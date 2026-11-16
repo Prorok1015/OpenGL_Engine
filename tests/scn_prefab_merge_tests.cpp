@@ -2300,4 +2300,75 @@ BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_RefusesAReferenceBackToTheFileIt
 	take_apart(load<scn::prefab_desc>(host_tag));
 }
 
+// ---------------------------------------------------------------- a world built with its file open (#1039)
+
+// The editor builds a world from its tag-less copy with the world's file open, as a level load does: a record of the world
+// that instantiates the prefab its instance node instantiates is the world's content and expands.
+BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiatesTheNodesPrefabAgain_WithoutItRefusesIt)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto world_tag = put("grown.world.desc",
+		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
+		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
+	auto world = load<scn::world_desc>(world_tag);
+	BOOST_REQUIRE(world);
+	const scn::world_desc copy = *world; // what the editor holds
+
+	entt::registry reg;
+	const auto root = reg.create();
+	scn::spawn_world(*assembler, reg, root, copy, "w", world_tag);
+	// No instance of the file: a hot reload of it does not rebuild the world.
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(root));
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_TEST(reg.get<scn::prefab_instance>(n).content_of == world_tag);
+	const auto added = child_named(reg, n, "added");
+	BOOST_REQUIRE(reg.valid(added));
+	BOOST_TEST((child_names(reg, added) == std::vector<std::string>{ "tip" }));
+	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
+	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == world_tag);
+
+	put("grown.world.desc", R"({"__type":"world_desc","__version":4,"name":"w","systems":[]})");
+	rs->signal_changed(world_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(world_tag));
+	BOOST_TEST((child_named(reg, root, "n") == n));
+	BOOST_TEST((child_named(reg, n, "added") == added));
+
+	const log_count refusals(engine::log_level::warn, "refers to itself");
+	entt::registry plain;
+	const auto plain_root = plain.create();
+	scn::spawn_world(*assembler, plain, plain_root, copy, "w", res::tag{});
+	BOOST_TEST(!plain.all_of<scn::prefab_instance>(plain_root));
+	const auto plain_n = child_named(plain, plain_root, "n");
+	BOOST_REQUIRE(plain.valid(plain_n));
+	const auto refused = child_named(plain, plain_n, "added");
+	BOOST_REQUIRE(plain.valid(refused));
+	BOOST_TEST(child_names(plain, refused).empty());
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+// A world desc that carries its file as its own tag (the cache's) is built as a level load builds it, not refused as
+// a reference to itself.
+BOOST_AUTO_TEST_CASE(SpawnWorld_OfADescWhoseOwnTagIsTheFile_BuildsItAsALevelLoadDoes)
+{
+	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
+	const auto world_tag = put("tagged.world.desc",
+		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
+	auto world = load<scn::world_desc>(world_tag);
+	BOOST_REQUIRE(world);
+	BOOST_REQUIRE(world->get_tag() == world_tag);
+
+	const log_count refusals(engine::log_level::error, "instantiates itself");
+	entt::registry reg;
+	const auto root = reg.create();
+	scn::spawn_world(*assembler, reg, root, *world, "w", world_tag);
+	const auto n = child_named(reg, root, "n");
+	BOOST_REQUIRE(reg.valid(n));
+	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip" }));
+	BOOST_TEST(refusals.count() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

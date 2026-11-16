@@ -299,6 +299,16 @@ void scn::context_set::reload_context(
 	ecs::system_factory& sf,
 	scn::ecs_assembler& assambler)
 {
+	reload_context(name, desc, sf, assambler, res::tag{});
+}
+
+void scn::context_set::reload_context(
+	std::string_view name,
+	const world_desc& desc,
+	ecs::system_factory& sf,
+	scn::ecs_assembler& assambler,
+	const res::tag& file)
+{
 	const current_scope as_current(*this);
 	ASSERT_MSG(m_context_ids.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
 
@@ -317,7 +327,7 @@ void scn::context_set::reload_context(
 	add_systems(w, desc.get_systems(), sf);
 
 	entt::entity e = w.state().create();
-	assambler.spawn_from_desc(w.state(), e, desc, name);
+	scn::spawn_world(assambler, w.state(), e, desc, name, file);
 }
 
 void scn::context_set::destroy_context(std::string_view name)

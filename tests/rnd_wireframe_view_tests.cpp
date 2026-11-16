@@ -189,10 +189,10 @@ BOOST_AUTO_TEST_CASE(TheCameraComponentFlagReachesItsPacketOnly)
 	BOOST_TEST(filled == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(TheWireframeCameraOfTheSmokeLevelTurnsItsSceneDrawsIntoLinesAndNothingElse, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_CASE(TheWireframeCameraOfALevelTurnsItsSceneDrawsIntoLinesAndNothingElse)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 
 	// a second camera next to the level's own (which draws to the backbuffer and is never wireframe)
 	entt::registry* camera_registry = nullptr;
@@ -241,7 +241,7 @@ BOOST_AUTO_TEST_CASE(TheWireframeCameraOfTheSmokeLevelTurnsItsSceneDrawsIntoLine
 	for (int frame = warm_up + 3; frame < frames; ++frame) {
 		const polygon_draws& wire = per_frame[frame];
 		BOOST_TEST(wire.lines > 0u, "frame " << frame);
-		// the same draws as before, some of them as lines: the level's own camera and the sky stay filled
+		// the same draws as before, some of them as lines: the level's own camera stays filled
 		BOOST_TEST(wire.lines + wire.fills == filled.fills, "frame " << frame);
 		BOOST_TEST(wire.fills > 0u, "frame " << frame);
 		BOOST_TEST(wire.fills < filled.fills, "frame " << frame);

@@ -5,6 +5,7 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/input/inp_input_stack.h>
+#include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>
@@ -220,6 +221,8 @@ namespace edt
 
 		// The copies the set "play" was built from; they live as long as it.
 		std::vector<scn::world_desc> m_worlds_copy;
+		// The file each copy was loaded from, indexed like m_worlds_copy: open while the copy is built (#1039).
+		std::vector<res::tag> m_world_tags_copy;
 		// What a module reload keeps (HOT_RELOAD_PLAY.md 4): plain data, nothing of the module's binary.
 		struct saved_world
 		{

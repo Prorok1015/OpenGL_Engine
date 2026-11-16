@@ -19,10 +19,11 @@ BOOST_AUTO_TEST_CASE(RenderValidateWrapsTheBackendInTheValidationDecorator)
 	BOOST_TEST(&validating_driver()->state() == &validating_swapchain()->state());
 }
 
-BOOST_AUTO_TEST_CASE(SmokeLevelRunsThreeFramesWithoutAGpu)
+// The robot level stays where a check needs its skin, textures or sky; these need any drawn scene (#977).
+BOOST_AUTO_TEST_CASE(QuadsRunThreeFramesWithoutAGpu)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 	BOOST_REQUIRE(levels.level_set().size() > 0u);
 
 	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
@@ -47,10 +48,10 @@ BOOST_AUTO_TEST_CASE(SmokeLevelFramesPassValidationWithoutViolations)
 	BOOST_TEST(state.last_frame().draws > 0u);
 }
 
-BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoFramebufferAfterWarmUp)
+BOOST_AUTO_TEST_CASE(QuadsBuildNoFramebufferAfterWarmUp)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 
 	std::vector<std::size_t> built;
 	auto& stages = storage.require<app::frame_stage_registry>();
@@ -90,10 +91,10 @@ BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoPipelineAfterWarmUp)
 	BOOST_TEST(driver()->pipelines().hits() > 0u);
 }
 
-BOOST_AUTO_TEST_CASE(SmokeLevelDrawsOnlyThroughBoundPipelines)
+BOOST_AUTO_TEST_CASE(QuadsDrawOnlyThroughBoundPipelines)
 {
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 
 	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
 

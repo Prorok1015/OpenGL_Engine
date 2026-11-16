@@ -164,6 +164,31 @@ jobs:
           git show "$base:tools/ci/vtable_pins.json" > "$base_pins"
           python3 tools/ci/check_vtable_pins.py --base-pins "$base_pins"
 
+      # #1056: a change of the module ABI (layout_revision, an API version, the pins, a new SNK_API line) adds its own
+      # docs/abi/changes/<issue>.md, so two changes never conflict on one history line.
+      # The PR's base is the first parent of the merge commit Plan read: pull_request.base.sha lags behind the branch.
+      # Without a base (by hand, a new branch) the current layout_revision must still be told in docs/abi.
+      - name: Check the ABI changes have their entries
+        env:
+          EVENT: ${{ github.event_name }}
+          PLAN_BASE: ${{ steps.plan.outputs.base }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          python3 tools/ci/check_abi_changes.py --self-test
+          base=""
+          case "$EVENT" in
+            pull_request) base="${PLAN_BASE:-$PR_BASE}" ;;
+            push) base="$PUSH_BEFORE" ;;
+          esac
+          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || ! printf '%s' "$base" | grep -q '[1-9a-f]'; then
+            echo "::warning::no base commit for this $EVENT event: only the current layout_revision is checked"
+            python3 tools/ci/check_abi_changes.py --state
+            exit $?
+          fi
+          git fetch --no-tags --depth=1 origin "$base"
+          python3 tools/ci/check_abi_changes.py --base "$base"
+
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:
     name: Base ${{ needs.plan.outputs.base }}
@@ -278,6 +303,16 @@ jobs:
         run: |
           set -o pipefail
           ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
+
+      # #746: a base shape file of core/res/shapes that differs from the generator is written by the test to generated_shapes/;
+      # these are the bytes to commit, as nobody builds locally.
+      - name: Upload the generated base shapes
+        if: failure() && matrix.preset == 'ci-linux-clang-debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-base-shapes
+          path: build/ci-linux-clang-debug/generated_shapes
+          if-no-files-found: ignore
 
       - name: Slowest test suites and cases
         if: always()

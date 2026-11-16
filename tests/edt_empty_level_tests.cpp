@@ -135,6 +135,22 @@ BOOST_AUTO_TEST_CASE(Resync_KeepsTheFileOfEachWorldAlignedWithItsWorld)
 	BOOST_TEST(state.world_tags[1] == tag_of("w0.desc"));
 }
 
+// Two reloaded worlds of one name from different files keep their own files: the tags follow the desc order (#1039).
+BOOST_AUTO_TEST_CASE(Resync_TwoWorldsOfOneNameKeepTheirOwnFiles)
+{
+	populate(put("lv.desc", LEVEL_TWO_WORLDS));
+	BOOST_REQUIRE(state.world_names.size() == 2u);
+	const std::vector<scn::world_desc> same_name{ state.world_descs[0], state.world_descs[0] }; // both "w0"
+
+	edt::apply_world_resync(state, world_ctrl, same_name, { tag_of("a.desc"), tag_of("b.desc") }, true,
+		[](const scn::world_desc&) { return false; });
+
+	BOOST_REQUIRE((state.world_names == std::vector<std::string>{ "w0", "w0" }));
+	BOOST_REQUIRE(state.world_tags.size() == 2u);
+	BOOST_TEST(state.world_tags[0] == tag_of("a.desc"));
+	BOOST_TEST(state.world_tags[1] == tag_of("b.desc"));
+}
+
 BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 {
 	const auto tag = put("lv.desc", LEVEL_NO_WORLDS);

@@ -1,3 +1,4 @@
 *.sh text eol=lf
 *.ttf binary
 *.resource text eol=lf
+*.desc text eol=lf
