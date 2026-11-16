@@ -3,16 +3,26 @@
 #include "test_decoder_sandbox.hpp"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -549,6 +559,201 @@ BOOST_AUTO_TEST_CASE(TheLogOfARun_IsCutAfterTwoHundredLinesOrSixtyFourKiB_Once)
 	BOOST_CHECK(!bytes.take(1));
 }
 
+
+// ---- the geometry pair of an answer (#1068 PR3b): decoded as the loader decodes it, encoded again by the editor ----
+
+namespace {
+
+const res::tag k_geom_bin("memory://m/m.geom.bin");
+
+rnd::geometry_desc one_triangle()
+{
+	rnd::geometry_desc out;
+	out.layout = rnd::driver::BufferLayout{ { rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" } };
+	const float floats[] = { -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 0.f, 1.f, 0.f };
+	out.vertices.resize(sizeof(floats));
+	std::memcpy(out.vertices.data(), floats, sizeof(floats));
+	out.indices = { 0, 1, 2 };
+	return out;
+}
+
+// What the editor's writer makes of one triangle: the pair a decoder sends back.
+rnd::geometry_files triangle_pair()
+{
+	rnd::geometry_file_options options;
+	options.header["__parent"] = "res://base_geometry.desc";
+	rnd::geometry_files files = rnd::encode_geometry_files(k_geom, one_triangle(), options);
+	BOOST_REQUIRE_MESSAGE(files, files.error);
+	return files;
+}
+
+boost::json::object json_of(const std::vector<std::byte>& bytes)
+{
+	return boost::json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())).as_object();
+}
+
+std::vector<std::byte> bytes_of_json(const boost::json::object& object)
+{
+	return text_bytes(boost::json::serialize(object));
+}
+
+// The answer of import_answer() with the geometry as `desc` and, when given, the binary file `binary` (created, not listed).
+edt::decode_bundle answer_with_geometry(const std::vector<std::byte>& desc, const std::optional<std::vector<std::byte>>& binary,
+	bool list_binary = false)
+{
+	edt::decode_bundle bundle = import_answer();
+	for (edt::bundle_blob& blob : bundle.blobs) {
+		if (blob.tag == k_geom.view()) blob.bytes = desc;
+	}
+	std::vector<res::tag> created = { k_prefab, k_geom, k_material, k_texture, k_texture_desc };
+	std::vector<res::tag> listed = created;
+	if (binary) {
+		bundle.blobs.push_back(blob_of(k_geom_bin, *binary));
+		created.push_back(k_geom_bin);
+		if (list_binary) listed.push_back(k_geom_bin);
+	}
+	return answer_with(bundle.blobs, listed, created);
+}
+
+// The range `key` of `desc` over `binary` patched by `patch`, its hash computed again: what a decoder that lies about the data
+// but not about the hash sends.
+void patch_range(boost::json::object& desc, std::vector<std::byte>& binary, std::string_view key,
+	const std::function<void(std::span<std::byte>)>& patch)
+{
+	boost::json::object& range = desc.at(key).as_object();
+	const std::size_t offset = static_cast<std::size_t>(range.at("offset").to_number<std::uint64_t>());
+	const std::size_t size = static_cast<std::size_t>(range.at("size").to_number<std::uint64_t>());
+	const std::span<std::byte> bytes(binary.data() + offset, size);
+	patch(bytes);
+	range["sha256"] = cmn::sha256_hex(bytes);
+}
+
+bool refused(const edt::decode_bundle& bundle, std::string_view expected)
+{
+	std::string problem;
+	const bool accepted = edt::accept_import_answer(bundle, request_in(), problem).has_value();
+	BOOST_TEST_MESSAGE("problem: " << problem);
+	return !accepted && problem.find(expected) != std::string::npos;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AGeometryPair_IsAccepted_AndStoredAsTheEditorEncodesIt)
+{
+	const rnd::geometry_files pair = triangle_pair();
+	const auto bundle = answer_with_geometry(pair.desc, pair.binary);
+	std::string problem;
+	rnd::geometry_files rewritten;
+	const auto imported = edt::accept_import_answer(bundle, request_in(), problem, &rewritten);
+	BOOST_REQUIRE_MESSAGE(imported.has_value(), problem);
+	BOOST_REQUIRE_MESSAGE(rewritten, rewritten.error);
+	// The editor's writer over the decoded data: the same bytes it writes for the same triangle.
+	BOOST_TEST((rewritten.desc == pair.desc));
+	BOOST_TEST((rewritten.binary == pair.binary));
+
+	// Without the out parameter (the cache path) the answer is only checked.
+	BOOST_TEST(edt::accept_import_answer(bundle, request_in(), problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryFileForADescWithoutRanges_IsRefused)
+{
+	const rnd::geometry_files pair = triangle_pair();
+	const std::vector<std::byte> no_data = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})json");
+	BOOST_TEST(refused(answer_with_geometry(no_data, pair.binary), "does not refer to one"));
+}
+
+BOOST_AUTO_TEST_CASE(ADescWithRanges_WithoutItsBinaryFile_IsRefused)
+{
+	const rnd::geometry_files pair = triangle_pair();
+	BOOST_TEST(refused(answer_with_geometry(pair.desc, std::nullopt), "did not come with the answer"));
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryFile_ListedOrUnderAnotherName_OrTwice_IsRefused)
+{
+	const rnd::geometry_files pair = triangle_pair();
+	BOOST_TEST(refused(answer_with_geometry(pair.desc, pair.binary, true), "lists the binary file"));
+
+	for (const char* name : { "memory://m/other.geom.bin", "memory://m/textures/m.geom.bin", "memory://m/M.geom.bin" }) {
+		auto bundle = answer_with_geometry(pair.desc, pair.binary);
+		auto imported = edt::import_intermediate_from_json(bundle.manifest.at("import"));
+		BOOST_REQUIRE(imported.has_value());
+		imported->created_tags.push_back(res::tag(name));
+		bundle.manifest["import"] = edt::to_json(*imported);
+		bundle.blobs.push_back(blob_of(res::tag(name), pair.binary));
+		BOOST_TEST_INFO(name);
+		std::string problem;
+		BOOST_TEST(!edt::accept_import_answer(bundle, request_in(), problem).has_value());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(OverlappingRanges_ARangePastTheFile_AndAHugeRangeSize_AreRefused)
+{
+	const rnd::geometry_files pair = triangle_pair();
+
+	boost::json::object overlapping = json_of(pair.desc);
+	overlapping["indices"].as_object()["offset"] = overlapping["vertices"].as_object()["offset"];
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(overlapping), pair.binary), "the geometry of the import is refused"));
+
+	boost::json::object past = json_of(pair.desc);
+	past["indices"].as_object()["size"] = pair.binary.size();
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(past), pair.binary), "the geometry of the import is refused"));
+
+	boost::json::object huge = json_of(pair.desc);
+	huge["vertices"].as_object()["size"] = std::uint64_t{ 0xFFFFFFFFFFFFFFF0ull };
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(huge), pair.binary), "the geometry of the import is refused"));
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryFile_WithAnotherHashOrHeader_OrCut_IsRefused)
+{
+	const rnd::geometry_files pair = triangle_pair();
+
+	std::vector<std::byte> changed = pair.binary;
+	changed.back() ^= std::byte{ 1 };
+	BOOST_TEST(refused(answer_with_geometry(pair.desc, changed), "the geometry of the import is refused"));
+
+	std::vector<std::byte> header = pair.binary;
+	header[0] = std::byte{ 'X' };
+	BOOST_TEST(refused(answer_with_geometry(pair.desc, header), "the geometry of the import is refused"));
+
+	std::vector<std::byte> cut = pair.binary;
+	cut.resize(cut.size() / 2);
+	BOOST_TEST(refused(answer_with_geometry(pair.desc, cut), "the geometry of the import is refused"));
+}
+
+// The hashes match the lie: the loader's data checks refuse it all the same.
+BOOST_AUTO_TEST_CASE(AnIndexPastTheVertices_OrAPositionThatIsNotFinite_IsRefused_WithTheirHashesRight)
+{
+	const rnd::geometry_files pair = triangle_pair();
+
+	boost::json::object desc = json_of(pair.desc);
+	std::vector<std::byte> binary = pair.binary;
+	patch_range(desc, binary, "indices", [](std::span<std::byte> bytes) {
+		const std::uint32_t past = 7;
+		std::memcpy(bytes.data(), &past, sizeof(past));
+	});
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(desc), binary), "past the"));
+
+	desc = json_of(pair.desc);
+	binary = pair.binary;
+	patch_range(desc, binary, "vertices", [](std::span<std::byte> bytes) {
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		std::memcpy(bytes.data(), &nan, sizeof(nan));
+	});
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(desc), binary), "not finite"));
+}
+
+BOOST_AUTO_TEST_CASE(TrianglesAsArrays_AndLinesWithABinaryFile_AreRefused)
+{
+	const std::vector<std::byte> arrays = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc",)json"
+		R"json("layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[0,0,128,191,0,0,128,191,0,0,0,0,0,0,128,63,0,0,128,191,0,0,0,0,0,0,0,0,0,0,128,63,0,0,0,0]})json");
+	BOOST_TEST(refused(answer_with_geometry(arrays, std::nullopt), "came as arrays"));
+
+	const rnd::geometry_files pair = triangle_pair();
+	boost::json::object lines = json_of(pair.desc);
+	lines[rnd::geometry_topology_key] = "lines";
+	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(lines), pair.binary), "lines or points"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // The editor's side of a scan through the decoder (#1043), with a fake child: what it hands over, how often, and when it
@@ -886,8 +1091,6 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	}
 
 	edt::model_importer importer(*descs, *rs);
-	// The decoder answers the geometry in JSON arrays until its answer carries the binary file (#1068 PR3b).
-	source.binary_geometry = false;
 	const edt::import_intermediate in_process = importer.import_background(source);
 	BOOST_REQUIRE_MESSAGE(in_process.error.empty(), in_process.error);
 	BOOST_CHECK(in_process.prefab_tag == through_process.prefab_tag);

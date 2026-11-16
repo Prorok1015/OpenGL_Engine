@@ -6,6 +6,7 @@
 #include <boost/json/value.hpp>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace res { class resource_system; }
 
@@ -54,4 +55,7 @@ namespace rnd::detail
 	// The recorded ranges read from the binary file beside `file` (its layer), checked, copied into the vectors, bounds
 	// built again when the file has the key. Throws res::load_error naming the JSON path.
 	void load_geometry_binary(res::resource_system& system, const res::tag& file, geometry_desc& geometry, bool verify_hash);
+	// The same from `file`, the bytes of the binary file beside `tag` held in memory (an answer not yet stored): at most
+	// res::desc_binary::max_file_bytes, every hash checked.
+	void decode_geometry_binary(const res::tag& tag, std::span<const std::byte> file, geometry_desc& geometry);
 }

@@ -5,6 +5,7 @@
 #include <boost/json/object.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -80,6 +81,12 @@ namespace rnd
 	// binary file beside `file` with their hashes checked; bounds when the file has them. Empty when read into `out`.
 	SNK_API std::string read_geometry_file(res::resource_system& system, const res::tag& file, const boost::json::object& desc,
 		geometry_desc& out);
+
+	// The same for a pair held in memory, nothing read or stored (the decoder's answer, #1068 PR3b): `binary` is the file
+	// beside `file`, at most res::desc_binary::max_file_bytes, every range checked as the loader checks it and every hash
+	// computed here. A desc with arrays takes no binary file. Empty when read into `out`.
+	SNK_API std::string decode_geometry_files(const res::tag& file, const boost::json::object& desc,
+		std::span<const std::byte> binary, geometry_desc& out);
 
 	// Whether a geometry desc holds its vertices as a JSON array (the form before EPIC-79).
 	SNK_API bool holds_geometry_arrays(const boost::json::object& desc);

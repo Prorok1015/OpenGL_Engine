@@ -118,6 +118,77 @@ void rnd::geometry_desc_adapter::load_binary(const ::res::tag& tag, rnd::geometr
 	detail::load_geometry_binary(m_resources, tag, geometry, verify_hash_on_load);
 }
 
+namespace
+{
+	[[noreturn]] void refuse_binary(const ::res::tag& tag, std::string_view path, const std::string& reason)
+	{
+		throw ::res::load_error(::res::diagnostic_kind::load, path, std::format("geometry '{}': {}: {}", tag.view(), path, reason));
+	}
+
+	// The recorded ranges in the order they are asked for, `paths` naming each in the desc.
+	struct asked_ranges
+	{
+		std::vector<::res::binary_range> ranges;
+		std::vector<std::string_view> paths;
+	};
+
+	asked_ranges ask_ranges(const ::res::tag& tag, const rnd::geometry_desc& geometry, const rnd::detail::geometry_binary_ranges& ranges)
+	{
+		asked_ranges asked;
+		if (ranges.vertices) {
+			const auto layout = ::res::parse_binary_layout(ranges.vertices->layout);
+			if (!layout || !vertex_layout_fits(geometry.layout, *layout)) {
+				refuse_binary(tag, "/vertices/layout", std::format("'{}' does not fit the {}-byte vertex of the layout (\"u8\", or "
+					"\"f32xN\" over float attributes)", ranges.vertices->layout, geometry.layout.get_stride()));
+			}
+			asked.ranges.push_back(*ranges.vertices);
+			asked.paths.push_back("/vertices");
+		}
+		if (ranges.indices) {
+			if (ranges.indices->layout != "u32") {
+				refuse_binary(tag, "/indices/layout", std::format("'{}' is not \"u32\"", ranges.indices->layout));
+			}
+			asked.ranges.push_back(*ranges.indices);
+			asked.paths.push_back("/indices");
+		}
+		return asked;
+	}
+
+	// What desc_binary read or parsed, checked and copied into `geometry` as the loader takes it.
+	void take_ranges(const ::res::tag& tag, rnd::geometry_desc& geometry, const rnd::detail::geometry_binary_ranges& ranges,
+		const asked_ranges& asked, const ::res::desc_binary_data& data)
+	{
+		if (!data) {
+			// The message names the range as "range N (": that is the path of the N-th range asked for.
+			std::string_view path = asked.paths.front();
+			for (std::size_t i = 0; i < asked.paths.size(); ++i) {
+				if (data.message.find(std::format("range {} (", i)) != std::string::npos) {
+					path = asked.paths[i];
+					break;
+				}
+			}
+			throw ::res::load_error(::res::diagnostic_kind::load, path, std::format("geometry '{}': {}", tag.view(), data.message));
+		}
+
+		static_assert(sizeof(unsigned int) == sizeof(std::uint32_t), "indices are u32 in the binary file");
+		std::size_t at = 0;
+		if (ranges.vertices && !::res::copy_binary_values(data.ranges[at++], geometry.vertices)) {
+			refuse_binary(tag, "/vertices", "the range is not whole bytes");
+		}
+		if (ranges.indices && !::res::copy_binary_values(data.ranges[at++], geometry.indices)) {
+			refuse_binary(tag, "/indices", "the range is not whole u32 values");
+		}
+
+		rnd::detail::check_geometry_data(tag, geometry);
+		geometry.bounds.clear();
+		geometry.rtree = {};
+		if (ranges.wants_bounds) {
+			rnd::detail::rebuild_bounds(geometry);
+		}
+		rnd::detail::set_binary_loaded(geometry);
+	}
+}
+
 void rnd::detail::load_geometry_binary(::res::resource_system& system, const ::res::tag& tag, rnd::geometry_desc& geometry,
 	bool verify_hash)
 {
@@ -125,59 +196,26 @@ void rnd::detail::load_geometry_binary(::res::resource_system& system, const ::r
 	if (!ranges) {
 		return;
 	}
-	const auto refuse = [&tag](std::string_view path, const std::string& reason) {
-		throw ::res::load_error(::res::diagnostic_kind::load, path, std::format("geometry '{}': {}: {}", tag.view(), path, reason));
-	};
+	const asked_ranges asked = ask_ranges(tag, geometry, *ranges);
+	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::read(system, tag, asked.ranges, verify_hash));
+}
 
-	// Asked for in this order; `paths` names each in the desc.
-	std::vector<::res::binary_range> asked;
-	std::vector<std::string_view> paths;
-	if (ranges->vertices) {
-		const auto layout = ::res::parse_binary_layout(ranges->vertices->layout);
-		if (!layout || !vertex_layout_fits(geometry.layout, *layout)) {
-			refuse("/vertices/layout", std::format("'{}' does not fit the {}-byte vertex of the layout (\"u8\", or \"f32xN\" "
-				"over float attributes)", ranges->vertices->layout, geometry.layout.get_stride()));
-		}
-		asked.push_back(*ranges->vertices);
-		paths.push_back("/vertices");
+void rnd::detail::decode_geometry_binary(const ::res::tag& tag, std::span<const std::byte> file, rnd::geometry_desc& geometry)
+{
+	const auto ranges = detail::binary_ranges_of(geometry);
+	if (!ranges) {
+		return;
 	}
-	if (ranges->indices) {
-		if (ranges->indices->layout != "u32") {
-			refuse("/indices/layout", std::format("'{}' is not \"u32\"", ranges->indices->layout));
-		}
-		asked.push_back(*ranges->indices);
-		paths.push_back("/indices");
+	const auto binary = ::res::desc_binary::binary_tag(tag);
+	if (!binary) {
+		refuse_binary(tag, "/vertices", "the desc is not named <name>.<ext>.desc: it has no binary file");
 	}
-
-	::res::desc_binary_data data = ::res::desc_binary::read(system, tag, asked, verify_hash);
-	if (!data) {
-		// The message names the range as "range N (": that is the path of the N-th range asked for.
-		std::string_view path = paths.front();
-		for (std::size_t i = 0; i < paths.size(); ++i) {
-			if (data.message.find(std::format("range {} (", i)) != std::string::npos) {
-				path = paths[i];
-				break;
-			}
-		}
-		throw ::res::load_error(::res::diagnostic_kind::load, path, std::format("geometry '{}': {}", tag.view(), data.message));
+	if (file.size() > ::res::desc_binary::max_file_bytes) {
+		refuse_binary(tag, "/vertices", std::format("'{}' is {} bytes, more than the {} a binary file may have", binary->view(),
+			file.size(), ::res::desc_binary::max_file_bytes));
 	}
-
-	static_assert(sizeof(unsigned int) == sizeof(std::uint32_t), "indices are u32 in the binary file");
-	std::size_t at = 0;
-	if (ranges->vertices && !::res::copy_binary_values(data.ranges[at++], geometry.vertices)) {
-		refuse("/vertices", "the range is not whole bytes");
-	}
-	if (ranges->indices && !::res::copy_binary_values(data.ranges[at++], geometry.indices)) {
-		refuse("/indices", "the range is not whole u32 values");
-	}
-
-	detail::check_geometry_data(tag, geometry);
-	geometry.bounds.clear();
-	geometry.rtree = {};
-	if (ranges->wants_bounds) {
-		detail::rebuild_bounds(geometry);
-	}
-	detail::set_binary_loaded(geometry);
+	const asked_ranges asked = ask_ranges(tag, geometry, *ranges);
+	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::parse(binary->view(), file, asked.ranges, true));
 }
 
 std::vector<std::byte> rnd::geometry_desc_adapter::serialize(const ::res::tag& tag,

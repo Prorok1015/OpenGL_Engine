@@ -1043,8 +1043,8 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 		store_tracked(m_res, binary_tag, files.binary, created_tags);
 		store_tracked(m_res, geom_tag, files.desc, created_tags);
 	} else {
-		// Arrays: the decoder's answer until it carries the binary file (#1068 PR3b), a model without meshes, or lines and
-		// points, read as before EPIC-79 with the topology named (the export keeps them in arrays).
+		// Arrays: binary_geometry off, a model without meshes, or lines and points, read as before EPIC-79 with the topology
+		// named (the export keeps them in arrays).
 		json::object jsgeometry;
 		jsgeometry["__type"] = "geometry_desc";
 		jsgeometry["__parent"] = "res://base_geometry.desc";
