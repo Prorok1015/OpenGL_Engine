@@ -258,6 +258,7 @@ json::object edt::to_json(const import_intermediate& imported)
 	out["source_path"] = path_text(imported.source_path);
 	out["prefab_json"] = imported.prefab_json;
 	out["skin_weights"] = std::move(weights);
+	out["missing_textures"] = strings_to(imported.missing_textures);
 	out["error"] = imported.error;
 	return out;
 }
@@ -291,6 +292,12 @@ std::optional<edt::import_intermediate> edt::import_intermediate_from_json(const
 	out.source_path = path_from(*source);
 	out.prefab_json = prefab_json->as_object();
 	out.error = *error;
+	// Names as the model wrote them, shown to the person: only what the import says it could not load.
+	if (const json::value* missing = object.if_contains("missing_textures")) {
+		const auto names = strings_from(missing);
+		if (!names) return std::nullopt;
+		out.missing_textures = *names;
+	}
 	for (const json::value& row : weights->as_array()) {
 		if (!row.is_array() || row.as_array().size() > k_max_items) return std::nullopt;
 		std::vector<std::uint32_t> column;

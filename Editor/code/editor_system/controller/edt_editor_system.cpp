@@ -46,7 +46,8 @@
 #if SNK_HAS_ASSIMP
 #include "edt_decoded_model_adapter.h"
 #include "edt_person_model_import.h"
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include "edt_import_problems.h"
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
@@ -279,7 +280,7 @@ edt::editor_system::~editor_system()
 	if (m_agent) m_agent->shutdown();
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
-	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
+	if (m_model_adapter_registered) m_res.unregistrate_adapter(mdl::model_adapter::INFO);
 	erase_import_folder(m_import_folder);
 	erase_import_folder(m_dialog_import_folder);
 #endif
@@ -388,10 +389,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (const std::string why = m_process_decoder->unavailable_reason(); !why.empty()) {
 			egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
 		}
-		m_res.registrate_adapter<edt::decoded_model_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(m_res),
+		m_res.registrate_adapter<edt::decoded_model_adapter>(mdl::model_adapter::INFO, std::ref(desc_system), std::ref(m_res),
 			edt::decoded_model_adapter::steps_of(m_process_decoder));
 		m_model_adapter_registered = true;
-		m_res.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
+		m_res.warn_on_sync_require(mdl::model_adapter::INFO.extensions);
 		// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk.
 		std::string earlier_imports = "__imports/";
 		erase_import_folder(earlier_imports);
@@ -1175,6 +1176,8 @@ bool edt::editor_system::poll_import_progress()
 		return false;
 	}
 
+	// A new import replaces what the last one reported.
+	m_context->problems().set(edt::k_import_problem_source, edt::import_problems(intermediate, name));
 	auto result = m_model_importer->finalize_on_main(std::move(intermediate));
 	if (result.prefab) {
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());

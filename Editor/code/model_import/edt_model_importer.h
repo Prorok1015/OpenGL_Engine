@@ -47,9 +47,6 @@ namespace edt {
 		std::string memory_folder;
 		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
 		bool on_disk = true;
-		// The geometry as <stem>.geom.desc with its binary file <stem>.geom.bin (EPIC-79); false: JSON arrays (tests of the
-		// form before EPIC-79).
-		bool binary_geometry = true;
 		// The decoder process's OS sandbox (#1043) this import asks for at least; off asks for nothing beyond the setting.
 		sandbox_mode sandbox = sandbox_mode::off;
 	};
@@ -58,8 +55,8 @@ namespace edt {
 	public:
 		model_importer(desc::desc_system& ds, res::resource_system& rs);
 
-		// Background-safe phase: Assimp parse + geometry + materials + store, in this process: the decoder process runs it
-		// (#647); the editor itself imports through process_decoder (#925, #987).
+		// Background-safe phase: mdl::import_model (assimp, snk_model_import_assimp) + store, in this process: the decoder
+		// process runs it (#647); the editor itself imports through process_decoder (#925, #987).
 		// Does NOT touch desc_sys.create_instance or skinning_manager.
 		// `ctx` (null: not cancellable) is checked between the phases and by Assimp while it parses; a stop request
 		// throws ds::task_cancelled. The helpers store textures, descs and materials as they go and the geometry

@@ -83,6 +83,7 @@ BOOST_AUTO_TEST_CASE(AnImport_RoundTrips_AndTakesNoTagButMemory)
 	imported.source_path = std::filesystem::path("some") / "robot.glb";
 	imported.prefab_json["name"] = "robot";
 	imported.skin_weights = { { 1, 2, 4000000000u }, {} };
+	imported.missing_textures = { "lost.png" };
 
 	const auto back = edt::import_intermediate_from_json(edt::to_json(imported));
 	BOOST_REQUIRE(back.has_value());
@@ -93,6 +94,7 @@ BOOST_AUTO_TEST_CASE(AnImport_RoundTrips_AndTakesNoTagButMemory)
 	BOOST_CHECK_EQUAL(boost::json::serialize(back->prefab_json), boost::json::serialize(imported.prefab_json));
 	BOOST_REQUIRE_EQUAL(back->skin_weights.size(), 2u);
 	BOOST_CHECK_EQUAL(back->skin_weights[0][2], 4000000000u);
+	BOOST_CHECK((back->missing_textures == std::vector<std::string>{ "lost.png" }));
 
 	for (const char* bad : { "res://robot.prefab.desc", "memory://../x", "user://settings" }) {
 		BOOST_TEST_CONTEXT(bad) {
