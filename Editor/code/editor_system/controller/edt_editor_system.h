@@ -46,10 +46,8 @@ namespace inp  { class input_router; }
 namespace cmd  { class command_registry; }
 
 namespace edt {
+	class asset_component;
 	class asset_database;
-	namespace picker { class database_catalog; }
-	class asset_index_link;
-	class asset_problem_publisher;
 	class agent_server;
 	class agent_access;
 	class agent_policy_model;
@@ -236,7 +234,7 @@ namespace edt {
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
 		agent_access* agent_access_object() { return m_agent_access.get(); }
 		// The asset database of the open project (#760); null without a project.
-		asset_database* assets() { return m_assets.get(); }
+		asset_database* assets();
 
 	private:
 		// Editor layer & panels
@@ -352,12 +350,9 @@ namespace edt {
 		// Account window; its commands are in m_registrations, removed before it. Before the asset database, whose callbacks ask it
 		// whether a git write runs, so the database goes first.
 		std::unique_ptr<edt::vcs_component> m_vcs;
-		// The asset database (#760): follows res:// from init, writes its cache when it goes.
-		std::unique_ptr<edt::asset_database> m_assets;
-		// What the reference pickers choose from; reads m_assets, so it goes first.
-		std::unique_ptr<edt::picker::database_catalog> m_asset_catalog;
-		// resource_system's asset index over m_assets (S57-7, #770); after it, so it detaches before the database goes.
-		std::unique_ptr<edt::asset_index_link> m_asset_index;
+		// The asset database and what hangs on it (#760, #770, #1004): follows res:// from init, writes its cache when it goes;
+		// null without a project. Its commands are in m_registrations, removed before it.
+		std::unique_ptr<edt::asset_component> m_asset_component;
 		// The person's trust in the project (#921); owned by the app_data_storage, where main's trust_library finds
 		// it.
 		std::weak_ptr<edt::project_trust_service> m_trust;
@@ -414,8 +409,6 @@ namespace edt {
 		desc_problem_publisher m_desc_problems;
 		// The source "play" (#597): the last check before Play.
 		play_preflight_publisher m_play_preflight;
-		// The source "assets" (S57-4): what the asset database finds, with its fixes for the person.
-		std::unique_ptr<asset_problem_publisher> m_asset_problems;
 		std::vector<connection> m_world_problem_connections;
 	};
 }
