@@ -566,7 +566,8 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 		for (const requested_file& wanted : answer->requested) {
 			if (!asked.emplace(wanted.name, wanted.kind).second) continue;
 			const resolved_reference resolved = access.resolve(wanted.name, wanted.kind);
-			if (!resolved.error.empty() && wanted.kind == model_file_kind::texture) return failed_scan(resolved.error);
+			// A model that is no file on the disk may name no other file at all (#925): that fails its load.
+			if (!resolved.error.empty() && (wanted.kind == model_file_kind::texture || !source.on_disk)) return failed_scan(resolved.error);
 			if (!resolved.error.empty()) {
 				// The parser also asks for names of its own: Assimp's OBJ loader, missing the .mtl, falls back to one built
 				// from the model's path. A side file the rule refuses is missing to the child, like one not on the disk.
