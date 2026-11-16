@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_version_notice.h"
 #include <snk/editor/edt_registration.h>
 #include <filesystem>
 #include <functional>
@@ -67,11 +68,14 @@ namespace edt
 		void install_edit_actions(std::vector<registration>& out);
 		// The window's close request goes through the "unsaved changes" flow and the exit blocker.
 		void attach_window_close(wnd::window_system& windows);
+		// The last save that upgraded a file, for a few seconds in the menu bar (#761); nothing otherwise.
+		void draw_status();
 
 	private:
 		std::optional<std::string> migration_blocker() const;
 
 		ports m_ports;
 		std::unique_ptr<file_menu> m_menu;
+		timed_notice m_save_notice;
 	};
 }

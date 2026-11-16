@@ -14,7 +14,7 @@ Editor/
     │   └── edt_camera_redirect.cpp/h # redirects backbuffer cameras to textures (editor shows them in the viewport)
     │
     ├── controller/                   # Editor controllers (decomposed from editor_system)
-    │   ├── edt_editor_system.cpp/h   # composition root: creates the services and editor_context, panels, wires callbacks, registers the built-ins, async orchestration
+    │   ├── edt_editor_system.cpp/h   # composition root (#1004): creates the services, the editor_context and the components below in order, wires the controllers' callbacks; no feature logic
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
     │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
     │   ├── edt_world_controller.cpp/h # switch/create world
@@ -41,6 +41,9 @@ Editor/
     ├── edt_component_renderers/      # per-type ImGui renderers for components
     │   ├── edt_component_renderers.cpp/h
     │   └── edt_cr_*.cpp              # skin, animation (camera, light, skybox and mesh are drawn from their schemas)
+    │
+    ├── game_layer/                   # a game module loaded, unloaded or reloaded (#1004)
+    │   └── edt_game_layer_component.cpp/h # game_layer_component: lets go of the old game layer (ends Play, closes the prefab preview, drops pending asset adds, abandons the load in flight) and builds the level in the new one; owns the `module_swap_gate` the build and Play components hand to the host and the `generation()` counter `project.migrate` binds a plan to; listens to `context_manager` from its constructor, so it is made before them
     │
     ├── startup/                      # the first frames (#1004)
     │   └── edt_startup_component.cpp/h # startup_component: the question about a project held back for its engine version (`ask_about_held_project`), the start level (`--game`, `editor/startup_level`, `editor/start_mode`, `editor/game_level`; the loading screen of game mode through `editor_mode_controller`) as the implicit `edt/load_level`, and the question about the project's modules (implicit `edt/project_trust`, #921); `install_start_level()` / `install_trust_check()` are called where the order of implicit callbacks needs them
@@ -124,10 +127,38 @@ code/file_identity/                   # snk::file_identity (#888): no engine, no
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `editor_system` | `controller/edt_editor_system.cpp/h` | Thin coordinator: init, panel wiring, camera, async orchestration |
+| `editor_system` | `controller/edt_editor_system.cpp/h` | Composition root: `init()` creates the components (table below) and wires the controllers; the queries other areas ask (`person_is_editing`, `load_in_progress`, the migration blockers) and the frame ticks |
 | `scene_editor` | `controller/edt_scene_editor.cpp/h` | Entity CRUD (create/delete/duplicate/reparent), desc tree helpers, `serialize_and_push`, `sync_ecs_transforms_to_desc` |
 | `level_controller` | `controller/edt_level_controller.cpp/h` | Level I/O: new/load/save/quicksave, `write_level_to_disk`, `populate_worlds_from_level`, templates; a load keeps the file's root `__version` (`scene_document::level_file_version`), and a save over a file of an older version WARNs `Editor/Save` (`version_upgrade_text`) and calls `on_file_upgraded` (the menu bar shows it for 5 s, `timed_notice` in `edt_version_notice.h`; #761, R26) |
 | `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
+
+
+## Where what is wired now (#1004)
+
+`editor_system::init` creates these in this order, each from a `ports` struct (references to what it uses; late-bound `std::function`s for what is made after it) and registers it with one `install(...)` where it has registrations; the order of `install` calls is the order of the registry, of the View menu and of the implicit frame callbacks. Nothing is a singleton: services are injected.
+
+| # | Component (`edt::`) | Folder | Owns |
+|---|---|---|---|
+| 1 | `import_component` | `import/` | decoder process, adapter of models, the person's import, exporter + export dialog, the agent's import |
+| 2 | `problems_component` | `problems/` | the publishers of Problems (`desc`, `world`, `play`, `assets`, `input`), `go_to_problem` |
+| 3 | `panels_component` | `panels/` | the editor's panels, their wiring to the controllers, View menu order |
+| 4 | `prefab_editor_component` | `prefab/` | the prefab window and its Inspector hand-over (nothing of it is in `edt_editor_system.*`) |
+| 5 | `asset_open_component` | `assets/` | the data documents' host, asset kinds, opening and adding an asset to the scene |
+| 6 | `level_load_component` | `level/` | the working copy, the "Loading Level" window, `level.cancel_load`, the settle |
+| 7 | `game_layer_component` | `game_layer/` | what the editor does when the game layer changes, the `module_swap_gate`, the generation counter |
+| 8 | `file_menu_component` | `file_menu/` | the File and Edit menus, the file.* and edit.* actions, the save notice, `start_editor_on` |
+| 9 | `migration_component` | `migration/` | project.migrate and friends, the window, the rollback offer, the notice and the scan |
+| 10 | `game_build_component` | `game_build/` | the builder and the reloader of the game module |
+| 11 | `live_mode_component` | `live/` | live mode and the trust question |
+| 12 | `play_component` | `play/` | Play of the scene document and the editor/game mode |
+| 13 | `vcs_component` | `vcs/`, `forge/` | git, the repository watcher, pull requests, tokens |
+| 14 | `asset_component` | `assets/` | the asset database and what hangs on it (only with a project) |
+| 15 | `startup_component` | `startup/` | the held-project question, the start level, the project trust check |
+| 16 | `agent_component`, `agent_ui_component` | `agent/` | the MCP server and the agent policy; the agents window, the status slot and the notice |
+
+What stays in `editor_system` on purpose: the services and controllers they share (`m_services`, `m_state`, `scene_editor`, `world_controller`, `level_controller`), `project_trust_service` creation and the `project.trust` action (the Project menu position is the registration order), `wire_controller_callbacks` (callbacks between the controllers, the context manager and Problems), the command sets registered as plain loops (scene, code, desc file commands), the menu bar status line and the layer hooks of `create_play_session`, and the small questions other components ask it through `std::function` ports.
+
+**Destruction.** `~editor_system` first runs `agent_component::shutdown()` (the server's thread and the log filter's closures name this system) and `import_component::shutdown()` (adapter, memory:// folders), clears the layer's hooks, stops Play, cancels the jobs, shuts the documents and closes the prefab editor, then clears the context manager's callbacks. The members then go in reverse declaration order: `agent_ui_component`, `agent_component`, `m_registrations`, the selection connections, `play_component`, `startup_component`, `live_mode_component`, `asset_component`, `vcs_component`, `game_build_component`, `file_menu_component`, `migration_component`, `game_layer_component`, `level_load_component`, `asset_open_component`, `prefab_editor_component` (already reset), `panels_component`, `problems_component`, `import_component`, the controllers, `m_state`, `m_services`. Each declaration in `edt_editor_system.h` says what it must outlive. The context manager's callbacks and the layer's hooks (`set_menu_bar_status`, the loading screen, the modal probe, the frame hook) are cleared in the destructor body above; implicit frame callbacks registered on the layer capture their component and are not unregistered when it goes.
 
 **Documents** (`include/snk/editor/edt_document.h`, `edt_document_manager.h`; `editor_context::documents()`): `document` has `id/kind/title/source/is_dirty/generation/can_save/save/save_as`. `document_manager` holds the one `scene_document` (owned by `editor_system`, the controllers are built on it) and at most one `prefab_document` preview: `scene()`, `active()`, `set_active(id)`, `open_prefab(tag)`, `preview()`, `close(id)` (the scene cannot be closed), `for_each`. It raises `document_opened/closed/activated`.
 

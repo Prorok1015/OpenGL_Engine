@@ -161,6 +161,7 @@ edt::file_menu_component::file_menu_component(ports from)
 	hooks.projects_path = m_ports.projects_path;
 	hooks.recent_projects = recent_projects_besides(m_ports.resources, m_ports.project_manifest);
 	m_menu = std::make_unique<file_menu>(m_ports.context.dialogs(), m_ports.context.actions(), std::move(hooks));
+	m_ports.level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 }
 
 edt::file_menu_component::~file_menu_component() = default;
@@ -198,4 +199,11 @@ void edt::file_menu_component::install_edit_actions(std::vector<registration>& o
 void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
 {
 	m_menu->attach_window_close(windows);
+}
+
+void edt::file_menu_component::draw_status()
+{
+	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
+	if (!text) return;
+	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
