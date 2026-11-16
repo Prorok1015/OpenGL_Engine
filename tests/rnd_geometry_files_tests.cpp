@@ -287,8 +287,13 @@ BOOST_AUTO_TEST_CASE(AGenericStoreOfAGeometry_IsRefused_AndWritesNothing)
 
 BOOST_AUTO_TEST_CASE(AGeometryWrittenAgain_IsDrawnByTheGeomManager_WithoutASignalOfTheCaller)
 {
-	const res::tag tag{ "memory://geometry_files/redrawn.geom.desc" };
-	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
+	// geom_manager draws memory:// but not geomfiles://, and the fixture's memory:// keeps files in RAM, where nothing commits.
+	fs::create_directories(dir.path() / "memory");
+	root().unregistrate_resolver(res::tag::memory);
+	root().registrate_resolver<res::vfs_resolver>(res::tag::memory, std::vector<fs::path>{ dir.path() / "memory" });
+	const res::tag tag{ "memory://redrawn.geom.desc" };
+	const std::string first_error = rnd::write_geometry_files(root(), tag, triangles(1));
+	BOOST_REQUIRE_MESSAGE(first_error.empty(), first_error);
 	rnd::geom_manager geometry(storage.require<rnd::render_system>().get_driver(), root());
 	const auto frame = [&] {
 		test_util::pump(tasks);
