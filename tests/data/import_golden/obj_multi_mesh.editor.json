@@ -1,0 +1,395 @@
+{
+	"memory://multi/materials/red.mat.desc": {
+		"json": {
+			"__type": "material_desc",
+			"__parent": "res://base_material.desc",
+			"name": "red",
+			"uniforms": {
+				"albedo": [
+					1E0,
+					0E0,
+					0E0,
+					1E0
+				],
+				"emissive": [
+					0E0,
+					0E0,
+					0E0,
+					1E0
+				],
+				"shininess": 3.2E1
+			},
+			"defines": [
+				"LIGHTS_ENABLED"
+			],
+			"queue": "mix",
+			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+		}
+	},
+	"memory://multi/materials/skin.mat.desc": {
+		"json": {
+			"__type": "material_desc",
+			"__parent": "res://base_material.desc",
+			"name": "skin",
+			"samplers": [
+				"memory://multi/textures/skin.png.txm.desc"
+			],
+			"uniforms": {
+				"albedo": [
+					1E0,
+					1E0,
+					1E0,
+					1E0
+				],
+				"emissive": [
+					0E0,
+					0E0,
+					0E0,
+					1E0
+				],
+				"shininess": 0E0
+			},
+			"defines": [
+				"LIGHTS_ENABLED",
+				"USE_TXM_AS_DIFFUSE"
+			],
+			"queue": "mix",
+			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+		}
+	},
+	"memory://multi/multi.geom.bin": {
+		"binary": 376
+	},
+	"memory://multi/multi.geom.desc": {
+		"json": {
+			"__type": "geometry_desc",
+			"__version": 2,
+			"__parent": "res://base_geometry.desc",
+			"layout": {
+				"position": "vec3",
+				"normal": "vec3",
+				"uv": "vec2",
+				"tangent": "vec3",
+				"bitangent": "vec3"
+			},
+			"vertices": {
+				"offset": 16,
+				"size": 336,
+				"layout": "f32x14"
+			},
+			"indices": {
+				"offset": 352,
+				"size": 24,
+				"layout": "u32"
+			},
+			"bounds": []
+		},
+		"geometry": {
+			"topology": "triangles",
+			"stride": 56,
+			"vertices": 6,
+			"indices": [
+				0,
+				1,
+				2,
+				0,
+				1,
+				2
+			],
+			"elements": {
+				"position": [
+					[
+						-1E0,
+						-1E0,
+						0E0
+					],
+					[
+						1E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						-1E0,
+						-1E0,
+						1E0
+					],
+					[
+						1E0,
+						-1E0,
+						1E0
+					],
+					[
+						0E0,
+						1E0,
+						1E0
+					]
+				],
+				"normal": [
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					]
+				],
+				"uv": [
+					[
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0
+					],
+					[
+						5E-1,
+						1E0
+					],
+					[
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0
+					]
+				],
+				"tangent": [
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					]
+				],
+				"bitangent": [
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
+				]
+			}
+		}
+	},
+	"memory://multi/multi.prefab.desc": {
+		"json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "fe5cddc5f22ceac9",
+			"children": [
+				{
+					"__id": "07725a972c1a83d3",
+					"name": "Textured",
+					"children": [
+						{
+							"__id": "6b1b3183d09ec0d3",
+							"name": "mesh_Textured",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://multi/multi.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://multi/materials/skin.mat.desc"
+								}
+							}
+						}
+					]
+				},
+				{
+					"__id": "f6b9cfc5c43ea786",
+					"name": "Plain",
+					"children": [
+						{
+							"__id": "3463690b95e6f445",
+							"name": "mesh_Plain",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://multi/multi.geom.desc",
+									"vx_begin": 3,
+									"vx_end": 6,
+									"ind_begin": 3,
+									"ind_end": 6,
+									"material": "memory://multi/materials/red.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"memory://multi/textures/skin.png": {
+		"size": 32,
+		"sha256": "269636cd7ca8a53119baf278f4380674210b0da0811fe55316b8449d242ff9c3"
+	},
+	"memory://multi/textures/skin.png.txm.desc": {
+		"json": {
+			"__type": "texture_2d_desc",
+			"__parent": "res://base_texture.desc",
+			"name": "skin.png",
+			"data": "memory://multi/textures/skin.png"
+		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://multi/multi.geom.desc",
+		"prefab_tag": "memory://multi/multi.prefab.desc",
+		"all_tags": [
+			"memory://multi/materials/red.mat.desc",
+			"memory://multi/materials/skin.mat.desc",
+			"memory://multi/multi.geom.desc",
+			"memory://multi/multi.prefab.desc",
+			"memory://multi/textures/skin.png",
+			"memory://multi/textures/skin.png.txm.desc"
+		],
+		"created_tags": [
+			"memory://multi/materials/red.mat.desc",
+			"memory://multi/materials/skin.mat.desc",
+			"memory://multi/multi.geom.bin",
+			"memory://multi/multi.geom.desc",
+			"memory://multi/multi.prefab.desc",
+			"memory://multi/textures/skin.png",
+			"memory://multi/textures/skin.png.txm.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "fe5cddc5f22ceac9",
+			"children": [
+				{
+					"__id": "07725a972c1a83d3",
+					"name": "Textured",
+					"children": [
+						{
+							"__id": "6b1b3183d09ec0d3",
+							"name": "mesh_Textured",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://multi/multi.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://multi/materials/skin.mat.desc"
+								}
+							}
+						}
+					]
+				},
+				{
+					"__id": "f6b9cfc5c43ea786",
+					"name": "Plain",
+					"children": [
+						{
+							"__id": "3463690b95e6f445",
+							"name": "mesh_Plain",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://multi/multi.geom.desc",
+									"vx_begin": 3,
+									"vx_end": 6,
+									"ind_begin": 3,
+									"ind_end": 6,
+									"material": "memory://multi/materials/red.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
+	}
+}

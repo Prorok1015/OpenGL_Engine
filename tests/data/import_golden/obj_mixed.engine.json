@@ -1,0 +1,159 @@
+{
+	"memory://models/obj_mixed/mixed.desc": {
+		"json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "ef799a2f24928fff",
+			"children": [
+				{
+					"__id": "f0d41c559c9e48b7",
+					"name": "Mixed",
+					"children": [
+						{
+							"__id": "dbb21861e2ed9251",
+							"name": "mesh_Mixed",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://models/obj_mixed/mixed.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 6,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": {
+										"__type": "material_desc",
+										"__version": 1,
+										"__parent": "res://base_material.desc",
+										"name": "DefaultMaterial",
+										"uniforms": {
+											"albedo": [
+												6.000000238418579E-1,
+												6.000000238418579E-1,
+												6.000000238418579E-1,
+												1E0
+											],
+											"emissive": [
+												0E0,
+												0E0,
+												0E0,
+												1E0
+											],
+											"shininess": 0E0
+										},
+										"defines": [
+											"LIGHTS_ENABLED"
+										],
+										"queue": "mix",
+										"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+									}
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"memory://models/obj_mixed/mixed.geom.bin": {
+		"binary": 172
+	},
+	"memory://models/obj_mixed/mixed.geom.desc": {
+		"json": {
+			"__type": "geometry_desc",
+			"__version": 2,
+			"__parent": "res://base_geometry.desc",
+			"layout": {
+				"position": "vec3",
+				"normal": "vec3"
+			},
+			"vertices": {
+				"offset": 16,
+				"size": 144,
+				"layout": "f32x6"
+			},
+			"indices": {
+				"offset": 160,
+				"size": 12,
+				"layout": "u32"
+			},
+			"bounds": []
+		},
+		"geometry": {
+			"topology": "triangles",
+			"stride": 24,
+			"vertices": 6,
+			"indices": [
+				0,
+				1,
+				2
+			],
+			"elements": {
+				"position": [
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
+				],
+				"normal": [
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					]
+				]
+			}
+		}
+	}
+}
