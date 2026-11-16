@@ -9,8 +9,11 @@
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_import_vertex_layout.h>
 #include <boost/json.hpp>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -84,6 +87,36 @@ f 1/1 2/2 3/3
 o Wire
 l 1/1 2/2
 l 2/2 3/3
+)";
+
+// #1100: a triangle mesh with uvs (so with tangents) and one without, at z = 1.
+constexpr std::string_view OBJ_UV_AND_NO_UV = R"(v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 0 1
+v 1 0 1
+v 1 1 1
+vt 0 0
+vt 1 0
+vt 1 1
+o WithUv
+f 1/1 2/2 3/3
+o NoUv
+f 4 5 6
+)";
+
+// #1100: the first mesh is a line without normals or uvs; the triangle after it has both. The layout is the triangle's.
+constexpr std::string_view OBJ_LINE_FIRST = R"(v 0 0 0
+v 1 0 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+vn 0 0 1
+o Wire
+l 1 2
+o Tri
+f 1/1/1 2/2/1 3/3/1
 )";
 
 bool contains(std::string_view text, std::string_view part)
@@ -205,6 +238,48 @@ bool warns_of_dropped_faces(const warn_capture& warnings)
 	return warnings.any([](std::string_view line) { return contains(line, "line(s) and") && contains(line, "point(s)"); });
 }
 
+// position + normal + uv + tangent + bitangent, in floats.
+constexpr std::size_t k_full_stride = (3 + 3 + 2 + 3 + 3) * sizeof(float);
+
+glm::vec3 vec3_at(const rnd::geometry_desc& geometry, std::size_t vertex, const std::string& element)
+{
+	glm::vec3 out{};
+	std::memcpy(&out, geometry.vertices.data() + vertex * geometry.layout.get_stride() + geometry.layout.get_element_offset(element), sizeof(out));
+	return out;
+}
+
+glm::vec2 vec2_at(const rnd::geometry_desc& geometry, std::size_t vertex, const std::string& element)
+{
+	glm::vec2 out{};
+	std::memcpy(&out, geometry.vertices.data() + vertex * geometry.layout.get_stride() + geometry.layout.get_element_offset(element), sizeof(out));
+	return out;
+}
+
+// Both meshes in one layout with uv and tangents; the vertices of the mesh without uvs (z = 1) carry the defaults.
+void check_uv_and_no_uv(const std::optional<stored_geometry>& geometry)
+{
+	BOOST_REQUIRE(geometry);
+	const rnd::geometry_desc& data = geometry->data;
+	BOOST_REQUIRE(data.layout.get_stride() == k_full_stride);
+	BOOST_REQUIRE(data.vertices.size() % k_full_stride == 0u);
+	const std::size_t count = data.vertices.size() / k_full_stride;
+	BOOST_TEST(count == 6u);
+	std::size_t without_uv = 0;
+	for (std::size_t v = 0; v < count; ++v) {
+		if (vec3_at(data, v, "position").z != 1.f) continue;
+		++without_uv;
+		BOOST_TEST((vec2_at(data, v, "uv") == scn::import_layout::default_uv));
+		// The default frame is built from the vertex normal: unit, perpendicular to it, bitangent = cross(n, t).
+		const glm::vec3 normal = vec3_at(data, v, "normal");
+		const glm::vec3 tangent = vec3_at(data, v, "tangent");
+		const glm::vec3 bitangent = vec3_at(data, v, "bitangent");
+		BOOST_TEST(std::abs(glm::length(tangent) - 1.f) < 1e-4f);
+		BOOST_TEST(std::abs(glm::dot(tangent, glm::normalize(normal))) < 1e-4f);
+		BOOST_TEST(glm::length(bitangent - glm::cross(glm::normalize(normal), tangent)) < 1e-4f);
+	}
+	BOOST_TEST(without_uv == 3u);
+}
+
 // The index range of the first mesh node the engine importer made, or -1 without one.
 int first_mesh_index_count(const json::value& node)
 {
@@ -304,6 +379,25 @@ BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEngineImporter)
 	BOOST_TEST(warnings.names_dropped("beside.obj", "Wire", 2u, "line"));
 }
 
+// #1100: two meshes with different attributes share one layout (the union), no ASSERT, the defaults in the gaps.
+BOOST_AUTO_TEST_CASE(MeshesWithAndWithoutUvs_ShareTheUnionLayout_InTheEngineImporter)
+{
+	const auto prefab = engine_import("uv_mix.obj", OBJ_UV_AND_NO_UV);
+	BOOST_REQUIRE(prefab);
+	check_uv_and_no_uv(engine_geometry("uv_mix"));
+}
+
+// #1100: before, the layout came from the first mesh (a line, position only) and the triangle tripped "Stride mismatch".
+BOOST_AUTO_TEST_CASE(ADroppedFirstMesh_DoesNotShapeTheLayout_InTheEngineImporter)
+{
+	const auto prefab = engine_import("line_first.obj", OBJ_LINE_FIRST);
+	BOOST_REQUIRE(prefab);
+	const auto geometry = engine_geometry("line_first");
+	check_kept(geometry, rnd::geometry_topology::triangles, 3u);
+	BOOST_TEST(geometry->data.layout.get_stride() == k_full_stride);
+	BOOST_TEST(geometry->data.vertices.size() == 3u * k_full_stride);
+}
+
 // ---- editor importer (edt::model_importer) ----
 
 BOOST_AUTO_TEST_CASE(ALinesOnlyObj_HasNoLineInATriangleGeometry_InTheEditorImporter)
@@ -356,6 +450,23 @@ BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEditorImporter)
 	check_kept(stored(imported.geom_tag), rnd::geometry_topology::triangles, 3u);
 	BOOST_TEST(mesh_node_count(imported.prefab_json) == 1);
 	BOOST_TEST(warnings.names_dropped("beside.obj", "Wire", 2u, "line"));
+}
+
+BOOST_AUTO_TEST_CASE(MeshesWithAndWithoutUvs_ShareTheUnionLayout_InTheEditorImporter)
+{
+	const edt::import_intermediate imported = editor_import("uv_mix.obj", OBJ_UV_AND_NO_UV);
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	check_uv_and_no_uv(stored(imported.geom_tag));
+}
+
+BOOST_AUTO_TEST_CASE(ADroppedFirstMesh_DoesNotShapeTheLayout_InTheEditorImporter)
+{
+	const edt::import_intermediate imported = editor_import("line_first.obj", OBJ_LINE_FIRST);
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	const auto geometry = stored(imported.geom_tag);
+	check_kept(geometry, rnd::geometry_topology::triangles, 3u);
+	BOOST_TEST(geometry->data.layout.get_stride() == k_full_stride);
+	BOOST_TEST(geometry->data.vertices.size() == 3u * k_full_stride);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
