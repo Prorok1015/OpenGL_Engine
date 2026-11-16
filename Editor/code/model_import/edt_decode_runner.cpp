@@ -48,6 +48,10 @@ std::vector<std::string> clean_environment(const fs::path& folder)
 #if defined(_WIN32)
 	keep("SystemRoot");
 	keep("PATH");
+	// CreateProcessW rewrites these for an AppContainer and fails (ERROR_ENVVAR_NOT_FOUND) without them (#1054).
+	keep("LOCALAPPDATA");
+	keep("APPDATA");
+	keep("USERPROFILE");
 	// The one place a confined child may write (#1054); unconfined, still the run folder that is removed after it.
 	env.push_back("TEMP=" + utf8_text(folder));
 	env.push_back("TMP=" + utf8_text(folder));

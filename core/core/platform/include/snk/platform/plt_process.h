@@ -49,6 +49,12 @@ namespace platform
 		std::wstring container_name;
 		std::vector<std::filesystem::path> read_write;
 		std::vector<std::filesystem::path> read_execute;
+		// What a machine lets a confined child start with differs (a CI runner's window station, a DLL's own start): the
+		// process mitigations and the job's UI limits can be left out, and the container can be given access to this
+		// process's window station and desktop, which user32 needs to start.
+		bool mitigations = true;
+		bool ui_limits = true;
+		bool desktop_access = false;
 	};
 
 	struct process_options
