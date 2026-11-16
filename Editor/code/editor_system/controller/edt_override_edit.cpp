@@ -403,6 +403,11 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id) return e.value;
 	}
 	std::vector<stale_record> found;
+	if (!referenced_prefab(owner)) {
+		auto none = std::make_shared<const std::vector<stale_record>>();
+		m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, none });
+		return none;
+	}
 	std::vector<bool> known(owner.overrides.size(), false);
 	for (const scn::stale_override& entry : scn::find_stale_records(*m_services.assembler(), owner)) {
 		found.push_back({ entry.index, entry.what });
@@ -423,7 +428,9 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 			}
 			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
 			if (!schema || schema->fields.empty()) continue;
-			if (desc::validate_override(*schema, desc::json_change{ record.path, record.value }, &descs->schemas()) == desc::override_status::stale) {
+			json::value patch = json::object{};
+			if (!desc::json_pointer_set(patch, record.path, record.value)) continue;
+			if (desc::check_override_object(*schema, patch.as_object(), nullptr, &descs->schemas()).status == desc::override_status::stale) {
 				found.push_back({ i, std::format("field {} is not in component '{}' any more", record.path, record.component) });
 			}
 		}

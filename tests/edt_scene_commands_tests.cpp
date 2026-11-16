@@ -701,6 +701,13 @@ BOOST_AUTO_TEST_CASE(a_record_of_the_world_that_instantiates_the_instances_prefa
 	BOOST_TEST(refused.code == cmd::codes::not_found);
 }
 
+BOOST_AUTO_TEST_CASE(a_node_that_instantiates_no_prefab_has_no_stale_records)
+{
+	edt::override_edit::view_cache cache(services, scene);
+
+	BOOST_TEST(cache.stale(*child(root(), 0xa4))->empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
 {
 	gesture = true;

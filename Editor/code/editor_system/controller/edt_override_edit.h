@@ -64,7 +64,7 @@ namespace edt::override_edit
 		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
 		// The records of `owner` that find nothing to change in the prefab any more, kept like the others: the node and component
 		// level from scn::find_stale_records, then the field level: a `set` record whose pointer the schema of the component it
-		// sets (as the base content defines it) no longer has (desc::validate_override; it logs a warning for each).
+		// sets (as the base content defines it) no longer has (desc::check_override_object: silent). A node that instantiates no prefab has none.
 		std::shared_ptr<const std::vector<stale_record>> stale(const prefab_node& owner);
 
 	private:
