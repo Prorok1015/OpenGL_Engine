@@ -81,6 +81,7 @@
 | [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | frozen — низкий приоритет для «Химеры» |
 | [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | done |
 | [EPIC-57](infrastructure/EPIC-57.md) | Asset Identity & Database — постоянный ID ассета (`.resource`), база ассетов, обратные зависимости (#27) | design |
+| [EPIC-80](infrastructure/EPIC-80.md) | Game Code in wasm Sandbox — один исходник игры: песочница wasm / нативная DLL / нативный статический (#1084) | idea |
 
 ### Render Migration
 
