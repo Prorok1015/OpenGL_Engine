@@ -82,6 +82,8 @@ namespace edt
 		};
 		std::vector<entry> m_entries;
 		bool m_needs_refresh = true;
+		// The labels were built with icon glyphs; a theme that loads or drops the icon font rebuilds them.
+		bool m_labels_have_icons = false;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
 
 		// The menu item of one folder (`folder` is relative to res://): asks for the window to open at the end of the frame.

@@ -173,6 +173,7 @@ namespace edt
 	{
 		m_entries.clear();
 		m_needs_refresh = false;
+		m_labels_have_icons = gui::ui_font_has_icons();
 
 		const std::string search_lower = to_lower(m_search);
 
@@ -286,7 +287,7 @@ namespace edt
 		ImGui::NextColumn();
 
 		// Right: current-directory contents
-		if (m_needs_refresh)
+		if (m_needs_refresh || m_labels_have_icons != gui::ui_font_has_icons())
 			refresh_entries();
 
 		// Room under the list for "Used by" of the picked file.

@@ -3,12 +3,14 @@
 #include <snk/resource/adapters/res_binary_adapter.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 // gui::ui_font picks between the shipped TTF and ImGui's built-in font, and builds the glyph ranges the TTF is
@@ -37,6 +39,52 @@ std::vector<std::byte> bytes_of(std::initializer_list<unsigned> values)
 	std::vector<std::byte> out;
 	for (unsigned v : values) {
 		out.push_back(static_cast<std::byte>(v));
+	}
+	return out;
+}
+
+struct table {
+	std::string_view name;
+	std::uint32_t length;
+};
+
+// A font file with these tables (zero filled) in a valid directory; `version` is the first four bytes.
+std::vector<std::byte> sfnt(std::initializer_list<unsigned> version, const std::vector<table>& tables)
+{
+	std::vector<std::byte> out = bytes_of(version);
+	auto u16 = [&](std::uint32_t v) { out.push_back(std::byte(v >> 8)); out.push_back(std::byte(v & 0xff)); };
+	auto u32 = [&](std::uint32_t v) { u16(v >> 16); u16(v & 0xffff); };
+	u16(static_cast<std::uint32_t>(tables.size()));
+	u16(0);
+	u16(0);
+	u16(0);
+	std::uint32_t offset = static_cast<std::uint32_t>(12 + 16 * tables.size());
+	for (const table& t : tables) {
+		for (char c : t.name) out.push_back(static_cast<std::byte>(c));
+		u32(0);
+		u32(offset);
+		u32(t.length);
+		offset += t.length;
+	}
+	out.resize(offset);
+	return out;
+}
+
+// A TrueType collection holding `font` as its only font.
+std::vector<std::byte> collection_of(const std::vector<std::byte>& font)
+{
+	std::vector<std::byte> out = bytes_of({ 't', 't', 'c', 'f', 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 16 });
+	const std::size_t base = out.size();
+	out.insert(out.end(), font.begin(), font.end());
+	// The table offsets of a collection's font count from the start of the file.
+	const std::uint32_t tables = (std::to_integer<std::uint32_t>(out[base + 4]) << 8)
+		| std::to_integer<std::uint32_t>(out[base + 5]);
+	for (std::uint32_t i = 0; i < tables; ++i) {
+		const std::size_t at = base + 12 + i * 16 + 8;
+		std::uint32_t offset = 0;
+		for (std::size_t b = 0; b < 4; ++b) offset = (offset << 8) | std::to_integer<std::uint32_t>(out[at + b]);
+		offset += static_cast<std::uint32_t>(base);
+		for (std::size_t b = 0; b < 4; ++b) out[at + b] = std::byte((offset >> (24 - 8 * b)) & 0xff);
 	}
 	return out;
 }
@@ -83,15 +131,60 @@ BOOST_AUTO_TEST_CASE(BytesThatAreNotAFontFallBackToTheBuiltInFont)
 	BOOST_TEST(atlas.ConfigData[0].SizePixels == 26.f);
 }
 
-BOOST_AUTO_TEST_CASE(TheFontHeaderCheckKnowsTheSfntMagics)
+BOOST_AUTO_TEST_CASE(TheFontCheckReadsTheTableDirectory)
 {
 	using gui::ui_font;
-	BOOST_TEST(ui_font::looks_like_font(bytes_of({ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 })));
-	BOOST_TEST(ui_font::looks_like_font(bytes_of({ 'O', 'T', 'T', 'O', 0, 0, 0, 0, 0, 0, 0, 0 })));
-	BOOST_TEST(ui_font::looks_like_font(bytes_of({ 't', 't', 'c', 'f', 0, 0, 0, 0, 0, 0, 0, 0 })));
+	const std::vector<table> truetype_tables = { { "cmap", 4 }, { "head", 54 }, { "hhea", 36 }, { "hmtx", 4 },
+		{ "maxp", 6 }, { "loca", 4 }, { "glyf", 4 } };
+	BOOST_TEST(ui_font::looks_like_font(sfnt({ 0, 1, 0, 0 }, truetype_tables)));
+	BOOST_TEST(ui_font::looks_like_font(sfnt({ 't', 'r', 'u', 'e' }, truetype_tables)));
+	BOOST_TEST(ui_font::looks_like_font(sfnt({ 'O', 'T', 'T', 'O' }, { { "cmap", 4 }, { "head", 54 },
+		{ "hhea", 36 }, { "hmtx", 4 }, { "maxp", 6 }, { "CFF ", 4 } })));
+	BOOST_TEST(ui_font::looks_like_font(collection_of(sfnt({ 0, 1, 0, 0 }, truetype_tables))));
+
+	// The magic alone is not a font any more: it is what a truncated file still has.
+	BOOST_TEST(!ui_font::looks_like_font(bytes_of({ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 })));
+	BOOST_TEST(!ui_font::looks_like_font(bytes_of({ 't', 't', 'c', 'f', 0, 0, 0, 0, 0, 0, 0, 0 })));
 	BOOST_TEST(!ui_font::looks_like_font({}));
-	BOOST_TEST(!ui_font::looks_like_font(bytes_of({ 0, 1, 0, 0 })));
 	BOOST_TEST(!ui_font::looks_like_font(bytes_of({ '<', 'h', 't', 'm', 'l', '>', 0, 0, 0, 0, 0, 0 })));
+
+	auto without = [&](std::string_view name) {
+		std::vector<table> tables;
+		for (const table& t : truetype_tables) {
+			if (t.name != name) tables.push_back(t);
+		}
+		return sfnt({ 0, 1, 0, 0 }, tables);
+	};
+	BOOST_TEST(!ui_font::looks_like_font(without("cmap")));
+	BOOST_TEST(!ui_font::looks_like_font(without("glyf")));
+	BOOST_TEST(!ui_font::looks_like_font(sfnt({ 0, 1, 0, 0 }, { { "cmap", 4 }, { "head", 20 }, { "hhea", 36 },
+		{ "hmtx", 4 }, { "maxp", 6 }, { "loca", 4 }, { "glyf", 4 } })));
+
+	std::vector<std::byte> past_the_end = sfnt({ 0, 1, 0, 0 }, truetype_tables);
+	past_the_end.resize(past_the_end.size() - 1);
+	BOOST_TEST(!ui_font::looks_like_font(past_the_end));
+}
+
+BOOST_AUTO_TEST_CASE(ATruncatedRealFont_IsNoFont_AndTheBuiltInFontIsAdded)
+{
+	const std::filesystem::path fonts = std::filesystem::path{ SNK_CORE_RES_DIR } / "fonts";
+	for (const char* name : { "NotoSans-Regular.ttf", "lucide-icons.ttf" }) {
+		BOOST_TEST_CONTEXT(name) {
+			std::vector<std::byte> bytes = read_bytes(fonts / name);
+			BOOST_REQUIRE(gui::ui_font::looks_like_font(bytes));
+			bytes.resize(bytes.size() / 2);
+			BOOST_TEST(!gui::ui_font::looks_like_font(bytes));
+
+			gui::ui_font font;
+			font.set_bytes(bytes);
+			font.set_icon_bytes(bytes);
+			ImFontAtlas atlas;
+			BOOST_REQUIRE(font.add_to(atlas, 13.f) != nullptr);
+			BOOST_TEST(atlas.Fonts.Size == 1);
+			BOOST_TEST(atlas.ConfigData.Size == 1);
+			BOOST_TEST(atlas.Build());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(GlyphRangesCoverLatinCyrillicAndGreek)

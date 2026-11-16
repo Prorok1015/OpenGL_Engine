@@ -35,7 +35,11 @@ namespace gui
 		};
 		using apply_function = std::function<void(theme)>;
 
-		theme_service(res::resource_system& resources, res::tag fallback, apply_function apply);
+		// Presets and fonts are read only from `protocols` (the editor: engine://), besides the fallback and the UI
+		// and icon fonts, which come from resource_system::engine_file: a project's res:// file never reaches the
+		// font parser (#929).
+		theme_service(res::resource_system& resources, res::tag fallback, apply_function apply,
+			std::vector<std::string> protocols = { std::string{ res::tag::engine } });
 
 		// The load of an earlier select() is dropped.
 		void select(res::tag preset);
@@ -61,6 +65,7 @@ namespace gui
 		void poll_preset();
 		void poll_fonts();
 		void give_up(std::string_view why);
+		bool readable(const res::tag& tag) const;
 		res::res_handle<res::binary_resource> request_font(const res::tag& tag);
 
 		res::resource_system& m_resources;
@@ -68,6 +73,7 @@ namespace gui
 		res::tag m_ui_font;
 		res::tag m_icon_font;
 		apply_function m_apply;
+		std::vector<std::string> m_protocols;
 
 		stage m_stage = stage::idle;
 		res::tag m_selected;

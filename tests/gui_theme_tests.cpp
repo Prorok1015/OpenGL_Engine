@@ -51,7 +51,11 @@ struct theme_env : test_util::ram_res_env
 {
 	desc::desc_system descs{ *rs };
 	std::vector<gui::theme_service::theme> applied;
+	// memory:// holds the test's own presets; the editor reads engine:// only (the default).
 	gui::theme_service service{ *rs, res::tag{ "engine://themes/classic.desc" },
+		[this](gui::theme_service::theme theme) { applied.push_back(std::move(theme)); },
+		{ std::string{ res::tag::engine }, std::string{ res::tag::memory } } };
+	gui::theme_service editor_service{ *rs, res::tag{ "engine://themes/classic.desc" },
 		[this](gui::theme_service::theme theme) { applied.push_back(std::move(theme)); } };
 
 	theme_env()
@@ -78,20 +82,22 @@ struct theme_env : test_util::ram_res_env
 		rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 	}
 
-	void settle()
+	void settle(gui::theme_service& themes)
 	{
-		for (int i = 0; i < 50 && service.loading(); ++i) {
+		for (int i = 0; i < 50 && themes.loading(); ++i) {
 			pump();
-			service.poll();
+			themes.poll();
 		}
 	}
 
-	const gui::theme_service::theme& select(std::string_view preset)
+	const gui::theme_service::theme& select(std::string_view preset) { return select(service, preset); }
+
+	const gui::theme_service::theme& select(gui::theme_service& themes, std::string_view preset)
 	{
 		applied.clear();
-		service.select(res::tag{ preset });
-		settle();
-		BOOST_REQUIRE(!service.loading());
+		themes.select(res::tag{ preset });
+		settle(themes);
+		BOOST_REQUIRE(!themes.loading());
 		BOOST_REQUIRE_EQUAL(applied.size(), 1u);
 		return applied.front();
 	}
@@ -206,6 +212,44 @@ BOOST_AUTO_TEST_CASE(AFontFileThatDoesNotExist_IsReplacedByTheUiFont)
 
 	BOOST_TEST(!theme.style.imgui_dark);
 	BOOST_TEST(gui::ui_font::looks_like_font(theme.text_font));
+}
+
+BOOST_AUTO_TEST_CASE(TheEditorReadsNoPresetOfTheProject_ItFallsBack)
+{
+	// core/res is served as res:// too: the same file under the project's protocol is still refused (#929).
+	const auto& theme = select(editor_service, "res://themes/dark_neutral.desc");
+
+	BOOST_TEST(theme.style.imgui_dark);
+	BOOST_TEST(editor_service.selected().view() == "engine://themes/classic.desc");
+}
+
+BOOST_AUTO_TEST_CASE(AFontOfTheProject_IsNotRead_TheUiFontIsUsed)
+{
+	const std::vector<std::byte> noto = read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Regular.ttf");
+	const std::vector<std::byte> other = read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "lucide-icons.ttf");
+	rs->store(res::tag{ "res://fonts/project.ttf" }, other);
+	const res::tag preset = put("project_font.desc",
+		R"({ "__type" : "gui.theme", "__version" : 1, "font" : "res://fonts/project.ttf" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(!theme.style.imgui_dark);
+	BOOST_TEST((theme.text_font == noto));
+}
+
+BOOST_AUTO_TEST_CASE(ATruncatedRealFont_IsReplacedByTheUiFont)
+{
+	std::vector<std::byte> truncated = read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Regular.ttf");
+	const std::vector<std::byte> noto = truncated;
+	truncated.resize(truncated.size() / 2);
+	rs->store(res::tag{ "memory://t/truncated.ttf" }, truncated);
+	const res::tag preset = put("truncated_font.desc",
+		R"({ "__type" : "gui.theme", "__version" : 1, "font" : "memory://t/truncated.ttf" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(!theme.style.imgui_dark);
+	BOOST_TEST((theme.text_font == noto));
 }
 
 BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)

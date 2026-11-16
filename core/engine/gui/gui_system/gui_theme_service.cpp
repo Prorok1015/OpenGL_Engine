@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <utility>
@@ -107,12 +108,14 @@ std::optional<gui::theme_style> gui::theme_style_of(const theme_desc& preset, st
 	return style;
 }
 
-gui::theme_service::theme_service(res::resource_system& resources, res::tag fallback, apply_function apply)
+gui::theme_service::theme_service(res::resource_system& resources, res::tag fallback, apply_function apply,
+	std::vector<std::string> protocols)
 	: m_resources(resources)
 	, m_fallback(std::move(fallback))
 	, m_ui_font(resources.engine_file("fonts/NotoSans-Regular.ttf"))
 	, m_icon_font(resources.engine_file("fonts/lucide-icons.ttf"))
 	, m_apply(std::move(apply))
+	, m_protocols(std::move(protocols))
 {
 }
 
@@ -121,8 +124,26 @@ void gui::theme_service::select(res::tag preset)
 	m_selected = std::move(preset);
 	m_text_font = {};
 	m_icons = {};
-	m_preset = m_resources.require<theme_desc>(m_selected);
+	m_preset = {};
 	m_stage = stage::preset;
+	if (!readable(m_selected)) {
+		std::string protocols;
+		for (const std::string& protocol : m_protocols) {
+			protocols += std::format("{}{}://", protocols.empty() ? "" : ", ", protocol);
+		}
+		give_up(std::format("themes are read only from {}", protocols));
+		return;
+	}
+	m_preset = m_resources.require<theme_desc>(m_selected);
+}
+
+bool gui::theme_service::readable(const res::tag& tag) const
+{
+	if (tag == m_fallback || tag == m_ui_font || tag == m_icon_font) {
+		return true;
+	}
+	const std::string_view protocol = tag.protocol();
+	return std::ranges::any_of(m_protocols, [&](const std::string& p) { return p == protocol; });
 }
 
 void gui::theme_service::poll()
@@ -154,6 +175,11 @@ void gui::theme_service::poll_preset()
 	m_style = *style;
 	m_wants_icons = preset->icons;
 	m_text_font_tag = preset->font;
+	if (!readable(m_text_font_tag)) {
+		egLOG_WARN("gui", "theme '{}': font '{}' is not read from that protocol, using '{}'", m_selected.view(),
+			m_text_font_tag.view(), m_ui_font.view());
+		m_text_font_tag = m_ui_font;
+	}
 	m_text_font = request_font(m_text_font_tag);
 	m_icons = m_wants_icons ? request_font(m_icon_font) : res::res_handle<res::binary_resource>{};
 	m_preset = {};
