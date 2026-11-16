@@ -71,17 +71,11 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface
 # (EPIC-49 US-49-1/US-49-3). The umbrella no longer leaks all component headers.
-# assimp: the editor calls it directly; in the shared build it lives in snk_engine.
-set(_edt_assimp "")
-if(SNK_WITH_ASSIMP)
-	snk_usage_only(_edt_assimp assimp)
-endif()
-if(SNK_WITH_ASSIMP AND SNK_ENGINE_SHARED AND MSVC)
-	# A DLL exports nothing it was not told to: assimp and Boost.JSON are linked into the editor
-	# as their own static copy. assimp's DefaultLogger is a per-module global, so logging set up in
-	# the editor is not seen by the DLL's copy (aiScene does not cross core headers).
+set(_edt_boost_json "")
+if(SNK_ENGINE_SHARED AND MSVC)
+	# A DLL exports nothing it was not told to: Boost.JSON is linked into the editor as its own static copy.
 	# imgui is stateful and is exported (IMGUI_API).
-	set(_edt_assimp assimp Boost::json)
+	set(_edt_boost_json Boost::json)
 endif()
 # snk::mcp_server: the agent server of the editor (edt_agent_server, edt_mcp_bridge_host). Nothing under core/ links it.
 # Like snk_engine, the library carries its dependencies privately: whoever includes snk/editor links snk::engine and
@@ -92,7 +86,7 @@ if(SNK_ENGINE_SHARED AND MSVC)
 	# As editor_system: snk_engine.dll exports only SNK_API, Boost.JSON is linked in as its own static copy.
 	target_link_libraries(snk_editor_api PRIVATE Boost::json)
 endif()
-target_link_libraries(${PROJECT_NAME} PUBLIC snk_editor_api PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp} PRIVATE snk::mcp_server)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk_editor_api PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_boost_json} PRIVATE snk::mcp_server)
 # EPIC-58 S7 (#759): project.migration_plan / project.migrate run the migration library in the editor.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::project_migration)
 # forge/curl: the owner-only access list of the request files (Windows security API).

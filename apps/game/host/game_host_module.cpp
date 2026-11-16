@@ -10,9 +10,8 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_start_level.h>
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -99,9 +98,7 @@ void snk::game_host::game_host_module::initialize_services(ds::app_data_storage&
 {
 #if SNK_HAS_ASSIMP
 	// Levels name .glb/.gltf/.obj/.fbx models directly; the editor registers the same adapter for itself.
-	auto& resources = data.require<res::resource_system>();
-	resources.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO,
-		std::ref(data.require<desc::desc_system>()), std::ref(resources));
+	mdl::register_model_adapter(data.require<res::resource_system>(), data.require<desc::desc_system>());
 #else
 	static_cast<void>(data);
 	egLOG_WARN("game", "built without assimp (SNK_WITH_ASSIMP=OFF): levels that name models cannot show them");
@@ -112,7 +109,7 @@ void snk::game_host::game_host_module::shutdown_services(ds::app_data_storage& d
 {
 	data.require<app::frame_stage_registry>().remove_stage(k_start_level_stage);
 #if SNK_HAS_ASSIMP
-	data.require<res::resource_system>().unregistrate_adapter(scn::model_importer_adapter::INFO);
+	data.require<res::resource_system>().unregistrate_adapter(mdl::model_adapter::INFO);
 #endif
 	data.destruct<run_outcome>();
 }
