@@ -44,6 +44,9 @@ namespace prj
 		// The manifest's engine_version against current_engine_version().
 		version_match engine_match = version_match::exact;
 
+		// Last, so the fields a game module reads keep their offsets: the manifest's "prefab_limits" (#1031).
+		prefab_spawn_limits prefab_limits;
+
 		// <root>/.cache: regenerated data, never committed.
 		std::filesystem::path cache_dir() const { return root / std::filesystem::path(k_cache_dir_name); }
 		// memory:// (data made at runtime, e.g. imports) inside the cache.

@@ -2,6 +2,7 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include "scn_hierarchy_destroy.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_manifest.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/level/scn_node_index.h>
@@ -403,15 +404,10 @@ namespace {
 		return child;
 	}
 
-	// Where one spawn is cut short; a test lowers the node budget (scn::detail::set_spawn_node_limit).
-	struct spawn_limits
-	{
-		// Nodes one outer call builds: a few small files that fan out would otherwise build K^depth entities.
-		std::size_t nodes = 1'000'000;
-		// Prefabs open one inside another above one node; the file the spawn starts from is not one of them.
-		std::size_t depth = 16;
-	};
-	spawn_limits g_spawn_limits;
+	// Where one spawn is cut short: the project's prefab_limits (scn::set_spawn_limits, from scene_init).
+	scn::spawn_limits g_spawn_limits;
+	static_assert(scn::spawn_limits{}.nesting_depth == prj::prefab_spawn_limits{}.nesting_depth
+		&& scn::spawn_limits{}.nodes_per_spawn == prj::prefab_spawn_limits{}.nodes_per_spawn);
 
 	// What one spawn knows on its way down the tree (#924). A project's files decide what references what: a prefab
 	// that instantiates itself, directly or through others, must end, and so must one that fans out without bound.
@@ -486,8 +482,10 @@ namespace {
 			egLOG_ERROR("desc", "a prefab instantiates itself, it is not built again: {}", path_text(walk.open, {}, file));
 			return true;
 		}
-		if (walk.open.size() - std::min(walk.roots, walk.open.size()) >= g_spawn_limits.depth) {
-			egLOG_ERROR("desc", "prefabs nested deeper than {}, not built: {}", g_spawn_limits.depth, path_text(walk.open, {}, file));
+		if (walk.open.size() - std::min(walk.roots, walk.open.size()) >= g_spawn_limits.nesting_depth) {
+			egLOG_ERROR("desc", "prefabs nested deeper than {} (project setting prefab_limits.nesting_depth), "
+				"not built: {}",
+				g_spawn_limits.nesting_depth, path_text(walk.open, {}, file));
 			return true;
 		}
 		return false;
@@ -813,8 +811,10 @@ namespace {
 			if (is_open(open, tag) || is_open(made.chain, tag)) {
 				egLOG_ERROR("desc", "a prefab instantiates itself, reference ignored: {}", path_text(open, made.chain, tag));
 				ignored = ref->key;
-			} else if (depth - std::min(roots, depth) >= g_spawn_limits.depth) {
-				egLOG_ERROR("desc", "prefabs nested deeper than {}, reference ignored: {}", g_spawn_limits.depth, path_text(open, made.chain, tag));
+			} else if (depth - std::min(roots, depth) >= g_spawn_limits.nesting_depth) {
+				egLOG_ERROR("desc", "prefabs nested deeper than {} (project setting prefab_limits.nesting_depth), "
+					"reference ignored: {}",
+					g_spawn_limits.nesting_depth, path_text(open, made.chain, tag));
 				ignored = ref->key;
 			}
 			if (ignored) ref.reset();
@@ -968,9 +968,9 @@ bool scn::expand_instance(const ecs_assembler& assembler, const prefab_desc::pre
 	return true;
 }
 
-std::size_t scn::detail::set_spawn_node_limit(std::size_t nodes)
+scn::spawn_limits scn::set_spawn_limits(const spawn_limits& limits)
 {
-	return std::exchange(g_spawn_limits.nodes, nodes);
+	return std::exchange(g_spawn_limits, limits);
 }
 
 namespace {
@@ -1108,11 +1108,12 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 
 	for (std::size_t index = 0; index < content->children.size(); ++index) {
 		const prefab_node& child_node = content->children[index];
-		if (walk.nodes >= g_spawn_limits.nodes) {
+		if (walk.nodes >= g_spawn_limits.nodes_per_spawn) {
 			if (!walk.over_budget) {
 				walk.over_budget = true;
-				egLOG_ERROR("desc", "a spawn builds more than {} nodes: the rest of the tree is left out{} (last prefab: {})",
-					g_spawn_limits.nodes, reload ? ", other live instances are left as they are" : "",
+				egLOG_ERROR("desc", "a spawn builds more than {} nodes (project setting prefab_limits.nodes_per_spawn): "
+					"the rest of the tree is left out{} (last prefab: {})",
+					g_spawn_limits.nodes_per_spawn, reload ? ", other live instances are left as they are" : "",
 					inside.empty() ? std::string_view{ "none" } : inside.back().view());
 			}
 			break;
@@ -1582,9 +1583,11 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 		if (!instance || instance->source_prefab != desc->get_tag()) continue;
 		// Out of budget: a tree not started keeps all its live children, as the rest of a tree cut short does.
 		if (walk.over_budget) break; // the cut inside a tree already reported it, with this outcome
-		if (walk.nodes >= g_spawn_limits.nodes) {
-			egLOG_ERROR("desc", "a hot reload builds more than {} nodes: the other live instances of {} are left as they are",
-				g_spawn_limits.nodes, desc->get_tag().view());
+		if (walk.nodes >= g_spawn_limits.nodes_per_spawn) {
+			egLOG_ERROR("desc", "a hot reload builds more than {} nodes "
+				"(project setting prefab_limits.nodes_per_spawn): "
+				"the other live instances of {} are left as they are",
+				g_spawn_limits.nodes_per_spawn, desc->get_tag().view());
 			walk.over_budget = true;
 			break;
 		}

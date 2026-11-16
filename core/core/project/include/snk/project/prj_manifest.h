@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -25,6 +26,20 @@ namespace prj
 		std::string name;
 		module_kind kind = module_kind::runtime;
 		bool optional = false;
+	};
+
+	// How far one spawn of prefabs goes (#924, #1031): "prefab_limits" of the manifest. Out of the bounds: the default.
+	struct prefab_spawn_limits
+	{
+		static constexpr std::size_t k_min_nesting_depth = 1;
+		static constexpr std::size_t k_max_nesting_depth = 64;
+		static constexpr std::size_t k_min_nodes_per_spawn = 1'000;
+		static constexpr std::size_t k_max_nodes_per_spawn = 100'000'000;
+
+		// Prefab instances open one inside another; plain children and the file a spawn starts from do not count.
+		std::size_t nesting_depth = 16;
+		// Nodes one spawn or hot reload builds: a few small files that fan out would otherwise build K^depth entities.
+		std::size_t nodes_per_spawn = 1'000'000;
 	};
 
 	struct manifest
@@ -57,6 +72,9 @@ namespace prj
 		std::optional<manifest_error> error;
 		// Non-fatal findings, such as unknown fields kept for forward compatibility.
 		std::vector<std::string> warnings;
+		// "prefab_limits" of the manifest. Not in struct manifest: a module reads project_context, whose fields after
+		// the manifest would move (#1031).
+		prefab_spawn_limits prefab_limits;
 	};
 
 	// Strict JSON (no comments, no trailing commas).

@@ -7,6 +7,9 @@
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/project/prj_project.h>
+#include <snk/scene/scn_scene_service_init.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <boost/json/monotonic_resource.hpp>
@@ -1390,17 +1393,31 @@ void take_apart(const std::shared_ptr<const scn::prefab_desc>& prefab)
 	root.components.clear();
 }
 
-// Lowers the node budget of one spawn while it lives: the real one takes too long to reach under a sanitizer.
-class node_budget
+// The spawn limits of a project while it lives.
+class spawn_limits_scope
 {
 public:
-	explicit node_budget(std::size_t nodes) : m_previous(scn::detail::set_spawn_node_limit(nodes)) {}
-	~node_budget() { scn::detail::set_spawn_node_limit(m_previous); }
-	node_budget(const node_budget&) = delete;
-	node_budget& operator=(const node_budget&) = delete;
+	explicit spawn_limits_scope(const scn::spawn_limits& limits) : m_previous(scn::set_spawn_limits(limits)) {}
+	~spawn_limits_scope() { scn::set_spawn_limits(m_previous); }
+	spawn_limits_scope(const spawn_limits_scope&) = delete;
+	spawn_limits_scope& operator=(const spawn_limits_scope&) = delete;
 
 private:
-	std::size_t m_previous;
+	scn::spawn_limits m_previous;
+};
+
+scn::spawn_limits with_node_budget(std::size_t nodes)
+{
+	scn::spawn_limits limits;
+	limits.nodes_per_spawn = nodes;
+	return limits;
+}
+
+// Lowers the node budget of one spawn while it lives: the real one takes too long to reach under a sanitizer.
+class node_budget : public spawn_limits_scope
+{
+public:
+	explicit node_budget(std::size_t nodes) : spawn_limits_scope(with_node_budget(nodes)) {}
 };
 
 }
@@ -1610,7 +1627,7 @@ BOOST_AUTO_TEST_CASE(ANodeBelowAnInstance_ThatInstantiatesItsOwnFile_IsRefused)
 // A world, or a prefab spawned as such, is not a level of nesting: sixteen prefabs open one inside another below it.
 BOOST_AUTO_TEST_CASE(SixteenPrefabsNestBelowTheFileASpawnStartsFrom_TheNextOneIsRefused)
 {
-	constexpr int k_last = 17;
+	const int k_last = static_cast<int>(scn::spawn_limits{}.nesting_depth) + 1;
 	put("deep" + std::to_string(k_last) + ".prefab.desc", prefab_with_children(R"({"name":"end"})"));
 	for (int level = k_last - 1; level >= 0; --level) {
 		put("deep" + std::to_string(level) + ".prefab.desc",
@@ -2369,6 +2386,57 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_OfADescWhoseOwnTagIsTheFile_BuildsItAsALevelLoad
 	BOOST_REQUIRE(reg.valid(n));
 	BOOST_TEST((child_names(reg, n) == std::vector<std::string>{ "tip" }));
 	BOOST_TEST(refusals.count() == 0u);
+}
+
+// #1031: a project that raises prefab_limits.nesting_depth gets one level more; the refusal names the setting.
+BOOST_AUTO_TEST_CASE(ARaisedNestingDepth_BuildsOneLevelMore_AndTheRefusalNamesTheSetting)
+{
+	scn::spawn_limits raised;
+	raised.nesting_depth = scn::spawn_limits{}.nesting_depth + 1;
+	const int k_last = static_cast<int>(raised.nesting_depth) + 1;
+	put("raised" + std::to_string(k_last) + ".prefab.desc", prefab_with_children(R"({"name":"end"})"));
+	for (int level = k_last - 1; level >= 0; --level) {
+		put("raised" + std::to_string(level) + ".prefab.desc",
+			prefab_with_children(instance_child("next", "raised" + std::to_string(level + 1) + ".prefab.desc")));
+	}
+	const auto tag = tag_of("raised0.prefab.desc");
+	auto top = load<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(top);
+
+	const spawn_limits_scope limits(raised);
+	const log_count refusals(engine::log_level::error, "project setting prefab_limits.nesting_depth");
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *top, "raised", tag);
+
+	entt::entity at = root;
+	for (int level = 1; level < k_last; ++level) {
+		BOOST_TEST_CONTEXT("level " << level) {
+			at = child_named(reg, at, "next");
+			BOOST_REQUIRE(reg.valid(at));
+			BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(at));
+		}
+	}
+	const auto refused = child_named(reg, at, "next");
+	BOOST_REQUIRE(reg.valid(refused));
+	BOOST_TEST(!reg.all_of<scn::prefab_instance>(refused));
+	BOOST_TEST(refusals.count() > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheSpawnLimitsAreTheOpenProjects_TheDefaultsWithoutOne)
+{
+	const ds::app_data_storage none;
+	BOOST_TEST(scn::project_spawn_limits(none).nesting_depth == scn::spawn_limits{}.nesting_depth);
+	BOOST_TEST(scn::project_spawn_limits(none).nodes_per_spawn == scn::spawn_limits{}.nodes_per_spawn);
+
+	prj::project_context project;
+	project.prefab_limits.nesting_depth = 20;
+	project.prefab_limits.nodes_per_spawn = 5'000;
+	ds::app_data_storage store;
+	store.construct<prj::project_context>(std::move(project));
+	const scn::spawn_limits limits = scn::project_spawn_limits(store);
+	BOOST_TEST(limits.nesting_depth == 20u);
+	BOOST_TEST(limits.nodes_per_spawn == 5'000u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
