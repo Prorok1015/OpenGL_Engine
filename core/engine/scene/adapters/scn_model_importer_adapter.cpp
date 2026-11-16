@@ -26,6 +26,7 @@
 #include <snk/common/ds/ds_svg_writer.hpp>
 #include <algorithm>
 #include <atomic>
+#include <format>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -668,6 +669,30 @@ json::object build_prefab_node(
 	return jsnode;
 }
 
+namespace {
+// What the meshes of `scene` hold; aiProcess_Triangulate leaves lines and points as they are.
+rnd::geometry_topology geometry_topology_of(const aiScene* scene)
+{
+	bool triangles = false;
+	bool lines = false;
+	bool points = false;
+	bool other = false;
+	for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+		const unsigned int types = scene->mMeshes[i]->mPrimitiveTypes;
+		triangles = triangles || (types & aiPrimitiveType_TRIANGLE) != 0;
+		lines = lines || (types & aiPrimitiveType_LINE) != 0;
+		points = points || (types & aiPrimitiveType_POINT) != 0;
+		other = other || (types & aiPrimitiveType_POLYGON) != 0;
+	}
+	if (other || static_cast<int>(triangles) + static_cast<int>(lines) + static_cast<int>(points) > 1) {
+		return rnd::geometry_topology::mixed;
+	}
+	if (lines) return rnd::geometry_topology::lines;
+	if (points) return rnd::geometry_topology::points;
+	return rnd::geometry_topology::triangles;
+}
+}
+
 void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, import_sink& res_sys)
 {
 	// 1. Setup geometry layout from first mesh
@@ -789,26 +814,35 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 	}
 
-	// 7. Store geometry as a memory resource: the desc and its binary file (EPIC-79), the binary file first.
+	// 7. Store geometry as a memory resource: triangles as the desc and its binary file (EPIC-79), the binary file first.
 	rnd::geometry_file_options geometry_options;
 	geometry_options.header["__parent"] = "res://base_geometry.desc";
 	geometry_options.bounds = !geometry.bounds.empty();
+	geometry_options.topology = geometry_topology_of(scene);
 	const bool has_meshes = !geometry.vertices.empty();
-	const rnd::geometry_files files = has_meshes ? rnd::encode_geometry_files(geom_tag, geometry, geometry_options) : rnd::geometry_files{};
-	if (has_meshes && files) {
+	if (has_meshes && geometry_options.topology == rnd::geometry_topology::triangles) {
+		// Triangles the loader would refuse are no model to import.
+		const rnd::geometry_files files = rnd::encode_geometry_files(geom_tag, geometry, geometry_options);
+		if (!files) {
+			throw std::runtime_error(std::format("model '{}': {}", tag.view(), files.error));
+		}
+		// store() registers the bytes for readers before it returns and queues the write on the resolver's one io thread:
+		// the binary file is served and written before the desc, so the lock need not wait for the disk.
 		const res::desc_binary::save_lock lock(geom_tag);
 		res_sys.store(*res::desc_binary::binary_tag(geom_tag), files.binary);
 		res_sys.store(geom_tag, files.desc);
 	} else {
-		// A model without meshes, or data the loader would refuse in a binary file (a line or a point primitive): arrays,
-		// read as before.
+		// A model without meshes, or lines and points: arrays, read as before EPIC-79, the topology named.
 		if (has_meshes) {
-			egLOG_WARN("scene/import", "'{}': geometry stays in JSON arrays, its binary file would be refused ({})", geom_tag.view(),
-				files.error);
+			egLOG_WARN("scene/import", "'{}': geometry stays in JSON arrays: not triangles ({})", tag.view(),
+				rnd::topology_name(geometry_options.topology));
 		}
 		json::object jsgeometry;
 		jsgeometry["__type"] = "geometry_desc";
 		jsgeometry["__parent"] = "res://base_geometry.desc";
+		if (has_meshes) {
+			jsgeometry[rnd::geometry_topology_key] = rnd::topology_name(geometry_options.topology);
+		}
 		geometry.serialize(jsgeometry);
 		std::string geom_str = json::serialize(jsgeometry);
 		std::vector<std::byte> geom_bytes(geom_str.size());

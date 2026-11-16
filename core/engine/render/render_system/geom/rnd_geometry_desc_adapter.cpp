@@ -106,6 +106,9 @@ std::shared_ptr<::res::resource_entry> rnd::geometry_desc_adapter::deserialize(c
 	}
 	if (detail::binary_state_of(*geometry) == detail::geometry_binary_state::not_loaded) {
 		load_binary(tag, *geometry);
+	} else {
+		// Arrays (the form before EPIC-79, and lines or points now): what holds for any topology, before the GPU gets them.
+		detail::check_geometry_arrays(tag, *geometry);
 	}
 	return entry;
 }

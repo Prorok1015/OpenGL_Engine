@@ -139,15 +139,33 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 	std::vector<res::tag>* written, bool& wrote) const
 {
 	wrote = false;
+	rnd::geometry_file_options options;
+	options.topology = rnd::topology_of(desc);
+	if (options.topology != rnd::geometry_topology::triangles) {
+		// Lines and points have no binary file: their arrays go as they are, on one line (#559), as before EPIC-79.
+		const std::string text = json::serialize(desc);
+		std::vector<std::byte> bytes(text.size());
+		std::memcpy(bytes.data(), text.data(), text.size());
+		if (unchanged_on_disk(to, bytes)) {
+			return {};
+		}
+		if (!m_res.store_sync(to, bytes)) {
+			return std::format("'{}' could not be written (see the log)", to.view());
+		}
+		if (written) written->push_back(to);
+		wrote = true;
+		return {};
+	}
+
 	rnd::geometry_desc geometry;
 	if (std::string problem = rnd::read_geometry_file(m_res, from, desc, geometry); !problem.empty()) {
 		return std::format("'{}' could not be read: {}", from.view(), problem);
 	}
-	rnd::geometry_file_options options;
 	for (const auto& member : desc) {
 		options.header[member.key()] = member.value();
 	}
 	options.bounds = !geometry.bounds.empty();
+	// Refused data (an index past the vertices, a position that is not finite, ...) ends the export, naming the check.
 	const rnd::geometry_files files = rnd::encode_geometry_files(to, geometry, options);
 	if (!files) {
 		return std::format("'{}' cannot be written: {}", to.view(), files.error);
@@ -159,11 +177,9 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 
 	// An old project's mesh in JSON arrays is converted at this save (owner decision, #1068).
 	const bool had_arrays = mesh::file_holds_geometry_arrays(m_res, to);
-	if (std::string problem = rnd::write_geometry_files(m_res, to, geometry, options); !problem.empty()) {
-		// A save stopped before its commit leaves the staged binary file: whoever takes the export back takes it too.
-		if (written) {
-			if (const auto staged = res::desc_binary::staged_tag(to)) written->push_back(*staged);
-		}
+	// A failed write names what it left (the staged file, or the desc with it), so whoever takes the export back takes
+	// exactly that; a desc never goes without the staged file it needs.
+	if (std::string problem = rnd::write_geometry_files(m_res, to, geometry, options, written); !problem.empty()) {
 		return problem;
 	}
 	if (had_arrays) {

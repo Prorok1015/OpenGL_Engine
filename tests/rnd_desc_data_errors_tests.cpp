@@ -30,9 +30,10 @@ struct data_error_fixture : test_util::null_engine_fixture
 		return handle;
 	}
 
+	// One-byte vertices and no indices: any bytes pass the data checks of arrays (#1068), only their JSON is tested here.
 	static std::string geometry(std::string_view vertices, std::string_view bounds = "[]")
 	{
-		return std::string(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":)") + std::string(vertices)
+		return std::string(R"({"__type":"geometry_desc","layout":{"id":"bool"},"indices":[],"vertices":)") + std::string(vertices)
 			+ R"(,"bounds":)" + std::string(bounds) + "}";
 	}
 };

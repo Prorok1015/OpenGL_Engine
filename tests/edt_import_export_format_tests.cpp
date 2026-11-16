@@ -35,6 +35,23 @@ usemtl paint
 f 1 2 3
 )";
 
+// Lines only: what assimp keeps as a line primitive, which has no binary file (EPIC-79).
+constexpr const char* OBJ_LINES = R"(v 0 0 0
+v 1 0 0
+v 1 1 0
+o Wire
+l 1 2
+l 2 3
+)";
+
+// A triangle whose first position is not a number.
+constexpr const char* OBJ_NAN = R"(v nan 0 0
+v 1 -1 0
+v 0 1 0
+o Tri
+f 1 2 3
+)";
+
 constexpr const char* MTL_PAINT = R"(newmtl paint
 Kd 0.25 0.5 1
 Ns 32
@@ -68,13 +85,18 @@ struct export_format_fixture : test_util::scene_env
 		std::filesystem::remove_all(std::filesystem::path{ "res" } / folder, ignored);
 	}
 
-	// Imports the model and exports it into res://<folder>/; `written` gets the files the export wrote.
-	void import_and_export(std::vector<res::tag>& written)
+	edt::import_intermediate import_model()
 	{
 		edt::model_importer importer(*descs, *rs);
 		edt::import_source source;
 		source.path = model;
-		const edt::import_intermediate imported = importer.import_background(source);
+		return importer.import_background(source);
+	}
+
+	// Imports the model and exports it into res://<folder>/; `written` gets the files the export wrote.
+	void import_and_export(std::vector<res::tag>& written)
+	{
+		const edt::import_intermediate imported = import_model();
 		BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
 		edt::import_result result;
 		result.root_tag = imported.prefab_tag;
@@ -82,7 +104,7 @@ struct export_format_fixture : test_util::scene_env
 		result.source_path = imported.source_path;
 
 		edt::asset_exporter exporter(*rs);
-		const auto remap = exporter.build_remap(result, "tri", folder);
+		const auto remap = exporter.build_remap(result, model.stem().string(), folder);
 		BOOST_REQUIRE(exporter.export_to_project(result, remap, nullptr, nullptr, &written, true));
 		for (const auto& [from, to] : remap) {
 			if (std::ranges::find(exported, to) == exported.end()) exported.push_back(to);
@@ -220,6 +242,75 @@ BOOST_AUTO_TEST_CASE(TheGeometry_IsExportedWithItsBinaryFile_AndAnOldArrayFileIs
 	std::lock_guard lock(said_mutex);
 	BOOST_REQUIRE(warned.size() == 1u);
 	BOOST_TEST(warned.front().find(std::string(desc_tag.view())) != std::string::npos);
+}
+
+// The review of #1091: a model of lines is imported and exported in JSON arrays, as before EPIC-79, the topology named.
+BOOST_AUTO_TEST_CASE(AModelOfLines_IsImportedAndExportedInJsonArrays)
+{
+	model = dir / "wire.obj";
+	std::ofstream(model) << OBJ_LINES;
+	std::mutex said_mutex;
+	std::vector<std::string> warned;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (category != "edt/import" || level != engine::log_level::warn) return;
+		std::lock_guard lock(said_mutex);
+		warned.emplace_back(message);
+	});
+
+	std::vector<res::tag> written;
+	import_and_export(written);
+	const res::tag memory_tag{ res::tag::memory, "wire/wire.geom.desc" };
+	BOOST_TEST(!rs->exists(*res::desc_binary::binary_tag(memory_tag)));
+	{
+		std::lock_guard lock(said_mutex);
+		const bool named = std::ranges::any_of(warned, [&](const std::string& line) {
+			return line.find(std::string(memory_tag.view())) != std::string::npos && line.find("not triangles (lines)") != std::string::npos;
+		});
+		BOOST_TEST(named);
+	}
+
+	const auto geometry = std::ranges::find_if(exported, [](const res::tag& tag) { return tag.view().ends_with(".geom.desc"); });
+	BOOST_REQUIRE(geometry != exported.end());
+	BOOST_TEST(std::ranges::find(written, *geometry) != written.end());
+	BOOST_TEST(!rs->exists(*res::desc_binary::binary_tag(*geometry)));
+	const std::string text = files_on_disk().at(geometry->string());
+	BOOST_TEST(std::ranges::count(text, '\n') <= 1);
+	const json::object desc = json::parse(text).as_object();
+	BOOST_TEST(rnd::holds_geometry_arrays(desc));
+	BOOST_TEST((rnd::topology_of(desc) == rnd::geometry_topology::lines));
+	const rnd::geometry_desc on_disk = geometry_of(*geometry);
+	BOOST_TEST(!on_disk.vertices.empty());
+	BOOST_TEST((on_disk.indices.size() % 2 == 0u));
+}
+
+// Triangles the loader would refuse are refused by the import and by the export, naming the file and the check.
+BOOST_AUTO_TEST_CASE(TrianglesTheLoaderRefuses_AreRefusedByTheImportAndTheExport)
+{
+	model = dir / "nan.obj";
+	std::ofstream(model) << OBJ_NAN;
+	const edt::import_intermediate imported = import_model();
+	BOOST_TEST(imported.error.find("nan.geom.desc") != std::string::npos);
+	BOOST_TEST(imported.error.find("not finite") != std::string::npos);
+	BOOST_TEST(!rs->exists(res::tag{ res::tag::memory, "nan/nan.geom.desc" }));
+
+	// The decoder's answer is arrays: an index past the vertices reaches the export, which writes nothing.
+	const res::tag memory_tag{ res::tag::memory, "past/past.geom.desc" };
+	std::string arrays = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,3],"vertices":[)";
+	for (int i = 0; i < 36; ++i) arrays += i == 0 ? "0" : ",0";
+	BOOST_REQUIRE(rs->store_sync(memory_tag, test_util::to_bytes(arrays + "]}")));
+	edt::import_result result;
+	result.all_tags = { memory_tag };
+	result.source_path = dir / "past.obj";
+	edt::asset_exporter exporter(*rs);
+	const auto remap = exporter.build_remap(result, "past", folder);
+	edt::export_progress progress;
+	std::vector<res::tag> written;
+	BOOST_TEST(!exporter.export_to_project(result, remap, &progress, nullptr, &written, true));
+	BOOST_TEST(progress.error.find("past.geom.desc") != std::string::npos);
+	BOOST_TEST(progress.error.find("/indices") != std::string::npos);
+	BOOST_TEST(written.empty());
+	BOOST_TEST(!rs->exists(remap.at(memory_tag)));
+	rs->erase(memory_tag);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

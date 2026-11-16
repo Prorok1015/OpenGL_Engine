@@ -10,21 +10,25 @@
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_vfs_test_hook.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,7 +73,7 @@ struct geometry_files_fixture : test_util::null_engine_fixture
 	{
 		// A project layer on disk: the save goes through a staged file and a commit (res::desc_binary::save).
 		fs::create_directories(dir.path() / "a");
-		root().registrate_resolver<res::vfs_resolver>("geomfiles", std::vector<fs::path>{ dir.path() });
+		resolver = &root().registrate_resolver<res::vfs_resolver>("geomfiles", std::vector<fs::path>{ dir.path() });
 	}
 
 	~geometry_files_fixture()
@@ -94,7 +98,37 @@ struct geometry_files_fixture : test_util::null_engine_fixture
 		return json::parse(text).as_object();
 	}
 
+	std::vector<std::byte> bytes_on_disk(std::string_view name) const
+	{
+		std::ifstream in(dir.path() / "a" / name, std::ios::binary);
+		const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		std::vector<std::byte> out(text.size());
+		std::memcpy(out.data(), text.data(), text.size());
+		return out;
+	}
+
+	// The next `count` writes of the file `name` (in a/) fail on the io thread; `name` and nothing longer: a/<name>.new
+	// is another file.
+	void fail_writes_of(std::string_view name, int count)
+	{
+		failures = count;
+		const std::string prefix = "." + std::string(name) + ".";
+		res::detail::write_hook_access::set(*resolver, [this, prefix](res::detail::write_stage stage, const fs::path& tmp) {
+			const std::string leaf = tmp.filename().string();
+			if (stage != res::detail::write_stage::after_check || !leaf.starts_with(prefix) || leaf.starts_with(prefix + "new.")) {
+				return;
+			}
+			if (failures.fetch_sub(1) > 0) {
+				throw std::runtime_error("a write the test fails");
+			}
+		});
+	}
+
+	void stop_failing() { res::detail::write_hook_access::set(*resolver, nullptr); }
+
 	test_util::temp_dir dir{ "rnd_geometry_files" };
+	res::vfs_resolver* resolver = nullptr;
+	std::atomic<int> failures{ 0 };
 };
 
 }
@@ -273,6 +307,187 @@ BOOST_AUTO_TEST_CASE(AGeometryWrittenAgain_IsDrawnByTheGeomManager_WithoutASigna
 		BOOST_REQUIRE(frame() != nullptr);
 	}
 	BOOST_TEST(geometry.draw_fits(tag, 6, 0, 0));
+}
+
+// The review of #1091: a commit that fails after the desc was written never leaves a desc without its binary file.
+BOOST_AUTO_TEST_CASE(ACommitThatFailsOnce_IsTriedAgain_AndThePairIsWhole)
+{
+	const res::tag tag{ "geomfiles://a/retry.geom.desc" };
+	fail_writes_of("retry.geom.bin", 1);
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(2));
+	stop_failing();
+	BOOST_REQUIRE_MESSAGE(error.empty(), error);
+	BOOST_TEST(fs::exists(dir.path() / "a" / "retry.geom.bin"));
+	BOOST_TEST(!fs::exists(dir.path() / "a" / "retry.geom.bin.new"));
+	const auto loaded = load<rnd::geometry_desc>(tag);
+	BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
+	BOOST_TEST((loaded->indices == triangles(2).indices));
+}
+
+BOOST_AUTO_TEST_CASE(ACommitThatFailsTwice_TakesTheNewDescBack_AndThenItsStagedFile)
+{
+	// A new file: the desc goes, then the staged file; nothing is left to take back.
+	const res::tag fresh{ "geomfiles://a/fresh.geom.desc" };
+	std::vector<res::tag> left;
+	fail_writes_of("fresh.geom.bin", 2);
+	const std::string fresh_error = rnd::write_geometry_files(root(), fresh, triangles(1), {}, &left);
+	stop_failing();
+	BOOST_TEST(mentions(fresh_error, "not committed"));
+	BOOST_TEST(mentions(fresh_error, "the desc was removed"));
+	BOOST_TEST(left.empty());
+	for (const char* name : { "fresh.geom.desc", "fresh.geom.bin", "fresh.geom.bin.new" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!fs::exists(dir.path() / "a" / name)); }
+	}
+
+	// Over a written pair: the previous desc comes back beside the previous binary file, which the commit never replaced.
+	const res::tag tag{ "geomfiles://a/kept.geom.desc" };
+	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
+	const auto old_desc = bytes_on_disk("kept.geom.desc");
+	const auto old_binary = bytes_on_disk("kept.geom.bin");
+	fail_writes_of("kept.geom.bin", 2);
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(3), {}, &left);
+	stop_failing();
+	BOOST_TEST(mentions(error, "the previous desc was put back"));
+	BOOST_TEST(left.empty());
+	BOOST_TEST((bytes_on_disk("kept.geom.desc") == old_desc));
+	BOOST_TEST((bytes_on_disk("kept.geom.bin") == old_binary));
+	BOOST_TEST(!fs::exists(dir.path() / "a" / "kept.geom.bin.new"));
+	const auto loaded = load<rnd::geometry_desc>(tag);
+	BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
+	BOOST_TEST((loaded->indices == triangles(1).indices));
+}
+
+BOOST_AUTO_TEST_CASE(ADescThatCannotBeTakenBack_KeepsItsStagedFile_AndNamesBoth)
+{
+	const res::tag tag{ "geomfiles://a/stuck.geom.desc" };
+	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
+	// The binary file fails twice, so does the desc put back after the new one was written.
+	std::atomic<int> desc_writes{ 0 };
+	failures = 2;
+	res::detail::write_hook_access::set(*resolver, [&](res::detail::write_stage stage, const fs::path& tmp) {
+		if (stage != res::detail::write_stage::after_check) return;
+		const std::string leaf = tmp.filename().string();
+		if (leaf.starts_with(".stuck.geom.desc.") && desc_writes.fetch_add(1) >= 1) {
+			throw std::runtime_error("a write the test fails");
+		}
+		if (leaf.starts_with(".stuck.geom.bin.") && !leaf.starts_with(".stuck.geom.bin.new.") && failures.fetch_sub(1) > 0) {
+			throw std::runtime_error("a write the test fails");
+		}
+	});
+	std::vector<res::tag> left;
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(2), {}, &left);
+	stop_failing();
+	BOOST_TEST(mentions(error, "taking it back failed too"));
+	const res::tag staged = *res::desc_binary::staged_tag(tag);
+	BOOST_TEST((left == std::vector<res::tag>{ staged, tag }));
+	// The new desc needs the staged file: it is there, and a reader takes the data from it.
+	BOOST_TEST(fs::exists(dir.path() / "a" / "stuck.geom.bin.new"));
+	rnd::geometry_desc read;
+	const std::string read_error = rnd::read_geometry_file(root(), tag, desc_on_disk("stuck.geom.desc"), read);
+	BOOST_REQUIRE_MESSAGE(read_error.empty(), read_error);
+	BOOST_TEST((read.indices == triangles(2).indices));
+}
+
+// Topology is the caller's to say: only triangles get a binary file, the rest stays in arrays that name it.
+BOOST_AUTO_TEST_CASE(OnlyTriangles_AreWrittenWithABinaryFile)
+{
+	rnd::geometry_file_options lines;
+	lines.topology = rnd::geometry_topology::lines;
+	const std::string error = rnd::write_geometry_files(root(), res::tag{ "geomfiles://a/lines.geom.desc" }, triangles(1), lines);
+	BOOST_TEST(mentions(error, "not triangles"));
+	BOOST_TEST(!fs::exists(dir.path() / "a" / "lines.geom.desc"));
+	BOOST_TEST(!rnd::encode_geometry_files(res::tag{ "geomfiles://a/lines.geom.desc" }, triangles(1), lines));
+
+	BOOST_TEST((rnd::topology_of(json::object{}) == rnd::geometry_topology::triangles));
+	BOOST_TEST((rnd::topology_of(json::object{ { "topology", "lines" } }) == rnd::geometry_topology::lines));
+	BOOST_TEST((rnd::topology_of(json::object{ { "topology", "points" } }) == rnd::geometry_topology::points));
+	BOOST_TEST((rnd::topology_of(json::object{ { "topology", "strips" } }) == rnd::geometry_topology::mixed));
+	BOOST_TEST((rnd::topology_of(json::object{ { "topology", 3 } }) == rnd::geometry_topology::mixed));
+
+	// The writer's own key: a header never carries it into a desc with ranges.
+	rnd::geometry_file_options header;
+	header.header["topology"] = "lines";
+	const rnd::geometry_files files = rnd::encode_geometry_files(res::tag{ "geomfiles://a/h.geom.desc" }, triangles(1), header);
+	BOOST_REQUIRE_MESSAGE(files, files.error);
+	BOOST_TEST(!json::parse(text_of(files.desc)).as_object().contains("topology"));
+}
+
+// A mesh is drawn by its indices only (geom_manager, glDrawElements): vertices without them are no mesh to write.
+BOOST_AUTO_TEST_CASE(VerticesWithoutIndices_AreRefused)
+{
+	rnd::geometry_desc geometry = triangles(1);
+	geometry.indices.clear();
+	const std::string error = rnd::write_geometry_files(root(), res::tag{ "geomfiles://a/no_indices.geom.desc" }, geometry);
+	BOOST_TEST(mentions(error, "/indices"));
+	BOOST_TEST(mentions(error, "no indices"));
+	BOOST_TEST(!fs::exists(dir.path() / "a" / "no_indices.geom.desc"));
+}
+
+// 32 floats a vertex is the widest "f32xN"; one more makes the vertices bytes.
+BOOST_AUTO_TEST_CASE(AVertexOf32Floats_IsF32x32_AndLoadsBack)
+{
+	const auto layout_of = [](int floats) {
+		std::vector<rnd::driver::BufferElement> elements{ { rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" } };
+		for (int i = 3; i < floats; ++i) {
+			elements.push_back({ rnd::driver::SHADER_DATA_TYPE::FLOAT, std::format("extra{}", i) });
+		}
+		return rnd::driver::BufferLayout{ elements };
+	};
+	const auto geometry_of = [&](int floats) {
+		rnd::geometry_desc out;
+		out.layout = layout_of(floats);
+		std::vector<float> values;
+		for (int v = 0; v < 3; ++v) {
+			for (int f = 0; f < floats; ++f) values.push_back(static_cast<float>(v * floats + f));
+		}
+		out.vertices.resize(values.size() * sizeof(float));
+		std::memcpy(out.vertices.data(), values.data(), out.vertices.size());
+		out.indices = { 0, 1, 2 };
+		return out;
+	};
+
+	const res::tag tag{ "geomfiles://a/wide.geom.desc" };
+	const rnd::geometry_desc wide = geometry_of(32);
+	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, wide).empty());
+	BOOST_TEST(std::string(desc_on_disk("wide.geom.desc").at("vertices").at("layout").as_string()) == "f32x32");
+	const auto loaded = load<rnd::geometry_desc>(tag);
+	BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
+	BOOST_TEST((loaded->vertices == wide.vertices));
+
+	const rnd::geometry_files wider = rnd::encode_geometry_files(res::tag{ "geomfiles://a/wider.geom.desc" }, geometry_of(33));
+	BOOST_REQUIRE_MESSAGE(wider, wider.error);
+	BOOST_TEST(std::string(json::parse(text_of(wider.desc)).as_object().at("vertices").at("layout").as_string()) == "u8");
+}
+
+// Arrays are checked by the loader too, with what holds for any topology: lines load, an index past the vertices does not.
+BOOST_AUTO_TEST_CASE(ArraysThatTheChecksRefuse_DoNotLoad_LinesDo)
+{
+	const auto arrays = [](std::string_view indices, std::string_view first_bytes, std::string_view topology) {
+		std::string text = R"({"__type":"geometry_desc","layout":{"position":"vec3"},)";
+		text += topology;
+		text += R"("indices":)" + std::string(indices) + R"(,"vertices":[)" + std::string(first_bytes);
+		for (int i = 4; i < 36; ++i) text += ",0";
+		return text + "]}";
+	};
+	const auto stored = [&](std::string_view name, const std::string& text) {
+		const res::tag tag{ std::string("memory://geometry_files/") + std::string(name) };
+		BOOST_REQUIRE(root().store(tag, test_util::to_bytes(text)));
+		test_util::pump(tasks);
+		return load<rnd::geometry_desc>(tag);
+	};
+
+	const auto line = stored("line.geom.desc", arrays("[0,1,1,2]", "0,0,0,0", R"("topology":"lines",)"));
+	BOOST_REQUIRE_MESSAGE(line.is_ready() && !line.has_error(), line.error_text());
+	BOOST_TEST(line->indices.size() == 4u);
+
+	const auto past = stored("past.geom.desc", arrays("[0,1,3]", "0,0,0,0", ""));
+	BOOST_TEST(past.has_error());
+	BOOST_TEST(mentions(past.error_text(), "/indices"));
+
+	// 0x7fc00000: a quiet NaN as the x of the first position.
+	const auto nan = stored("nan.geom.desc", arrays("[0,1,2]", "0,0,192,127", ""));
+	BOOST_TEST(nan.has_error());
+	BOOST_TEST(mentions(nan.error_text(), "not finite"));
 }
 
 #if SNK_HAS_ASSIMP

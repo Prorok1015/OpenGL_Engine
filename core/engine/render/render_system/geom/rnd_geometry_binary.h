@@ -41,6 +41,9 @@ namespace rnd::detail
 	// Throws res::load_error naming `file` and the JSON path: a stride of 0, vertex bytes off the stride, an index count
 	// off 3, an index past the vertices, a position or uv that is not finite.
 	void check_geometry_data(const res::tag& file, const geometry_desc& geometry);
+	// Arrays of any topology the loader takes (lines, points too): vertex bytes off the stride, an index past the vertices,
+	// a position or uv that is not finite. Nothing for a geometry without vertices or with an empty layout.
+	void check_geometry_arrays(const res::tag& file, const geometry_desc& geometry);
 	// Bounds (uv of each triangle, as the importer makes them) and the tree, from data check_geometry_data passed.
 	void rebuild_bounds(geometry_desc& geometry);
 

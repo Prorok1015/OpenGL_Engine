@@ -37,6 +37,28 @@ void checkpoint(ds::task_context* ctx)
 	if (ctx) ctx->throw_if_stopped();
 }
 
+// What the meshes of `scene` hold; aiProcess_Triangulate leaves lines and points as they are.
+rnd::geometry_topology geometry_topology_of(const aiScene* scene)
+{
+	bool triangles = false;
+	bool lines = false;
+	bool points = false;
+	bool other = false;
+	for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+		const unsigned int types = scene->mMeshes[i]->mPrimitiveTypes;
+		triangles = triangles || (types & aiPrimitiveType_TRIANGLE) != 0;
+		lines = lines || (types & aiPrimitiveType_LINE) != 0;
+		points = points || (types & aiPrimitiveType_POINT) != 0;
+		other = other || (types & aiPrimitiveType_POLYGON) != 0;
+	}
+	if (other || static_cast<int>(triangles) + static_cast<int>(lines) + static_cast<int>(points) > 1) {
+		return rnd::geometry_topology::mixed;
+	}
+	if (lines) return rnd::geometry_topology::lines;
+	if (points) return rnd::geometry_topology::points;
+	return rnd::geometry_topology::triangles;
+}
+
 // Assimp polls it while it reads a file; false aborts the import (the importer then returns no scene).
 class stop_progress_handler final : public Assimp::ProgressHandler
 {
@@ -950,30 +972,45 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	// Last safe point: from here the results are stored in the resource system.
 	checkpoint(ctx);
 
-	// 10. Store geometry (res_sys.store is mutex-protected): the desc and its binary file (EPIC-79), the binary file first.
-	// The binary file is not in all_tags: whoever copies the desc carries it along (asset_exporter).
+	// 10. Store geometry (res_sys.store is mutex-protected): triangles as the desc and its binary file (EPIC-79), the binary
+	// file first. The binary file is not in all_tags: whoever copies the desc carries it along (asset_exporter).
 	rnd::geometry_file_options geometry_options;
 	geometry_options.header["__parent"] = "res://base_geometry.desc";
 	geometry_options.bounds = !geometry.bounds.empty();
-	const bool binary = source.binary_geometry && !geometry.vertices.empty();
-	const rnd::geometry_files files = binary ? rnd::encode_geometry_files(geom_tag, geometry, geometry_options) : rnd::geometry_files{};
+	geometry_options.topology = geometry_topology_of(scene);
+	const bool has_meshes = !geometry.vertices.empty();
+	const bool triangles = has_meshes && geometry_options.topology == rnd::geometry_topology::triangles;
+	const bool binary = triangles && source.binary_geometry;
+	// Triangles the loader would refuse are no model to import, whichever form the answer takes.
+	rnd::geometry_files files;
+	if (binary) {
+		files = rnd::encode_geometry_files(geom_tag, geometry, geometry_options);
+	} else if (triangles) {
+		files.error = rnd::geometry_write_problem(geom_tag, geometry, geometry_options);
+	}
+	if (!files) {
+		im.error = std::format("the geometry of the model is refused: {}", files.error);
+		egLOG_ERROR("edt/import", "{}", im.error);
+		return im;
+	}
 	(void)already_there(tags, m_res, geom_tag);
-	if (binary && files) {
+	if (binary) {
 		const res::tag binary_tag = *res::desc_binary::binary_tag(geom_tag);
 		(void)already_there(tags, m_res, binary_tag);
 		const res::desc_binary::save_lock lock(geom_tag);
 		store_tracked(m_res, binary_tag, files.binary, created_tags);
 		store_tracked(m_res, geom_tag, files.desc, created_tags);
 	} else {
-		// Arrays: the decoder's answer, a model without meshes, or data the loader would refuse in a binary file (a line
-		// or a point primitive), read as before.
-		if (binary) {
-			egLOG_WARN("edt/import", "'{}': geometry stays in JSON arrays, its binary file would be refused ({})", geom_tag.view(),
-				files.error);
-		}
+		// Arrays: the decoder's answer until it carries the binary file (#1068 PR3b), a model without meshes, or lines and
+		// points, read as before EPIC-79 with the topology named (the export keeps them in arrays).
 		json::object jsgeometry;
 		jsgeometry["__type"] = "geometry_desc";
 		jsgeometry["__parent"] = "res://base_geometry.desc";
+		if (has_meshes && !triangles) {
+			egLOG_WARN("edt/import", "'{}': geometry stays in JSON arrays: not triangles ({})", geom_tag.view(),
+				rnd::topology_name(geometry_options.topology));
+			jsgeometry[rnd::geometry_topology_key] = rnd::topology_name(geometry_options.topology);
+		}
 		geometry.serialize(jsgeometry);
 		std::string geom_str = json::serialize(jsgeometry);
 		std::vector<std::byte> geom_bytes(geom_str.size());

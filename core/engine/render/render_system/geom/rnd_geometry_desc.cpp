@@ -267,44 +267,62 @@ void rnd::detail::forget_binary(const geometry_desc& geometry)
 	reg.entries.erase(&geometry);
 }
 
-void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
+namespace
 {
-	const std::size_t stride = geometry.layout.get_stride();
-	if (stride == 0) {
-		refuse_data(file, "/layout", "the vertex layout is empty");
-	}
-	if (geometry.vertices.size() % stride != 0) {
-		refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
-	}
-	const std::size_t vertex_count = geometry.vertices.size() / stride;
-	if (geometry.indices.size() % 3 != 0) {
-		refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
-	}
-	for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
-		if (geometry.indices[i] >= vertex_count) {
-			refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
+	// `triangles`: the whole check of data for a binary file; else what holds for arrays of any topology the loader takes.
+	void check_data(const res::tag& file, const rnd::geometry_desc& geometry, bool triangles)
+	{
+		const std::size_t stride = geometry.layout.get_stride();
+		if (stride == 0) {
+			refuse_data(file, "/layout", "the vertex layout is empty");
 		}
-	}
+		if (geometry.vertices.size() % stride != 0) {
+			refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
+		}
+		const std::size_t vertex_count = geometry.vertices.size() / stride;
+		if (triangles && geometry.indices.size() % 3 != 0) {
+			refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
+		}
+		for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
+			if (geometry.indices[i] >= vertex_count) {
+				refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
+			}
+		}
 
-	const auto* position = element_named(geometry.layout, "position");
-	if (position == nullptr || !is_float_type(position->Type)) {
-		refuse_data(file, "/layout/position", "the layout has no float 'position'");
-	}
-	// The CPU reads these two: positions for the scene, uv for the bounds.
-	for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
-		if (element == nullptr || !is_float_type(element->Type)) {
-			continue;
+		const auto* position = element_named(geometry.layout, "position");
+		if (triangles && (position == nullptr || !is_float_type(position->Type))) {
+			refuse_data(file, "/layout/position", "the layout has no float 'position'");
 		}
-		const std::size_t components = element->Size / sizeof(float);
-		for (std::size_t v = 0; v < vertex_count; ++v) {
-			for (std::size_t c = 0; c < components; ++c) {
-				const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
-				if (!std::isfinite(value)) {
-					refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
+		// The CPU reads these two: positions for the scene, uv for the bounds.
+		for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
+			if (element == nullptr || !is_float_type(element->Type)) {
+				continue;
+			}
+			const std::size_t components = element->Size / sizeof(float);
+			for (std::size_t v = 0; v < vertex_count; ++v) {
+				for (std::size_t c = 0; c < components; ++c) {
+					const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
+					if (!std::isfinite(value)) {
+						refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
+					}
 				}
 			}
 		}
 	}
+}
+
+void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
+{
+	check_data(file, geometry, true);
+}
+
+void rnd::detail::check_geometry_arrays(const res::tag& file, const geometry_desc& geometry)
+{
+	// A desc without data (base_geometry.desc, a test's indices alone) has nothing the checks could hold against.
+	if (geometry.vertices.empty() || geometry.layout.get_stride() == 0) {
+		return;
+	}
+	check_data(file, geometry, false);
 }
 
 void rnd::detail::rebuild_bounds(geometry_desc& geometry)

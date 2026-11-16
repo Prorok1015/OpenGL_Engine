@@ -83,8 +83,9 @@ namespace edt {
 		// git see nothing (#559).
 		bool unchanged_on_disk(const res::tag& tag, const std::vector<std::byte>& bytes) const;
 
-		// Writes the geometry `desc` (memory:// `from`, references remapped) as `to` and its binary file. Empty when written
-		// or unchanged (`wrote` says which), else why not.
+		// Writes the geometry `desc` (memory:// `from`, references remapped) as `to` and its binary file; lines and points (the
+		// desc names its topology) as one line of JSON arrays, as before EPIC-79. Empty when written or unchanged (`wrote`
+		// says which), else why not; triangles the loader would refuse are not written.
 		std::string export_geometry(const res::tag& from, const res::tag& to, const boost::json::object& desc,
 			std::vector<res::tag>* written, bool& wrote) const;
 

@@ -618,20 +618,54 @@ res::file_operation res::desc_binary::commit_pending(resource_system& system, co
 	return detail::desc_binary_access::commit(system, *staged, *binary, written.file);
 }
 
+res::file_operation res::desc_binary::take_back(resource_system& system, const save_lock& lock, const tag& desc,
+	const desc_binary_written& written, const std::vector<std::byte>& written_desc,
+	const std::optional<std::vector<std::byte>>& previous_desc)
+{
+	require_guard(lock, desc, "take_back");
+	const auto staged = staged_tag(desc);
+	if (!staged) {
+		return file_operation::failure(std::format("'{}' is not named <name>.<ext>.desc: it has no binary file", desc.view()));
+	}
+	if (previous_desc) {
+		if (!system.store_sync(desc, *previous_desc)) {
+			return file_operation::failure(std::format("the previous '{}' could not be written back (see the log)", desc.view()));
+		}
+	} else if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, desc, written_desc); !removed) {
+		return file_operation::failure(std::format("'{}' could not be removed: {}", desc.view(), removed.error));
+	}
+	// No desc needs the staged file any more: a leftover is only stale, a reader ignores it.
+	if (!written.file.empty()) {
+		if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, *staged, written.file); !removed) {
+			egLOG_WARN("resource/desc_binary", "A stale staged file '{}' stays: {}", staged->view(), removed.error);
+		}
+	}
+	return file_operation::success();
+}
+
 res::desc_binary_written res::desc_binary::save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
 	const desc_writer& write_desc)
 {
 	const save_lock lock(desc);
 	desc_binary_written out = write_pending(system, lock, desc, chunks);
 	if (!out) {
+		out.failed_step = desc_binary_save_step::staging;
 		return out;
 	}
 	if (!write_desc || !write_desc(out.ranges)) {
 		out.error = std::format("'{}' was not written: the save stopped before the commit", desc.view());
+		out.failed_step = desc_binary_save_step::desc;
 		return out;
 	}
-	if (const file_operation committed = commit_pending(system, lock, desc, out); !committed) {
+	// The desc is on disk: one more try before the caller has to take it back.
+	file_operation committed = commit_pending(system, lock, desc, out);
+	if (!committed) {
+		egLOG_WARN("resource/desc_binary", "'{}': the commit of its binary file failed, tried again: {}", desc.view(), committed.error);
+		committed = commit_pending(system, lock, desc, out);
+	}
+	if (!committed) {
 		out.error = std::format("'{}' was written, its binary file was not committed: {}", desc.view(), committed.error);
+		out.failed_step = desc_binary_save_step::commit;
 	}
 	return out;
 }

@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -123,12 +124,19 @@ namespace {
 		return bytes;
 	}
 
-	// Takes back the files a failed or cancelled export wrote: only those, only plain files.
+	// Takes back the files a failed or cancelled export wrote: only those, only plain files, newest first. A staged binary
+	// file (EPIC-79) stays while its desc does: a reader of that desc recovers from it.
 	void take_back(const std::vector<res::tag>& written, const fs::path& top)
 	{
+		constexpr std::string_view staged_suffix = ".bin.new";
 		for (auto tag = written.rbegin(); tag != written.rend(); ++tag) {
-			const fs::path file = top / from_utf8(std::string(tag->relative()));
+			const std::string relative(tag->relative());
+			const fs::path file = top / from_utf8(relative);
 			std::error_code ec;
+			if (relative.ends_with(staged_suffix)) {
+				const fs::path desc = top / from_utf8(relative.substr(0, relative.size() - staged_suffix.size()) + ".desc");
+				if (fs::symlink_status(desc, ec).type() != fs::file_type::not_found) continue;
+			}
 			if (fs::symlink_status(file, ec).type() == fs::file_type::regular) fs::remove(file, ec);
 		}
 	}
