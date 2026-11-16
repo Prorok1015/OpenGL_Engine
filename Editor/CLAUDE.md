@@ -36,6 +36,7 @@ Editor/
     │   └── edt_prefab_editor_panel.h/.cpp # the window: toolbar, node tree, viewport
     │
     ├── panels/                       # 7 UI panels, all extend panel_base
+    │   └── edt_panels_component.cpp/h # panels_component (#1004): makes the editor's panels, wires them to the controllers and registers them in the View menu order (`install(out, after_assets)`: the prefab editor's window goes in after the Asset Browser; `add()` for the panels made elsewhere: migration, agents); `editor_system` reaches a panel through its accessors
     │
     ├── edt_component_renderers/      # per-type ImGui renderers for components
     │   ├── edt_component_renderers.cpp/h
