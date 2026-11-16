@@ -68,6 +68,7 @@ namespace edt {
 	class asset_open_component;
 	class model_importer;
 	class process_decoder;
+	class decoder_sandbox_notice;
 	class asset_exporter;
 	class agent_model_import;
 	class asset_export_dialog;
@@ -165,6 +166,8 @@ namespace edt {
 		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
 		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
 		std::shared_ptr<edt::process_decoder> m_process_decoder;
+		// What the decoders of this run said of their OS sandbox, in Problems (#1076).
+		std::shared_ptr<edt::decoder_sandbox_notice> m_decoder_sandbox;
 		bool m_model_adapter_registered = false;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;

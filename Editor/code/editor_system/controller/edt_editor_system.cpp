@@ -56,6 +56,7 @@
 #include "edt_file_menu.h"
 #include "edt_template_ids.h"
 #include "edt_agent_model_import.h"
+#include "edt_decoder_sandbox_notice.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
@@ -150,6 +151,26 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
+	// The configuration files the editor read its settings from (--config, else the one beside the executable): an agent's
+	// checkout or pull must not change them, import/decoder_sandbox is a person's (#1076).
+	std::vector<std::filesystem::path> editor_config_files()
+	{
+		std::vector<std::filesystem::path> files;
+		const auto add = [&files](const std::filesystem::path& file) {
+			if (file.empty()) return;
+			std::error_code ec;
+			std::filesystem::path absolute = std::filesystem::weakly_canonical(file, ec);
+			if (ec) absolute = std::filesystem::absolute(file, ec);
+			if (ec || absolute.empty()) return;
+			if (std::find(files.begin(), files.end(), absolute) == files.end()) files.push_back(std::move(absolute));
+		};
+		add(cfg::loaded_config_path());
+		if (const std::filesystem::path program = platform::current_executable(); !program.empty()) {
+			add(program.parent_path() / ".." / "config" / "editor.cfg");
+		}
+		return files;
+	}
+
 
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
@@ -374,7 +395,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			std::string sandbox_warning;
 			decoder_config.sandbox = edt::decoder_sandbox_mode(*cfg_import_decoder_sandbox, sandbox_warning);
 			if (!sandbox_warning.empty()) egLOG_WARN("Editor/Import", "{}", sandbox_warning);
-			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config));
+			// Read once, here: what a person set before the editor started is the mode for the whole run (#1076).
+			const edt::sandbox_mode sandbox_mode = decoder_config.sandbox;
+			m_decoder_sandbox = std::make_shared<edt::decoder_sandbox_notice>(m_context->problems(), sandbox_mode,
+				edt::expected_decoder_sandbox(sandbox_mode));
+			// The decoder runs on worker threads; Problems is the main thread's. The resource system may run the decoder after
+			// this system is gone: the notice then is too, and nothing is posted.
+			auto on_sandbox = [&tasks = data.require<ds::task_system>(), notice = std::weak_ptr(m_decoder_sandbox)](const edt::decoder_sandbox_status& status) {
+				if (!notice.lock()) return;
+				tasks.post_main([notice, status] {
+					if (const auto alive = notice.lock()) alive->seen(status);
+				});
+			};
+			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config), std::move(on_sandbox));
 		}
 		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
 		// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
@@ -393,6 +426,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->scan(source, task);
+		};
+		import_options.sandbox_status = [notice = std::weak_ptr(m_decoder_sandbox)] {
+			const auto alive = notice.lock();
+			return alive ? alive->current() : edt::decoder_sandbox_status{};
 		};
 		import_options.unavailable_reason = [decoder = m_process_decoder.get()] {
 			const std::string why = decoder->unavailable_reason();
@@ -875,6 +912,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->follow_agent_policy(project_policy, [this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
+		m_vcs->guard_config_files(editor_config_files());
 		m_agent_access->policy().set_on_changed([this] {
 			if (m_agent_server) m_agent_server->notify_tools_changed();
 		});
