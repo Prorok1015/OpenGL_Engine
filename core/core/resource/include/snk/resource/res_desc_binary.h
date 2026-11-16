@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -144,7 +145,8 @@ namespace res
 		SNK_API std::optional<tag> staged_tag(const tag& desc);
 
 		// The file for `chunks`: header, then each chunk at the next multiple of range_alignment. Fills `ranges`.
-		// nullopt with `error` set for an invalid layout, a size that is not a multiple of it, or more than max_file_bytes.
+		// nullopt with `error` set for more than max_ranges chunks, an invalid layout, a size that is not a multiple of it,
+		// or more than max_file_bytes.
 		SNK_API std::optional<std::vector<std::byte>> encode(std::span<const binary_chunk> chunks,
 			std::vector<binary_range>& ranges, std::string& error);
 
@@ -163,6 +165,9 @@ namespace res
 			save_lock(const save_lock&) = delete;
 			save_lock& operator=(const save_lock&) = delete;
 
+			// Whether this lock serializes the saves of `desc` (the lock of its binary file).
+			bool guards(const tag& desc) const;
+
 		private:
 			std::shared_ptr<std::recursive_mutex> m_mutex;
 		};
@@ -173,11 +178,21 @@ namespace res
 			bool verify_hash, std::uint64_t max_bytes = max_file_bytes,
 			desc_binary_recovery recovery = desc_binary_recovery::use_staged);
 
-		// Step 1 of a save, under a save_lock the caller holds through step 3: writes the staged file of `desc` and returns
-		// the ranges for the desc. Throws std::logic_error for a tag outside limit_writes_to.
-		SNK_API desc_binary_written write_pending(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks);
-		// Step 3: the binary file gets `written.file`, refused when the staged file no longer holds it. Throws like
-		// write_pending.
-		SNK_API file_operation commit_pending(resource_system& system, const tag& desc, const desc_binary_written& written);
+		// Step 1 of a save, under `lock`, which the caller holds through step 3: writes the staged file of `desc` and
+		// returns the ranges for the desc. Throws std::logic_error for a lock of another desc or a tag outside limit_writes_to.
+		SNK_API desc_binary_written write_pending(resource_system& system, const save_lock& lock, const tag& desc,
+			std::span<const binary_chunk> chunks);
+		// Step 3, under the lock of step 1: the binary file gets `written.file`, refused when the staged file no longer
+		// holds it. Throws like write_pending.
+		SNK_API file_operation commit_pending(resource_system& system, const save_lock& lock, const tag& desc,
+			const desc_binary_written& written);
+
+		// Step 2 of save(): stores the desc with `ranges`; false stops the save before the commit.
+		using desc_writer = std::function<bool(std::span<const binary_range> ranges)>;
+
+		// The whole save under one save_lock: write_pending, `write_desc`, commit_pending. `error` names the failed step;
+		// before the desc is written the old pair stays readable, after it a reader recovers from the staged file.
+		SNK_API desc_binary_written save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
+			const desc_writer& write_desc);
 	}
 }
