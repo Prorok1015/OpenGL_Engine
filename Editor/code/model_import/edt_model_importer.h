@@ -4,6 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include "edt_async_import_task.h"
+#include "edt_decoder_sandbox.h"
 #include "edt_model_file_access.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -49,6 +50,8 @@ namespace edt {
 		// The geometry as <stem>.geom.desc with its binary file <stem>.geom.bin (EPIC-79); false: JSON arrays, what the
 		// decoder process answers until its answer carries the binary file (#1068 PR3b).
 		bool binary_geometry = true;
+		// The decoder process's OS sandbox (#1043) this import asks for at least; off asks for nothing beyond the setting.
+		sandbox_mode sandbox = sandbox_mode::off;
 	};
 
 	class model_importer {

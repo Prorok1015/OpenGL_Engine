@@ -46,6 +46,8 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_component;
+	class panels_component;
+	class problems_component;
 	class level_load_component;
 	class asset_database;
 	class agent_server;
@@ -195,10 +197,7 @@ namespace edt {
 		bool poll_import_pipeline();
 
 		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
-		void create_panels(bool capture_log);
-		void create_viewport_panel();
 		void wire_controller_callbacks();
-		void wire_panel_callbacks();
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
@@ -239,24 +238,14 @@ namespace edt {
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
-		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
-		std::shared_ptr<inspector_panel>       m_inspector_panel;
-		std::shared_ptr<viewport_panel>        m_viewport_panel;
-		std::shared_ptr<game_view_panel>       m_game_view_panel;
-		std::shared_ptr<console_panel>         m_console_panel;
-		std::shared_ptr<problems_panel>        m_problems_panel;
-		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
-		std::shared_ptr<input_actions_panel>   m_input_actions_panel;
-		// gs::input_actions::revision() the Problems of the source "input" were last made for.
-		std::uint64_t                          m_input_problems_revision = ~std::uint64_t{ 0 };
-		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
-		std::shared_ptr<git_panel>             m_git_panel;
-		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
+		// What the Problems panel shows and where a row leads (#1004): the publishers sit here. Before the panels, the prefab
+		// editor, the loads and the drop, which report into them, so it goes after them.
+		std::unique_ptr<problems_component> m_problems;
+
+		// The editor's panels (#1004): made, wired to the controllers and registered by panels_component, in the View menu order.
+		std::unique_ptr<panels_component> m_panels;
 		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
 		std::shared_ptr<migration_panel>       m_migration_panel;
-		// The console's feed from the engine log; removed with the editor system.
-		engine::log_sink_handle                m_log_sink;
-		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
@@ -364,14 +353,5 @@ namespace edt {
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
-		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
-		void refresh_world_problems();
-		void go_to(const desc_target& target);
-		world_problem_publisher m_world_problems;
-		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab" (the open preview).
-		desc_problem_publisher m_desc_problems;
-		// The source "play" (#597): the last check before Play.
-		play_preflight_publisher m_play_preflight;
-		std::vector<connection> m_world_problem_connections;
 	};
 }

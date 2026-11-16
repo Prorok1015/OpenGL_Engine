@@ -503,10 +503,25 @@ void res::resource_system::deliver_held() {
   }
 }
 
-void res::resource_system::add_mount(mount added) {
+bool res::resource_system::add_mount(mount added) {
   ASSERT_MSG(!m_parent, "A resource layer uses the mounts of its root");
+  {
+    std::shared_lock lock(m_registry_mutex);
+    if (m_resolvers.contains(added.protocol)) {
+      egLOG_ERROR("resource/system", "add_mount: {}:// is already served; remount changes the roots of a mount",
+                  added.protocol);
+      return false;
+    }
+  }
   register_mount(added);
-  m_mounts.push_back(std::move(added));
+  // A mount whose resolver was unregistered keeps its record; mount_roots reads the first one, so it is replaced.
+  const auto stale = std::ranges::find_if(m_mounts, [&added](const mount &m) { return m.protocol == added.protocol; });
+  if (stale != m_mounts.end()) {
+    *stale = std::move(added);
+  } else {
+    m_mounts.push_back(std::move(added));
+  }
+  return true;
 }
 
 bool res::resource_system::remount(std::string_view protocol, std::vector<std::filesystem::path> roots) {

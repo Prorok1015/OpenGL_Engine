@@ -220,3 +220,30 @@ why: CI builds every preset with the option ON; third-party code is exempt, proj
 [CONSTRAINT_21]
 rule: A component exposes only include/ PUBLIC; its source root and subdirs are PRIVATE (snk_component_headers + a PRIVATE subdir list); tests get white-box access to internal headers only through the explicit PRIVATE include list on unit_tests
 why: consumers (Editor/main.cpp, other targets) see only <snk/...> public headers; a loose internal header in a consumer fails the configure/build instead of silently widening the API (EPIC-49 US-49-1, editor_system done)
+
+[CONSTRAINTS_WEB_PORTABILITY]
+# Owner direction 2026-11-16: a far-future browser build (engine + editor as wasm, project served over net://). Not a goal now; new code must not make it more expensive.
+[CONSTRAINT_22]
+rule: OpenGL calls live only in core/core/video; everything else draws through rnd::
+why: the web build needs a second render backend (WebGL2/WebGPU: no DSA glNamed*/glCreate*, no geometry shaders); one module to replace instead of the whole tree
+how_to_apply:
+  - No gl* call, GL type or GL header in a new file outside core/core/video
+  - No new geometry/tessellation shader stage without the owner's decision
+
+[CONSTRAINT_23]
+rule: New resource loading is asynchronous (res::resource_system::require + ready callback/handle state); no new require_sync on the main thread
+why: a browser cannot block its main thread waiting for a file or a network answer
+how_to_apply:
+  - require_sync only in tools, tests and paths that already use it; never add one to a per-frame or UI path
+
+[CONSTRAINT_24]
+rule: New code reads and writes project data through the resource system (res://, user://, memory://...), not std::filesystem / fstream directly
+why: in the browser there is no local disk; a protocol (net://) serves the files, std::filesystem would hit an empty virtual FS
+how_to_apply:
+  - Direct filesystem access only where it already lives (resolvers, project open/create, build, VCS, tests)
+
+[CONSTRAINT_25]
+rule: Binary data on disk has a fixed byte order (little-endian) and fixed-width types; never write raw structs with size_t/pointers/padding
+why: the same file must load in a 32-bit wasm build and a 64-bit native one
+how_to_apply:
+  - Explicit uint32_t/uint64_t/float fields, explicit endianness on read/write (EPIC-79 SNKB format does this)

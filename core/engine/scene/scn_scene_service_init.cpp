@@ -1,4 +1,5 @@
 #include <snk/scene/scn_scene_service_init.h>
+#include <snk/project/prj_project.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
@@ -23,7 +24,16 @@ void scn::register_engine_event_types(scn::context_manager &contexts) {
   contexts.add_event<scn::animation_finished>({}, &scn::animation_finished_json);
 }
 
+scn::spawn_limits scn::project_spawn_limits(const ds::app_data_storage &store) {
+  if (!store.has_value<prj::project_context>()) {
+    return {};
+  }
+  const prj::prefab_spawn_limits &limits = store.require<prj::project_context>().prefab_limits;
+  return {limits.nesting_depth, limits.nodes_per_spawn};
+}
+
 void scn::scene_init(ds::app_data_storage &store) {
+  scn::set_spawn_limits(project_spawn_limits(store));
   auto &desc_sys = store.require<desc::desc_system>();
   auto &sfactory = store.require<ecs::system_factory>();
   auto &resource = store.require<res::resource_system>();

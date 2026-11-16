@@ -70,13 +70,12 @@ private:
 	std::uint64_t m_left;
 };
 
-// The most a bundle under `limits` can take: the head, the manifest, and per blob its tag, its two sizes and its bytes.
-std::uint64_t largest_bundle(const edt::bundle_limits& limits)
+}
+
+std::uint64_t edt::largest_bundle_bytes(const bundle_limits& limits)
 {
 	constexpr std::uint64_t k_head = 4 + 4 + 8 + 8;
 	return k_head + limits.max_manifest_bytes + limits.max_total_bytes + limits.max_blobs * (4 + 8 + limits.max_tag_bytes);
-}
-
 }
 
 bool edt::is_bundle_tag(const std::string& tag, std::size_t max_bytes)
@@ -150,7 +149,7 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	platform::beneath::read_request request;
 	request.root = folder;
 	request.leaf = file.filename();
-	request.max_bytes = largest_bundle(limits);
+	request.max_bytes = largest_bundle_bytes(limits);
 	std::vector<std::byte> contents;
 	const platform::beneath::read_result read = platform::beneath::read_beneath(request, contents);
 	switch (read.status) {

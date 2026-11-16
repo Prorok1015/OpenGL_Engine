@@ -161,10 +161,15 @@ namespace scn {
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	SNK_API void assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 
-	namespace detail
+	// Where one spawn or hot reload is cut short: the project's "prefab_limits" (prj::prefab_spawn_limits, #1031).
+	struct spawn_limits
 	{
-		// For the engine's tests only, not for game modules: the most nodes one outer spawn or hot reload call builds.
-		// Returns the limit it replaced. Not thread-safe.
-		SNK_API std::size_t set_spawn_node_limit(std::size_t nodes);
-	}
+		// Prefab instances open one inside another; plain children and the file a spawn starts from do not count.
+		std::size_t nesting_depth = 16;
+		std::size_t nodes_per_spawn = 1'000'000;
+	};
+
+	// One for the process: scene_init sets the open project's limits (the defaults without a project). Returns the
+	// limits it replaced. Not thread-safe: set while nothing spawns.
+	SNK_API spawn_limits set_spawn_limits(const spawn_limits& limits);
 }

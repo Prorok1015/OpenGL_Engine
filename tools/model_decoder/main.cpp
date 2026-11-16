@@ -7,8 +7,11 @@
 // read for it by its rule (#1043): this process opens no file but its run folder. The out bundle holds a manifest
 // ({"kind":"scan","requests"|"error"} or {"kind":"import",...}) and, for an import, the resources it stored under
 // memory://. Exit codes: 0 an out bundle was written (a refused model is an "error" inside it), 1 no out bundle could
-// be made, 2 usage. Run it with the working directory a scratch folder: memory:// is ./sandbox there.
+// be made, 2 usage, 4 it refused to run without its OS sandbox (#1043, `--sandbox off|best_effort|required`, one line on stderr
+// says why). Run it with the working directory a scratch folder: memory:// is ./sandbox there, and the sandbox leaves it
+// nothing else to touch.
 // The self-test flags (--self-test-*) exist only in the test build (SNK_MODEL_DECODER_SELF_TEST), never in the shipped tool.
+#include "decoder_sandbox.h"
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
 #include "edt_model_importer.h"
@@ -26,6 +29,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <optional>
@@ -44,6 +48,13 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <csignal>
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+#include <arpa/inet.h>
+#include <cerrno>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 #elif defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -126,12 +137,26 @@ struct arguments
 {
 	fs::path request;
 	fs::path out;
+	edt::sandbox_mode sandbox = edt::sandbox_mode::best_effort;
+	std::uint64_t max_output_bytes = 1ull << 30;
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	// For the process tests: sleep this long / allocate and touch this much / start a copy of this program that sleeps
 	// and write its process id to a file, instead of decoding.
 	std::uint64_t self_test_sleep_ms = 0;
 	std::uint64_t self_test_alloc_bytes = 0;
 	fs::path self_test_spawn_pid_file;
+	// For the sandbox tests (#1043), once the sandbox is applied: open this file / connect to TCP / start a program /
+	// print what the sandbox applied, instead of decoding. Exit 0: refused (or printed), 5: it worked.
+	fs::path self_test_open;
+	bool self_test_connect = false;
+	bool self_test_exec = false;
+	bool self_test_sandbox_report = false;
+	// Signal the parent, or make the kernel signal it for this process's I/O (fcntl F_SETOWN, F_SETSIG, O_ASYNC,
+	// F_NOTIFY).
+	bool self_test_signal = false;
+	bool self_test_pretend_no_landlock = false;
+	// Start a second thread before the sandbox is applied: the sandbox must refuse to cover only one of them.
+	bool self_test_extra_thread = false;
 #endif
 };
 
@@ -166,6 +191,13 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.out = fs::absolute(args[++i]);
 		} else if (arg == "--parent-pid" && has_value) {
 			++i;
+		} else if (arg == "--sandbox" && has_value) {
+			const std::optional<edt::sandbox_mode> mode = edt::sandbox_mode_from_name(args[++i].string());
+			if (!mode) return std::nullopt;
+			parsed.sandbox = *mode;
+		} else if (arg == "--max-output-bytes" && has_value) {
+			parsed.max_output_bytes = std::strtoull(args[++i].string().c_str(), nullptr, 10);
+			if (parsed.max_output_bytes == 0) return std::nullopt;
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 		} else if (arg == "--self-test-sleep" && has_value) {
 			parsed.self_test_sleep_ms = std::strtoull(args[++i].string().c_str(), nullptr, 10);
@@ -173,13 +205,29 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_alloc_bytes = std::strtoull(args[++i].string().c_str(), nullptr, 10);
 		} else if (arg == "--self-test-spawn" && has_value) {
 			parsed.self_test_spawn_pid_file = args[++i];
+		} else if (arg == "--self-test-open" && has_value) {
+			parsed.self_test_open = args[++i];
+		} else if (arg == "--self-test-connect") {
+			parsed.self_test_connect = true;
+		} else if (arg == "--self-test-exec") {
+			parsed.self_test_exec = true;
+		} else if (arg == "--self-test-sandbox-report") {
+			parsed.self_test_sandbox_report = true;
+		} else if (arg == "--self-test-signal") {
+			parsed.self_test_signal = true;
+		} else if (arg == "--self-test-pretend-no-landlock") {
+			parsed.self_test_pretend_no_landlock = true;
+		} else if (arg == "--self-test-extra-thread") {
+			parsed.self_test_extra_thread = true;
 #endif
 		} else {
 			return std::nullopt;
 		}
 	}
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
-	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()) {
+	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
+		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
+		|| parsed.self_test_signal || parsed.self_test_extra_thread) {
 		return parsed;
 	}
 #endif
@@ -215,6 +263,72 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 	return manifest;
 }
 
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+// The self-test probes of the sandbox: 0 when the system refused what the probe tried, 5 when it worked, 6 when it failed
+// in a way that says nothing about the sandbox.
+int self_test_probe(const arguments& args, const decoder_sandbox::status& applied)
+{
+	if (args.self_test_sandbox_report) {
+		std::fputs((decoder_sandbox::report_line(applied) + "\n").c_str(), stdout);
+		std::fflush(stdout);
+		return 0;
+	}
+#if defined(__linux__)
+	const auto refused = [](int error) { return error == EACCES || error == EPERM ? 0 : 6; };
+	if (!args.self_test_open.empty()) {
+		const int fd = ::open(args.self_test_open.c_str(), O_RDONLY | O_CLOEXEC);
+		if (fd < 0) return refused(errno);
+		::close(fd);
+		return 5;
+	}
+	if (args.self_test_connect) {
+		const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd < 0) return refused(errno);
+		sockaddr_in address{};
+		address.sin_family = AF_INET;
+		address.sin_port = htons(9);
+		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		const int connected = ::connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+		const int error = errno;
+		::close(fd);
+		return connected != 0 && refused(error) == 0 ? 0 : 5;
+	}
+	if (args.self_test_signal) {
+		const pid_t parent = ::getppid();
+		const int directory = ::open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		const int flags = ::fcntl(STDOUT_FILENO, F_GETFL);
+		if (directory < 0 || flags < 0) return 6;	// the probe needs these allowed to test anything
+		bool any_worked = false;
+		const auto tried = [&](int result) {
+			if (result == 0) any_worked = true;
+			else if (refused(errno) != 0) any_worked = true;	// an error other than a refusal: not shown refused
+		};
+		// The kernel's signals are aimed at this process and ignored: a run without the sandbox must not signal the test.
+		std::signal(SIGIO, SIG_IGN);
+		std::signal(SIGUSR1, SIG_IGN);
+		tried(::kill(parent, 0));
+		tried(::fcntl(STDOUT_FILENO, F_SETOWN, ::getpid()));
+		tried(::fcntl(STDOUT_FILENO, F_SETSIG, SIGUSR1));
+		tried(::fcntl(STDOUT_FILENO, F_SETFL, flags | O_ASYNC));
+		tried(::fcntl(directory, F_NOTIFY, DN_MODIFY));
+		::close(directory);
+		return any_worked ? 5 : 0;
+	}
+	if (args.self_test_exec) {
+		// A program that exits 5: an exec that worked is seen as such, not as a refusal.
+		std::string shell = "/bin/sh";
+		std::string flag = "-c";
+		std::string command = "exit 5";
+		char* const program_args[] = { shell.data(), flag.data(), command.data(), nullptr };
+		char* const no_environment[] = { nullptr };
+		::execve(shell.c_str(), program_args, no_environment);
+		return refused(errno);
+	}
+#endif
+	return 5;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -241,6 +355,32 @@ int main(int argc, char** argv)
 	if (args->self_test_sleep_ms != 0) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(args->self_test_sleep_ms));
 		return 0;
+	}
+	if (args->self_test_extra_thread) {
+		std::thread([] { std::this_thread::sleep_for(std::chrono::minutes(2)); }).detach();
+	}
+#endif
+
+	// The sandbox before anything of the request is read (#1043): whatever the model makes the parser do, it does inside it.
+	decoder_sandbox::settings sandbox_settings;
+	sandbox_settings.mode = args->sandbox;
+	sandbox_settings.max_output_bytes = args->max_output_bytes;
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+	sandbox_settings.pretend_no_landlock = args->self_test_pretend_no_landlock;
+#endif
+	const decoder_sandbox::status sandbox = decoder_sandbox::apply(sandbox_settings);
+	if (!sandbox.refusal.empty()) {
+		const std::string line = std::string(edt::k_decoder_sandbox_refusal_prefix) + sandbox.refusal + "\n";
+		std::fputs(line.c_str(), stderr);
+		std::fflush(stderr);
+		return edt::k_decoder_sandbox_exit_code;
+	}
+	std::fputs((decoder_sandbox::status_line(sandbox) + "\n").c_str(), stderr);
+	std::fflush(stderr);
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
+		|| args->self_test_signal || args->self_test_extra_thread) {
+		return self_test_probe(*args, sandbox);
 	}
 #endif
 
