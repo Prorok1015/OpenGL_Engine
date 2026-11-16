@@ -25,7 +25,7 @@ namespace edt {
 		bool hashed = false;
 		// Every name the model asked for this file by (the scan records them): the import hands the decoder process its
 		// bytes under each of them (#1043).
-		std::vector<std::string> names;
+		std::vector<std::string> names{};
 		model_file_kind kind = model_file_kind::texture;
 	};
 
@@ -33,24 +33,24 @@ namespace edt {
 	// boundary (the importer names its textures by it), and its bytes; no bytes: the file is not on the disk.
 	struct provided_file
 	{
-		std::string name;
-		std::string relative;
+		std::string name{};
+		std::string relative{};
 		model_file_kind kind = model_file_kind::texture;
-		std::shared_ptr<const std::vector<std::byte>> bytes;
+		std::shared_ptr<const std::vector<std::byte>> bytes{};
 	};
 
 	// A name the model asked for that it was not given (the decoder's scan reports them to the editor, #1043).
 	struct requested_file
 	{
-		std::string name;
+		std::string name{};
 		model_file_kind kind = model_file_kind::texture;
 	};
 
 	// What the decoder's scan asks the editor for; `error` set: the model cannot be read, and why.
 	struct scan_requests
 	{
-		std::vector<requested_file> requested;
-		std::string error;
+		std::vector<requested_file> requested{};
+		std::string error{};
 	};
 
 	struct model_file_limits

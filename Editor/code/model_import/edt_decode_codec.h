@@ -46,8 +46,8 @@ namespace edt {
 	// `relative` is empty.
 	struct provided_entry
 	{
-		std::string name;
-		std::string relative;
+		std::string name{};
+		std::string relative{};
 		model_file_kind kind = model_file_kind::texture;
 		bool present = false;
 	};
