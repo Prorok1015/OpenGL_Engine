@@ -383,11 +383,11 @@ std::shared_ptr<const void> edt::override_edit::view_cache::source_of(const pref
 
 template<typename T>
 const edt::override_edit::view_cache::entry<T>* edt::override_edit::view_cache::find_entry(std::vector<entry<T>>& entries, int world,
-	uint64_t owner_id, std::span<const uint64_t> target, const std::shared_ptr<const void>& source)
+	uint64_t owner_id, std::span<const uint64_t> target, const std::weak_ptr<const void>& source)
 {
 	for (auto it = entries.begin(); it != entries.end(); ++it) {
 		if (it->world != world || it->owner_id != owner_id || !std::ranges::equal(it->target, target)) continue;
-		if (it->source == source) return &*it;
+		if (!it->source.owner_before(source) && !source.owner_before(it->source)) return &*it;
 		entries.erase(it);
 		break;
 	}
@@ -398,7 +398,7 @@ std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::overr
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	const auto source = source_of(owner);
+	const std::weak_ptr<const void> source = source_of(owner);
 	if (const auto* found = find_entry(m_bases, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target, active_file()));
 	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
@@ -409,7 +409,7 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	const auto source = source_of(owner);
+	const std::weak_ptr<const void> source = source_of(owner);
 	if (const auto* found = find_entry(m_children, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target, active_file()));
 	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
@@ -419,7 +419,7 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::override_edit::view_cache::stale(const prefab_node& owner)
 {
 	sync_generation();
-	const auto source = source_of(owner);
+	const std::weak_ptr<const void> source = source_of(owner);
 	if (const auto* found = find_entry(m_stale, m_state.active_world_idx, owner.node_id, {}, source)) return found->value;
 	std::vector<stale_record> found;
 	if (!referenced_prefab(owner)) {
