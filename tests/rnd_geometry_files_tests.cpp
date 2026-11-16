@@ -2,11 +2,13 @@
 #include <boost/json.hpp>
 #include "null_engine_fixture.hpp"
 #include "test_temp_dir.hpp"
+#include "geom/rnd_geom_manager.h"
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #if SNK_HAS_ASSIMP
@@ -247,6 +249,30 @@ BOOST_AUTO_TEST_CASE(AGenericStoreOfAGeometry_IsRefused_AndWritesNothing)
 		BOOST_TEST(refused);
 	}
 	BOOST_TEST(!root().exists(tag));
+}
+
+BOOST_AUTO_TEST_CASE(AGeometryWrittenAgain_IsDrawnByTheGeomManager_WithoutASignalOfTheCaller)
+{
+	const res::tag tag{ "geomfiles://a/redrawn.geom.desc" };
+	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
+	rnd::geom_manager geometry(storage.require<rnd::render_system>().get_driver(), root());
+	const auto frame = [&] {
+		test_util::pump(tasks);
+		geometry.begin_frame();
+		return geometry.require_geometry(tag);
+	};
+	rnd::driver::vertex_array_interface* first = nullptr;
+	for (int attempt = 0; attempt < 16 && !(first = frame()); ++attempt) {}
+	BOOST_REQUIRE(first != nullptr);
+	BOOST_TEST(!geometry.draw_fits(tag, 6, 0, 0));
+
+	// The writer itself tells the cache: the test signals nothing.
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(2));
+	BOOST_REQUIRE_MESSAGE(error.empty(), error);
+	for (int i = 0; i < 16 && geometry.require_geometry(tag) == first; ++i) {
+		BOOST_REQUIRE(frame() != nullptr);
+	}
+	BOOST_TEST(geometry.draw_fits(tag, 6, 0, 0));
 }
 
 #if SNK_HAS_ASSIMP

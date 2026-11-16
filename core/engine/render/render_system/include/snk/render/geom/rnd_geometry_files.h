@@ -43,7 +43,8 @@ namespace rnd
 		const geometry_file_options& options = {});
 
 	// Encodes and writes the pair through res::desc_binary::save, which holds the save lock from the staged binary file
-	// through the desc to the commit. A protocol without layers (memory:// of the tests) cannot commit. Empty when written.
+	// through the desc to the commit, then signals both files changed (what was built from them reloads). A protocol without
+	// layers (memory:// of the tests) cannot commit. Empty when written.
 	SNK_API std::string write_geometry_files(res::resource_system& system, const res::tag& file, const geometry_desc& geometry,
 		const geometry_file_options& options = {});
 

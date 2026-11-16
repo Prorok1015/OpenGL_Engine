@@ -968,7 +968,8 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 		// Arrays: the decoder's answer, a model without meshes, or data the loader would refuse in a binary file (a line
 		// or a point primitive), read as before.
 		if (binary) {
-			egLOG_WARN("edt/import", "'{}': geometry stays in JSON arrays: {}", geom_tag.view(), files.error);
+			egLOG_WARN("edt/import", "'{}': geometry stays in JSON arrays, its binary file would be refused ({})", geom_tag.view(),
+				files.error);
 		}
 		json::object jsgeometry;
 		jsgeometry["__type"] = "geometry_desc";

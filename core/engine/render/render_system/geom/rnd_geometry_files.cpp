@@ -147,6 +147,9 @@ std::string rnd::write_geometry_files(res::resource_system& system, const res::t
 	if (!written) {
 		return desc_error.empty() ? written.error : desc_error;
 	}
+	// A store does not evict the cache (the resolver reports its own writes to subscribers only): as every desc save.
+	system.signal_changed(*res::desc_binary::binary_tag(file));
+	system.signal_changed(file);
 	return {};
 }
 

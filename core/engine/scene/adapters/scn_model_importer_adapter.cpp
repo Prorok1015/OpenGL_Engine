@@ -803,7 +803,8 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		// A model without meshes, or data the loader would refuse in a binary file (a line or a point primitive): arrays,
 		// read as before.
 		if (has_meshes) {
-			egLOG_WARN("scene/import", "'{}': geometry stays in JSON arrays: {}", geom_tag.view(), files.error);
+			egLOG_WARN("scene/import", "'{}': geometry stays in JSON arrays, its binary file would be refused ({})", geom_tag.view(),
+				files.error);
 		}
 		json::object jsgeometry;
 		jsgeometry["__type"] = "geometry_desc";
