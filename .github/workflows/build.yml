@@ -314,6 +314,15 @@ jobs:
           path: build/ci-linux-clang-debug/generated_shapes
           if-no-files-found: ignore
 
+      # #1108: the same for the import snapshots of tests/data/import_golden (scn_import_golden_tests).
+      - name: Upload the generated import snapshots
+        if: failure() && matrix.preset == 'ci-linux-clang-debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-import-golden
+          path: build/ci-linux-clang-debug/generated_import_golden
+          if-no-files-found: ignore
+
       - name: Slowest test suites and cases
         if: always()
         continue-on-error: true
