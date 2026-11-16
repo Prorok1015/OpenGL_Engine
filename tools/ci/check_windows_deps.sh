@@ -7,7 +7,8 @@
 # --runtime-elsewhere: the binary is checked where it was built, not in a package (the shipping host `game`, #591,
 # has no package yet), so the MSVC runtime is reported and not required next to it. Everything else is checked alike.
 # --deny: only this: fails when a file imports (or delay-loads) one of the listed DLLs, compared without case. The model
-# decoder must load no window, GDI, GL or engine DLL (#1077, groundwork for win32k lockdown #1054).
+# decoder must import no window, GDI, GL or engine DLL directly (#1077). Only direct imports are seen: what an imported
+# system DLL loads in turn (shell32 -> user32) is not, so this is no proof for win32k lockdown (#1054).
 #
 # Reads the imports (and delay-load imports) with `dumpbin -dependents` (an MSVC developer shell). A dependency is
 # fine when it sits in <bin dir> next to the binary, or is on the explicit list of Windows DLLs below (API sets

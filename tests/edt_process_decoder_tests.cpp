@@ -1049,6 +1049,30 @@ BOOST_AUTO_TEST_CASE(APrefabThatIsNoObject_IsRefused_WhenItIsStamped)
 	BOOST_TEST(!edt::accept_import_answer(bundle, request_in(), problem, nullptr, descs.get()).has_value());
 }
 
+// With a desc system the prefab comes from its blob, not from the manifest's copy: the blob is held to the rules of every
+// desc of the import, and a __version the decoder sent is replaced by the editor's.
+BOOST_AUTO_TEST_CASE(AHostilePrefabBlob_IsRefusedOnTheStampedPath_AndASentVersionIsTheEditors)
+{
+	const auto request = request_in();
+	std::string problem;
+	const auto refused = [&](const char* text) {
+		auto bundle = import_answer();
+		bundle.blobs[0].bytes = text_bytes(text);
+		return !edt::accept_import_answer(bundle, request, problem, nullptr, descs.get()).has_value();
+	};
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","geometry":"user://x.geom.desc"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","__guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","__parent":"edt://settings/x"})json"));
+
+	auto bundle = import_answer();
+	bundle.blobs[0].bytes = text_bytes(R"json({"__type":"prefab_desc","__version":999,"geometry":"memory://m/m.geom.desc"})json");
+	const auto accepted = edt::accept_import_answer(bundle, request, problem, nullptr, descs.get());
+	BOOST_REQUIRE_MESSAGE(accepted.has_value(), problem);
+	boost::json::object expected = boost::json::parse(R"json({"__type":"prefab_desc","geometry":"memory://m/m.geom.desc"})json").as_object();
+	descs->stamp_tree(expected);
+	BOOST_TEST(boost::json::serialize(accepted->prefab_json) == boost::json::serialize(expected));
+}
+
 BOOST_AUTO_TEST_CASE(AMissingDecoder_IsUnavailable_WithAReasonThatNamesTheFile)
 {
 	edt::decode_runner_config config;

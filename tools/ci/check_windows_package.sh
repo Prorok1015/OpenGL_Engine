@@ -102,7 +102,7 @@ ls -l "${root}/bin"
 # ---- 3. dependencies ----
 bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_model_decoder.exe snk_model_import_assimp.dll snk_engine.dll \
 	snk_editor_api.dll || status=1
-# #1077: the decoder loads no window, GDI, GL, engine or model import DLL (groundwork for win32k lockdown, #1054).
+# #1077: the decoder imports no window, GDI, GL, engine or model import DLL directly (not what those DLLs load: #1054).
 bash tools/ci/check_windows_deps.sh --deny user32.dll,gdi32.dll,opengl32.dll,snk_engine.dll,snk_engined.dll,snk_model_import_assimp.dll,snk_model_import_assimpd.dll \
 	"${root}/bin" snk_model_decoder.exe || status=1
 [[ $status -eq 0 ]] || exit 1

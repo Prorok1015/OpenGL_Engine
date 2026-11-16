@@ -293,7 +293,8 @@ jobs:
           if command -v sccache >/dev/null; then sccache --show-stats; fi
           if command -v ccache >/dev/null; then ccache -s; fi
 
-      # #1077: the model decoder loads no window, GDI, GL or engine DLL (groundwork for win32k lockdown, #1054). unit_tests
+      # #1077: the model decoder imports no window, GDI, GL or engine DLL directly. Only its direct imports are checked: a
+      # system DLL it imports (shell32) may still load user32/gdi32, which win32k lockdown (#1054) must rule out. unit_tests
       # builds both decoders; the shipped one is copied next to it, the self-test build stays in tools/model_decoder.
       - name: Model decoder imports
         if: runner.os == 'Windows'

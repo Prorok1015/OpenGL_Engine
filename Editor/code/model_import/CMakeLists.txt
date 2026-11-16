@@ -50,6 +50,8 @@ if(SNK_WITH_ASSIMP)
 	target_link_libraries(snk_model_decoder_side PUBLIC snk::model_import_core PUBLIC snk::model_codec PUBLIC snk::common
 		PUBLIC snk::platform PUBLIC snk::file_identity PRIVATE snk::engine_logger PRIVATE $<BUILD_LOCAL_INTERFACE:snk::sanitizers>)
 	if(SNK_ENGINE_SHARED)
+		# PUBLIC on purpose: the decoder's own sources include the same headers and must not see SNK_API as dllimport.
+		# Any target linking this becomes the engine's export side too, so link it only into the decoder.
 		target_compile_definitions(snk_model_decoder_side PUBLIC SNK_ENGINE_BUILD)
 	endif()
 endif()

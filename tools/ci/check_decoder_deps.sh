@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Checks that the model decoder (#647) loads no engine, GL or window library (#1077, groundwork for win32k lockdown #1054):
+# Checks that the model decoder (#647) needs no engine, GL or window library directly (#1077; NEEDED only, not what
+# those libraries pull in):
 #
 #   tools/ci/check_decoder_deps.sh <path to snk_model_decoder>
 #
