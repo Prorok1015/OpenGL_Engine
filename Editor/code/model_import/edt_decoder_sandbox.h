@@ -39,6 +39,10 @@ namespace edt {
 	// what the child says (decoder_sandbox_status from its status line) is what counts.
 	decoder_sandbox_status expected_decoder_sandbox(sandbox_mode mode);
 
+	// A child that ran without saying how it is sandboxed (its first stderr line was no status): counted as running without
+	// any sandbox (#1076), never as unknown.
+	decoder_sandbox_status unreported_decoder_sandbox();
+
 	// The line a person (Problems) and an agent (its question, its job's result) are shown when the decoder runs without
 	// all of its sandbox; empty when it has all of it or nothing was reported.
 	std::string decoder_sandbox_warning(const decoder_sandbox_status& status);

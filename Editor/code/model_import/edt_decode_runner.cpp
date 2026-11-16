@@ -164,6 +164,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 		const std::lock_guard lock(refusal_mutex);
 		outcome.sandbox = sandbox_status.status();
 	}
+	outcome.started = result.error.empty();
 
 	if (timed_out.load()) {
 		outcome.timed_out = true;

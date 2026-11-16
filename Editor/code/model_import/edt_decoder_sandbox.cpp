@@ -29,6 +29,14 @@ edt::decoder_sandbox_status edt::expected_decoder_sandbox(sandbox_mode mode)
 	return expected;
 }
 
+edt::decoder_sandbox_status edt::unreported_decoder_sandbox()
+{
+	decoder_sandbox_status unreported;
+	unreported.reported = true;
+	unreported.why = "the decoder did not say whether it runs in its OS sandbox";
+	return unreported;
+}
+
 int edt::decoder_sandbox_gap(const decoder_sandbox_status& status)
 {
 	if (!status.reported) return 0;

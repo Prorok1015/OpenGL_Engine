@@ -511,9 +511,11 @@ BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesAnyFile_WhenEveryCommandIsAllowedB
 	BOOST_TEST(changes_between(before, take_snapshot()) == std::string{});
 }
 
-// #1076: only a person sets the model decoder's OS sandbox (import/decoder_sandbox, read once at start): no command an
-// agent may call changes it, even with every command allowed by name, and none that names settings or config writes.
-BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesTheDecoderSandboxSetting_WhenEveryCommandIsAllowedByName, agent_editor_fixture)
+// #1076: only a person sets the model decoder's OS sandbox (import/decoder_sandbox, read once at start). This covers the
+// commands: none an agent may call changes the loaded setting, even with every command allowed by name, and none that
+// names settings or config writes. The files are covered elsewhere: no agent write reaches a cfg file, and an agent's
+// checkout or pull that changes one is refused (EdtVcsServiceTests, AGuardedCheckout_ThatChangesTheEditorsConfiguration_IsDenied).
+BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesTheLoadedDecoderSandboxSetting_WhenEveryCommandIsAllowedByName, agent_editor_fixture)
 {
 	const cfg::config_view config;
 	const std::optional<std::string> before = config.value("import/decoder_sandbox");

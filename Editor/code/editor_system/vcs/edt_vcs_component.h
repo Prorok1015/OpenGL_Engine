@@ -48,6 +48,8 @@ namespace edt
 		void tick();
 		// Asked at the start of every agent write, so an edit of either policy file applies at once. Without it the defaults apply.
 		void follow_agent_policy(std::filesystem::path project_policy_file, std::function<vcs_policy()> source);
+		// The editor's configuration files: an agent's checkout or pull must not change them (#1076).
+		void guard_config_files(std::vector<std::filesystem::path> files);
 
 		bool writes_running() const { return m_vcs.running_writes() > 0; }
 		std::optional<std::filesystem::path> git_dir() const { return m_vcs.cached_state().git_dir; }

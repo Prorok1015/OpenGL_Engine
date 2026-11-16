@@ -52,6 +52,8 @@ namespace edt {
 		bool cancelled = false;
 		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
 		bool sandbox_refused = false;
+		// The child process was started (it may still have failed, been killed or answered nothing usable).
+		bool started = false;
 		decoder_sandbox_status sandbox;
 
 		bool ok() const { return bundle.has_value(); }

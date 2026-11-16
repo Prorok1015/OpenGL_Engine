@@ -149,6 +149,26 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
+	// The configuration files the editor read its settings from (--config, else the one beside the executable): an agent's
+	// checkout or pull must not change them, import/decoder_sandbox is a person's (#1076).
+	std::vector<std::filesystem::path> editor_config_files()
+	{
+		std::vector<std::filesystem::path> files;
+		const auto add = [&files](const std::filesystem::path& file) {
+			if (file.empty()) return;
+			std::error_code ec;
+			std::filesystem::path absolute = std::filesystem::weakly_canonical(file, ec);
+			if (ec) absolute = std::filesystem::absolute(file, ec);
+			if (ec || absolute.empty()) return;
+			if (std::find(files.begin(), files.end(), absolute) == files.end()) files.push_back(std::move(absolute));
+		};
+		add(cfg::loaded_config_path());
+		if (const std::filesystem::path program = platform::current_executable(); !program.empty()) {
+			add(program.parent_path() / ".." / "config" / "editor.cfg");
+		}
+		return files;
+	}
+
 
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
@@ -1091,6 +1111,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->follow_agent_policy(project_policy, [this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
+		m_vcs->guard_config_files(editor_config_files());
 		m_agent_access->policy().set_on_changed([this] {
 			if (m_agent_server) m_agent_server->notify_tools_changed();
 		});
