@@ -372,8 +372,23 @@ rnd::geometry_desc::~geometry_desc()
 	detail::forget_binary(*this);
 }
 
-void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::object& resource)
+void rnd::geometry_desc::deserialize(desc::desc_system&, const json::object& resource)
 {
+	detail::read_geometry_json(*this, resource);
+}
+
+json::value rnd::detail::layout_json(const driver::BufferLayout& layout)
+{
+	return json::value_from(layout);
+}
+
+void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object& resource)
+{
+	auto& layout = geometry.layout;
+	auto& indices = geometry.indices;
+	auto& vertices = geometry.vertices;
+	auto& bounds = geometry.bounds;
+	auto& rtree = geometry.rtree;
 	auto& json_layout = resource.at("layout");
 	{
 		std::vector<rnd::driver::BufferElement> elements;
@@ -417,10 +432,10 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		ranges.wants_bounds = resource.contains("bounds");
 		bounds.clear();
 		rtree = {};
-		detail::set_binary_ranges(*this, std::move(ranges));
+		detail::set_binary_ranges(geometry, std::move(ranges));
 		return;
 	}
-	detail::forget_binary(*this);
+	detail::forget_binary(geometry);
 
 	if (resource.contains("bounds"))
 	{
@@ -439,7 +454,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 
 void rnd::geometry_desc::serialize(json::object& resource) const
 {
-	// Until the writer of the binary file (PR3a), a geometry read from one is never written as arrays nor as nothing.
+	// A geometry read from a binary file is never written as arrays nor as nothing: rnd::write_geometry_files writes it.
 	switch (detail::binary_state_of(*this)) {
 	case detail::geometry_binary_state::not_loaded:
 		throw std::runtime_error(std::format("geometry '{}': its binary data was not loaded (it was not read as a geometry), "

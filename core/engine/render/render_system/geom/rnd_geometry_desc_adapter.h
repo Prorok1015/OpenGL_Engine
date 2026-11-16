@@ -32,6 +32,7 @@ namespace rnd
 			const ::res::res_deps& deps) const override;
 		std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag& tag,
 			const std::vector<std::byte>& raw_data) const override;
+		// Throws std::runtime_error: a geometry is written with its binary file by rnd::write_geometry_files (EPIC-79).
 		std::vector<std::byte> serialize(const ::res::tag& tag,
 			const std::shared_ptr<::res::resource_entry>& resource) const override;
 

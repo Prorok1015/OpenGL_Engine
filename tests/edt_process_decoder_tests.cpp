@@ -832,6 +832,8 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	}
 
 	edt::model_importer importer(*descs, *rs);
+	// The decoder answers the geometry in JSON arrays until its answer carries the binary file (#1068 PR3b).
+	source.binary_geometry = false;
 	const edt::import_intermediate in_process = importer.import_background(source);
 	BOOST_REQUIRE_MESSAGE(in_process.error.empty(), in_process.error);
 	BOOST_CHECK(in_process.prefab_tag == through_process.prefab_tag);

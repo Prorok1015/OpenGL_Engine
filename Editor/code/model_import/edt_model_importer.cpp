@@ -9,6 +9,8 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/scene/scn_glm_json_convert.h>
@@ -948,16 +950,35 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	// Last safe point: from here the results are stored in the resource system.
 	checkpoint(ctx);
 
-	// 10. Store geometry (res_sys.store is mutex-protected)
-	json::object jsgeometry;
-	jsgeometry["__type"] = "geometry_desc";
-	jsgeometry["__parent"] = "res://base_geometry.desc";
-	geometry.serialize(jsgeometry);
-	std::string geom_str = json::serialize(jsgeometry);
-	std::vector<std::byte> geom_bytes(geom_str.size());
-	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
+	// 10. Store geometry (res_sys.store is mutex-protected): the desc and its binary file (EPIC-79), the binary file first.
+	// The binary file is not in all_tags: whoever copies the desc carries it along (asset_exporter).
+	rnd::geometry_file_options geometry_options;
+	geometry_options.header["__parent"] = "res://base_geometry.desc";
+	geometry_options.bounds = !geometry.bounds.empty();
+	const bool binary = source.binary_geometry && !geometry.vertices.empty();
+	const rnd::geometry_files files = binary ? rnd::encode_geometry_files(geom_tag, geometry, geometry_options) : rnd::geometry_files{};
 	(void)already_there(tags, m_res, geom_tag);
-	store_tracked(m_res, geom_tag, geom_bytes, created_tags);
+	if (binary && files) {
+		const res::tag binary_tag = *res::desc_binary::binary_tag(geom_tag);
+		(void)already_there(tags, m_res, binary_tag);
+		const res::desc_binary::save_lock lock(geom_tag);
+		store_tracked(m_res, binary_tag, files.binary, created_tags);
+		store_tracked(m_res, geom_tag, files.desc, created_tags);
+	} else {
+		// Arrays: the decoder's answer, a model without meshes, or data the loader would refuse in a binary file (a line
+		// or a point primitive), read as before.
+		if (binary) {
+			egLOG_WARN("edt/import", "'{}': geometry stays in JSON arrays: {}", geom_tag.view(), files.error);
+		}
+		json::object jsgeometry;
+		jsgeometry["__type"] = "geometry_desc";
+		jsgeometry["__parent"] = "res://base_geometry.desc";
+		geometry.serialize(jsgeometry);
+		std::string geom_str = json::serialize(jsgeometry);
+		std::vector<std::byte> geom_bytes(geom_str.size());
+		std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
+		store_tracked(m_res, geom_tag, geom_bytes, created_tags);
+	}
 	im.all_tags.push_back(geom_tag);
 
 	checkpoint(ctx);

@@ -8,6 +8,8 @@
 #include <snk/common/eng_profiler.h>
 
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_path_sanitize.h>
@@ -787,15 +789,31 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 	}
 
-	// 7. Store geometry as a memory resource
-	json::object jsgeometry;
-	jsgeometry["__type"] = "geometry_desc";
-	jsgeometry["__parent"] = "res://base_geometry.desc";
-	geometry.serialize(jsgeometry);
-	std::string geom_str = json::serialize(jsgeometry);
-	std::vector<std::byte> geom_bytes(geom_str.size());
-	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
-	res_sys.store(geom_tag, geom_bytes);
+	// 7. Store geometry as a memory resource: the desc and its binary file (EPIC-79), the binary file first.
+	rnd::geometry_file_options geometry_options;
+	geometry_options.header["__parent"] = "res://base_geometry.desc";
+	geometry_options.bounds = !geometry.bounds.empty();
+	const bool has_meshes = !geometry.vertices.empty();
+	const rnd::geometry_files files = has_meshes ? rnd::encode_geometry_files(geom_tag, geometry, geometry_options) : rnd::geometry_files{};
+	if (has_meshes && files) {
+		const res::desc_binary::save_lock lock(geom_tag);
+		res_sys.store(*res::desc_binary::binary_tag(geom_tag), files.binary);
+		res_sys.store(geom_tag, files.desc);
+	} else {
+		// A model without meshes, or data the loader would refuse in a binary file (a line or a point primitive): arrays,
+		// read as before.
+		if (has_meshes) {
+			egLOG_WARN("scene/import", "'{}': geometry stays in JSON arrays: {}", geom_tag.view(), files.error);
+		}
+		json::object jsgeometry;
+		jsgeometry["__type"] = "geometry_desc";
+		jsgeometry["__parent"] = "res://base_geometry.desc";
+		geometry.serialize(jsgeometry);
+		std::string geom_str = json::serialize(jsgeometry);
+		std::vector<std::byte> geom_bytes(geom_str.size());
+		std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
+		res_sys.store(geom_tag, geom_bytes);
+	}
 
 	// 8. Add skin_weights_desc component to root (registered during assembly)
 	if (!skin_weights.empty()) {

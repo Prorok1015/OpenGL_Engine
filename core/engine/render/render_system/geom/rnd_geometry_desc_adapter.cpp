@@ -8,6 +8,7 @@
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <cstdint>
 #include <format>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -111,6 +112,12 @@ std::shared_ptr<::res::resource_entry> rnd::geometry_desc_adapter::deserialize(c
 
 void rnd::geometry_desc_adapter::load_binary(const ::res::tag& tag, rnd::geometry_desc& geometry) const
 {
+	detail::load_geometry_binary(m_resources, tag, geometry, verify_hash_on_load);
+}
+
+void rnd::detail::load_geometry_binary(::res::resource_system& system, const ::res::tag& tag, rnd::geometry_desc& geometry,
+	bool verify_hash)
+{
 	const auto ranges = detail::binary_ranges_of(geometry);
 	if (!ranges) {
 		return;
@@ -139,7 +146,7 @@ void rnd::geometry_desc_adapter::load_binary(const ::res::tag& tag, rnd::geometr
 		paths.push_back("/indices");
 	}
 
-	::res::desc_binary_data data = ::res::desc_binary::read(m_resources, tag, asked, verify_hash_on_load);
+	::res::desc_binary_data data = ::res::desc_binary::read(system, tag, asked, verify_hash);
 	if (!data) {
 		// The message names the range as "range N (": that is the path of the N-th range asked for.
 		std::string_view path = paths.front();
@@ -171,7 +178,9 @@ void rnd::geometry_desc_adapter::load_binary(const ::res::tag& tag, rnd::geometr
 }
 
 std::vector<std::byte> rnd::geometry_desc_adapter::serialize(const ::res::tag& tag,
-	const std::shared_ptr<::res::resource_entry>& resource) const
+	const std::shared_ptr<::res::resource_entry>&) const
 {
-	return m_descs.serialize(tag, resource);
+	// Vertices and indices go to the binary file beside the desc, which a store of one file cannot write (EPIC-79).
+	throw std::runtime_error(std::format("geometry '{}' is not written by a store of the resource: rnd::write_geometry_files "
+		"writes the desc with its binary file", tag.view()));
 }

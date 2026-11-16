@@ -1,7 +1,7 @@
 # EPIC-79: Desc Binary Data — большие числовые данные desc в двоичном файле рядом
 
 **Theme:** desc-driven
-**Status:** in progress (PR1 — формат, чтение и запись пары; PR2 — геометрия читает `.bin`)
+**Status:** in progress (PR1 — формат, чтение и запись пары; PR2 — геометрия читает `.bin`; PR3a — писатели геометрии пишут `.bin`)
 **Issue:** [#1068](https://github.com/Prorok1015/OpenGL_Engine/issues/1068)
 **Depends on:** EPIC-77 (#1007, `*.geom.desc`), EPIC-58 (#28, версии и миграция), EPIC-57 (#27, принадлежащие боковые файлы)
 
@@ -78,7 +78,7 @@
 
 - SHA-256 (`cmn::sha256_hex`) — сверка пары desc ↔ `.bin`, не защита: кто правит проект, правит оба файла.
 - Хэш каждого диапазона **всегда записан в desc** (`binary_range_from_json` без `sha256` отказывает): он нужен и для сверки, и для будущего хранилища по хэшу (раздел 9), даже если при обычной загрузке его не проверяют.
-- Проверка — параметр чтения `verify_hash`. Обязательна при импорте, приёме ответа декодера, миграции, сохранении и в проверке проекта. При обычной загрузке — по замеру (PR3a).
+- Проверка — параметр чтения `verify_hash`. Обязательна при импорте, приёме ответа декодера, миграции, сохранении и в проверке проекта. При обычной загрузке — по замеру (PR3a): пока `geometry_desc_adapter::verify_hash_on_load = true`; решение — по строкам `test/timing` теста `GenRobot_ImportAndGeometryLoad_AreTimed` (раздел 7.2).
 - Если рядом лежит `.bin.new`, хэши `.bin` проверяются всегда, независимо от `verify_hash`: иначе не отличить устаревший `.new` от незавершённого сохранения.
 - При нескольких корнях протокола хэши проверяются всегда (раздел 2.2).
 
@@ -138,6 +138,28 @@
 - **Чтение как `desc_base`.** Запрос `.geom.desc` как `desc_base` идёт через общий `desc_adapter_t`: векторы пусты, состояние `not_loaded`. `serialize` такого объекта бросает `std::runtime_error` (пустой меш не пишется), а загруженного из `.bin` — тоже (обратно в массивы не пишется; явный писатель — `write_geometry_files`, PR3a). `desc_system::reduce_to_parent` с таким родителем пишет desc целиком (с `__parent`, если форма читается обратно так же) и пишет WARN, не бросает. `desc_resave` пропускает geometry с диапазонами (строка «skipped» в отчёте, не ошибка).
 - **Hot reload.** Ошибка при перезагрузке (несовпадение хэша, битый `.bin`) — ошибка блока; `rnd::geom_manager` уже держит прежнюю геометрию и пишет WARN «changed but failed to load», следующая правка пробуется снова. Первая загрузка падает.
 - **Версия.** `geometry_desc` — версия 2, шаг 1→2 пустой: массивы остаются верными, версия 2 говорит старому движку «здесь могут быть диапазоны» (он откажет, а не прочтёт объект как массив). Файлы `core/res/shapes/*.geom.desc`, `core/res/base_geometry.desc`, `projects/sandbox/res/bench/bench_quad.desc` и `base_shape_file_version` переведены на 2.
+
+## 7.2. Сделано в PR3a
+
+- **Писатель.** `snk/render/geom/rnd_geometry_files.h`: `rnd::encode_geometry_files(tag, geometry, options)` — пара в памяти (desc компактным JSON и байты `.bin`), ничего не пишет; `rnd::write_geometry_files(system, tag, geometry, options)` — пишет пару через `res::desc_binary::save` (замок сохранения от `.bin.new` через desc до коммита); `rnd::read_geometry_file(system, tag, json, out)` — данные desc без кэша (массивы как есть или диапазоны `.bin` с проверкой хэшей); `rnd::holds_geometry_arrays(json)`. Перед записью — те же проверки, что у загрузчика (`check_geometry_data`), плюс отказ без вершин и для имени не `<name>.<ext>.desc`: писатель никогда не пишет файл, от которого откажется загрузчик. Раскладки: вершины `f32xN` (N = шаг/4), если все атрибуты float и N ≤ 32, иначе `u8`; индексы `u32`. `__version` = 2 (`rnd::geometry_binary_version`), заголовок (`__parent`, `__guid`, …) из `options.header` без ключей писателя. `bounds` — только ключ (`[]`), если у геометрии были границы: загрузчик строит их заново.
+- **Писатели геометрии** (каждый либо пишет пару, либо отказывает):
+
+| Писатель | Что теперь |
+|---|---|
+| `edt::asset_exporter` (окно экспорта после импорта, импорт агента; `memory://` → `res://`) | читает геометрию `memory://` (массивы ответа декодера или `.bin` импорта в процессе) через `read_geometry_file` и пишет пару `write_geometry_files`; без изменений на диске — ничего не пишет (#559); `written` получает desc и `.bin`, при остановке до коммита — `.bin.new` (импорт агента его забирает назад). Импорт агента заранее отказывает, если `.bin`/`.bin.new` цели уже есть |
+| `edt::mesh::write_geometry_json` | заменён на `edt::mesh::write_mesh_geometry(system, tag, geometry, options)` — пара через `write_geometry_files`, без `bounds`; вызовов в коде редактора не было (только тесты) |
+| `scn::model_importer_adapter` (импорт в процессе в `memory://`, путь gen_robot) | `<stem>.geom.desc` + `<stem>.geom.bin` (сначала `.bin`, под замком); модель без мешей и данные, от которых отказал бы загрузчик (линии и точки), — по-прежнему массивы, с WARN `scene/import` |
+| `edt::model_importer::import_background` (в процессе) | так же (`import_source::binary_geometry`, по умолчанию `true`); `.bin` в `created_tags`, но не в `all_tags` (его уносит экспортёр). Процесс декодера ставит `false`: ответ декодера пока текст (PR3b) |
+| общий `store` ресурса (`geometry_desc_adapter::serialize`) | отказ `std::runtime_error` с отсылкой к `write_geometry_files` (`geometry_desc::serialize` остаётся для массивов: генератор фигур, ответ декодера) |
+| MCP `desc.create`/`desc.write` | отказ `invalid_args` для `*.geom.desc`, `*.poly.desc` (в любом регистре) и для `__type` `geometry_desc`/`poly_mesh_desc`; вопрос `desc.write` говорит «will be refused» |
+| копирование/дублирование ассета, «сохранить как» desc | в редакторе их нет (браузер ассетов умеет только Create Document; Save As — только уровень и документы данных, геометрия не документ). Перенос `.bin` при переименовании, перемещении, копировании и удалении — PR4 |
+| фигуры `core/res/shapes/*.geom.desc` (`edt::mesh::base_shape_file_text`) | остаются массивами: файлы в репозитории, генератор пишет их `geometry_desc::serialize`, тест синхронизации сравнивает байты как раньше. Переводит их миграция PR4 |
+| `tools/desc_resave` | пропускает двоичную геометрию (PR2), не тронут |
+| `tools/project_migration` | PR4 |
+
+- **Старые проекты** (решение 3). Сохранение меша, найденного в массивах (экспорт поверх файла проекта, `write_mesh_geometry`), пишет пару и один WARN `Editor/Save` — тот же канал, что предупреждение о версии EPIC-58 (`edt::geometry_conversion_text` в `edt_version_notice.h`: «converted to the binary format (EPIC-79)», с именем файла и `.bin`).
+- **Замер.** Тест `RndGeometryFilesTests/GenRobot_ImportAndGeometryLoad_AreTimed` (только с assimp; ничего не утверждает о времени) импортирует `projects/sandbox/res/objects/robot/gen_robot.glb` через `scn::model_importer_adapter` без запомненных импортов и пишет три строки `test/timing`: импорт и первая загрузка геометрии; запись — JSON-массивы против пары; загрузка тех же данных из JSON-массивов (форма до EPIC-79) против `.bin` с `verify_hash_on_load`, и SHA-256 `.bin` отдельно. «До» и «после» — в одном прогоне CI, на одних данных.
+- **`verify_hash_on_load`** остаётся `true`; решение — после чисел CI: если SHA-256 заметная доля загрузки `.bin`, выключить при обычной загрузке (при нескольких корнях и рядом с `.bin.new` хэши проверяются всё равно).
 
 ## 8. Решения владельца (2026-11-16)
 

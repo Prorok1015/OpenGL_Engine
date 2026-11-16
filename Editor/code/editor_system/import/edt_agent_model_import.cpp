@@ -3,6 +3,7 @@
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_desc_binary.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -231,14 +232,23 @@ namespace {
 			if (const std::string why = edt::asset_exporter::remap_problem(remap, in.plan.name, in.plan.folder); !why.empty()) {
 				throw std::runtime_error("the import cannot be exported: " + why);
 			}
+			// A geometry desc is written with its binary file and the staged one (EPIC-79): neither may be there either.
+			std::vector<res::tag> targets;
 			for (const auto& entry : remap) {
-				const std::string relative(entry.second.relative());
+				targets.push_back(entry.second);
+				if (entry.second.view().ends_with(".geom.desc")) {
+					if (const auto binary = res::desc_binary::binary_tag(entry.second)) targets.push_back(*binary);
+					if (const auto staged = res::desc_binary::staged_tag(entry.second)) targets.push_back(*staged);
+				}
+			}
+			for (const res::tag& target : targets) {
+				const std::string relative(target.relative());
 				switch (state_in_layers(in.layers, relative)) {
 				case edt::level_file_state::missing: break;
 				case edt::level_file_state::file:
-					throw std::runtime_error(std::format("'{}' exists: nothing was written", entry.second.view()));
+					throw std::runtime_error(std::format("'{}' exists: nothing was written", target.view()));
 				case edt::level_file_state::unsafe:
-					throw std::runtime_error(std::format("'{}' is not a plain file: nothing was written", entry.second.view()));
+					throw std::runtime_error(std::format("'{}' is not a plain file: nothing was written", target.view()));
 				}
 			}
 

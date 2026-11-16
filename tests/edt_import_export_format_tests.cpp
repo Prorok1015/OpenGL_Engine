@@ -3,7 +3,11 @@
 #include "edt_asset_exporter.h"
 #include "edt_async_import_task.h"
 #include "edt_model_importer.h"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,6 +15,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -97,6 +102,19 @@ struct export_format_fixture : test_util::scene_env
 		return out;
 	}
 
+	// The geometry of `tag` read the way the exporter reads it (arrays, or the binary file beside it).
+	rnd::geometry_desc geometry_of(const res::tag& tag)
+	{
+		auto data = rs->fetch_data(tag);
+		BOOST_REQUIRE(data);
+		const std::vector<std::byte>& bytes = data->get();
+		BOOST_REQUIRE(!data->has_error());
+		rnd::geometry_desc out;
+		const std::string error = rnd::read_geometry_file(*rs, tag, json::parse(text_of(bytes)).as_object(), out);
+		BOOST_REQUIRE_MESSAGE(error.empty(), error);
+		return out;
+	}
+
 	std::filesystem::path dir;
 	std::filesystem::path model;
 	std::string folder;
@@ -155,6 +173,53 @@ BOOST_AUTO_TEST_CASE(TheSameModelImportedAgain_WritesNothing_AndAnEditedFileIsWr
 	import_and_export(third);
 	BOOST_TEST(third.size() == 1u);
 	BOOST_TEST((files_on_disk() == before));
+}
+
+// EPIC-79 (#1068): the in-process import keeps the geometry in a binary file in memory://, the export writes the pair, and a
+// mesh an old project kept in JSON arrays is converted at the next export, with the warning.
+BOOST_AUTO_TEST_CASE(TheGeometry_IsExportedWithItsBinaryFile_AndAnOldArrayFileIsConverted)
+{
+	std::vector<res::tag> written;
+	import_and_export(written);
+	const auto geometry = std::ranges::find_if(exported, [](const res::tag& tag) { return tag.view().ends_with(".geom.desc"); });
+	BOOST_REQUIRE(geometry != exported.end());
+	const res::tag desc_tag = *geometry;
+	const res::tag binary_tag = *res::desc_binary::binary_tag(desc_tag);
+	BOOST_TEST(std::ranges::find(written, binary_tag) != written.end());
+	BOOST_TEST(rs->exists(binary_tag));
+	BOOST_TEST(!rs->exists(*res::desc_binary::staged_tag(desc_tag)));
+
+	const res::tag memory_tag{ res::tag::memory, "tri/tri.geom.desc" };
+	BOOST_TEST(rs->exists(*res::desc_binary::binary_tag(memory_tag)));
+	const rnd::geometry_desc imported = geometry_of(memory_tag);
+	const rnd::geometry_desc on_disk = geometry_of(desc_tag);
+	BOOST_TEST(!imported.vertices.empty());
+	BOOST_TEST((on_disk.vertices == imported.vertices));
+	BOOST_TEST((on_disk.indices == imported.indices));
+	BOOST_TEST(on_disk.layout.get_stride() == imported.layout.get_stride());
+
+	// The project's file in the old form: written again as the pair, with one warning naming it.
+	json::object arrays;
+	rnd::geometry_desc plain;
+	plain.layout = on_disk.layout;
+	plain.vertices = on_disk.vertices;
+	plain.indices = on_disk.indices;
+	plain.serialize(arrays);
+	BOOST_REQUIRE(rs->store_sync(desc_tag, test_util::to_bytes(json::serialize(arrays))));
+	std::mutex said_mutex;
+	std::vector<std::string> warned;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (category != "Editor/Save" || level != engine::log_level::warn) return;
+		std::lock_guard lock(said_mutex);
+		warned.emplace_back(message);
+	});
+	std::vector<res::tag> again;
+	import_and_export(again);
+	BOOST_TEST(std::ranges::find(again, desc_tag) != again.end());
+	BOOST_TEST(!rnd::holds_geometry_arrays(json::parse(files_on_disk().at(desc_tag.string())).as_object()));
+	std::lock_guard lock(said_mutex);
+	BOOST_REQUIRE(warned.size() == 1u);
+	BOOST_TEST(warned.front().find(std::string(desc_tag.view())) != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

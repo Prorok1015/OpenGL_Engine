@@ -444,6 +444,25 @@ namespace {
 		return out;
 	}
 
+	// Mesh data is written by the editor, never as a desc: a geometry keeps its vertices in a binary file beside the desc
+	// (EPIC-79), an editable mesh is the editor's (EPIC-77). Empty when `relative` and the content's `__type` are neither.
+	std::string mesh_file_refusal(std::string_view relative, const json::value& content)
+	{
+		std::string lower(relative);
+		std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const json::value* type = content.is_object() ? content.as_object().if_contains("__type") : nullptr;
+		const std::string_view type_name = type && type->is_string() ? view_of(type->as_string()) : std::string_view{};
+		if (lower.ends_with(".geom.desc") || type_name == "geometry_desc") {
+			return std::format("'res://{}': a geometry is written by the editor with its binary file (an import, a mesh save), "
+				"not by desc.create or desc.write", relative);
+		}
+		if (lower.ends_with(".poly.desc") || type_name == "poly_mesh_desc") {
+			return std::format("'res://{}': an editable mesh is written by the editor's mesh tools, not by desc.create or desc.write",
+				relative);
+		}
+		return {};
+	}
+
 	std::string type_of_text(std::string_view text)
 	{
 		boost::system::error_code ec;
@@ -477,6 +496,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -505,6 +527,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -554,6 +579,7 @@ namespace {
 			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) return refused(why);
 			if (std::optional<std::string> why = m_files.write_blocked()) return refused_message(*why);
 			const std::string shown_path = edt::forge::escaped_text(path.relative, 1024);
 			const located_file found = m_files.locate(path.relative);
