@@ -1077,6 +1077,41 @@ BOOST_AUTO_TEST_CASE(ASandboxThatFailsToSetUp_FailsTheImport_AndNamesTheSettingT
 #endif
 }
 
+#if !defined(_WIN32)
+// #1076: a child that ran without saying how it is sandboxed counts as having no sandbox, and a run that failed is
+// reported all the same (the parse may have run unconfined); one that refused to run parsed nothing and says nothing.
+BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_EvenWhenItFails)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+
+	auto silent = decoder_config();
+	silent.decoder = "/usr/bin/false";
+	std::vector<edt::decoder_sandbox_status> heard;
+	const edt::process_decoder failing(*rs, silent, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
+	BOOST_CHECK_THROW(failing.import(source, nullptr), std::runtime_error);
+	BOOST_REQUIRE_EQUAL(heard.size(), 1u);
+	BOOST_CHECK(heard.front().reported);
+	BOOST_CHECK(!heard.front().fs);
+	BOOST_CHECK_MESSAGE(heard.front().why.find("did not say") != std::string::npos, heard.front().why);
+
+	auto refusing = decoder_config();
+	refusing.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
+	refusing.sandbox = edt::sandbox_mode::required;
+	refusing.extra_arguments = { "--self-test-pretend-no-landlock" };
+	std::vector<edt::decoder_sandbox_status> refused_heard;
+	const edt::process_decoder refuser(*rs, refusing, [&refused_heard](const edt::decoder_sandbox_status& status) {
+		refused_heard.push_back(status);
+	});
+	BOOST_CHECK_THROW(refuser.import(source, nullptr), std::runtime_error);
+	BOOST_CHECK(refused_heard.empty());
+}
+#endif
+
 // #1043: the real decoder decodes real models inside Landlock and the seccomp filter (the CI test of the allowlist).
 BOOST_AUTO_TEST_CASE(AGltfWithItsBin_AndAnObjWithItsMtl_DecodeInTheRequiredSandbox)
 {

@@ -577,7 +577,7 @@ void edt::file_menu::register_actions()
 		.result_schema = json::object{
 			{ "type", "object" },
 			{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
-				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}, or {needs_files_approval, files_token, file_count} when the model refers to other files (nothing is written then); job.cancel stops it and takes back what it wrote." } } } } },
+				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}, or {needs_files_approval, files_token, file_count} when the model refers to other files (nothing is written then); both carry decoder_sandbox {fs: landlock|none, syscalls: seccomp|none, why?, warning?}, what the model decoder said of its OS sandbox (warning: the user's files were not protected from the parser); job.cancel stops it and takes back what it wrote." } } } } },
 			{ "additionalProperties", false } },
 		.activate = [this] { import_model(); },
 		.enabled = import_available,

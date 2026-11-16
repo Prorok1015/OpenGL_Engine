@@ -235,6 +235,8 @@ namespace edt
 		// The project's agent policy file, which a guarded checkout or pull must not change; empty (the default):
 		// <project root>/.snk/agent_policy.json.
 		void set_policy_file(std::filesystem::path file) { m_policy_file = std::move(file); }
+		// The editor's configuration files (absolute): an agent's checkout or pull must not change them (#1076).
+		void set_config_files(std::vector<std::filesystem::path> files) { m_config_files = std::move(files); }
 
 		// Writes; `caller` is the origin of the command (cmd::call::from). Paths are relative to the repository root.
 		started start_stage(const std::vector<std::string>& paths, const cmd::origin& caller);
@@ -428,6 +430,7 @@ namespace edt
 		vcs_write_permissions m_write_permissions;
 		std::function<vcs_policy()> m_policy_source;
 		std::filesystem::path m_policy_file;
+		std::vector<std::filesystem::path> m_config_files;
 		scratch_dir m_scratch;
 		std::uint64_t m_message_count = 0;
 		// Shared with the log jobs, which fill it on the io lane.

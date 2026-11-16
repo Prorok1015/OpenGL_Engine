@@ -60,8 +60,7 @@ namespace edt {
 	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
-	class migration_panel;
-	class migration_notice_model;
+	class migration_component;
 	struct journal_offer;
 	class live_mode_component;
 	class play_component;
@@ -70,6 +69,7 @@ namespace edt {
 	class asset_open_component;
 	class model_importer;
 	class process_decoder;
+	class decoder_sandbox_notice;
 	class asset_exporter;
 	class agent_model_import;
 	class asset_export_dialog;
@@ -167,6 +167,8 @@ namespace edt {
 		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
 		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
 		std::shared_ptr<edt::process_decoder> m_process_decoder;
+		// What the decoders of this run said of their OS sandbox, in Problems (#1076).
+		std::shared_ptr<edt::decoder_sandbox_notice> m_decoder_sandbox;
 		bool m_model_adapter_registered = false;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
@@ -210,18 +212,6 @@ namespace edt {
 		void draw_agent_status();
 		void draw_agent_policy_notice();
 		void open_agents_panel();
-		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
-		void open_migration_window();
-		// The window with the question about rolling migration `id` back (#910): the full listing; it runs
-		// (project.migrate_rollback as a person's call) only once the person confirms there.
-		void open_migration_rollback(const std::string& id);
-		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
-		void offer_migration_rollback(const journal_offer& offer);
-		// Once the project is open and the start level settled (#761): a scan of the project on the io lane, with a snapshot
-		// of the game layer's types; the notice "N files in an old format" when it found a migration is needed.
-		void start_migration_scan(const std::filesystem::path& root);
-		// The notice, bottom right; false once there is nothing to show (the implicit edt/migration_notice ends).
-		bool draw_migration_notice();
 
 	public:
 		agent_server* agent_server_object();
@@ -240,8 +230,6 @@ namespace edt {
 
 		// The editor's panels (#1004): made, wired to the controllers and registered by panels_component, in the View menu order.
 		std::unique_ptr<panels_component> m_panels;
-		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
-		std::shared_ptr<migration_panel>       m_migration_panel;
 
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
@@ -259,23 +247,9 @@ namespace edt {
 		res::tag m_level_after_layer_change;
 		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
 		std::uint64_t m_game_layer_generation = 0;
-		// A migration (or rollback) stopped half way: no level of the project is saved until that migration is rolled back,
-		// whatever level is loaded meanwhile, so the files stay as the rollback expects them.
-		migration_save_block m_migration_stopped;
-		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
-		// and quitting are refused until it ended (migration_blocker).
-		bool m_migration_running = false;
 		std::optional<std::string> migration_blocker() const;
 		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
 		std::optional<std::string> project_write_blocker();
-		// The notice of a project in an old format (#761) and whether its scan still runs.
-		std::unique_ptr<migration_notice_model> m_migration_notice;
-		std::uint64_t m_migration_scan_job = 0;
-		// Migration and rollback runs started so far: a format check made before one is stale.
-		std::uint64_t m_migration_runs = 0;
-		// Owner of the format check's callback: declared after what it touches, so it dies (and cancels) first. Not the
-		// import's m_lifetime, which exists only with assimp.
-		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		timed_notice m_save_notice;
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
@@ -288,6 +262,10 @@ namespace edt {
 		// The load of a level and the settle after it (US-24-4, #613, #1004); its action is in m_registrations, removed before it.
 		// Declared after m_tasks, which the settle uses.
 		std::unique_ptr<edt::level_load_component> m_level_load;
+		// Project migration (EPIC-58, #761, #1004): the commands, the window, the offer to roll back, the notice and the scan;
+		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
+		// changes and saves, builds, module reloads and quitting (migration_blocker).
+		std::unique_ptr<migration_component> m_migration;
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
