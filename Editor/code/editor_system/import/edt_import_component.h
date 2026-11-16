@@ -66,6 +66,7 @@ namespace edt
 #endif
 
 	private:
+		void build();
 		bool poll_pipeline();
 #if SNK_HAS_ASSIMP
 		bool poll_progress();
