@@ -41,7 +41,10 @@ namespace scn
 		res::resource_system& m_res_sys;
 	};
 
-	// How many times model_importer_adapter ran assimp in this process: an import of bytes it imported before under the
-	// same tag writes what that import wrote and does not run it (#977).
+	// Turns on (off by default) remembering what an import wrote, per process: an import of bytes imported before
+	// under the same tag then writes that again and does not run assimp. The unit tests turn it on, as each test imports
+	// the same models again (#977); the editor and a game rely on the resource cache. Turning it off forgets it all.
+	SNK_API void remember_model_imports(bool on);
+	// How many times model_importer_adapter ran assimp in this process.
 	SNK_API std::size_t model_importer_runs();
 }

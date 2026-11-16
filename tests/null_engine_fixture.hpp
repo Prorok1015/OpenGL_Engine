@@ -164,6 +164,8 @@ struct null_engine_fixture
 		rs.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(rs), std::ref(descs));
 #if SNK_HAS_ASSIMP
 		rs.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(descs), std::ref(rs));
+		// Every case loads the same models again; only their parse is shared, each case writes them itself (#977).
+		scn::remember_model_imports(true);
 #endif
 		auto& sfactory = storage.construct<ecs::system_factory>();
 

@@ -79,7 +79,7 @@ struct remembered_import
 	}
 };
 
-// Every test builds its own engine and loads its models again; in the editor a level loaded twice does the same.
+// Each unit test builds its own engine and imports the same models again: the memory is the tests' (#977).
 constexpr std::size_t k_remembered_bytes = 256u * 1024u * 1024u;
 
 std::mutex g_imports_mutex;
@@ -87,6 +87,7 @@ std::mutex g_imports_mutex;
 std::list<std::pair<res::tag, std::shared_ptr<const remembered_import>>> g_imports;
 std::size_t g_imports_bytes = 0;
 std::atomic<std::size_t> g_assimp_runs{ 0 };
+std::atomic<bool> g_remember_imports{ false };
 
 auto find_import(const res::tag& tag)
 {
@@ -95,6 +96,7 @@ auto find_import(const res::tag& tag)
 
 std::shared_ptr<const remembered_import> remembered(const res::tag& tag, const std::vector<std::byte>& model)
 {
+	if (!g_remember_imports.load()) return nullptr;
 	const std::lock_guard guard(g_imports_mutex);
 	const auto found = find_import(tag);
 	if (found == g_imports.end() || found->second->model != model) return nullptr;
@@ -104,6 +106,7 @@ std::shared_ptr<const remembered_import> remembered(const res::tag& tag, const s
 
 void remember(const res::tag& tag, std::shared_ptr<const remembered_import> import)
 {
+	if (!g_remember_imports.load()) return;
 	const std::lock_guard guard(g_imports_mutex);
 	if (const auto old = find_import(tag); old != g_imports.end()) {
 		g_imports_bytes -= old->second->bytes();
@@ -175,6 +178,16 @@ namespace {
 	}
 
 #define TXM_LOG(type) log_material_texture(scene, material, type, #type)
+}
+
+void scn::remember_model_imports(bool on)
+{
+	const std::lock_guard guard(g_imports_mutex);
+	g_remember_imports = on;
+	if (!on) {
+		g_imports.clear();
+		g_imports_bytes = 0;
+	}
 }
 
 std::size_t scn::model_importer_runs()

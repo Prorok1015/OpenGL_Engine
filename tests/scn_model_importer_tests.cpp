@@ -491,6 +491,7 @@ const res::tag* geometry_of(const test_util::ram_resolver& ram, std::string_view
 
 BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 {
+	scn::remember_model_imports(true);
 	const std::size_t before = scn::model_importer_runs();
 	const auto first = import("cache977/once.obj", OBJ_TRIANGLE);
 	BOOST_REQUIRE(first);
@@ -516,6 +517,7 @@ BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 
 BOOST_AUTO_TEST_CASE(OtherBytesUnderTheSameTag_AreImportedAgain)
 {
+	scn::remember_model_imports(true);
 	const std::size_t before = scn::model_importer_runs();
 	BOOST_REQUIRE(import("cache977/changed.obj", OBJ_TRIANGLE));
 	rs->signal_changed(res::tag{ "memory://models/cache977/changed.obj" });
@@ -529,11 +531,25 @@ BOOST_AUTO_TEST_CASE(AModelThatReadsAnotherFile_IsImportedEveryTime)
 	const std::string bin(reinterpret_cast<const char*>(GLTF_TRIANGLE_BIN), sizeof(GLTF_TRIANGLE_BIN));
 	rs->store(res::tag{ "memory://models/cache977/side/data/tri.bin" }, test_util::to_bytes(bin));
 	const std::string gltf = gltf_with_buffer_uri("data/tri.bin");
+	scn::remember_model_imports(true);
 	const std::size_t before = scn::model_importer_runs();
 	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
 	rs->signal_changed(res::tag{ "memory://models/cache977/side/tri.gltf" });
 	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
 	BOOST_TEST(scn::model_importer_runs() == before + 2u);
+}
+
+// Off, as in the editor and a game: every import runs assimp, and what was remembered is forgotten.
+BOOST_AUTO_TEST_CASE(RememberingImportsTurnedOff_ImportsEveryTime)
+{
+	scn::remember_model_imports(true);
+	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
+	scn::remember_model_imports(false);
+	const std::size_t before = scn::model_importer_runs();
+	rs->signal_changed(res::tag{ "memory://models/cache977/off.obj" });
+	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
+	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	scn::remember_model_imports(true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
