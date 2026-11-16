@@ -68,6 +68,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/problems"
 	"${CMAKE_CURRENT_SOURCE_DIR}/agent"
 	"${CMAKE_CURRENT_SOURCE_DIR}/file_menu"
+	"${CMAKE_CURRENT_SOURCE_DIR}/startup"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface

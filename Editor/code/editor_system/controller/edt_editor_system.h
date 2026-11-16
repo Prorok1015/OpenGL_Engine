@@ -56,6 +56,7 @@ namespace edt {
 	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
+	class startup_component;
 	class vcs_component;
 	class migration_component;
 	struct journal_offer;
@@ -235,6 +236,9 @@ namespace edt {
 		// Live mode and the question "Trust this project?" (#445, #921, #1004); after the builder and the reloader it calls, so it
 		// is destroyed first.
 		std::unique_ptr<edt::live_mode_component> m_live;
+		// The first frames (#1004): the held-project question, the start level, the question about the project's modules. Registers
+		// implicit callbacks only; after what they reach (the level load, live mode), so it is destroyed first.
+		std::unique_ptr<edt::startup_component> m_startup;
 		// Play of the scene document and the editor/game mode (#1004); its commands are in m_registrations, removed before it.
 		// Stopped in the destructor while the context it reports to is still there.
 		std::unique_ptr<edt::play_component> m_play_component;

@@ -42,6 +42,9 @@ Editor/
     │   ├── edt_component_renderers.cpp/h
     │   └── edt_cr_*.cpp              # skin, animation (camera, light, skybox and mesh are drawn from their schemas)
     │
+    ├── startup/                      # the first frames (#1004)
+    │   └── edt_startup_component.cpp/h # startup_component: the question about a project held back for its engine version (`ask_about_held_project`), the start level (`--game`, `editor/startup_level`, `editor/start_mode`, `editor/game_level`; the loading screen of game mode through `editor_mode_controller`) as the implicit `edt/load_level`, and the question about the project's modules (implicit `edt/project_trust`, #921); `install_start_level()` / `install_trust_check()` are called where the order of implicit callbacks needs them
+    │
     ├── file_menu/                    # the File and Edit menus (#1004)
     │   └── edt_file_menu_component.cpp/h # file_menu_component: the hooks of `file_menu` (`controller/edt_file_menu.h`: new/save/save as/open level, the other open documents, the blockers of a migration, a level load and the start level, exit, New/Open Project, `start_editor_on`), the built-in menus, the file.* actions and the Edit actions (undo/redo with the asset undo); `attach_window_close` for the window's close request
     │
