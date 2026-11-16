@@ -53,7 +53,7 @@ namespace edt {
 	class agent_access;
 	class agent_component;
 	class agent_ui_component;
-	class file_menu;
+	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
@@ -218,7 +218,7 @@ namespace edt {
 		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
 		// changes and saves, builds, module reloads and quitting (migration_blocker).
 		std::unique_ptr<migration_component> m_migration;
-		std::unique_ptr<edt::file_menu> m_file_menu;
+		std::unique_ptr<edt::file_menu_component> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
 		std::unique_ptr<edt::game_build_component> m_build;

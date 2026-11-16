@@ -40,6 +40,18 @@ edt::import_component::import_component(ports from)
 #endif
 	, m_exporter(std::make_unique<asset_exporter>(m_ports.resources))
 {
+	// A throw below must not leave the adapter registered: it holds the decoder, and a destructor does not run for this object.
+	try {
+		build();
+	}
+	catch (...) {
+		shutdown();
+		throw;
+	}
+}
+
+void edt::import_component::build()
+{
 	res::resource_system& resources = m_ports.resources;
 	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources);
 	agent_import_options import_options;

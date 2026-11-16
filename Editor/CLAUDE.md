@@ -42,6 +42,9 @@ Editor/
     │   ├── edt_component_renderers.cpp/h
     │   └── edt_cr_*.cpp              # skin, animation (camera, light, skybox and mesh are drawn from their schemas)
     │
+    ├── file_menu/                    # the File and Edit menus (#1004)
+    │   └── edt_file_menu_component.cpp/h # file_menu_component: the hooks of `file_menu` (`controller/edt_file_menu.h`: new/save/save as/open level, the other open documents, the blockers of a migration, a level load and the start level, exit, New/Open Project, `start_editor_on`), the built-in menus, the file.* actions and the Edit actions (undo/redo with the asset undo); `attach_window_close` for the window's close request
+    │
     ├── import/                       # Asset import/export pipeline (the importer itself is in ../model_import)
     │   ├── edt_asset_exporter.cpp/h
     │   ├── edt_asset_export_dialog.cpp/h
@@ -351,7 +354,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_ada
 - Bone nodes → `bone_desc` components with offset matrix + global index
 - Animations → `animations_desc` on root, `keyframes_desc` on each animated node
 
-Import in editor: File menu → `dialog_service::pick_file` → `editor_system::start_import` → async import → export dialog → auto-add to scene.
+Import in editor: File menu → `dialog_service::pick_file` → `import_component::start_import` → async import → export dialog → auto-add to scene.
 
 **JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` (vertex and index arrays) stays on one line. A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
 
