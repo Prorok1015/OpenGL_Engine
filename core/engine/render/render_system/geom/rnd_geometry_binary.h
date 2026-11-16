@@ -56,6 +56,6 @@ namespace rnd::detail
 	// built again when the file has the key. Throws res::load_error naming the JSON path.
 	void load_geometry_binary(res::resource_system& system, const res::tag& file, geometry_desc& geometry, bool verify_hash);
 	// The same from `file`, the bytes of the binary file beside `tag` held in memory (an answer not yet stored): at most
-	// res::desc_binary::max_file_bytes, every hash checked.
+	// res::desc_binary::max_file_bytes, every hash checked; no bounds are built (the caller encodes the data again).
 	void decode_geometry_binary(const res::tag& tag, std::span<const std::byte> file, geometry_desc& geometry);
 }

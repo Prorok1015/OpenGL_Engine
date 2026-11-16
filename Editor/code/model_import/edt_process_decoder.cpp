@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -446,12 +447,17 @@ std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& g
 	};
 	const bool ranges = is_range("vertices") || is_range("indices");
 	const rnd::geometry_topology topology = rnd::topology_of(desc);
+	const auto holds = [&desc](std::string_view key) {
+		const boost::json::value* found = desc.if_contains(key);
+		return found != nullptr && (!found->is_array() || !found->as_array().empty());
+	};
+	const bool lines_or_points = topology == rnd::geometry_topology::lines || topology == rnd::geometry_topology::points;
 	if (!ranges) {
 		if (binary_blob != nullptr) return "a binary file came with a geometry that does not refer to one";
-		const boost::json::value* vertices = desc.if_contains("vertices");
-		const bool holds_vertices = vertices != nullptr && vertices->is_array() && !vertices->as_array().empty();
-		if (topology == rnd::geometry_topology::triangles && holds_vertices) {
-			return "the triangles of the geometry came as arrays, not as its binary file";
+		// Arrays are only lines or points named as such: triangles, a mixed or unknown topology would be stored as the
+		// child wrote them.
+		if ((holds("vertices") || holds("indices")) && !lines_or_points) {
+			return "a geometry in arrays that is not lines or points";
 		}
 	} else {
 		if (binary_blob == nullptr) return "the geometry refers to a binary file that did not come with the answer";
@@ -461,6 +467,9 @@ std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& g
 	rnd::geometry_desc data;
 	const std::span<const std::byte> binary = binary_blob != nullptr ? std::span<const std::byte>(binary_blob->bytes) : std::span<const std::byte>{};
 	if (std::string why = rnd::decode_geometry_files(geom_tag, desc, binary, data); !why.empty()) return why;
+	if (topology == rnd::geometry_topology::lines && data.indices.size() % 2 != 0) {
+		return std::format("{} indices are not whole lines", data.indices.size());
+	}
 
 	if (binary_blob != nullptr && rewritten != nullptr) {
 		rnd::geometry_file_options encode;
@@ -469,7 +478,13 @@ std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& g
 			encode.header["__parent"] = *parent;
 		}
 		encode.bounds = desc.contains("bounds");
-		*rewritten = rnd::encode_geometry_files(geom_tag, data, encode);
+		try {
+			*rewritten = rnd::encode_geometry_files(geom_tag, data, encode);
+		} catch (const std::bad_alloc&) {
+			return "the geometry is too big to be written again";
+		} catch (const std::exception& e) {
+			return std::string("the geometry cannot be written again: ") + e.what();
+		}
 		if (!*rewritten) return rewritten->error;
 	}
 	return {};

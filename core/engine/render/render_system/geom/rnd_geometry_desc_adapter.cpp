@@ -154,9 +154,10 @@ namespace
 		return asked;
 	}
 
-	// What desc_binary read or parsed, checked and copied into `geometry` as the loader takes it.
+	// What desc_binary read or parsed, checked and copied into `geometry` as the loader takes it. `build_bounds` false: the
+	// data is encoded again by its caller, which only keeps whether the desc had "bounds".
 	void take_ranges(const ::res::tag& tag, rnd::geometry_desc& geometry, const rnd::detail::geometry_binary_ranges& ranges,
-		const asked_ranges& asked, const ::res::desc_binary_data& data)
+		const asked_ranges& asked, const ::res::desc_binary_data& data, bool build_bounds)
 	{
 		if (!data) {
 			// The message names the range as "range N (": that is the path of the N-th range asked for.
@@ -182,7 +183,7 @@ namespace
 		rnd::detail::check_geometry_data(tag, geometry);
 		geometry.bounds.clear();
 		geometry.rtree = {};
-		if (ranges.wants_bounds) {
+		if (ranges.wants_bounds && build_bounds) {
 			rnd::detail::rebuild_bounds(geometry);
 		}
 		rnd::detail::set_binary_loaded(geometry);
@@ -197,7 +198,7 @@ void rnd::detail::load_geometry_binary(::res::resource_system& system, const ::r
 		return;
 	}
 	const asked_ranges asked = ask_ranges(tag, geometry, *ranges);
-	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::read(system, tag, asked.ranges, verify_hash));
+	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::read(system, tag, asked.ranges, verify_hash), true);
 }
 
 void rnd::detail::decode_geometry_binary(const ::res::tag& tag, std::span<const std::byte> file, rnd::geometry_desc& geometry)
@@ -215,7 +216,7 @@ void rnd::detail::decode_geometry_binary(const ::res::tag& tag, std::span<const 
 			file.size(), ::res::desc_binary::max_file_bytes));
 	}
 	const asked_ranges asked = ask_ranges(tag, geometry, *ranges);
-	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::parse(binary->view(), file, asked.ranges, true));
+	take_ranges(tag, geometry, *ranges, asked, ::res::desc_binary::parse(binary->view(), file, asked.ranges, true), false);
 }
 
 std::vector<std::byte> rnd::geometry_desc_adapter::serialize(const ::res::tag& tag,

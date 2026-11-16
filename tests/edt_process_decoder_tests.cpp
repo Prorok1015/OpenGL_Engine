@@ -742,16 +742,38 @@ BOOST_AUTO_TEST_CASE(AnIndexPastTheVertices_OrAPositionThatIsNotFinite_IsRefused
 	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(desc), binary), "not finite"));
 }
 
+// Arrays of three positions (36 bytes) with `indices` and the "topology" text `topology` (none: no key).
+static std::vector<std::byte> arrays_desc(std::string_view indices, std::string_view topology = {})
+{
+	std::string text = R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc","layout":{"position":"vec3"},)json";
+	if (!topology.empty()) text += R"json("topology":")json" + std::string(topology) + "\",";
+	text += R"json("indices":)json" + std::string(indices);
+	text += R"json(,"vertices":[0,0,128,191,0,0,128,191,0,0,0,0,0,0,128,63,0,0,128,191,0,0,0,0,0,0,0,0,0,0,128,63,0,0,0,0]})json";
+	return text_bytes(text);
+}
+
 BOOST_AUTO_TEST_CASE(TrianglesAsArrays_AndLinesWithABinaryFile_AreRefused)
 {
-	const std::vector<std::byte> arrays = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc",)json"
-		R"json("layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[0,0,128,191,0,0,128,191,0,0,0,0,0,0,128,63,0,0,128,191,0,0,0,0,0,0,0,0,0,0,128,63,0,0,0,0]})json");
-	BOOST_TEST(refused(answer_with_geometry(arrays, std::nullopt), "came as arrays"));
+	BOOST_TEST(refused(answer_with_geometry(arrays_desc("[0,1,2]"), std::nullopt), "not lines or points"));
+	BOOST_TEST(refused(answer_with_geometry(arrays_desc("[0,1,2]", "mixed"), std::nullopt), "not lines or points"));
+	BOOST_TEST(refused(answer_with_geometry(arrays_desc("[0,1,2]", "polygons"), std::nullopt), "not lines or points"));
 
 	const rnd::geometry_files pair = triangle_pair();
 	boost::json::object lines = json_of(pair.desc);
 	lines[rnd::geometry_topology_key] = "lines";
 	BOOST_TEST(refused(answer_with_geometry(bytes_of_json(lines), pair.binary), "lines or points"));
+}
+
+BOOST_AUTO_TEST_CASE(LinesAndPoints_InArrays_AreAccepted_WholeLinesOnly_AndIndicesNeedVertices)
+{
+	std::string problem;
+	BOOST_TEST(edt::accept_import_answer(answer_with_geometry(arrays_desc("[0,1,1,2]", "lines"), std::nullopt), request_in(), problem).has_value(), problem);
+	BOOST_TEST(edt::accept_import_answer(answer_with_geometry(arrays_desc("[0,1,2]", "points"), std::nullopt), request_in(), problem).has_value(), problem);
+	BOOST_TEST(refused(answer_with_geometry(arrays_desc("[0,1,2]", "lines"), std::nullopt), "not whole lines"));
+
+	const std::vector<std::byte> no_vertices = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc",)json"
+		R"json("layout":{"position":"vec3"},"topology":"points","indices":[0,1,2],"vertices":[]})json");
+	BOOST_TEST(refused(answer_with_geometry(no_vertices, std::nullopt), "past the"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
