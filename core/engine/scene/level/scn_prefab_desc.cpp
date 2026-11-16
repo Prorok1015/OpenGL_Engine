@@ -1048,6 +1048,8 @@ std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembl
 	return found;
 }
 
+}
+
 std::vector<scn::stale_override> scn::find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node)
 {
 	constexpr std::size_t nesting_followed = 64;
