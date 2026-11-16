@@ -89,21 +89,13 @@ edt::decode_bundle answer_with(const std::vector<edt::bundle_blob>& blobs, const
 	return bundle;
 }
 
-edt::referenced_file file_at(const fs::path& path, std::uintmax_t size = 10)
+edt::decode_bundle scan_answer(const std::vector<edt::requested_file>& requested)
 {
-	edt::referenced_file file;
-	file.path = path;
-	file.size = size;
-	return file;
-}
-
-edt::decode_bundle scan_answer(const std::vector<edt::referenced_file>& files)
-{
-	edt::model_file_scan scan;
-	scan.files = files;
+	edt::scan_requests requests;
+	requests.requested = requested;
 	edt::decode_bundle bundle;
+	bundle.manifest = edt::to_json(requests);
 	bundle.manifest["kind"] = "scan";
-	bundle.manifest["scan"] = edt::to_json(scan);
 	return bundle;
 }
 
@@ -342,39 +334,23 @@ BOOST_AUTO_TEST_CASE(AFailedImport_IsHandedBackAsItsError_ButNeverWithResources)
 	BOOST_CHECK(!edt::accept_import_answer(failed, request, problem).has_value());
 }
 
-BOOST_AUTO_TEST_CASE(AScanAnswer_WithFilesInTheFolderOfTheModel_IsAccepted_ElseRefused)
+// #1043: the scan names files, the editor's rule decides whether they are read; the answer itself only has to be one.
+BOOST_AUTO_TEST_CASE(AScanAnswer_ThatAsksForFiles_IsAccepted_WhateverTheNamesPointAt)
 {
-	const auto request = request_in();
 	std::string problem;
-	const auto good = edt::accept_scan_answer(scan_answer({ file_at(k_models / "a.mtl"), file_at(k_models / "tex" / "b.png", 20) }), request, problem);
+	const auto good = edt::accept_scan_answer(scan_answer({ { "m.mtl", edt::model_file_kind::side_file },
+		{ "../../secret.png", edt::model_file_kind::texture } }), problem);
 	BOOST_REQUIRE_MESSAGE(good.has_value(), problem);
-	BOOST_CHECK_EQUAL(good->files.size(), 2u);
-	BOOST_CHECK_EQUAL(good->total_bytes, 30u);
+	BOOST_REQUIRE_EQUAL(good->requested.size(), 2u);
+	BOOST_CHECK(good->requested[0].kind == edt::model_file_kind::side_file);
+	BOOST_CHECK(good->error.empty());
 
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models.parent_path() / "other" / "a.mtl") }), request, problem).has_value());
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / ".." / "a.mtl") }), request, problem).has_value());
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a.mtl"), file_at(k_models / "a.mtl") }), request, problem).has_value());
-}
-
-BOOST_AUTO_TEST_CASE(AScanAnswer_WithABoundary_TakesFilesFromAnywhereInIt_ButNotBeyond)
-{
-	auto request = request_in();
-	request.boundary = k_models.parent_path();
-	std::string problem;
-	const auto good = edt::accept_scan_answer(scan_answer({ file_at(k_models.parent_path() / "other" / "a.mtl") }), request, problem);
-	BOOST_REQUIRE_MESSAGE(good.has_value(), problem);
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models.parent_path().parent_path() / "a.mtl") }), request, problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("content root") != std::string::npos, problem);
-}
-
-BOOST_AUTO_TEST_CASE(AScanAnswer_ForAModelGivenOnlyAsBytes_ListsNoFile)
-{
-	auto request = request_in();
-	request.on_disk = false;
-	std::string problem;
-	BOOST_CHECK(edt::accept_scan_answer(scan_answer({}), request, problem).has_value());
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a.mtl") }), request, problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("not a file on the disk") != std::string::npos, problem);
+	edt::decode_bundle none;
+	none.manifest["kind"] = "scan";
+	BOOST_CHECK(!edt::accept_scan_answer(none, problem).has_value());
+	auto other = scan_answer({});
+	other.manifest["kind"] = "import";
+	BOOST_CHECK(!edt::accept_scan_answer(other, problem).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AnImportAnswer_ForAModelGivenOnlyAsBytes_CarriesNoImageFile)
@@ -419,24 +395,38 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_GoesToTheMemoryFolderTheRequestNamed_AndNowh
 	}
 }
 
-BOOST_AUTO_TEST_CASE(AScanAnswer_OverTheLimitsOfTheRequest_OrWithResources_IsRefused)
+BOOST_AUTO_TEST_CASE(AScanAnswer_ThatAsksForTooManyFiles_OrComesWithResources_IsRefused)
 {
-	auto request = request_in();
-	request.limits.max_files = 1;
 	std::string problem;
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a"), file_at(k_models / "b") }), request, problem).has_value());
-
-	request = request_in();
-	request.limits.max_file_bytes = 5;
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a", 6) }), request, problem).has_value());
-
-	request = request_in();
-	request.limits.max_total_bytes = 15;
-	BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ file_at(k_models / "a", 10), file_at(k_models / "b", 10) }), request, problem).has_value());
+	std::vector<edt::requested_file> many;
+	for (int i = 0; i < 256; ++i) many.push_back({ "t" + std::to_string(i) + ".png", edt::model_file_kind::texture });
+	BOOST_CHECK_MESSAGE(edt::accept_scan_answer(scan_answer(many), problem).has_value(), problem);
+	many.push_back({ "one_more.png", edt::model_file_kind::texture });
+	BOOST_CHECK(!edt::accept_scan_answer(scan_answer(many), problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("more files than it may") != std::string::npos, problem);
 
 	auto with_blob = scan_answer({});
 	with_blob.blobs.push_back({ "memory://m/x.desc", { std::byte{ 1 } } });
-	BOOST_CHECK(!edt::accept_scan_answer(with_blob, request_in(), problem).has_value());
+	BOOST_CHECK(!edt::accept_scan_answer(with_blob, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("came with resources") != std::string::npos, problem);
+}
+
+BOOST_AUTO_TEST_CASE(AScanAnswer_ThatAsksByANameThatCannotBeOne_IsRefused)
+{
+	for (const std::string& name : { std::string(), std::string("a\nb.mtl"), std::string("a\x1b[2Jb.png"), std::string("a\0b.png", 7),
+		std::string(1025, 'a') }) {
+		BOOST_TEST_CONTEXT(name.size()) {
+			std::string problem;
+			BOOST_CHECK(!edt::accept_scan_answer(scan_answer({ { name, edt::model_file_kind::side_file } }), problem).has_value());
+			BOOST_CHECK_MESSAGE(problem.find("by a name that cannot be one") != std::string::npos, problem);
+		}
+	}
+	std::string problem;
+	BOOST_CHECK(edt::accept_scan_answer(scan_answer({ { std::string(1024, 'a'), edt::model_file_kind::side_file } }), problem).has_value());
+
+	auto bad_kind = scan_answer({ { "m.mtl", edt::model_file_kind::side_file } });
+	bad_kind.manifest["requests"].as_array()[0].as_object()["kind"] = "model";
+	BOOST_CHECK(!edt::accept_scan_answer(bad_kind, problem).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AScanThatTheChildReportedAsFailed_ComesBackWithItsError)
@@ -445,10 +435,15 @@ BOOST_AUTO_TEST_CASE(AScanThatTheChildReportedAsFailed_ComesBackWithItsError)
 	failed.manifest["kind"] = "scan";
 	failed.manifest["error"] = "std::bad_alloc";
 	std::string problem;
-	const auto scan = edt::accept_scan_answer(failed, request_in(), problem);
+	const auto scan = edt::accept_scan_answer(failed, problem);
 	BOOST_REQUIRE(scan.has_value());
-	BOOST_CHECK(!scan->ok());
+	BOOST_CHECK(scan->requested.empty());
 	BOOST_CHECK_EQUAL(scan->error, "the decoder ran out of memory");
+
+	failed.manifest["error"] = "the model cannot be read:\nnope";
+	const auto cleaned = edt::accept_scan_answer(failed, problem);
+	BOOST_REQUIRE(cleaned.has_value());
+	BOOST_CHECK_EQUAL(cleaned->error.find('\n'), std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(TheDecoderMemory_DefaultsTo2GiB_AndIsClampedWithAWarning_NeverUnlimited)
@@ -587,7 +582,7 @@ BOOST_AUTO_TEST_CASE(AScanThroughTheProcess_OfASelfContainedModel_ListsNoFiles)
 	BOOST_CHECK(scan.files.empty());
 }
 
-BOOST_AUTO_TEST_CASE(ASideFileThatChangedAfterItWasListed_FailsTheImportInTheChild)
+BOOST_AUTO_TEST_CASE(ASideFileThatChangedAfterItWasListed_FailsTheImportInTheEditor)
 {
 	test_util::temp_dir dir{ "process_decoder" };
 	const std::string obj = "mtllib tri.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nusemtl m\nf 1 2 3\n";
@@ -602,6 +597,9 @@ BOOST_AUTO_TEST_CASE(ASideFileThatChangedAfterItWasListed_FailsTheImportInTheChi
 	const edt::model_file_scan listed = decoder.scan(source, nullptr);
 	BOOST_REQUIRE_MESSAGE(listed.ok(), listed.error);
 	BOOST_REQUIRE_EQUAL(listed.files.size(), 1u);
+	BOOST_CHECK(listed.files[0].kind == edt::model_file_kind::side_file);
+	BOOST_CHECK(!listed.files[0].names.empty());
+	BOOST_CHECK(listed.files[0].hashed);
 
 	// Same size and time, other bytes: only the digest tells.
 	const auto written = fs::last_write_time(mtl);
@@ -611,11 +609,65 @@ BOOST_AUTO_TEST_CASE(ASideFileThatChangedAfterItWasListed_FailsTheImportInTheChi
 	}
 	fs::last_write_time(mtl, written);
 
+	// The editor reads the file again before it hands it over: no decoder runs.
+	source.allowed = &listed.files;
+	try {
+		decoder.import(source, nullptr);
+		BOOST_FAIL("a side file that changed was handed to the decoder");
+	} catch (const std::runtime_error& e) {
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("changed") != std::string::npos, e.what());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ATextureThatAnMtlNamesOutsideTheFolder_FailsTheScanByTheEditorsRule)
+{
+	test_util::temp_dir dir{ "process_decoder" };
+	const std::string obj = "mtllib tri.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl m\nf 1/1 2/2 3/3\n";
+	const fs::path model = dir.write("m/tri.obj", obj);
+	dir.write("m/tri.mtl", "newmtl m\nKd 1 1 1\nmap_Kd ../secret.png\n");
+	dir.write("secret.png", std::string("\x89PNG\r\n\x1a\n", 8) + std::string(32, 'x'));
+	const std::vector<std::byte> bytes = bytes_of(obj);
+	edt::import_source source;
+	source.path = model;
+	source.preloaded = &bytes;
+
+	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::model_file_scan scan = decoder.scan(source, nullptr);
+	BOOST_CHECK(!scan.ok());
+	BOOST_CHECK_MESSAGE(scan.error.find("outside") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("secret.png") != std::string::npos, scan.error);
+	BOOST_CHECK(scan.files.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AGltfWithItsBin_IsScannedAndImportedThroughTheEditor)
+{
+	test_util::temp_dir dir{ "process_decoder" };
+	const std::string gltf = R"json({"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":36}],
+		"bufferViews":[{"buffer":0,"byteLength":36}],
+		"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]}],
+		"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})json";
+	const float positions[] = { -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 0.f, 1.f, 0.f };
+	const fs::path model = dir.write("m/tri.gltf", gltf);
+	dir.write("m/tri.bin", std::string_view(reinterpret_cast<const char*>(positions), sizeof(positions)));
+	const std::vector<std::byte> bytes = bytes_of(gltf);
+	edt::import_source source;
+	source.path = model;
+	source.preloaded = &bytes;
+
+	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::model_file_scan listed = decoder.scan(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(listed.ok(), listed.error);
+	BOOST_REQUIRE_EQUAL(listed.files.size(), 1u);
+	BOOST_CHECK(listed.files[0].path.filename() == "tri.bin");
+	BOOST_CHECK(listed.files[0].kind == edt::model_file_kind::side_file);
+	BOOST_CHECK(listed.files[0].hashed);
+	BOOST_CHECK_EQUAL(listed.total_bytes, sizeof(positions));
+
 	source.allowed = &listed.files;
 	const edt::import_intermediate imported = decoder.import(source, nullptr);
-	BOOST_CHECK(!imported.error.empty());
-	BOOST_CHECK_MESSAGE(imported.error.find("changed") != std::string::npos, imported.error);
-	BOOST_CHECK(imported.created_tags.empty());
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	BOOST_CHECK(!imported.created_tags.empty());
+	for (const res::tag& tag : imported.created_tags) rs->erase(tag);
 }
 
 BOOST_AUTO_TEST_CASE(ADecoderThatIsSlow_FailsTheImportWithoutStoringAnything)

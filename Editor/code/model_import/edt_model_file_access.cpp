@@ -1,8 +1,12 @@
 #include "edt_model_file_access.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/text_escape.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <format>
 #include <fstream>
 #include <initializer_list>
@@ -54,6 +58,31 @@ namespace {
 	{
 		return path.generic_string();
 	}
+
+	// ".png" of "tex/skin.PNG", from a generic UTF-8 name.
+	std::string lowered_extension_of_name(std::string_view name)
+	{
+		const std::size_t slash = name.rfind('/');
+		const std::string_view leaf = slash == std::string_view::npos ? name : name.substr(slash + 1);
+		const std::size_t dot = leaf.rfind('.');
+		if (dot == std::string_view::npos || dot == 0) return {};
+		std::string text(leaf.substr(dot));
+		std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return text;
+	}
+
+	std::string shown(std::string_view text)
+	{
+		return text_escape::escaped_text(text, 256);
+	}
+
+	bool image_bytes_match(const std::string& extension, const std::vector<std::byte>& bytes)
+	{
+		std::array<unsigned char, 18> head{};
+		if (bytes.size() < head.size()) return false;
+		std::copy_n(reinterpret_cast<const unsigned char*>(bytes.data()), head.size(), head.begin());
+		return looks_like_image(extension, head);
+	}
 }
 
 edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed,
@@ -77,13 +106,60 @@ edt::model_file_access::model_file_access(fs::path root_file, model_file_limits 
 	}
 }
 
+edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<provided_file>* provided, provided_mode mode)
+	: m_root_file(std::move(root_file)), m_limits(limits), m_provided(provided), m_mode(mode)
+{
+	ASSERT_MSG(m_provided != nullptr, "model_file_access: the provided mode needs the list of provided files");
+	m_root_extension = lowered_extension(m_root_file);
+	m_dir = m_boundary = m_root_file.parent_path();
+}
+
+edt::resolved_reference edt::model_file_access::resolve_provided(std::string_view reference, model_file_kind kind)
+{
+	resolved_reference out;
+	out.kind = kind;
+	for (std::size_t index = 0; index < m_provided->size(); ++index) {
+		const provided_file& entry = (*m_provided)[index];
+		if (entry.name != reference) continue;
+		if (entry.kind != kind) {
+			out.error = std::format("the model asks for '{}' as another kind of file", shown(reference));
+			return out;
+		}
+		if (!entry.bytes) return out;
+		out.path = fs::path("provided") / std::to_string(index);
+		out.size = entry.bytes->size();
+		return out;
+	}
+	if (m_mode == provided_mode::record) {
+		const bool known = std::any_of(m_requested.begin(), m_requested.end(),
+			[&](const requested_file& asked) { return asked.kind == kind && asked.name == reference; });
+		if (!known) m_requested.push_back({ std::string(reference), kind });
+		return out;
+	}
+	// Not handed over is missing: nothing is read for it. A side file the scan found missing (an .obj whose .mtl is gone)
+	// is not among the listed files, so refusing it here would refuse a model that imports with a default material.
+	return out;
+}
+
+const edt::provided_file* edt::model_file_access::provided_entry(const resolved_reference& file) const
+{
+	if (!m_provided || !file.found() || file.path.parent_path() != fs::path("provided")) return nullptr;
+	const std::string text = file.path.filename().string();
+	std::size_t index = 0;
+	const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), index);
+	if (error != std::errc{} || end != text.data() + text.size() || index >= m_provided->size()) return nullptr;
+	const provided_file& entry = (*m_provided)[index];
+	return entry.bytes ? &entry : nullptr;
+}
+
 edt::resolved_reference edt::model_file_access::resolve(std::string_view reference, model_file_kind kind)
 {
+	if (m_provided) return resolve_provided(reference, kind);
 	resolved_reference out;
 	out.kind = kind;
 	const auto refuse = [&](std::string why) {
 		out.path.clear();
-		out.error = std::format("the model refers to '{}': {}", std::string(reference).substr(0, 200), why);
+		out.error = std::format("the model refers to '{}': {}", shown(reference), why);
 		return out;
 	};
 	if (!m_on_disk) return refuse("the model is not a file on the disk, so it cannot read other files");
@@ -132,7 +208,15 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 			return refuse(std::format("the files of the model together are bigger than {} bytes", m_limits.max_total_bytes));
 		}
 		m_listed_bytes += out.size;
-		m_files.push_back({ *inside, out.size, out.modified, out.id });
+		referenced_file listed{ *inside, out.size, out.modified, out.id };
+		listed.names.emplace_back(reference);
+		listed.kind = kind;
+		m_files.push_back(std::move(listed));
+	} else {
+		const auto listed = std::find_if(m_files.begin(), m_files.end(), [&](const referenced_file& file) { return file.path == *inside; });
+		if (listed != m_files.end() && std::find(listed->names.begin(), listed->names.end(), reference) == listed->names.end()) {
+			listed->names.emplace_back(reference);
+		}
 	}
 	out.path = *inside;
 	return out;
@@ -141,10 +225,33 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolved_reference& file)
 {
 	if (!file.found()) return std::nullopt;
+	if (m_provided) {
+		const provided_file* entry = provided_entry(file);
+		if (!entry) return std::nullopt;
+		m_bytes_read += entry->bytes->size();
+		if (m_bytes_read > m_limits.max_total_bytes) throw std::runtime_error("the import would read more bytes than it was allowed");
+		if (entry->kind == model_file_kind::texture && !image_bytes_match(lowered_extension_of_name(entry->relative), *entry->bytes)) {
+			throw std::runtime_error(std::format("'{}' is no image", shown(entry->relative)));
+		}
+		return *entry->bytes;
+	}
 	m_bytes_read += file.size;
 	if (m_bytes_read > m_limits.max_total_bytes) throw std::runtime_error("the import would read more bytes from the disk than it was allowed");
-	auto bytes = res::read_regular_file_capped(file.path, file.size);
-	if (!bytes || bytes->size() != file.size) return std::nullopt;
+	// Opened below the boundary without following a link: a folder or the file swapped for one since resolve() is not read.
+	fs::path below = file.path.lexically_relative(m_boundary);
+	if (below.empty() || *below.begin() == "..") {
+		std::error_code ec;
+		below = (fs::weakly_canonical(file.path.parent_path(), ec) / file.path.filename()).lexically_relative(m_boundary);
+		if (ec || below.empty() || *below.begin() == "..") return std::nullopt;
+	}
+	platform::beneath::read_request request;
+	request.root = m_boundary;
+	request.folder = below.parent_path();
+	request.leaf = below.filename();
+	request.max_bytes = file.size;
+	std::optional<std::vector<std::byte>> bytes(std::in_place);
+	if (platform::beneath::read_beneath(request, *bytes).status != platform::beneath::read_status::ok) return std::nullopt;
+	if (bytes->size() != file.size) return std::nullopt;
 	if (file.kind == model_file_kind::texture) {
 		std::array<unsigned char, 18> head{};
 		std::copy_n(reinterpret_cast<const unsigned char*>(bytes->data()), (std::min)(head.size(), bytes->size()), head.begin());
@@ -177,7 +284,7 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 
 void edt::model_file_access::hash_listed(const resolved_reference& file)
 {
-	if (!file.found() || m_allowed) return;
+	if (!file.found() || m_allowed || m_provided) return;
 	const auto listed = std::find_if(m_files.begin(), m_files.end(), [&](const referenced_file& entry) { return entry.path == file.path; });
 	if (listed == m_files.end() || listed->hashed) return;
 	if (!read(file)) throw std::runtime_error(std::format("'{}' cannot be read", file.path.filename().string()));
@@ -185,6 +292,10 @@ void edt::model_file_access::hash_listed(const resolved_reference& file)
 
 std::string edt::model_file_access::relative_name(const resolved_reference& file) const
 {
+	if (m_provided) {
+		const provided_file* entry = provided_entry(file);
+		return entry ? entry->relative : std::string{};
+	}
 	// With a boundary every name is taken from it, so a file in the model's folder and one elsewhere never share a name.
 	return file.path.lexically_relative(m_boundary).generic_string();
 }

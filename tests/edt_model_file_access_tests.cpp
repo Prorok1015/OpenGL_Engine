@@ -2,10 +2,13 @@
 #include "test_temp_dir.hpp"
 #include "edt_model_file_access.h"
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 // The files a model may make an agent's import read (#548): its folder without hidden names, images checked by their
 // bytes, a bounded number of files and bytes, and only what the person was shown.
@@ -335,6 +338,130 @@ BOOST_AUTO_TEST_CASE(AModelGivenOnlyAsBytes_ReadsNoOtherFile_EvenOneThatIsThere)
 	}
 	BOOST_CHECK(access.files().empty());
 	BOOST_CHECK_EQUAL(access.listed_bytes(), 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The decoder process's side of the rule (#1043): it reads nothing from the disk, only what the editor handed over under
+// the exact name the model asked for.
+namespace {
+
+std::shared_ptr<const std::vector<std::byte>> bytes_of(const std::string& text)
+{
+	auto bytes = std::make_shared<std::vector<std::byte>>(text.size());
+	for (std::size_t i = 0; i < text.size(); ++i) (*bytes)[i] = static_cast<std::byte>(text[i]);
+	return bytes;
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtModelFileAccessProvidedTests, access_fixture)
+
+BOOST_AUTO_TEST_CASE(Recording_AnUnprovidedSideFileIsNotedOnce_AndIsNotFound_ThoughItLiesOnTheDisk)
+{
+	const std::vector<edt::provided_file> none;
+	edt::model_file_access access(root, {}, &none, edt::model_file_access::provided_mode::record);
+	BOOST_CHECK(access.provided());
+	for (int i = 0; i < 2; ++i) {
+		const auto asked = access.resolve("mesh.bin", edt::model_file_kind::side_file);
+		BOOST_CHECK(!asked.found());
+		BOOST_CHECK(asked.error.empty());
+	}
+	BOOST_CHECK(!access.resolve("skin.png", edt::model_file_kind::texture).found());
+	BOOST_REQUIRE_EQUAL(access.requested().size(), 2u);
+	BOOST_CHECK_EQUAL(access.requested()[0].name, "mesh.bin");
+	BOOST_CHECK(access.requested()[0].kind == edt::model_file_kind::side_file);
+	BOOST_CHECK(access.requested()[1].kind == edt::model_file_kind::texture);
+	BOOST_CHECK(access.files().empty());
+}
+
+BOOST_AUTO_TEST_CASE(Recording_AProvidedFileIsServedUnderItsName_AndAMissingOneIsNeitherFoundNorAskedAgain)
+{
+	const std::vector<edt::provided_file> given = {
+		{ "../shared/mesh.bin", "shared/mesh.bin", edt::model_file_kind::side_file, bytes_of("buffer bytes") },
+		{ "gone.bin", "", edt::model_file_kind::side_file, nullptr } };
+	edt::model_file_access access(root, {}, &given, edt::model_file_access::provided_mode::record);
+
+	const auto bin = access.resolve("../shared/mesh.bin", edt::model_file_kind::side_file);
+	BOOST_REQUIRE(bin.found());
+	BOOST_CHECK_EQUAL(bin.size, 12u);
+	BOOST_CHECK_EQUAL(access.relative_name(bin), "shared/mesh.bin");
+	const auto read = access.read(bin);
+	BOOST_REQUIRE(read.has_value());
+	BOOST_CHECK(*read == *given[0].bytes);
+
+	const auto gone = access.resolve("gone.bin", edt::model_file_kind::side_file);
+	BOOST_CHECK(!gone.found());
+	BOOST_CHECK(gone.error.empty());
+	// Only the exact name: the same file under another spelling was not handed over.
+	BOOST_CHECK(!access.resolve("../shared/./mesh.bin", edt::model_file_kind::side_file).found());
+	BOOST_REQUIRE_EQUAL(access.requested().size(), 1u);
+	BOOST_CHECK_EQUAL(access.requested()[0].name, "../shared/./mesh.bin");
+}
+
+BOOST_AUTO_TEST_CASE(Strict_AnUnprovidedFileIsMissing_AndNothingIsReadForIt)
+{
+	// An .obj whose .mtl the scan found missing still imports, with a default material.
+	const std::vector<edt::provided_file> none;
+	edt::model_file_access access(root, {}, &none, edt::model_file_access::provided_mode::strict);
+	const auto side = access.resolve("mesh.bin", edt::model_file_kind::side_file);
+	BOOST_CHECK(!side.found());
+	BOOST_CHECK(side.error.empty());
+	BOOST_CHECK(!access.read(side).has_value());
+
+	const auto texture = access.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!texture.found());
+	BOOST_CHECK(texture.error.empty());
+	BOOST_CHECK(!access.read(texture).has_value());
+	BOOST_CHECK(access.requested().empty());
+}
+
+BOOST_AUTO_TEST_CASE(Strict_AFileAskedForAsAnotherKind_IsRefused_AndATextureThatIsNoImageThrowsOnRead)
+{
+	const std::vector<edt::provided_file> given = {
+		{ "mesh.bin", "mesh.bin", edt::model_file_kind::side_file, bytes_of("buffer bytes") },
+		{ "fake.png", "fake.png", edt::model_file_kind::texture, bytes_of("this is not a png") },
+		{ "skin.png", "tex/skin.png", edt::model_file_kind::texture, bytes_of(png_bytes) } };
+	edt::model_file_access access(root, {}, &given, edt::model_file_access::provided_mode::strict);
+
+	const auto wrong = access.resolve("mesh.bin", edt::model_file_kind::texture);
+	BOOST_CHECK(!wrong.found());
+	BOOST_CHECK_MESSAGE(wrong.error.find("as another kind of file") != std::string::npos, wrong.error);
+
+	const auto fake = access.resolve("fake.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(fake.found());
+	BOOST_CHECK_THROW(access.read(fake), std::runtime_error);
+
+	const auto skin = access.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(skin.found());
+	BOOST_CHECK(access.read(skin).has_value());
+	BOOST_CHECK_EQUAL(access.relative_name(skin), "tex/skin.png");
+}
+
+BOOST_AUTO_TEST_CASE(Strict_WhatIsReadIsBoundByTheLimitOfTheImport)
+{
+	const std::vector<edt::provided_file> given = { { "mesh.bin", "mesh.bin", edt::model_file_kind::side_file, bytes_of("buffer bytes") } };
+	edt::model_file_limits limits;
+	limits.max_total_bytes = 20;
+	edt::model_file_access access(root, limits, &given, edt::model_file_access::provided_mode::strict);
+	const auto bin = access.resolve("mesh.bin", edt::model_file_kind::side_file);
+	BOOST_REQUIRE(bin.found());
+	BOOST_CHECK(access.read(bin).has_value());
+	BOOST_CHECK_THROW(access.read(bin), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(TheScan_RecordsEveryNameAFileWasAskedForBy_AndItsKind)
+{
+	auto access = make();
+	BOOST_REQUIRE(access.resolve("skin.png", edt::model_file_kind::texture).found());
+	BOOST_REQUIRE(access.resolve("./skin.png", edt::model_file_kind::texture).found());
+	BOOST_REQUIRE(access.resolve("skin.png", edt::model_file_kind::texture).found());
+	BOOST_REQUIRE(access.resolve("mesh.bin", edt::model_file_kind::side_file).found());
+	BOOST_REQUIRE_EQUAL(access.files().size(), 2u);
+	BOOST_CHECK((access.files()[0].names == std::vector<std::string>{ "skin.png", "./skin.png" }));
+	BOOST_CHECK(access.files()[0].kind == edt::model_file_kind::texture);
+	BOOST_CHECK((access.files()[1].names == std::vector<std::string>{ "mesh.bin" }));
+	BOOST_CHECK(access.files()[1].kind == edt::model_file_kind::side_file);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

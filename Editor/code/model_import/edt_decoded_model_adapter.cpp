@@ -38,12 +38,11 @@ std::optional<std::vector<std::byte>> read_exactly(const fs::path& path, std::ui
 }
 
 // What process_decoder::import asks the decoder for `source`.
-edt::decode_request import_request(const edt::import_source& source, const std::vector<edt::referenced_file>& allowed)
+edt::decode_request import_request(const edt::import_source& source)
 {
 	edt::decode_request request;
 	request.mode = edt::decode_request::mode_kind::import;
 	request.source_path = source.path;
-	request.allowed = allowed;
 	request.limits = source.limits;
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
@@ -174,7 +173,7 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 	// What is in memory:// now is read back as a decoder's answer, and checked as one: anyone may change those files.
 	const std::vector<fs::path> roots = m_resources.mount_roots(res::tag::memory);
 	if (roots.empty()) return std::nullopt;
-	const decode_request request = import_request(source, decode.scan.files);
+	const decode_request request = import_request(source);
 	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * 2;
 	decode_bundle answer;
 	answer.manifest["kind"] = "import";

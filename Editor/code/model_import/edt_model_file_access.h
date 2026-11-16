@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -10,6 +11,8 @@
 #include <vector>
 
 namespace edt {
+
+	enum class model_file_kind { texture, side_file };
 
 	struct referenced_file
 	{
@@ -20,6 +23,34 @@ namespace edt {
 		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
+		// Every name the model asked for this file by (the scan records them): the import hands the decoder process its
+		// bytes under each of them (#1043).
+		std::vector<std::string> names;
+		model_file_kind kind = model_file_kind::texture;
+	};
+
+	// A file the editor read for the decoder process (#1043): the name the model asked for it by, its name below the
+	// boundary (the importer names its textures by it), and its bytes; no bytes: the file is not on the disk.
+	struct provided_file
+	{
+		std::string name;
+		std::string relative;
+		model_file_kind kind = model_file_kind::texture;
+		std::shared_ptr<const std::vector<std::byte>> bytes;
+	};
+
+	// A name the model asked for that it was not given (the decoder's scan reports them to the editor, #1043).
+	struct requested_file
+	{
+		std::string name;
+		model_file_kind kind = model_file_kind::texture;
+	};
+
+	// What the decoder's scan asks the editor for; `error` set: the model cannot be read, and why.
+	struct scan_requests
+	{
+		std::vector<requested_file> requested;
+		std::string error;
 	};
 
 	struct model_file_limits
@@ -36,8 +67,6 @@ namespace edt {
 		std::string error;
 		bool ok() const { return error.empty(); }
 	};
-
-	enum class model_file_kind { texture, side_file };
 
 	struct resolved_reference
 	{
@@ -57,13 +86,21 @@ namespace edt {
 	// modification time changed. `read` checks again what it read, down to its bytes.
 	// `boundary` (a folder that holds the model's folder) widens "its own folder" to that folder: a res:// model of the
 	// project may read side files anywhere in its content root (#925). Empty, or not around the model: the model's folder.
+	// Given `provided` files (the decoder process, #1043), it never touches the disk: a name resolves only to a file the
+	// editor read and handed over under that exact name.
 	class model_file_access
 	{
 	public:
+		// `record`: a name the model asks for that it was not given is noted in requested() (the scan's rounds).
+		// `strict`: such a file is missing, and nothing is read for it (the import).
+		enum class provided_mode { record, strict };
+
 		// `on_disk` false: the model was only given as bytes (served from memory or a pack, #925). It has no folder, so every
 		// file it refers to is refused and nothing is read from the disk.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
 			const std::filesystem::path& boundary = {}, bool on_disk = true);
+		// `provided` must outlive the access.
+		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<provided_file>* provided, provided_mode mode);
 
 		// Nothing found and no error: the file is not there (the importer skips such a texture).
 		resolved_reference resolve(std::string_view reference, model_file_kind kind);
@@ -78,15 +115,23 @@ namespace edt {
 		std::uintmax_t listed_bytes() const { return m_listed_bytes; }
 		const model_file_limits& limits() const { return m_limits; }
 		bool on_disk() const { return m_on_disk; }
+		bool provided() const { return m_provided != nullptr; }
+		const std::vector<requested_file>& requested() const { return m_requested; }
 
 	private:
+		resolved_reference resolve_provided(std::string_view reference, model_file_kind kind);
+		const provided_file* provided_entry(const resolved_reference& file) const;
+
 		std::filesystem::path m_root_file;
 		std::filesystem::path m_dir;
 		// m_dir, or the folder around it the import may read from.
 		std::filesystem::path m_boundary;
 		std::string m_root_extension;
 		model_file_limits m_limits;
-		const std::vector<referenced_file>* m_allowed;
+		const std::vector<referenced_file>* m_allowed = nullptr;
+		const std::vector<provided_file>* m_provided = nullptr;
+		provided_mode m_mode = provided_mode::strict;
+		std::vector<requested_file> m_requested;
 		bool m_on_disk = true;
 		std::vector<referenced_file> m_files;
 		std::unordered_set<std::string> m_seen;

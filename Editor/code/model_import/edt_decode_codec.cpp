@@ -12,6 +12,7 @@ namespace json = boost::json;
 namespace {
 
 constexpr std::size_t k_max_items = 1u << 20;
+constexpr std::size_t k_max_name_bytes = 1024;
 
 std::optional<std::uint64_t> u64_from(const json::value* value)
 {
@@ -70,6 +71,25 @@ std::string path_text(const std::filesystem::path& path)
 std::filesystem::path path_from(const std::string& text)
 {
 	return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
+const char* kind_text(edt::model_file_kind kind)
+{
+	return kind == edt::model_file_kind::side_file ? "side_file" : "texture";
+}
+
+std::optional<edt::model_file_kind> kind_from(const json::value* value)
+{
+	const auto text = string_from(value);
+	if (!text) return std::nullopt;
+	if (*text == "side_file") return edt::model_file_kind::side_file;
+	if (*text == "texture") return edt::model_file_kind::texture;
+	return std::nullopt;
+}
+
+bool fits_name(const std::string& text, std::size_t min_bytes)
+{
+	return text.size() >= min_bytes && text.size() <= k_max_name_bytes && text.find('\0') == std::string::npos;
 }
 
 }
@@ -179,6 +199,48 @@ std::optional<edt::model_file_scan> edt::model_file_scan_from_json(const json::v
 	return scan;
 }
 
+json::object edt::to_json(const scan_requests& requests)
+{
+	json::object out;
+	if (!requests.error.empty()) {
+		out["error"] = requests.error;
+		return out;
+	}
+	json::array list;
+	for (const requested_file& file : requests.requested) {
+		json::object entry;
+		entry["name"] = file.name;
+		entry["kind"] = kind_text(file.kind);
+		list.emplace_back(std::move(entry));
+	}
+	out["requests"] = std::move(list);
+	return out;
+}
+
+std::optional<edt::scan_requests> edt::scan_requests_from_json(const json::value& value)
+{
+	if (!value.is_object()) return std::nullopt;
+	const json::object& object = value.as_object();
+	scan_requests out;
+	if (const json::value* error = object.if_contains("error")) {
+		const auto text = string_from(error);
+		if (!text) return std::nullopt;
+		out.error = *text;
+		return out;
+	}
+	const json::value* list = object.if_contains("requests");
+	if (!list || !list->is_array() || list->as_array().size() > k_max_items) return std::nullopt;
+	out.requested.reserve(list->as_array().size());
+	for (const json::value& item : list->as_array()) {
+		if (!item.is_object()) return std::nullopt;
+		const auto name = string_from(item.as_object().if_contains("name"));
+		const auto kind = kind_from(item.as_object().if_contains("kind"));
+		if (!name || !kind) return std::nullopt;
+		out.requested.push_back({ *name, *kind });
+	}
+	return out;
+}
+
 json::object edt::to_json(const import_intermediate& imported)
 {
 	json::array weights;
@@ -250,9 +312,16 @@ boost::json::object edt::to_json(const decode_request& request)
 	json::object out;
 	out["mode"] = request.mode == decode_request::mode_kind::scan ? "scan" : "import";
 	out["source_path"] = path_text(request.source_path);
-	json::array allowed;
-	for (const referenced_file& file : request.allowed) allowed.emplace_back(to_json(file));
-	out["allowed"] = std::move(allowed);
+	json::array provided;
+	for (const provided_entry& file : request.provided) {
+		json::object entry;
+		entry["name"] = file.name;
+		entry["relative"] = file.relative;
+		entry["kind"] = kind_text(file.kind);
+		entry["present"] = file.present;
+		provided.emplace_back(std::move(entry));
+	}
+	out["provided"] = std::move(provided);
 	json::object limits;
 	limits["max_total_bytes"] = u64_to(request.limits.max_total_bytes);
 	limits["max_file_bytes"] = u64_to(request.limits.max_file_bytes);
@@ -282,12 +351,20 @@ std::optional<edt::decode_request> edt::decode_request_from_json(const boost::js
 	if (!source || source->empty()) return std::nullopt;
 	request.source_path = path_from(*source);
 
-	const json::value* allowed = object.if_contains("allowed");
-	if (!allowed || !allowed->is_array() || allowed->as_array().size() > k_max_items) return std::nullopt;
-	for (const json::value& item : allowed->as_array()) {
-		auto file = referenced_file_from_json(item);
-		if (!file) return std::nullopt;
-		request.allowed.push_back(std::move(*file));
+	const json::value* provided = object.if_contains("provided");
+	if (!provided || !provided->is_array() || provided->as_array().size() > k_max_items) return std::nullopt;
+	for (const json::value& item : provided->as_array()) {
+		if (!item.is_object()) return std::nullopt;
+		const json::object& entry = item.as_object();
+		const auto name = string_from(entry.if_contains("name"));
+		const auto relative = string_from(entry.if_contains("relative"));
+		const auto kind = kind_from(entry.if_contains("kind"));
+		const json::value* present = entry.if_contains("present");
+		if (!name || !relative || !kind || !present || !present->is_bool()) return std::nullopt;
+		// A file that is there has its name below the boundary; one that is not has none.
+		if (!fits_name(*name, 1) || !fits_name(*relative, present->as_bool() ? 1 : 0)) return std::nullopt;
+		if (!present->as_bool() && !relative->empty()) return std::nullopt;
+		request.provided.push_back({ *name, *relative, *kind, present->as_bool() });
 	}
 
 	const json::value* limits = object.if_contains("limits");

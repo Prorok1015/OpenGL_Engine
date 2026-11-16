@@ -3,8 +3,9 @@
 //
 //   snk_model_decoder --request <bundle> --out <bundle>
 //
-// The request bundle holds the JSON of edt::decode_request and the model's bytes (the editor read and verified them).
-// The out bundle holds a manifest ({"kind":"scan"|"import",...}) and, for an import, the resources it stored under
+// The request bundle holds the JSON of edt::decode_request, the model's bytes and the bytes of the side files the editor
+// read for it by its rule (#1043): this process opens no file but its run folder. The out bundle holds a manifest
+// ({"kind":"scan","requests"|"error"} or {"kind":"import",...}) and, for an import, the resources it stored under
 // memory://. Exit codes: 0 an out bundle was written (a refused model is an "error" inside it), 1 no out bundle could
 // be made, 2 usage. Run it with the working directory a scratch folder: memory:// is ./sandbox there.
 // The self-test flags (--self-test-*) exist only in the test build (SNK_MODEL_DECODER_SELF_TEST), never in the shipped tool.
@@ -22,13 +23,16 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_registration_scope.h>
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <new>
 #include <optional>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -190,6 +194,18 @@ int fail(const std::string& message)
 	return 1;
 }
 
+// The index in decode_request::provided that a blob's tag names; SIZE_MAX when it names none.
+std::size_t provided_index(const std::string& tag)
+{
+	const std::string_view prefix = edt::k_decode_file_tag_prefix;
+	if (!tag.starts_with(prefix)) return SIZE_MAX;
+	const char* begin = tag.data() + prefix.size();
+	const char* end = tag.data() + tag.size();
+	std::size_t index = 0;
+	const auto [last, error] = std::from_chars(begin, end, index);
+	return error == std::errc{} && last == end ? index : SIZE_MAX;
+}
+
 boost::json::object failure_manifest(const char* kind, const std::string& error)
 {
 	boost::json::object manifest;
@@ -227,7 +243,7 @@ int main(int argc, char** argv)
 	}
 #endif
 
-	const auto request_bundle = edt::read_bundle(args->request);
+	auto request_bundle = edt::read_bundle(args->request);
 	if (!request_bundle.ok()) {
 		return fail("request: " + request_bundle.error);
 	}
@@ -252,13 +268,31 @@ int main(int argc, char** argv)
 #endif
 
 	const std::vector<std::byte>* source = nullptr;
-	for (const edt::bundle_blob& blob : request_bundle.bundle->blobs) {
+	std::vector<std::vector<std::byte>*> file_bytes(request->provided.size(), nullptr);
+	for (edt::bundle_blob& blob : request_bundle.bundle->blobs) {
 		if (blob.tag == edt::k_decode_source_tag) {
 			source = &blob.bytes;
+			continue;
 		}
+		const std::size_t index = provided_index(blob.tag);
+		if (index >= file_bytes.size() || blob.tag != edt::provided_blob_tag(index)) {
+			return fail("request: it carries bytes that belong to no file of the request");
+		}
+		file_bytes[index] = &blob.bytes;
 	}
 	if (!source) {
 		return fail("request: the model bytes are missing");
+	}
+	std::vector<edt::provided_file> files;
+	files.reserve(request->provided.size());
+	for (std::size_t i = 0; i < request->provided.size(); ++i) {
+		const edt::provided_entry& entry = request->provided[i];
+		if (entry.present != (file_bytes[i] != nullptr)) {
+			return fail("request: the bytes of the files do not match the list of files");
+		}
+		std::shared_ptr<const std::vector<std::byte>> bytes;
+		if (file_bytes[i]) bytes = std::make_shared<const std::vector<std::byte>>(std::move(*file_bytes[i]));
+		files.push_back({ entry.name, entry.relative, entry.kind, std::move(bytes) });
 	}
 
 	// No watcher threads in the child.
@@ -295,9 +329,7 @@ int main(int argc, char** argv)
 	import.boundary = request->boundary;
 	import.memory_folder = request->memory_folder;
 	import.on_disk = request->on_disk;
-	if (request->mode == edt::decode_request::mode_kind::import) {
-		import.allowed = &request->allowed;
-	}
+	import.provided = &files;
 	if (request->deadline_ms != 0) {
 		import.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request->deadline_ms);
 	}
@@ -305,8 +337,8 @@ int main(int argc, char** argv)
 	edt::decode_bundle out;
 	try {
 		if (request->mode == edt::decode_request::mode_kind::scan) {
+			out.manifest = edt::to_json(edt::model_importer::list_requests(import));
 			out.manifest["kind"] = "scan";
-			out.manifest["scan"] = edt::to_json(edt::model_importer::scan_files(import));
 		} else {
 			edt::model_importer importer(desc_sys, res_sys);
 			const edt::import_intermediate imported = importer.import_background(import);
