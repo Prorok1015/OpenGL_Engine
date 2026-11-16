@@ -17,6 +17,7 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_import_vertex_layout.h>
 
 #include "scn_assimp_resource_system_wrapper.h"
 
@@ -441,13 +442,6 @@ std::string unique_child_name(std::unordered_set<std::string>& used_names, const
 	return candidate;
 }
 
-void store_data(std::vector<std::byte>& data, const auto& value)
-{
-	const size_t begin = data.size();
-	data.resize(data.size() + sizeof(value));
-	std::memcpy((data.data() + begin), &value, sizeof(value));
-}
-
 namespace {
 // What the one geometry of `scene` keeps (#1092): triangles when any mesh has them, else lines, else points. Faces of
 // another kind are dropped; aiProcess_Triangulate leaves lines and points as they are.
@@ -474,6 +468,24 @@ unsigned int kept_face_size(rnd::geometry_topology topology)
 	case rnd::geometry_topology::points: return 1;
 	default: return 3;
 	}
+}
+
+// The vertex attributes of the geometry (#1100): the union over the meshes that keep a face of `face_size`; a mesh
+// whose faces are all dropped writes no vertex and adds nothing.
+scn::import_layout::vertex_attributes kept_attributes_of(const aiScene* scene, unsigned int face_size)
+{
+	scn::import_layout::vertex_attributes out;
+	for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
+		const aiMesh* mesh = scene->mMeshes[m];
+		bool keeps = false;
+		for (unsigned int f = 0; f < mesh->mNumFaces && !keeps; ++f) {
+			keeps = mesh->mFaces[f].mNumIndices == face_size;
+		}
+		if (keeps) {
+			out |= scn::import_layout::vertex_attributes{ mesh->HasNormals(), mesh->HasTextureCoords(0), mesh->HasTangentsAndBitangents(), false };
+		}
+	}
+	return out;
 }
 }
 
@@ -502,36 +514,28 @@ bool process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 		return false;
 	}
 
+	// Every vertex in the geometry's layout (#1100): what this mesh lacks takes the default of scn::import_layout.
+	const scn::import_layout::vertex_attributes layout = scn::import_layout::attributes_of(geometry.layout);
+	if (layout.normal && !mesh->HasNormals()) {
+		egLOG_WARN("scene/import", "model '{}': mesh '{}' has no normals: written as (0, 0, 1)", tag.view(), mesh->mName.C_Str());
+	}
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
 	{
-		ASSERT_MSG(0 == geometry.layout.get_element_offset("position"), "Offset position mismatch");
-		size_t stride = sizeof(glm::vec3);
-		size_t begin = geometry.vertices.size();
-
-		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
-		if (mesh->HasNormals())
-		{
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
-			stride += sizeof(glm::vec3);
-			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
+		scn::import_layout::vertex_values vertex;
+		vertex.position = convert_to_glm(mesh->mVertices[i]);
+		if (mesh->HasNormals()) {
+			vertex.normal = convert_to_glm(mesh->mNormals[i]);
 		}
-		if (mesh->HasTextureCoords(0))
-		{
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
-			stride += sizeof(glm::vec2);
-			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
+		if (mesh->HasTextureCoords(0)) {
+			vertex.uv = glm::vec2(convert_to_glm(mesh->mTextureCoords[0][i]));
 		}
-		if (mesh->HasTangentsAndBitangents())
-		{
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
-			ASSERT_MSG((stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
-			stride += sizeof(glm::vec3) * 2;
-			store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
-			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
+		if (mesh->HasTangentsAndBitangents()) {
+			vertex.tangent = convert_to_glm(mesh->mTangents[i]);
+			vertex.bitangent = convert_to_glm(mesh->mBitangents[i]);
 		}
-
-		ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
-		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
+		const size_t begin = geometry.vertices.size();
+		scn::import_layout::append_vertex(geometry.vertices, layout, vertex);
+		ASSERT_MSG(geometry.vertices.size() - begin == geometry.layout.get_stride(), "Stride mismatch");
 	}
 
 	const bool has_uv = mesh->HasTextureCoords(0);
@@ -729,24 +733,11 @@ json::object build_prefab_node(
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, import_sink& res_sys)
 {
-	// 1. Setup geometry layout from first mesh
+	// 1. One layout for every mesh the geometry keeps (#1100)
 	rnd::geometry_desc geometry;
+	const rnd::geometry_topology topology = kept_topology_of(scene);
 	if (scene->HasMeshes()) {
-		std::vector<rnd::driver::BufferElement> layout;
-		layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" });
-
-		auto mesh = scene->mMeshes[0];
-		if (mesh->HasNormals()) {
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal" });
-		}
-		if (mesh->HasTextureCoords(0)) {
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv" });
-		}
-		if (mesh->HasTangentsAndBitangents()) {
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent" });
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent" });
-		}
-		geometry.layout = rnd::driver::BufferLayout{ layout };
+		geometry.layout = scn::import_layout::layout_of(kept_attributes_of(scene, kept_face_size(topology)));
 	}
 
 	// 2. Pre-scan bones: bone_name → global index
@@ -822,7 +813,6 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 
 	// 5. Build prefab tree + accumulate skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	const rnd::geometry_topology topology = kept_topology_of(scene);
 	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, kept_face_size(topology), geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys, scene->mRootNode->mName.C_Str());
 
 	// 6. Add animation_collection_desc component to root (inline clips)
