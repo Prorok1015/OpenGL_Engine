@@ -274,6 +274,21 @@ BOOST_AUTO_TEST_CASE(TooManyRangesAreRefused)
 	BOOST_TEST(static_cast<bool>(res::desc_binary::parse("f.bin", file, enough, false)));
 }
 
+BOOST_AUTO_TEST_CASE(TooManyChunks_AreRefusedByEncode_AsTheReadSideRefusesTheirRanges)
+{
+	std::vector<res::binary_range> ranges;
+	std::string error;
+	const std::vector<res::binary_chunk> many(res::desc_binary::max_ranges + 1, res::binary_chunk{ {}, "u8" });
+	BOOST_TEST(!res::desc_binary::encode(many, ranges, error).has_value());
+	BOOST_TEST(error.find(std::format("at most {} are read", res::desc_binary::max_ranges)) != std::string::npos);
+	BOOST_TEST(ranges.empty());
+
+	const std::vector<res::binary_chunk> enough(res::desc_binary::max_ranges, res::binary_chunk{ {}, "u8" });
+	error.clear();
+	BOOST_TEST(res::desc_binary::encode(enough, ranges, error).has_value());
+	BOOST_TEST(ranges.size() == res::desc_binary::max_ranges);
+}
+
 BOOST_FIXTURE_TEST_CASE(WritePendingCommitAndReadRoundTrip, two_layers)
 {
 	res::resource_system sys(tasks, table());

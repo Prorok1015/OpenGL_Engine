@@ -335,6 +335,12 @@ void rnd::detail::rebuild_bounds(geometry_desc& geometry)
 	}
 }
 
+rnd::geometry_desc::geometry_desc()
+{
+	// The address may be one a geometry destroyed without this dtor (an inline one of an old module) left in the table.
+	detail::forget_binary(*this);
+}
+
 rnd::geometry_desc::geometry_desc(const geometry_desc& other)
 	: desc::desc_base(other)
 	, layout(other.layout)
@@ -443,6 +449,11 @@ void rnd::geometry_desc::serialize(json::object& resource) const
 			get_tag().view()));
 	case detail::geometry_binary_state::none:
 		break;
+	}
+	// Whatever the table says: a layout without vertices is a mesh whose data is elsewhere or lost, never written empty.
+	if (vertices.empty() && (layout.begin() != layout.end() || layout.get_stride() != 0)) {
+		throw std::runtime_error(std::format("geometry '{}' has a vertex layout but no vertices: an empty mesh is not written",
+			get_tag().view()));
 	}
 	resource["__type"] = "geometry_desc";
 	resource["layout"] = json::value_from(layout);

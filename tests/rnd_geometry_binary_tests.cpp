@@ -5,6 +5,7 @@
 #include "geom/rnd_geom_manager.h"
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
@@ -13,7 +14,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -356,6 +359,67 @@ BOOST_AUTO_TEST_CASE(ABinaryGeometryLoaded_IsNotWrittenBackAsArrays)
 	geometry->copy_to(copy);
 	BOOST_TEST(copy.vertices.size() == 36u);
 	BOOST_CHECK_THROW(copy.serialize(written), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(ALayoutWithoutVertices_IsNeverWritten_WhateverTheTableSays)
+{
+	// Arrays only: the side table has nothing for it.
+	rnd::geometry_desc geometry;
+	geometry.layout = rnd::driver::BufferLayout{ { rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" } };
+	geometry.indices = { 0, 1, 2 };
+	boost::json::object written;
+	BOOST_CHECK_THROW(geometry.serialize(written), std::runtime_error);
+
+	// No layout and no data (core/res/base_geometry.desc) is still written.
+	rnd::geometry_desc empty;
+	BOOST_CHECK_NO_THROW(empty.serialize(written));
+}
+
+BOOST_AUTO_TEST_CASE(ANewGeometry_DoesNotInheritAStateLeftAtItsAddress)
+{
+	// Ranges with no layout: the recorded state is the only thing the object holds (nothing allocated to leak).
+	const auto positions = positions_of(1);
+	const auto indices = indices_of(1);
+	const std::array<res::binary_chunk, 2> chunks{ res::binary_chunk{ std::as_bytes(std::span(positions)), "f32x3" },
+		res::binary_chunk{ std::as_bytes(std::span(indices)), "u32" } };
+	std::vector<res::binary_range> ranges;
+	std::string error;
+	BOOST_REQUIRE_MESSAGE(res::desc_binary::encode(chunks, ranges, error).has_value(), error);
+	const boost::json::object text = boost::json::parse(desc_text(ranges, "{}")).as_object();
+
+	alignas(rnd::geometry_desc) std::byte storage_bytes[sizeof(rnd::geometry_desc)];
+	auto* stale = new (storage_bytes) rnd::geometry_desc();
+	stale->deserialize(storage.require<desc::desc_system>(), text);
+	boost::json::object written;
+	BOOST_REQUIRE_THROW(stale->serialize(written), std::runtime_error);
+
+	// Its destructor never runs (a module-side destruction that skipped ours): a new geometry takes the address.
+	auto* geometry = new (storage_bytes) rnd::geometry_desc();
+	BOOST_CHECK_NO_THROW(geometry->serialize(written));
+	std::destroy_at(geometry);
+}
+
+BOOST_AUTO_TEST_CASE(AChildOfABinaryGeometry_IsWrittenWhole_KeepingItsParent)
+{
+	const res::tag parent_tag{ "memory://geometry_binary/parent.geom.desc" };
+	put(parent_tag, positions_of(1), indices_of(1));
+	auto& descs = storage.require<desc::desc_system>();
+	const auto instance = descs.create_instance("geometry_desc", res::tag{ "memory://geometry_binary/child.geom.desc" });
+	auto* child = dynamic_cast<rnd::geometry_desc*>(instance.get());
+	BOOST_REQUIRE(child != nullptr);
+	child->layout = rnd::driver::BufferLayout{ { rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" } };
+	child->indices = { 0, 1, 2 };
+	child->vertices.assign(36, std::byte{ 0 });
+	child->set_parent(parent_tag);
+
+	// The parent refuses to be written: no fields to compare with, the child is written whole and still loads on it.
+	boost::json::object body;
+	child->serialize(body);
+	BOOST_REQUIRE_NO_THROW(descs.reduce_to_parent(*child, body));
+	BOOST_TEST(body.contains("__parent"));
+	BOOST_TEST(body.at("vertices").is_array());
+	BOOST_TEST(body.at("vertices").as_array().size() == 36u);
+	BOOST_TEST(body.at("indices").as_array().size() == 3u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

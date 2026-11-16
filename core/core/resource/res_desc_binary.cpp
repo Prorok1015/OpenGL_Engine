@@ -449,6 +449,11 @@ std::optional<std::vector<std::byte>> res::desc_binary::encode(std::span<const b
 	std::vector<binary_range>& ranges, std::string& error)
 {
 	ranges.clear();
+	// A file is read at most max_ranges ranges at a time: one with more could never be read back whole.
+	if (chunks.size() > max_ranges) {
+		error = std::format("{} chunks in one file, at most {} are read", chunks.size(), max_ranges);
+		return std::nullopt;
+	}
 	ranges.reserve(chunks.size());
 	std::uint64_t end = header_bytes;
 	for (std::size_t i = 0; i < chunks.size(); ++i) {

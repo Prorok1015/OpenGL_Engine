@@ -7,6 +7,7 @@
 // --base mounts a lower layer under the directory (projects/sandbox/res needs core/res for its base descs);
 // only the descs of the first directory (and of --edt) are touched.
 // --edt mounts a directory as the edt:// protocol (Editor/data) and resaves its descs as well.
+// A geometry whose data is in its binary file (EPIC-79) is not written back as arrays: it is skipped and reported.
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_system.h>
@@ -24,6 +25,7 @@
 #include <snk/scene/scn_registration_scope.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <algorithm>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -47,6 +49,24 @@ namespace {
 		std::vector<std::byte> bytes(text.size());
 		std::transform(text.begin(), text.end(), bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
 		return bytes;
+	}
+
+	// "vertices" or "indices" is a range of the binary file next to the desc (EPIC-79), not an array.
+	bool has_binary_geometry(std::string_view text)
+	{
+		boost::system::error_code error;
+		const json::value root = json::parse(text, error);
+		const json::object* object = !error ? root.if_object() : nullptr;
+		if (object == nullptr) {
+			return false;
+		}
+		const json::value* type = object->if_contains("__type");
+		if (type == nullptr || !type->is_string() || type->as_string() != "geometry_desc") {
+			return false;
+		}
+		const json::value* vertices = object->if_contains("vertices");
+		const json::value* indices = object->if_contains("indices");
+		return (vertices != nullptr && vertices->is_object()) || (indices != nullptr && indices->is_object());
 	}
 
 }
@@ -139,10 +159,18 @@ int main(int argc, char** argv)
 
 	int failed = 0;
 	int changed = 0;
+	int skipped = 0;
 	for (const auto& [path, tag] : files) {
 		const std::string rel = tag.string();
-		if (desc::is_template_file_of_unknown_type(rel, as_text(read_file(path)), desc_sys)) {
+		const std::vector<std::byte> text = read_file(path);
+		if (desc::is_template_file_of_unknown_type(rel, as_text(text), desc_sys)) {
 			egLOG_INFO("desc_resave", "{}: a game type of a template, skipped", rel);
+			++skipped;
+			continue;
+		}
+		if (has_binary_geometry(as_text(text))) {
+			egLOG_INFO("desc_resave", "{}: a geometry with its data in a binary file, not written back as arrays, skipped", rel);
+			++skipped;
 			continue;
 		}
 		auto handle = res_sys.require_sync<desc::desc_base>(tag);
@@ -153,7 +181,14 @@ int main(int argc, char** argv)
 			continue;
 		}
 
-		auto written = adapter.serialize(tag, loaded);
+		std::vector<std::byte> written;
+		try {
+			written = adapter.serialize(tag, loaded);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("desc_resave", "{}: cannot be written: {}", rel, e.what());
+			++failed;
+			continue;
+		}
 		const std::vector<std::byte> original = read_file(path);
 		// One form with a migration (#851): the root __guid stays as the file has it, none is made.
 		boost::system::error_code before_error;
@@ -177,6 +212,7 @@ int main(int argc, char** argv)
 		egLOG_INFO("desc_resave", "{}: rewritten", rel);
 	}
 
-	egLOG_INFO("desc_resave", "{} files, {} {}, {} failed", files.size(), changed, check_only ? "would change" : "rewritten", failed);
+	egLOG_INFO("desc_resave", "{} files, {} {}, {} skipped, {} failed", files.size(), changed,
+		check_only ? "would change" : "rewritten", skipped, failed);
 	return failed > 0 || (check_only && changed > 0) ? 1 : 0;
 }

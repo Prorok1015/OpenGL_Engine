@@ -145,7 +145,8 @@ namespace res
 		SNK_API std::optional<tag> staged_tag(const tag& desc);
 
 		// The file for `chunks`: header, then each chunk at the next multiple of range_alignment. Fills `ranges`.
-		// nullopt with `error` set for an invalid layout, a size that is not a multiple of it, or more than max_file_bytes.
+		// nullopt with `error` set for more than max_ranges chunks, an invalid layout, a size that is not a multiple of it,
+		// or more than max_file_bytes.
 		SNK_API std::optional<std::vector<std::byte>> encode(std::span<const binary_chunk> chunks,
 			std::vector<binary_range>& ranges, std::string& error);
 

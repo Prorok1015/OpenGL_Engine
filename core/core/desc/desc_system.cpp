@@ -474,11 +474,6 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 		stamp_tree(object);
 		return object;
 	};
-	const json::object inherited = [&] {
-		json::object out;
-		parent->serialize(out);
-		return stamped(std::move(out));
-	}();
 	const json::object target = stamped(body);
 	// The form is right only if loading it does what the adapter does - the parent copied in, the file read on top - and
 	// gives `body` again; each type reads its fields its own way, so that is checked rather than assumed.
@@ -497,6 +492,23 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 			return false;
 		}
 	};
+	json::object inherited;
+	try {
+		parent->serialize(inherited);
+	} catch (const std::exception& e) {
+		// A parent that is never written (a geometry read from its binary file, EPIC-79) gives nothing to compare with.
+		json::object whole = file_form(body);
+		if (reads_back(whole)) {
+			egLOG_WARN("desc", "'{}': its '__parent' '{}' cannot be written ({}); written whole, '__parent' kept",
+				desc.get_tag().view(), parent_tag.view(), e.what());
+			body = std::move(whole);
+		} else {
+			egLOG_WARN("desc", "'{}': its '__parent' '{}' cannot be written ({}); written whole, without '__parent'",
+				desc.get_tag().view(), parent_tag.view(), e.what());
+		}
+		return;
+	}
+	inherited = stamped(std::move(inherited));
 
 	// The smallest form first: key by key, for map fields and prefab nodes that merge with the parent's. Then whole values,
 	// for a type that reads a field as a whole.
