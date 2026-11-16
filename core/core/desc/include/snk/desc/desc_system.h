@@ -11,6 +11,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_dynamic.h>
+#include <snk/desc/desc_fnv1a.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <algorithm>
@@ -118,7 +119,7 @@ namespace desc
 		// std::hash is not stable across platforms/STLs; these names end up in saved data.
 		static constexpr uint64_t fnv1a_64(std::string_view s) noexcept
 		{
-			return desc::schema_id(s);
+			return desc::fnv1a_64(s);
 		}
 
 		desc_system(res::resource_system& res_system);

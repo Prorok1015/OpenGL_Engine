@@ -70,7 +70,7 @@ add_subdirectory("image")
 if(SNK_ENGINE_SHARED)
 	set(_snk_whole_archive
 		snk::core snk::common snk::engine_logger snk::config_system snk::application snk::window
-		snk::resource_system snk::desc_system snk::command snk::project snk::platform snk::ecs snk::drv_opengl snk::drv_null snk::drv_validation snk::input_system snk::render
+		snk::resource_system snk::model_codec snk::desc_system snk::command snk::project snk::platform snk::ecs snk::drv_opengl snk::drv_null snk::drv_validation snk::input_system snk::render
 		snk::game snk::scene snk::gui snk::gui_gl_backend snk::image imgui)
 	if(MSVC)
 		# An archive that carries a .res (assimp.rc did, LNK1241) must not be whole-archived: the plain link-line

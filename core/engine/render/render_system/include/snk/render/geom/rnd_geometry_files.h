@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_encode.h>
 #include <snk/resource/res_tag.h>
 #include <snk/common/snk_api.h>
 #include <boost/json/object.hpp>
@@ -16,55 +17,15 @@ namespace res { class resource_system; }
 // desc keeps their ranges. Every writer of a *.geom.desc file goes through it.
 namespace rnd
 {
-	// The __version a desc with ranges is written in: an older engine refuses it instead of reading a range as an array.
-	inline constexpr int geometry_binary_version = 2;
-
-	// The primitives of a geometry, as the importer found them. Only triangles get a binary file; any other stays in JSON
-	// arrays (the form before EPIC-79) with the key "topology" naming it.
-	enum class geometry_topology : std::uint8_t
+	// The data of `geometry`, for the encoders of rnd_geometry_encode.h (it must outlive the view).
+	inline geometry_view geometry_view_of(const geometry_desc& geometry)
 	{
-		triangles,
-		lines,
-		points,
-		mixed,
-	};
+		return geometry_view{ geometry.layout, geometry.vertices, geometry.indices, geometry.bounds };
+	}
 
-	// The key of an arrays desc that names a topology other than triangles; a desc without it holds triangles.
-	inline constexpr std::string_view geometry_topology_key = "topology";
-	SNK_API std::string_view topology_name(geometry_topology topology);
-	// What "topology" of `desc` names: triangles without the key, mixed for a name this engine does not know.
-	SNK_API geometry_topology topology_of(const boost::json::object& desc);
-
-	struct geometry_file_options
-	{
-		// Written after "__type" and "__version" ("__parent", "__guid", ...); the writer's own keys in it are left out.
-		boost::json::object header;
-		// Writes the key "bounds" (empty): the loader builds the bounds again from the data, they are never stored.
-		bool bounds = false;
-		// Given by the caller (the importer knows it): anything but triangles is refused, it is written as arrays.
-		geometry_topology topology = geometry_topology::triangles;
-	};
-
-	struct geometry_files
-	{
-		// The desc as compact JSON, its ranges filled.
-		std::vector<std::byte> desc;
-		// The binary file beside it.
-		std::vector<std::byte> binary;
-		// Empty when encoded.
-		std::string error;
-
-		explicit operator bool() const { return error.empty(); }
-	};
-
-	// Why `geometry` cannot be written as `file` with its binary file; empty when it can. The loader's checks
-	// (check_geometry_data: index past the vertices, a position or uv not finite, bytes off the stride, a partial triangle)
-	// and: a topology other than triangles, no vertices, no indices (drawing is indexed), `file` not <name>.<ext>.desc.
+	// geometry_write_problem and encode_geometry_files of rnd_geometry_encode.h for the data of `geometry`.
 	SNK_API std::string geometry_write_problem(const res::tag& file, const geometry_desc& geometry,
 		const geometry_file_options& options = {});
-
-	// The pair for `geometry` named `file`, nothing written; refused (`error`) as geometry_write_problem says. Vertices
-	// are "f32xN" when every attribute is float, else "u8"; indices "u32".
 	SNK_API geometry_files encode_geometry_files(const res::tag& file, const geometry_desc& geometry,
 		const geometry_file_options& options = {});
 

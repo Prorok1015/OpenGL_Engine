@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/desc/desc_system.h>
+#include <snk/desc/desc_fnv1a.h>
 #include <charconv>
 #include <cstdint>
 #include <format>
@@ -31,7 +31,7 @@ namespace desc
 	// yields the same id, so files and importers that carry no explicit id get ids that survive reloads.
 	inline uint64_t derive_node_id(std::string_view name_path)
 	{
-		const uint64_t id = desc_system::fnv1a_64(name_path);
+		const uint64_t id = fnv1a_64(name_path);
 		return id == invalid_node_id ? 1 : id;
 	}
 

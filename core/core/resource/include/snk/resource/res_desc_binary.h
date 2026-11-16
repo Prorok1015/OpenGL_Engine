@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +21,8 @@
 #include <snk/resource/res_tag.h>
 
 // Large numeric data of a desc (mesh vertices and indices first) kept in a binary file next to it (EPIC-79, #1068).
-// Format, naming and write order: docs/epics/desc-driven/EPIC-79.md.
+// Format, naming and write order: docs/epics/desc-driven/EPIC-79.md. What needs no resource_system (the layouts and ranges,
+// the tags, encode and save_lock) is in snk_model_codec (#1077), the rest in resource_system.
 namespace res
 {
 	class resource_system;
@@ -143,6 +145,7 @@ namespace res
 	{
 		inline constexpr std::uint32_t version = 1;
 		// "SNKB", then the version as a little-endian u32.
+		inline constexpr std::array<char, 4> magic{ 'S', 'N', 'K', 'B' };
 		inline constexpr std::size_t header_bytes = 8;
 		// The writer starts every range at a multiple of this.
 		inline constexpr std::size_t range_alignment = 16;
