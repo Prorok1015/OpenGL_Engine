@@ -1,5 +1,6 @@
 #include "edt_editor_system.h"
 #include "edt_agent_log_filter.h"
+#include "edt_level_load_component.h"
 #include "edt_asset_component.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
@@ -144,26 +145,6 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
-	// Where the diagnostics of a load of the level lead, by that load (`copy` is its working copy, `file` its own file).
-	edt::desc_problem_publisher::locator level_locator(const res::res_handle<scn::level_desc>& handle, const res::tag& copy,
-		const res::tag& file)
-	{
-		if (!handle.is_ready()) return {};
-		struct located
-		{
-			// Kept with its worlds: their roots point into it.
-			std::shared_ptr<scn::level_desc> desc;
-			edt::level_worlds worlds;
-		};
-		auto held = std::make_shared<located>();
-		held->desc = handle.get_sync();
-		if (!held->desc) return {};
-		held->worlds = edt::level_worlds_of(*held->desc, file.string(), { copy.string(), file.string() });
-		return [held](const res::diagnostic& item) { return edt::locate_desc(held->worlds, item.resource, item.json_path); };
-	}
-}
-
-namespace {
 
 	// Play locks the document: what would add to the scene is refused where the person sees it, not only in the log.
 	bool refused_during_play(const edt::play_session* play, edt::dialog_service& dialogs, std::string text)
@@ -269,20 +250,6 @@ namespace {
 #else
 		return {};
 #endif
-	}
-
-	// A desc file that says it is something else than a level (`"__type": "material_desc"`, a prefab...). Reading it as a level
-	// asserts in the desc adapter, so it is refused before. A file that is no JSON, or says nothing, fails the load as before.
-	bool names_another_desc_type(const std::vector<std::byte>& bytes)
-	{
-		boost::json::error_code ec;
-		boost::json::parse_options options;
-		options.max_depth = 64;
-		const boost::json::value parsed = boost::json::parse(
-			std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec, {}, options);
-		if (ec || !parsed.is_object()) return false;
-		const boost::json::value* type = parsed.as_object().if_contains("__type");
-		return type != nullptr && type->is_string() && std::string_view(type->as_string()) != scn::level_desc::__type;
 	}
 
 	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
@@ -672,6 +639,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[this] { return m_level_ctrl.quick_save_level(); },
 		[this](const res::tag& target) { return m_level_ctrl.save_level_as(std::string(target.relative())); });
 
+	level_load_component::ports level_ports{ .context = *m_context, .layer = *editor_layer, .level_ctrl = m_level_ctrl, .services = m_services,
+		.resources = m_res, .state = m_state, .desc_problems = m_desc_problems, .tasks = m_tasks,
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(); },
+		.refresh_world_problems = [this] { refresh_world_problems(); },
+		.stop_after_level_loaded = m_stop_after_level_loaded };
+	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
+
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
 	hooks.is_dirty = [this] { return m_state.is_dirty(); };
@@ -680,7 +654,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
-		cancel_level_settle();
+		m_level_load->cancel_settle();
 		m_desc_problems.clear(m_context->problems(), "level");
 		m_level_ctrl.new_level();
 	};
@@ -704,20 +678,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
-		if (begin_level_load(res::tag::make(relative.string()))) {
-			editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
-		}
+		m_level_load->begin_and_watch(res::tag::make(relative.string()));
 	};
 	// The commands an agent calls name a level by its project path: no file system path in between.
 	hooks.load_level_tag = [this](const std::string& relative) -> std::optional<std::string> {
-		if (!begin_level_load(res::tag::make(relative))) return "'" + relative + "' is not a level file";
-		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+		if (!m_level_load->begin_and_watch(res::tag::make(relative))) return "'" + relative + "' is not a level file";
 		return std::nullopt;
 	};
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
 	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
 		if (auto migrating = migration_blocker()) return migrating;
-		if (m_loading_level) return std::string{ "a level is loading" };
+		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
 		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
 		std::optional<std::string> stopped = m_migration_stopped.reason();
 		if (m_level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
@@ -728,7 +699,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
 		if (auto migrating = migration_blocker()) return migrating;
 		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
-		if (m_loading_level) return std::string{ "a level is loading" };
+		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
 		return std::nullopt;
 	};
 #if SNK_HAS_ASSIMP
@@ -753,19 +724,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
-	m_registrations.push_back(m_context->actions().add({ .id = "level.cancel_load", .label = "Cancel Level Load",
-		.menu_path = "File", .separator_before = true,
-		// While nothing loads the registry answers `disabled` with this reason: a cancel that comes after the load ended changes nothing.
-		.disabled_reason = [] { return std::string{ "no level is loading" }; },
-		.execute_call = [this](const cmd::call& call) { return cancel_level_load(call.from); },
-		.result_schema = boost::json::parse(R"json({
-			"type": "object",
-			"properties": { "cancelled": { "type": "boolean" }, "level": { "type": "string" } },
-			"required": ["cancelled", "level"],
-			"additionalProperties": false
-		})json"),
-		.enabled = [this] { return m_loading_level; },
-		.category = cmd::agent_category::scene_edit }));
+	m_level_load->install(m_registrations);
 	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; };
 	const auto asset_undo = [this] {
 		if (!m_asset_component) {
@@ -870,7 +829,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			const res::tag level = current_level_tag();
 			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
 			m_pending_desc_handle = {};
-			if (m_loading_level) abandon_level_load();
+			if (m_level_load->in_progress()) m_level_load->abandon();
 			// A level a stopped migration left detached stays as it was kept (a second detach would keep the empty worlds).
 			if (!m_level_ctrl.is_detached()) m_level_ctrl.detach_from_game_layer();
 			return level;
@@ -886,16 +845,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (std::optional<std::string> stopped = m_migration_stopped.reason()) return stopped;
 			m_level_ctrl.attach_to_game_layer();
 			if (!level.is_valid()) return std::nullopt;
-			if (!begin_level_load(level)) return "'" + std::string(level.view()) + "' did not start loading again";
-			editor_layer->register_implicit("edt/load_level", [this, loaded = std::move(loaded)] {
-				bool done = false;
-				const bool loading = poll_level_load(&done);
-				if (!loading && loaded) loaded(done);
-				return loading;
-			});
+			if (!m_level_load->begin_and_watch(level, std::move(loaded))) return "'" + std::string(level.view()) + "' did not start loading again";
 			return std::nullopt;
 		};
-		migration.level_load_in_progress = [this] { return m_loading_level; };
+		migration.level_load_in_progress = [this] { return m_level_load->in_progress(); };
 		migration.approved_internally = [this](std::string_view ticket) {
 			return m_agent_access != nullptr && m_agent_access->confirmations().approved_internally(ticket);
 		};
@@ -1170,10 +1123,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// #518: a neutral loading screen until the load ends; every end of it (loaded, failed, Esc in its modal) passes
 		// through the poll below to finish_startup.
 		if (start_in_game && m_modes) m_modes->begin_startup(std::string(level.view()));
-		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { static_cast<void>(begin_level_load(level)); },
+		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { static_cast<void>(m_level_load->begin(level)); },
 			[this, start_in_game] {
 				bool loaded = false;
-				if (poll_level_load(&loaded)) {
+				if (m_level_load->poll(&loaded)) {
 					return true;
 				}
 				// Begun in a frame, the load ends a frame later, and closing its modal focuses the top panel. The
@@ -1190,7 +1143,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path root = data.require<prj::project_context>().root;
 		migration_startup::ports startup_ports;
 		startup_ports.settled = [this] {
-			return !(m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+			return !(m_level_load->in_progress() || m_level_load->settling() || (m_modes && m_modes->startup_pending())
 				|| editor_layer->has_implicit_prefix("edt/load_level"));
 		};
 		startup_ports.unfinished = [root] { return prj::migration::unfinished_migrations(root); };
@@ -1227,7 +1180,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	if (cfg_open_migration && !headless && !project_held && data.has_value<prj::project_context>()) {
 		editor_layer->register_implicit("edt/open_migration", [this] {
-			const bool settling = m_loading_level || m_level_settle.has_value() || (m_modes && m_modes->startup_pending())
+			const bool settling = m_level_load->in_progress() || m_level_load->settling() || (m_modes && m_modes->startup_pending())
 				|| editor_layer->has_implicit_prefix("edt/load_level");
 			if (settling) return true;
 			open_migration_window();
@@ -1778,9 +1731,9 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		m_prefab->close_for_layer_change();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
-		if (m_loading_level) {
-			m_level_after_layer_change = m_loading_level_tag;
-			abandon_level_load();
+		if (m_level_load->in_progress()) {
+			m_level_after_layer_change = m_level_load->loading_tag();
+			m_level_load->abandon();
 		}
 		m_level_ctrl.detach_from_game_layer();
 		return;
@@ -1790,7 +1743,7 @@ void edt::editor_system::follow_game_layer_change(bool before)
 	}
 	m_level_ctrl.attach_to_game_layer();
 	if (m_level_after_layer_change.is_valid()) {
-		begin_level_load(std::exchange(m_level_after_layer_change, res::tag{}));
+		m_level_load->begin(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
 
@@ -2002,169 +1955,17 @@ void edt::editor_system::run_implicit_callbacks()
 
 bool edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
-	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
-	auto& game_resources = *m_services.resources();
-	std::optional<std::vector<std::byte>> level_bytes;
-	if (const auto raw = game_resources.fetch_data(original_tag)) {
-		raw->wait();
-		if (raw->is_ready()) level_bytes = raw->data;
-	}
-	if (level_bytes && names_another_desc_type(*level_bytes)) {
-		egLOG_ERROR("Editor/Load", "'{}' is not a level file (its __type is not '{}')", original_tag.view(), scn::level_desc::__type);
-		return false;
-	}
-
-	// Another level replaces the one Play was built from.
-	if (m_play && m_play->active()) m_play->stop();
-	m_level_ctrl.unwatch_level();
-
-	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
-	// A load that was never finished (begin_level_load called again): its copy goes.
-	if (m_loading_level) abandon_level_load();
-	cancel_level_settle();
-	m_loading_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_load_serial) + "/" + stem + ".desc" };
-	m_loading_level_tag = original_tag;
-	m_loading_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
-
-	if (level_bytes) m_services.writable_resources()->store(m_loading_editor_tag, *level_bytes);
-
-	m_loading_level_handle = game_resources.require<scn::level_desc>(m_loading_editor_tag);
-	m_loading_level = true;
-	m_slow_load.start(slow_load_notice::clock::now());
-	return true;
+	return m_level_load->begin(original_tag);
 }
 
-void edt::editor_system::release_level_load()
+bool edt::editor_system::level_load_in_progress() const
 {
-	m_loading_editor_tag = res::tag{};
-	m_loading_level_tag = res::tag{};
-	m_loading_level = false;
-	m_loading_level_handle = {};
-}
-
-void edt::editor_system::erase_loading_copy(const res::tag& copy)
-{
-	constexpr std::string_view prefix = "memory://editor/loading/";
-	if (!copy.is_valid() || !copy.view().starts_with(prefix)) return;
-	m_services.writable_resources()->erase(copy);
-}
-
-void edt::editor_system::abandon_level_load()
-{
-	const res::tag copy = m_loading_editor_tag;
-	release_level_load();
-	erase_loading_copy(copy);
-}
-
-cmd::result edt::editor_system::cancel_level_load(const cmd::origin& from)
-{
-	// A load that finished or failed is no longer one: nothing to undo, and the level stays as that load left it.
-	if (!m_loading_level) return cmd::result::failure(cmd::codes::failed, "no level is loading");
-	const res::tag level = m_loading_level_tag;
-	abandon_level_load();
-	m_level_ctrl.resume_watch();
-	const char* who = from.kind == cmd::origin_kind::agent ? "an agent" : from.kind == cmd::origin_kind::ui ? "a person"
-		: from.kind == cmd::origin_kind::test ? "a test" : "the game";
-	egLOG_INFO("editor", "the load of level '{}' was cancelled by {}{}", level.view(), who,
-		from.session.empty() ? std::string{} : " (session " + from.session + ")");
-	boost::json::object out;
-	out["cancelled"] = true;
-	out["level"] = boost::json::string_view(level.view().data(), level.view().size());
-	return cmd::result::success(std::move(out));
-}
-
-bool edt::editor_system::poll_level_load(bool* loaded_out)
-{
-	// The load was refused (not a level) or is gone: nothing to wait for.
-	if (!m_loading_level) {
-		if (loaded_out) *loaded_out = false;
-		return false;
-	}
-	if (m_loading_level_handle.has_error()) {
-		scn::report_level_failed(m_loading_level_tag, m_loading_level_handle);
-		m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
-			m_loading_level_tag);
-		if (loaded_out) *loaded_out = false;
-		abandon_level_load();
-		m_level_ctrl.resume_watch();
-		return false;
-	}
-
-	if (!m_loading_level_handle.is_ready()) {
-		if (const auto waited = m_slow_load.due(slow_load_notice::clock::now())) {
-			egLOG_WARN("editor", "level '{}' is still loading after {} s; level.cancel_load (File > Cancel Level Load) cancels it",
-				m_loading_level_tag.view(), waited->count());
-		}
-		ImGui::OpenPopup("Loading Level##edt_load");
-		if (ImGui::BeginPopupModal("Loading Level##edt_load", nullptr,
-			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-		{
-			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-				if (loaded_out) *loaded_out = false;
-				static_cast<void>(cancel_level_load(cmd::origin::ui()));
-				ImGui::CloseCurrentPopup();
-				ImGui::EndPopup();
-				return false;
-			}
-			ImGui::Text("Loading level...");
-			ImGui::EndPopup();
-		}
-		return true;
-	}
-
-	ImGui::OpenPopup("Loading Level##edt_load");
-	if (ImGui::BeginPopupModal("Loading Level##edt_load", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::CloseCurrentPopup();
-		ImGui::EndPopup();
-	}
-
-	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
-	if (m_play && m_play->active()) m_play->stop();
-	const res::tag editor_tag_before = m_state.editor_tag;
-	const bool loaded = m_level_ctrl.take_loaded_level(m_loading_level_handle, m_loading_level_tag, m_loading_editor_tag, m_loading_file_version);
-	if (loaded_out) *loaded_out = loaded;
-	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
-	m_desc_problems.report(m_context->problems(), "level", diagnostics_of(m_loading_level_handle), m_loading_editor_tag,
-		m_loading_level_tag, level_locator(m_loading_level_handle, m_loading_editor_tag, m_loading_level_tag));
-	if (loaded) {
-		// The previous level's working copy has no user left: the level set was rebuilt from the new one.
-		release_level_load();
-		if (editor_tag_before != m_state.editor_tag) erase_loading_copy(editor_tag_before);
-	} else {
-		abandon_level_load();
-	}
-	if (loaded) {
-		refresh_world_problems();
-		start_level_settle(m_state.level_tag);
-	}
-	return false;
-}
-
-void edt::editor_system::start_level_settle(const res::tag& level)
-{
-	m_settle_contexts = m_services.ctx_manager.lock();
-	ASSERT_MSG(m_settle_contexts && m_tasks, "a level loaded before editor_system::init");
-	m_level_settle.emplace(*m_settle_contexts, m_res, *m_tasks);
-	m_level_settle->start(level);
-}
-
-void edt::editor_system::cancel_level_settle()
-{
-	m_level_settle.reset();
-	m_settle_contexts.reset();
+	return m_level_load && m_level_load->in_progress();
 }
 
 void edt::editor_system::tick_level_settle()
 {
-	if (!m_level_settle || !m_level_settle->poll()) return;
-	cancel_level_settle();
-	if (m_stop_after_level_loaded) {
-		egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");
-		m_stop_after_level_loaded();
-	}
+	if (m_level_load) m_level_load->tick_settle();
 }
 
 void edt::editor_system::refresh_world_problems()
@@ -2263,7 +2064,7 @@ std::optional<std::string> edt::editor_system::project_write_blocker()
 
 std::optional<std::string> edt::editor_system::load_in_progress() const
 {
-	if (m_loading_level) return std::string{ "a level is loading" };
+	if (m_level_load && m_level_load->in_progress()) return std::string{ "a level is loading" };
 	if (m_pending_desc_handle.is_valid()) return std::string{ "an asset is being added to the scene" };
 	return std::nullopt;
 }
