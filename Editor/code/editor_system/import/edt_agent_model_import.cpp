@@ -160,6 +160,17 @@ namespace {
 		edt::agent_import_plan plan;
 	};
 
+	// What the decoder said of its OS sandbox goes back to the agent as it is, never hidden (#1076): the agent that started
+	// the editor itself could have turned it off.
+	void add_decoder_sandbox(json::object& result, const edt::decoder_sandbox_status& sandbox)
+	{
+		if (!sandbox.reported) return;
+		json::object reported{ { "fs", sandbox.fs ? "landlock" : "none" }, { "syscalls", sandbox.syscalls ? "seccomp" : "none" } };
+		if (!sandbox.why.empty()) reported["why"] = sandbox.why;
+		if (const std::string warning = edt::decoder_sandbox_warning(sandbox); !warning.empty()) reported["warning"] = warning;
+		result["decoder_sandbox"] = std::move(reported);
+	}
+
 	// The model refers to other files: nothing is imported. The list waits for the second call, whose question shows it.
 	json::value park_files(const import_job_inputs& in, const edt::model_file_scan& found, const edt::content_digest& digest)
 	{
@@ -172,6 +183,7 @@ namespace {
 		plan.files = found.files;
 		plan.files_bytes = found.total_bytes;
 		plan.scanned = true;
+		plan.sandbox = found.sandbox;
 		std::string token;
 		{
 			const std::lock_guard lock(in.scans->mutex);
@@ -186,11 +198,13 @@ namespace {
 			token = std::format("files-{}", ++in.scans->counter);
 			in.scans->items.push_back({ token, in.scan_key, in.session, std::move(plan), at });
 		}
-		return json::object{
+		json::object parked{
 			{ "needs_files_approval", true },
 			{ "files_token", token },
 			{ "file_count", static_cast<std::int64_t>(found.files.size()) },
 			{ "next", "Nothing was imported or written. Call file.import_model again with the same arguments and files_token: a person is then shown the list of files and decides." } };
+		add_decoder_sandbox(parked, found.sandbox);
+		return parked;
 	}
 
 	json::value run_import(const import_job_inputs& in, ds::task_context& ctx)
@@ -280,9 +294,11 @@ namespace {
 		json::array listed;
 		for (const std::string& asset : assets) listed.emplace_back(json::string(asset));
 		const auto prefab = remap.find(result.root_tag);
-		return json::object{
+		json::object done{
 			{ "prefab", prefab == remap.end() ? std::string{} : std::string(prefab->second.view()) },
 			{ "assets", std::move(listed) } };
+		add_decoder_sandbox(done, imported.sandbox);
+		return done;
 	}
 }
 
@@ -431,6 +447,7 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 	if (!plan.ok()) return "This request will be refused: " + shown_message(plan.error);
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
 		shown_path(plan.source), size_text(plan.size), shown(plan.folder), shown(plan.name), shown(plan.prefab));
+	edt::decoder_sandbox_status sandbox = m_options.sandbox_status ? m_options.sandbox_status() : decoder_sandbox_status{};
 	if (request.files_token.empty()) {
 		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
@@ -446,9 +463,12 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		plan.files = found->plan.files;
 		plan.files_bytes = found->plan.files_bytes;
 		plan.scanned = true;
+		plan.sandbox = found->plan.sandbox;
+		if (plan.sandbox.reported) sandbox = plan.sandbox;
 		text += std::format("The model makes the editor read these {} files from its folder, {} in all, and copy them into the project:", plan.files.size(), size_text(plan.files_bytes));
 		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown_path(file.path), size_text(file.size));
 	}
+	if (const std::string warning = decoder_sandbox_warning(sandbox); !warning.empty()) text += "\n" + warning;
 	remember(call_key(request, caller), caller.session, std::move(plan));
 	return text;
 }

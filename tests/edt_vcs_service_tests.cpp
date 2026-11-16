@@ -2899,6 +2899,37 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfAProjectInASubfolder_IsDeniedOnlyForItsP
 	BOOST_TEST(head_of(repo) != main_head);
 }
 
+// #1076: an agent's checkout must not change the editor's configuration (import/decoder_sandbox is a person's setting),
+// wherever in the repository it lies; a person's checkout may.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheEditorsConfiguration_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("editor_config_checkout");
+	const fs::path project = repo / "game";
+	const fs::path config = repo / "Editor" / "config" / "editor.cfg";
+	write(project / "res" / "a.txt", "a\n");
+	write(config, "import:\n  decoder_sandbox: on\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project and the editor's configuration" });
+	const std::string main_head = head_of(repo);
+	git(repo, { "checkout", "-q", "-b", "sandbox_off" });
+	write(config, "import:\n  decoder_sandbox: off\n");
+	git(repo, { "commit", "-q", "-am", "turn the decoder's sandbox off" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(project));
+	service->set_config_files({ config });
+
+	const json::value refused = finish(service->start_checkout("sandbox_off", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("editor's configuration file")
+		!= std::string::npos);
+	BOOST_TEST(head_of(repo) == main_head);
+
+	const json::value by_person = finish(service->start_checkout("sandbox_off", cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
+	BOOST_TEST(head_of(repo) != main_head);
+}
+
 // #909: an agent's checkout must not bring in what decides the code that is built and loaded: the project's .snk/,
 // its manifest, build/ (in any letter case where the file system ignores it) and, while live mode is on, code/ (with
 // it off, code/ needs the call's consent: #931). A change elsewhere, or outside the project, goes through; so does a

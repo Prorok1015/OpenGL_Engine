@@ -88,6 +88,8 @@ namespace edt::vcs_detail
 		std::vector<std::string> allowed_remotes;
 		// Guarded: the project's agent policy file (absolute; empty: none), which a checkout or pull must not change.
 		fs::path policy_file;
+		// Guarded: the editor's configuration files (absolute), which a checkout or pull must not change either (#1076).
+		std::vector<fs::path> config_files;
 		// git 2.30+: rev-parse takes --end-of-options.
 		bool rev_parse_end_of_options = false;
 		// fetch, pull, push: each progress update git prints (--progress), on the job's thread.
@@ -1161,14 +1163,14 @@ namespace {
 		return ref;
 	}
 
-	// The policy file as a path of the repository ('/'-separated): empty when it is not in this repository; nullopt when
+	// A guarded file as a path of the repository ('/'-separated): empty when it is not in this repository; nullopt when
 	// git could not tell. Git computes it (rev-parse in the nearest folder of the file that exists), so a symlink or the
 	// case of a folder name never makes the file look outside.
-	std::optional<std::string> policy_path_in_repository(const git_context& git, std::stop_token stop)
+	std::optional<std::string> path_in_repository(const git_context& git, const fs::path& file, std::stop_token stop)
 	{
-		if (git.policy_file.empty()) return std::string{};
-		fs::path dir = git.policy_file.parent_path();
-		fs::path rest = git.policy_file.filename();
+		if (file.empty()) return std::string{};
+		fs::path dir = file.parent_path();
+		fs::path rest = file.filename();
 		std::error_code ec;
 		while (!dir.empty() && !fs::is_directory(dir, ec)) {
 			if (dir == dir.parent_path()) return std::string{};
@@ -1196,15 +1198,22 @@ namespace {
 		return prefix + std::string(tail.begin(), tail.end());
 	}
 
-	// A guarded checkout or pull to `target` (a commit OID) that would change the project's agent policy file: an agent
-	// must not change the policy it is judged by (agent_access reloads the file when it changes). Nullopt: allowed.
-	std::optional<json::value> policy_refusal(const git_context& git, const std::string& target, const ds::task_context& task)
+	// A file an agent's checkout or pull must not change: what it is called in a refusal, and why.
+	struct guarded_file
 	{
-		if (!git.guarded) return std::nullopt;
+		fs::path path;
+		std::string_view what;
+		std::string_view why;
+	};
+
+	// A guarded checkout or pull to `target` (a commit OID) that would change `file`. Nullopt: allowed.
+	std::optional<json::value> guarded_file_refusal(const git_context& git, const guarded_file& file, const std::string& target,
+		const ds::task_context& task)
+	{
 		const auto deny = [](std::string message) { return error_json("denied", message, {}, -1); };
-		const std::optional<std::string> path = policy_path_in_repository(git, task.stop);
+		const std::optional<std::string> path = path_in_repository(git, file.path, task.stop);
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
-		if (!path) return deny("git could not tell where the agent policy file is in the repository");
+		if (!path) return deny(std::format("git could not tell where {} is in the repository", file.what));
 		if (path->empty()) return std::nullopt;
 		const std::string shown = edt::vcs::valid_utf8(*path);
 		const git_output head = run_git(git, { "rev-parse", "--verify", "--quiet", "HEAD^{commit}" }, task.stop, k_read_cap);
@@ -1215,8 +1224,7 @@ namespace {
 			const git_output has = run_git(git, { "cat-file", "-e", target + ":" + *path }, task.stop, k_read_cap);
 			if (task.stop.stop_requested()) throw ds::task_cancelled{};
 			if (!has.process.error.empty() || has.process.exit_code == 0) {
-				return deny(std::format("the target holds the agent policy file '{}': agents cannot change the policy that "
-					"judges them", shown));
+				return deny(std::format("the target holds {} '{}': {}", file.what, shown, file.why));
 			}
 			return std::nullopt;
 		}
@@ -1227,10 +1235,28 @@ namespace {
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
 		if (succeeded(diff)) return std::nullopt;
 		if (diff.process.error.empty() && diff.process.exit_code == 1) {
-			return deny(std::format("the target changes the agent policy file '{}': agents cannot change the policy that "
-				"judges them", shown));
+			return deny(std::format("the target changes {} '{}': {}", file.what, shown, file.why));
 		}
-		return deny(std::format("git could not compare the agent policy file '{}' with the target", shown));
+		return deny(std::format("git could not compare {} '{}' with the target", file.what, shown));
+	}
+
+	// A guarded checkout or pull to `target` (a commit OID) that would change the project's agent policy file (an agent
+	// must not change the policy it is judged by; agent_access reloads the file when it changes) or the editor's
+	// configuration (settings only a person sets, import/decoder_sandbox among them: #1076). Nullopt: allowed.
+	std::optional<json::value> policy_refusal(const git_context& git, const std::string& target, const ds::task_context& task)
+	{
+		if (!git.guarded) return std::nullopt;
+		std::vector<guarded_file> files;
+		files.reserve(1 + git.config_files.size());
+		files.push_back({ git.policy_file, "the agent policy file", "agents cannot change the policy that judges them" });
+		for (const fs::path& config : git.config_files) {
+			files.push_back({ config, "the editor's configuration file",
+				"agents cannot change the settings only a person sets (import/decoder_sandbox among them); a person can (the Git panel)" });
+		}
+		for (const guarded_file& file : files) {
+			if (auto refusal = guarded_file_refusal(git, file, target, task)) return refusal;
+		}
+		return std::nullopt;
 	}
 
 	// Two names of one file system entry: in any letter case where the file system ignores it (Windows, macOS).
@@ -2189,6 +2215,7 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		context.guard_network = write->network;
 		context.allow_repo_credential_helper = permissions.allow_repo_credential_helper;
 		context.allowed_remotes = policy.remotes;
+		context.config_files = m_config_files;
 		if (!m_policy_file.empty()) context.policy_file = m_policy_file;
 		else if (m_probed_project) context.policy_file = *m_probed_project / ".snk" / "agent_policy.json";
 	}

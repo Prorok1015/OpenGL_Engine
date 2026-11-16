@@ -64,19 +64,6 @@ edt::decoded_model_adapter::decoder_steps edt::decoded_model_adapter::steps_of(s
 	return edt::steps_of(std::move(decoder));
 }
 
-std::optional<edt::model_location> edt::decoded_model_adapter::locate(const std::vector<fs::path>& roots, const res::tag& tag)
-{
-	for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
-		const std::optional<fs::path> file = res::path_within_dir(*root, tag.relative());
-		std::error_code ec;
-		if (!file || !fs::is_regular_file(*file, ec)) continue;
-		fs::path canonical_root = fs::weakly_canonical(*root, ec);
-		if (ec) canonical_root = root->lexically_normal();
-		return model_location{ *file, std::move(canonical_root) };
-	}
-	return std::nullopt;
-}
-
 std::string edt::decoded_model_adapter::memory_folder_of(const res::tag& tag)
 {
 	const std::string below = res::sanitize_relative_path(std::string(tag.path()) + std::string(tag.name()));
@@ -98,11 +85,23 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	import_source source;
 	source.preloaded = &raw_data;
 	source.memory_folder = memory_folder_of(tag);
-	if (const std::optional<model_location> location = locate(m_resources.mount_roots(tag.protocol()), tag)) {
-		source.path = location->file;
-		source.boundary = location->root;
+	// What decides is the file the bytes were read from, never a file of the same name: memory:// holds what was made
+	// at runtime (the editor keeps it in the project's cache), so its models go by their bytes too.
+	std::optional<res::disk_file> file;
+	if (tag.protocol() != res::tag::memory) {
+		std::string differs;
+		file = m_resources.disk_file_holding(tag, raw_data, differs);
+		if (!differs.empty()) {
+			egLOG_WARN("edt/decoder", "model '{}' goes to the decoder as its bytes alone, it may name no other file: {}",
+				tag.view(), differs);
+		}
+	}
+	if (file) {
+		std::error_code ec;
+		source.boundary = fs::weakly_canonical(file->root, ec);
+		if (ec) source.boundary = file->root.lexically_normal();
+		source.path = std::move(file->file);
 	} else {
-		// Served from memory or a pack: the decoder gets only the bytes, and the model may name no other file.
 		source.path = fs_paths::path_from_utf8(source.memory_folder) / fs_paths::path_from_utf8(tag.name());
 		source.on_disk = false;
 	}
@@ -130,13 +129,13 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 		}
 	}
 	if (!imported) {
-		forget(source.memory_folder);
+		const std::vector<res::tag> made_before = forget(source.memory_folder);
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
 		const model_file_scan found = step([&] { return m_decoder.scan(source, nullptr); });
 		if (!found.ok()) throw refuse(found.error);
 		source.allowed = &found.files;
 
-		if (const std::optional<res::tag> left = erase_memory_folder(m_resources, source.memory_folder)) {
+		if (const std::optional<res::tag> left = erase_memory_folder(m_resources, source.memory_folder, &made_before)) {
 			throw refuse(std::format("'{}', left in memory:// by an earlier load of the model, cannot be removed", left->view()));
 		}
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
@@ -171,25 +170,21 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 	}
 
 	// What is in memory:// now is read back as a decoder's answer, and checked as one: anyone may change those files.
-	const std::vector<fs::path> roots = m_resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return std::nullopt;
 	const decode_request request = import_request(source);
 	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * 2;
 	decode_bundle answer;
 	answer.manifest["kind"] = "import";
 	answer.manifest["import"] = to_json(decode.imported);
 	for (const res::tag& resource : decode.imported.created_tags) {
-		const std::optional<fs::path> file = res::path_within_dir(roots.back(), resource.relative());
-		std::error_code ec;
-		const std::uintmax_t size = file ? fs::file_size(*file, ec) : 0;
-		// Gone (erased, or the folder was swept): decoded again like a model seen for the first time.
-		if (!file || ec) return std::nullopt;
-		if (size > blob_limit) {
+		// As the resource system serves it now, whichever resolver serves memory:// (#1086).
+		std::optional<std::vector<std::byte>> bytes{ std::in_place };
+		const platform::beneath::read_result read = m_resources.read_now(resource, blob_limit, *bytes);
+		if (read.status == platform::beneath::read_status::too_large) {
 			problem = std::format("'{}' is bigger than a resource of the import may be", resource.view());
 			return std::nullopt;
 		}
-		std::optional<std::vector<std::byte>> bytes = read_exactly(*file, size);
-		if (!bytes) return std::nullopt;
+		// Gone (erased, or the folder was swept): decoded again like a model seen for the first time.
+		if (read.status != platform::beneath::read_status::ok) return std::nullopt;
 		// A resource that still passes the checks of an answer but is not what the decoder made is not taken either.
 		const auto stored = std::find_if(decode.imported.created_digests.begin(), decode.imported.created_digests.end(),
 			[&resource](const auto& entry) { return entry.first == resource; });
@@ -208,10 +203,14 @@ void edt::decoded_model_adapter::remember(const std::string& folder, cached_deco
 	m_cache.insert_or_assign(folder, std::move(decode));
 }
 
-void edt::decoded_model_adapter::forget(const std::string& folder) const
+std::vector<res::tag> edt::decoded_model_adapter::forget(const std::string& folder) const
 {
 	const std::lock_guard guard(m_cache_mutex);
-	m_cache.erase(folder);
+	const auto found = m_cache.find(folder);
+	if (found == m_cache.end()) return {};
+	std::vector<res::tag> made = std::move(found->second.imported.created_tags);
+	m_cache.erase(found);
+	return made;
 }
 
 std::shared_ptr<std::mutex> edt::decoded_model_adapter::folder_lock(const std::string& folder) const

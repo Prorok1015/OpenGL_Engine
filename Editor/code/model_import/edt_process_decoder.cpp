@@ -81,21 +81,10 @@ const boost::json::string* string_of(const boost::json::object& object, const ch
 // written before it read the request (decoder_sandbox_status), never from its answer.
 void warn_once_without_sandbox(const edt::decoder_sandbox_status& sandbox)
 {
-	if (sandbox.reported && sandbox.fs && sandbox.syscalls) return;
+	const std::string warning = edt::decoder_sandbox_warning(sandbox);
+	if (warning.empty()) return;
 	static std::once_flag once;
-	std::call_once(once, [&] {
-		if (!sandbox.reported) {
-			egLOG_WARN("edt/decoder", "the model decoder did not say whether it runs in its OS sandbox");
-			return;
-		}
-		const std::string why = sandbox.why.empty() ? std::string() : " (" + sandbox.why + ")";
-		if (!sandbox.fs) {
-			// seccomp alone leaves open and write allowed: without Landlock the files are not protected at all.
-			egLOG_WARN("edt/decoder", "the model decoder runs without its OS sandbox: it can read and write every file this user can{}", why);
-		} else {
-			egLOG_WARN("edt/decoder", "the model decoder runs without its system call filter{}", why);
-		}
-	});
+	std::call_once(once, [&] { egLOG_WARN("edt/decoder", "{}", warning); });
 }
 
 } // namespace
@@ -591,17 +580,15 @@ edt::decoder_steps edt::steps_of(std::shared_ptr<const process_decoder> decoder)
 	return steps;
 }
 
-std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources, const std::string& folder)
+std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources, const std::string& folder,
+	const std::vector<res::tag>* known)
 {
-	const std::vector<fs::path> roots = resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return std::nullopt;
-	const fs::path dir = roots.back() / fs_paths::path_from_utf8(folder);
-	std::error_code ec;
-	if (!fs::is_directory(dir, ec)) return std::nullopt;
-	std::vector<res::tag> found;
-	for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
-		if (it->is_regular_file(ec)) found.emplace_back(res::tag::memory, folder + fs_paths::generic_utf8_of(it->path().lexically_relative(dir)));
+	std::optional<std::vector<res::tag>> listed = resources.files_under(res::tag::memory, folder);
+	if (!listed) {
+		egLOG_WARN("edt/decoder", "memory:// cannot list '{}': only what this run made there is erased", folder);
+		listed.emplace(known ? *known : std::vector<res::tag>{});
 	}
+	const std::vector<res::tag>& found = *listed;
 	for (const res::tag& tag : found) resources.erase(tag);
 	for (const res::tag& tag : found) {
 		if (resources.exists(tag)) return tag;
@@ -609,9 +596,10 @@ std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources
 	return std::nullopt;
 }
 
-edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config)
+edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox)
 	: m_resources(resources)
 	, m_config(std::move(config))
+	, m_on_sandbox(std::move(on_sandbox))
 {
 	if (m_config.decoder.empty()) {
 		const fs::path self = platform::current_executable();
@@ -691,6 +679,16 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 	const sandbox_mode mode = config.sandbox;
 	const decode_runner runner(std::move(config));
 	decode_outcome outcome = runner.run(request, *source.preloaded, files, task != nullptr ? task->stop : std::stop_token{});
+	// Before any check of the answer (#1076): a child that crashed, timed out or answered garbage may have parsed the model
+	// without its sandbox all the same. One that ran without saying how it is sandboxed counts as having none; one that
+	// refused to run, or was cancelled before it said anything, parsed nothing.
+	if (outcome.started && !outcome.cancelled && !outcome.sandbox_refused && !outcome.sandbox.reported) {
+		outcome.sandbox = unreported_decoder_sandbox();
+	}
+	if (outcome.sandbox.reported) {
+		warn_once_without_sandbox(outcome.sandbox);
+		if (m_on_sandbox) m_on_sandbox(outcome.sandbox);
+	}
 	if (outcome.cancelled) throw ds::task_cancelled{};
 	if (outcome.timed_out) throw std::runtime_error("the model took too long to decode");
 	if (outcome.sandbox_refused) {
@@ -705,7 +703,6 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 		throw std::runtime_error(outcome.error.starts_with("the decoder failed") || outcome.error.starts_with("the decoder could not run")
 			? "the decoder failed (more in the editor log)" : "the decoder's answer cannot be used (more in the editor log)");
 	}
-	warn_once_without_sandbox(outcome.sandbox);
 	return outcome;
 }
 
@@ -719,10 +716,12 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
 
-	return broker_scan(source, [&](const std::vector<provided_file>& provided) {
+	decoder_sandbox_status sandbox;
+	model_file_scan scanned = broker_scan(source, [&](const std::vector<provided_file>& provided) {
 		std::vector<bundle_blob> blobs;
 		request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
 		const decode_outcome outcome = run(request, blobs, source, task);
+		sandbox = outcome.sandbox;
 		std::string problem;
 		std::optional<scan_requests> answer = accept_scan_answer(*outcome.bundle, problem);
 		if (!answer) {
@@ -731,6 +730,8 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 		}
 		return std::move(*answer);
 	}, task);
+	scanned.sandbox = std::move(sandbox);
+	return scanned;
 }
 
 edt::import_intermediate edt::process_decoder::import(const import_source& source, ds::task_context* task) const
@@ -777,6 +778,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 		egLOG_WARN("edt/decoder", "the answer to an import was refused: {}", problem);
 		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
 	}
+	imported->sandbox = outcome.sandbox;
 	if (!imported->error.empty()) return std::move(*imported);
 
 	// An agent's import never reuses or overwrites a resource it did not store itself. The check and the store are two calls:

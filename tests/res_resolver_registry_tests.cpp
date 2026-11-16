@@ -305,4 +305,133 @@ BOOST_AUTO_TEST_CASE(AMountOfAProtocolThatIsServed_IsRefused_AndChangesNothing)
 	rs->unregistrate_resolver(k_mounted);
 }
 
+// #996: the file a tag is read from, while it holds the bytes a load got; none from a resolver that reads no files.
+BOOST_AUTO_TEST_CASE(TheDiskFileOfATag_IsTheOneItsResolverReads_WhileItHoldsTheBytes)
+{
+	const auto low = folder_with("disk_low", "a.txt");
+	const auto high = folder_with("disk_high", "a.txt");
+	std::ofstream(high / "a.txt") << "high";
+	res::mount both = mount_of(low);
+	both.roots.push_back(high);
+	BOOST_REQUIRE(rs->add_mount(std::move(both)));
+	const res::tag tag{ "mount1034://a.txt" };
+
+	std::string differs;
+	const auto found = rs->disk_file_holding(tag, test_util::to_bytes("high"), differs);
+	BOOST_REQUIRE(found.has_value());
+	BOOST_TEST(std::filesystem::equivalent(found->root, high));
+	BOOST_TEST(std::filesystem::equivalent(found->file, high / "a.txt"));
+	BOOST_TEST(differs.empty());
+
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("text"), differs).has_value());
+	BOOST_TEST(!differs.empty());
+	differs.clear();
+	BOOST_TEST(!rs->disk_file_holding(res::tag{ "mount1034://none.txt" }, test_util::to_bytes("text"), differs));
+	BOOST_TEST(differs.empty());
+
+	rs->unregistrate_resolver(k_mounted);
+	rs->registrate_resolver<test_util::ram_resolver>(k_mounted);
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("high"), differs).has_value());
+	BOOST_TEST(differs.empty());
+	rs->unregistrate_resolver(k_mounted);
+}
+
+// #1086: what the resolver of a tag opens for it now, reads past the cache, and lists below a folder.
+BOOST_AUTO_TEST_CASE(TheFileOfATag_ItsBytesAndAFoldersFiles_AreTheResolvers)
+{
+	const auto low = folder_with("asked_low", "a.txt");
+	const auto high = folder_with("asked_high", "a.txt");
+	std::ofstream(high / "a.txt") << "high";
+	std::filesystem::create_directories(low / "dir" / "sub");
+	std::ofstream(low / "dir" / "sub" / "b.txt") << "b";
+	std::filesystem::create_directories(high / "dir");
+	std::ofstream(high / "dir" / "c.txt") << "c";
+	res::mount both = mount_of(low);
+	both.roots.push_back(high);
+	BOOST_REQUIRE(rs->add_mount(std::move(both)));
+	using platform::beneath::read_status;
+	const res::tag a_txt{ "mount1034://a.txt" };
+	const res::tag none_txt{ "mount1034://none.txt" };
+
+	const auto opened = rs->disk_file_of(a_txt);
+	BOOST_REQUIRE(opened.has_value());
+	BOOST_TEST(std::filesystem::equivalent(opened->root, high));
+	// A missing file is opened in the top layer, where a store would put it.
+	const auto missing = rs->disk_file_of(none_txt);
+	BOOST_REQUIRE(missing.has_value());
+	BOOST_TEST(std::filesystem::equivalent(missing->root, high));
+
+	test_util::in_task(tasks, [&] {
+		std::vector<std::byte> bytes;
+		BOOST_TEST((rs->read_now(a_txt, 16, bytes).status == read_status::ok));
+		BOOST_TEST((bytes == test_util::to_bytes("high")));
+		BOOST_TEST((rs->read_now(a_txt, 3, bytes).status == read_status::too_large));
+		BOOST_TEST((rs->read_now(none_txt, 16, bytes).status != read_status::ok));
+	});
+
+	const auto listed = rs->files_under(k_mounted, "dir/");
+	BOOST_REQUIRE(listed.has_value());
+	const std::vector<res::tag> expected{ res::tag{ "mount1034://dir/c.txt" }, res::tag{ "mount1034://dir/sub/b.txt" } };
+	BOOST_TEST((*listed == expected));
+	BOOST_TEST(rs->files_under(k_mounted, "nothing/").value().empty());
+
+	rs->unregistrate_resolver(k_mounted);
+	rs->registrate_resolver<test_util::ram_resolver>(k_mounted).files[a_txt] = test_util::to_bytes("ram");
+	BOOST_TEST(!rs->disk_file_of(a_txt).has_value());
+	BOOST_TEST(!rs->files_under(k_mounted, "dir/").has_value());
+	test_util::in_task(tasks, [&] {
+		std::vector<std::byte> bytes;
+		BOOST_TEST((rs->read_now(a_txt, 16, bytes).status == read_status::ok));
+		BOOST_TEST((bytes == test_util::to_bytes("ram")));
+	});
+	rs->unregistrate_resolver(k_mounted);
+}
+
+// #1086: a link in a listed folder is not followed, as the resolver would not read through it either.
+BOOST_AUTO_TEST_CASE(AFoldersFiles_LeaveOutLinks)
+{
+	const auto folder = folder_with("linked", "a.txt");
+	const auto outside = folder_with("outside", "secret.txt");
+	std::filesystem::create_directories(folder / "dir");
+	std::ofstream(folder / "dir" / "kept.txt") << "k";
+	std::error_code ec;
+	std::filesystem::create_symlink(outside / "secret.txt", folder / "dir" / "file_link.txt", ec);
+	const bool file_linked = !ec;
+	std::filesystem::create_directory_symlink(outside, folder / "dir" / "dir_link", ec);
+	const bool dir_linked = !ec;
+	if (!file_linked && !dir_linked) BOOST_TEST_MESSAGE("links cannot be made here: only the plain file is checked");
+	BOOST_REQUIRE(rs->add_mount(mount_of(folder)));
+
+	const auto listed = rs->files_under(k_mounted, "dir");
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST((*listed == std::vector<res::tag>{ res::tag{ "mount1034://dir/kept.txt" } }));
+	rs->unregistrate_resolver(k_mounted);
+}
+
+// #1086: a resolver may give no block to wait for (the loader takes that as a failed load): read_now fails.
+namespace {
+
+class empty_resolver : public core::res::res_resolver_interface
+{
+public:
+	using res_resolver_interface::res_resolver_interface;
+	async_raw_data resolve(const res::tag&) const override { return nullptr; }
+	bool exists(const res::tag&) const override { return false; }
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(ReadingFromAResolverThatGivesNothing_Fails)
+{
+	rs->registrate_resolver<empty_resolver>(k_mounted);
+	test_util::in_task(tasks, [&] {
+		std::vector<std::byte> bytes;
+		const auto read = rs->read_now(res::tag{ "mount1034://a.txt" }, 16, bytes);
+		BOOST_TEST((read.status != platform::beneath::read_status::ok));
+		BOOST_TEST(!read.error.empty());
+		BOOST_TEST(bytes.empty());
+	});
+	rs->unregistrate_resolver(k_mounted);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

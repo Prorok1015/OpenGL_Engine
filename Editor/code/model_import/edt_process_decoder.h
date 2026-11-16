@@ -73,7 +73,11 @@ namespace edt {
 	class process_decoder
 	{
 	public:
-		process_decoder(res::resource_system& resources, decode_runner_config config);
+		// Called on the thread that ran the decoder, after every run that ended with an answer: what the child said of its
+		// sandbox (#1076: the editor shows it in Problems).
+		using sandbox_listener = std::function<void(const decoder_sandbox_status&)>;
+
+		process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox = {});
 
 		// Empty when the decoder can be run; else why not, naming the file.
 		std::string unavailable_reason() const;
@@ -89,6 +93,7 @@ namespace edt {
 
 		res::resource_system& m_resources;
 		decode_runner_config m_config;
+		sandbox_listener m_on_sandbox;
 		mutable std::once_flag m_version_once;
 		mutable std::string m_version;
 	};
@@ -114,7 +119,9 @@ namespace edt {
 	decoder_steps steps_of(std::shared_ptr<const process_decoder> decoder);
 
 	// Erases every file below memory://`folder` (ending in '/'): the decoder overwrites nothing, and memory:// is on the disk,
-	// so an earlier run left its files there. The tag of a file that is still there afterwards, if any.
-	std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder);
+	// so an earlier run left its files there. The files are those the resolver of memory:// lists; one that cannot list
+	// them gets `known` erased (what the caller made there) and a warning. The tag of a file still there after, if any.
+	std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder,
+		const std::vector<res::tag>* known = nullptr);
 
 } // namespace edt

@@ -91,3 +91,8 @@ void edt::vcs_component::follow_agent_policy(std::filesystem::path project_polic
 	m_vcs.set_policy_source(source);
 	m_forge->set_policy_source(std::move(source));
 }
+
+void edt::vcs_component::guard_config_files(std::vector<std::filesystem::path> files)
+{
+	m_vcs.set_config_files(std::move(files));
+}
