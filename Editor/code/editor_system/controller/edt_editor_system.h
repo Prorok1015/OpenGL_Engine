@@ -3,7 +3,6 @@
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
 #include "edt_desc_file_commands.h"
-#include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
 #include "edt_project_trust_service.h"
 #include <snk/command/cmd_log_commands.h>
@@ -47,6 +46,7 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_component;
+	class level_load_component;
 	class asset_database;
 	class agent_server;
 	class agent_access;
@@ -104,7 +104,7 @@ namespace edt {
 		bool begin_level_load(const res::tag& level_tag);
 		// True from begin_level_load until the level is loaded, failed or cancelled. The document still belongs to the
 		// level it had before; only a successful load makes it the new one.
-		bool level_load_in_progress() const { return m_loading_level; }
+		bool level_load_in_progress() const;
 		// The level file the document belongs to (empty for an untitled one); not the one being loaded.
 		const res::tag& current_level_tag() const { return m_state.level_tag; }
 		// The working copy the document's level is read from (`memory://editor/loading/<n>/<name>.desc`).
@@ -265,8 +265,6 @@ namespace edt {
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
 
-		// Async level load (US-24-4)
-		res::res_handle<scn::level_desc> m_loading_level_handle;
 		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
 		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
 		void follow_game_layer_change(bool before);
@@ -293,30 +291,7 @@ namespace edt {
 		// Owner of the format check's callback: declared after what it touches, so it dies (and cancels) first. Not the
 		// import's m_lifetime, which exists only with assimp.
 		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
-		bool m_loading_level = false;
-		slow_load_notice m_slow_load;
 		timed_notice m_save_notice;
-		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
-		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
-		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
-		// the copy of the level being edited, whatever the two files are called.
-		res::tag m_loading_level_tag;
-		res::tag m_loading_editor_tag;
-		// The root __version of the bytes the load read (0: unknown).
-		int m_loading_file_version = 0;
-		std::uint32_t m_load_serial = 0;
-		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
-		void abandon_level_load();
-		// level.cancel_load, Esc in the loading window: the load goes, the level is the one before it. Main thread, as
-		// every load step: it never meets a load half finished.
-		cmd::result cancel_level_load(const cmd::origin& from);
-		// The load is over: forgets its tags and handle. The working copy stays (it is the document's now).
-		void release_level_load();
-		// Removes the working copy of a load (only `memory://editor/loading/...`; the document's other copies are not touched).
-		void erase_loading_copy(const res::tag& copy);
-		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
-		bool poll_level_load(bool* loaded = nullptr);
-
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
@@ -325,11 +300,9 @@ namespace edt {
 		// Set with editor/exit_after_level_loaded: stops the frame loop once a loaded level settled (CI headless run).
 		std::function<void()> m_stop_after_level_loaded;
 		ds::task_system* m_tasks = nullptr;
-		// Kept while the level waits: the settle holds a reference to it. Declared first, so it is destroyed after it.
-		std::shared_ptr<scn::context_manager> m_settle_contexts;
-		std::optional<scn::level_settle> m_level_settle;
-		void start_level_settle(const res::tag& level);
-		void cancel_level_settle();
+		// The load of a level and the settle after it (US-24-4, #613, #1004); its action is in m_registrations, removed before it.
+		// Declared after m_tasks, which the settle uses.
+		std::unique_ptr<edt::level_load_component> m_level_load;
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.

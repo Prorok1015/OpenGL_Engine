@@ -55,6 +55,8 @@ Editor/
     │   ├── edt_live_build.cpp/h      # live_build: live mode state machine (debounce, build, quiet, reload), no UI (#445)
     │   └── edt_live_mode.cpp/h       # live_mode: owns live_build in the editor: code:// feed, toggle, menu-bar status, live.* tools (#445)
     │
+    ├── level/                        # the load of a level (#1004)
+    │   └── edt_level_load_component.cpp/h # level_load_component: the working copy, the "Loading Level" window and its Esc, `level.cancel_load`, the slow-load notice and the settle after a load; `begin_and_watch(tag, ended?)` opens a level and polls it under `edt/load_level`; `level_locator` is where a load's diagnostics lead. `editor_system` creates it, calls `install()` and keeps thin forwarders (`begin_level_load`, `level_load_in_progress`, `tick_level_settle`)
     ├── game_build/                   # Build > Build Game (#434)
     │   ├── edt_game_build_component.h/.cpp # game_build_component (#1004): the builder and the reloader with everything they ask of the editor (trust, Play snapshot, swap gate, waits) and the Build Settings commands; `editor_system` creates it before live mode, calls `install()`, and hands its `builder()`/`reloader()` on
     │   ├── edt_build_diagnostics.h   # build_output_parser (MSVC/GCC/Clang/ld/CMake lines -> problems)
