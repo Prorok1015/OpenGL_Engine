@@ -55,8 +55,73 @@ std::string edt::describe_override_record(const scn::override_record& record)
 	return std::format("{}{} {} = {}", prefix, record.component, record.path.empty() ? std::string{ "(whole)" } : record.path, value_text(record.value));
 }
 
+std::string edt::apply_to_prefab_question(const res::tag& prefab, std::size_t instances, std::size_t records)
+{
+	return std::format("This changes prefab {} for all of its instances ({} in this level).\n\n"
+		"{} of this instance's overrides move into the prefab file and are removed from the instance.",
+		prefab.view(), instances, records);
+}
+
+namespace
+{
+	bool applicable(const scn::override_record& record, const edt::override_edit::stale_record* gone)
+	{
+		return !gone && record.op == scn::override_op::set;
+	}
+
+	std::vector<std::size_t> records_asked_about(const scn::prefab_desc::prefab_node& node, const std::vector<const edt::override_edit::stale_record*>& stale_at,
+		std::size_t asking)
+	{
+		std::vector<std::size_t> indices;
+		for (std::size_t i = 0; i < node.overrides.size(); ++i) {
+			if ((asking == edt::instance_overrides_state::all_records || asking == i) && applicable(node.overrides[i], stale_at[i])) indices.push_back(i);
+		}
+		return indices;
+	}
+
+	bool draw_apply_question(scn::prefab_desc::prefab_node& node, const std::vector<const edt::override_edit::stale_record*>& stale_at,
+		const res::tag& prefab, const edt::instance_overrides_hooks& hooks, edt::instance_overrides_state& state)
+	{
+		constexpr const char* popup = "Apply to Prefab###apply_override";
+		if (state.open_requested) {
+			ImGui::OpenPopup(popup);
+			state.open_requested = false;
+		}
+		if (!state.asking) return false;
+		bool changed = false;
+		bool keep_asking = true;
+		if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			const std::vector<std::size_t> indices = records_asked_about(node, stale_at, *state.asking);
+			const std::size_t instances = hooks.instances_in_level ? hooks.instances_in_level(prefab) : 0;
+			ImGui::TextUnformatted(edt::apply_to_prefab_question(prefab, instances, indices.size()).c_str());
+			ImGui::Separator();
+			if (ImGui::Button("Apply to Prefab") && !indices.empty()) {
+				std::vector<scn::override_record> records;
+				for (const std::size_t i : indices) records.push_back(node.overrides[i]);
+				state.error = hooks.apply_to_prefab(prefab, records);
+				if (state.error.empty()) {
+					for (std::size_t i = indices.size(); i-- > 0;) node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(indices[i]));
+					changed = true;
+				}
+				keep_asking = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) {
+				keep_asking = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		} else {
+			keep_asking = false;
+		}
+		if (!keep_asking) state.asking.reset();
+		return changed;
+	}
+}
+
 bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<override_edit::stale_record>* stale,
-	const instance_overrides_hooks& hooks)
+	const instance_overrides_hooks& hooks, instance_overrides_state& state)
 {
 	const scn::prefab_desc* prefab = override_edit::referenced_prefab(node);
 	if (!prefab && node.overrides.empty()) return false;
@@ -87,6 +152,13 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 	const std::string header = std::format("Overrides ({})###instance_overrides", node.overrides.size());
 	if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) return false;
 
+	const bool can_apply = prefab && hooks.apply_to_prefab;
+	if (!state.error.empty()) {
+		ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.4f, 1.f), "Not applied: %s", state.error.c_str());
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Dismiss")) state.error.clear();
+	}
+
 	std::optional<std::size_t> remove_index;
 	for (std::size_t i = 0; i < node.overrides.size(); ++i) {
 		ImGui::PushID(static_cast<int>(i));
@@ -101,8 +173,18 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton(gone ? "Remove" : "Revert")) remove_index = i;
+		if (can_apply && applicable(node.overrides[i], gone)) {
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Apply to Prefab")) {
+				state.asking = i;
+				state.open_requested = true;
+			}
+		}
 		ImGui::PopID();
 	}
+	const res::tag prefab_tag = prefab ? prefab->get_tag() : res::tag{};
+	bool changed_by_apply = can_apply && draw_apply_question(node, stale_at, prefab_tag, hooks, state);
+	if (changed_by_apply) return true;
 	if (remove_index) {
 		node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(*remove_index));
 		return true;
@@ -111,6 +193,13 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 	if (ImGui::SmallButton("Revert All")) {
 		node.overrides.clear();
 		return true;
+	}
+	if (can_apply && !records_asked_about(node, stale_at, instance_overrides_state::all_records).empty()) {
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Apply All to Prefab")) {
+			state.asking = instance_overrides_state::all_records;
+			state.open_requested = true;
+		}
 	}
 	if (stale_count > 0) {
 		ImGui::SameLine();

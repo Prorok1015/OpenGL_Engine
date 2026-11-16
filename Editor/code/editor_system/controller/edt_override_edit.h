@@ -134,6 +134,16 @@ namespace edt::override_edit
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,
 		glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
 
+	// Moves the value of `record` into `prefab`, the file content the owner instantiates, the way the owner's record would have
+	// changed it: a `set` of a field of a node the file holds is written into that node (its transform, or the component's own
+	// values); a record below a node that instantiates another prefab, or on a component that node only gets from it, goes to that
+	// node as a record of its own (one level, never into the nested file). Returns the reason it cannot be done (empty: done):
+	// `remove` and `add_node` records, a node or component the file does not have. `prefab` is changed only when it works.
+	std::string fold_record(scn::prefab_desc& prefab, const scn::override_record& record);
+
+	// How many nodes of `worlds` instantiate the prefab `tag` (the level's own nodes, nested instances inside other prefabs excluded).
+	std::size_t count_instances(const std::vector<scn::world_desc>& worlds, const res::tag& tag);
+
 	bool has_record(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component);
 
 	// "Reset to base": drops the records of (target, component). True if there were any.

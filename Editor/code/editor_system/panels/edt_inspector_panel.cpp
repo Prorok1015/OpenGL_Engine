@@ -271,7 +271,7 @@ namespace edt
 		// The records of an instance node, its prefab and the stale ones (#149).
 		if (!m_readonly) {
 			const auto stale = m_view_cache ? m_view_cache->stale(node) : nullptr;
-			changed |= draw_instance_overrides(node, stale.get(), instance_overrides_hooks{ .open_prefab = m_open_prefab });
+			changed |= draw_instance_overrides(node, stale.get(), m_instance_hooks, m_instance_ui);
 		}
 
 		ImGui::Separator();

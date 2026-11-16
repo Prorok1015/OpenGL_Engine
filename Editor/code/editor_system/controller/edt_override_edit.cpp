@@ -576,3 +576,107 @@ bool edt::override_edit::reset(prefab_node& owner, std::span<const uint64_t> tar
 	erase_records(owner, target, component);
 	return had;
 }
+
+namespace
+{
+	bool is_vec3(const json::value* value)
+	{
+		if (!value || !value->is_array() || value->as_array().size() != 3) return false;
+		return std::ranges::all_of(value->as_array(), [] (const json::value& number) { return number.is_number(); });
+	}
+
+	std::string write_transform_record(prefab_node& node, const scn::override_record& record)
+	{
+		json::value transform = json::object{
+			{ "position", json::value_from(node.position) },
+			{ "rotation", json::value_from(node.rotation) },
+			{ "scale", json::value_from(node.scale) },
+		};
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return "the transform record needs an object value";
+			desc::json_deep_merge(transform.as_object(), record.value.as_object());
+		} else if (!desc::json_pointer_set(transform, record.path, record.value)) {
+			return std::format("the transform has no '{}'", record.path);
+		}
+		const auto& fields = transform.as_object();
+		if (!is_vec3(fields.if_contains("position")) || !is_vec3(fields.if_contains("rotation")) || !is_vec3(fields.if_contains("scale"))) {
+			return "the transform record does not leave three numbers per field";
+		}
+		node.position = json::value_to<glm::vec3>(fields.at("position"));
+		node.rotation = json::value_to<glm::vec3>(fields.at("rotation"));
+		node.scale = json::value_to<glm::vec3>(fields.at("scale"));
+		node.has_transform = true;
+		return {};
+	}
+
+	std::string write_component_record(prefab_node& node, const scn::override_record& record)
+	{
+		scn::prefab_desc::prefab_comp_node& comp = node.components.at(record.component);
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return std::format("component '{}' can only be merged with an object", record.component);
+			desc::json_deep_merge(comp.overrides, record.value.as_object());
+			return {};
+		}
+		json::value held{ std::move(comp.overrides) };
+		const bool written = desc::json_pointer_set(held, record.path, record.value);
+		comp.overrides = std::move(held.as_object());
+		return written ? std::string{} : std::format("component '{}' has no field '{}'", record.component, record.path);
+	}
+}
+
+std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn::override_record& record)
+{
+	if (record.op != scn::override_op::set) {
+		return "only a changed value can be moved into a prefab, not a removed or added node or component";
+	}
+	scn::prefab_desc working = prefab;
+	prefab_node* node = &working.get_root();
+	for (std::size_t depth = 0; depth < record.target.size(); ++depth) {
+		const auto child = std::ranges::find(node->children, record.target[depth], &prefab_node::node_id);
+		if (child != node->children.end()) {
+			node = &*child;
+			continue;
+		}
+		if (!referenced_prefab(*node)) {
+			return std::format("node '{}' of the prefab has no child with that id any more", node->name);
+		}
+		scn::override_record forwarded = record;
+		forwarded.target.erase(forwarded.target.begin(), forwarded.target.begin() + static_cast<std::ptrdiff_t>(depth));
+		node->overrides.push_back(std::move(forwarded));
+		prefab = std::move(working);
+		return {};
+	}
+
+	std::string error;
+	if (record.component == scn::transform_pseudo_component) {
+		error = write_transform_record(*node, record);
+	} else if (node->components.contains(record.component)) {
+		error = write_component_record(*node, record);
+	} else if (referenced_prefab(*node)) {
+		scn::override_record forwarded = record;
+		forwarded.target.clear();
+		node->overrides.push_back(std::move(forwarded));
+	} else {
+		error = std::format("the prefab has no component '{}' on node '{}'", record.component, node->name);
+	}
+	if (error.empty()) prefab = std::move(working);
+	return error;
+}
+
+namespace
+{
+	std::size_t count_in(const prefab_node& node, const res::tag& tag)
+	{
+		const scn::prefab_desc* prefab = edt::override_edit::referenced_prefab(node);
+		std::size_t count = prefab && prefab->get_tag() == tag ? 1 : 0;
+		for (const prefab_node& child : node.children) count += count_in(child, tag);
+		return count;
+	}
+}
+
+std::size_t edt::override_edit::count_instances(const std::vector<scn::world_desc>& worlds, const res::tag& tag)
+{
+	std::size_t total = 0;
+	for (const scn::world_desc& world : worlds) total += count_in(world.get_root(), tag);
+	return total;
+}

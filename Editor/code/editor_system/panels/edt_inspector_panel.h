@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_instance_overrides_view.h"
 #include "edt_schema_inspector.h"
 #include <snk/editor/edt_panel_base.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -50,8 +51,8 @@ namespace edt
 		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
 		// True while the document must not change (Play): the panel is drawn disabled with a hint.
 		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
-		// "Edit Prefab" on an instance node opens the prefab in the prefab editor.
-		void set_open_prefab(std::function<void(const res::tag&)> open) { m_open_prefab = std::move(open); }
+		// What the "Prefab instance" section of an instance node can do: open the prefab in the prefab editor, apply records to its file.
+		void set_instance_hooks(instance_overrides_hooks hooks) { m_instance_hooks = std::move(hooks); }
 		// An edit made in the panel waits for its widget to let go before it is committed.
 		bool has_pending_commit() const { return m_pending_commit; }
 		void note_edit() { m_pending_commit = true; }
@@ -95,7 +96,8 @@ namespace edt
 		bool                           m_pending_commit = false;
 		std::function<bool(uint64_t)>  m_agent_marked;
 		std::function<bool()>          m_edits_locked;
-		std::function<void(const res::tag&)> m_open_prefab;
+		instance_overrides_hooks m_instance_hooks;
+		instance_overrides_state m_instance_ui;
 
 		// Cached serialized parent_desc data — built once on selection change for read-only display
 		std::unordered_map<std::string, boost::json::object> m_parent_cache;
