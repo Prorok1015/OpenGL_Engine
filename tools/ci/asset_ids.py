@@ -29,6 +29,7 @@ here are content folders, never a project folder.
 import json
 import math
 import os
+import stat
 import sys
 import tempfile
 import uuid
@@ -65,16 +66,34 @@ def is_ignored_asset_name(name):
         return True
     if ascii_lower(name) in ('thumbs.db', 'desktop.ini'):
         return True
-    def ends_with_lower(suffix):
-        return len(name) > len(suffix) and ascii_lower(name[-len(suffix):]) == suffix
-    if ends_with_lower('.tmp') or ends_with_lower('.bin.new'):
-        return True
-    # What res::desc_binary::binary_tag makes of "<name>.<ext>.desc"; a plain x.bin stays an asset.
-    if not ends_with_lower('.bin'):
-        return False
-    stem = name[:-len('.bin')]
+    return len(name) > 4 and ascii_lower(name[-4:]) == '.tmp'
+
+
+def desc_binary_owner_name(name):
+    """res::desc_binary_owner_name: "<x>.<y>.desc" for "<x>.<y>.bin" and "<x>.<y>.bin.new", else None."""
+    stem = name
+    if ascii_lower(stem).endswith('.new'):
+        stem = stem[:-len('.new')]
+    if not ascii_lower(stem).endswith('.bin'):
+        return None
+    stem = stem[:-len('.bin')]
     dot = stem.rfind('.')
-    return dot > 0 and dot + 1 != len(stem)
+    if dot <= 0 or dot + 1 == len(stem):
+        return None
+    return stem + '.desc'
+
+
+def is_desc_binary_entry(folder, name):
+    """res::is_desc_binary_entry for a file: a desc's binary file (or its sidecar) whose desc is a regular file in `folder`."""
+    if is_sidecar_name(name):
+        name = name[:-len(META_SUFFIX)]
+    owner = desc_binary_owner_name(name)
+    if owner is None:
+        return False
+    try:
+        return stat.S_ISREG(os.lstat(Path(folder) / owner).st_mode)
+    except OSError:
+        return False
 
 
 # ---- res::write_pretty_json ----
@@ -305,6 +324,8 @@ def walk(tree, submodules):
                         continue
                     pending.append(path)
                 elif entry.is_file(follow_symlinks=False):
+                    if is_desc_binary_entry(folder, name):
+                        continue
                     if is_sidecar_name(name):
                         if not is_ignored_asset_name(name[:-len(META_SUFFIX)]):
                             sidecars.append(path)
@@ -566,8 +587,28 @@ def _self_test_trees():
         expect(sum('00000000-0000-4000-8000-000000000001 is the ID of 2 files' in e for e in errors) == 1, 'a duplicate ID')
 
 
+def _self_test_desc_binary():
+    for name, owner in (('a.geom.bin', 'a.geom.desc'), ('A.GEOM.BIN', 'A.GEOM.desc'), ('a.geom.bin.new', 'a.geom.desc'),
+                        ('a.b.geom.Bin.NEW', 'a.b.geom.desc'), ('foo.bin', None), ('.geom.bin', None), ('a..bin', None),
+                        ('x.bin.new', None), ('a.geom.binx', None), ('a.geom.new', None), ('a.geom.desc', None)):
+        expect(desc_binary_owner_name(name) == owner, f'desc_binary_owner_name({name!r}) is not {owner!r}')
+    with tempfile.TemporaryDirectory() as temp:
+        tree = Path(temp)
+        for name in ('a.geom.desc', 'a.geom.bin', 'a.geom.bin.new', 'a.geom.bin.resource', 'scene.gltf', 'scene.gltf.bin',
+                     'terrain.lod0.bin'):
+            (tree / name).write_text('x')
+        (tree / 'sub').mkdir()
+        (tree / 'sub' / 'a.geom.bin').write_text('x')
+        files, sidecars = walk(tree, set())
+        names = sorted(p.relative_to(tree).as_posix() for p in files)
+        expect(names == ['a.geom.desc', 'scene.gltf', 'scene.gltf.bin', 'sub/a.geom.bin', 'terrain.lod0.bin'],
+               f'the walk lists {names}')
+        expect(sidecars == [], f'the walk lists the sidecars {sidecars}')
+
+
 def self_test():
     _self_test_names()
+    _self_test_desc_binary()
     _self_test_format()
     _self_test_trees()
     print('asset_ids: self-test passed')

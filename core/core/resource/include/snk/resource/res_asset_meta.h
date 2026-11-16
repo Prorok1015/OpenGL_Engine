@@ -33,8 +33,8 @@ namespace res
 		return true;
 	}
 
-	// Not an asset: dot files (.gitkeep, .DS_Store, .x.swp), well-known temporary or system names (Thumbs.db, desktop.ini,
-	// ~$x, x.tmp, x~) and a desc's binary files (x.geom.bin, x.geom.bin.new; EPIC-79). No record, no .resource.
+	// Not an asset: dot files (.gitkeep, .DS_Store, .x.swp) and well-known temporary or system names (Thumbs.db,
+	// desktop.ini, ~$x, x.tmp, x~). The asset database does not list them and no .resource is made for them.
 	inline bool is_ignored_asset_name(std::string_view name)
 	{
 		const auto equals_lower = [](std::string_view text, std::string_view lower) {
@@ -55,20 +55,38 @@ namespace res
 		if (equals_lower(name, "thumbs.db") || equals_lower(name, "desktop.ini")) {
 			return true;
 		}
-		const auto ends_with_lower = [&](std::string_view text, std::string_view suffix) {
-			return text.size() > suffix.size() && equals_lower(text.substr(text.size() - suffix.size()), suffix);
-		};
-		if (ends_with_lower(name, ".tmp") || ends_with_lower(name, ".bin.new")) {
+		constexpr std::string_view tmp_suffix = ".tmp";
+		return name.size() > tmp_suffix.size() && equals_lower(name.substr(name.size() - tmp_suffix.size()), tmp_suffix);
+	}
+
+	// The desc whose binary file `name` would be (EPIC-79): "<x>.<y>.desc" for "<x>.<y>.bin" and "<x>.<y>.bin.new" (suffix in
+	// any letter case), the stem rules of res::desc_binary::binary_tag. Such a file is no asset only while that desc is beside it.
+	inline std::optional<std::string> desc_binary_owner_name(std::string_view name)
+	{
+		const auto strip_lower = [](std::string_view& text, std::string_view suffix) {
+			if (text.size() < suffix.size()) {
+				return false;
+			}
+			const std::string_view tail = text.substr(text.size() - suffix.size());
+			for (std::size_t i = 0; i < tail.size(); ++i) {
+				const char c = tail[i] >= 'A' && tail[i] <= 'Z' ? static_cast<char>(tail[i] - 'A' + 'a') : tail[i];
+				if (c != suffix[i]) {
+					return false;
+				}
+			}
+			text.remove_suffix(suffix.size());
 			return true;
+		};
+		std::string_view stem = name;
+		strip_lower(stem, ".new");
+		if (!strip_lower(stem, ".bin")) {
+			return std::nullopt;
 		}
-		// What res::desc_binary::binary_tag makes of `<name>.<ext>.desc`; a plain x.bin stays an asset.
-		constexpr std::string_view bin_suffix = ".bin";
-		if (!ends_with_lower(name, bin_suffix)) {
-			return false;
-		}
-		const std::string_view stem = name.substr(0, name.size() - bin_suffix.size());
 		const std::size_t dot = stem.find_last_of('.');
-		return dot != std::string_view::npos && dot != 0 && dot + 1 != stem.size();
+		if (dot == std::string_view::npos || dot == 0 || dot + 1 == stem.size()) {
+			return std::nullopt;
+		}
+		return std::string{ stem } + ".desc";
 	}
 
 	struct asset_meta

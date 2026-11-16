@@ -6,8 +6,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <vector>
+#include <snk/common/fs_paths.h>
 #include <snk/common/snk_api.h>
 #include <snk/resource/res_asset_meta.h>
 
@@ -59,6 +61,19 @@ namespace res
 	{
 		if (is_ignored_asset_name(name)) return true;
 		return !is_dir && is_asset_meta_sidecar(name) && is_ignored_asset_name(asset_meta_owner(name));
+	}
+
+	// A desc's binary file or its .resource (desc_binary_owner_name) whose desc is a regular file (not a link) in the same
+	// folder `dir` of the same layer: a walk neither lists it nor gives it an ID. One look at the disk, only for such a name.
+	inline bool is_desc_binary_entry(const std::filesystem::path& dir, std::string_view name, bool is_dir)
+	{
+		if (is_dir) return false;
+		const std::string_view file = is_asset_meta_sidecar(name) ? asset_meta_owner(name) : name;
+		const std::optional<std::string> owner = desc_binary_owner_name(file);
+		if (!owner) return false;
+		std::error_code ec;
+		const std::filesystem::file_status status = std::filesystem::symlink_status(dir / fs_paths::path_from_utf8(*owner), ec);
+		return !ec && status.type() == std::filesystem::file_type::regular;
 	}
 
 	// A name directly in the project folder that is no content even when the folder is a content root ".": the project's

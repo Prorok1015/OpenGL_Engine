@@ -37,14 +37,3 @@ level.desc	0
 a.png.resource	0
 x$	0
 $x	0
-robot.geom.bin	1
-ROBOT.GEOM.BIN	1
-robot.geom.bin.new	1
-x.bin.new	1
-foo.bin	0
-bin	0
-.bin	1
-a..bin	0
-robot.geom.bin.png	0
-robot.geom.binx	0
-robot.geom.desc	0

@@ -1,12 +1,14 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_vfs_test_hook.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -173,11 +175,36 @@ BOOST_AUTO_TEST_CASE(TheBinaryFileIsNamedAfterTheDesc)
 BOOST_AUTO_TEST_CASE(TheBinaryFilesOfADescAreNoAssets)
 {
 	const res::tag desc{ "res://a/robot.geom.desc" };
-	BOOST_TEST(res::is_ignored_asset_name(res::desc_binary::binary_tag(desc)->name()));
-	BOOST_TEST(res::is_ignored_asset_name(res::desc_binary::staged_tag(desc)->name()));
-	BOOST_TEST(!res::is_ignored_asset_name(desc.name()));
-	// A plain .bin can be a user's asset.
-	BOOST_TEST(!res::is_ignored_asset_name("firmware.bin"));
+	BOOST_TEST(res::desc_binary_owner_name(res::desc_binary::binary_tag(desc)->name()).value_or("") == "robot.geom.desc");
+	BOOST_TEST(res::desc_binary_owner_name(res::desc_binary::staged_tag(desc)->name()).value_or("") == "robot.geom.desc");
+	BOOST_TEST(res::desc_binary_owner_name("A.GEOM.Bin.NEW").value_or("") == "A.GEOM.desc");
+	for (const char* none : { "robot.geom.desc", "firmware.bin", ".geom.bin", "a..bin", "x.bin.new", "a.geom.binx", "a.geom.new" }) {
+		BOOST_TEST(!res::desc_binary_owner_name(none).has_value(), none);
+	}
+	// By name alone nothing of these is hidden: only a desc beside it makes a binary file no asset.
+	BOOST_TEST(!res::is_ignored_asset_name("robot.geom.bin"));
+	BOOST_TEST(!res::is_ignored_asset_name("robot.geom.bin.new"));
+
+	test_util::temp_dir dir{ "res_desc_binary_walk" };
+	for (const char* name : { "a.geom.desc", "a.geom.bin", "a.geom.bin.new", "a.geom.bin.resource", "scene.gltf", "scene.gltf.bin",
+			 "terrain.lod0.bin" }) {
+		dir.write(name, "x");
+	}
+	// The layer above: its a.geom.bin has no desc beside it, the desc of the layer below does not count.
+	test_util::temp_dir upper{ "res_desc_binary_walk_upper" };
+	upper.write("a.geom.bin", "x");
+	BOOST_TEST(res::is_desc_binary_entry(dir.path(), "a.geom.bin", false));
+	BOOST_TEST(!res::is_desc_binary_entry(dir.path(), "a.geom.bin", true));
+	BOOST_TEST(!res::is_desc_binary_entry(upper.path(), "a.geom.bin", false));
+	BOOST_TEST(!res::is_desc_binary_entry(dir.path(), "scene.gltf.bin", false));
+
+	std::vector<std::string> walked;
+	for (const res::asset_walk_file& file : res::walk_asset_layers({ dir.path(), upper.path() }, {}, false)) {
+		walked.push_back(file.relative.generic_string());
+	}
+	std::ranges::sort(walked);
+	const std::vector<std::string> expected{ "a.geom.bin", "a.geom.desc", "scene.gltf", "scene.gltf.bin", "terrain.lod0.bin" };
+	BOOST_TEST(walked == expected, boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(LayoutsComeFromAClosedVocabulary)
