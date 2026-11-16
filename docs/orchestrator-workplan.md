@@ -26,7 +26,7 @@
 
 ## Очереди команд
 - Качества: #1106 (#1082, Fable merge+правка 36724410) → #977 после PR3b. Заведены #1105 (pid), #1102, #1103.
-- Редактора: #1004 шаг 10a agent_component (Fable; начинать после #1089 или влить aibranch до undraft; таблица вызывающих политики + порядок разрушения) → 10b agent_ui → import (+m_agent_sessions/m_agent_import) → desc_layout-документы → финальная редукция edt_editor_system.cpp + Editor/CLAUDE.md → #148–#151 (решения владельца; варианты через __parent; DISCOVER сначала).
+- Редактора: #1004 ЗАКРЫТ (5af03e9). Дальше: малый PR (снять on_file_upgraded в ~file_menu_component) → #148–#151. Было: #1004 шаг 10a agent_component (Fable; начинать после #1089 или влить aibranch до undraft; таблица вызывающих политики + порядок разрушения) → 10b agent_ui → import (+m_agent_sessions/m_agent_import) → desc_layout-документы → финальная редукция edt_editor_system.cpp + Editor/CLAUDE.md → #148–#151 (решения владельца; варианты через __parent; DISCOVER сначала).
 - Ядра: #1091 → #1094/#1092 → EPIC-79 PR3b (декодер) → PR4 (+#1093) → PR5 (binary_ref в ключ пачкой: geometry_file_options, disk_file, …) → PR6.
 - Рендера: #1089 → #1054 (Windows AppContainer; план одобрен: одна настройка, откат без контейнера в on — статус ставит редактор; отказ только required) → #1082 → #1090 → #1044 → #1077; #1097 macOS (P2, без плана).
 - Качества: #1096 → #977 финальный замер Windows после EPIC-79 PR3a/PR3b + возврат таймаута.
@@ -64,7 +64,7 @@ Smoke базовая линия: 1×0.000%, 4×0.193%, 1×1.431%.
 aibranch layout_revision = 15 (после #1073). Запись каждого изменения — docs/abi/changes/<issue>.md.
 
 ## Влито 2026-11-16 (последнее сверху)
-- 5ae5adf #1114 (11a) · 0edd233 #1110 (#1109 PR1) · f312f39 #1111 (import step) · 74aee07 #1107 (PR3b) · 802b343 #1101 (closes #1100) · 0779d2d #1106 (closes #1082) · 5521248 #1104 (10b) · cc7a850 #1094 (closes #1092) · 780c7c0 #1095 (10a) · f50701f #1091 (EPIC-79 PR3a) · 0b0208f #1096 (closes #1086) · 8cd9607 #1089 (closes #1076) · be97c94 #1088 (#1004 шаг 9) · 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
+- 5af03e9 #1118 (closes #1004!) · cf4c46c #1116 (11b) · d5e2a3b #1113 (#1108 PR1) · 5ae5adf #1114 (11a) · 0edd233 #1110 (#1109 PR1) · f312f39 #1111 (import step) · 74aee07 #1107 (PR3b) · 802b343 #1101 (closes #1100) · 0779d2d #1106 (closes #1082) · 5521248 #1104 (10b) · cc7a850 #1094 (closes #1092) · 780c7c0 #1095 (10a) · f50701f #1091 (EPIC-79 PR3a) · 0b0208f #1096 (closes #1086) · 8cd9607 #1089 (closes #1076) · be97c94 #1088 (#1004 шаг 9) · 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
 - docs: 699ea204 CONSTRAINT_22–25 · e2cde2c EPIC-80
 - Заведены сегодня: #1082 #1084 #1085 #1086 #1090 #1092 #1093 #1097
 
