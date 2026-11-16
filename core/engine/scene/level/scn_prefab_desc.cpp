@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
 #include "scn_hierarchy_destroy.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/scene/scn_model.h>
@@ -1010,6 +1011,31 @@ void scn::reconcile(
 	if (scope.outermost()) walk.roots = 1;
 	const open_scope opened(walk, inside);
 	reconcile_node(assembler, reg, live, node, mode, walk, {});
+}
+
+void scn::spawn_world(
+	const scn::ecs_assembler& assembler,
+	entt::registry& reg,
+	entt::entity e,
+	const scn::world_desc& desc,
+	const std::string_view name,
+	const res::tag& file
+) {
+	// A desc that carries the file as its own tag opens it itself, as a level load does; opened here too,
+	// its own spawn would be refused as a self-reference and leave the world empty.
+	if (file.string().empty() || desc.get_tag() == file) {
+		assembler.spawn_from_desc(reg, e, desc, name);
+		return;
+	}
+	const walk_scope scope;
+	spawn_walk& walk = scope.walk();
+	// Opened as reconcile opens a known file; the world spawner's assemble_prefab gets no tag and opens nothing more.
+	if (refuses_to_open(walk, file)) return;
+	std::vector<res::tag> inside(walk.open.begin(), walk.open.end());
+	inside.push_back(file);
+	if (scope.outermost()) walk.roots = 1;
+	const open_scope opened(walk, inside);
+	assembler.spawn_from_desc(reg, e, desc, name);
 }
 
 namespace {

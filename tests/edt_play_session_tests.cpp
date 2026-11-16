@@ -455,6 +455,42 @@ struct play_fixture : test_util::module_env
 
 }
 
+namespace {
+
+// A world whose instance N of leaf adds, by a record, A that instantiates leaf again: content of the world's file (#1039).
+res::tag open_grown_level(play_fixture& fixture)
+{
+	fixture.put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag world_file = fixture.put("w2.desc", R"({"__type":"world_desc","__version":4,"name":"w2","systems":[],"children":[
+		{"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
+			{"op":"add_node","target":[],"value":{"__id":"00000000000000d2","name":"A",
+				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
+	fixture.open_level(R"({"__type":"level_desc","__version":2,"name":"lv","worlds":["memory://t/w2.desc"]})");
+	BOOST_REQUIRE(fixture.state.world_tag(0) == world_file);
+	return world_file;
+}
+
+entt::entity first_named(entt::registry& reg, std::string_view name)
+{
+	for (auto [e, n] : reg.view<scn::name_component>().each()) {
+		if (n.name == name) return e;
+	}
+	return entt::null;
+}
+
+std::vector<std::string> children_of_named(entt::registry& reg, std::string_view name)
+{
+	std::vector<std::string> out;
+	const entt::entity e = first_named(reg, name);
+	if (e == entt::null) return out;
+	if (const auto* children = reg.try_get<scn::children_component>(e)) {
+		for (const entt::entity c : children->children) out.push_back(reg.get<scn::name_component>(c).name);
+	}
+	return out;
+}
+
+}
+
 BOOST_FIXTURE_TEST_SUITE(edt_play_session_tests, play_fixture)
 
 BOOST_AUTO_TEST_CASE(start_builds_the_play_set_from_copies_hides_the_level_and_changes_nothing_of_the_document)
@@ -1912,6 +1948,51 @@ BOOST_AUTO_TEST_CASE(a_leftover_play_set_is_not_reused)
 	BOOST_TEST(contexts().level_set().active());
 	BOOST_TEST(!state.edits_locked());
 	contexts().destroy_set(edt::k_play_set);
+}
+
+// After an edit the live world is rebuilt with its file open, as a level load builds it (#1039): a record of the world that
+// instantiates the prefab its instance node instantiates still builds that prefab's content in the viewport.
+BOOST_AUTO_TEST_CASE(an_edit_rebuilds_the_world_with_its_file_open_and_a_hot_reload_of_the_file_leaves_it_alone)
+{
+	const res::tag world_file = open_grown_level(*this);
+	scn::context_set& level = contexts().level_set();
+	BOOST_TEST((children_of_named(level.get("w2").state(), "A") == std::vector<std::string>{ "tip" })); // as loaded
+
+	scene_ed.create_entity("Empty");
+	entt::registry& edited = level.get("w2").state();
+	BOOST_TEST((children_of_named(edited, "A") == std::vector<std::string>{ "tip" }));
+	const entt::entity world_root = first_named(edited, "w2");
+	BOOST_REQUIRE(world_root != entt::null);
+	BOOST_TEST(!edited.all_of<scn::prefab_instance>(world_root));
+
+	// The file is not what the edited world shows: a hot reload of it must not rebuild the world over the edit.
+	scn::trigger_hot_reload(*services.assembler(), edited, services.resources()->require_sync<desc::desc_base>(world_file));
+	BOOST_TEST((first_named(edited, "Entity") != entt::null));
+	BOOST_TEST((children_of_named(edited, "A") == std::vector<std::string>{ "tip" }));
+
+	// Without the file (the old rebuild) the record is read as the prefab's own and refused.
+	state.world_tags[0] = res::tag{};
+	scene_ed.create_entity("Empty");
+	BOOST_TEST(children_of_named(level.get("w2").state(), "A").empty());
+}
+
+// Play's twins are built from the copies with the files of their worlds open, as the level was (#1039).
+BOOST_AUTO_TEST_CASE(start_builds_each_twin_with_the_file_of_its_world_open)
+{
+	open_grown_level(*this);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play_set());
+	entt::registry& twin = play_set()->get("w2").state();
+	BOOST_TEST((children_of_named(twin, "A") == std::vector<std::string>{ "tip" }));
+	const entt::entity world_root = first_named(twin, "w2");
+	BOOST_REQUIRE(world_root != entt::null);
+	BOOST_TEST(!twin.all_of<scn::prefab_instance>(world_root));
+	play.stop();
+
+	state.world_tags[0] = res::tag{};
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play_set());
+	BOOST_TEST(children_of_named(play_set()->get("w2").state(), "A").empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
