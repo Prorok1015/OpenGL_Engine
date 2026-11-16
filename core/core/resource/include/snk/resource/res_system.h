@@ -6,6 +6,7 @@
 #include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_mount_table.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
@@ -123,6 +124,23 @@ namespace res
 		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
 		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
 		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
+		// Whether a resolver serves `protocol` (mounted or registered). Any thread.
+		bool serves(std::string_view protocol) const;
+		// The file on the disk the resolver of `tag` opens for it now (vfs_resolver::disk_file_of): nullopt when it
+		// reads no files (a RAM or pack one), a store of it is queued, or every layer refuses the tag. Any thread.
+		std::optional<disk_file> disk_file_of(const tag& tag) const;
+		// The bytes of `tag` as its resolver serves them now, past the cache: the file of the layer that has it (or a
+		// queued store of it); `too_large` past `max_bytes`. Not on the main thread outside a task (it waits, #1086).
+		::platform::beneath::read_result read_now(const tag& tag, std::uint64_t max_bytes,
+			std::vector<std::byte>& out) const;
+		// The files below `folder` of `protocol` as its resolver sees them (vfs_resolver::files_under); nullopt when it
+		// cannot list them (not mounted, or it reads no files). Any thread.
+		std::optional<std::vector<tag>> files_under(std::string_view protocol, std::string_view folder) const;
+		// The file on the disk `tag` is read from now, when it holds exactly `bytes` (what a load of it got): nullopt
+		// when its resolver reads no files (a RAM or pack one), a store of it is queued, or there is no file. `differs`
+		// says why a file that is there is not taken (vfs_resolver::disk_file_holding). Any thread.
+		std::optional<disk_file> disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+			std::string& differs) const;
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <format>
 #include <random>
+#include <set>
 #include <shared_mutex>
 #include <chrono>
 #include <thread>
@@ -600,6 +601,81 @@ std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& sou
 	report_self_change(to, from, change_kind::renamed);
 	egLOG("resource/rename", "Renamed resource '{}' to '{}'", from.view(), to.view());
 	return {};
+}
+
+std::optional<res::disk_file> res::vfs_resolver::disk_file_of(const tag& tag) const
+{
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_pending_writes.contains(tag) || m_erased.contains(tag)) return std::nullopt;
+	}
+	auto found = resolve_tag(tag);
+	if (!found.has_value()) return std::nullopt;
+	return disk_file{ std::move(found->first), std::move(found->second) };
+}
+
+std::optional<res::disk_file> res::vfs_resolver::disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+	std::string& differs) const
+{
+	std::optional<disk_file> found = disk_file_of(tag);
+	std::error_code ec;
+	if (!found.has_value() || !fs::is_regular_file(found->file, ec)) return std::nullopt;
+	const std::uintmax_t size = fs::file_size(found->file, ec);
+	if (ec || size != bytes.size()) {
+		differs = "its file on the disk has another size";
+		return std::nullopt;
+	}
+	const fs::path relative = found->file.lexically_relative(found->root);
+	platform::beneath::read_request request;
+	request.root = found->root;
+	request.folder = relative.parent_path();
+	request.leaf = relative.filename();
+	request.max_bytes = bytes.size();
+	std::vector<std::byte> on_disk;
+	const auto read = platform::beneath::read_beneath(request, on_disk);
+	if (read.status != platform::beneath::read_status::ok) {
+		differs = std::format("its file on the disk cannot be read: {}", read.error);
+		return std::nullopt;
+	}
+	if (on_disk != bytes) {
+		differs = "its file on the disk holds other bytes";
+		return std::nullopt;
+	}
+	return found;
+}
+
+std::vector<res::tag> res::vfs_resolver::files_under(std::string_view folder) const
+{
+	std::string base{ folder };
+	while (!base.empty() && base.back() == '/') base.pop_back();
+	if (base.empty()) return {};
+	std::set<std::string> found;
+	auto stack = entries_stack;
+	for (; !stack.empty(); stack.pop()) {
+		const std::optional<fs::path> dir = safe_path(stack.top(), res::tag(protocol, base));
+		std::error_code ec;
+		if (!dir || !fs::is_directory(fs::symlink_status(*dir, ec))) continue;
+		// The iterator does not enter a linked folder; a linked file is skipped as safe_path would refuse it.
+		for (fs::recursive_directory_iterator it(*dir, fs::directory_options::skip_permission_denied, ec), end;
+			!ec && it != end; it.increment(ec)) {
+			if (!fs::is_regular_file(it->symlink_status(ec))) continue;
+			found.insert(base + "/" + fs_paths::generic_utf8_of(it->path().lexically_relative(*dir)));
+		}
+	}
+	const std::string prefix = base + "/";
+	{
+		std::shared_lock lock(m_pending_mutex);
+		for (const auto& [tag, data] : m_pending_writes) {
+			if (tag.relative().starts_with(prefix)) found.insert(std::string(tag.relative()));
+		}
+		for (const auto& [tag, generation] : m_erased) {
+			if (!m_pending_writes.contains(tag)) found.erase(std::string(tag.relative()));
+		}
+	}
+	std::vector<res::tag> out;
+	out.reserve(found.size());
+	for (const std::string& relative : found) out.emplace_back(protocol, relative);
+	return out;
 }
 
 bool res::vfs_resolver::exists(const::res::tag& tag) const

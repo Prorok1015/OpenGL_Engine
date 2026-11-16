@@ -11,6 +11,7 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -34,6 +35,13 @@ namespace fs = std::filesystem;
 
 const res::tag k_model("res://models/m.obj");
 const res::tag k_prefab("memory://__models/res/models/m.obj/m.prefab.desc");
+
+std::vector<std::byte> text_bytes(std::string_view text)
+{
+	std::vector<std::byte> out(text.size());
+	for (std::size_t i = 0; i < text.size(); ++i) out[i] = static_cast<std::byte>(text[i]);
+	return out;
+}
 
 struct adapter_env
 {
@@ -93,38 +101,53 @@ struct adapter_env
 	rnd::skinning_manager skinning;
 	std::optional<scn::registration_scope> scope;
 
+	// As the resource system runs an adapter: in a compute task (resource_system::read_now refuses the main thread).
+	std::shared_ptr<res::resource_entry> load(const edt::decoded_model_adapter& adapter, const res::tag& tag,
+		const std::vector<std::byte>& bytes)
+	{
+		std::shared_ptr<res::resource_entry> loaded;
+		test_util::in_task(tasks, [&] { loaded = adapter.deserialize(tag, bytes); });
+		return loaded;
+	}
+
+	std::string error_of(const edt::decoded_model_adapter& adapter, const res::tag& tag,
+		const std::vector<std::byte>& bytes)
+	{
+		try {
+			load(adapter, tag, bytes);
+		} catch (const std::runtime_error& e) {
+			return e.what();
+		}
+		return {};
+	}
+
 	std::optional<edt::import_source> scanned;
 	std::optional<edt::import_source> imported;
 	std::vector<edt::referenced_file> imported_allowed;
 	std::chrono::steady_clock::time_point scanned_at{};
 };
 
-std::string error_of(const edt::decoded_model_adapter& adapter, const res::tag& tag, const std::vector<std::byte>& bytes)
-{
-	try {
-		adapter.deserialize(tag, bytes);
-	} catch (const std::runtime_error& e) {
-		return e.what();
-	}
-	return {};
-}
-
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtDecodedModelAdapterTests, adapter_env)
 
-BOOST_AUTO_TEST_CASE(TheModelIsFoundInTheHighestRootThatHasIt)
+// #996: the file the resolver reads the model from, only while it holds the bytes the load got.
+BOOST_AUTO_TEST_CASE(TheModelIsTheFileOfTheHighestRootThatHasIt_WhileItHoldsTheBytes)
 {
-	const auto found = edt::decoded_model_adapter::locate({ dir.path() / "low", dir.path() / "content" }, k_model);
+	std::string differs;
+	const auto found = rs->disk_file_holding(k_model, bytes(), differs);
 	BOOST_REQUIRE(found.has_value());
 	BOOST_TEST(fs::equivalent(found->file, dir.path() / "content" / "models" / "m.obj"));
 	BOOST_TEST(fs::equivalent(found->root, dir.path() / "content"));
+	BOOST_TEST(differs.empty());
 
-	const auto only_low = edt::decoded_model_adapter::locate({ dir.path() / "low" }, k_model);
-	BOOST_REQUIRE(only_low.has_value());
-	BOOST_TEST(fs::equivalent(only_low->root, dir.path() / "low"));
+	// The low root's file is not the one read: the bytes of the low file are not taken from the high one.
+	BOOST_TEST(!rs->disk_file_holding(k_model, text_bytes("low"), differs).has_value());
+	BOOST_TEST(!differs.empty());
 
-	BOOST_TEST(!edt::decoded_model_adapter::locate({ dir.path() / "low", dir.path() / "content" }, res::tag("res://models/none.obj")).has_value());
+	differs.clear();
+	BOOST_TEST(!rs->disk_file_holding(res::tag("res://models/none.obj"), bytes(), differs).has_value());
+	BOOST_TEST(differs.empty());
 }
 
 BOOST_AUTO_TEST_CASE(EachModelPathHasAMemoryFolderOfItsOwn)
@@ -139,7 +162,7 @@ BOOST_AUTO_TEST_CASE(TheDecoderGetsTheContentRootAndItsOwnTimeLimit_AndItsAnswer
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
 	const std::vector<std::byte> model = bytes();
-	const auto loaded = adapter.deserialize(k_model, model);
+	const auto loaded = load(adapter, k_model, model);
 
 	BOOST_REQUIRE(scanned.has_value());
 	BOOST_REQUIRE(imported.has_value());
@@ -176,7 +199,7 @@ BOOST_AUTO_TEST_CASE(AModelThatIsNoFileOnTheDisk_GoesToTheDecoderAsItsBytesAlone
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
 	const std::vector<std::byte> model = bytes();
-	const auto loaded = adapter.deserialize(res::tag("res://models/none.obj"), model);
+	const auto loaded = load(adapter, res::tag("res://models/none.obj"), model);
 
 	BOOST_REQUIRE(scanned.has_value());
 	BOOST_TEST(!scanned->on_disk);
@@ -191,9 +214,50 @@ BOOST_AUTO_TEST_CASE(AModelThatIsNoFileOnTheDisk_GoesToTheDecoderAsItsBytesAlone
 BOOST_AUTO_TEST_CASE(AModelOnTheDisk_GoesToTheDecoderAsAFile)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_REQUIRE(scanned.has_value());
 	BOOST_TEST(scanned->on_disk);
+}
+
+// #996: memory:// holds what was made at runtime; on the disk in the editor, still its models go by their bytes.
+BOOST_AUTO_TEST_CASE(AMemoryModel_GoesToTheDecoderAsItsBytesAlone_ThoughItsFolderIsOnTheDisk)
+{
+	dir.write("memory/models/x.obj", "o m");
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	load(adapter, res::tag("memory://models/x.obj"), bytes());
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	BOOST_TEST(scanned->boundary.empty());
+}
+
+// #996: a resolver that reads no files serves the bytes; a file of the same name in the mount's root is not the model.
+BOOST_AUTO_TEST_CASE(AModelFromAResolverThatReadsNoFiles_GoesAsItsBytes_ThoughAFileOfItsNameIsOnTheDisk)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	load(adapter, k_model, bytes());
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	BOOST_TEST(scanned->boundary.empty());
+}
+
+// #996: the file changed (or is another one) after the bytes were read: it is not the model, which goes by its bytes.
+BOOST_AUTO_TEST_CASE(AModelWhoseFileHoldsOtherBytes_GoesAsItsBytes_AndThatIsWarned)
+{
+	std::vector<std::string> warned;
+	const engine::log_sink_handle sink = engine::add_log_sink(
+		[&warned](std::string_view, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) warned.emplace_back(message);
+		});
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	load(adapter, k_model, text_bytes("o x"));
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	const auto named = std::count_if(warned.begin(), warned.end(), [](const std::string& line) {
+		return line.find("res://models/m.obj") != std::string::npos && line.find("bytes alone") != std::string::npos;
+	});
+	BOOST_TEST(named == 1);
 }
 
 BOOST_AUTO_TEST_CASE(WhatTheDecoderRefusesOrFailsOn_FailsTheLoadNamingTheModel)
@@ -252,7 +316,7 @@ BOOST_AUTO_TEST_CASE(WhatAnEarlierLoadLeftInTheModelsMemoryFolder_IsGoneBeforeTh
 		return answer(source, task);
 	};
 	const edt::decoded_model_adapter adapter(*descs, *rs, std::move(steps));
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 
 	BOOST_REQUIRE(left_over.has_value());
 	BOOST_TEST(!*left_over);
@@ -267,13 +331,6 @@ namespace {
 
 const res::tag k_geom("memory://__models/res/models/m.obj/m.geom.desc");
 const fs::path k_side_file = fs::path("content") / "models" / "m.mtl";
-
-std::vector<std::byte> text_bytes(std::string_view text)
-{
-	std::vector<std::byte> out(text.size());
-	for (std::size_t i = 0; i < text.size(); ++i) out[i] = static_cast<std::byte>(text[i]);
-	return out;
-}
 
 struct cache_env : adapter_env
 {
@@ -352,9 +409,9 @@ BOOST_FIXTURE_TEST_SUITE(EdtDecodedModelCacheTests, cache_env)
 BOOST_AUTO_TEST_CASE(TheSameBytesLoadedAgain_AreNotDecodedAgain_AndGiveThePrefab)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(load(adapter, k_model, bytes())) != nullptr);
 	const warnings warned;
-	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(load(adapter, k_model, bytes())) != nullptr);
 	BOOST_TEST(scans == 1);
 	BOOST_TEST(imports == 1);
 	BOOST_TEST((rs->resolve_alias(k_model) == k_prefab));
@@ -364,19 +421,19 @@ BOOST_AUTO_TEST_CASE(TheSameBytesLoadedAgain_AreNotDecodedAgain_AndGiveThePrefab
 BOOST_AUTO_TEST_CASE(OtherBytesOfTheModel_AreDecoded)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
-	adapter.deserialize(k_model, text_bytes("o n"));
+	load(adapter, k_model, bytes());
+	load(adapter, k_model, text_bytes("o n"));
 	BOOST_TEST(imports == 2);
-	adapter.deserialize(k_model, text_bytes("o n"));
+	load(adapter, k_model, text_bytes("o n"));
 	BOOST_TEST(imports == 2, "the new bytes are the ones reused now");
 }
 
 BOOST_AUTO_TEST_CASE(ASideFileTheScanListedThatChanged_IsDecodedAgain)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	dir.write(k_side_file.generic_string(), "newmtl b");
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(scans == 2);
 	BOOST_TEST(imports == 2);
 }
@@ -384,9 +441,9 @@ BOOST_AUTO_TEST_CASE(ASideFileTheScanListedThatChanged_IsDecodedAgain)
 BOOST_AUTO_TEST_CASE(AnotherBuildOfTheDecoder_DecodesAgain)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	version = "decoder-2";
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 }
 
@@ -394,18 +451,18 @@ BOOST_AUTO_TEST_CASE(WithoutTheVersionOfTheDecoder_NothingIsReused)
 {
 	version.clear();
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 }
 
 BOOST_AUTO_TEST_CASE(AResourceChangedInMemory_IsRefusedAsADecodersAnswerWouldBe_AndTheModelIsDecodedAgain)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://levels/secret.desc"})")));
 	const warnings warned;
-	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(adapter.deserialize(k_model, bytes())) != nullptr);
+	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(load(adapter, k_model, bytes())) != nullptr);
 	BOOST_TEST(imports == 2);
 	BOOST_TEST(warned.count("the earlier decode of 'res://models/m.obj' was refused") == 1u);
 }
@@ -413,10 +470,10 @@ BOOST_AUTO_TEST_CASE(AResourceChangedInMemory_IsRefusedAsADecodersAnswerWouldBe_
 BOOST_AUTO_TEST_CASE(AResourceSwappedForOneThatPassesTheChecks_IsNotTaken_AndTheModelIsDecodedAgain)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_REQUIRE(rs->store_sync(k_geom, text_bytes(R"({"__type":"geometry_desc","__parent":"res://base_geometry.desc","name":"other"})")));
 	const warnings warned;
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 	BOOST_TEST(warned.count("is not what the decoder stored") == 1u);
 }
@@ -425,8 +482,8 @@ BOOST_AUTO_TEST_CASE(AnImportWithoutTheDigestsOfItsResources_IsNotReused)
 {
 	with_digests = false;
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 }
 
@@ -434,19 +491,19 @@ BOOST_AUTO_TEST_CASE(TheSameBytesFoundInAnotherRoot_AreDecodedAgain)
 {
 	// Same tag, same folder, same bytes; another file and content root, so another boundary for its side files.
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	fs::remove(dir.path() / "content" / "models" / "m.obj");
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 }
 
 BOOST_AUTO_TEST_CASE(AResourceGoneFromMemory_IsDecodedAgain)
 {
 	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	rs->erase(k_geom);
 	BOOST_REQUIRE(!rs->exists(k_geom));
-	adapter.deserialize(k_model, bytes());
+	load(adapter, k_model, bytes());
 	BOOST_TEST(imports == 2);
 	BOOST_TEST(rs->exists(k_geom));
 }
@@ -465,6 +522,38 @@ BOOST_AUTO_TEST_CASE(TheVersionOfTheDecoderProcess_IsTheSha256OfItsFile_AndEmpty
 	BOOST_TEST(missing.version().empty());
 	BOOST_TEST(missing.version().empty());
 	BOOST_TEST(warned.count("cannot be read") == 1u, "one warning, however often it is asked");
+}
+
+// #1086: an earlier import is read back through the resolver that serves memory://, not from its folder on the disk.
+BOOST_AUTO_TEST_CASE(AnEarlierImport_IsReadBackThroughTheResolverOfMemory)
+{
+	rs->unregistrate_resolver(res::tag::memory);
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::memory);
+	const edt::decoded_model_adapter adapter(*descs, *rs, decoding());
+	load(adapter, k_model, bytes());
+	load(adapter, k_model, bytes());
+	BOOST_TEST(imports == 1);
+}
+
+// #1086: a resolver of memory:// that cannot list its files gets what the last decode made erased, and a warning.
+BOOST_AUTO_TEST_CASE(UnderAMemoryResolverThatCannotList_WhatTheLastDecodeMadeIsErased_AndThatIsWarned)
+{
+	rs->unregistrate_resolver(res::tag::memory);
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::memory);
+	edt::decoded_model_adapter::decoder_steps steps = decoding();
+	bool geom_there_at_import = true;
+	steps.import = [&, real_import = steps.import](const edt::import_source& source, ds::task_context* context) {
+		geom_there_at_import = rs->exists(k_geom);
+		return real_import(source, context);
+	};
+	const edt::decoded_model_adapter adapter(*descs, *rs, std::move(steps));
+	load(adapter, k_model, bytes());
+	BOOST_REQUIRE(rs->exists(k_geom));
+	const warnings warned;
+	load(adapter, k_model, text_bytes("o n"));
+	BOOST_TEST(imports == 2);
+	BOOST_TEST(!geom_there_at_import);
+	BOOST_TEST(warned.count("cannot list") == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -507,7 +596,7 @@ BOOST_AUTO_TEST_CASE(AGlbFromMemory_IsDecoded)
 {
 	const std::vector<std::byte> robot = file_bytes(fs::path(SNK_TEST_PROJECT_DIR) / "res" / "objects" / "robot" / "gen_robot.glb");
 	BOOST_REQUIRE(!robot.empty());
-	const auto loaded = adapter().deserialize(res::tag("res://ram/gen_robot.glb"), robot);
+	const auto loaded = load(adapter(), res::tag("res://ram/gen_robot.glb"), robot);
 	BOOST_TEST(std::dynamic_pointer_cast<scn::prefab_desc>(loaded) != nullptr);
 	BOOST_TEST((rs->resolve_alias(res::tag("res://ram/gen_robot.glb")) == res::tag("memory://__models/res/ram/gen_robot.glb/gen_robot.prefab.desc")));
 }

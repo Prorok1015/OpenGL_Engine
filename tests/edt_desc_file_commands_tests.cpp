@@ -68,15 +68,20 @@ bool says_which_entry(std::string_view text)
 // engine:// served from `root` for one test; its resolver goes before the folder does.
 struct engine_mount_scope
 {
-	engine_mount_scope(res::resource_system& resources, const fs::path& root) : m_resources(resources)
+	engine_mount_scope(res::resource_system& resources, const fs::path& root)
+		: engine_mount_scope(resources, std::vector<fs::path>{ root })
+	{
+	}
+	// Lowest priority first, as a mount lists its roots.
+	engine_mount_scope(res::resource_system& resources, std::vector<fs::path> roots) : m_resources(resources)
 	{
 		if (!m_resources.mount_roots(res::tag::engine).empty()) {
-			m_resources.remount(res::tag::engine, { root });
+			m_resources.remount(res::tag::engine, std::move(roots));
 			return;
 		}
 		res::mount added;
 		added.protocol = res::tag::engine;
-		added.roots = { root };
+		added.roots = std::move(roots);
 		added.access = res::mount_access::read_only;
 		m_resources.add_mount(std::move(added));
 	}
@@ -816,6 +821,44 @@ BOOST_AUTO_TEST_CASE(AWorldUnderAnotherProtocol_BlocksNoWriteToTheProject)
 	BOOST_TEST_MESSAGE(created.error);
 	BOOST_TEST(created.ok);
 	BOOST_TEST(fs::exists(res_root / "materials" / "n.mat.desc"));
+}
+
+// #1086: engine:// over two folders, the project's the top one: a file the agent makes there would shadow the level's
+// world read from the lower one, so it is the level's.
+BOOST_AUTO_TEST_CASE(AFileThatWouldShadowAnEngineWorldFromALowerFolder_IsTheLevels)
+{
+	fs::create_directories(res_root / "levels");
+	dir.write("engine_low/worlds/x.desc", R"({"__type":"world_desc"})");
+	const engine_mount_scope engine{ *rs, std::vector<fs::path>{ dir.path() / "engine_low", res_root } };
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto created = call("desc.create", desc_args("worlds/x.desc", R"({"__type":"world_desc"})"));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(created.error.find("is a name of the open level") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "worlds" / "x.desc"));
+}
+
+// #1086: an engine:// resolver that reads no files cannot tell which file an entry is: the entry is the level's.
+BOOST_AUTO_TEST_CASE(AnEngineWorldUnderAResolverThatReadsNoFiles_IsTheLevels)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "m.mat.desc");
+	rs->unregistrate_resolver(res::tag::engine);
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::engine);
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto written = call("desc.write",
+		write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	rs->unregistrate_resolver(res::tag::engine);
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find("belongs to the open level") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "m.mat.desc") == before);
 }
 
 // A guid no file holds, without a path: the resolver loads nothing by it, so no file is the level's through it.

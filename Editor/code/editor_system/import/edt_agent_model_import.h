@@ -53,6 +53,8 @@ namespace edt {
 		std::vector<referenced_file> files;
 		std::uintmax_t files_bytes = 0;
 		bool scanned = false;
+		// What the decoder said of its OS sandbox when it listed the files (#1076): the second question says so.
+		decoder_sandbox_status sandbox{};
 		// Set when the request is refused: the command code (invalid_args, not_found, needs_input, busy) and why.
 		std::string code;
 		std::string error;
@@ -76,6 +78,9 @@ namespace edt {
 		std::function<std::filesystem::path()> resources_path;
 		// Why no import may start now (Play, the dialog import is running); null or nullopt: it may.
 		std::function<std::optional<std::string>()> blocker;
+		// What the decoder's OS sandbox is as far as the editor knows before a run (#1076); null: nothing is known, the
+		// question carries no mark.
+		std::function<decoder_sandbox_status()> sandbox_status;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
 		// The largest model file an agent may import: the job reads it into memory and parses it.
