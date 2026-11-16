@@ -925,7 +925,7 @@ BOOST_AUTO_TEST_CASE(FoldRecord_ANodeThePrefabLacks_AndRemoveRecords_AreRefusedL
 	const std::string missing = edt::override_edit::fold_record(edited,
 		scn::override_record{ .target = { 0xff }, .component = "stat", .path = "/hp", .value = 1 });
 	const std::string removal = edt::override_edit::fold_record(edited,
-		scn::override_record{ .target = {}, .component = "stat", .op = scn::override_op::remove });
+		scn::override_record{ .target = {}, .component = "stat", .path = {}, .value = {}, .op = scn::override_op::remove });
 
 	BOOST_TEST(!missing.empty());
 	BOOST_TEST(!removal.empty());
