@@ -30,6 +30,7 @@
 #include "edt_viewport_panel.h"
 #include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
+#include "edt_panels_component.h"
 #include "edt_problems_component.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
@@ -201,12 +202,8 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_start_mode, "editor/start_mode", "editor");
 	// --game=res://<level>: the level game mode starts on, instead of editor/startup_level. Only a res:// tag is taken.
 	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
-	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
-	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
-	// Logs the screen rectangle of the Asset Browser entries (Editor/UiProbe), so a headless smoke script finds an item by name.
-	CFG_VAR_DEF_BOOL(cfg_ui_probe, "editor/ui_probe", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
 	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
@@ -443,30 +440,37 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
 
-	// Create panels
-	// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
-	create_panels(!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
-	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
-	m_inspector_panel->set_desc_source([this] { return m_services.descs(); });
+	// What the Problems panel shows (#1004): before the panels, the prefab editor and the loads that report into it.
+	m_problems = std::make_unique<problems_component>(problems_component::ports{ .context = *m_context, .state = m_state,
+		.services = m_services, .worlds = m_world_ctrl,
+		.assets = [this] { return m_asset_component.get(); },
+		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
+		.play_active = [this] { return m_play && m_play->active(); } });
+
 	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
-	m_inspector_panel->set_asset_source(asset_catalog);
-	{
-		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
-		auto view_cache = std::make_shared<override_edit::view_cache>(m_services, m_state);
-		m_inspector_panel->set_view_cache(view_cache);
-		m_hierarchy_panel->set_view_cache(std::move(view_cache));
-	}
-	// "Changed by agent" (AI_INTEGRATION.md §3.4): nodes of the active world an agent's edits changed, not saved or accepted.
-	const auto changed_by_agent = [this](std::uint64_t node_id) {
-		return m_state.has_active_world() && m_state.agent_changes().contains({ static_cast<std::size_t>(m_state.active_world_idx), node_id });
-	};
-	m_hierarchy_panel->set_agent_marks(changed_by_agent);
-	m_inspector_panel->set_agent_marks(changed_by_agent);
-	create_viewport_panel();
+	// Create panels
+	m_panels = std::make_unique<panels_component>(panels_component::ports{ .context = *m_context, .services = m_services, .state = m_state,
+		.scene = m_scene_editor, .worlds = m_world_ctrl, .resources = m_res, .rnd = m_rnd, .gui = m_gui, .input_router = m_input_router,
+		.problems = *m_problems,
+		.capture = data.has_value<rnd::capture_service>() ? &data.require<rnd::capture_service>() : nullptr,
+		// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
+		.capture_log = !(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()),
+		.asset_catalog = asset_catalog,
+		.project_root = [&data]() -> std::optional<std::filesystem::path> {
+			if (!data.has_value<prj::project_context>()) return std::nullopt;
+			return data.require<prj::project_context>().root;
+		},
+		.input_actions = [&data]() -> gs::input_actions* {
+			return data.has_value<gs::input_actions>() ? &data.require<gs::input_actions>() : nullptr;
+		},
+		.default_configuration = *cfg_build_configuration,
+		.manual_build_running = [this] { return m_build && m_build->builder().is_manual_build_running(); },
+		.stop_live_build = [this] { stop_live_build(); },
+		.play_active = [this] { return m_play && m_play->active(); } });
+	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
 
 	// Wire all controller + panel callbacks
 	wire_controller_callbacks();
-	wire_panel_callbacks();
 	// During Play the selected entity is the one of the play twin, which the views show.
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
 		scn::context_set* set = view_set(m_services);
@@ -475,24 +479,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	m_selection_connections = wire_selection(
 		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
-		*m_hierarchy_panel, *m_inspector_panel,
-		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
-	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
-
-	// What the Problems panel shows (#1004): before the prefab editor and the loads that report into it.
-	m_problems = std::make_unique<problems_component>(problems_component::ports{ .context = *m_context, .state = m_state,
-		.services = m_services, .worlds = m_world_ctrl,
-		.assets = [this] { return m_asset_component.get(); },
-		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
-		.play_active = [this] { return m_play && m_play->active(); } });
+		*m_panels->hierarchy(), *m_panels->inspector(),
+		[this](ecs::entity ent) { m_panels->viewport()->set_selected_entity(ent); });
+	m_panels->viewport()->set_selected_resolver([this] { return m_context->selection().entity(); });
 
 	// Prefab editor (EPIC-25, #1004): after wire_selection, whose Inspector hand-over its selection listener follows.
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
-		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_inspector_panel, m_problems->desc() });
+		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc() });
 
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
 		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
-		.browser = *m_asset_browser_panel,
+		.browser = *m_panels->asset_browser(),
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.show_prefab = [this] { m_prefab->show(); },
 		.play_active = [this] { return m_play && m_play->active(); },
@@ -503,72 +500,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
 
-	// Registration order is the render order and the View menu order.
-	const auto add_panel = [this](const std::shared_ptr<panel_base>& panel, dock_slot slot, bool open_by_default) {
-		m_registrations.push_back(m_context->panels().add({
-			.id = panel->get_id(), .title = panel->get_title(), .slot = slot, .open_by_default = open_by_default, .panel = panel }));
-	};
-	add_panel(m_hierarchy_panel, dock_slot::left, true);
-	add_panel(m_inspector_panel, dock_slot::right, true);
-	add_panel(m_viewport_panel, dock_slot::center, true);
-	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
-	// The views show the set "play" while Play runs (view_set), the level otherwise.
-	m_game_view_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
-	m_game_view_panel->set_world_name_getter([this] {
-		const std::string* name = m_state.active_world_name();
-		return name ? *name : std::string{};
-	});
-	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
-		if (scn::context_set* set = view_set(m_services)) {
-			set->for_each([&visit](scn::world_context& world) { visit(world.state()); });
-		}
-	});
-	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_services, m_state); });
-	add_panel(m_game_view_panel, dock_slot::center, cfg_show_game_view);
-	// viewport.capture names the two views by what the panels show; the engine knows only these ids.
-	if (data.has_value<rnd::capture_service>()) {
-		auto& capture = data.require<rnd::capture_service>();
-		m_registrations.push_back(capture.add_target("scene", [this] {
-			return m_rnd.get_render_targets().current(viewport_panel::render_target_tag());
-		}));
-		m_registrations.push_back(capture.add_target("game", [this] {
-			const auto& target = m_game_view_panel->render_target();
-			return target ? m_rnd.get_render_targets().current(*target) : rnd::driver::texture_handle{};
-		}));
-	}
-	add_panel(m_console_panel, dock_slot::bottom_right, true);
-	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
-		? data.require<prj::project_context>().root : std::filesystem::path{});
-	m_problems->wire(*m_problems_panel);
-	add_panel(m_problems_panel, dock_slot::bottom_right, true);
-	m_blackboard_panel = std::make_shared<blackboard_panel>();
-	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
-	add_panel(m_blackboard_panel, dock_slot::bottom_right, false);
-	m_input_actions_panel = std::make_shared<input_actions_panel>();
-	m_input_actions_panel->set_actions_getter([&data]() -> gs::input_actions* {
-		return data.has_value<gs::input_actions>() ? &data.require<gs::input_actions>() : nullptr;
-	});
-	add_panel(m_input_actions_panel, dock_slot::bottom_right, false);
-	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
-	m_prefab->install(m_registrations);
-	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
-		if (!data.has_value<prj::project_context>()) return std::nullopt;
-		return data.require<prj::project_context>().root;
-	}, *cfg_build_configuration, [this] { return m_build && m_build->builder().is_manual_build_running(); });
-	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
-	m_build_settings_panel->set_stop_background([this] { stop_live_build(); });
-	add_panel(m_build_settings_panel, dock_slot::floating, false);
-	// #456: through the vcs.* commands as the person's calls; closed by default, so it reads nothing until opened.
-	git_panel_model::ports git_ports;
-	git_ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
-	git_ports.cancel = [this](std::uint64_t job) { return m_context->jobs().cancel(job); };
-	m_git_panel = std::make_shared<git_panel>(m_context->events(), std::move(git_ports), m_context->dialogs(), m_res);
-	add_panel(m_git_panel, dock_slot::right, false);
-	world_systems_model::ports systems_ports;
-	systems_ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
-	systems_ports.playing = [this] { return m_play && m_play->active(); };
-	m_world_systems_panel = std::make_shared<world_systems_panel>(m_context->events(), std::move(systems_ports));
-	add_panel(m_world_systems_panel, dock_slot::right, false);
+	// Registration order is the render order and the View menu order (panels_component::install).
+	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -852,13 +785,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return rollback_listing_of(data.require<prj::project_context>().root, id);
 		};
 		m_migration_panel = std::make_shared<migration_panel>(m_context->events(), std::move(ports));
-		add_panel(m_migration_panel, dock_slot::floating, false);
+		m_panels->add(m_registrations, m_migration_panel, dock_slot::floating, false);
 		m_registrations.push_back(register_migration_window_action(m_context->actions(),
 			[&data] { return data.has_value<prj::project_context>(); }, [this] { open_migration_window(); }));
 	}
 	m_file_menu->attach_window_close(wnd_sys);
 
-	game_build_component::ports build_ports{ .context = *m_context, .layer = *editor_layer, .settings_panel = *m_build_settings_panel,
+	game_build_component::ports build_ports{ .context = *m_context, .layer = *editor_layer, .settings_panel = *m_panels->build_settings(),
 		.swap_gate = m_swap_gate, .trust = m_trust,
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.default_configuration = *cfg_build_configuration,
@@ -879,7 +812,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	m_live = std::make_unique<live_mode_component>(live_mode_component::ports{
 		.context = *m_context, .resources = m_res, .layer = *editor_layer, .trust = m_trust, .builder = m_build->builder(),
-		.reloader = m_build->reloader(), .build_settings = *m_build_settings_panel, .problems = *m_problems_panel,
+		.reloader = m_build->reloader(), .build_settings = *m_panels->build_settings(), .problems = *m_panels->problems(),
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.module_host = [&data]() -> core::project_module_host* {
 			return data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
@@ -893,7 +826,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	m_build->install(m_registrations);
 
-	vcs_component::ports vcs_ports{ *m_context, *m_git_panel };
+	vcs_component::ports vcs_ports{ *m_context, *m_panels->git() };
 	vcs_ports.project_root = [&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
@@ -902,7 +835,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_vcs = std::make_unique<vcs_component>(std::move(vcs_ports));
 	if (data.has_value<prj::project_context>()) {
 		const prj::project_context& project = data.require<prj::project_context>();
-		asset_component::ports asset_ports{ *m_context, m_res, *m_asset_browser_panel, project };
+		asset_component::ports asset_ports{ *m_context, m_res, *m_panels->asset_browser(), project };
 		asset_ports.vcs_busy = [this] { return m_vcs && m_vcs->writes_running(); };
 		asset_ports.git_dir = [this]() -> std::optional<std::filesystem::path> {
 			return m_vcs ? m_vcs->git_dir() : std::nullopt;
@@ -1211,9 +1144,9 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 {
 	m_play_component = std::make_unique<play_component>(play_component::ports{
 		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
-		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_hierarchy_panel,
-		.inspector = *m_inspector_panel, .viewport = *m_viewport_panel, .game_view = *m_game_view_panel,
-		.problems = *m_problems_panel, .preflight = m_problems->play_preflight(),
+		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_panels->hierarchy(),
+		.inspector = *m_panels->inspector(), .viewport = *m_panels->viewport(), .game_view = *m_panels->game_view(),
+		.problems = *m_panels->problems(), .preflight = m_problems->play_preflight(),
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.module_host = [&data]() -> core::project_module_host* {
 			return data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
@@ -1243,7 +1176,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
 	// The Input Actions panel waiting for a key is a modal too: Ctrl+S and the rest must not fire under the player's key (#470).
 	editor_layer->set_modal_probe([this] {
-		return m_context->dialogs().pending() > 0 || (m_input_actions_panel && m_input_actions_panel->capturing());
+		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
 	});
 	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
 	editor_layer->set_frame_hook([this, &data] {
@@ -1257,7 +1190,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_problems->install();
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
-	m_game_view_panel->set_input_blocked([this] {
+	m_panels->game_view()->set_input_blocked([this] {
 		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
 	});
 
@@ -1476,46 +1409,6 @@ void edt::editor_system::draw_save_notice()
 	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
-void edt::editor_system::create_panels(bool capture_log)
-{
-	m_hierarchy_panel = std::make_shared<scene_hierarchy_panel>();
-	m_inspector_panel = std::make_shared<inspector_panel>();
-	m_inspector_panel->set_inspector_registry(&m_context->inspectors());
-	m_console_panel = std::make_shared<console_panel>();
-	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
-	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
-	if (cfg_ui_probe)
-		m_asset_browser_panel->set_ui_probe(std::make_shared<ui_probe>());
-	if (const auto code_roots = m_res.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
-		code_actions actions{ m_res, code_tree_model{ code_roots.back() },
-			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };
-		m_asset_browser_panel->set_code_section(std::make_shared<code_section>(m_res, std::move(actions)));
-	}
-
-	if (!capture_log) return;
-
-	auto console_weak = std::weak_ptr<console_panel>(m_console_panel);
-	m_log_sink = engine::add_log_sink([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
-		auto panel = console_weak.lock();
-		if (!panel) return;
-		edt::log_level edt_level = edt::log_level::info;
-		if (level == engine::log_level::warn)  edt_level = edt::log_level::warning;
-		if (level == engine::log_level::error) edt_level = edt::log_level::error;
-		panel->add_log(edt_level, std::format("[{}] {}", category, message));
-	});
-}
-
-void edt::editor_system::create_viewport_panel()
-{
-	m_viewport_panel = std::make_shared<viewport_panel>(m_rnd, m_gui);
-	m_viewport_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
-	m_viewport_panel->set_input_router(m_input_router, [this] { return active_input_target(m_services, m_state); });
-	m_viewport_panel->set_on_asset_dropped([this](const std::string& res_rel_path) {
-		if (!m_state.editor_tag.is_valid()) return;
-		m_context->asset_kinds().drop_into_scene(*m_context, res::tag::make(res_rel_path));
-	});
-}
-
 void edt::editor_system::wire_controller_callbacks()
 {
 	// on_before_modify and on_world_switched go through the selection service (edt_selection_wiring.cpp).
@@ -1573,44 +1466,6 @@ void edt::editor_system::follow_game_layer_change(bool before)
 	if (m_level_after_layer_change.is_valid()) {
 		m_level_load->begin(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
-}
-
-void edt::editor_system::wire_panel_callbacks()
-{
-	m_hierarchy_panel->set_on_world_changed([this](int idx) {
-		// A refused switch leaves the old world active: resync the tab and the panels to it.
-		if (!m_world_ctrl.switch_to_world(idx) && m_world_ctrl.on_world_switched)
-			m_world_ctrl.on_world_switched(m_state.active_world_idx);
-	});
-	m_hierarchy_panel->set_on_create_world([this](const std::string& name) {
-		m_world_ctrl.create_world(name);
-	});
-	m_hierarchy_panel->set_on_create_node([this](const std::string& type_name) {
-		m_scene_editor.create_entity(type_name);
-	});
-	m_hierarchy_panel->set_on_delete_node([this](uint64_t node_id) {
-		m_scene_editor.delete_entity(node_id);
-	});
-	m_hierarchy_panel->set_on_delete_nodes([this](const std::vector<uint64_t>& node_ids) {
-		m_scene_editor.delete_entities(node_ids);
-	});
-	m_hierarchy_panel->set_on_rename_node([this](const std::string& /*old_name*/, const std::string& /*new_name*/) {
-		m_state.commit("Rename node");
-	});
-	m_hierarchy_panel->set_on_duplicate_node([this](uint64_t node_id) {
-		m_scene_editor.duplicate_entity(node_id);
-	});
-	m_hierarchy_panel->set_on_duplicate_nodes([this](const std::vector<uint64_t>& node_ids) {
-		m_scene_editor.duplicate_entities(node_ids);
-	});
-	m_hierarchy_panel->set_on_reparent_node([this](uint64_t node_id, uint64_t new_parent_id, int insert_index) {
-		m_scene_editor.reparent_entity(node_id, new_parent_id, insert_index);
-	});
-
-	m_viewport_panel->set_on_transform_committed(
-		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
-			m_scene_editor.on_transform_committed(path, pos, rot, scale);
-		});
 }
 
 // ─── Import pipeline ────────────────────────────────────────────────────────
@@ -1818,7 +1673,7 @@ std::optional<std::string> edt::editor_system::load_in_progress() const
 bool edt::editor_system::person_is_editing() const
 {
 	// A text field that only has the keyboard is no gesture; a typed value not yet committed is the inspector's pending commit.
-	return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_inspector_panel && m_inspector_panel->has_pending_commit())
-		|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
+	return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_panels && m_panels->inspector() && m_panels->inspector()->has_pending_commit())
+		|| (m_panels && m_panels->viewport() && m_panels->viewport()->is_dragging_gizmo());
 }
 
