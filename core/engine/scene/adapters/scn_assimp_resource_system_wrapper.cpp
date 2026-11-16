@@ -7,6 +7,7 @@ Assimp::IOStream* scn::engine_assimp_resource_system_wrapper::Open(const char* p
 {
     const std::optional<res::tag> reference = res::model_reference_tag(source_tag, pFile);
     if (!reference) {
+        m_read_other_files = true;
         egLOG_WARN("loader", "model '{}' refers to '{}', which is absolute, in another protocol or above its root: not read",
             source_tag.view(), pFile);
         return nullptr;
@@ -15,6 +16,7 @@ Assimp::IOStream* scn::engine_assimp_resource_system_wrapper::Open(const char* p
     if (file_tag == source_tag) {
         return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(data.data()), data.size());
     }
+    m_read_other_files = true;
 
     if (std::string_view{ pMode } == "rb") {
         auto it = data_map.find(file_tag);
