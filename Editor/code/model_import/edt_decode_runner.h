@@ -59,15 +59,16 @@ namespace edt {
 		bool m_done = false;
 	};
 
-	// Runs the decoder process (#647) for one request. The model's bytes go in the request bundle; the child gets a
-	// clean environment and a scratch folder as its working directory, which is deleted on every path, a kill included.
-	// Blocks: call it from a worker thread.
+	// Runs the decoder process (#647) for one request. The model's bytes and `files` (the side files the editor read for
+	// it, #1043) go in the request bundle; the child gets a clean environment and a scratch folder as its working
+	// directory, which is deleted on every path, a kill included. Blocks: call it from a worker thread.
 	class decode_runner
 	{
 	public:
 		explicit decode_runner(decode_runner_config config);
 
-		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const;
+		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, const std::vector<bundle_blob>& files,
+			std::stop_token stop) const;
 
 		// Deletes the run folders of decoders whose editor process no longer runs (an editor that crashed mid-import):
 		// core::res::remove_stale_scratch_dirs, with its rules (only a private directory of this user, never a link).

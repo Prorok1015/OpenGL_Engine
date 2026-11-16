@@ -27,6 +27,10 @@ bool edt::filesystem_assimp_io::Exists(const char* pFile) const
 		throw std::runtime_error(m_access->resolve(pFile, model_file_kind::side_file).error);
 	}
 
+	// The decoder process (#1043) touches no disk: the root is only its own path, compared as text.
+	if (m_access && m_access->provided())
+		return p.lexically_normal() == m_root_path.lexically_normal() || m_access->resolve(pFile, model_file_kind::side_file).found();
+
 	std::error_code ec;
 	if (std::filesystem::equivalent(p, m_root_path, ec))
 		return true;
@@ -49,7 +53,10 @@ Assimp::IOStream* edt::filesystem_assimp_io::Open(const char* pFile, const char*
 
 	// Root file — serve from memory
 	std::error_code ec;
-	if (p == m_root_path || ((!m_access || m_access->on_disk()) && std::filesystem::equivalent(p, m_root_path, ec))) {
+	const bool root = m_access && m_access->provided()
+		? p.lexically_normal() == m_root_path.lexically_normal()
+		: p == m_root_path || ((!m_access || m_access->on_disk()) && std::filesystem::equivalent(p, m_root_path, ec));
+	if (root) {
 		return new Assimp::MemoryIOStream(
 			reinterpret_cast<const uint8_t*>(m_root_data.data()),
 			m_root_data.size());

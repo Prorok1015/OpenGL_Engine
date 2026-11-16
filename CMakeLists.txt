@@ -249,6 +249,8 @@ if(SNK_ENGINE_SHARED)
     add_subdirectory(tests/module_dll)
     # A module that registers into the editor through snk_editor_api (#587).
     add_subdirectory(tests/editor_api_dll)
+    # An editor module whose exported editor layout key unit_tests checks across the boundary (#969).
+    add_subdirectory(tests/editor_module_dll)
 else()
     # A game module compiled into a static host (snk_add_game_host, #592), run headless by CI.
     add_subdirectory(tests/static_game)

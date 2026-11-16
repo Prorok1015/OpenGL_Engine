@@ -100,4 +100,14 @@ BOOST_AUTO_TEST_CASE(the_host_refuses_another_key_and_lets_the_same_or_an_unknow
 	BOOST_TEST(why.find("rebuild the project") != std::string::npos);
 }
 
+// #1060: game_module::run hands module code a task handle by value.
+BOOST_AUTO_TEST_CASE(the_key_lists_the_task_handle_a_module_gets_by_value)
+{
+	using gs::detail::list_contains;
+	using gs::detail::module_layout_types;
+	static_assert(list_contains<ds::task_handle_base, module_layout_types>::value);
+	static_assert(list_contains<ds::task_handle<void>, module_layout_types>::value);
+	BOOST_TEST(gs::module_layout_key() != 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -652,13 +652,71 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 					scan.error = "the model took too long to read";
 					return scan;
 				}
-				access.hash_listed(reference);
+				try {
+					access.hash_listed(reference);
+				} catch (const std::runtime_error& e) {
+					// Not an image, changed while read, over the budget: the bytes are checked here, not by resolve().
+					scan.error = e.what();
+					return scan;
+				}
 			}
 		}
 	}
 	scan.files = access.files();
 	scan.total_bytes = access.listed_bytes();
 	return scan;
+}
+
+edt::scan_requests edt::model_importer::list_requests(const import_source& source, ds::task_context* ctx)
+{
+	scan_requests out;
+	if (!source.preloaded) {
+		out.error = "the model file was not read";
+		return out;
+	}
+	const std::vector<provided_file> none;
+	model_file_access access(source.path, source.limits, source.provided ? source.provided : &none, model_file_access::provided_mode::record);
+	Assimp::Importer importer;
+	importer.SetProgressHandler(new stop_progress_handler(ctx, source.deadline));
+	importer.SetIOHandler(new edt::filesystem_assimp_io(source.path, *source.preloaded, &access));
+	const aiScene* scene = importer.ReadFile(source.path.string(), 0);
+	checkpoint(ctx);
+	if (stop_progress_handler::past_deadline(source.deadline)) {
+		out.error = "the model took too long to read";
+		return out;
+	}
+	const auto& requested = access.requested();
+	if (std::any_of(requested.begin(), requested.end(), [](const requested_file& file) { return file.kind == model_file_kind::side_file; })) {
+		out.requested = requested;
+		return out;
+	}
+	if (!scene) {
+		out.error = std::format("the model cannot be read: {}", importer.GetErrorString());
+		return out;
+	}
+	constexpr aiTextureType read_types[] = { aiTextureType_DIFFUSE, aiTextureType_BASE_COLOR, aiTextureType_SPECULAR, aiTextureType_NORMALS };
+	for (unsigned int m = 0; m < scene->mNumMaterials; ++m) {
+		const aiMaterial* material = scene->mMaterials[m];
+		for (const aiTextureType type : read_types) {
+			for (unsigned int i = 0; i < material->GetTextureCount(type); ++i) {
+				aiString name;
+				material->GetTexture(type, i, &name);
+				if (scene->GetEmbeddedTexture(name.C_Str())) continue;
+				const resolved_reference reference = access.resolve(name.C_Str(), model_file_kind::texture);
+				if (!reference.error.empty()) {
+					out.error = reference.error;
+					return out;
+				}
+			}
+		}
+		checkpoint(ctx);
+		if (stop_progress_handler::past_deadline(source.deadline)) {
+			out.error = "the model took too long to read";
+			return out;
+		}
+	}
+	out.requested = access.requested();
+	return out;
 }
 
 edt::import_intermediate edt::model_importer::import_background(const import_source& source, ds::task_context* ctx)
@@ -668,13 +726,16 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	im.source_path = abs_path;
 	std::vector<res::tag> created_tags;
 	import_tags tags{ im.all_tags, created_tags };
-	if (!source.on_disk && (!source.allowed || !source.preloaded)) {
+	if (!source.on_disk && (!(source.allowed || source.provided) || !source.preloaded)) {
 		// Without model_file_access the importer reads side files from the folder of `path`, which names no folder here.
 		im.error = "a model that is not a file on the disk is imported from its bytes with the list of files it may read";
 		return im;
 	}
 	std::optional<model_file_access> access;
-	if (source.allowed) {
+	if (source.provided) {
+		access.emplace(abs_path, source.limits, source.provided, model_file_access::provided_mode::strict);
+		tags.files = &*access;
+	} else if (source.allowed) {
 		access.emplace(abs_path, source.limits, source.allowed, source.boundary, source.on_disk);
 		tags.files = &*access;
 	}

@@ -25,6 +25,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 // What a game_editor module (#588) leaves behind: nothing. A module registers only through its context; unloading it
 // puts the registries, the subscriptions and the tasks back as they were, and a module of another API major version
@@ -393,6 +394,46 @@ BOOST_AUTO_TEST_CASE(AResultQueuedBeforeTheUnload_IsNotDeliveredToTheModuleAfter
 	test_util::pump(tasks);
 	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
 	BOOST_CHECK_EQUAL(state.shutdowns, 1);
+}
+
+// #1061: job_service::launch's continuation is the module's code (a template it instantiates), held by the service's own
+// lifetime but queued with the module's task as its origin, so the unload runs it (run_pending_main) before the code goes.
+BOOST_AUTO_TEST_CASE(AJobOfAModule_IsRetiredInsideTheUnload_SoNoContinuationOfItsCodeIsLeftInTheMainQueue)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	int finished = 0;
+	edt::connection on_finished = context->events().job_finished.subscribe(
+		[&finished](std::uint64_t, edt::job_status, const std::string&, const std::optional<boost::json::value>&) { ++finished; });
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.job_bodies_run, 1);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		BOOST_REQUIRE_EQUAL(finished, 0);
+		module.shutdown_services(host_data);
+		// No drain_main in between: only the unload itself can have run the continuation.
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+		BOOST_CHECK_EQUAL(finished, 1);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(finished, 1);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AJobOfAModuleThatNeverRan_IsAlsoRetiredInsideTheUnload)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		module.shutdown_services(host_data);
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
 }
 
 BOOST_AUTO_TEST_CASE(APreviewOfAModule_IsDestroyedAtUnload_AfterItsTasksStoppedAndBeforeItsKindIsGone_AndNothingArrivesAfterwards)

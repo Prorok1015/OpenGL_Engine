@@ -2,6 +2,7 @@
 #include "edt_agent_log_filter.h"
 #include "edt_level_load_component.h"
 #include "edt_asset_component.h"
+#include "edt_asset_open_component.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -309,7 +310,7 @@ edt::editor_system::~editor_system()
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
 		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
 		context->jobs().cancel_all_and_wait();
-		if (m_data_documents) m_data_documents->shutdown();
+		if (m_asset_open) m_asset_open->data_documents().shutdown();
 		context->documents().shutdown();
 	}
 	// Its "prefab" listener of document_closed reaches m_desc_problems, which is declared after it and would go first.
@@ -481,33 +482,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_inspector_panel, m_desc_problems });
 
-	asset_kind_hooks asset_hooks;
-	asset_hooks.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); };
-	asset_hooks.desc_layout = [this] { return desc_layout(); };
-	asset_hooks.edits_locked = [this] { return m_play && m_play->active(); };
-	m_data_documents = std::make_unique<data_document_host>(*m_context, m_services, [this] { return desc_layout(); }, [this](document& open) {
-		if (m_context->documents().preview() == &open) m_prefab->show();
-	});
-	m_data_documents->set_asset_source(asset_catalog);
-	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
-		if (refused_during_play(m_play, m_context->dialogs(), "Stop Play to add an asset to the scene.")) return;
-		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
-		m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(tag);
-		m_pending_desc_tag = tag;
-		m_pending_desc_key = m_scene_editor.make_unique_key(stem.empty() ? "Asset" : stem);
-		editor_layer->register_implicit("edt/drop_loading", [this] { return poll_pending_desc(); });
-	};
-	for (auto& kind : register_builtin_asset_kinds(m_context->asset_kinds(), std::move(asset_hooks))) m_registrations.push_back(std::move(kind));
-	m_asset_browser_panel->set_document_creator(
-		std::make_shared<document_creator>(document_creator::ports{
-			[this] { return m_services.descs(); },
-			[this] { return m_services.writable_resources(); },
-			[this] { return m_res.get_resource_layers(); },
-			[this] { return project_write_blocker(); } }),
-		[this](const res::tag& tag) { open_asset(tag, false); });
-	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
-		open_asset(res::tag::make(res_rel.generic_string()), false);
-	});
+	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
+		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_desc_problems,
+		.browser = *m_asset_browser_panel,
+		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
+		.show_prefab = [this] { m_prefab->show(); },
+		.play_active = [this] { return m_play && m_play->active(); },
+		.refused_during_play = [this](std::string text) { return refused_during_play(m_play, m_context->dialogs(), std::move(text)); },
+		.write_blocker = [this] { return project_write_blocker(); },
+		.asset_index_wait = [this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); },
+		.asset_catalog = asset_catalog };
+	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
+	m_asset_open->install(m_registrations);
 
 	// Registration order is the render order and the View menu order.
 	const auto add_panel = [this](const std::shared_ptr<panel_base>& panel, dock_slot slot, bool open_by_default) {
@@ -645,13 +631,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_data_documents->dirty().empty() || m_prefab->dirty() != nullptr; };
+	hooks.other_documents_dirty = [this] { return !m_asset_open->data_documents().dirty().empty() || m_prefab->dirty() != nullptr; };
 	hooks.save_other_documents = [this] {
 		if (!m_prefab->apply_dirty()) return false;
-		return m_data_documents->save_all();
+		return m_asset_open->data_documents().save_all();
 	};
 	hooks.discard_other_documents = [this] {
-		for (const document_id id : m_data_documents->dirty()) m_data_documents->close(id);
+		for (const document_id id : m_asset_open->data_documents().dirty()) m_asset_open->data_documents().close(id);
 		if (m_prefab->dirty()) m_prefab->close();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
@@ -736,7 +722,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
 	{
 		edt::desc_file_deps desc_files{ m_res, desc_system };
-		desc_file_layout layout = desc_layout();
+		desc_file_layout layout = m_asset_open->desc_layout();
 		desc_files.top_layer = std::move(layout.top_layer);
 		desc_files.layers = std::move(layout.layers);
 		desc_files.open_level_files = std::move(layout.open_level_files);
@@ -801,12 +787,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				if (&open != &documents.scene()) open_documents.push_back(open.id());
 			});
 			for (const document_id id : open_documents) {
-				if (m_data_documents->owns(id)) m_data_documents->close(id);
+				if (m_asset_open->data_documents().owns(id)) m_asset_open->data_documents().close(id);
 				else if (documents.find(id)) documents.close(id);
 			}
 			const res::tag level = current_level_tag();
 			// As follow_game_layer_change before a layer change: nothing may hold the level while its files are written.
-			m_pending_desc_handle = {};
+			m_asset_open->drop_pending();
 			if (m_level_load->in_progress()) m_level_load->abandon();
 			// A level a stopped migration left detached stays as it was kept (a second detach would keep the empty worlds).
 			if (!m_level_ctrl.is_detached()) m_level_ctrl.detach_from_game_layer();
@@ -874,7 +860,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			for (const std::filesystem::path& content : project.content_roots) {
 				const std::filesystem::path relative = file.lexically_relative(content.lexically_normal());
 				if (relative.empty() || *relative.begin() == std::filesystem::path("..")) continue;
-				if (!open_asset(res::tag::make(fs_paths::generic_utf8_of(relative)), false)) {
+				if (!m_asset_open->open(res::tag::make(fs_paths::generic_utf8_of(relative)), false)) {
 					egLOG_INFO("project/migrate", "'{}' is not a file the editor opens", path);
 				}
 				return;
@@ -1282,7 +1268,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
 	editor_layer->set_frame_hook([this, &data] {
 		// Before the shortcuts of the frame: Ctrl+Z goes to the document of the window the person is in.
-		if (m_data_documents) m_data_documents->follow_focus();
+		if (m_asset_open) m_asset_open->data_documents().follow_focus();
 		if (!m_context || !data.has_value<gs::input_actions>()) return;
 		const auto& actions = data.require<gs::input_actions>();
 		if (actions.revision() == m_input_problems_revision) return;
@@ -1596,7 +1582,7 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_play && m_play->active()) m_play->stop(play_reason::user);
 		m_prefab->close_for_layer_change();
-		m_pending_desc_handle = {};
+		m_asset_open->drop_pending();
 		m_level_after_layer_change = res::tag{};
 		if (m_level_load->in_progress()) {
 			m_level_after_layer_change = m_level_load->loading_tag();
@@ -1666,11 +1652,7 @@ bool edt::editor_system::poll_import_pipeline()
 			auto exported_tag = m_export_dialog->get_exported_tag();
 			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()
 				&& !refused_during_play(m_play, m_context->dialogs(), "The asset is exported; stop Play to add it to the scene.")) {
-				std::string name_str = std::string(exported_tag.pure_name());
-				m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(exported_tag);
-				m_pending_desc_tag = exported_tag;
-				m_pending_desc_key = m_scene_editor.make_unique_key(name_str.empty() ? "ImportedModel" : name_str);
-				editor_layer->register_implicit("edt/export_add", [this] { return poll_pending_desc(); });
+				m_asset_open->add_exported_to_scene(exported_tag);
 			}
 			return false;
 		}
@@ -1912,7 +1894,7 @@ void edt::editor_system::go_to(const desc_target& target)
 		return;
 	}
 	if (target.resource.empty()) return;
-	if (!open_asset(res::tag{ target.resource }, true)) {
+	if (!m_asset_open->open(res::tag{ target.resource }, true)) {
 		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
 	}
 }
@@ -1932,79 +1914,8 @@ std::optional<std::string> edt::editor_system::project_write_blocker()
 std::optional<std::string> edt::editor_system::load_in_progress() const
 {
 	if (m_level_load && m_level_load->in_progress()) return std::string{ "a level is loading" };
-	if (m_pending_desc_handle.is_valid()) return std::string{ "an asset is being added to the scene" };
+	if (m_asset_open && m_asset_open->adding_to_scene()) return std::string{ "an asset is being added to the scene" };
 	return std::nullopt;
-}
-
-bool edt::editor_system::poll_pending_desc()
-{
-	// Dropped when the game layer changed under the load.
-	if (!m_pending_desc_handle.is_valid()) return false;
-	if (m_pending_desc_handle.has_error()) {
-		egLOG_ERROR("Editor/Drop", "Failed to load desc '{}'", m_pending_desc_tag.view());
-		m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
-		m_pending_desc_handle = {};
-		return false;
-	}
-
-	if (!m_pending_desc_handle.is_ready()) {
-		ImGui::OpenPopup("Loading Asset##edt_drop");
-		if (ImGui::BeginPopupModal("Loading Asset##edt_drop", nullptr,
-			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-		{
-			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-				m_pending_desc_handle = {};
-				ImGui::CloseCurrentPopup();
-				ImGui::EndPopup();
-				return false;
-			}
-			ImGui::Text("Loading '%s'...", m_pending_desc_key.c_str());
-			ImGui::EndPopup();
-		}
-		return true;
-	}
-
-	ImGui::OpenPopup("Loading Asset##edt_drop");
-	if (ImGui::BeginPopupModal("Loading Asset##edt_drop", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::CloseCurrentPopup();
-		ImGui::EndPopup();
-	}
-
-	m_desc_problems.report(m_context->problems(), "drop", diagnostics_of(m_pending_desc_handle));
-	m_level_ctrl.add_desc_to_scene(m_pending_desc_handle, m_pending_desc_key);
-	m_pending_desc_handle = {};
-	return false;
-}
-
-edt::desc_file_layout edt::editor_system::desc_layout()
-{
-	desc_file_layout layout;
-	layout.top_layer = [this] { return m_res.get_resources_path(); };
-	layout.layers = [this] { return m_res.get_resource_layers(); };
-	layout.open_level_files = [this] {
-		std::vector<std::string> open;
-		for (const res::tag* tag : { &current_level_tag(), &current_editor_tag() }) {
-			if (!tag->view().empty()) open.emplace_back(tag->relative());
-		}
-		return open;
-	};
-	layout.write_blocker = [this] { return project_write_blocker(); };
-	// Read when asked: the asset database and its link exist only while a project is open.
-	layout.asset_index_wait = [this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); };
-	return layout;
-}
-
-// ─── Data documents (EPIC-56, #793) ─────────────────────────────────────────
-
-bool edt::editor_system::open_asset(const res::tag& tag, bool quiet)
-{
-	if (m_context->asset_kinds().open(*m_context, tag)) return true;
-	if (!tag.relative().ends_with(".desc")) return false;
-	m_data_documents->open(tag, quiet);
-	return true;
 }
 
 bool edt::editor_system::person_is_editing() const
