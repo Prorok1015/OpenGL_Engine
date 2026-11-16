@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -425,7 +426,7 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 		if (ranges.indices) {
 			indices.clear();
 		} else if (!json_indices.as_array().empty()) {
-			indices = json::value_to<decltype(indices)>(json_indices);
+			indices = json::value_to<std::remove_cvref_t<decltype(indices)>>(json_indices);
 		}
 	}
 
@@ -458,7 +459,7 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 	if (resource.contains("bounds"))
 	{
 		auto& json_bounds = resource.at("bounds");
-		bounds = json::value_to<decltype(bounds)>(json_bounds);
+		bounds = json::value_to<std::remove_cvref_t<decltype(bounds)>>(json_bounds);
 
 		PROFILE_SCOPE("geometry_desc rtree build");
 		for(auto& [key, val] : bounds)
