@@ -170,7 +170,9 @@ namespace scn {
 		std::string what;
 	};
 	// The stale records of `node`, in the order of `node.overrides`: judged by expanding the node, so a record that an earlier one
-	// makes meaningful (an added node) is not stale, and one handed down to a nested instance is judged there. Applies nothing.
+	// makes meaningful (an added node) is not stale, and one handed down to a nested instance is judged there (each nested instance
+	// is expanded once; one that instantiates a prefab it is inside is refused, as in a spawn). Applies nothing. A node that cannot
+	// be expanded reports nothing. Not module API until stale_override is in gs::module_layout_key (docs/abi/changes/148.md).
 	SNK_API std::vector<stale_override> find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node);
 	// Removes them from `node.overrides` (what the editor's "clear stale overrides" and a cook do); returns how many went.
 	SNK_API std::size_t prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node);

@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -1001,8 +1002,11 @@ bool scn::expand_instance(const ecs_assembler& assembler, const prefab_desc::pre
 namespace {
 
 // The records of `node` that find nothing to change when it is expanded, by their number among `node.overrides`. A record handed
-// down to a nested instance is judged there: that instance is expanded in turn. `guard` bounds the nesting that is followed.
-std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembler, const prefab_node& node, std::size_t guard)
+// down to a nested instance is judged there: each nested instance is expanded once, whatever number of records it was handed. `open`
+// are the prefabs `node` is inside, as in a spawn: a prefab that instantiates itself is refused at once, so a cycle ends. `guard`
+// bounds the nesting that is followed. A node that cannot be expanded (no prefab, no records) reports nothing.
+std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembler, const prefab_node& node,
+	std::span<const res::tag> open, std::size_t guard)
 {
 	std::vector<scn::stale_override> found;
 	if (guard == 0) return found;
@@ -1010,31 +1014,44 @@ std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembl
 	res::tag source;
 	expansion made;
 	stale_sink sink;
-	if (!materialize(assembler, node, out, source, {}, 0, made, {}, &sink)) return found;
+	if (!materialize(assembler, node, out, source, open, 0, made, {}, &sink)) return found;
 	found = std::move(sink.stale);
+
+	std::vector<res::tag> inside(open.begin(), open.end());
+	if (!source.string().empty()) inside.push_back(source);
+	std::vector<std::pair<std::vector<uint64_t>, std::vector<const stale_sink::forward*>>> by_instance;
 	for (const auto& note : sink.forwarded) {
+		auto group = std::ranges::find(by_instance, note.prefix, &decltype(by_instance)::value_type::first);
+		if (group == by_instance.end()) {
+			by_instance.emplace_back(note.prefix, std::vector<const stale_sink::forward*>{});
+			group = std::prev(by_instance.end());
+		}
+		group->second.push_back(&note);
+	}
+	for (const auto& [prefix, notes] : by_instance) {
 		const prefab_node* nested = &out;
-		for (const uint64_t id : note.prefix) {
+		for (const uint64_t id : prefix) {
 			auto child = std::ranges::find(nested->children, id, &prefab_node::node_id);
 			if (child == nested->children.end()) { nested = nullptr; break; }
 			nested = &*child;
 		}
 		if (!nested) continue;
-		for (auto& inner : stale_in_node(assembler, *nested, guard - 1)) {
-			if (inner.index != note.position) continue;
-			inner.index = note.record;
-			found.push_back(std::move(inner));
+		const std::vector<scn::stale_override> inner = stale_in_node(assembler, *nested, inside, guard - 1);
+		for (const auto* note : notes) {
+			for (const scn::stale_override& entry : inner) {
+				if (entry.index != note->position) continue;
+				found.push_back(entry);
+				found.back().index = note->record;
+			}
 		}
 	}
 	return found;
 }
 
-}
-
 std::vector<scn::stale_override> scn::find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node)
 {
 	constexpr std::size_t nesting_followed = 64;
-	std::vector<stale_override> found = stale_in_node(assembler, node, nesting_followed);
+	std::vector<stale_override> found = stale_in_node(assembler, node, {}, nesting_followed);
 	std::ranges::sort(found, {}, &stale_override::index);
 	return found;
 }
