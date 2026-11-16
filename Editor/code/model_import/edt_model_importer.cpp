@@ -16,6 +16,7 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_import_vertex_layout.h>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -68,6 +69,24 @@ kept_faces kept_faces_of(const aiScene* scene, std::string source)
 	out.topology = kept_topology_of(scene);
 	out.face_size = out.topology == rnd::geometry_topology::lines ? 2u : (out.topology == rnd::geometry_topology::points ? 1u : 3u);
 	out.source = std::move(source);
+	return out;
+}
+
+// The vertex attributes of the geometry (#1100): the union over the meshes that keep a face of `face_size`; a mesh
+// whose faces are all dropped writes no vertex and adds nothing.
+scn::import_layout::vertex_attributes kept_attributes_of(const aiScene* scene, unsigned int face_size)
+{
+	scn::import_layout::vertex_attributes out;
+	for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
+		const aiMesh* mesh = scene->mMeshes[m];
+		bool keeps = false;
+		for (unsigned int f = 0; f < mesh->mNumFaces && !keeps; ++f) {
+			keeps = mesh->mFaces[f].mNumIndices == face_size;
+		}
+		if (keeps) {
+			out |= scn::import_layout::vertex_attributes{ mesh->HasNormals(), mesh->HasTextureCoords(0), mesh->HasTangentsAndBitangents(), false };
+		}
+	}
 	return out;
 }
 
@@ -181,13 +200,6 @@ trs_result decompose_aimatrix(const aiMatrix4x4& m)
 	float yaw = 0.f, pitch = 0.f, roll = 0.f;
 	glm::extractEulerAngleYXZ(glm::mat4_cast(q), yaw, pitch, roll);
 	return { convert_to_glm(pos), glm::degrees(glm::vec3{ pitch, yaw, roll }), convert_to_glm(scale) };
-}
-
-void store_data(std::vector<std::byte>& data, const auto& value)
-{
-	const size_t begin = data.size();
-	data.resize(data.size() + sizeof(value));
-	std::memcpy((data.data() + begin), &value, sizeof(value));
 }
 
 void log_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, std::string_view name)
@@ -443,38 +455,27 @@ bool process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 		return false;
 	}
 
-	// Validate layout offsets once before the loop (PERF-06)
-	{
-		size_t expected_stride = sizeof(glm::vec3); // position
-		ASSERT_MSG(0 == geometry.layout.get_element_offset("position"), "Offset position mismatch");
-		if (mesh->HasNormals()) {
-			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
-			expected_stride += sizeof(glm::vec3);
-		}
-		if (mesh->HasTextureCoords(0)) {
-			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
-			expected_stride += sizeof(glm::vec2);
-		}
-		if (mesh->HasTangentsAndBitangents()) {
-			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
-			ASSERT_MSG((expected_stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
-			expected_stride += sizeof(glm::vec3) * 2;
-		}
-		ASSERT_MSG(expected_stride == geometry.layout.get_stride(), "Stride mismatch");
+	// Every vertex in the geometry's layout (#1100): what this mesh lacks takes the default of scn::import_layout.
+	const scn::import_layout::vertex_attributes layout = scn::import_layout::attributes_of(geometry.layout);
+	if (layout.normal && !mesh->HasNormals()) {
+		egLOG_WARN("edt/import", "model '{}': mesh '{}' has no normals: written as (0, 0, 1)", kept.source, mesh->mName.C_Str());
 	}
-
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
+		scn::import_layout::vertex_values vertex;
+		vertex.position = convert_to_glm(mesh->mVertices[i]);
 		if (mesh->HasNormals()) {
-			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
+			vertex.normal = convert_to_glm(mesh->mNormals[i]);
 		}
 		if (mesh->HasTextureCoords(0)) {
-			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
+			vertex.uv = glm::vec2(convert_to_glm(mesh->mTextureCoords[0][i]));
 		}
 		if (mesh->HasTangentsAndBitangents()) {
-			store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
-			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
+			vertex.tangent = convert_to_glm(mesh->mTangents[i]);
+			vertex.bitangent = convert_to_glm(mesh->mBitangents[i]);
 		}
+		const size_t begin = geometry.vertices.size();
+		scn::import_layout::append_vertex(geometry.vertices, layout, vertex);
+		ASSERT_MSG(geometry.vertices.size() - begin == geometry.layout.get_stride(), "Stride mismatch");
 	}
 
 	const bool has_uvs = mesh->HasTextureCoords(0);
@@ -863,23 +864,8 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	std::string model_name = abs_path.stem().string();
 	std::string mem_prefix = source.memory_folder.empty() ? model_name + "/" : source.memory_folder;
 
-	// 4. Setup geometry
+	// 4. Setup geometry: its layout is set with the faces it keeps (step 8)
 	rnd::geometry_desc geometry;
-	if (scene->HasMeshes()) {
-		std::vector<rnd::driver::BufferElement> layout;
-		layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" });
-
-		auto mesh = scene->mMeshes[0];
-		if (mesh->HasNormals())
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal" });
-		if (mesh->HasTextureCoords(0))
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv" });
-		if (mesh->HasTangentsAndBitangents()) {
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent" });
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent" });
-		}
-		geometry.layout = rnd::driver::BufferLayout{ layout };
-	}
 
 	// 5. Pre-scan bones
 	std::unordered_map<std::string, int> bone_index_map;
@@ -958,6 +944,9 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	std::filesystem::path model_dir = abs_path.parent_path();
 	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
 	const kept_faces kept = kept_faces_of(scene, abs_path.string());
+	if (scene->HasMeshes()) {
+		geometry.layout = scn::import_layout::layout_of(kept_attributes_of(scene, kept.face_size));
+	}
 	json::object prefab_root = build_prefab_node(
 		scene, scene->mRootNode, geometry, kept, geom_tag, bone_index_map,
 		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, tags, prefab_tag,
