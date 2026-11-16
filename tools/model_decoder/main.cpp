@@ -53,7 +53,11 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <sys/ptrace.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #endif
 #elif defined(_WIN32)
 #ifndef NOMINMAX
@@ -157,6 +161,9 @@ struct arguments
 	bool self_test_pretend_no_landlock = false;
 	// Start a second thread before the sandbox is applied: the sandbox must refuse to cover only one of them.
 	bool self_test_extra_thread = false;
+	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork.
+	std::string self_test_call;
+	fs::path self_test_path;
 #endif
 };
 
@@ -219,6 +226,10 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_pretend_no_landlock = true;
 		} else if (arg == "--self-test-extra-thread") {
 			parsed.self_test_extra_thread = true;
+		} else if (arg == "--self-test-call" && has_value) {
+			parsed.self_test_call = args[++i].string();
+		} else if (arg == "--self-test-path" && has_value) {
+			parsed.self_test_path = args[++i];
 #endif
 		} else {
 			return std::nullopt;
@@ -227,7 +238,7 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
 		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
-		|| parsed.self_test_signal || parsed.self_test_extra_thread) {
+		|| parsed.self_test_signal || parsed.self_test_extra_thread || !parsed.self_test_call.empty()) {
 		return parsed;
 	}
 #endif
@@ -264,6 +275,52 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 }
 
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
+#if defined(__linux__)
+// One call of --self-test-call, with the codes of self_test_probe.
+int self_test_call(std::string_view name, const fs::path& path)
+{
+	const auto refused = [](int error) { return error == EACCES || error == EPERM ? 0 : 6; };
+	if (name == "write") {
+		const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+		if (fd < 0) return refused(errno);
+		const bool written = ::write(fd, "x", 1) == 1;
+		::close(fd);
+		return written ? 5 : 6;
+	}
+	if (name == "truncate") return ::truncate(path.c_str(), 0) == 0 ? 5 : refused(errno);
+	if (name == "chmod") return ::chmod(path.c_str(), S_IRUSR | S_IWUSR) == 0 ? 5 : refused(errno);
+	if (name == "io_uring") {
+#if defined(__NR_io_uring_setup)
+		// struct io_uring_params, zeroed: the kernel fills in what it set up.
+		alignas(8) unsigned char params[120] = {};
+		const long ring = ::syscall(__NR_io_uring_setup, 1u, params);
+		if (ring >= 0) {
+			::close(static_cast<int>(ring));
+			return 5;
+		}
+		return refused(errno);
+#else
+		return 6;
+#endif
+	}
+	if (name == "ptrace") {
+		// Asks about the parent without attaching: a run that lets the call through gets ESRCH and attaches to nothing.
+		errno = 0;
+		::ptrace(PTRACE_PEEKUSER, ::getppid(), nullptr, nullptr);
+		return errno == ESRCH ? 5 : refused(errno);
+	}
+	if (name == "fork") {
+		const pid_t child = ::fork();
+		if (child == 0) ::_exit(0);
+		if (child < 0) return refused(errno);
+		int status = 0;
+		::waitpid(child, &status, 0);
+		return 5;
+	}
+	return 6;
+}
+#endif
+
 // The self-test probes of the sandbox: 0 when the system refused what the probe tried, 5 when it worked, 6 when it failed
 // in a way that says nothing about the sandbox.
 int self_test_probe(const arguments& args, const decoder_sandbox::status& applied)
@@ -274,6 +331,7 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		return 0;
 	}
 #if defined(__linux__)
+	if (!args.self_test_call.empty()) return self_test_call(args.self_test_call, args.self_test_path);
 	const auto refused = [](int error) { return error == EACCES || error == EPERM ? 0 : 6; };
 	if (!args.self_test_open.empty()) {
 		const int fd = ::open(args.self_test_open.c_str(), O_RDONLY | O_CLOEXEC);
@@ -379,7 +437,7 @@ int main(int argc, char** argv)
 	std::fflush(stderr);
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
-		|| args->self_test_signal || args->self_test_extra_thread) {
+		|| args->self_test_signal || args->self_test_extra_thread || !args->self_test_call.empty()) {
 		return self_test_probe(*args, sandbox);
 	}
 #endif
