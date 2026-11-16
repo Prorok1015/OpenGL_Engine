@@ -68,6 +68,7 @@ void edt::play_session::abandon()
 {
 	m_world_changed.disconnect();
 	m_worlds_copy.clear();
+	m_world_tags_copy.clear();
 	m_state = play_state::stopped;
 }
 
@@ -167,6 +168,7 @@ bool edt::play_session::start(play_reason reason)
 
 	// Copies of the document, never the files: Play shows the level as it is edited, saved or not.
 	m_worlds_copy = m_document.world_descs;
+	m_world_tags_copy = m_document.world_tags;
 	const std::vector<std::string> names = m_document.world_names;
 	const std::vector<std::vector<std::string>> systems = m_document.worlds_systems_list;
 	// What was injected into "play" or asked of its stack before it started is not for this session.
@@ -192,7 +194,9 @@ bool edt::play_session::start(play_reason reason)
 			world.set_input_stack(copy.get_input_stack());
 			keep_bus_journal(world);
 			const entt::entity root = world.state().create();
-			m_services.assembler()->spawn_from_desc(world.state(), root, copy, name);
+			// With the world's file open, as a level load builds it: a record may add an instance of a prefab it is inside.
+			const res::tag tag = i < m_world_tags_copy.size() ? m_world_tags_copy[i] : res::tag{};
+			scn::spawn_world(*m_services.assembler(), world.state(), root, copy, name, tag);
 		}
 	}
 
@@ -224,6 +228,7 @@ void edt::play_session::stop(play_reason reason)
 		}
 	}
 	m_worlds_copy.clear();
+	m_world_tags_copy.clear();
 	m_camera_world.clear();
 	m_reload.reset();
 	m_suspended = false;
@@ -442,6 +447,7 @@ void edt::play_session::suspend_for_swap()
 	++m_wait_generation;
 	// The copies hold descs of the module's types: they go before its binary does.
 	m_worlds_copy.clear();
+	m_world_tags_copy.clear();
 	if (m_options.input) {
 		// Only a swap that happens loses them: a reload the host refuses leaves the queues of the running Play alone.
 		if (m_reload) {
@@ -469,6 +475,7 @@ bool edt::play_session::restore_after_swap(scn::snapshot_report& report, std::st
 	m_dropped_systems.clear();
 	reload_snapshot& saved = *m_reload;
 	m_worlds_copy = m_document.world_descs;
+	m_world_tags_copy = m_document.world_tags;
 
 	scn::context_set& play = contexts->create_set(k_play_set, layer, scn::set_options{ .hot_reload = false });
 	play.set_mode(ecs::run_mode::pause);
@@ -677,6 +684,7 @@ void edt::play_session::await_revert(const std::string& module, std::string fail
 	m_waiting.reset();
 	++m_wait_generation;
 	m_worlds_copy.clear();
+	m_world_tags_copy.clear();
 	if (m_options.input) m_options.input->forget_set(k_play_set);
 	if (m_options.forget_runtime_entities) m_options.forget_runtime_entities();
 	m_restore_failure = std::move(failure);

@@ -33,6 +33,7 @@
 #include <snk/scene/scn_scene_service_init.h>
 #include <snk/window/wnd_null_window_system.h>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -42,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef SNK_TEST_PROJECT_DIR
 #error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
@@ -106,10 +108,32 @@ inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::s
 	}
 }
 
+// A 16x16 RGB PNG of one colour; stb_image reads it by its content whatever the file's extension.
+inline std::vector<std::byte> small_png()
+{
+	constexpr std::uint8_t png[] = {
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x91, 0x68,
+		0x36, 0x00, 0x00, 0x00, 0x16, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x48, 0x68, 0x38, 0x40,
+		0x12, 0x62, 0x18, 0xd5, 0x30, 0xaa, 0x61, 0xf8, 0x6a, 0x00, 0x00, 0xc8, 0x54, 0xa0, 0x10, 0xff,
+		0x98, 0xeb, 0xde, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	};
+	std::vector<std::byte> bytes(sizeof(png));
+	std::memcpy(bytes.data(), png, sizeof(png));
+	return bytes;
+}
+
 inline void mount_repo_res(test_util::ram_resolver& ram)
 {
 	for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, (fs::path{ SNK_TEST_PROJECT_DIR } / "res") }) {
 		mount_dir(ram, root, res::tag::default_protocol());
+	}
+	// The shipped sky faces are 2048x2048 JPEGs: decoding six of them in every level with a sky cost seconds of
+	// Debug test time, and no check reads their pixels (#977).
+	for (const char* face : { "right", "left", "top", "bottom", "front", "back" }) {
+		const res::tag tag{ res::tag::default_protocol(), std::string{ "skybox/" } + face + ".jpg" };
+		BOOST_REQUIRE_MESSAGE(ram.files.contains(tag), "the sky face moved: update the small sky of the test fixture");
+		ram.files[tag] = small_png();
 	}
 }
 

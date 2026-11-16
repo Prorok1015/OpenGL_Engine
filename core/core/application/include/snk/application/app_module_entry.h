@@ -137,6 +137,7 @@
 // #929: res::resource_system::engine_file and engine::gui::load_ui_font_bytes are new exports (no type changes: the layout key stays).
 // #1021: scn::geometry_holds and scn::hot_reload_manager::resources are new exports (no type changes).
 // #993: scn::prefab_instance gains content_of (the file its node is content of) at its end (layout_revision 14); scn::reconcile and scn::expand_instance gain overloads that name that file, the old exports stay.
+// #1039: scn::spawn_world and a context_set::reload_context overload that names the world's file are new exports (no type changes: the layout key stays).
 #define SNK_MODULE_API_VERSION 0x0004'0000u // major << 16 | minor
 
 // The key SNK_DECLARE_MODULE exports: snk/game/gs_module_layout.h defines it, whatever the order of the includes;

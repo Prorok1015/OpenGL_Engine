@@ -279,6 +279,16 @@ jobs:
           set -o pipefail
           ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
 
+      # #746: a base shape file of core/res/shapes that differs from the generator is written by the test to generated_shapes/;
+      # these are the bytes to commit, as nobody builds locally.
+      - name: Upload the generated base shapes
+        if: failure() && matrix.preset == 'ci-linux-clang-debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-base-shapes
+          path: build/ci-linux-clang-debug/generated_shapes
+          if-no-files-found: ignore
+
       - name: Slowest test suites and cases
         if: always()
         continue-on-error: true

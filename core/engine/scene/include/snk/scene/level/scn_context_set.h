@@ -232,6 +232,14 @@ namespace scn
 			const world_desc& desc,
 			ecs::system_factory& sf,
 			scn::ecs_assembler& assambler);
+		// `file`: the world's file, open while it is built (scn::spawn_world), so a record of it may add an instance of a
+		// prefab it is inside; empty: the overload above.
+		void reload_context(
+			std::string_view name,
+			const world_desc& desc,
+			ecs::system_factory& sf,
+			scn::ecs_assembler& assambler,
+			const res::tag& file);
 
 		// Remembers the context's system list and builds its execution plan (once, not per frame).
 		void add_systems(

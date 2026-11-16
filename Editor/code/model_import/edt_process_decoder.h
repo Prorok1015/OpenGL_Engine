@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -55,6 +56,8 @@ namespace edt {
 
 		// Empty when the decoder can be run; else why not, naming the file.
 		std::string unavailable_reason() const;
+		// The SHA-256 of the decoder file, read once (#999); empty, with one WARN, when it cannot be read.
+		std::string version() const;
 
 		model_file_scan scan(const import_source& source, ds::task_context* task) const;
 		import_intermediate import(const import_source& source, ds::task_context* task) const;
@@ -64,6 +67,8 @@ namespace edt {
 
 		res::resource_system& m_resources;
 		decode_runner_config m_config;
+		mutable std::once_flag m_version_once;
+		mutable std::string m_version;
 	};
 
 	// The steps of a decoder as the importers call them: process_decoder's, or a test's.
@@ -73,6 +78,8 @@ namespace edt {
 		std::function<import_intermediate(const import_source&, ds::task_context*)> import;
 		// Empty when the decoder can run.
 		std::function<std::string()> unavailable_reason;
+		// What tells one build of the decoder from another. Unset, or empty: nothing it decoded is reused (#999).
+		std::function<std::string()> version;
 	};
 
 	// The steps of `decoder`, which they keep alive (a load can outlive the editor_system that made it).

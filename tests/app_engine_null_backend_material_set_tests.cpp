@@ -17,6 +17,7 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -31,16 +32,18 @@ namespace {
 
 struct material_set_fixture : test_util::null_engine_fixture
 {
-	void load_warm_smoke_level()
+	void load_warm_level(std::string_view path)
 	{
 		auto& levels = storage.require<scn::context_manager>();
-		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+		BOOST_REQUIRE(levels.load_level(res::tag::make(path)));
 		test_util::pump(tasks);
 		// The meshes draw from the first frame, some with placeholder textures while theirs still load: the groups of
 		// those frames go once unused for grace_frames, so warm means past that (#1021).
 		constexpr int warm_frames = static_cast<int>(rnd::material_groups::grace_frames) + 2;
 		BOOST_REQUIRE(run_frames(warm_frames) == warm_frames);
 	}
+
+	void load_warm_smoke_level() { load_warm_level("levels/smoke_level.desc"); }
 
 	// The packets of the frame being rendered: only there while a frame is in progress.
 	std::pmr::vector<rnd::render_packet_t>& packets()
@@ -117,9 +120,10 @@ struct material_set_fixture : test_util::null_engine_fixture
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendMaterialSet, material_set_fixture)
 
-BOOST_AUTO_TEST_CASE(EveryDrawOfAMaterialHasItsGroupBound, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+// Quads alone: any material shows its group bound, and no model import is needed (#977).
+BOOST_AUTO_TEST_CASE(EveryDrawOfAMaterialHasItsGroupBound)
 {
-	load_warm_smoke_level();
+	load_warm_level("levels/smoke_quads.desc");
 	const auto before = driver()->draws_with_set();
 	BOOST_REQUIRE(run_frames(4) == 4);
 

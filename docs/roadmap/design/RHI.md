@@ -70,7 +70,7 @@ void begin_render_pass(const render_pass_desc&); void end_render_pass();
   - `render_area` — только ограничение clear (scissor на время очистки, потом выключается) и viewport по умолчанию; для offscreen-целей `{0}` очищает всю текстуру, как раньше;
   - clear глубины не зависит от маски записи глубины в последнем `set_render_state` (драйвер её помнит);
   - текстура при удалении сама выбрасывает свои FBO из кеша (общий `framebuffer_registry`, живёт дольше драйвера);
-  - validation: бюджет `max_frame_buffers` считает pass за кадр (раньше push), кадр на null-бэкенде не строит FBO после прогрева (`SmokeLevelBuildsNoFramebufferAfterWarmUp`).
+  - validation: бюджет `max_frame_buffers` считает pass за кадр (раньше push), кадр на null-бэкенде не строит FBO после прогрева (`QuadsBuildNoFramebufferAfterWarmUp`).
 
 **Шаг 2 — неизменяемый pipeline (#116).**
 - `shader_config` сейчас смешивает три вещи. Они разводятся:

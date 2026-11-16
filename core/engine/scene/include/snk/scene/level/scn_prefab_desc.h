@@ -126,6 +126,17 @@ namespace scn {
 		reconcile_mode mode,
 		const res::tag& file);
 
+	class world_desc;
+	// Builds `desc` (a world) on `e` with `file`, the world's file, open, as a level load builds it; empty: plain
+	// spawn_from_desc. The root gets no prefab_instance: a hot reload of the file must not rebuild an edited world.
+	SNK_API void spawn_world(
+		const ecs_assembler& assembler,
+		entt::registry& reg,
+		entt::entity e,
+		const world_desc& desc,
+		std::string_view name,
+		const res::tag& file);
+
 	// What reconcile builds for `node` before it spawns anything: the referenced prefab (itself expanded) plus the
 	// node's own components and children, then the node's override records, those forwarded from above included.
 	// False (`out` untouched) for a plain node without records; `source` is the prefab's tag, empty if none.
