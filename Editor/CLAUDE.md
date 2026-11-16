@@ -55,6 +55,8 @@ Editor/
     │   ├── edt_live_build.cpp/h      # live_build: live mode state machine (debounce, build, quiet, reload), no UI (#445)
     │   └── edt_live_mode.cpp/h       # live_mode: owns live_build in the editor: code:// feed, toggle, menu-bar status, live.* tools (#445)
     │
+    ├── problems/                     # what the Problems panel shows (#1004)
+    │   └── edt_problems_component.cpp/h # problems_component: the publishers of the sources `desc`, `world`, `play` (handed out by reference to the prefab editor, the level load, the drop and Play), `go_to_problem`/`go_to`, the fixes of the source `assets`, the input conflicts and the refresh of the world rows; `editor_system` creates it before the prefab editor and calls `install()` and `wire(panel)`
     ├── level/                        # the load of a level (#1004)
     │   └── edt_level_load_component.cpp/h # level_load_component: the working copy, the "Loading Level" window and its Esc, `level.cancel_load`, the slow-load notice and the settle after a load; `begin_and_watch(tag, ended?)` opens a level and polls it under `edt/load_level`; `level_locator` is where a load's diagnostics lead. `editor_system` creates it, calls `install()` and keeps thin forwarders (`begin_level_load`, `level_load_in_progress`, `tick_level_settle`)
     ├── game_build/                   # Build > Build Game (#434)

@@ -30,6 +30,7 @@
 #include "edt_viewport_panel.h"
 #include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
+#include "edt_problems_component.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
 #include "edt_input_actions_panel.h"
@@ -313,7 +314,7 @@ edt::editor_system::~editor_system()
 		if (m_asset_open) m_asset_open->data_documents().shutdown();
 		context->documents().shutdown();
 	}
-	// Its "prefab" listener of document_closed reaches m_desc_problems, which is declared after it and would go first.
+	// Its "prefab" listener of document_closed reaches the problems component, which is declared before it and goes after it.
 	if (m_prefab) {
 		m_prefab->detach_document();
 		m_prefab.reset();
@@ -478,12 +479,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
 	m_viewport_panel->set_selected_resolver([this] { return m_context->selection().entity(); });
 
+	// What the Problems panel shows (#1004): before the prefab editor and the loads that report into it.
+	m_problems = std::make_unique<problems_component>(problems_component::ports{ .context = *m_context, .state = m_state,
+		.services = m_services, .worlds = m_world_ctrl,
+		.assets = [this] { return m_asset_component.get(); },
+		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
+		.play_active = [this] { return m_play && m_play->active(); } });
+
 	// Prefab editor (EPIC-25, #1004): after wire_selection, whose Inspector hand-over its selection listener follows.
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
-		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_inspector_panel, m_desc_problems });
+		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_inspector_panel, m_problems->desc() });
 
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
-		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_desc_problems,
+		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
 		.browser = *m_asset_browser_panel,
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.show_prefab = [this] { m_prefab->show(); },
@@ -531,35 +539,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	add_panel(m_console_panel, dock_slot::bottom_right, true);
 	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
 		? data.require<prj::project_context>().root : std::filesystem::path{});
-	m_problems_panel->set_on_activate([this](const std::string& source, const problem& item) { go_to_problem(source, item); });
-	// The idle gate of Edit > Undo (register_edit_actions): no dialog waiting, no gesture in progress.
-	const auto problems_idle = [this] { return m_context->dialogs().pending() == 0 && !ImGui::IsAnyItemActive(); };
-	// The asset fixes are the person's own: no command, so no agent reaches them.
-	m_problems_panel->set_actions([this](const std::string& source, const problem& item) {
-		std::vector<std::pair<std::string, std::function<void()>>> out;
-		if (source != asset_problem_publisher::source || !m_asset_component) {
-			return out;
-		}
-		for (problem_action& action : m_asset_component->problem_actions(item)) {
-			out.emplace_back(action.label, [label = action.label, run = std::move(action.run)] {
-				if (const asset_fix_result result = run(); !result.ok) {
-					egLOG_WARN("assets", "{}: {}", label, result.error);
-				}
-			});
-		}
-		return out;
-	}, problems_idle);
-	m_problems_panel->set_undo(
-		[this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; },
-		[this] {
-			if (!m_asset_component) {
-				return;
-			}
-			if (const asset_fix_result result = m_asset_component->undo_last(); !result.ok) {
-				egLOG_ERROR("assets", "{}", result.error);
-			}
-		},
-		problems_idle);
+	m_problems->wire(*m_problems_panel);
 	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
@@ -604,9 +584,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[this](const res::tag& target) { return m_level_ctrl.save_level_as(std::string(target.relative())); });
 
 	level_load_component::ports level_ports{ .context = *m_context, .layer = *editor_layer, .level_ctrl = m_level_ctrl, .services = m_services,
-		.resources = m_res, .state = m_state, .desc_problems = m_desc_problems, .tasks = m_tasks,
+		.resources = m_res, .state = m_state, .desc_problems = m_problems->desc(), .tasks = m_tasks,
 		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(); },
-		.refresh_world_problems = [this] { refresh_world_problems(); },
+		.refresh_world_problems = [this] { m_problems->refresh_world(); },
 		.stop_after_level_loaded = m_stop_after_level_loaded };
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
 
@@ -619,7 +599,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.new_level = [this] {
 		if (m_play && m_play->active()) m_play->stop();
 		m_level_load->cancel_settle();
-		m_desc_problems.clear(m_context->problems(), "level");
+		m_problems->desc().clear(m_context->problems(), "level");
 		m_level_ctrl.new_level();
 	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
@@ -1233,7 +1213,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
 		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_hierarchy_panel,
 		.inspector = *m_inspector_panel, .viewport = *m_viewport_panel, .game_view = *m_game_view_panel,
-		.problems = *m_problems_panel, .preflight = m_play_preflight,
+		.problems = *m_problems_panel, .preflight = m_problems->play_preflight(),
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.module_host = [&data]() -> core::project_module_host* {
 			return data.has_value<core::project_module_host>() ? &data.require<core::project_module_host>() : nullptr;
@@ -1271,16 +1251,11 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (m_asset_open) m_asset_open->data_documents().follow_focus();
 		if (!m_context || !data.has_value<gs::input_actions>()) return;
 		const auto& actions = data.require<gs::input_actions>();
-		if (actions.revision() == m_input_problems_revision) return;
-		m_input_problems_revision = actions.revision();
-		auto problems = input_actions_view::conflict_problems(actions.conflicts());
-		if (problems.empty()) m_context->problems().clear("input");
-		else m_context->problems().set("input", std::move(problems));
+		m_problems->follow_input_actions(actions);
 	});
-	m_level_ctrl.on_worlds_replaced = [this] { refresh_world_problems(); };
+	m_level_ctrl.on_worlds_replaced = [this] { m_problems->refresh_world(); };
 	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
-	m_world_problem_connections.push_back(m_context->events().document_changed.subscribe([this](document_id, std::uint64_t) { refresh_world_problems(); }));
-	m_world_problem_connections.push_back(m_context->events().active_world_changed.subscribe([this](document_id) { refresh_world_problems(); }));
+	m_problems->install();
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_game_view_panel->set_input_blocked([this] {
 		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
@@ -1559,7 +1534,7 @@ void edt::editor_system::wire_controller_callbacks()
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 		// Also a reload that failed: its errors stay in Problems until a clean one replaces them.
 		ctx_mgr->set_on_reload_result([this](const res::tag&, const res::res_handle<scn::level_desc>& handle) {
-			m_desc_problems.report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag,
+			m_problems->desc().report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag,
 				level_locator(handle, m_state.editor_tag, m_state.level_tag));
 		});
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
@@ -1650,8 +1625,7 @@ bool edt::editor_system::poll_import_pipeline()
 			erase_import_folder(m_dialog_import_folder);
 #endif
 			auto exported_tag = m_export_dialog->get_exported_tag();
-			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()
-				&& !refused_during_play(m_play, m_context->dialogs(), "The asset is exported; stop Play to add it to the scene.")) {
+			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()) {
 				m_asset_open->add_exported_to_scene(exported_tag);
 			}
 			return false;
@@ -1817,86 +1791,9 @@ void edt::editor_system::tick_level_settle()
 	if (m_level_load) m_level_load->tick_settle();
 }
 
-void edt::editor_system::refresh_world_problems()
-{
-	if (!m_context) return;
-	m_world_problems.refresh(m_context->problems(), m_state, m_services.level_set());
-}
-
 void edt::editor_system::go_to_problem(const std::string& source, const problem& item)
 {
-	if (source == desc_problem_publisher::source) {
-		if (const auto target = m_desc_problems.target_of(item)) go_to(*target);
-		return;
-	}
-	if (source == play_preflight_publisher::source) {
-		if (const auto target = m_play_preflight.target_of(item)) go_to(*target);
-		return;
-	}
-	if (source == asset_problem_publisher::source) {
-		const std::optional<std::string> file = m_asset_component ? m_asset_component->problem_file(item) : std::nullopt;
-		if (!file) {
-			return;
-		}
-		desc_target target;
-		target.resource = *file;
-		go_to(target);
-		return;
-	}
-	if (source == world_problem_publisher::source) {
-		const auto world = m_world_problems.world_of(item);
-		if (!world) return;
-		desc_target target;
-		target.level = m_state.level_tag.string();
-		target.world = *world;
-		go_to(target);
-	}
-}
-
-void edt::editor_system::go_to(const desc_target& target)
-{
-	if (!target.world.empty()) {
-		if (target.level != m_state.level_tag.string()) {
-			egLOG_INFO("editor", "open the level '{}' to go to the node", target.level);
-			return;
-		}
-		if (m_play && m_play->active()) {
-			egLOG_INFO("editor", "stop Play to go to the node");
-			return;
-		}
-		const auto found = std::ranges::find(m_state.world_names, target.world);
-		const auto index = static_cast<std::size_t>(found - m_state.world_names.begin());
-		if (found == m_state.world_names.end() || index >= m_state.world_descs.size()) {
-			egLOG_INFO("editor", "the world '{}' is no longer in the level", target.world);
-			return;
-		}
-		if (!target.path.empty()) {
-			const auto address = scene_editor::resolve_node_path(m_state.world_descs[index].get_root().children, target.path);
-			if (!address.owner || !address.target.empty()) {
-				egLOG_INFO("editor", "the node of this problem is no longer in the world '{}'", target.world);
-				return;
-			}
-		}
-		if (m_state.active_world_idx != static_cast<int>(index)) {
-			m_world_ctrl.select_world(static_cast<int>(index));
-			// A world the level set does not build is refused: the selection must not point into an inactive world.
-			if (m_state.active_world_idx != static_cast<int>(index)) {
-				egLOG_INFO("editor", "the world '{}' could not be made active", target.world);
-				return;
-			}
-		}
-		if (target.path.empty()) return;
-		selection value;
-		value.document = m_state.id();
-		value.world = target.world;
-		value.path = target.path;
-		m_context->selection().select(std::move(value));
-		return;
-	}
-	if (target.resource.empty()) return;
-	if (!m_asset_open->open(res::tag{ target.resource }, true)) {
-		egLOG_INFO("editor", "nothing in the editor opens '{}'", target.resource);
-	}
+	m_problems->go_to_problem(source, item);
 }
 
 std::optional<std::string> edt::editor_system::migration_blocker() const
