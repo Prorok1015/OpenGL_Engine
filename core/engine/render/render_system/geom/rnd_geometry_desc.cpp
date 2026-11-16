@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -267,44 +268,62 @@ void rnd::detail::forget_binary(const geometry_desc& geometry)
 	reg.entries.erase(&geometry);
 }
 
-void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
+namespace
 {
-	const std::size_t stride = geometry.layout.get_stride();
-	if (stride == 0) {
-		refuse_data(file, "/layout", "the vertex layout is empty");
-	}
-	if (geometry.vertices.size() % stride != 0) {
-		refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
-	}
-	const std::size_t vertex_count = geometry.vertices.size() / stride;
-	if (geometry.indices.size() % 3 != 0) {
-		refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
-	}
-	for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
-		if (geometry.indices[i] >= vertex_count) {
-			refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
+	// `triangles`: the whole check of data for a binary file; else what holds for arrays of any topology the loader takes.
+	void check_data(const res::tag& file, const rnd::geometry_desc& geometry, bool triangles)
+	{
+		const std::size_t stride = geometry.layout.get_stride();
+		if (stride == 0) {
+			refuse_data(file, "/layout", "the vertex layout is empty");
 		}
-	}
+		if (geometry.vertices.size() % stride != 0) {
+			refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
+		}
+		const std::size_t vertex_count = geometry.vertices.size() / stride;
+		if (triangles && geometry.indices.size() % 3 != 0) {
+			refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
+		}
+		for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
+			if (geometry.indices[i] >= vertex_count) {
+				refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
+			}
+		}
 
-	const auto* position = element_named(geometry.layout, "position");
-	if (position == nullptr || !is_float_type(position->Type)) {
-		refuse_data(file, "/layout/position", "the layout has no float 'position'");
-	}
-	// The CPU reads these two: positions for the scene, uv for the bounds.
-	for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
-		if (element == nullptr || !is_float_type(element->Type)) {
-			continue;
+		const auto* position = element_named(geometry.layout, "position");
+		if (triangles && (position == nullptr || !is_float_type(position->Type))) {
+			refuse_data(file, "/layout/position", "the layout has no float 'position'");
 		}
-		const std::size_t components = element->Size / sizeof(float);
-		for (std::size_t v = 0; v < vertex_count; ++v) {
-			for (std::size_t c = 0; c < components; ++c) {
-				const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
-				if (!std::isfinite(value)) {
-					refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
+		// The CPU reads these two: positions for the scene, uv for the bounds.
+		for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
+			if (element == nullptr || !is_float_type(element->Type)) {
+				continue;
+			}
+			const std::size_t components = element->Size / sizeof(float);
+			for (std::size_t v = 0; v < vertex_count; ++v) {
+				for (std::size_t c = 0; c < components; ++c) {
+					const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
+					if (!std::isfinite(value)) {
+						refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
+					}
 				}
 			}
 		}
 	}
+}
+
+void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
+{
+	check_data(file, geometry, true);
+}
+
+void rnd::detail::check_geometry_arrays(const res::tag& file, const geometry_desc& geometry)
+{
+	// A desc without data (base_geometry.desc, a test's indices alone) has nothing the checks could hold against.
+	if (geometry.vertices.empty() || geometry.layout.get_stride() == 0) {
+		return;
+	}
+	check_data(file, geometry, false);
 }
 
 void rnd::detail::rebuild_bounds(geometry_desc& geometry)
@@ -372,8 +391,23 @@ rnd::geometry_desc::~geometry_desc()
 	detail::forget_binary(*this);
 }
 
-void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::object& resource)
+void rnd::geometry_desc::deserialize(desc::desc_system&, const json::object& resource)
 {
+	detail::read_geometry_json(*this, resource);
+}
+
+json::value rnd::detail::layout_json(const driver::BufferLayout& layout)
+{
+	return json::value_from(layout);
+}
+
+void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object& resource)
+{
+	auto& layout = geometry.layout;
+	auto& indices = geometry.indices;
+	auto& vertices = geometry.vertices;
+	auto& bounds = geometry.bounds;
+	auto& rtree = geometry.rtree;
 	auto& json_layout = resource.at("layout");
 	{
 		std::vector<rnd::driver::BufferElement> elements;
@@ -392,7 +426,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		if (ranges.indices) {
 			indices.clear();
 		} else if (!json_indices.as_array().empty()) {
-			indices = json::value_to<decltype(indices)>(json_indices);
+			indices = json::value_to<std::remove_cvref_t<decltype(indices)>>(json_indices);
 		}
 	}
 
@@ -417,15 +451,15 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		ranges.wants_bounds = resource.contains("bounds");
 		bounds.clear();
 		rtree = {};
-		detail::set_binary_ranges(*this, std::move(ranges));
+		detail::set_binary_ranges(geometry, std::move(ranges));
 		return;
 	}
-	detail::forget_binary(*this);
+	detail::forget_binary(geometry);
 
 	if (resource.contains("bounds"))
 	{
 		auto& json_bounds = resource.at("bounds");
-		bounds = json::value_to<decltype(bounds)>(json_bounds);
+		bounds = json::value_to<std::remove_cvref_t<decltype(bounds)>>(json_bounds);
 
 		PROFILE_SCOPE("geometry_desc rtree build");
 		for(auto& [key, val] : bounds)
@@ -439,7 +473,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 
 void rnd::geometry_desc::serialize(json::object& resource) const
 {
-	// Until the writer of the binary file (PR3a), a geometry read from one is never written as arrays nor as nothing.
+	// A geometry read from a binary file is never written as arrays nor as nothing: rnd::write_geometry_files writes it.
 	switch (detail::binary_state_of(*this)) {
 	case detail::geometry_binary_state::not_loaded:
 		throw std::runtime_error(std::format("geometry '{}': its binary data was not loaded (it was not read as a geometry), "

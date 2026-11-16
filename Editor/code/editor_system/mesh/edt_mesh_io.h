@@ -3,9 +3,12 @@
 #include "edt_mesh_shapes.h"
 #include <snk/desc/desc_base.hpp>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/resource/res_tag.h>
 #include <cstddef>
 #include <optional>
 #include <string>
+
+namespace res { class resource_system; }
 
 namespace edt::mesh
 {
@@ -50,8 +53,13 @@ namespace edt::mesh
 		bool write_parent = true;
 	};
 
-	// The text of a *.geom.desc: compact JSON, no `bounds` (the runtime does not use them).
-	std::string write_geometry_json(const rnd::geometry_desc& geometry, const geometry_file_options& options = {});
+	// Writes `file` (*.geom.desc) with its binary file (EPIC-79) through rnd::write_geometry_files: compact JSON, no `bounds`
+	// (the runtime does not use them). Replacing a file in JSON arrays logs its conversion (Editor/Save). Empty when written.
+	std::string write_mesh_geometry(res::resource_system& system, const res::tag& file, const rnd::geometry_desc& geometry,
+		const geometry_file_options& options = {});
+
+	// Whether `file` exists and holds its vertices as JSON arrays (the form before EPIC-79).
+	bool file_holds_geometry_arrays(res::resource_system& system, const res::tag& file);
 
 	void register_mesh_descs(desc::desc_system& system);
 	void unregister_mesh_descs(desc::desc_system& system);

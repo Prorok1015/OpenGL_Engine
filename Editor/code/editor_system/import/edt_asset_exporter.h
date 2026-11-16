@@ -42,6 +42,8 @@ namespace edt {
 		// `ctx` (null: not cancellable) is checked before each file; a stop request throws ds::task_cancelled.
 		// The files written before that stay on disk: each write is as atomic as res::resource_system::store(), but a
 		// cancelled export can leave a partial project (some leaves written, no root prefab).
+		// A geometry desc is written with its binary file (<name>.geom.bin, EPIC-79) whatever form memory:// holds it in,
+		// always waited for; `written` gets both. One that replaces a file in JSON arrays logs the conversion (Editor/Save).
 		// `written` (null: not told) gets each res:// tag as its file is stored. `wait_for_writes` stores each file with
 		// store_sync (the file is on disk when the call returns; false when a write is refused), the way a caller that may
 		// have to take the files back needs it. `on_file` (empty: none) is called after each file with (done, total).
@@ -80,6 +82,12 @@ namespace edt {
 		// The file holds these bytes already (an import of an unchanged model): it is not written again, so file watchers and
 		// git see nothing (#559).
 		bool unchanged_on_disk(const res::tag& tag, const std::vector<std::byte>& bytes) const;
+
+		// Writes the geometry `desc` (memory:// `from`, references remapped) as `to` and its binary file; lines and points (the
+		// desc names its topology) as one line of JSON arrays, as before EPIC-79. Empty when written or unchanged (`wrote`
+		// says which), else why not; triangles the loader would refuse are not written.
+		std::string export_geometry(const res::tag& from, const res::tag& to, const boost::json::object& desc,
+			std::vector<res::tag>* written, bool& wrote) const;
 
 		// Remap all string values in a JSON tree that match memory:// tags
 		static void remap_json_strings(

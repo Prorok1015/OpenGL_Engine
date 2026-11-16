@@ -461,6 +461,25 @@ namespace {
 		return out;
 	}
 
+	// Mesh data is written by the editor, never as a desc: a geometry keeps its vertices in a binary file beside the desc
+	// (EPIC-79), an editable mesh is the editor's (EPIC-77). Empty when `relative` and the content's `__type` are neither.
+	std::string mesh_file_refusal(std::string_view relative, const json::value& content)
+	{
+		std::string lower(relative);
+		std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const json::value* type = content.is_object() ? content.as_object().if_contains("__type") : nullptr;
+		const std::string_view type_name = type && type->is_string() ? view_of(type->as_string()) : std::string_view{};
+		if (lower.ends_with(".geom.desc") || type_name == "geometry_desc") {
+			return std::format("'res://{}': a geometry is written by the editor with its binary file (a model import: file.import_model, a mesh save), "
+				"not by desc.create or desc.write", relative);
+		}
+		if (lower.ends_with(".poly.desc") || type_name == "poly_mesh_desc") {
+			return std::format("'res://{}': an editable mesh is written by the editor's mesh tools, not by desc.create or desc.write",
+				relative);
+		}
+		return {};
+	}
+
 	std::string type_of_text(std::string_view text)
 	{
 		boost::system::error_code ec;
@@ -494,6 +513,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -522,6 +544,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -571,6 +596,7 @@ namespace {
 			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) return refused(why);
 			if (std::optional<std::string> why = m_files.write_blocked()) return refused_message(*why);
 			const std::string shown_path = edt::forge::escaped_text(path.relative, 1024);
 			const located_file found = m_files.locate(path.relative);
@@ -904,7 +930,10 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 	add("desc.create", "Create a desc file (*.desc) in the project's res/ folder from a JSON object with a `__type`; never replaces a file. "
 			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
 			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough. "
-			"Content with a guid is answered `busy` while the editor's asset index is still being built",
+			"Content with a guid is answered `busy` while the editor's asset index is still being built. "
+			"*.geom.desc and *.poly.desc files (and content whose `__type` is geometry_desc or poly_mesh_desc) are refused: mesh data is written only by the editor, "
+			"a geometry's vertices living in a binary file next to the desc (EPIC-79); a geometry comes from a model import (file.import_model), "
+			"an editable mesh from the editor's mesh editing (no tool)",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"res://levels/a.desc or levels/a.desc: inside the project, *.desc only"},
 			"desc":{"type":"object","description":"the file's content; the editor writes __version and the header order"}},
@@ -912,7 +941,9 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 		version_result, true, false, cmd::agent_category::scene_edit, cmd::danger::none, &desc_commands::create);
 	add("desc.write", "Replace an existing desc file of the project's res/ folder (a person confirms each time). `version` must be the one desc.read gave, "
 			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`), "
-			"and so is content with a guid while the asset index is still being built",
+			"and so is content with a guid while the asset index is still being built. "
+			"*.geom.desc and *.poly.desc files (and content whose `__type` is geometry_desc or poly_mesh_desc) are refused as in desc.create: mesh data is written "
+			"only by the editor, a geometry's vertices living in a binary file next to the desc (EPIC-79); a new geometry comes from a model import (file.import_model)",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},
 			"desc":{"type":"object","description":"the whole new content"}},

@@ -360,6 +360,33 @@ BOOST_AUTO_TEST_CASE(Write_RefusesAMissingFile_AndOneOfALowerLayer)
 	BOOST_TEST(read_file(lower / "materials" / "engine.mat.desc") == k_material);
 }
 
+// EPIC-77/EPIC-79 (#1068): a geometry keeps its data in a binary file beside the desc and an editable mesh is the editor's:
+// neither is written as a desc, by path or by type.
+BOOST_AUTO_TEST_CASE(MeshFiles_AreRefusedByCreateAndWrite_ByPathAndByType)
+{
+	const char* geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})";
+	const auto by_path = call("desc.create", desc_args("meshes/a.geom.desc", geometry));
+	BOOST_TEST(by_path.code == cmd::codes::invalid_args);
+	BOOST_TEST(by_path.error.find("binary file") != std::string::npos);
+	const auto in_capitals = call("desc.create", desc_args("meshes/A.GEOM.DESC", k_material));
+	BOOST_TEST(in_capitals.code == cmd::codes::invalid_args);
+	const auto by_type = call("desc.create", desc_args("meshes/a.desc", geometry));
+	BOOST_TEST(by_type.code == cmd::codes::invalid_args);
+	const auto poly = call("desc.create", desc_args("meshes/a.poly.desc", R"({"__type":"poly_mesh_desc"})"));
+	BOOST_TEST(poly.code == cmd::codes::invalid_args);
+	BOOST_TEST(poly.error.find("mesh tools") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "meshes"));
+
+	dir.write("res/meshes/old.geom.desc", geometry);
+	const std::string version = version_of("meshes/old.geom.desc");
+	const auto written = call("desc.write", write_args("meshes/old.geom.desc", version, geometry));
+	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "meshes" / "old.geom.desc") == geometry);
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("meshes/old.geom.desc", version, geometry)));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->find("This request will be refused") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(Write_WithAnotherVersion_IsStale_AndTheFileStays)
 {
 	make_material("materials/s.mat.desc");

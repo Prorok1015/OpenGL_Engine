@@ -5,9 +5,11 @@
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/resource/res_desc_binary.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <initializer_list>
 #include <mutex>
@@ -315,6 +317,7 @@ BOOST_AUTO_TEST_CASE(Obj_TriangleBecomesPrefabWithMeshNodeAndDefaultMaterial)
 	BOOST_TEST(mat.at("defines").at(0).as_string() == "LIGHTS_ENABLED");
 }
 
+// EPIC-79 (#1068): the vertices and indices are in the binary file beside the desc, the desc holds their ranges.
 BOOST_AUTO_TEST_CASE(Obj_StoresGeometryDescWithLayoutIndicesAndVertexBytes)
 {
 	import("tri.obj", OBJ_TRIANGLE);
@@ -324,9 +327,12 @@ BOOST_AUTO_TEST_CASE(Obj_StoresGeometryDescWithLayoutIndicesAndVertexBytes)
 	BOOST_TEST(geom.at("__type").as_string() == "geometry_desc");
 	BOOST_TEST(geom.at("layout").at("position").as_string() == "vec3");
 	BOOST_TEST(geom.at("layout").at("uv").as_string() == "vec2");
-	BOOST_TEST(geom.at("indices").as_array().size() == 3u);
+	BOOST_TEST(geom.at("indices").at("layout").as_string() == "u32");
+	BOOST_TEST(geom.at("indices").at("size").to_number<std::uint64_t>() == 3u * sizeof(std::uint32_t));
 	// stride = pos3 + normal3 + uv2 + tangent3 + bitangent3 floats
-	BOOST_TEST(geom.at("vertices").as_array().size() == 3u * 14u * sizeof(float));
+	BOOST_TEST(geom.at("vertices").at("layout").as_string() == "f32x14");
+	BOOST_TEST(geom.at("vertices").at("size").to_number<std::uint64_t>() == 3u * 14u * sizeof(float));
+	BOOST_TEST(ram->files.contains(res::tag{ "memory://models/tri.geom.bin" }));
 }
 
 BOOST_AUTO_TEST_CASE(Obj_RegistersAliasFromSourceTagToStoredPrefab)
@@ -501,9 +507,13 @@ BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 	BOOST_REQUIRE(geometry != nullptr);
 	const res::tag geometry_tag = *geometry;
 	const std::vector<std::byte> geometry_bytes = ram->files.at(geometry_tag);
+	const res::tag binary_tag = *res::desc_binary::binary_tag(geometry_tag);
+	BOOST_REQUIRE(ram->files.contains(binary_tag));
+	const std::vector<std::byte> binary_bytes = ram->files.at(binary_tag);
 
 	// What the import wrote is gone, as in another resource system; the model's change makes it load again.
 	ram->files.erase(geometry_tag);
+	ram->files.erase(binary_tag);
 	ram->files.erase(res::tag{ "memory://models/cache977/once.desc" });
 	const res::tag model{ "memory://models/cache977/once.obj" };
 	rs->signal_changed(model);
@@ -512,6 +522,8 @@ BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 	BOOST_TEST(scn::model_importer_runs() == before + 1u);
 	BOOST_REQUIRE(ram->files.contains(geometry_tag));
 	BOOST_TEST((ram->files.at(geometry_tag) == geometry_bytes));
+	BOOST_REQUIRE(ram->files.contains(binary_tag));
+	BOOST_TEST((ram->files.at(binary_tag) == binary_bytes));
 	BOOST_TEST(json::serialize(serialized(*second)) == json::serialize(first_prefab));
 }
 
