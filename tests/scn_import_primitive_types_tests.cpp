@@ -178,10 +178,7 @@ struct primitive_types_fixture : test_util::scene_env
 // points are dropped or kept in a geometry of their own topology, never in a mixed one.
 void check_no_stray_primitives(const std::optional<stored_geometry>& geometry, std::size_t triangle_faces)
 {
-	if (!geometry) {
-		BOOST_TEST(triangle_faces == 0u);
-		return;
-	}
+	BOOST_REQUIRE(geometry);
 	const rnd::geometry_topology topology = rnd::topology_of(geometry->desc);
 	BOOST_TEST_INFO("topology: " << rnd::topology_name(topology) << ", indices: " << geometry->data.indices.size());
 	BOOST_TEST((topology != rnd::geometry_topology::mixed));
@@ -193,6 +190,19 @@ void check_no_stray_primitives(const std::optional<stored_geometry>& geometry, s
 	} else if (topology == rnd::geometry_topology::points) {
 		BOOST_TEST(triangle_faces == 0u);
 	}
+}
+
+// A geometry of one kind of face only, written whole: the exact topology and index count.
+void check_kept(const std::optional<stored_geometry>& geometry, rnd::geometry_topology topology, std::size_t indices)
+{
+	BOOST_REQUIRE(geometry);
+	BOOST_TEST((rnd::topology_of(geometry->desc) == topology));
+	BOOST_TEST(geometry->data.indices.size() == indices);
+}
+
+bool warns_of_dropped_faces(const warn_capture& warnings)
+{
+	return warnings.any([](std::string_view line) { return contains(line, "line(s) and") && contains(line, "point(s)"); });
 }
 
 // The index range of the first mesh node the engine importer made, or -1 without one.
@@ -233,17 +243,21 @@ BOOST_FIXTURE_TEST_SUITE(ScnImportPrimitiveTypesTests, primitive_types_fixture)
 // Red before the fix under ASan (CI "Linux ASan+UBSan"): the UV loop reads face.mIndices[j + 2] of a 2-index face.
 BOOST_AUTO_TEST_CASE(ALinesOnlyObj_DoesNotOverflow_InTheEngineImporter)
 {
+	const warn_capture warnings;
 	const auto prefab = engine_import("wire.obj", OBJ_LINES);
 	BOOST_REQUIRE(prefab);
-	check_no_stray_primitives(engine_geometry("wire"), 0u);
+	check_kept(engine_geometry("wire"), rnd::geometry_topology::lines, 4u);
+	BOOST_TEST(!warns_of_dropped_faces(warnings));
 }
 
 // Red before the fix under ASan: the same loop reads face.mIndices[1] and [2] of a 1-index face.
 BOOST_AUTO_TEST_CASE(APointsOnlyObj_DoesNotOverflow_InTheEngineImporter)
 {
+	const warn_capture warnings;
 	const auto prefab = engine_import("dots.obj", OBJ_POINTS);
 	BOOST_REQUIRE(prefab);
-	check_no_stray_primitives(engine_geometry("dots"), 0u);
+	check_kept(engine_geometry("dots"), rnd::geometry_topology::points, 3u);
+	BOOST_TEST(!warns_of_dropped_faces(warnings));
 }
 
 BOOST_AUTO_TEST_CASE(AMixedMeshOfTrianglesAndLines_KeepsOnlyItsTriangles_InTheEngineImporter)
@@ -282,7 +296,7 @@ BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEngineImporter)
 	const warn_capture warnings;
 	const auto prefab = engine_import("beside.obj", OBJ_TRIANGLE_BESIDE_LINES);
 	BOOST_REQUIRE(prefab);
-	check_no_stray_primitives(engine_geometry("beside"), 1u);
+	check_kept(engine_geometry("beside"), rnd::geometry_topology::triangles, 3u);
 	json::object out;
 	prefab->serialize(out);
 	BOOST_TEST(mesh_node_count(out) == 1);
@@ -294,16 +308,20 @@ BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEngineImporter)
 
 BOOST_AUTO_TEST_CASE(ALinesOnlyObj_HasNoLineInATriangleGeometry_InTheEditorImporter)
 {
+	const warn_capture warnings;
 	const edt::import_intermediate imported = editor_import("wire.obj", OBJ_LINES);
 	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
-	check_no_stray_primitives(stored(imported.geom_tag), 0u);
+	check_kept(stored(imported.geom_tag), rnd::geometry_topology::lines, 4u);
+	BOOST_TEST(!warns_of_dropped_faces(warnings));
 }
 
 BOOST_AUTO_TEST_CASE(APointsOnlyObj_HasNoPointInATriangleGeometry_InTheEditorImporter)
 {
+	const warn_capture warnings;
 	const edt::import_intermediate imported = editor_import("dots.obj", OBJ_POINTS);
 	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
-	check_no_stray_primitives(stored(imported.geom_tag), 0u);
+	check_kept(stored(imported.geom_tag), rnd::geometry_topology::points, 3u);
+	BOOST_TEST(!warns_of_dropped_faces(warnings));
 }
 
 BOOST_AUTO_TEST_CASE(AMixedMeshOfTrianglesAndLines_KeepsOnlyItsTriangles_InTheEditorImporter)
@@ -335,7 +353,7 @@ BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEditorImporter)
 	const warn_capture warnings;
 	const edt::import_intermediate imported = editor_import("beside.obj", OBJ_TRIANGLE_BESIDE_LINES);
 	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
-	check_no_stray_primitives(stored(imported.geom_tag), 1u);
+	check_kept(stored(imported.geom_tag), rnd::geometry_topology::triangles, 3u);
 	BOOST_TEST(mesh_node_count(imported.prefab_json) == 1);
 	BOOST_TEST(warnings.names_dropped("beside.obj", "Wire", 2u, "line"));
 }
