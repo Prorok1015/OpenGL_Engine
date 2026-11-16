@@ -863,9 +863,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		agent_ports.session_closed = [this](const std::string& session) {
 			if (m_agent_sessions) m_agent_sessions->session_closed(session);
 		};
+		// The guard is in place before the server can take a call.
+		m_vcs->guard_config_files(editor_config_files());
 		m_agent = std::make_unique<agent_component>(std::move(agent_ports));
 		m_agent->install(m_registrations);
-		m_vcs->guard_config_files(editor_config_files());
 		auto& commands = data.require<cmd::command_registry>();
 		editor_events& events = m_context->events();
 

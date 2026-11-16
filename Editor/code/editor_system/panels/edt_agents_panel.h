@@ -16,7 +16,7 @@ namespace edt
 	{
 		// null: no agent server in this editor.
 		std::function<agent_server*()> server;
-		// The person's switch (editor_system::set_agent_server). False: it did not take effect (port taken).
+		// The person's switch (agent_component::set_server). False: it did not take effect (port taken).
 		std::function<bool(bool enabled, std::uint16_t port)> set_server;
 		// The port of the person's last choice (edt://settings/agent_server.json).
 		std::function<std::uint16_t()> chosen_port;

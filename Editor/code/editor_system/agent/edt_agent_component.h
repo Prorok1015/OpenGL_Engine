@@ -65,7 +65,8 @@ namespace edt
 		// editor.quit, where the editor supports it (a window with a person, or headless / stdio).
 		void install(std::vector<registration>& out);
 		// First in ~editor_system: the server (its thread and the calls it queued), the session listeners, the log filter's
-		// closures (they name the editor system), the access and the argument check, in that order. Idempotent.
+		// closures (they name the editor system), the vcs policy source, the access and the argument check, in that order. Idempotent.
+		// The constructor runs it, and drops its layer callback, when it throws.
 		void shutdown();
 
 		// Null once shutdown() ran.
@@ -80,6 +81,8 @@ namespace edt
 		void notify_tools_changed();
 
 	private:
+		void build();
+
 		ports m_ports;
 		bool m_stdio = false;
 		// The editor.quit sources, kept for install().

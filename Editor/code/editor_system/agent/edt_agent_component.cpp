@@ -42,6 +42,20 @@ namespace
 edt::agent_component::agent_component(ports from)
 	: m_ports(std::move(from))
 {
+	// A throw below (the server, the policy files) must not leave this component's hooks in the registry, the log filter, the
+	// vcs service and the layer: they name an object that is about to be gone, and a destructor does not run for it.
+	try {
+		build();
+	}
+	catch (...) {
+		shutdown();
+		m_ports.layer.unregister_implicit("edt/agent_confirmations");
+		throw;
+	}
+}
+
+void edt::agent_component::build()
+{
 	const bool headless = m_ports.headless;
 	m_stdio = cfg_mcp_stdio;
 	if (m_stdio && !m_ports.stdio_write) {
@@ -168,6 +182,7 @@ void edt::agent_component::shutdown()
 		};
 		m_log_filter = nullptr;
 	}
+	m_ports.vcs.follow_agent_policy({}, [] { return vcs_policy{}; });
 	m_access.reset();
 	if (m_argument_checks) {
 		m_argument_checks->set_agent_argument_check(nullptr);
