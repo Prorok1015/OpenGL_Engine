@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(ARecordOfAWholeComponent_SaysWhole)
 
 BOOST_AUTO_TEST_CASE(ALongValue_IsCut)
 {
-	const std::string text = edt::describe_override_record(set_record({}, "c", "/p", std::string(200, 'x')));
+	const std::string text = edt::describe_override_record(set_record({}, "c", "/p", boost::json::value_from(std::string(200, 'x'))));
 	BOOST_TEST(text.size() < 100u);
 	BOOST_TEST(text.ends_with("..."));
 }
