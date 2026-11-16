@@ -30,9 +30,11 @@ check fails when:
       - a pin of the base branch (matched by its constant) is missing here. Restore it, or retire it: add
         {"constant": "<name>_abi_revision", "reason": "<one line>"} to the top-level "retired" list and raise
         its key's revision. A retired entry stays in the file afterwards. Renaming a constant is a removal plus a new pin;
-      - a pin was retired relative to the base and its key's revision is not higher than the base's. A base file without
-        "layout_revision" (older format) has an unknown game revision: the change passes with a note; one without
-        "editor_layout_revision" reads it as 0.
+      - a pin was retired relative to the base and its key's revision is not higher than the base's. A pin whose "key"
+        differs from the base pin of the same constant counts as retired from the old key (that key's revision must be
+        higher than the base's) and as a new pin in its new key. A base file without "layout_revision" (older
+        format) has an unknown game revision: the change passes with a note; one without "editor_layout_revision"
+        reads it as 0.
     A pin only in this branch is new and passes. A missing or malformed --base-pins file is an error: the caller leaves
     the flag out when the base has none.
 --update refuses the first case too: it records changed lists only with a raised revision. It keeps "retired".
@@ -451,9 +453,14 @@ def check_against_base(pins, base_pins):
         return isinstance(value, int) and value > base_value, value, base_value
 
     changed_unknown = []
+    removed = {}
     for constant, entry in head.items():
         before = base.get(constant)
         key = key_of(entry)
+        if key is not None and before is not None and key_of(before) not in (None, key):
+            # Another key: a retirement from the old key (its revision must rise) and a new pin in this one.
+            removed.setdefault(key_of(before), []).append(f'{constant} (moved to the {key} key)')
+            continue
         if key is None or before is None or before.get('virtuals') is None or entry.get('virtuals') is None:
             continue
         if not differs(pinned_of(before), pinned_of(entry)):
@@ -479,7 +486,6 @@ def check_against_base(pins, base_pins):
         notes.append(f"{TOOL}: note: the base branch's pin file records no {name}: the change of {constant} is "
                      f"accepted without comparing it")
     retired = retired_constants(pins)
-    removed = {}
     for constant, before in base.items():
         if constant in head:
             continue
@@ -776,6 +782,20 @@ namespace demo {
     expect(len(errors) == 1 and 'editor_layout_revision' in errors[0], f'an editor retirement, same revision gives {errors}')
     expect(check_against_base(dict(without_panel, editor_layout_revision=2), both) == ([], []),
            'an editor retirement with a raised editor_layout_revision fails')
+    # A pin moved to another key retires it from the old key: the old key's revision must rise, the new key's need not.
+    game_to_editor = dict(both, interfaces=[dict(both['interfaces'][0], key='editor'), both['interfaces'][1]])
+    errors, _ = check_against_base(game_to_editor, both)
+    expect(len(errors) == 1 and 'iface_abi_revision (moved to the editor key)' in errors[0]
+           and 'layout_revision is 12 here' in errors[0], f'a game pin moved to the editor key gives {errors}')
+    expect(check_against_base(dict(game_to_editor, layout_revision=13), both) == ([], []),
+           'a game pin moved to the editor key with a raised layout_revision fails')
+    editor_to_game = dict(both, interfaces=[both['interfaces'][0],
+                                            {k: v for k, v in both['interfaces'][1].items() if k != 'key'}])
+    errors, _ = check_against_base(editor_to_game, both)
+    expect(len(errors) == 1 and 'panel_abi_revision (moved to the game key)' in errors[0]
+           and 'editor_layout_revision is 1 here' in errors[0], f'an editor pin moved to the game key gives {errors}')
+    expect(check_against_base(dict(editor_to_game, editor_layout_revision=2), both) == ([], []),
+           'an editor pin moved to the game key with a raised editor_layout_revision fails')
     print(f'{TOOL}: self-test passed')
 
 

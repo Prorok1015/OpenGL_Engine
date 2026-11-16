@@ -1,5 +1,5 @@
 #pragma once
-#include "edt_api.h"
+#include <snk/editor/edt_api.h>
 #include <snk/command/cmd_types.h>
 #include <cstddef>
 #include <cstdint>

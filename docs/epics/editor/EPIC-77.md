@@ -43,7 +43,7 @@
 | Что нужно моделлеру | Что есть |
 |---|---|
 | Документ со своим окном | `document` / `previewable_document`, `document_manager::adopt` (много документов), `prefab_document` с рабочей копией, миром `preview:<tag>`, Apply/Revert, `[*]`, вопросом при закрытии, плашкой «изменён на диске» |
-| Отмена | `document_history` + `history_change` — общие, не знают типа документа (`edt_document_history.h:14`); у `data_document` своя история, у `prefab_document` её нет. Меню Edit работает с `documents().active()` |
+| Отмена | `document_history` + `history_change` — общие, не знают типа документа (`Editor/code/editor_system/core/edt_document_history.h:14`, закрытый); у `data_document` своя история, у `prefab_document` её нет. Меню Edit работает с `documents().active()` |
 | Оверлей поверх кадра | Подсветка костей идёт **через движок**: экстрактор кладёт линии в `packet.debug_draws`, их рисует `rnd_debug_pass` (без глубины). Произвольного источника линий, кроме скелета, нет. Гизмо рисуется ImGui-слоем поверх картинки (`world_to_screen`, `edt_transform_gizmo.hpp:37`) |
 | Выбор кликом во вьюпорте | **Нет вообще**: ни луча, ни теста треугольников, ни id-буфера. Выделение — только узлы, из иерархии |
 | Гизмо по произвольной точке | Нет: `draw_transform_gizmo` привязан к сущности. Помощники осей (`draw_translate_axis`, `draw_scale_axis`) возвращают смещение в мире и ECS не трогают |
