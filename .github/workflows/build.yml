@@ -166,21 +166,25 @@ jobs:
 
       # #1056: a change of the module ABI (layout_revision, an API version, the pins, a new SNK_API line) adds its own
       # docs/abi/changes/<issue>.md, so two changes never conflict on one history line.
+      # The PR's base is the first parent of the merge commit Plan read: pull_request.base.sha lags behind the branch.
+      # Without a base (by hand, a new branch) the current layout_revision must still be told in docs/abi.
       - name: Check the ABI changes have their entries
         env:
           EVENT: ${{ github.event_name }}
+          PLAN_BASE: ${{ steps.plan.outputs.base }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           python3 tools/ci/check_abi_changes.py --self-test
           base=""
           case "$EVENT" in
-            pull_request) base="$PR_BASE" ;;
+            pull_request) base="${PLAN_BASE:-$PR_BASE}" ;;
             push) base="$PUSH_BEFORE" ;;
           esac
           if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || ! printf '%s' "$base" | grep -q '[1-9a-f]'; then
-            echo "no base commit for this $EVENT event: nothing to compare"
-            exit 0
+            echo "::warning::no base commit for this $EVENT event: only the current layout_revision is checked"
+            python3 tools/ci/check_abi_changes.py --state
+            exit $?
           fi
           git fetch --no-tags --depth=1 origin "$base"
           python3 tools/ci/check_abi_changes.py --base "$base"
