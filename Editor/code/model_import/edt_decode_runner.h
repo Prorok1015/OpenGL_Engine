@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
+#include "edt_decoder_sandbox.h"
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -21,6 +22,9 @@ namespace edt {
 		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
 		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
 		bundle_limits answer_limits;
+		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
+		// import's.
+		sandbox_mode sandbox = sandbox_mode::best_effort;
 		// Appended to the child's command line; the process tests use snk_model_decoder's --self-test-* flags.
 		std::vector<std::string> extra_arguments;
 	};
@@ -33,6 +37,8 @@ namespace edt {
 		std::string error;
 		bool timed_out = false;
 		bool cancelled = false;
+		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
+		bool sandbox_refused = false;
 
 		bool ok() const { return bundle.has_value(); }
 	};

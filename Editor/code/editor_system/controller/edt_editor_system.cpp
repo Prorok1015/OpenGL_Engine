@@ -224,6 +224,9 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
 	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
+	// The decoder's OS sandbox (#1043) for a person's import and a level's model: best_effort (run without it where the
+	// system has none, with one WARN) or required (refuse to decode). An agent's import is always required.
+	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "best_effort");
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
@@ -372,6 +375,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			edt::decode_runner_config decoder_config;
 			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
 			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
+			std::string sandbox_warning;
+			decoder_config.sandbox = edt::decoder_sandbox_mode(*cfg_import_decoder_sandbox, sandbox_warning);
+			if (!sandbox_warning.empty()) egLOG_WARN("Editor/Import", "{}", sandbox_warning);
 			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config));
 		}
 		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this

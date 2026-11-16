@@ -4,6 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include "edt_async_import_task.h"
+#include "edt_decoder_sandbox.h"
 #include "edt_model_file_access.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -46,6 +47,9 @@ namespace edt {
 		std::string memory_folder;
 		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
 		bool on_disk = true;
+		// The decoder process's OS sandbox (#1043): the editor's configured mode or this, whichever is stricter. An agent's
+		// import asks for `required`.
+		sandbox_mode sandbox = sandbox_mode::best_effort;
 	};
 
 	class model_importer {

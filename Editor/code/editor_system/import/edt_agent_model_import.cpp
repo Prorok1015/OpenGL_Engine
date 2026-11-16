@@ -197,6 +197,8 @@ namespace {
 		source.path = in.plan.source;
 		source.preloaded = &source_bytes;
 		source.limits = in.limits;
+		// An agent's model never runs in a decoder without its OS sandbox, whatever import/decoder_sandbox says (#1043).
+		source.sandbox = edt::sandbox_mode::required;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 		std::vector<edt::referenced_file> files = in.plan.files;
 		if (!in.plan.scanned) {

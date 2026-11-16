@@ -42,6 +42,9 @@ namespace edt {
 		bool ok() const { return bundle.has_value(); }
 	};
 
+	// The most bytes a bundle under `limits` can take: its head, the manifest and every blob with its tag and sizes.
+	std::uint64_t largest_bundle_bytes(const bundle_limits& limits);
+
 	// A tag a bundle may carry: memory://<name>..., no "..", backslash, control character or empty segment.
 	bool is_bundle_tag(const std::string& tag, std::size_t max_bytes);
 

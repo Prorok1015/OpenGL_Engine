@@ -71,6 +71,7 @@ struct import_fixture : test_util::scene_env
 		result.scan = [this](const edt::import_source& source, ds::task_context*) {
 			++scans;
 			deadline_was_set = source.deadline != std::chrono::steady_clock::time_point{};
+			scan_sandbox = source.sandbox;
 			edt::model_file_scan scan;
 			scan.error = scan_error;
 			scan.files = listed_files;
@@ -91,6 +92,7 @@ struct import_fixture : test_util::scene_env
 	{
 		const fs::path& model = source.path;
 		++imports;
+		import_sandbox = source.sandbox;
 		if (source.allowed) seen_allowed = *source.allowed;
 		if (source.preloaded) seen_bytes.assign(reinterpret_cast<const char*>(source.preloaded->data()), source.preloaded->size());
 		if (during_import) during_import();
@@ -165,6 +167,8 @@ struct import_fixture : test_util::scene_env
 	int imports = 0;
 	int scans = 0;
 	bool deadline_was_set = false;
+	edt::sandbox_mode scan_sandbox = edt::sandbox_mode::best_effort;
+	edt::sandbox_mode import_sandbox = edt::sandbox_mode::best_effort;
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
 	bool scan_leaves_unhashed = false;
@@ -384,6 +388,18 @@ BOOST_AUTO_TEST_CASE(ASelfContainedModel_NeedsOnePrompt)
 	BOOST_CHECK_EQUAL(scans, 1);
 	BOOST_CHECK_EQUAL(imports, 1);
 	BOOST_CHECK(deadline_was_set);
+}
+
+// #1043: an agent's model is scanned and imported only by a decoder in its OS sandbox, whatever the editor's cfg says.
+BOOST_AUTO_TEST_CASE(AnAgentsModel_AsksForTheRequiredSandbox_ToScanAndToImport)
+{
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_REQUIRE_EQUAL(scans, 1);
+	BOOST_REQUIRE_EQUAL(imports, 1);
+	BOOST_CHECK(scan_sandbox == edt::sandbox_mode::required);
+	BOOST_CHECK(import_sandbox == edt::sandbox_mode::required);
 }
 
 BOOST_AUTO_TEST_CASE(AModelWithFiles_EndsTheFirstJobWithTheirListAndWritesNothing)

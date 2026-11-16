@@ -215,6 +215,9 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		if (is_spelling_the_rule_refuses(fs_paths::generic_utf8_of(normal.lexically_relative(*base)))) return refuse(refusal_kind::rule, not_allowed);
 	} else if (is_spelling_the_rule_refuses(reference)) {
 		return refuse(refusal_kind::rule, not_allowed);
+	} else if (!lexically_under((m_dir / given).lexically_normal(), m_boundary)) {
+		// A ".." that leaves the boundary is refused here, so weakly_canonical below never asks the disk about a path outside it.
+		return refuse(refusal_kind::rule, outside);
 	}
 	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(refusal_kind::rule, outside);

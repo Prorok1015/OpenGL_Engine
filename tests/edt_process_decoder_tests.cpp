@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_process_decoder.h"
+#include "test_decoder_sandbox.hpp"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/common/logger/engine_log_sinks.h>
@@ -451,6 +452,45 @@ BOOST_AUTO_TEST_CASE(AScanThatTheChildReportedAsFailed_ComesBackWithItsError)
 	const auto cleaned = edt::accept_scan_answer(failed, problem);
 	BOOST_REQUIRE(cleaned.has_value());
 	BOOST_CHECK_EQUAL(cleaned->error.find('\n'), std::string::npos);
+}
+
+// #1043: the child reports what of its sandbox it applied; the editor reads it only as an object of strings.
+BOOST_AUTO_TEST_CASE(AnAnswer_MayCarryTheSandboxReport_ButOnlyAsAnObjectOfStrings)
+{
+	std::string problem;
+	edt::decode_bundle scan = scan_answer({});
+	scan.manifest["sandbox"] = boost::json::object{ { "fs", "none" }, { "syscalls", "seccomp" }, { "why", "no Landlock" }, { "later", 1 } };
+	BOOST_CHECK_MESSAGE(edt::accept_scan_answer(scan, problem).has_value(), problem);
+	scan.manifest["sandbox"] = "landlock";
+	BOOST_CHECK(!edt::accept_scan_answer(scan, problem).has_value());
+	scan.manifest["sandbox"] = boost::json::object{ { "fs", 1 } };
+	BOOST_CHECK(!edt::accept_scan_answer(scan, problem).has_value());
+
+	const auto request = request_in();
+	edt::decode_bundle imported = import_answer();
+	imported.manifest["sandbox"] = boost::json::object{ { "fs", "landlock" }, { "syscalls", "seccomp" } };
+	BOOST_CHECK_MESSAGE(edt::accept_import_answer(imported, request, problem).has_value(), problem);
+	imported.manifest["sandbox"] = boost::json::object{ { "why", boost::json::array{} } };
+	BOOST_CHECK(!edt::accept_import_answer(imported, request, problem).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheSandboxMode_IsTheStricterOfTheEditorsAndTheImports_AndAnUnknownCfgValueIsBestEffort)
+{
+	using edt::sandbox_mode;
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::best_effort, sandbox_mode::best_effort) == sandbox_mode::best_effort);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::best_effort, sandbox_mode::required) == sandbox_mode::required);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::required, sandbox_mode::best_effort) == sandbox_mode::required);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::required, sandbox_mode::required) == sandbox_mode::required);
+
+	std::string warning;
+	BOOST_CHECK(edt::decoder_sandbox_mode("best_effort", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(warning.empty());
+	BOOST_CHECK(edt::decoder_sandbox_mode("required", warning) == sandbox_mode::required);
+	BOOST_CHECK(warning.empty());
+	BOOST_CHECK(edt::decoder_sandbox_mode("off", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(warning.find("import/decoder_sandbox") != std::string::npos);
+	BOOST_CHECK(edt::decoder_sandbox_mode("REQUIRED", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(!warning.empty());
 }
 
 BOOST_AUTO_TEST_CASE(TheDecoderMemory_DefaultsTo2GiB_AndIsClampedWithAWarning_NeverUnlimited)
@@ -967,6 +1007,67 @@ BOOST_AUTO_TEST_CASE(ADecoderThatIsSlow_FailsTheImportWithoutStoringAnything)
 		BOOST_FAIL("a decoder that sleeps was not stopped");
 	} catch (const std::runtime_error& e) {
 		BOOST_CHECK_MESSAGE(std::string(e.what()).find("too long") != std::string::npos, e.what());
+	}
+}
+
+// #1043: a decoder that refuses to run without its sandbox (exit code 4) fails the import with its reason.
+BOOST_AUTO_TEST_CASE(AnImportThatAsksForTheRequiredSandbox_FailsWithTheReason_WhenTheDecoderCannotHaveIt)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	source.sandbox = edt::sandbox_mode::required;
+	auto config = decoder_config();
+	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
+	config.extra_arguments = { "--self-test-pretend-no-landlock" };
+	const edt::process_decoder decoder(*rs, config);
+	try {
+		decoder.import(source, nullptr);
+		BOOST_FAIL("a decoder without its sandbox decoded a model that required it");
+	} catch (const std::runtime_error& e) {
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("cannot run in its sandbox") != std::string::npos, e.what());
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("Landlock") != std::string::npos, e.what());
+	}
+}
+
+// #1043: the real decoder decodes real models inside Landlock and the seccomp filter (the CI test of the allowlist).
+BOOST_AUTO_TEST_CASE(AGltfWithItsBin_AndAnObjWithItsMtl_DecodeInTheRequiredSandbox)
+{
+	if (test_util::landlock_abi() == 0) {
+		BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
+		return;
+	}
+	test_util::temp_dir dir{ "process_decoder_sandbox" };
+	const std::string gltf = R"json({"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":36}],
+		"bufferViews":[{"buffer":0,"byteLength":36}],
+		"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]}],
+		"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})json";
+	const float positions[] = { -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 0.f, 1.f, 0.f };
+	const std::string obj = "mtllib tri.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nusemtl m\nf 1 2 3\n";
+	dir.write("g/tri.bin", std::string_view(reinterpret_cast<const char*>(positions), sizeof(positions)));
+	dir.write("o/tri.mtl", "newmtl m\nKd 1 0 0\n");
+	const std::pair<fs::path, std::string> models[] = { { dir.write("g/tri.gltf", gltf), gltf }, { dir.write("o/tri.obj", obj), obj } };
+
+	const edt::process_decoder decoder(*rs, decoder_config());
+	for (const auto& [model, text] : models) {
+		BOOST_TEST_CONTEXT(model.filename().string()) {
+			const std::vector<std::byte> bytes = bytes_of(text);
+			edt::import_source source;
+			source.path = model;
+			source.preloaded = &bytes;
+			source.sandbox = edt::sandbox_mode::required;
+			const edt::model_file_scan listed = decoder.scan(source, nullptr);
+			BOOST_REQUIRE_MESSAGE(listed.ok(), listed.error);
+			BOOST_CHECK_EQUAL(listed.files.size(), 1u);
+			source.allowed = &listed.files;
+			const edt::import_intermediate imported = decoder.import(source, nullptr);
+			BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+			BOOST_CHECK(!imported.created_tags.empty());
+			for (const res::tag& tag : imported.created_tags) rs->erase(tag);
+		}
 	}
 }
 
