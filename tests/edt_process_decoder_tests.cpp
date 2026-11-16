@@ -507,6 +507,36 @@ BOOST_AUTO_TEST_CASE(AMissingDecoder_IsUnavailable_WithAReasonThatNamesTheFile)
 	BOOST_CHECK_MESSAGE(why.find("not found") != std::string::npos, why);
 }
 
+// #1063: each process_decoder asks for the decoder's version; the file is hashed once per process, not per decoder.
+BOOST_AUTO_TEST_CASE(TwoDecodersOfOneFile_HashItOnce_AndAChangedFileIsHashedAgain)
+{
+	test_util::temp_dir dir{ "process_decoder_version" };
+	edt::decode_runner_config config;
+	config.decoder = dir.write("decoder.bin", "the first build");
+	const std::size_t before = edt::file_version_hashes();
+
+	const edt::process_decoder first(*rs, config);
+	const edt::process_decoder second(*rs, config);
+	const std::string version = first.version();
+	BOOST_TEST(!version.empty());
+	BOOST_TEST(second.version() == version);
+	BOOST_TEST(edt::file_version_hashes() == before + 1u);
+
+	// Another build in its place: another size, so another version.
+	dir.write("decoder.bin", "the second, longer build");
+	const edt::process_decoder third(*rs, config);
+	BOOST_TEST(third.version() != version);
+	BOOST_TEST(edt::file_version_hashes() == before + 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AnUnreadableDecoder_HasNoVersion)
+{
+	edt::decode_runner_config config;
+	config.decoder = fs::temp_directory_path() / "no_such_folder" / "snk_model_decoder";
+	BOOST_TEST(!edt::file_version(config.decoder).has_value());
+	BOOST_TEST(edt::process_decoder(*rs, config).version().empty());
+}
+
 #if SNK_HAS_ASSIMP
 
 namespace {
