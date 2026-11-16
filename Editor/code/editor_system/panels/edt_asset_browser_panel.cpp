@@ -2,6 +2,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -18,16 +19,31 @@ namespace edt
 		return s;
 	}
 
+	struct file_icon {
+		const char* glyph;
+		const char* text;
+	};
+
+	static file_icon icon_of_extension(const std::string& ext)
+	{
+		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return {gui::icon::model, "[3D] "};
+		if (ext == ".desc")                                                      return {gui::icon::desc, "[D]  "};
+		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
+		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp")                  return {gui::icon::image, "[IMG]"};
+		if (ext == ".vert" || ext == ".frag" || ext == ".geom" || ext == ".glsl") return {gui::icon::file_code, "[SHD]"};
+		if (ext == ".wav"  || ext == ".ogg"  || ext == ".mp3")                  return {gui::icon::sound, "[SND]"};
+		return {gui::icon::file, "[F]  "};
+	}
+
+	static const char* folder_icon()
+	{
+		return gui::ui_font_has_icons() ? gui::icon::folder : "[/]";
+	}
+
 	const char* asset_browser_panel::get_file_icon(const std::filesystem::path& p) const
 	{
-		std::string ext = to_lower(fs_paths::utf8_of(p.extension()));
-		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return "[3D] ";
-		if (ext == ".desc")                                                      return "[D]  ";
-		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
-		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp")                  return "[IMG]";
-		if (ext == ".vert" || ext == ".frag" || ext == ".geom" || ext == ".glsl") return "[SHD]";
-		if (ext == ".wav"  || ext == ".ogg"  || ext == ".mp3")                  return "[SND]";
-		return "[F]  ";
+		const file_icon icon = icon_of_extension(to_lower(fs_paths::utf8_of(p.extension())));
+		return gui::ui_font_has_icons() ? icon.glyph : icon.text;
 	}
 
 	// ─── lifecycle ────────────────────────────────────────────────────────────
@@ -157,6 +173,7 @@ namespace edt
 	{
 		m_entries.clear();
 		m_needs_refresh = false;
+		m_labels_have_icons = gui::ui_font_has_icons();
 
 		const std::string search_lower = to_lower(m_search);
 
@@ -167,7 +184,7 @@ namespace edt
 					continue;
 			}
 			std::string label = src.is_dir
-				? "[/] " + src.name
+				? std::string(folder_icon()) + " " + src.name
 				: std::string(get_file_icon(src.path)) + " " + src.name;
 			m_entries.push_back({std::move(src), std::move(label)});
 		}
@@ -270,7 +287,7 @@ namespace edt
 		ImGui::NextColumn();
 
 		// Right: current-directory contents
-		if (m_needs_refresh)
+		if (m_needs_refresh || m_labels_have_icons != gui::ui_font_has_icons())
 			refresh_entries();
 
 		// Room under the list for "Used by" of the picked file.
@@ -281,7 +298,7 @@ namespace edt
 			{
 				bool at_root = m_current_rel.empty();
 				if (at_root) ImGui::BeginDisabled();
-				if (ImGui::Selectable("[/] .."))
+				if (ImGui::Selectable((std::string(folder_icon()) + " ..").c_str()))
 					navigate_to(m_current_rel.parent_path());
 				if (at_root) ImGui::EndDisabled();
 			}
@@ -297,9 +314,14 @@ namespace edt
 					ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 				const bool picked = ImGui::Selectable(e.label.c_str(), !e.src.is_dir && e.src.relative == m_selected_rel);
 				if (m_ui_probe) {
-					if (ImGui::IsItemVisible()) {
-						const ImVec2 item_min = ImGui::GetItemRectMin();
-						const ImVec2 item_max = ImGui::GetItemRectMax();
+					// A row the list cuts off is "visible" to ImGui; only its part inside the list counts, so a
+					// driver that aims at the centre does not land below the list.
+					const ImDrawList* list = ImGui::GetWindowDrawList();
+					const ImVec2 item_min{ std::max(ImGui::GetItemRectMin().x, list->GetClipRectMin().x),
+						std::max(ImGui::GetItemRectMin().y, list->GetClipRectMin().y) };
+					const ImVec2 item_max{ std::min(ImGui::GetItemRectMax().x, list->GetClipRectMax().x),
+						std::min(ImGui::GetItemRectMax().y, list->GetClipRectMax().y) };
+					if (ImGui::IsItemVisible() && item_max.x - item_min.x >= 2.f && item_max.y - item_min.y >= 2.f) {
 						m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
 					} else {
 						m_ui_probe->report_hidden("asset_browser", e.src.name);
