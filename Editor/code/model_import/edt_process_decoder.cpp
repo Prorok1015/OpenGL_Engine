@@ -570,7 +570,7 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 			if (!resolved.error.empty()) {
 				// The parser also asks for names of its own: Assimp's OBJ loader, missing the .mtl, falls back to one built
 				// from the model's path. A side file the rule refuses is missing to the child, like one not on the disk.
-				egLOG_WARN("edt/decoder", "{}; the model is read without it", resolved.error);
+				egLOG_WARN("edt/decoder", "{}: the side-file rule refuses it, so the model is read without it", resolved.error);
 				new_side_file = true;
 				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
 				continue;
