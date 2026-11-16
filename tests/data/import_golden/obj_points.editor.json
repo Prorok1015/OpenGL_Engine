@@ -17,6 +17,8 @@
 					"count": 36,
 					"sum": 5.73E2,
 					"magnitude": 5.73E2,
+					"probe": 1.4539762989317035E2,
+					"probe_magnitude": 1.880707842221858E2,
 					"min": 0E0,
 					"max": 1.28E2
 				}
@@ -34,27 +36,21 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 3,
-						"sum": 2E0,
-						"magnitude": 2E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 1E0,
-						"magnitude": 1E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						1E0,
+						0E0
+					]
 				]
 			}
 		}
@@ -116,5 +112,49 @@
 			"queue": "mix",
 			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
 		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://dots/dots.geom.desc",
+		"prefab_tag": "memory://dots/dots.prefab.desc",
+		"all_tags": [
+			"memory://dots/dots.geom.desc",
+			"memory://dots/dots.prefab.desc",
+			"memory://dots/materials/DefaultMaterial.mat.desc"
+		],
+		"created_tags": [
+			"memory://dots/dots.geom.desc",
+			"memory://dots/dots.prefab.desc",
+			"memory://dots/materials/DefaultMaterial.mat.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "d5b70fbcbb5436fa",
+			"children": [
+				{
+					"__id": "50ebdb0d6e73be7b",
+					"name": "Dots",
+					"children": [
+						{
+							"__id": "3212ce8402e12f16",
+							"name": "mesh_Dots",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://dots/dots.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://dots/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
 	}
 }

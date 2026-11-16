@@ -147,112 +147,158 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 4E0,
-						"min": -1E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": -2E0,
-						"magnitude": 6E0,
-						"min": -1E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 0E0,
-						"max": 1E0
-					}
+					[
+						-1E0,
+						-1E0,
+						0E0
+					],
+					[
+						1E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						-1E0,
+						-1E0,
+						1E0
+					],
+					[
+						1E0,
+						-1E0,
+						1E0
+					],
+					[
+						0E0,
+						1E0,
+						1E0
+					]
 				],
 				"normal": [
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 6E0,
-						"magnitude": 6E0,
-						"min": 1E0,
-						"max": 1E0
-					}
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					]
 				],
 				"uv": [
-					{
-						"count": 6,
-						"sum": 1.5E0,
-						"magnitude": 1.5E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 1E0,
-						"magnitude": 1E0,
-						"min": 0E0,
-						"max": 1E0
-					}
+					[
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0
+					],
+					[
+						5E-1,
+						1E0
+					],
+					[
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0
+					]
 				],
 				"tangent": [
-					{
-						"count": 6,
-						"sum": 6E0,
-						"magnitude": 6E0,
-						"min": 1E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					]
 				],
 				"bitangent": [
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 6E0,
-						"min": -1E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
 				]
 			}
 		}

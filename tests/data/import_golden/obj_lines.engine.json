@@ -74,6 +74,8 @@
 					"count": 48,
 					"sum": 7.64E2,
 					"magnitude": 7.64E2,
+					"probe": 2.9766734227967515E2,
+					"probe_magnitude": 3.403404966086906E2,
 					"min": 0E0,
 					"max": 1.28E2
 				}
@@ -92,27 +94,26 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 4,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 4,
-						"sum": 1E0,
-						"magnitude": 1E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 4,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						1E0,
+						0E0
+					]
 				]
 			}
 		}

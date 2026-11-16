@@ -64,112 +64,86 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 2E0,
-						"min": -1E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": -1E0,
-						"magnitude": 3E0,
-						"min": -1E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						-1E0,
+						-1E0,
+						0E0
+					],
+					[
+						1E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
 				],
 				"normal": [
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 3,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 1E0,
-						"max": 1E0
-					}
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					]
 				],
 				"uv": [
-					{
-						"count": 3,
-						"sum": 1.5E0,
-						"magnitude": 1.5E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 2E0,
-						"magnitude": 2E0,
-						"min": 0E0,
-						"max": 1E0
-					}
+					[
+						0E0,
+						1E0
+					],
+					[
+						1E0,
+						1E0
+					],
+					[
+						5E-1,
+						0E0
+					]
 				],
 				"tangent": [
-					{
-						"count": 3,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 1E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					]
 				],
 				"bitangent": [
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 3,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 1E0,
-						"max": 1E0
-					},
-					{
-						"count": 3,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
 				]
 			}
 		}
@@ -290,5 +264,136 @@
 				}
 			]
 		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://tri/tri.geom.desc",
+		"prefab_tag": "memory://tri/tri.prefab.desc",
+		"all_tags": [
+			"memory://tri/materials/Red.mat.desc",
+			"memory://tri/tri.geom.desc",
+			"memory://tri/tri.prefab.desc"
+		],
+		"created_tags": [
+			"memory://tri/materials/Red.mat.desc",
+			"memory://tri/tri.geom.bin",
+			"memory://tri/tri.geom.desc",
+			"memory://tri/tri.prefab.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "4eb514ebcb80553d",
+			"transform": {
+				"position": [
+					1E0,
+					2E0,
+					3E0
+				],
+				"rotation": [
+					-0E0,
+					9.000000762939453E1,
+					0E0
+				],
+				"scale": [
+					2.000000238418579E0,
+					2E0,
+					2.000000238418579E0
+				]
+			},
+			"components": {
+				"animated_node_desc": {
+					"__type": "animated_node_desc",
+					"__version": 1
+				},
+				"animation_collection_desc": {
+					"__type": "animation_collection_desc",
+					"__version": 1,
+					"clips": [
+						{
+							"__type": "animation_clip_desc",
+							"__version": 1,
+							"name": "Move",
+							"duration": 2E3,
+							"ticks_per_second": 1E3,
+							"channels": {
+								"Parent": {
+									"position": [
+										{
+											"value": [
+												0E0,
+												0E0,
+												0E0
+											],
+											"time": 0E0
+										},
+										{
+											"value": [
+												1E1,
+												0E0,
+												0E0
+											],
+											"time": 2E3
+										}
+									],
+									"rotation": [
+										{
+											"value": [
+												7.071068286895752E-1,
+												0E0,
+												7.071068286895752E-1,
+												0E0
+											],
+											"time": 0E0
+										}
+									],
+									"scale": [
+										{
+											"value": [
+												2E0,
+												2E0,
+												2E0
+											],
+											"time": 0E0
+										}
+									]
+								}
+							}
+						}
+					]
+				}
+			},
+			"children": [
+				{
+					"__id": "dfc80d0b6c56ee34",
+					"name": "Child",
+					"transform": {
+						"position": [
+							0E0,
+							5E0,
+							0E0
+						]
+					},
+					"children": [
+						{
+							"__id": "d7c0e685f8027127",
+							"name": "mesh_TriMesh",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://tri/tri.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://tri/materials/Red.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
 	}
 }

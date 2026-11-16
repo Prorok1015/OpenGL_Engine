@@ -45,6 +45,8 @@
 					"count": 48,
 					"sum": 7.64E2,
 					"magnitude": 7.64E2,
+					"probe": 2.9766734227967515E2,
+					"probe_magnitude": 3.403404966086906E2,
 					"min": 0E0,
 					"max": 1.28E2
 				}
@@ -63,27 +65,26 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 4,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 4,
-						"sum": 1E0,
-						"magnitude": 1E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 4,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						1E0,
+						0E0
+					]
 				]
 			}
 		}
@@ -118,5 +119,49 @@
 				}
 			]
 		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://wire/wire.geom.desc",
+		"prefab_tag": "memory://wire/wire.prefab.desc",
+		"all_tags": [
+			"memory://wire/materials/DefaultMaterial.mat.desc",
+			"memory://wire/wire.geom.desc",
+			"memory://wire/wire.prefab.desc"
+		],
+		"created_tags": [
+			"memory://wire/materials/DefaultMaterial.mat.desc",
+			"memory://wire/wire.geom.desc",
+			"memory://wire/wire.prefab.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "fadf3ecaf2c5571f",
+			"children": [
+				{
+					"__id": "f227392535ae83a5",
+					"name": "Wire",
+					"children": [
+						{
+							"__id": "dd914f668a8fb7cd",
+							"name": "mesh_Wire",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://wire/wire.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 4,
+									"ind_begin": 0,
+									"ind_end": 4,
+									"material": "memory://wire/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
 	}
 }

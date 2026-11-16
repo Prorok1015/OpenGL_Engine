@@ -60,50 +60,68 @@
 			],
 			"elements": {
 				"position": [
-					{
-						"count": 6,
-						"sum": 2E0,
-						"magnitude": 2E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 2E0,
-						"magnitude": 2E0,
-						"min": 0E0,
-						"max": 1E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					}
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
 				],
 				"normal": [
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 0E0,
-						"magnitude": 0E0,
-						"min": 0E0,
-						"max": 0E0
-					},
-					{
-						"count": 6,
-						"sum": 3E0,
-						"magnitude": 3E0,
-						"min": 0E0,
-						"max": 1E0
-					}
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						0E0,
+						0E0,
+						0E0
+					]
 				]
 			}
 		}
@@ -138,5 +156,50 @@
 				}
 			]
 		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://mixed/mixed.geom.desc",
+		"prefab_tag": "memory://mixed/mixed.prefab.desc",
+		"all_tags": [
+			"memory://mixed/materials/DefaultMaterial.mat.desc",
+			"memory://mixed/mixed.geom.desc",
+			"memory://mixed/mixed.prefab.desc"
+		],
+		"created_tags": [
+			"memory://mixed/materials/DefaultMaterial.mat.desc",
+			"memory://mixed/mixed.geom.bin",
+			"memory://mixed/mixed.geom.desc",
+			"memory://mixed/mixed.prefab.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "ef799a2f24928fff",
+			"children": [
+				{
+					"__id": "f0d41c559c9e48b7",
+					"name": "Mixed",
+					"children": [
+						{
+							"__id": "dbb21861e2ed9251",
+							"name": "mesh_Mixed",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://mixed/mixed.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 6,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://mixed/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
 	}
 }
