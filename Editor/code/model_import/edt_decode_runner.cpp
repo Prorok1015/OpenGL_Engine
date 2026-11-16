@@ -69,7 +69,8 @@ edt::decode_runner::decode_runner(decode_runner_config config)
 	}
 }
 
-edt::decode_outcome edt::decode_runner::run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const
+edt::decode_outcome edt::decode_runner::run(const decode_request& request, const std::vector<std::byte>& source, const std::vector<bundle_blob>& files,
+	std::stop_token stop) const
 {
 	decode_outcome outcome;
 	// A folder this call made itself, private to this user (exclusive, random name, 0700 / owner-only): the same helper
@@ -89,7 +90,9 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 
 	decode_bundle request_bundle;
 	request_bundle.manifest = to_json(sent);
+	request_bundle.blobs.reserve(files.size() + 1);
 	request_bundle.blobs.push_back({ k_decode_source_tag, source });
+	request_bundle.blobs.insert(request_bundle.blobs.end(), files.begin(), files.end());
 	const fs::path request_file = folder / "request.bundle";
 	const fs::path out_file = folder / "out.bundle";
 	std::string write_error;

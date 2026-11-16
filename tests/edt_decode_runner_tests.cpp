@@ -97,10 +97,13 @@ BOOST_AUTO_TEST_CASE(AScan_OfAnObj_ComesBackFromTheChild_AndTheFolderIsGone)
 {
 	const fs::path model = dir.write("m/tri.obj", k_triangle_obj);
 	const edt::decode_runner runner(config());
-	const auto outcome = runner.run(request_for(model, edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {});
+	const auto outcome = runner.run(request_for(model, edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
 	BOOST_REQUIRE_MESSAGE(outcome.ok(), outcome.error);
 	BOOST_CHECK_EQUAL(boost::json::value_to<std::string>(outcome.bundle->manifest.at("kind")), "scan");
-	BOOST_CHECK(edt::model_file_scan_from_json(outcome.bundle->manifest.at("scan")).has_value());
+	const auto requests = edt::scan_requests_from_json(outcome.bundle->manifest);
+	BOOST_REQUIRE(requests.has_value());
+	BOOST_CHECK_MESSAGE(requests->error.empty(), requests->error);
+	BOOST_CHECK(requests->requested.empty());
 	BOOST_CHECK(scratch_is_empty());
 }
 
@@ -108,7 +111,7 @@ BOOST_AUTO_TEST_CASE(AnImport_OfAnObj_ReturnsEveryCreatedResourceAsABlob)
 {
 	const fs::path model = dir.write("m/tri.obj", k_triangle_obj);
 	const edt::decode_runner runner(config());
-	const auto outcome = runner.run(request_for(model, edt::decode_request::mode_kind::import), bytes_of(k_triangle_obj), {});
+	const auto outcome = runner.run(request_for(model, edt::decode_request::mode_kind::import), bytes_of(k_triangle_obj), {}, {});
 	BOOST_REQUIRE_MESSAGE(outcome.ok(), outcome.error);
 	const auto imported = edt::import_intermediate_from_json(outcome.bundle->manifest.at("import"));
 	BOOST_REQUIRE(imported.has_value());
@@ -128,7 +131,7 @@ BOOST_AUTO_TEST_CASE(AChildThatRunsTooLong_IsKilledAtTheDeadline_AndTheFolderIsG
 	cfg.extra_arguments = { "--self-test-sleep", "60000" };
 	const edt::decode_runner runner(cfg);
 	const auto started = std::chrono::steady_clock::now();
-	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {});
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {}, {});
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(outcome.timed_out);
 	BOOST_CHECK_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(30));
@@ -145,7 +148,7 @@ BOOST_AUTO_TEST_CASE(ARequestToStop_KillsTheChild_AndTheFolderIsGone)
 		std::this_thread::sleep_for(std::chrono::milliseconds(300));
 		stop.request_stop();
 	});
-	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), stop.get_token());
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {}, stop.get_token());
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(outcome.cancelled);
 	BOOST_CHECK(scratch_is_empty());
@@ -161,7 +164,7 @@ BOOST_AUTO_TEST_CASE(AChildThatWantsMoreThanItsMemoryLimit_FailsAndTheEditorGoes
 	cfg.memory_limit_bytes = 256ull * 1024ull * 1024ull;
 	cfg.extra_arguments = { "--self-test-alloc", std::to_string(2ull * 1024ull * 1024ull * 1024ull) };
 	const edt::decode_runner runner(cfg);
-	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {});
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {}, {});
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(!outcome.timed_out);
 	BOOST_CHECK(scratch_is_empty());
@@ -216,7 +219,7 @@ BOOST_AUTO_TEST_CASE(AMissingDecoder_IsAFailure_NotACrash)
 	auto cfg = config();
 	cfg.decoder = dir.path() / "no_such_decoder";
 	const edt::decode_runner runner(cfg);
-	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {});
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {}, {});
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(!outcome.error.empty());
 	BOOST_CHECK(scratch_is_empty());
