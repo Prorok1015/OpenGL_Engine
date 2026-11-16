@@ -1514,7 +1514,8 @@ public:
 				continue;
 			}
 			std::string on_disk = fs_paths::utf8_of(entry->path().filename());
-			if (res::is_skipped_asset_entry(on_disk, is_dir, path.empty() && m_project_folder[layer])) {
+			if (res::is_skipped_asset_entry(on_disk, is_dir, path.empty() && m_project_folder[layer])
+				|| res::is_desc_binary_entry(entry->path().parent_path(), on_disk, is_dir)) {
 				continue;
 			}
 			std::string child = joined(path, on_disk);
@@ -1839,6 +1840,17 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	for (std::string& relative : touched) {
 		if (res::is_asset_meta_sidecar(relative)) {
 			relative.resize(res::asset_meta_owner(relative).size());
+		}
+		// A desc that came or went decides whether its binary files are assets (res::is_desc_binary_entry): look at them again.
+		if (relative.ends_with(".desc")) {
+			const std::string stem = relative.substr(0, relative.size() - std::string_view{ ".desc" }.size());
+			for (const char* suffix : { ".bin", ".bin.new" }) {
+				std::string binary = stem + suffix;
+				if (res::desc_binary_owner_name(binary.substr(binary.find_last_of('/') + 1))) {
+					std::string binary_key = lookup.key_of(binary);
+					files.emplace(std::move(binary_key), std::move(binary));
+				}
+			}
 		}
 		std::string key = lookup.key_of(relative);
 		files.emplace(std::move(key), std::move(relative));
@@ -2344,7 +2356,13 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 		return;
 	}
 	const asset_record& record = found->second;
-	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(record.path.view().substr(record.path.view().find_last_of('/') + 1)) || matches_gone(record)) {
+	const std::string_view name = record.path.view().substr(record.path.view().find_last_of('/') + 1);
+	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(name) || matches_gone(record)) {
+		return;
+	}
+	// A desc's binary file whose desc came after it gets no ID: the batch over the desc drops its record.
+	if (const std::optional<std::string> relative = relative_of(record.path);
+		relative && res::is_desc_binary_entry((m_layers[record.layer] / fs_paths::path_from_utf8(*relative)).parent_path(), name, false)) {
 		return;
 	}
 	const auto [entry, added] = m_pending_ids.try_emplace(key, pending_id{ steady_now(), own });

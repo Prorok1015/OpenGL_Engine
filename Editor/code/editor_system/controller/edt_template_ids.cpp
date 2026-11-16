@@ -214,7 +214,7 @@ std::string edt::give_template_fresh_ids(const fs::path& project_root)
 				}
 				continue;
 			}
-			if (is_dir || !fs::is_regular_file(status)) {
+			if (is_dir || !fs::is_regular_file(status) || res::is_desc_binary_entry(it->path().parent_path(), name, false)) {
 				continue;
 			}
 			(res::is_asset_meta_name(name) ? sidecars : files).insert(relative);

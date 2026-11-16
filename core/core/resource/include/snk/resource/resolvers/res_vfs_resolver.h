@@ -66,6 +66,22 @@ namespace res
 		virtual ::res::file_operation rename(const ::res::tag& from, const ::res::tag& to) override;
 		virtual bool exists(const ::res::tag& tag) const override;
 
+		// The file of `tag` from the layer that holds `anchor` (the top layer when none does), read on the calling thread:
+		// a file paired with another (a desc's binary file, #1068) never comes from a layer the other is not in.
+		::platform::beneath::read_result read_beside(const ::res::tag& anchor, const ::res::tag& tag, std::uint64_t max_bytes,
+			std::vector<std::byte>& out) const;
+		// Whether the file of `tag` is in the layer read_beside would read it from; nothing is read.
+		bool exists_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
+		// How many folders are mounted: with more than one, the layer of a file depends on which of them have it.
+		std::size_t root_count() const;
+		// Whether `anchor` resolves to the top layer of a writable mount: the layer a store of its pair writes to.
+		bool writes_beside(const ::res::tag& anchor) const;
+		// The last step of a two-file save: `target` gets `bytes`, then `staged` is removed only if it still holds them.
+		// Refused, writing nothing, when `staged` does not hold them first. Top root, write policy, no file_operations.
+		::res::file_operation commit_staged(const ::res::tag& staged, const ::res::tag& target, const std::vector<std::byte>& bytes);
+		// Removes the top-root file of `tag` only if it holds exactly `bytes`, compared on the io thread right before.
+		::res::file_operation remove_if_same(const ::res::tag& tag, const std::vector<std::byte>& bytes);
+
 	private:
 		bool is_shadowed(const fs::path& path) const;
 		bool exists_below_top(const tag& tag) const;
@@ -74,6 +90,12 @@ namespace res
 		// The layer that has the file and its path there (the top layer when none has it); nullopt when every layer
 		// rejects the tag.
 		std::optional<std::pair<fs::path, fs::path>> resolve_tag(const tag& tag) const;
+		// The layer read_beside reads the pair of `anchor` from: the top one while a store of `anchor` is queued.
+		std::optional<fs::path> beside_layer(const tag& anchor, std::string& error) const;
+		// Whether the top-root file of `tag` (at `path`) holds exactly `bytes`; a queued store of it is what it will hold.
+		bool holds_exactly(const tag& tag, const fs::path& path, const std::vector<std::byte>& bytes, std::string& why) const;
+		// On the io thread: remove_on_io when the file still holds `bytes`; the error text, empty once removed.
+		std::string remove_if_same_on_io(const tag& tag, const fs::path& path, const std::vector<std::byte>& bytes);
 		// The file a remove or rename may touch: inside the top root and under the write policy as a tag and as the file
 		// it resolves to. nullopt with `why` set otherwise.
 		std::optional<fs::path> writable_path(const tag& tag, std::string& why) const;

@@ -50,6 +50,11 @@ namespace res
 
 	class resource_system;
 
+	namespace detail {
+		// res_desc_binary.cpp: reads a desc's binary file from the desc's own layer through the root's resolver.
+		struct desc_binary_access;
+	}
+
 	// One hold of resource_system::hold_changes. Move-only; the destructor releases it, also when an exception unwinds.
 	class SNK_API change_hold
 	{
@@ -782,6 +787,7 @@ namespace res
 
 		// hold_changes (root only): what a resolver reports goes through these first; true when a hold took it in.
 		friend class change_hold;
+		friend struct detail::desc_binary_access;
 		struct held_changes;
 		bool hold_signal(const res::tag& tag);
 		bool hold_batch(const std::string& protocol, const std::vector<file_change>& batch);

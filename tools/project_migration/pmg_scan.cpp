@@ -396,6 +396,7 @@ namespace
 			const bool at_project_root = path.parent_path() == project;
 			const std::string name = fs_paths::utf8_of(path.filename());
 			if (res::is_skipped_asset_entry(name, fs::is_directory(status), at_project_root)) return;
+			if (res::is_desc_binary_entry(path.parent_path(), name, fs::is_directory(status))) return;
 			// Only a real folder is entered: a link or a junction to one is reported, never followed.
 			if (fs::is_directory(status)) {
 				folder(path);
