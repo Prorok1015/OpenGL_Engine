@@ -17,8 +17,7 @@
 - Ревью-субагент серии #1004: ac6f5a962268047e1 (SendMessage); mesh: abf7ce14bb6264507
 
 ## Открытые PR (порядок)
-- #1088 (#1004 шаг 9 migration, Редактора) — ревью Sonnet MERGE; полный CI.
-- #1089 (#1076, Рендера) — Fable merge; полный CI.
+- (push-прогон aibranch 8cd9607 проверяет сочетание #1088+#1089)
 - #1091 (EPIC-79 PR3a, Ядра) — Fable merge (0f7c3965); после этого только фиксы CI (dd35b31e, 2cccb235, af3f9781 — тест geomfiles→memory); draft до зелёного fast; цифры gen_robot до/после в описание.
 - #1096 (#1086, Качества) — Fable merge + 2 правки (217bbfed, проверил сам); draft до зелёного fast.
 - #1094 (#1092 P1 линии/OOB UV, Ядра) — repro под ASan сначала; ревью Sonnet.
@@ -57,7 +56,7 @@ Smoke базовая линия: 1×0.000%, 4×0.193%, 1×1.431%.
 aibranch layout_revision = 15 (после #1073). Запись каждого изменения — docs/abi/changes/<issue>.md.
 
 ## Влито 2026-11-16 (последнее сверху)
-- 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
+- 8cd9607 #1089 (closes #1076) · be97c94 #1088 (#1004 шаг 9) · 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
 - docs: 699ea204 CONSTRAINT_22–25 · e2cde2c EPIC-80
 - Заведены сегодня: #1082 #1084 #1085 #1086 #1090 #1092 #1093 #1097
 
