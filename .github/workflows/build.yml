@@ -1134,6 +1134,23 @@ jobs:
           grep -q "agent server: MCP over stdin/stdout" "$err"
           if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless MCP migration log"; exit 1; fi
 
+      # TEMPORARY (#1109 PR 2, removed with the new references): the runs of the reference comparisons below, taken once
+      # without a comparison into headless_out/candidates/, so one run gives every new reference of the dark_neutral
+      # default. The comparisons below are unchanged and fail until the references are replaced.
+      - name: Reference candidates
+        run: |
+          shoot() {
+            local name="$1" size="$2"; shift 2
+            tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size "$size" \
+              --shot "headless_out/candidates/$name/final.png" -- --project projects/sandbox "$@"
+          }
+          shoot smoke 1600x900 --set editor/startup_level levels/smoke_level.desc
+          shoot game_view 1600x900 --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
+          shoot two_worlds 1600x900 --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions \
+            --size 1920x1080 --shot headless_out/candidates/checklist/final.png \
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+
       - name: Smoke run (smoke_level)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \
