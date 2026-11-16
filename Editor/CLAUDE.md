@@ -56,6 +56,7 @@ Editor/
     │   └── edt_live_mode.cpp/h       # live_mode: owns live_build in the editor: code:// feed, toggle, menu-bar status, live.* tools (#445)
     │
     ├── game_build/                   # Build > Build Game (#434)
+    │   ├── edt_game_build_component.h/.cpp # game_build_component (#1004): the builder and the reloader with everything they ask of the editor (trust, Play snapshot, swap gate, waits) and the Build Settings commands; `editor_system` creates it before live mode, calls `install()`, and hands its `builder()`/`reloader()` on
     │   ├── edt_build_diagnostics.h   # build_output_parser (MSVC/GCC/Clang/ld/CMake lines -> problems)
     │   ├── edt_build_settings.cpp/h  # build_settings: <root>/.snk/build.json (parse/merge/load, update_build_settings read-merge-write, pure)
     │   ├── edt_build_settings_model.cpp/h # build_settings_model (Build Settings state, no ImGui), preset_for_configuration, build.settings.get (#444)
@@ -76,6 +77,8 @@ Editor/
     │   ├── edt_history_model.cpp/h   # history_model: History tab state without ImGui: vcs.log pages loaded as rows come into view, filter (300 ms), stale restart, commit files/diff (#457)
     │   └── edt_history_view.cpp/h    # row_segments (the lines of one graph row), age_text, short_hash: what the History tab draws (#457), pure
     │
+    ├── assets/                       # the asset database and what hangs on it (#760)
+    │   └── edt_asset_component.cpp/h # asset_component (#1004): the database, the pickers' catalog, the asset index, the Problems source `assets`, asset.usages and the browser's usage list; `editor_system` creates it only with a project, calls `install()`, `tick()` (`editor_assets` stage) and asks `database()/catalog()/index()`
     ├── input/                        # Input binding helpers & file dialog
     │   ├── edt_input_manager.h       # make_input_area / to_framebuffer_size (window units -> framebuffer pixels)
     │   ├── edt_input_binding.h       # bind_item_input: a hovered panel image binds its rect to a context in inp::input_router

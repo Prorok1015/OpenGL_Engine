@@ -2758,7 +2758,7 @@ BOOST_FIXTURE_TEST_SUITE(edt_play_session_frame_tests, engine_play_fixture)
 
 BOOST_AUTO_TEST_CASE(ten_cycles_over_real_frames_do_not_grow_the_frame_allocator)
 {
-	const res::tag level = res::tag::make("levels/smoke_level.desc");
+	const res::tag level = res::tag::make("levels/smoke_quads.desc");
 	state.editor_tag = level;
 	state.level_tag = level;
 	auto handle = services.resources()->require_sync<scn::level_desc>(level);

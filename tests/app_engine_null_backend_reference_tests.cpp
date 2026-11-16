@@ -84,14 +84,13 @@ BOOST_AUTO_TEST_CASE(ATexture2dInheritingARefusedPicture_LoadsAndReadsNothing)
 	BOOST_TEST(user.resolves == 0u);
 }
 
-// The smoke level's meshes come from a .glb: without assimp it has no geometry to redirect.
-BOOST_AUTO_TEST_CASE(AGeometryTagOfAComponent_IsNotLoadedFromUser_ByTheFrame, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
+BOOST_AUTO_TEST_CASE(AGeometryTagOfAComponent_IsNotLoadedFromUser_ByTheFrame)
 {
 	user.store(res::tag{ "user://saves/slot0.desc" },
 		test_util::to_bytes(R"json({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[]})json"));
 
 	auto& levels = storage.require<scn::context_manager>();
-	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_quads.desc")));
 	test_util::pump(tasks);
 	BOOST_REQUIRE(run_frames(3) == 3);
 
