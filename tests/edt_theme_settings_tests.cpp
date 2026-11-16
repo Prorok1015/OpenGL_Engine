@@ -251,7 +251,8 @@ BOOST_AUTO_TEST_CASE(ABuiltInPreset_IsNotSaved)
 
 BOOST_AUTO_TEST_CASE(WithoutARenderer_NothingIsAppliedOrWritten)
 {
-	edt::theme_settings_model model{ { .resources = *rs, .descs = descs, .themes = nullptr } };
+	edt::theme_settings_model model{ { .resources = *rs, .descs = descs, .themes = nullptr,
+		.theme_set_by_config = false, .list_files = {} } };
 
 	model.start();
 	model.choose(res::tag{ "engine://themes/light.desc" });

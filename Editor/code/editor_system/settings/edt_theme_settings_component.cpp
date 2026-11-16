@@ -14,7 +14,7 @@ edt::theme_settings_component::theme_settings_component(ports from)
 {
 	m_model = std::make_unique<theme_settings_model>(theme_settings_model::ports{ .resources = m_ports.resources,
 		.descs = m_ports.descs, .themes = m_ports.themes,
-		.theme_set_by_config = engine::gui::theme_set_by_config() });
+		.theme_set_by_config = engine::gui::theme_set_by_config(), .list_files = {} });
 	m_panel = std::make_shared<editor_settings_panel>(*m_model);
 	m_model->start();
 	m_ports.layer.register_implicit("edt/theme_settings", [this] {
