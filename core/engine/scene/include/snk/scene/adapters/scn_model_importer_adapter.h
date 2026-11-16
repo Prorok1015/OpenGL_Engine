@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <snk/common/common.h>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/desc/desc_system.h>
@@ -39,4 +40,8 @@ namespace scn
 		desc::desc_system& desc_system;
 		res::resource_system& m_res_sys;
 	};
+
+	// How many times model_importer_adapter ran assimp in this process: an import of bytes it imported before under the
+	// same tag writes what that import wrote and does not run it (#977).
+	SNK_API std::size_t model_importer_runs();
 }

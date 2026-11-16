@@ -476,4 +476,64 @@ BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
 	}
 }
 
+// #977: bytes imported before under the same tag are written again as that import wrote them, without assimp.
+namespace {
+
+const res::tag* geometry_of(const test_util::ram_resolver& ram, std::string_view model_folder)
+{
+	for (const auto& [tag, bytes] : ram.files) {
+		if (tag.view().ends_with(".geom.desc") && tag.view().find(model_folder) != std::string_view::npos) return &tag;
+	}
+	return nullptr;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
+{
+	const std::size_t before = scn::model_importer_runs();
+	const auto first = import("cache977/once.obj", OBJ_TRIANGLE);
+	BOOST_REQUIRE(first);
+	BOOST_REQUIRE(scn::model_importer_runs() == before + 1u);
+	const json::object first_prefab = serialized(*first);
+	const res::tag* geometry = geometry_of(*ram, "cache977/");
+	BOOST_REQUIRE(geometry != nullptr);
+	const res::tag geometry_tag = *geometry;
+	const std::vector<std::byte> geometry_bytes = ram->files.at(geometry_tag);
+
+	// What the import wrote is gone, as in another resource system; the model's change makes it load again.
+	ram->files.erase(geometry_tag);
+	ram->files.erase(res::tag{ "memory://models/cache977/once.desc" });
+	const res::tag model{ "memory://models/cache977/once.obj" };
+	rs->signal_changed(model);
+	const auto second = import("cache977/once.obj", OBJ_TRIANGLE);
+	BOOST_REQUIRE(second);
+	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	BOOST_REQUIRE(ram->files.contains(geometry_tag));
+	BOOST_TEST((ram->files.at(geometry_tag) == geometry_bytes));
+	BOOST_TEST(json::serialize(serialized(*second)) == json::serialize(first_prefab));
+}
+
+BOOST_AUTO_TEST_CASE(OtherBytesUnderTheSameTag_AreImportedAgain)
+{
+	const std::size_t before = scn::model_importer_runs();
+	BOOST_REQUIRE(import("cache977/changed.obj", OBJ_TRIANGLE));
+	rs->signal_changed(res::tag{ "memory://models/cache977/changed.obj" });
+	BOOST_REQUIRE(import("cache977/changed.obj", OBJ_NO_UV));
+	BOOST_TEST(scn::model_importer_runs() == before + 2u);
+}
+
+// A side file can change while the model's bytes stay the same: such a model is imported every time.
+BOOST_AUTO_TEST_CASE(AModelThatReadsAnotherFile_IsImportedEveryTime)
+{
+	const std::string bin(reinterpret_cast<const char*>(GLTF_TRIANGLE_BIN), sizeof(GLTF_TRIANGLE_BIN));
+	rs->store(res::tag{ "memory://models/cache977/side/data/tri.bin" }, test_util::to_bytes(bin));
+	const std::string gltf = gltf_with_buffer_uri("data/tri.bin");
+	const std::size_t before = scn::model_importer_runs();
+	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
+	rs->signal_changed(res::tag{ "memory://models/cache977/side/tri.gltf" });
+	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
+	BOOST_TEST(scn::model_importer_runs() == before + 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
