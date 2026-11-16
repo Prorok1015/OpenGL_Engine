@@ -46,6 +46,7 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_component;
+	class problems_component;
 	class level_load_component;
 	class asset_database;
 	class agent_server;
@@ -247,8 +248,6 @@ namespace edt {
 		std::shared_ptr<problems_panel>        m_problems_panel;
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
 		std::shared_ptr<input_actions_panel>   m_input_actions_panel;
-		// gs::input_actions::revision() the Problems of the source "input" were last made for.
-		std::uint64_t                          m_input_problems_revision = ~std::uint64_t{ 0 };
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
 		std::shared_ptr<git_panel>             m_git_panel;
 		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
@@ -257,6 +256,10 @@ namespace edt {
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
+
+		// What the Problems panel shows and where a row leads (#1004): the publishers sit here. Before the prefab editor, the
+		// loads and the drop, which report into them, so it goes after them.
+		std::unique_ptr<problems_component> m_problems;
 
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
@@ -364,14 +367,5 @@ namespace edt {
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
-		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
-		void refresh_world_problems();
-		void go_to(const desc_target& target);
-		world_problem_publisher m_world_problems;
-		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab" (the open preview).
-		desc_problem_publisher m_desc_problems;
-		// The source "play" (#597): the last check before Play.
-		play_preflight_publisher m_play_preflight;
-		std::vector<connection> m_world_problem_connections;
 	};
 }
