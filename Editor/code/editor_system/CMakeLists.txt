@@ -66,6 +66,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/level"
 	"${CMAKE_CURRENT_SOURCE_DIR}/migration"
 	"${CMAKE_CURRENT_SOURCE_DIR}/problems"
+	"${CMAKE_CURRENT_SOURCE_DIR}/agent"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface

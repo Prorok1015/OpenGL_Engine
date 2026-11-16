@@ -89,6 +89,7 @@
 #include "edt_agent_model_guard.h"
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
+#include "edt_agent_component.h"
 #include "edt_agent_policy_model.h"
 #include "edt_agents_panel.h"
 #include "edt_editor_quit.h"
@@ -226,29 +227,15 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
 	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
-	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
-	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
-	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
-	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
-	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
 	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
 	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
-	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
-	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
-	// Minutes without a request after which an agent's MCP session is closed (its "allow until the end of the session" with it); 0: never.
-	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
 	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
 	// The decoder's OS sandbox (#1043) for every import, a person's setting: on (run without it where the system has
 	// none, with one WARN), off, or required (CI: refuse to decode without it). An agent's import never changes it.
 	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "on");
-	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
-	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
-	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
-	// (agent_policy::set_preanswers_file). Relative to the working directory.
-	CFG_VAR_DEF_PATH(cfg_agent_policy_file, "editor/agent_policy_file", "");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
 
 	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
@@ -290,25 +277,14 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 
 edt::editor_system::~editor_system()
 {
-	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
-	m_agent_server.reset();
+	if (m_agent) m_agent->shutdown();
 	m_session_connections.clear();
-	if (m_log_filter) {
-		// They name this system: nothing of it may be asked once it is gone, and without them an agent would read the
-		// whole journal, so the registry's agents go first (m_agent_server above).
-		m_log_filter->visible = [](std::string_view, const cmd::origin& from) { return from.kind == cmd::origin_kind::ui; };
-		m_log_filter->redact = [](std::string_view text, const cmd::origin& from) {
-			return from.kind == cmd::origin_kind::ui ? std::string(text) : std::string{};
-		};
-	}
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
 	erase_import_folder(m_import_folder);
 	erase_import_folder(m_dialog_import_folder);
 #endif
-	m_agent_access.reset();
-	if (m_agent_argument_checks) m_agent_argument_checks->set_agent_argument_check(nullptr);
 	// The layer may outlive this system: no game layout drawn through it any more.
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
@@ -724,7 +700,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		},
 		.game_layer_generation = [this] { return m_game_layer_generation; },
 		.approved_internally = [this](std::string_view ticket) {
-			return m_agent_access != nullptr && m_agent_access->confirmations().approved_internally(ticket);
+			return m_agent != nullptr && m_agent->access() != nullptr && m_agent->access()->confirmations().approved_internally(ticket);
 		},
 		.rebuild_assets = [this] {
 			if (m_asset_component) m_asset_component->rebuild();
@@ -762,7 +738,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.migration_blocker = [this] { return migration_blocker(); },
 		.load_in_progress = [this] { return load_in_progress(); },
 		.play_active = [this] { return m_play && m_play->active(); },
-		.tools_changed = [this] { if (m_agent_server) m_agent_server->notify_tools_changed(); } });
+		.tools_changed = [this] { if (m_agent) m_agent->notify_tools_changed(); } });
 	m_live->install();
 	create_play_session(data);
 
@@ -865,127 +841,41 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	m_migration->install_open_on_start();
 
-	bool stdio = cfg_mcp_stdio;
-	if (stdio && !data.has_value<platform::protocol_stdout>()) {
-		egLOG_ERROR("mcp", "editor/mcp_stdio needs the --mcp-stdio option (stdout must belong to the protocol): no stdio transport");
-		stdio = false;
-	}
 	{
-		// The policy and the server object always exist, so the person can switch the HTTP transport on later (#449). The
-		// transport itself runs when cfg `editor/agent_server` says so (it wins, with its port) or the person's own switch
-		// (edt://settings/agent_server.json) is on.
-		agent_server_options options;
-		const auto user_roots_for_server = m_res.mount_roots("edt");
-		const std::filesystem::path settings_dir = (user_roots_for_server.empty() ? default_user_data_dir() : user_roots_for_server.back()) / "settings";
-		m_agent_server_settings_file = settings_dir / "agent_server.json";
-		const agent_server_settings person_choice = load_agent_server_settings(m_agent_server_settings_file);
-		const std::string cfg_text = cfg_agent_server;
-		const int cfg_port = cfg_agent_server_port;
-		const agent_http_choice http = decide_agent_http(parse_cfg_switch(cfg_text), cfg_port, person_choice, headless, stdio);
-		options.http = http.enabled;
-		options.port = http.port;
-		const int idle_minutes = cfg_agent_session_idle_minutes;
-		// More than a week is the same as never, and keeps the minutes far from overflowing the clock's nanoseconds.
-		constexpr int never_after_minutes = 7 * 24 * 60;
-		options.session_idle_timeout = std::chrono::minutes{ (idle_minutes > never_after_minutes) ? 0 : std::max(idle_minutes, 0) };
-		const std::string project_dir = cfg_project_dir;
-		const auto agent_roots = m_res.mount_roots("edt");
-		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
-			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt,
-			agent_roots.empty() ? default_user_data_dir() : agent_roots.back());
-		const std::filesystem::path project_policy = options.project_dir / ".snk" / "agent_policy.json";
-		const auto user_roots = m_res.mount_roots("edt");
-		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
-		auto& commands = data.require<cmd::command_registry>();
-		commands.set_agent_argument_check(make_agent_model_check(m_res));
-		m_agent_argument_checks = &commands;
-		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
-			approved_snapshot_for(user_dir / "settings", options.project_dir));
-		// What log.read gives anyone but the person at the editor (#935). The filter is the engine's, kept in the storage.
-		ASSERT_MSG(commands.find("log.read") == nullptr || data.has_value<cmd::log_read_filter>(),
-			"log.read is registered without its filter: an agent would read the whole journal");
-		if (data.has_value<cmd::log_read_filter>()) {
-			m_log_filter = &data.require<cmd::log_read_filter>();
-			install_agent_log_filter(*m_log_filter, [this, &commands] {
-				return m_agent_access != nullptr && agent_build_output_allowed(m_agent_access->policy(), commands);
-			}, agent_log_roots_of(options.project_dir));
+		agent_component::ports agent_ports{ .context = *m_context, .resources = m_res, .commands = data.require<cmd::command_registry>(),
+			.tasks = data.require<ds::task_system>(), .layer = *editor_layer, .vcs = *m_vcs, .headless = headless };
+		if (data.has_value<cmd::log_read_filter>()) agent_ports.log_filter = &data.require<cmd::log_read_filter>();
+		if (data.has_value<prj::project_context>()) agent_ports.project_root = data.require<prj::project_context>().root;
+		if (data.has_value<platform::protocol_stdout>()) {
+			agent_ports.stdio_write = [fd = data.require<platform::protocol_stdout>().fd](std::string_view line) {
+				return platform::write_all(fd, line);
+			};
 		}
-		// Asked at the start of every agent write, so an edit of either policy file applies at once.
-		m_vcs->follow_agent_policy(project_policy, [this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
-		m_vcs->guard_config_files(editor_config_files());
-		m_agent_access->policy().set_on_changed([this] {
-			if (m_agent_server) m_agent_server->notify_tools_changed();
-		});
-		m_agent_access->policy().set_live_mode([this] { return m_live != nullptr && m_live->enabled(); });
-		m_agent_access->set_questions_routed(true);
-		// A person is here to approve a looser project policy only with a window; headless never loosens (#483).
-		m_agent_access->policy().set_approval_allowed(!headless);
-		// Once, so a project file that loosens something is known (the notice, the status bar) before an agent ever connects.
-		if (!headless) m_agent_access->policy().refresh();
-		m_agent_access->set_headless(headless);
-		if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
-			if (headless) {
-				m_agent_access->policy().set_preanswers_file(preanswers, options.project_dir);
-			} else {
-				egLOG_WARN("agent", "--agent-policy ignored: not headless ({})", utf8_of(preanswers));
-			}
-		}
-		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
-		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
-			if (m_agent_access == nullptr) return false;
-			if (m_agent_server) m_agent_server->tick();
-			// Nothing to do for a person who does not use agents: no question can come, and the policy files are not read.
-			if (m_agent_server == nullptr || !m_agent_server->active()) return true;
-			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
-		});
-		// One signal for the end of an MCP session; whoever keeps something per session listens to it.
-		editor_events& events = m_context->events();
-		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
-			if (m_agent_access) m_agent_access->confirmations().drop_session(session);
-		}));
-		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
-			if (m_agent_sessions) m_agent_sessions->session_closed(session);
-		}));
-		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
-		options.jobs = &m_context->jobs();
-		options.events = &events;
-		ASSERT_MSG(m_log_filter != nullptr || commands.find("log.read") == nullptr,
-			"the MCP bridge is built without the log filter: an agent would read the texts of its jobs as they are");
-		options.log_filter = m_log_filter;
-		editor_quit_sources quit;
-		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
-		// Every open document, not only the scene: a modified preview is dropped too.
-		quit.is_dirty = [this] {
+		agent_ports.live_enabled = [this] { return m_live != nullptr && m_live->enabled(); };
+		agent_ports.any_unsaved = [this] {
 			return any_unsaved([this](const std::function<void(document&)>& visit) { m_context->documents().for_each(visit); });
 		};
-		quit.discard_changes = [this] {
+		agent_ports.discard_changes = [this] {
 			m_state.mark_clean();
 			m_prefab->drop_dirty_document();
 		};
-		quit.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
-		if (stdio) {
-			options.stdio_write = [fd = data.require<platform::protocol_stdout>().fd](std::string_view line) {
-				return platform::write_all(fd, line);
-			};
-			auto& tasks = data.require<ds::task_system>();
-			options.on_stdio_eof = [&tasks, alive = std::weak_ptr<int>(m_stdio_alive), headless, quit] {
-				tasks.post_main([alive, headless, quit] {
-					if (alive.lock()) on_stdio_input_closed(headless, quit);
-				});
-			};
-		}
-		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), *m_agent_access, std::move(options));
-		if (editor_quit_available(stdio, headless)) {
-			registration added = register_editor_quit(commands, std::move(quit));
-			if (added.active()) m_registrations.push_back(std::move(added));
-		}
+		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
+		agent_ports.session_closed = [this](const std::string& session) {
+			if (m_agent_sessions) m_agent_sessions->session_closed(session);
+		};
+		// The guard is in place before the server can take a call.
+		m_vcs->guard_config_files(editor_config_files());
+		m_agent = std::make_unique<agent_component>(std::move(agent_ports));
+		m_agent->install(m_registrations);
+		auto& commands = data.require<cmd::command_registry>();
+		editor_events& events = m_context->events();
 
 		// The agents window (#449). Nothing here is a command an agent could call: the buttons call the model directly.
-		m_agent_policy_model = std::make_unique<agent_policy_model>(m_agent_access->policy(), [&commands] { return commands.list(); });
+		m_agent_policy_model = std::make_unique<agent_policy_model>(m_agent->access()->policy(), [&commands] { return commands.list(); });
 		agents_panel_services services;
-		services.server = [this] { return m_agent_server.get(); };
-		services.set_server = [this](bool enabled, std::uint16_t port) { return set_agent_server(enabled, port); };
-		services.chosen_port = [this] { return load_agent_server_settings(m_agent_server_settings_file).port; };
+		services.server = [this] { return m_agent->server(); };
+		services.set_server = [this](bool enabled, std::uint16_t port) { return m_agent->set_server(enabled, port); };
+		services.chosen_port = [this] { return load_agent_server_settings(m_agent->settings_file()).port; };
 		m_agents_panel = std::make_shared<agents_panel>(*m_agent_policy_model, std::move(services));
 		m_registrations.push_back(m_context->panels().add({ .id = m_agents_panel->get_id(), .title = m_agents_panel->get_title(),
 			.slot = dock_slot::floating, .open_by_default = false, .panel = m_agents_panel }));
@@ -1003,25 +893,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	}
 }
 
-bool edt::editor_system::set_agent_server(bool enabled, std::uint16_t port)
+edt::agent_server* edt::editor_system::agent_server_object()
 {
-	if (!m_agent_server) {
-		return false;
-	}
-	bool done = true;
-	if (enabled) {
-		done = m_agent_server->start_http(port);
-	}
-	else {
-		m_agent_server->stop_http();
-	}
-	if (!done) {
-		return false;
-	}
-	if (const std::optional<std::string> error = save_agent_server_settings(m_agent_server_settings_file, agent_server_settings{ enabled, port })) {
-		egLOG_WARN("editor/agent_server", "the agent server choice cannot be saved: {}", *error);
-	}
-	return true;
+	return m_agent ? m_agent->server() : nullptr;
+}
+
+edt::agent_access* edt::editor_system::agent_access_object()
+{
+	return m_agent ? m_agent->access() : nullptr;
 }
 
 void edt::editor_system::tick_live_mode()
@@ -1075,9 +954,9 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		.person_is_editing = [this] { return person_is_editing(); },
 		.agent_mode_of = [this](std::string_view command_id) {
 			// No agent server: no agent can call at all.
-			if (!m_agent_access) return cmd::policy_mode::allow;
+			if (!agent_access_object()) return cmd::policy_mode::allow;
 			const cmd::command_desc* command = m_context->actions().find(command_id);
-			return command ? m_agent_access->policy().effective(*command).mode : cmd::policy_mode::deny;
+			return command ? agent_access_object()->policy().effective(*command).mode : cmd::policy_mode::deny;
 		} });
 	m_play_component->install(m_registrations);
 	m_play = m_play_component->play();
@@ -1103,7 +982,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_problems->install();
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_panels->game_view()->set_input_blocked([this] {
-		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
+		return m_context->dialogs().pending() > 0 || (agent_access_object() && !agent_access_object()->confirmations().pending().empty());
 	});
 
 	editor_layer->set_menu_bar_status([this] {
@@ -1129,23 +1008,23 @@ void edt::editor_system::open_agents_panel()
 
 void edt::editor_system::draw_agent_policy_notice()
 {
-	if (m_agent_access == nullptr) return;
-	if (!m_agent_access->policy().project_pending_approval()) {
+	if (agent_access_object() == nullptr) return;
+	if (!agent_access_object()->policy().project_pending_approval()) {
 		m_policy_notice_dismissed_key.clear();
 		return;
 	}
 	// agent_access::frame reads the files every frame while the server is active; a waiting policy must also notice, about once
 	// a second, that its file was fixed or changed again. Nothing is done while no policy waits (the idle editor).
-	if (m_agent_server == nullptr || !m_agent_server->active()) {
+	if (agent_server_object() == nullptr || !agent_server_object()->active()) {
 		const auto now = std::chrono::steady_clock::now();
 		if (now - m_policy_refreshed >= std::chrono::seconds(1)) {
 			m_policy_refreshed = now;
-			m_agent_access->policy().refresh();
-			if (!m_agent_access->policy().project_pending_approval()) return;
+			agent_access_object()->policy().refresh();
+			if (!agent_access_object()->policy().project_pending_approval()) return;
 		}
 	}
 	std::string pending_key;
-	for (const policy_loosening& change : m_agent_access->policy().pending_loosenings()) {
+	for (const policy_loosening& change : agent_access_object()->policy().pending_loosenings()) {
 		pending_key += change.what + '|' + cmd::to_string(change.from) + '|' + cmd::to_string(change.to) + '\n';
 	}
 	if (m_policy_notice_dismissed_key == pending_key) return;
@@ -1168,14 +1047,14 @@ void edt::editor_system::draw_agent_policy_notice()
 
 void edt::editor_system::draw_agent_status()
 {
-	if (m_agent_access == nullptr || m_agent_server == nullptr) return;
-	const bool pending = m_agent_access->policy().project_pending_approval();
+	if (agent_access_object() == nullptr || agent_server_object() == nullptr) return;
+	const bool pending = agent_access_object()->policy().project_pending_approval();
 	// Before any ImGui call: for a person who does not use agents the menu bar is what it was.
-	if (!pending && !m_agent_server->active()) return;
+	if (!pending && !agent_server_object()->active()) return;
 
-	const std::vector<agent_session_info> sessions = m_agent_server->sessions();
-	const std::size_t connected = sessions.size() + (m_agent_server->stdio_session().empty() ? 0u : 1u);
-	const std::size_t questions = m_agent_access->confirmations().pending().size();
+	const std::vector<agent_session_info> sessions = agent_server_object()->sessions();
+	const std::size_t connected = sessions.size() + (agent_server_object()->stdio_session().empty() ? 0u : 1u);
+	const std::size_t questions = agent_access_object()->confirmations().pending().size();
 	const bool flash = !m_recent_agent_actions.empty()
 		&& std::chrono::steady_clock::now() - m_recent_agent_actions.back().at < std::chrono::seconds(2);
 
@@ -1204,7 +1083,7 @@ void edt::editor_system::draw_agent_status()
 			ImGui::PushID(session.id.c_str());
 			ImGui::TextUnformatted(session.client_name.empty() ? "(unnamed)" : session.client_name.c_str());
 			ImGui::SameLine();
-			if (ImGui::SmallButton("Disconnect")) m_agent_server->close_session(session.id);
+			if (ImGui::SmallButton("Disconnect")) agent_server_object()->close_session(session.id);
 			ImGui::PopID();
 		}
 		if (ImGui::MenuItem("Settings...")) open_agents_panel();
