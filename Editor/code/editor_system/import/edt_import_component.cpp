@@ -79,7 +79,7 @@ void edt::import_component::build()
 				if (const auto alive = notice.lock()) alive->seen(status);
 			});
 		};
-		m_decoder = std::make_shared<process_decoder>(resources, std::move(decoder_config), std::move(on_sandbox));
+		m_decoder = std::make_shared<process_decoder>(resources, m_ports.desc, std::move(decoder_config), std::move(on_sandbox));
 	}
 	// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
 	// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.

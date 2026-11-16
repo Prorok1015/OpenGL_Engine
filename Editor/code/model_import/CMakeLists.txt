@@ -10,7 +10,7 @@ add_library(snk::model_import ALIAS ${PROJECT_NAME})
 
 set(SE_MODEL_IMPORT_SOURCES edt_decoder_sandbox.cpp edt_decode_bundle.cpp edt_decode_codec.cpp edt_decode_runner.cpp edt_process_decoder.cpp edt_model_file_access.cpp edt_person_model_import.cpp)
 if(SNK_WITH_ASSIMP)
-	list(APPEND SE_MODEL_IMPORT_SOURCES edt_model_file_source.cpp edt_model_importer.cpp edt_decoded_model_adapter.cpp)
+	list(APPEND SE_MODEL_IMPORT_SOURCES edt_model_file_source.cpp edt_model_import_core.cpp edt_model_importer.cpp edt_decoded_model_adapter.cpp)
 endif()
 list(TRANSFORM SE_MODEL_IMPORT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_MODEL_IMPORT_SOURCES})
