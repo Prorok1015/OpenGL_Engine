@@ -12,6 +12,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -24,7 +25,9 @@
 
 // #1108: what each of the two model importers (the engine's adapter, the editor's import) writes for a set of models,
 // against snapshots committed in tests/data/import_golden. Merging the importers keeps these snapshots; a difference the
-// merge makes on purpose changes its snapshot in the same PR.
+// merge makes on purpose changes its snapshot in the same PR. What a snapshot holds: the memory:// files the import wrote
+// and, for the editor, the import's result (tags, prefab JSON, skin weights); the instance the editor makes from it later
+// on the main thread is not part of it.
 namespace {
 
 namespace json = boost::json;
@@ -119,21 +122,37 @@ std::span<const std::byte> as_bytes(const std::vector<std::byte>& data)
 }
 
 // Float arrays and long strings as figures that survive the last bits a compiler or assimp build changes: the snapshot
-// of gen_robot stays small, and an array that changes shows in its count, sum or extremes.
+// of gen_robot stays small, and an array that changes shows in its count, sum, extremes or probe.
 constexpr std::size_t k_kept_array = 32;
 constexpr std::size_t k_kept_string = 256;
 
+// A fixed weight in [-1, 1) per position (splitmix64 of the index). The probe, the sum of value times weight, moves by
+// about a value times the square root of the count when values change places or turn their sign, while the noise of the
+// last bits moves it by far less than its tolerance.
+double probe_weight(std::size_t index)
+{
+	std::uint64_t z = static_cast<std::uint64_t>(index) + 0x9e3779b97f4a7c15ull;
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+	z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+	z ^= z >> 31;
+	return static_cast<double>(z >> 11) * (2.0 / 9007199254740992.0) - 1.0;
+}
+
 json::object figures_of(std::span<const double> values)
 {
-	double sum = 0, magnitude = 0;
+	double sum = 0, magnitude = 0, probe = 0, probe_magnitude = 0;
 	double low = values.empty() ? 0 : values.front(), high = low;
-	for (const double value : values) {
+	for (std::size_t i = 0; i < values.size(); ++i) {
+		const double value = values[i];
 		sum += value;
 		magnitude += std::abs(value);
+		probe += probe_weight(i) * value;
+		probe_magnitude += std::abs(probe_weight(i) * value);
 		low = std::min(low, value);
 		high = std::max(high, value);
 	}
-	return { { "count", values.size() }, { "sum", sum }, { "magnitude", magnitude }, { "min", low }, { "max", high } };
+	return { { "count", values.size() }, { "sum", sum }, { "magnitude", magnitude }, { "probe", probe },
+		{ "probe_magnitude", probe_magnitude }, { "min", low }, { "max", high } };
 }
 
 json::value summarized(const json::value& value)
@@ -206,16 +225,25 @@ json::object decoded_geometry(res::resource_system& system, const res::tag& tag,
 		out["indices"] = json::object{ { "count", geometry.indices.size() }, { "sha256", cmn::sha256_hex(bytes) } };
 	}
 
+	// A small geometry whole, vertex by vertex; a big one as the figures of each component.
 	json::object elements;
 	for (const auto& element : geometry.layout) {
 		const std::size_t floats = element.Size / sizeof(float);
 		std::vector<std::vector<double>> components(floats);
+		json::array whole;
 		for (std::size_t vertex = 0; vertex < vertices; ++vertex) {
+			json::array values;
 			for (std::size_t c = 0; c < floats; ++c) {
 				float value = 0;
 				std::memcpy(&value, geometry.vertices.data() + vertex * stride + element.Offset + c * sizeof(float), sizeof(value));
 				components[c].push_back(value);
+				values.push_back(static_cast<double>(value));
 			}
+			whole.push_back(std::move(values));
+		}
+		if (vertices <= k_kept_array) {
+			elements[element.Name] = std::move(whole);
+			continue;
 		}
 		json::array figures;
 		for (const auto& component : components) figures.push_back(figures_of(component));
@@ -255,10 +283,20 @@ json::object snapshot_of(res::resource_system& system, const std::unordered_map<
 	return out;
 }
 
-// Numbers within 1e-4 of the larger magnitude; a sum within 1e-4 of the magnitude of what was summed, which a sum close
-// to zero needs. Object keys in any order. The first difference, or nothing.
+bool is_integer(const json::value& value)
+{
+	return value.is_int64() || value.is_uint64();
+}
+
+// Integers (counts, offsets, indices) exactly. Other numbers within 1e-4 of the larger magnitude; a sum within 1e-4 of
+// the magnitude of what was summed, which a sum close to zero needs; a probe within 1e-6 of its magnitude. Object keys in
+// any order. The first difference, or nothing.
 std::string difference(const json::value& expected, const json::value& found, const std::string& where, double scale = 0)
 {
+	if (is_integer(expected) && is_integer(found)) {
+		return expected.to_number<double>() == found.to_number<double>()
+			? std::string() : where + ": " + json::serialize(expected) + " != " + json::serialize(found);
+	}
 	if (expected.is_number() && found.is_number()) {
 		const double a = expected.to_number<double>(), b = found.to_number<double>();
 		const double tolerance = 1e-4 * std::max({ 1.0, std::abs(a), std::abs(b), scale });
@@ -274,9 +312,11 @@ std::string difference(const json::value& expected, const json::value& found, co
 		for (const auto& [key, item] : b) {
 			if (!a.contains(key)) return where + "/" + std::string(key) + ": not in the snapshot";
 		}
-		const double magnitude = a.contains("magnitude") && a.at("magnitude").is_number() ? a.at("magnitude").to_number<double>() : 0;
+		const auto number_at = [&](std::string_view key) { return a.contains(key) && a.at(key).is_number() ? a.at(key).to_number<double>() : 0.0; };
+		const double magnitude = number_at("magnitude");
+		const double probe_magnitude = number_at("probe_magnitude");
 		for (const auto& [key, item] : a) {
-			const double nested = key == "sum" ? magnitude : 0;
+			const double nested = key == "sum" ? magnitude : key == "probe" ? 0.01 * probe_magnitude : 0;
 			if (auto found_one = difference(item, b.at(key), where + "/" + std::string(key), nested); !found_one.empty()) return found_one;
 		}
 		return {};
@@ -345,6 +385,30 @@ void check_snapshot(const std::string& file_name, const json::object& found)
 	BOOST_ERROR("tests/data/import_golden/" + file_name + ": " + problem + " (the import's snapshot is in the generated_import_golden artifact)");
 }
 
+json::array sorted_tags(const std::vector<res::tag>& tags)
+{
+	std::vector<std::string> names;
+	for (const res::tag& tag : tags) names.emplace_back(tag.view());
+	std::sort(names.begin(), names.end());
+	json::array out;
+	for (const std::string& name : names) out.push_back(json::string(name));
+	return out;
+}
+
+// What the editor's import hands on besides the files: the main thread makes the prefab and its skin weights from it.
+json::object result_of(const edt::import_intermediate& result)
+{
+	json::array weights;
+	for (const auto& row : result.skin_weights) {
+		json::array cells;
+		for (const std::uint32_t cell : row) cells.push_back(cell);
+		weights.push_back(std::move(cells));
+	}
+	return { { "geom_tag", result.geom_tag.view() }, { "prefab_tag", result.prefab_tag.view() },
+		{ "all_tags", sorted_tags(result.all_tags) }, { "created_tags", sorted_tags(result.created_tags) },
+		{ "prefab_json", summarized(result.prefab_json) }, { "skin_weights", summarized(weights) } };
+}
+
 struct golden_fixture : test_util::scene_env
 {
 	golden_fixture()
@@ -376,7 +440,10 @@ struct golden_fixture : test_util::scene_env
 		source.path = dir.path() / model.files.front().name;
 		const edt::import_intermediate result = importer.import_background(source);
 		BOOST_TEST_REQUIRE(result.error.empty(), result.error);
-		return snapshot_of(*rs, ram->files, {});
+		json::object out = snapshot_of(*rs, ram->files, {});
+		// Not a memory:// tag, so it can name no file.
+		out["(import result)"] = result_of(result);
+		return out;
 	}
 };
 
@@ -414,6 +481,39 @@ BOOST_AUTO_TEST_CASE(TheComparison_AcceptsFloatNoise_AndRefusesAChange)
 	BOOST_TEST(!difference(snapshot, json::parse(R"({"a":[1,2],"b":{"count":4,"sum":0.0,"magnitude":1000.0,"min":-1.0,"max":1.0},"c":"x"})"), "").empty());
 	BOOST_TEST(!difference(snapshot, json::parse(R"({"a":[1,2,3],"b":{"count":4,"sum":0.0,"magnitude":1000.0,"min":-1.0,"max":1.0},"c":"y"})"), "").empty());
 	BOOST_TEST(!difference(snapshot, json::parse(R"({"a":[1,2,3],"b":{"count":4,"sum":0.0,"magnitude":1000.0,"min":-1.0,"max":1.0}})"), "").empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheComparison_TakesIntegersExactly)
+{
+	const json::value snapshot = json::parse(R"({"vx_end":42686,"count":3})");
+	BOOST_TEST(difference(snapshot, snapshot, "").empty());
+	BOOST_TEST(!difference(snapshot, json::parse(R"({"vx_end":42687,"count":3})"), "").empty());
+	BOOST_TEST(!difference(snapshot, json::parse(R"({"vx_end":42686,"count":4})"), "").empty());
+}
+
+// The figures of a big array: noise in the last bits passes; a value moved to the next vertex, two neighbours swapped,
+// or normals turned over do not, even when the count, the sum and the extremes stay the same.
+BOOST_AUTO_TEST_CASE(TheFigures_AcceptNoise_AndRefuseMovedOrTurnedValues)
+{
+	std::vector<double> values(42686);
+	for (std::size_t i = 0; i < values.size(); ++i) values[i] = std::sin(0.37 * static_cast<double>(i));
+	const json::value expected = figures_of(values);
+
+	std::vector<double> noisy = values;
+	for (std::size_t i = 0; i < noisy.size(); ++i) noisy[i] *= 1.0 + (i % 2 == 0 ? 1e-6 : -1e-6);
+	BOOST_TEST(difference(expected, figures_of(noisy), "").empty());
+
+	std::vector<double> moved = values;
+	std::rotate(moved.begin(), moved.begin() + 1, moved.end());
+	BOOST_TEST(!difference(expected, figures_of(moved), "").empty());
+
+	std::vector<double> swapped = values;
+	std::swap(swapped[1000], swapped[1001]);
+	BOOST_TEST(!difference(expected, figures_of(swapped), "").empty());
+
+	std::vector<double> turned = values;
+	for (double& value : turned) value = -value;
+	BOOST_TEST(!difference(expected, figures_of(turned), "").empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
