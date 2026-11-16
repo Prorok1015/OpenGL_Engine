@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_decoder_sandbox.h"
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <array>
@@ -30,6 +31,9 @@ namespace edt {
 
 		// Non-empty means failure.
 		std::string                        error;
+
+		// What the decoder process said of its OS sandbox for this import (#1076); not reported by an importer in this process.
+		decoder_sandbox_status             sandbox{};
 	};
 
 } // namespace edt

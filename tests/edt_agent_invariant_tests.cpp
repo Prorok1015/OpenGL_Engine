@@ -15,6 +15,7 @@
 #include <snk/application/app_frame_commands.h>
 #include <snk/application/app_frame_control.h>
 #include <snk/command/cmd_registry.h>
+#include <snk/config/cfg_api.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -508,6 +509,28 @@ BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesAnyFile_WhenEveryCommandIsAllowedB
 	const snapshot before = take_snapshot();
 	BOOST_TEST(call_every_agent_command() > 0u);
 	BOOST_TEST(changes_between(before, take_snapshot()) == std::string{});
+}
+
+// #1076: only a person sets the model decoder's OS sandbox (import/decoder_sandbox, read once at start): no command an
+// agent may call changes it, even with every command allowed by name, and none that names settings or config writes.
+BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesTheDecoderSandboxSetting_WhenEveryCommandIsAllowedByName, agent_editor_fixture)
+{
+	const cfg::config_view config;
+	const std::optional<std::string> before = config.value("import/decoder_sandbox");
+	BOOST_REQUIRE(before.has_value());
+	person_allows(true);
+
+	BOOST_TEST(call_every_agent_command() > 0u);
+
+	BOOST_TEST(config.value("import/decoder_sandbox") == before);
+	for (const std::string& id : agent_visible_ids()) {
+		if (id.find("cfg") == std::string::npos && id.find("config") == std::string::npos && id.find("setting") == std::string::npos) continue;
+		const cmd::command_desc* desc = registry().find(id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST_REQUIRE(desc != nullptr);
+			BOOST_TEST(!desc->mutates);
+		}
+	}
 }
 
 BOOST_FIXTURE_TEST_CASE(HostilePaths_ChangeNoFile_UnderTheDefaultPolicy, agent_editor_fixture)

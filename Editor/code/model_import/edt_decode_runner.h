@@ -29,16 +29,6 @@ namespace edt {
 		std::vector<std::string> extra_arguments;
 	};
 
-	// What the child said of its OS sandbox (#1043) in its first stderr line, written before it read anything of the request:
-	// after the parse the child may be the model's, so nothing it says later counts.
-	struct decoder_sandbox_status
-	{
-		bool reported = false;
-		bool fs = false;		// Landlock restricts the files it can reach
-		bool syscalls = false;	// the seccomp allowlist is installed
-		std::string why;		// what is missing, escaped, at most 256 bytes
-	};
-
 	// Reads the child's stderr lines in their order: only the first may be the status.
 	class sandbox_status_reader
 	{

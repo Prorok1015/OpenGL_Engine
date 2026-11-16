@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_decoder_sandbox.h"
 #include "edt_file_identity.h"
 #include <cstddef>
 #include <cstdint>
@@ -65,6 +66,8 @@ namespace edt {
 		std::vector<referenced_file> files;
 		std::uintmax_t total_bytes = 0;
 		std::string error;
+		// What the decoder process said of its OS sandbox for this scan (#1076); not reported by an importer in this process.
+		decoder_sandbox_status sandbox{};
 		bool ok() const { return error.empty(); }
 	};
 

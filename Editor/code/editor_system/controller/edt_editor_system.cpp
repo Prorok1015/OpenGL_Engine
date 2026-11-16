@@ -55,6 +55,7 @@
 #include "edt_file_menu.h"
 #include "edt_template_ids.h"
 #include "edt_agent_model_import.h"
+#include "edt_decoder_sandbox_notice.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
@@ -379,7 +380,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			std::string sandbox_warning;
 			decoder_config.sandbox = edt::decoder_sandbox_mode(*cfg_import_decoder_sandbox, sandbox_warning);
 			if (!sandbox_warning.empty()) egLOG_WARN("Editor/Import", "{}", sandbox_warning);
-			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config));
+			// Read once, here: what a person set before the editor started is the mode for the whole run (#1076).
+			const edt::sandbox_mode sandbox_mode = decoder_config.sandbox;
+			m_decoder_sandbox = std::make_shared<edt::decoder_sandbox_notice>(m_context->problems(), sandbox_mode,
+				edt::expected_decoder_sandbox(sandbox_mode));
+			// The decoder runs on worker threads; Problems is the main thread's. The resource system may run the decoder after
+			// this system is gone: the notice then is too, and nothing is posted.
+			auto on_sandbox = [&tasks = data.require<ds::task_system>(), notice = std::weak_ptr(m_decoder_sandbox)](const edt::decoder_sandbox_status& status) {
+				if (!notice.lock()) return;
+				tasks.post_main([notice, status] {
+					if (const auto alive = notice.lock()) alive->seen(status);
+				});
+			};
+			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config), std::move(on_sandbox));
 		}
 		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
 		// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
@@ -398,6 +411,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
 			return decoder->scan(source, task);
+		};
+		import_options.sandbox_status = [notice = std::weak_ptr(m_decoder_sandbox)] {
+			const auto alive = notice.lock();
+			return alive ? alive->current() : edt::decoder_sandbox_status{};
 		};
 		import_options.unavailable_reason = [decoder = m_process_decoder.get()] {
 			const std::string why = decoder->unavailable_reason();

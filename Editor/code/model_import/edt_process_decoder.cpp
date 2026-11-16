@@ -609,9 +609,10 @@ std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources
 	return std::nullopt;
 }
 
-edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config)
+edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox)
 	: m_resources(resources)
 	, m_config(std::move(config))
+	, m_on_sandbox(std::move(on_sandbox))
 {
 	if (m_config.decoder.empty()) {
 		const fs::path self = platform::current_executable();
@@ -706,6 +707,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 			? "the decoder failed (more in the editor log)" : "the decoder's answer cannot be used (more in the editor log)");
 	}
 	warn_once_without_sandbox(outcome.sandbox);
+	if (m_on_sandbox) m_on_sandbox(outcome.sandbox);
 	return outcome;
 }
 
@@ -719,10 +721,12 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
 
-	return broker_scan(source, [&](const std::vector<provided_file>& provided) {
+	decoder_sandbox_status sandbox;
+	model_file_scan scanned = broker_scan(source, [&](const std::vector<provided_file>& provided) {
 		std::vector<bundle_blob> blobs;
 		request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
 		const decode_outcome outcome = run(request, blobs, source, task);
+		sandbox = outcome.sandbox;
 		std::string problem;
 		std::optional<scan_requests> answer = accept_scan_answer(*outcome.bundle, problem);
 		if (!answer) {
@@ -731,6 +735,8 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 		}
 		return std::move(*answer);
 	}, task);
+	scanned.sandbox = std::move(sandbox);
+	return scanned;
 }
 
 edt::import_intermediate edt::process_decoder::import(const import_source& source, ds::task_context* task) const
@@ -777,6 +783,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 		egLOG_WARN("edt/decoder", "the answer to an import was refused: {}", problem);
 		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
 	}
+	imported->sandbox = outcome.sandbox;
 	if (!imported->error.empty()) return std::move(*imported);
 
 	// An agent's import never reuses or overwrites a resource it did not store itself. The check and the store are two calls:
