@@ -809,7 +809,7 @@ BOOST_AUTO_TEST_CASE(AFileThatWouldShadowAnEngineWorldFromALowerFolder_IsTheLeve
 
 	const auto created = call("desc.create", desc_args("worlds/x.desc", R"({"__type":"world_desc"})"));
 	BOOST_TEST(created.code == cmd::codes::busy);
-	BOOST_TEST(created.error.find("belongs to the open level") != std::string::npos);
+	BOOST_TEST(created.error.find("is a name of the open level") != std::string::npos);
 	BOOST_TEST(!fs::exists(res_root / "worlds" / "x.desc"));
 }
 
