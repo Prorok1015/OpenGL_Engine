@@ -86,6 +86,8 @@ namespace edt
 		// A panel made elsewhere (Project Migration, MCP / Agents) joins the registry.
 		void add(std::vector<registration>& out, const std::shared_ptr<panel_base>& panel, dock_slot slot, bool open_by_default);
 
+		// The hierarchy, inspector, viewport, console and asset browser exist from the constructor on; the game view, problems,
+		// blackboard, input actions, build settings, git and world systems panels are made by install() and are null before it.
 		std::shared_ptr<scene_hierarchy_panel>& hierarchy() { return m_hierarchy; }
 		std::shared_ptr<inspector_panel>& inspector() { return m_inspector; }
 		std::shared_ptr<viewport_panel>& viewport() { return m_viewport; }
