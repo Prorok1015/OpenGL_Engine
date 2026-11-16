@@ -31,6 +31,8 @@ namespace edt {
 	// parsed in the decoder process, never in the editor (#925). It may read side files anywhere in its content root but
 	// no hidden ones, each decoder step gets k_deadline, and without the decoder the load fails with its reason. A model
 	// that is no file on the disk (served from memory or a pack) is decoded from its bytes alone and may name no other file.
+	// A model loaded again with the same bytes (and the same decoder, limits and place) is not decoded again (#999): its
+	// earlier import is taken from its memory:// folder once that passes the checks of a decoder's answer.
 	class decoded_model_adapter : public core::res::adapter_interface
 	{
 	public:
@@ -55,6 +57,20 @@ namespace edt {
 		static std::string memory_folder_of(const res::tag& tag);
 
 	private:
+		// The last decode of a model's memory:// folder, for this run of the editor only.
+		struct cached_decode
+		{
+			std::string key;
+			model_file_scan scan;
+			import_intermediate imported;
+		};
+
+		// The earlier import of `source`'s folder when its key is `key`, its side files still have the bytes the scan read,
+		// and what is in memory:// passes accept_import_answer; nullopt (with `problem` when it was refused) otherwise.
+		std::optional<import_intermediate> cached(const std::string& key, const import_source& source, std::string& problem) const;
+		void remember(const std::string& folder, cached_decode decode) const;
+		void forget(const std::string& folder) const;
+
 		// Held from emptying a model's folder until its import is in: two loads of one model do not erase each other.
 		std::shared_ptr<std::mutex> folder_lock(const std::string& folder) const;
 
@@ -63,6 +79,8 @@ namespace edt {
 		decoder_steps m_decoder;
 		mutable std::mutex m_folder_locks_mutex;
 		mutable std::unordered_map<std::string, std::shared_ptr<std::mutex>> m_folder_locks;
+		mutable std::mutex m_cache_mutex;
+		mutable std::unordered_map<std::string, cached_decode> m_cache;
 	};
 
 } // namespace edt

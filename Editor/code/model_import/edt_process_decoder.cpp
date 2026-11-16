@@ -1,6 +1,7 @@
 #include "edt_process_decoder.h"
 #include "edt_tag_text.h"
 #include <snk/common/fs_paths.h>
+#include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
 #include <snk/platform/plt_process.h>
@@ -458,6 +459,7 @@ edt::decoder_steps edt::steps_of(std::shared_ptr<const process_decoder> decoder)
 	steps.scan = [decoder](const import_source& source, ds::task_context* task) { return decoder->scan(source, task); };
 	steps.import = [decoder](const import_source& source, ds::task_context* task) { return decoder->import(source, task); };
 	steps.unavailable_reason = [decoder] { return decoder->unavailable_reason(); };
+	steps.version = [decoder] { return decoder->version(); };
 	return steps;
 }
 
@@ -499,6 +501,19 @@ std::string edt::process_decoder::unavailable_reason() const
 	if (fs::is_regular_file(m_config.decoder, ec)) return {};
 	return std::format("the model decoder '{}' was not found next to the editor (reinstall the editor)",
 		text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
+}
+
+std::string edt::process_decoder::version() const
+{
+	std::call_once(m_version_once, [this] {
+		if (std::optional<std::string> hash = cmn::sha256_file_hex(m_config.decoder)) {
+			m_version = std::move(*hash);
+			return;
+		}
+		egLOG_WARN("edt/decoder", "the model decoder '{}' cannot be read: every model load runs it, none is reused",
+			text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
+	});
+	return m_version;
 }
 
 edt::decode_outcome edt::process_decoder::run(const decode_request& request, const import_source& source, ds::task_context* task) const
@@ -579,6 +594,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 			const res::tag tag(blob.tag);
 			if (!m_resources.store(tag, blob.bytes)) throw std::runtime_error(std::format("'{}' could not be stored", blob.tag));
 			stored.push_back(tag);
+			imported->created_digests.emplace_back(tag, digest_of(blob.bytes));
 		}
 		if (task != nullptr) task->throw_if_stopped();
 	} catch (...) {
