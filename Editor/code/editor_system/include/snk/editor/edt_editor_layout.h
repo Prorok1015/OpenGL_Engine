@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/game/gs_module_layout.h>
 #include <cstdint>
+#include <type_traits>
 
 // The editor layout key of a game_editor module (#969): what gs::module_layout_key is to the engine's types, this is to
 // the editor's. A module built against editor headers in which one of the listed types has another size or alignment,
@@ -26,5 +27,13 @@ namespace edt
 			((hash = gs::detail::layout_part<Types>::mix(hash)), ...);
 			return hash;
 		}
+
+		// The key as edt_editor_layout_key.h specializes it: what SNK_DECLARE_EDITOR_MODULE exports, a constant.
+		template<class List = void>
+		struct listed_editor_layout
+		{
+			static_assert(!std::is_void_v<List>,
+				"SNK_DECLARE_EDITOR_MODULE needs the editor layout key: #include <snk/editor/edt_editor_layout_key.h>");
+		};
 	}
 }

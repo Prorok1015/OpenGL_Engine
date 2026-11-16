@@ -203,7 +203,7 @@ namespace edt
 	} \
 	extern "C" SNK_MODULE_EXPORT std::uint64_t prefix##editor_layout_key() \
 	{ \
-		return ::edt::editor_layout_key(); \
+		return ::edt::detail::listed_editor_layout<>::key; \
 	}
 
 #define SNK_DECLARE_EDITOR_MODULE(Type) SNK_DECLARE_EDITOR_MODULE_PREFIXED(snk_, Type)

@@ -29,6 +29,11 @@ namespace edt
 {
 	namespace detail
 	{
+		struct editor_layout_access
+		{
+			using job_record = job_service::record;
+		};
+
 		// Every editor interface whose vtable module code fills with an override or calls inline. A change of its bases or
 		// virtual functions raises its revision: tools/ci/check_vtable_pins.py ("key": "editor") fails the change that does not.
 		using editor_interface_abi_revisions = gs::detail::layout_values<editor_extension_abi_revision,
@@ -46,6 +51,9 @@ namespace edt
 			// Handles it keeps, and the signal machinery subscribe() instantiates in module code. The members of signal,
 			// slot and signal_state do not depend on the arguments: <int> stands for every one.
 			registration, connection, signal<int>, detail::slot<int>, detail::signal_state<int>, callback_gate,
+			callback_gate::guard,
+			// job_service::start* instantiate launch() in module code: it builds a record in a node of m_jobs.
+			editor_layout_access::job_record, ds::task_handle_base,
 			// Payloads of editor_events a module's handler reads inline.
 			game_module_build_result, agent_action_info,
 			// The bases a module derives from: its extension, its panels, its preview documents.
@@ -67,9 +75,18 @@ namespace edt
 			"the editor layout key must mix in the editor interface ABI revisions, the ImGui version and its types");
 	}
 
-	// Evaluated in whichever binary includes this header: SNK_DECLARE_EDITOR_MODULE exports it as snk_editor_layout_key.
+	// Evaluated in whichever binary includes this header: SNK_DECLARE_EDITOR_MODULE exports it (listed_editor_layout).
 	constexpr std::uint64_t editor_layout_key() noexcept
 	{
 		return detail::editor_layout_of<detail::editor_layout_types>();
+	}
+
+	namespace detail
+	{
+		template<>
+		struct listed_editor_layout<void>
+		{
+			static constexpr std::uint64_t key = editor_layout_key();
+		};
 	}
 }

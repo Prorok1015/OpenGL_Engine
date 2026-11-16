@@ -70,4 +70,15 @@ BOOST_AUTO_TEST_CASE(a_size_change_of_a_listed_type_changes_the_key)
 	BOOST_TEST(edt::detail::editor_layout_of<std::uint64_t>() == edt::detail::editor_layout_of<std::uint64_t>());
 }
 
+// #969 review: start_job builds a job_service::record in module code; the key must see its layout and the handle in it.
+BOOST_AUTO_TEST_CASE(the_key_lists_what_inline_editor_templates_build_in_module_code)
+{
+	using edt::detail::editor_layout_types;
+	using gs::detail::list_contains;
+	static_assert(list_contains<edt::detail::editor_layout_access::job_record, editor_layout_types>::value);
+	static_assert(list_contains<ds::task_handle_base, editor_layout_types>::value);
+	static_assert(list_contains<edt::callback_gate::guard, editor_layout_types>::value);
+	BOOST_TEST(edt::detail::listed_editor_layout<>::key == edt::editor_layout_key());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
