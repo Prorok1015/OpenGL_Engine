@@ -43,8 +43,8 @@ std::string text_of(const std::vector<std::byte>& bytes)
 struct theme_settings_env : test_util::ram_res_env
 {
 	desc::desc_system descs{ *rs };
-	test_util::ram_resolver* engine = nullptr;
-	test_util::ram_resolver* edt = nullptr;
+	test_util::ram_resolver* engine_ram = nullptr;
+	test_util::ram_resolver* edt_ram = nullptr;
 	std::vector<gui::theme_service::theme> applied;
 	gui::theme_service themes{ *rs, res::tag{ "engine://themes/classic.desc" },
 		[this](gui::theme_service::theme theme) { applied.push_back(std::move(theme)); } };
@@ -54,12 +54,12 @@ struct theme_settings_env : test_util::ram_res_env
 		rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs),
 			std::ref(descs));
 		engine::gui::register_gui_descs(descs);
-		engine = &rs->registrate_resolver<test_util::ram_resolver>(res::tag::engine);
-		edt = &rs->registrate_resolver<test_util::ram_resolver>("edt");
+		engine_ram = &rs->registrate_resolver<test_util::ram_resolver>(res::tag::engine);
+		edt_ram = &rs->registrate_resolver<test_util::ram_resolver>("edt");
 		for (const std::string_view folder : { "themes", "fonts" }) {
 			for (const auto& entry : fs::directory_iterator(fs::path{ SNK_CORE_RES_DIR } / folder)) {
 				const std::string relative = std::string{ folder } + "/" + entry.path().filename().generic_string();
-				engine->files[res::tag{ res::tag::engine, relative }] = read_bytes(entry.path());
+				engine_ram->files[res::tag{ res::tag::engine, relative }] = read_bytes(entry.path());
 			}
 		}
 	}
@@ -82,7 +82,7 @@ struct theme_settings_env : test_util::ram_res_env
 	// What files_under gives for a disk mount, from the RAM resolvers.
 	std::vector<res::tag> list(std::string_view protocol, std::string_view folder)
 	{
-		const test_util::ram_resolver* ram = protocol == "edt" ? edt : engine;
+		const test_util::ram_resolver* ram = protocol == "edt" ? edt_ram : engine_ram;
 		std::vector<res::tag> out;
 		const std::string prefix = std::string{ protocol } + "://" + std::string{ folder } + "/";
 		for (const auto& [tag, bytes] : ram->files) {
@@ -102,14 +102,14 @@ struct theme_settings_env : test_util::ram_res_env
 
 	std::string edt_file(std::string_view path)
 	{
-		const auto it = edt->files.find(res::tag{ "edt", path });
-		return it == edt->files.end() ? std::string{} : text_of(it->second);
+		const auto it = edt_ram->files.find(res::tag{ "edt", path });
+		return it == edt_ram->files.end() ? std::string{} : text_of(it->second);
 	}
 };
 
 }
 
-BOOST_AUTO_TEST_SUITE(EdtThemeSettingsTests)
+BOOST_FIXTURE_TEST_SUITE(EdtThemeSettingsTests, theme_settings_env)
 
 BOOST_AUTO_TEST_CASE(TheChoiceIsAThemeKeyInAJsonObject)
 {
@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(ANameOfAPersonalPreset_IsAPlainFileName)
 
 BOOST_AUTO_TEST_CASE(TheKeptChoice_IsAppliedAtStart)
 {
-	edt->files[res::tag{ "edt://settings/editor_theme.json" }] =
+	edt_ram->files[res::tag{ "edt://settings/editor_theme.json" }] =
 		test_util::to_bytes(R"({"theme":"engine://themes/light.desc"})");
 	auto model = make_model();
 
@@ -157,7 +157,7 @@ BOOST_AUTO_TEST_CASE(TheKeptChoice_IsAppliedAtStart)
 
 BOOST_AUTO_TEST_CASE(AThemeNamedByTheConfig_WinsOverTheKeptChoice)
 {
-	edt->files[res::tag{ "edt://settings/editor_theme.json" }] =
+	edt_ram->files[res::tag{ "edt://settings/editor_theme.json" }] =
 		test_util::to_bytes(R"({"theme":"engine://themes/light.desc"})");
 	themes.select(res::tag{ "engine://themes/dark_contrast.desc" });
 	auto model = make_model(true);
@@ -170,9 +170,10 @@ BOOST_AUTO_TEST_CASE(AThemeNamedByTheConfig_WinsOverTheKeptChoice)
 
 BOOST_AUTO_TEST_CASE(TheListHasTheShippedPresetsThenThePersons)
 {
-	edt->files[res::tag{ "edt://themes/zz_mine.desc" }] = test_util::to_bytes(R"({"__type":"gui.theme","__version":1})");
-	edt->files[res::tag{ "edt://fonts/own.TTF" }] = test_util::to_bytes("x");
-	edt->files[res::tag{ "edt://fonts/readme.txt" }] = test_util::to_bytes("x");
+	edt_ram->files[res::tag{ "edt://themes/zz_mine.desc" }] =
+		test_util::to_bytes(R"({"__type":"gui.theme","__version":1})");
+	edt_ram->files[res::tag{ "edt://fonts/own.TTF" }] = test_util::to_bytes("x");
+	edt_ram->files[res::tag{ "edt://fonts/readme.txt" }] = test_util::to_bytes("x");
 	auto model = make_model();
 
 	model.refresh_lists();
@@ -246,7 +247,7 @@ BOOST_AUTO_TEST_CASE(ABuiltInPreset_IsNotSaved)
 	BOOST_REQUIRE(model.working() != nullptr);
 
 	BOOST_TEST(model.save().has_value());
-	BOOST_TEST(edt->files.empty() || edt_file("themes/light.desc").empty());
+	BOOST_TEST(edt_ram->files.empty() || edt_file("themes/light.desc").empty());
 }
 
 BOOST_AUTO_TEST_CASE(WithoutARenderer_NothingIsAppliedOrWritten)
