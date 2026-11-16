@@ -33,17 +33,27 @@
 
 namespace {
 
+struct written_file
+{
+	res::tag tag;
+	std::vector<std::byte> bytes;
+	// The import writes it only where it is not there yet: a file the caller has stays as it is.
+	bool only_if_absent = false;
+};
+
 // What an import writes to memory://, kept so that the same bytes can be written again without running assimp (#977).
 class import_sink
 {
 public:
-	explicit import_sink(res::resource_system& resources) : m_resources(resources) {}
+	import_sink(res::resource_system& resources, bool record) : m_resources(resources), m_record(record) {}
 
 	// A file already there before this import is not written by it: such an import is not remembered, as writing what it
 	// wrote again into another resource system would leave that file out.
 	bool exists(const res::tag& tag)
 	{
-		const auto same = [&tag](const auto& file) { return file.first == tag; };
+		if (!m_record) return m_resources.exists(tag);
+		m_checked.push_back(tag);
+		const auto same = [&tag](const written_file& file) { return file.tag == tag; };
 		if (std::find_if(m_files.begin(), m_files.end(), same) != m_files.end()) return true;
 		const bool found = m_resources.exists(tag);
 		m_found_before = m_found_before || found;
@@ -53,33 +63,40 @@ public:
 	void store(const res::tag& tag, const std::vector<std::byte>& bytes)
 	{
 		m_resources.store(tag, bytes);
-		m_files.emplace_back(tag, bytes);
+		if (!m_record) return;
+		const bool checked = std::find(m_checked.begin(), m_checked.end(), tag) != m_checked.end();
+		m_files.push_back({ tag, bytes, checked });
 	}
 
+	bool recording() const { return m_record; }
 	bool found_before() const { return m_found_before; }
-	std::vector<std::pair<res::tag, std::vector<std::byte>>>& files() { return m_files; }
+	std::vector<written_file>& files() { return m_files; }
 
 private:
 	res::resource_system& m_resources;
-	std::vector<std::pair<res::tag, std::vector<std::byte>>> m_files;
+	const bool m_record;
+	std::vector<written_file> m_files;
+	std::vector<res::tag> m_checked;
 	bool m_found_before = false;
 };
 
 struct remembered_import
 {
 	std::vector<std::byte> model;
-	std::vector<std::pair<res::tag, std::vector<std::byte>>> files;
+	std::vector<written_file> files;
+	// Not stamped: the desc system that asks stamps it (another one can have other versions).
 	json::object prefab;
 
 	std::size_t bytes() const
 	{
 		std::size_t total = model.size();
-		for (const auto& file : files) total += file.second.size();
+		for (const auto& file : files) total += file.bytes.size();
 		return total;
 	}
 };
 
 // Each unit test builds its own engine and imports the same models again: the memory is the tests' (#977).
+// Counts the model and the files only, not the prefab JSON, so the memory held is somewhat more.
 constexpr std::size_t k_remembered_bytes = 256u * 1024u * 1024u;
 
 std::mutex g_imports_mutex;
@@ -106,8 +123,9 @@ std::shared_ptr<const remembered_import> remembered(const res::tag& tag, const s
 
 void remember(const res::tag& tag, std::shared_ptr<const remembered_import> import)
 {
-	if (!g_remember_imports.load()) return;
 	const std::lock_guard guard(g_imports_mutex);
+	// Under the mutex: remember_model_imports(false) may have run since the import began.
+	if (!g_remember_imports.load()) return;
 	if (const auto old = find_import(tag); old != g_imports.end()) {
 		g_imports_bytes -= old->second->bytes();
 		g_imports.erase(old);
@@ -199,11 +217,13 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
 {
 	PROFILE_SCOPE("LoadModel.Assimp");
 	const res::tag actual_tag{ std::format("memory://{0}{1}.desc", tag.path(), tag.pure_name()) };
-	std::shared_ptr<const remembered_import> import = remembered(tag, data);
-	if (import) {
-		for (const auto& [file, bytes] : import->files) {
-			m_res_sys.store(file, bytes);
+	json::object prefab;
+	if (const std::shared_ptr<const remembered_import> import = remembered(tag, data)) {
+		for (const written_file& file : import->files) {
+			if (file.only_if_absent && m_res_sys.exists(file.tag)) continue;
+			m_res_sys.store(file.tag, file.bytes);
 		}
+		prefab = import->prefab;
 	}
 	else {
 		Assimp::Importer importer;
@@ -216,23 +236,23 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
 			throw std::runtime_error("model '" + std::string{ tag.view() } + "': " + importer.GetErrorString());
 		}
 
-		auto made = std::make_shared<remembered_import>();
-		made->prefab["__type"] = "prefab_desc";
-		import_sink sink(m_res_sys);
-		process_model(scene, made->prefab, tag, actual_tag, sink);
-		desc_system.stamp_tree(made->prefab);
-		made->files = std::move(sink.files());
+		prefab["__type"] = "prefab_desc";
+		import_sink sink(m_res_sys, g_remember_imports.load());
+		process_model(scene, prefab, tag, actual_tag, sink);
 		// Side files can change while the model's bytes stay the same.
-		if (!sink.found_before() && !io->read_other_files()) {
+		if (sink.recording() && !sink.found_before() && !io->read_other_files()) {
+			auto made = std::make_shared<remembered_import>();
 			made->model = data;
-			remember(tag, made);
+			made->files = std::move(sink.files());
+			made->prefab = prefab;
+			remember(tag, std::move(made));
 		}
-		import = std::move(made);
 	}
 
+	desc_system.stamp_tree(prefab);
 	auto instance = desc_system.create_instance("prefab_desc", actual_tag);
-	instance->deserialize(desc_system, import->prefab);
-	m_res_sys.store(actual_tag, desc_system.serialize_to_bytes(import->prefab));
+	instance->deserialize(desc_system, prefab);
+	m_res_sys.store(actual_tag, desc_system.serialize_to_bytes(prefab));
 	m_res_sys.register_alias(tag, actual_tag);
 
 	return instance;

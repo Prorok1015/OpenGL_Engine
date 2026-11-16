@@ -479,10 +479,10 @@ BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
 // #977: bytes imported before under the same tag are written again as that import wrote them, without assimp.
 namespace {
 
-const res::tag* geometry_of(const test_util::ram_resolver& ram, std::string_view model_folder)
+const res::tag* file_of(const test_util::ram_resolver& ram, std::string_view model_folder, std::string_view suffix)
 {
 	for (const auto& [tag, bytes] : ram.files) {
-		if (tag.view().ends_with(".geom.desc") && tag.view().find(model_folder) != std::string_view::npos) return &tag;
+		if (tag.view().ends_with(suffix) && tag.view().find(model_folder) != std::string_view::npos) return &tag;
 	}
 	return nullptr;
 }
@@ -497,7 +497,7 @@ BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 	BOOST_REQUIRE(first);
 	BOOST_REQUIRE(scn::model_importer_runs() == before + 1u);
 	const json::object first_prefab = serialized(*first);
-	const res::tag* geometry = geometry_of(*ram, "cache977/");
+	const res::tag* geometry = file_of(*ram, "cache977/", ".geom.desc");
 	BOOST_REQUIRE(geometry != nullptr);
 	const res::tag geometry_tag = *geometry;
 	const std::vector<std::byte> geometry_bytes = ram->files.at(geometry_tag);
@@ -539,6 +539,32 @@ BOOST_AUTO_TEST_CASE(AModelThatReadsAnotherFile_IsImportedEveryTime)
 	BOOST_TEST(scn::model_importer_runs() == before + 2u);
 }
 
+// A file the import writes only where it is missing (a texture desc) stays as the caller has it, as with assimp.
+BOOST_AUTO_TEST_CASE(AFileTheCallerHas_IsKept_WhenTheImportIsWrittenAgain)
+{
+	json::object gltf = json::parse(GLTF_TRIANGLE).as_object();
+	gltf["images"] = json::array{ json::object{ { "uri", "skin.png" } } };
+	gltf["textures"] = json::array{ json::object{ { "source", 0 } } };
+	json::object& pbr = gltf["materials"].as_array()[0].as_object()["pbrMetallicRoughness"].as_object();
+	pbr["baseColorTexture"] = json::object{ { "index", 0 } };
+	const std::string text = json::serialize(gltf);
+	scn::remember_model_imports(true);
+	const std::size_t before = scn::model_importer_runs();
+	BOOST_REQUIRE(import("cache977/kept/tri.gltf", text.c_str()));
+	BOOST_REQUIRE(scn::model_importer_runs() == before + 1u);
+	const res::tag* texture = file_of(*ram, "cache977/kept/", ".txm.desc");
+	BOOST_REQUIRE(texture != nullptr);
+	const res::tag texture_tag = *texture;
+	std::vector<std::byte> callers = ram->files.at(texture_tag);
+	callers.push_back(std::byte{ ' ' });
+	ram->files[texture_tag] = callers;
+
+	rs->signal_changed(res::tag{ "memory://models/cache977/kept/tri.gltf" });
+	BOOST_REQUIRE(import("cache977/kept/tri.gltf", text.c_str()));
+	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	BOOST_TEST((ram->files.at(texture_tag) == callers));
+}
+
 // Off, as in the editor and a game: every import runs assimp, and what was remembered is forgotten.
 BOOST_AUTO_TEST_CASE(RememberingImportsTurnedOff_ImportsEveryTime)
 {
@@ -546,9 +572,12 @@ BOOST_AUTO_TEST_CASE(RememberingImportsTurnedOff_ImportsEveryTime)
 	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
 	scn::remember_model_imports(false);
 	const std::size_t before = scn::model_importer_runs();
-	rs->signal_changed(res::tag{ "memory://models/cache977/off.obj" });
+	const res::tag model{ "memory://models/cache977/off.obj" };
+	rs->signal_changed(model);
 	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
-	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	rs->signal_changed(model);
+	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
+	BOOST_TEST(scn::model_importer_runs() == before + 2u);
 	scn::remember_model_imports(true);
 }
 
