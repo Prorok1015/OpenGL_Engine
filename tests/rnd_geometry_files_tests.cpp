@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -300,15 +301,21 @@ BOOST_AUTO_TEST_CASE(AGeometryWrittenAgain_IsDrawnByTheGeomManager_WithoutASigna
 		geometry.begin_frame();
 		return geometry.require_geometry(tag);
 	};
+	// The disk mount loads on its io thread: frames go on until the buffers exist, within a time limit.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	const auto in_time = [&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		return std::chrono::steady_clock::now() < deadline;
+	};
 	rnd::driver::vertex_array_interface* first = nullptr;
-	for (int attempt = 0; attempt < 16 && !(first = frame()); ++attempt) {}
+	while (!(first = frame()) && in_time()) {}
 	BOOST_REQUIRE(first != nullptr);
 	BOOST_TEST(!geometry.draw_fits(tag, 6, 0, 0));
 
 	// The writer itself tells the cache: the test signals nothing.
 	const std::string error = rnd::write_geometry_files(root(), tag, triangles(2));
 	BOOST_REQUIRE_MESSAGE(error.empty(), error);
-	for (int i = 0; i < 16 && geometry.require_geometry(tag) == first; ++i) {
+	while (geometry.require_geometry(tag) == first && in_time()) {
 		BOOST_REQUIRE(frame() != nullptr);
 	}
 	BOOST_TEST(geometry.draw_fits(tag, 6, 0, 0));
