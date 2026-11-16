@@ -1,5 +1,6 @@
 #include "edt_editor_system.h"
 #include "edt_agent_log_filter.h"
+#include "edt_asset_component.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -67,8 +68,6 @@
 #include "edt_git_panel.h"
 #include "edt_world_systems_panel.h"
 #include "edt_vcs_component.h"
-#include "edt_github_provider.h"
-#include "edt_curl_transport.h"
 #include "edt_live_mode_component.h"
 #include "edt_live_consent.h"
 #include "edt_project_trust_service.h"
@@ -502,7 +501,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	create_panels(!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
 	m_inspector_panel->set_desc_source([this] { return m_services.descs(); });
-	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_catalog.get(); };
+	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
 	m_inspector_panel->set_asset_source(asset_catalog);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
@@ -607,10 +606,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// The asset fixes are the person's own: no command, so no agent reaches them.
 	m_problems_panel->set_actions([this](const std::string& source, const problem& item) {
 		std::vector<std::pair<std::string, std::function<void()>>> out;
-		if (source != asset_problem_publisher::source || !m_assets || !m_asset_problems) {
+		if (source != asset_problem_publisher::source || !m_asset_component) {
 			return out;
 		}
-		for (problem_action& action : m_asset_problems->actions_of(item, *m_assets)) {
+		for (problem_action& action : m_asset_component->problem_actions(item)) {
 			out.emplace_back(action.label, [label = action.label, run = std::move(action.run)] {
 				if (const asset_fix_result result = run(); !result.ok) {
 					egLOG_WARN("assets", "{}: {}", label, result.error);
@@ -620,12 +619,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return out;
 	}, problems_idle);
 	m_problems_panel->set_undo(
-		[this]() -> std::optional<std::string> { return m_assets ? m_assets->next_undo_label() : std::nullopt; },
+		[this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; },
 		[this] {
-			if (!m_assets) {
+			if (!m_asset_component) {
 				return;
 			}
-			if (const asset_fix_result result = m_assets->undo_last(); !result.ok) {
+			if (const asset_fix_result result = m_asset_component->undo_last(); !result.ok) {
 				egLOG_ERROR("assets", "{}", result.error);
 			}
 		},
@@ -767,12 +766,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		})json"),
 		.enabled = [this] { return m_loading_level; },
 		.category = cmd::agent_category::scene_edit }));
-	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_assets ? m_assets->next_undo_label() : std::nullopt; };
+	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; };
 	const auto asset_undo = [this] {
-		if (!m_assets) {
+		if (!m_asset_component) {
 			return false;
 		}
-		const asset_fix_result result = m_assets->undo_last();
+		const asset_fix_result result = m_asset_component->undo_last();
 		if (!result.ok) {
 			egLOG_ERROR("assets", "{}", result.error);
 		}
@@ -786,7 +785,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); },
-				[this] { return asset_index_wait(m_asset_index.get()); } })) {
+				[this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); } })) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
@@ -880,7 +879,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// Through the base system: it reaches the game layer's too.
 		migration.signal_changed = [this](const res::tag& tag) { m_res.signal_changed(tag); };
 		migration.rebuild_assets = [this] {
-			if (m_assets) m_assets->rebuild();
+			if (m_asset_component) m_asset_component->rebuild();
 		};
 		migration.reopen_level = [this](const res::tag& level, std::function<void(bool)> loaded) -> std::optional<std::string> {
 			// The files are still half migrated (a rollback refused): the level stays detached, as the stopped migration left it.
@@ -1117,42 +1116,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_vcs = std::make_unique<vcs_component>(std::move(vcs_ports));
 	if (data.has_value<prj::project_context>()) {
 		const prj::project_context& project = data.require<prj::project_context>();
-		m_assets = std::make_unique<asset_database>(m_context->jobs(), &m_context->events(), m_res.get_resource_layers(),
-			asset_cache_location{ project.root, project.cache_dir().lexically_relative(project.root) / "asset_db" });
-		m_assets->attach(m_res);
-		m_assets->set_vcs_busy([this] { return m_vcs && m_vcs->writes_running(); });
-		m_assets->set_git_dir_provider([this]() -> std::optional<std::filesystem::path> {
+		asset_component::ports asset_ports{ *m_context, m_res, *m_asset_browser_panel, project };
+		asset_ports.vcs_busy = [this] { return m_vcs && m_vcs->writes_running(); };
+		asset_ports.git_dir = [this]() -> std::optional<std::filesystem::path> {
 			return m_vcs ? m_vcs->git_dir() : std::nullopt;
-		});
-		m_assets->rebuild();
-		m_asset_catalog = std::make_unique<picker::database_catalog>(*m_assets);
-		m_asset_index = std::make_unique<asset_index_link>(*m_assets, m_res);
-		m_asset_problems = std::make_unique<asset_problem_publisher>();
-		asset_usage_sources usage_sources;
-		usage_sources.assets = [this]() -> const asset_database* { return m_assets.get(); };
-		usage_sources.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
-		// The project context lives in the app data storage as long as the editor.
-		const auto manifest_file = [manifest = &project] { return fs_paths::utf8_of(manifest->manifest_file.filename()); };
-		const auto manifest_references = [manifest = &project] {
-			std::vector<manifest_reference> out;
-			if (!manifest->data.start_scene.empty()) out.push_back(manifest_reference{ "/start_scene", manifest->data.start_scene });
-			if (!manifest->data.input_actions.empty()) out.push_back(manifest_reference{ "/input_actions", manifest->data.input_actions });
-			return out;
 		};
-		usage_sources.manifest_file = manifest_file;
-		usage_sources.manifest = manifest_references;
-		for (auto& command : register_asset_usage_commands(m_context->actions().commands(), std::move(usage_sources))) {
-			m_registrations.push_back(std::move(command));
-		}
-		m_asset_browser_panel->set_usages(
-			[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
-				if (!m_assets) return std::nullopt;
-				const std::vector<manifest_reference> manifest = manifest_references();
-				return index->find(*m_assets, m_services.descs(), usage_target{ asset, std::nullopt }, manifest_file(), manifest);
-			},
-			[this, manifest_references] {
-				return usage_stamp{ m_assets ? m_assets->revision() : std::uint64_t{ 0 }, m_game_layer_generation, manifest_references() };
-			});
+		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
+		asset_ports.game_layer_generation = [this] { return m_game_layer_generation; };
+		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
+		m_asset_component->install(m_registrations);
 	}
 	m_vcs->install(m_registrations);
 
@@ -1431,17 +1403,16 @@ void edt::editor_system::tick_repository_watcher()
 	if (m_vcs && m_context) m_vcs->tick();
 }
 
+edt::asset_database* edt::editor_system::assets()
+{
+	return m_asset_component ? &m_asset_component->database() : nullptr;
+}
+
 void edt::editor_system::tick_asset_problems()
 {
-	if (!m_assets || !m_asset_problems || !m_context) {
-		return;
+	if (m_asset_component && m_context) {
+		m_asset_component->tick();
 	}
-	// New files waiting for an ID: a git operation that held them back may have ended (#765).
-	m_assets->poll();
-	if (m_asset_index) {
-		m_asset_index->poll();
-	}
-	m_asset_problems->publish(m_context->problems(), *m_assets);
 }
 
 void edt::editor_system::stop_live_build()
@@ -2213,7 +2184,7 @@ void edt::editor_system::go_to_problem(const std::string& source, const problem&
 		return;
 	}
 	if (source == asset_problem_publisher::source) {
-		const std::optional<std::string> file = m_asset_problems ? m_asset_problems->file_of(item) : std::nullopt;
+		const std::optional<std::string> file = m_asset_component ? m_asset_component->problem_file(item) : std::nullopt;
 		if (!file) {
 			return;
 		}
@@ -2354,7 +2325,7 @@ edt::desc_file_layout edt::editor_system::desc_layout()
 	};
 	layout.write_blocker = [this] { return project_write_blocker(); };
 	// Read when asked: the asset database and its link exist only while a project is open.
-	layout.asset_index_wait = [this] { return asset_index_wait(m_asset_index.get()); };
+	layout.asset_index_wait = [this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); };
 	return layout;
 }
 
