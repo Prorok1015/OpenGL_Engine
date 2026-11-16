@@ -602,6 +602,40 @@ std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& sou
 	return {};
 }
 
+std::optional<res::disk_file> res::vfs_resolver::disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+	std::string& differs) const
+{
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_pending_writes.contains(tag) || m_erased.contains(tag)) return std::nullopt;
+	}
+	auto found = resolve_tag(tag);
+	std::error_code ec;
+	if (!found.has_value() || !fs::is_regular_file(found->second, ec)) return std::nullopt;
+	const std::uintmax_t size = fs::file_size(found->second, ec);
+	if (ec || size != bytes.size()) {
+		differs = "its file on the disk has another size";
+		return std::nullopt;
+	}
+	const fs::path relative = found->second.lexically_relative(found->first);
+	platform::beneath::read_request request;
+	request.root = found->first;
+	request.folder = relative.parent_path();
+	request.leaf = relative.filename();
+	request.max_bytes = bytes.size();
+	std::vector<std::byte> on_disk;
+	const auto read = platform::beneath::read_beneath(request, on_disk);
+	if (read.status != platform::beneath::read_status::ok) {
+		differs = std::format("its file on the disk cannot be read: {}", read.error);
+		return std::nullopt;
+	}
+	if (on_disk != bytes) {
+		differs = "its file on the disk holds other bytes";
+		return std::nullopt;
+	}
+	return disk_file{ std::move(found->first), std::move(found->second) };
+}
+
 bool res::vfs_resolver::exists(const::res::tag& tag) const
 {
 	{

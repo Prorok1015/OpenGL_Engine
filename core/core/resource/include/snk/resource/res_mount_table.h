@@ -13,6 +13,13 @@ namespace res
 		read_only,
 	};
 
+	// The file on the disk a tag's bytes are read from, and the mount folder (layer) it lies in (#996).
+	struct disk_file
+	{
+		std::filesystem::path root;
+		std::filesystem::path file;
+	};
+
 	// One protocol served from directories by a vfs_resolver.
 	struct mount
 	{

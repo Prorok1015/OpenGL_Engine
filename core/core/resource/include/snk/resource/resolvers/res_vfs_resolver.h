@@ -72,6 +72,11 @@ namespace res
 			std::vector<std::byte>& out) const;
 		// Whether the file of `tag` is in the layer read_beside would read it from; nothing is read.
 		bool exists_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
+		// The file resolve() reads `tag` from now, when it holds exactly `bytes`: nullopt while a store of it is queued
+		// or it was erased (those bytes are no file), and when there is no regular file. `differs` says why a file that
+		// is there is not taken: another size, other bytes, or it cannot be read below its root (a link).
+		std::optional<::res::disk_file> disk_file_holding(const ::res::tag& tag, const std::vector<std::byte>& bytes,
+			std::string& differs) const;
 		// How many folders are mounted: with more than one, the layer of a file depends on which of them have it.
 		std::size_t root_count() const;
 		// Whether `anchor` resolves to the top layer of a writable mount: the layer a store of its pair writes to.

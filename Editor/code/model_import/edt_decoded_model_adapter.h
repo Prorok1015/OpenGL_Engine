@@ -20,17 +20,11 @@
 
 namespace edt {
 
-	// Where a model a tag names lies on the disk: the file, and the mount root (content root) it was found in.
-	struct model_location
-	{
-		std::filesystem::path file;
-		std::filesystem::path root;
-	};
-
 	// The editor's adapter for the model files descs refer to (res://x.glb as a level's prefab or a __parent): the model is
 	// parsed in the decoder process, never in the editor (#925). It may read side files anywhere in its content root but
 	// no hidden ones, each decoder step gets k_deadline, and without the decoder the load fails with its reason. A model
-	// that is no file on the disk (served from memory or a pack) is decoded from its bytes alone and may name no other file.
+	// that is no file on the disk is decoded from its bytes alone and may name no other file: a memory:// one, one its
+	// resolver does not read from a file (RAM, a pack) and one whose file does not hold the bytes the load got (#996).
 	// A model loaded again with the same bytes (and the same decoder, limits and place) is not decoded again (#999): its
 	// earlier import is taken from its memory:// folder once that passes the checks of a decoder's answer.
 	class decoded_model_adapter : public core::res::adapter_interface
@@ -48,9 +42,6 @@ namespace edt {
 		std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw_data) const override;
 		std::vector<std::byte> serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const override;
 
-		// The file of `tag` in the highest of `roots` (lowest priority first, as resource_system::mount_roots lists them)
-		// that holds it; nullopt when none does.
-		static std::optional<model_location> locate(const std::vector<std::filesystem::path>& roots, const res::tag& tag);
 		// "__models/<protocol>/<folder of the tag><file name>/": one memory:// folder per model file (x.glb and x.fbx apart),
 		// apart from the "<stem>/" of an import. Each load empties it first: the decoder overwrites nothing, and memory://
 		// is on the disk, so an earlier run of the editor left the files of its load there.
