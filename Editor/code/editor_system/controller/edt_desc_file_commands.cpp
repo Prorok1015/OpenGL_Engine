@@ -338,6 +338,11 @@ namespace {
 							if (!m_deps.res.serves(res::tag::engine)) continue;
 							const std::optional<res::disk_file> opened = m_deps.res.disk_file_of(world_file);
 							if (!opened || is_opened(opened->file)) return mine;
+							// A file the agent puts in the top folder would shadow a world read from a lower one.
+							const std::vector<fs::path> engine_roots = m_deps.res.mount_roots(res::tag::engine);
+							const std::optional<fs::path> top = engine_roots.empty() ? std::nullopt
+								: resolver_path(engine_roots.back(), world_file.relative());
+							if (top && is_opened(*top)) return mine;
 							continue;
 						}
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());

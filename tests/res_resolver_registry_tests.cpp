@@ -408,4 +408,30 @@ BOOST_AUTO_TEST_CASE(AFoldersFiles_LeaveOutLinks)
 	rs->unregistrate_resolver(k_mounted);
 }
 
+// #1086: a resolver may give no block to wait for (the loader takes that as a failed load): read_now fails.
+namespace {
+
+class empty_resolver : public core::res::res_resolver_interface
+{
+public:
+	using res_resolver_interface::res_resolver_interface;
+	async_raw_data resolve(const res::tag&) const override { return nullptr; }
+	bool exists(const res::tag&) const override { return false; }
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(ReadingFromAResolverThatGivesNothing_Fails)
+{
+	rs->registrate_resolver<empty_resolver>(k_mounted);
+	test_util::in_task(tasks, [&] {
+		std::vector<std::byte> bytes;
+		const auto read = rs->read_now(res::tag{ "mount1034://a.txt" }, 16, bytes);
+		BOOST_TEST((read.status != platform::beneath::read_status::ok));
+		BOOST_TEST(!read.error.empty());
+		BOOST_TEST(bytes.empty());
+	});
+	rs->unregistrate_resolver(k_mounted);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

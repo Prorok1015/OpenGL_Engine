@@ -2678,6 +2678,10 @@ platform::beneath::read_result res::resource_system::read_now(const tag& tag, st
 		return vfs->read_beside(tag, tag, max_bytes, out);
 	}
 	const auto data = found->resolve(tag);
+	if (!data) {
+		result.error = std::format("'{}': its resolver gave nothing to read", tag.view());
+		return result;
+	}
 	data->wait();
 	if (data->has_error()) {
 		result.status = found->exists(tag) ? platform::beneath::read_status::failed
