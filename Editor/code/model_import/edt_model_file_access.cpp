@@ -203,11 +203,18 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (!m_on_disk) return refuse(refusal_kind::rule, "the model is not a file on the disk, so it cannot read other files");
 
 	const char* const outside = m_boundary == m_dir ? "outside the folder of the model" : "outside the content root of the model";
-	if (is_spelling_the_rule_refuses(reference)) return refuse(refusal_kind::rule, "a name the rule does not allow");
+	constexpr const char* not_allowed = "a name the rule does not allow";
+	if (reference.find('\0') != std::string_view::npos) return refuse(refusal_kind::rule, not_allowed);
 	const fs::path given = fs_paths::path_from_utf8(with_forward_slashes(reference));
 	if (given.has_root_name() || given.has_root_directory()) {
+		// The model's own folder may be a share (//server/share): Assimp names its side files from it. Only what lies below
+		// that folder is the model's spelling.
 		const fs::path normal = given.lexically_normal();
-		if (!lexically_under(normal, m_boundary) && !lexically_under(normal, m_dir_as_given)) return refuse(refusal_kind::rule, outside);
+		const fs::path* base = lexically_under(normal, m_dir_as_given) ? &m_dir_as_given : lexically_under(normal, m_boundary) ? &m_boundary : nullptr;
+		if (!base) return refuse(refusal_kind::rule, outside);
+		if (is_spelling_the_rule_refuses(fs_paths::generic_utf8_of(normal.lexically_relative(*base)))) return refuse(refusal_kind::rule, not_allowed);
+	} else if (is_spelling_the_rule_refuses(reference)) {
+		return refuse(refusal_kind::rule, not_allowed);
 	}
 	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(refusal_kind::rule, outside);

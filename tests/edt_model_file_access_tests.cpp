@@ -368,6 +368,23 @@ BOOST_AUTO_TEST_CASE(ANameThatIsAShareADeviceOrAStream_IsRefusedByTheRule_Before
 	BOOST_CHECK(access.files().empty());
 }
 
+#if !defined(_WIN32)
+// On Windows these names would reach a real share; on POSIX "//server/share" is a local path that does not exist.
+BOOST_AUTO_TEST_CASE(AModelInAShareFolder_KeepsItsSideFiles_WhileAnotherShareIsRefused)
+{
+	edt::model_file_access access(fs::path("//server/share/models/m.obj"), {});
+	const auto own = access.resolve("//server/share/models/m.mtl", edt::model_file_kind::side_file);
+	BOOST_CHECK_MESSAGE(own.error.empty(), own.error);
+	BOOST_CHECK(own.refusal == edt::refusal_kind::none);
+
+	const auto other = access.resolve("//elsewhere/share/m.mtl", edt::model_file_kind::side_file);
+	BOOST_CHECK(!other.found());
+	BOOST_CHECK(other.refusal == edt::refusal_kind::rule);
+	const auto stream = access.resolve("//server/share/models/m.mtl:stream", edt::model_file_kind::side_file);
+	BOOST_CHECK(stream.refusal == edt::refusal_kind::rule);
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(AnAbsoluteSideFile_IsReadOnlyInsideTheModelFolder)
 {
 	dir.write("models/m.obj", "o m");
