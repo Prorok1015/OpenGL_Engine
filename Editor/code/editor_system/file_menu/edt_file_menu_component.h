@@ -60,8 +60,11 @@ namespace edt
 		file_menu_component(const file_menu_component&) = delete;
 		file_menu_component& operator=(const file_menu_component&) = delete;
 
-		// The built-in menus, the file.* actions and the Edit actions, in that order.
+		// The built-in menus and the file.* actions.
 		void install(std::vector<registration>& out);
+		// The Edit actions (undo, redo, delete...): a separate step so that the owner can register what it does between the two
+		// (the order of registrations is the order of the registry's list and of the tools an agent sees).
+		void install_edit_actions(std::vector<registration>& out);
 		// The window's close request goes through the "unsaved changes" flow and the exit blocker.
 		void attach_window_close(wnd::window_system& windows);
 

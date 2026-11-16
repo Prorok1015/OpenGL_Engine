@@ -408,6 +408,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.assets = [this] { return m_asset_component.get(); } });
 	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
+	m_file_menu->install_edit_actions(m_registrations);
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
 	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),

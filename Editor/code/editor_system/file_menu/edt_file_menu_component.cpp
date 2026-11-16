@@ -174,6 +174,10 @@ void edt::file_menu_component::install(std::vector<registration>& out)
 {
 	for (auto& menu : register_builtin_menus(m_ports.context.actions())) out.push_back(std::move(menu));
 	m_menu->register_actions();
+}
+
+void edt::file_menu_component::install_edit_actions(std::vector<registration>& out)
+{
 	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_ports.assets && m_ports.assets() ? m_ports.assets()->next_undo_label() : std::nullopt; };
 	const auto asset_undo = [this] {
 		if (!m_ports.assets || !m_ports.assets()) {
