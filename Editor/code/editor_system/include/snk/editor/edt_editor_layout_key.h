@@ -54,6 +54,8 @@ namespace edt
 			callback_gate::guard,
 			// job_service::start* instantiate launch() in module code: it builds a record in a node of m_jobs.
 			editor_layout_access::job_record, ds::task_handle_base,
+			// An element of job_info::diagnostics: a module copies job_info out of jobs().list() / info().
+			res::diagnostic,
 			// Payloads of editor_events a module's handler reads inline.
 			game_module_build_result, agent_action_info,
 			// The bases a module derives from: its extension, its panels, its preview documents.
