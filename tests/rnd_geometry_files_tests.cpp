@@ -628,7 +628,7 @@ BOOST_AUTO_TEST_CASE(GenRobot_ImportAndGeometryLoad_AreTimed)
 	egLOG_INFO("test/timing", "gen_robot: import (assimp, memory:// files): {:.1f} ms; first geometry load: {:.1f} ms", import_ms, first_load_ms);
 	egLOG_INFO("test/timing", "gen_robot: geometry write, JSON arrays: {:.1f} ms ({} bytes); binary pair: {:.1f} ms ({} + {} bytes)",
 		arrays_write_ms, arrays_text.size(), binary_write_ms, files.desc.size(), files.binary.size());
-	egLOG_INFO("test/timing", "gen_robot: geometry load, JSON arrays: {:.1f} ms; binary file (verify_hash_on_load): {:.1f} ms; "
+	egLOG_INFO("test/timing", "gen_robot: geometry load, JSON arrays: {:.1f} ms; binary file (hashes checked, no cache): {:.1f} ms; "
 		"SHA-256 of the binary file: {:.1f} ms", arrays_load_ms, binary_load_ms, sha_ms);
 }
 #endif

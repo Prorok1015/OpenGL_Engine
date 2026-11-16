@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -73,15 +74,24 @@ namespace res
 		io,
 	};
 
+	// Move-only: `ranges` point into `file`, whose buffer a move keeps.
 	struct desc_binary_data
 	{
 		desc_binary_error error = desc_binary_error::none;
 		// Names the file and the range.
 		std::string message;
-		// One per requested range, in the order asked.
-		std::vector<std::vector<std::byte>> ranges;
+		// The whole file as read.
+		std::vector<std::byte> file;
+		// One per requested range, in the order asked, into `file`.
+		std::vector<std::span<const std::byte>> ranges;
 		// Read from the staged file a save left behind (it matched the desc, the binary file did not).
 		bool from_staged = false;
+
+		desc_binary_data() = default;
+		desc_binary_data(desc_binary_data&&) noexcept = default;
+		desc_binary_data& operator=(desc_binary_data&&) noexcept = default;
+		desc_binary_data(const desc_binary_data&) = delete;
+		desc_binary_data& operator=(const desc_binary_data&) = delete;
 
 		explicit operator bool() const { return error == desc_binary_error::none; }
 	};
@@ -165,8 +175,11 @@ namespace res
 		SNK_API std::optional<std::vector<std::byte>> encode(std::span<const binary_chunk> chunks,
 			std::vector<binary_range>& ranges, std::string& error);
 
-		// Checks `file` (named `file_name` in messages) and copies the ranges out: header, layouts, offsets in u64
-		// without overflow, inside the file, not overlapping; SHA-256 of each range when `verify_hash`.
+		// Checks `file` (named `file_name` in messages) and keeps it with the ranges as spans into it: header, layouts,
+		// offsets in u64 without overflow, inside the file, not overlapping; SHA-256 of each range when `verify_hash`.
+		SNK_API desc_binary_data parse(std::string_view file_name, std::vector<std::byte>&& file,
+			std::span<const binary_range> ranges, bool verify_hash);
+		// The same over a copy of `file`.
 		SNK_API desc_binary_data parse(std::string_view file_name, std::span<const std::byte> file,
 			std::span<const binary_range> ranges, bool verify_hash);
 
@@ -189,6 +202,8 @@ namespace res
 
 		// The ranges of the binary file of `desc`, from the desc's layer, refused before reading over `max_bytes`.
 		// A staged file left by a save is used when it matches the desc and the binary file does not (EPIC-79 section 5).
+		// Hashes are checked over several roots and beside a staged file always; else when `verify_hash` and the root's
+		// verify_desc_binary_hash(), unless its desc_binary_hash_cache knows the pair unchanged (EPIC-79 section 7).
 		SNK_API desc_binary_data read(resource_system& system, const tag& desc, std::span<const binary_range> ranges,
 			bool verify_hash, std::uint64_t max_bytes = max_file_bytes,
 			desc_binary_recovery recovery = desc_binary_recovery::use_staged);
@@ -216,5 +231,11 @@ namespace res
 		// desc needs the staged file, which a reader recovers from; the caller completes or takes back the pair under the lock.
 		SNK_API desc_binary_written save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
 			const desc_writer& write_desc);
+	}
+
+	namespace detail
+	{
+		// For tests: how many ranges desc_binary::parse has hashed in this process.
+		SNK_API std::atomic<std::uint64_t>& desc_binary_hashed_ranges();
 	}
 }

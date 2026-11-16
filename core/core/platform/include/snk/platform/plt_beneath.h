@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -96,10 +97,21 @@ namespace platform::beneath {
 
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 
+	// Size and last write time of a file as its open handle saw them.
+	struct file_stamp {
+		std::uint64_t size = 0;
+		// Nanoseconds since the Unix epoch.
+		std::int64_t write_time_ns = 0;
+
+		bool operator==(const file_stamp&) const = default;
+	};
+
 	struct read_result {
 		read_status status = read_status::failed;
 		// Why, for `failed` (and the cause of `missing`); empty otherwise.
 		std::string error;
+		// For `ok` only, and only when the file did not change while it was read (the same handle checked after the read).
+		std::optional<file_stamp> stamp{};
 	};
 
 	struct read_request {
