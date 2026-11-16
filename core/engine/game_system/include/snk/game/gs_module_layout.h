@@ -39,25 +39,7 @@ namespace gs
 		}
 
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
-		// type modules read inline. 1: world_context's accessors out of line (#802). 2: desc_system, schema_registry and
-		// dynamic_desc touch their members only out of line (#786). 3: the sandbox's components move into the world by
-		// engine code through the module's ecs::sandbox_emplace<T> (#784, #738). 4: field_kind::map and std::optional in
-		// schemas (#790): field_kind gains a value and the schema's field table changes for code built before. 5: system_registry
-		// is all exports and the world keeps the engine's copy of a component's default (#785, #826). 6: gs::input_actions loses
-		// its two warning fields, so the members after them move (#782).
-		// 7: inp::action_binding is a {kind, code, threshold} struct, not a variant (#783).
-		// 8: desc_base gains the tag of its parent and joins the list (#812); the list now sees its size.
-		// 9: field_schema gains `nullable` in the padding after its flags, unseen by its size; it and type_schema, which
-		// module code builds too, join the list (#861).
-		// 10: cmd::command_desc, which a module builds for gs::game_module::add_command, gains describe_before_allowed_invoke
-		// and joins the list (#759).
-		// 11: the engine components (scn::engine_component_types), the ctx types and events a module reads, the channel
-		// types, app_data_storage and the structs passed by value join the list (#922); no type changes.
-		// 12: the ABI revisions of the interfaces with a vtable, the versions of EnTT, Boost and glm and the sizes of
-		// entt::registry, boost::json::value and glm::mat4 join the key (#922); no type changes.
-		// 13: the accessors of scene_layer and input_actions and the core of app_data_storage are exports; module code no
-		// longer reads their members inline (#922 PR 3).
-		// 14: scn::prefab_instance gains content_of at its end (#993).
+		// type modules read inline, or a type of the list changes. Each value is told in docs/abi (HISTORY.md, changes/).
 		inline constexpr std::uint64_t layout_revision = 14;
 
 		// Numbers the key mixes in as they are, in order: the interfaces' ABI revisions and the third-party versions.
