@@ -52,6 +52,7 @@ namespace edt {
 	class asset_database;
 	class agent_server;
 	class agent_access;
+	class agent_component;
 	class agent_policy_model;
 	class agents_panel;
 	class file_menu;
@@ -213,14 +214,9 @@ namespace edt {
 		void open_agents_panel();
 
 	public:
-		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
-		// file; a different port restarts it) or off (every session ends and is reported). The choice is kept in
-		// edt://settings/agent_server.json, only when it took effect. False when there is no agent server object or the
-		// port cannot be bound. Main thread.
-		bool set_agent_server(bool enabled, std::uint16_t port);
-		agent_server* agent_server_object() { return m_agent_server.get(); }
+		agent_server* agent_server_object();
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
-		agent_access* agent_access_object() { return m_agent_access.get(); }
+		agent_access* agent_access_object();
 		// The asset database of the open project (#760); null without a project.
 		asset_database* assets();
 
@@ -302,19 +298,10 @@ namespace edt {
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
-		// Taken by work the stdio transport posts to the main thread: it finds the system gone through the weak copy.
-		std::shared_ptr<int> m_stdio_alive = std::make_shared<int>(0);
-		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
-		// null when both are off.
-		std::unique_ptr<agent_access> m_agent_access;
-		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
-		cmd::command_registry* m_agent_argument_checks = nullptr;
-		// The engine's filter of log.read, filled in by this system and emptied when it goes.
-		cmd::log_read_filter* m_log_filter = nullptr;
-		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
-		std::unique_ptr<agent_server> m_agent_server;
-		std::filesystem::path m_agent_server_settings_file;
-		// The policy part of the agents window (#449); after the access it reads, so it is destroyed first.
+		// What an agent can reach (the MCP server, the policy, the log filter, editor.quit). Declared before the agents window
+		// below, which reads its access: that goes first, then this one (shutdown() already ran at the top of ~editor_system).
+		std::unique_ptr<agent_component> m_agent;
+		// The policy part of the agents window (#449); after m_agent, whose access it reads, so it is destroyed first.
 		std::unique_ptr<agent_policy_model> m_agent_policy_model;
 		std::shared_ptr<agents_panel> m_agents_panel;
 		// The last actions an agent made (editor_events::agent_action), for the status bar slot.
@@ -329,7 +316,7 @@ namespace edt {
 		// The pending loosenings (as text) the person sent away with "Later"; empty = not dismissed. A different set shows the notice again.
 		std::string m_policy_notice_dismissed_key;
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
-		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
+		// The listener of editor_events::agent_action (the status bar slot); dropped first.
 		std::vector<connection> m_session_connections;
 	};
 }
