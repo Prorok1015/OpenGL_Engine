@@ -10,6 +10,7 @@
 #include "edt_asset_problems.h"
 #include "edt_asset_usages.h"
 #include "edt_startup_component.h"
+#include "edt_game_layer_component.h"
 #include <memory>
 #include <algorithm>
 #include <chrono>
@@ -386,6 +387,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.refresh_world_problems = [this] { m_problems->refresh_world(); },
 		.stop_after_level_loaded = m_stop_after_level_loaded };
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
+	m_game_layer = std::make_unique<game_layer_component>(game_layer_component::ports{ .services = m_services, .level_ctrl = m_level_ctrl,
+		.level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open,
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); } });
 
 	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
 		.level_ctrl = m_level_ctrl, .level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open, .problems = *m_problems,
@@ -461,7 +465,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			});
 			return dirty;
 		},
-		.game_layer_generation = [this] { return m_game_layer_generation; },
+		.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; },
 		.approved_internally = [this](std::string_view ticket) {
 			return m_agent != nullptr && m_agent->access() != nullptr && m_agent->access()->confirmations().approved_internally(ticket);
 		},
@@ -473,7 +477,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu->attach_window_close(wnd_sys);
 
 	game_build_component::ports build_ports{ .context = *m_context, .layer = *editor_layer, .settings_panel = *m_panels->build_settings(),
-		.swap_gate = m_swap_gate, .trust = m_trust,
+		.swap_gate = m_game_layer->swap_gate(), .trust = m_trust,
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.default_configuration = *cfg_build_configuration,
 		.module_host = [&data]() -> core::project_module_host* {
@@ -522,7 +526,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return m_vcs ? m_vcs->git_dir() : std::nullopt;
 		};
 		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
-		asset_ports.game_layer_generation = [this] { return m_game_layer_generation; };
+		asset_ports.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; };
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
 	}
@@ -615,7 +619,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 {
 	m_play_component = std::make_unique<play_component>(play_component::ports{
 		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
-		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_panels->hierarchy(),
+		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_game_layer->swap_gate(), .hierarchy = *m_panels->hierarchy(),
 		.inspector = *m_panels->inspector(), .viewport = *m_panels->viewport(), .game_view = *m_panels->game_view(),
 		.problems = *m_panels->problems(), .preflight = m_problems->play_preflight(),
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
@@ -658,7 +662,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		m_problems->follow_input_actions(actions);
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { m_problems->refresh_world(); };
-	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_problems->install();
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_panels->game_view()->set_input_blocked([this] {
@@ -669,7 +672,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		if (m_agent_ui) m_agent_ui->draw_status();
 		m_play_component->draw_status();
-		draw_save_notice();
+		m_file_menu->draw_status();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
 				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
@@ -677,13 +680,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		}
 		m_live->draw_status();
 	});
-}
-
-void edt::editor_system::draw_save_notice()
-{
-	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
-	if (!text) return;
-	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
 void edt::editor_system::wire_controller_callbacks()
@@ -707,41 +703,11 @@ void edt::editor_system::wire_controller_callbacks()
 			m_problems->desc().report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag,
 				level_locator(handle, m_state.editor_tag, m_state.level_tag));
 		});
-		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
-			++m_game_layer_generation;
-			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
-		});
 		// The set "level" is the edited document: a game's request_level only ever replaces the worlds of Play (#564).
 		ctx_mgr->set_level_set_switchable(false);
 		ctx_mgr->set_on_level_switched([this](scn::context_set& set) {
 			if (set.name() == k_play_set && m_play) m_play->on_level_switched();
 		});
-	}
-}
-
-void edt::editor_system::follow_game_layer_change(bool before)
-{
-	if (before) {
-		// Nothing of the editor may refer to the old layer once it goes: the set "play", the preview set, the loads in
-		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
-		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
-		if (m_play && m_play->active()) m_play->stop(play_reason::user);
-		m_prefab->close_for_layer_change();
-		m_asset_open->drop_pending();
-		m_level_after_layer_change = res::tag{};
-		if (m_level_load->in_progress()) {
-			m_level_after_layer_change = m_level_load->loading_tag();
-			m_level_load->abandon();
-		}
-		m_level_ctrl.detach_from_game_layer();
-		return;
-	}
-	if (scn::context_set* level = m_services.level_set()) {
-		level->set_mode(ecs::run_mode::edit);
-	}
-	m_level_ctrl.attach_to_game_layer();
-	if (m_level_after_layer_change.is_valid()) {
-		m_level_load->begin(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
 
