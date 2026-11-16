@@ -710,7 +710,8 @@ BOOST_AUTO_TEST_CASE(a_node_that_instantiates_no_prefab_has_no_stale_records)
 
 BOOST_AUTO_TEST_CASE(a_record_turns_stale_when_the_prefab_file_changes_under_an_unchanged_level)
 {
-	auto& inst = const_cast<prefab_node&>(*child(root(), 0xe1));
+	scene.active_world_idx = 1;
+	auto& inst = const_cast<prefab_node&>(*child(root(1), 0xe1));
 	inst.overrides.push_back(scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = "/fov", .value = 55 });
 	edt::override_edit::view_cache cache(services, scene);
 	BOOST_REQUIRE(cache.stale(inst)->empty());
