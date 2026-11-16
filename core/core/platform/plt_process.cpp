@@ -21,6 +21,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <aclapi.h>
+#include <userenv.h>
 #else
 #include <cerrno>
 #include <csignal>
@@ -276,6 +278,94 @@ namespace
 		}
 		return std::nullopt;
 	}
+
+	std::string system_text(DWORD code)
+	{
+		return std::error_code{ static_cast<int>(code), std::system_category() }.message();
+	}
+
+	platform::process_result confinement_failure(std::string why)
+	{
+		platform::process_result result;
+		result.error = std::move(why);
+		result.confinement_failed = true;
+		return result;
+	}
+
+	class container_sid
+	{
+	public:
+		container_sid() = default;
+		~container_sid()
+		{
+			if (m_sid != nullptr) FreeSid(m_sid);
+		}
+		container_sid(const container_sid&) = delete;
+		container_sid& operator=(const container_sid&) = delete;
+
+		PSID get() const { return m_sid; }
+		PSID* out() { return &m_sid; }
+
+	private:
+		PSID m_sid = nullptr;
+	};
+
+	// The SID is derived from the name alone: no profile (registry, %LOCALAPPDATA%\Packages) unless a start needs one.
+	std::string derive_container(const std::wstring& name, container_sid& sid)
+	{
+		if (name.empty()) return "the AppContainer has no name";
+		const HRESULT derived = DeriveAppContainerSidFromAppContainerName(name.c_str(), sid.out());
+		if (FAILED(derived)) {
+			return std::format("cannot derive the SID of the AppContainer: {}", system_text(static_cast<DWORD>(HRESULT_CODE(derived))));
+		}
+		return {};
+	}
+
+	bool create_container_profile(const std::wstring& name)
+	{
+		PSID created = nullptr;
+		const HRESULT made = CreateAppContainerProfile(name.c_str(), name.c_str(), L"snk model decoder (#1054)", nullptr, 0, &created);
+		if (created != nullptr) FreeSid(created);
+		return SUCCEEDED(made) || made == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
+	}
+
+	// Adds the container to the access list of `path` (and, for a folder, of what it holds): read and write, or read and
+	// execute. No execute with write: nothing the child writes may be run.
+	std::string grant_container(const fs::path& path, PSID sid, bool write)
+	{
+		PACL current = nullptr;
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		DWORD status = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &current,
+			nullptr, &descriptor);
+		if (status != ERROR_SUCCESS) return std::format("cannot read the access list of '{}': {}", utf8_of(path), system_text(status));
+		const scope_exit free_descriptor{ [descriptor] { LocalFree(descriptor); } };
+		std::error_code ec;
+		const bool folder = fs::is_directory(path, ec);
+		EXPLICIT_ACCESS_W entry{};
+		entry.grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD)
+			: (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+		entry.grfAccessMode = GRANT_ACCESS;
+		entry.grfInheritance = folder ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+		entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+		entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+		entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+		PACL updated = nullptr;
+		status = SetEntriesInAclW(1, &entry, current, &updated);
+		if (status != ERROR_SUCCESS) return std::format("cannot extend the access list of '{}': {}", utf8_of(path), system_text(status));
+		const scope_exit free_updated{ [updated] { LocalFree(updated); } };
+		status = SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr,
+			updated, nullptr);
+		if (status != ERROR_SUCCESS) return std::format("cannot change the access list of '{}': {}", utf8_of(path), system_text(status));
+		return {};
+	}
+
+	// What a confined child may not do, set when it is created (#1054).
+	constexpr DWORD64 k_confined_mitigations = PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON
+		| PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON
+		| PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_PREFER_SYSTEM32_ALWAYS_ON
+		| PROCESS_CREATION_MITIGATION_POLICY_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON
+		| PROCESS_CREATION_MITIGATION_POLICY_STRICT_HANDLE_CHECKS_ALWAYS_ON
+		| PROCESS_CREATION_MITIGATION_POLICY_FONT_DISABLE_ALWAYS_ON;
 }
 
 fs::path platform::current_executable()
@@ -351,11 +441,24 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		return system_failure("cannot open NUL as the input of", program);
 	}
 
+	const process_confinement* confinement = options.confinement ? &*options.confinement : nullptr;
+	container_sid sid;
+	if (confinement != nullptr) {
+		if (std::string why = derive_container(confinement->container_name, sid); !why.empty()) return confinement_failure(std::move(why));
+		for (const fs::path& folder : confinement->read_write) {
+			if (std::string why = grant_container(folder, sid.get(), true); !why.empty()) return confinement_failure(std::move(why));
+		}
+		for (const fs::path& folder : confinement->read_execute) {
+			if (std::string why = grant_container(folder, sid.get(), false); !why.empty()) return confinement_failure(std::move(why));
+		}
+	}
+
+	const DWORD attribute_count = confinement != nullptr ? 4 : 1;
 	SIZE_T list_size = 0;
-	InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
+	InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &list_size);
 	std::vector<std::byte> list_storage(list_size);
 	auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_storage.data());
-	if (!InitializeProcThreadAttributeList(attributes, 1, 0, &list_size)) {
+	if (!InitializeProcThreadAttributeList(attributes, attribute_count, 0, &list_size)) {
 		return system_failure("cannot prepare the start of", program);
 	}
 	const scope_exit delete_attributes{ [attributes] { DeleteProcThreadAttributeList(attributes); } };
@@ -366,6 +469,21 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
 			sizeof(HANDLE) * inherited_count, nullptr, nullptr)) {
 		return system_failure("cannot prepare the start of", program);
+	}
+	// No capabilities: no network, no access to the user's profile or libraries.
+	SECURITY_CAPABILITIES capabilities{};
+	DWORD64 mitigations = k_confined_mitigations;
+	DWORD child_processes = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
+	if (confinement != nullptr) {
+		capabilities.AppContainerSid = sid.get();
+		if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities),
+				nullptr, nullptr)
+			|| !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations, sizeof(mitigations),
+				nullptr, nullptr)
+			|| !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, &child_processes,
+				sizeof(child_processes), nullptr, nullptr)) {
+			return confinement_failure(std::format("cannot prepare the confinement of '{}': {}", utf8_of(program), system_text(GetLastError())));
+		}
 	}
 
 	STARTUPINFOEXW startup{};
@@ -405,12 +523,20 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 
 	PROCESS_INFORMATION process{};
-	if (!CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
+	const auto start = [&] {
+		return CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
 			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
 				| static_cast<DWORD>(options.low_priority ? BELOW_NORMAL_PRIORITY_CLASS : 0),
 			options.environment ? environment.data() : nullptr,
-			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process)) {
-		return system_failure("cannot start", program);
+			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process);
+	};
+	bool started = start() != FALSE;
+	// Some systems start a container only once its profile exists: made then, once, and left (#1054).
+	if (!started && confinement != nullptr && create_container_profile(confinement->container_name)) started = start() != FALSE;
+	if (!started) {
+		process_result failed = system_failure(confinement != nullptr ? "cannot start confined" : "cannot start", program);
+		failed.confinement_failed = confinement != nullptr;
+		return failed;
 	}
 	handle_owner process_handle{ process.hProcess };
 	handle_owner thread_handle{ process.hThread };
@@ -426,10 +552,20 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
 		limits.ProcessMemoryLimit = static_cast<SIZE_T>(options.memory_limit_bytes);
 	}
+	JOBOBJECT_BASIC_UI_RESTRICTIONS no_ui{};
+	if (confinement != nullptr) {
+		limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+		limits.BasicLimitInformation.ActiveProcessLimit = 1;
+		no_ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD | JOB_OBJECT_UILIMIT_DESKTOP
+			| JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+			| JOB_OBJECT_UILIMIT_EXITWINDOWS | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS;
+	}
 	if (job.get() == nullptr
 		|| !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))
+		|| (confinement != nullptr && !SetInformationJobObject(job.get(), JobObjectBasicUIRestrictions, &no_ui, sizeof(no_ui)))
 		|| !AssignProcessToJobObject(job.get(), process_handle.get())) {
 		auto result = system_failure("cannot put into a job object", program);
+		result.confinement_failed = confinement != nullptr;
 		TerminateProcess(process_handle.get(), 1);
 		WaitForSingleObject(process_handle.get(), INFINITE);
 		return result;

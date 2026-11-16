@@ -62,6 +62,10 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 #include <Windows.h>
 #include <shellapi.h>
 #endif
@@ -324,6 +328,52 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		::execve(shell.c_str(), program_args, no_environment);
 		return refused(errno);
 	}
+#elif defined(_WIN32)
+	// What the AppContainer, its policies and its job refuse (#1054) come back as access denied.
+	const auto refused = [](DWORD error) { return error == ERROR_ACCESS_DENIED ? 0 : 6; };
+	if (!args.self_test_open.empty()) {
+		const HANDLE file = CreateFileW(args.self_test_open.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (file == INVALID_HANDLE_VALUE) return refused(GetLastError());
+		CloseHandle(file);
+		return 5;
+	}
+	if (args.self_test_connect) {
+		WSADATA wsa{};
+		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 6;
+		const SOCKET socket_handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (socket_handle == INVALID_SOCKET) {
+			const int error = WSAGetLastError();
+			WSACleanup();
+			return error == WSAEACCES ? 0 : 6;
+		}
+		sockaddr_in address{};
+		address.sin_family = AF_INET;
+		address.sin_port = htons(9);
+		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		const int connected = ::connect(socket_handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+		const int error = WSAGetLastError();
+		closesocket(socket_handle);
+		WSACleanup();
+		return connected != 0 && error == WSAEACCES ? 0 : 5;
+	}
+	if (args.self_test_exec) {
+		// cmd.exe that exits 5: a start that worked is seen as such, not as a refusal.
+		wchar_t system_dir[MAX_PATH] = {};
+		const UINT length = GetSystemDirectoryW(system_dir, MAX_PATH);
+		if (length == 0 || length >= MAX_PATH) return 6;
+		const std::wstring shell = std::wstring(system_dir) + L"\\cmd.exe";
+		std::wstring command = L"cmd.exe /c exit 5";
+		STARTUPINFOW startup{};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION started{};
+		if (!CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &started)) {
+			return refused(GetLastError());
+		}
+		WaitForSingleObject(started.hProcess, INFINITE);
+		CloseHandle(started.hThread);
+		CloseHandle(started.hProcess);
+		return 5;
+	}
 #endif
 	return 5;
 }
@@ -333,6 +383,10 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 
 int main(int argc, char** argv)
 {
+#if defined(_WIN32)
+	// DLLs only from System32 and this program's folder, never from the run folder the child writes (#1054).
+	SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+#endif
 	harden_process(parent_pid_argument(argc, argv));
 	const auto args = parse_arguments(command_line(argc, argv));
 	if (!args) {

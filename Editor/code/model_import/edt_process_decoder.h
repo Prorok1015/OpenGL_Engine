@@ -3,6 +3,7 @@
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
 #include "edt_decode_runner.h"
+#include "edt_decoder_copy.h"
 #include "edt_model_file_access.h"
 #include "edt_model_importer.h"
 #include <snk/common/ds/ds_task_system.hpp>
@@ -90,10 +91,19 @@ namespace edt {
 	private:
 		decode_outcome run(const decode_request& request, const std::vector<bundle_blob>& files, const import_source& source,
 			ds::task_context* task) const;
+		// Runs the child (Windows #1054: confined where the decoder is; if it cannot load or start there, confined from a
+		// copy; if that fails too, unconfined with the editor's own word on its sandbox, or refused under `required`).
+		decode_outcome launch(decode_runner_config config, const decode_request& request, const std::vector<bundle_blob>& files,
+			const import_source& source, std::stop_token stop) const;
+		// The copy of the decoder a container runs from, made once a session; nullopt with `why` extended when it cannot be.
+		std::optional<decoder_copy> copy_of_decoder(const std::filesystem::path& decoder, std::string& why) const;
 
 		res::resource_system& m_resources;
 		decode_runner_config m_config;
 		sandbox_listener m_on_sandbox;
+		mutable std::mutex m_copy_mutex;
+		mutable std::optional<decoder_copy> m_copy;
+		mutable std::string m_copy_error;
 		mutable std::once_flag m_version_once;
 		mutable std::string m_version;
 	};

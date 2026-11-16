@@ -2,6 +2,7 @@
 #include "test_decoder_sandbox.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_decode_runner.h"
+#include "edt_decoder_copy.h"
 #include <chrono>
 #include <filesystem>
 #include <snk/platform/plt_process.h>
@@ -227,7 +228,12 @@ BOOST_AUTO_TEST_CASE(AChildThatCannotHaveTheRequiredSandbox_IsRefused_WithItsRea
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(outcome.sandbox_refused);
 	BOOST_CHECK_MESSAGE(outcome.error.starts_with("the model decoder cannot run in its sandbox: "), outcome.error);
+#if defined(_WIN32)
+	// The runner alone does not confine (process_decoder does, #1054): the child is in no AppContainer.
+	BOOST_CHECK_MESSAGE(outcome.error.find("AppContainer") != std::string::npos, outcome.error);
+#else
 	BOOST_CHECK_MESSAGE(outcome.error.find("Landlock") != std::string::npos, outcome.error);
+#endif
 	BOOST_CHECK(scratch_is_empty());
 }
 
@@ -336,6 +342,73 @@ BOOST_AUTO_TEST_CASE(AChildWithASecondThreadBeforeItsSandbox_RefusesToRun_EvenIn
 	const auto threaded = run_probe(dir.path() / "scratch", { "--sandbox", "best_effort", "--self-test-extra-thread" });
 	BOOST_CHECK_EQUAL(threaded.exit_code, edt::k_decoder_sandbox_exit_code);
 	BOOST_CHECK_MESSAGE(threaded.err.find("threads") != std::string::npos, threaded.err);
+}
+#endif
+
+#if defined(_WIN32)
+namespace {
+
+struct confined_probe_result
+{
+	int exit_code = -1;
+	std::string out;
+	std::string err;
+	std::string error;
+};
+
+// The test build of the decoder, run from a copy (a build folder is not readable by containers) in its AppContainer,
+// policies and job, as process_decoder runs it (#1054).
+confined_probe_result run_confined_probe(const fs::path& base, const fs::path& scratch, std::vector<std::string> arguments)
+{
+	confined_probe_result result;
+	std::string copy_error;
+	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, base, copy_error);
+	if (!copy) {
+		result.error = copy_error;
+		return result;
+	}
+	fs::create_directories(scratch);
+	platform::process_options options;
+	options.working_dir = scratch;
+	options.confinement = platform::process_confinement{ L"snk.model_decoder", { scratch }, { copy->folder } };
+	options.on_stderr_line = [&result](std::string_view line) { result.err += std::string(line) + "\n"; };
+	const auto run = platform::run_process(copy->program, arguments, options,
+		[&result](std::string_view line) { result.out += std::string(line) + "\n"; }, {});
+	result.exit_code = run.exit_code;
+	result.error = run.error;
+	return result;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AConfinedChild_IsInItsAppContainer_AndCannotOpenAFileOutsideItsFolder_ConnectOrStartAProgram)
+{
+	const fs::path base = dir.path() / "copies";
+	const fs::path scratch = dir.path() / "scratch";
+	const fs::path outside = dir.write("outside.txt", "a secret");
+
+	const auto report = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-sandbox-report" });
+	BOOST_REQUIRE_MESSAGE(report.error.empty(), report.error);
+	BOOST_CHECK_EQUAL(report.exit_code, 0);
+	BOOST_CHECK_EQUAL(report.out, "fs=appcontainer syscalls=policy\n");
+
+	const auto opened = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
+	BOOST_CHECK_MESSAGE(opened.exit_code == 0, "open outside: " << opened.exit_code << " " << opened.err << opened.error);
+	const auto connected = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-connect" });
+	BOOST_CHECK_MESSAGE(connected.exit_code == 0, "connect: " << connected.exit_code << " " << connected.err << connected.error);
+	const auto executed = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-exec" });
+	BOOST_CHECK_MESSAGE(executed.exit_code == 0, "exec: " << executed.exit_code << " " << executed.err << executed.error);
+}
+
+BOOST_AUTO_TEST_CASE(AConfinementThatCannotBeSetUp_StartsNothing_AndSaysSo)
+{
+	platform::process_options options;
+	options.confinement = platform::process_confinement{ L"", {}, {} };
+	const auto run = platform::run_process(SNK_MODEL_DECODER_SELFTEST_PATH, { "--self-test-sandbox-report" }, options,
+		[](std::string_view) {}, {});
+	BOOST_CHECK(run.confinement_failed);
+	BOOST_CHECK_MESSAGE(run.error.find("AppContainer") != std::string::npos, run.error);
+	BOOST_CHECK_EQUAL(run.exit_code, -1);
 }
 #endif
 

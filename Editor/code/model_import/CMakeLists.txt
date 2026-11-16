@@ -8,7 +8,7 @@ project(model_import)
 add_library(${PROJECT_NAME} STATIC)
 add_library(snk::model_import ALIAS ${PROJECT_NAME})
 
-set(SE_MODEL_IMPORT_SOURCES edt_decoder_sandbox.cpp edt_decode_bundle.cpp edt_decode_codec.cpp edt_decode_runner.cpp edt_process_decoder.cpp edt_model_file_access.cpp edt_person_model_import.cpp)
+set(SE_MODEL_IMPORT_SOURCES edt_decoder_sandbox.cpp edt_decoder_copy.cpp edt_decode_bundle.cpp edt_decode_codec.cpp edt_decode_runner.cpp edt_process_decoder.cpp edt_model_file_access.cpp edt_person_model_import.cpp)
 if(SNK_WITH_ASSIMP)
 	list(APPEND SE_MODEL_IMPORT_SOURCES edt_filesystem_assimp_io.cpp edt_model_importer.cpp edt_decoded_model_adapter.cpp)
 endif()

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <format>
 #include <iterator>
 #include <map>
@@ -679,8 +680,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 	}
 	config.sandbox = effective_sandbox_mode(m_config.sandbox, source.sandbox);
 	const sandbox_mode mode = config.sandbox;
-	const decode_runner runner(std::move(config));
-	decode_outcome outcome = runner.run(request, *source.preloaded, files, task != nullptr ? task->stop : std::stop_token{});
+	decode_outcome outcome = launch(std::move(config), request, files, source, task != nullptr ? task->stop : std::stop_token{});
 	// Before any check of the answer (#1076): a child that crashed, timed out or answered garbage may have parsed the model
 	// without its sandbox all the same. One that ran without saying how it is sandboxed counts as having none; one that
 	// refused to run, or was cancelled before it said anything, parsed nothing.
@@ -706,6 +706,71 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 			? "the decoder failed (more in the editor log)" : "the decoder's answer cannot be used (more in the editor log)");
 	}
 	return outcome;
+}
+
+edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, const decode_request& request,
+	const std::vector<bundle_blob>& files, const import_source& source, std::stop_token stop) const
+{
+	const auto run_once = [&](const decode_runner_config& with) { return decode_runner(with).run(request, *source.preloaded, files, stop); };
+#if defined(_WIN32)
+	if (config.sandbox == sandbox_mode::off) return run_once(config);
+	config.confine = true;
+	// The container could not be set up, or the child could not load its DLLs where it is (a folder no container reads).
+	const auto failed_where_it_is = [](const decode_outcome& outcome) {
+		return outcome.confinement_failed
+			|| (outcome.started && !outcome.cancelled && !outcome.timed_out && !outcome.sandbox.reported && is_loader_failure(outcome.exit_code));
+	};
+	const auto why_of = [](const decode_outcome& outcome) {
+		return outcome.confinement_failed ? outcome.error
+			: std::format("the decoder did not load in its AppContainer (exit code {:#x})", static_cast<std::uint32_t>(outcome.exit_code));
+	};
+	std::string why;
+	std::optional<decoder_copy> copy;
+	{
+		const std::lock_guard lock(m_copy_mutex);
+		copy = m_copy;
+	}
+	if (!copy) {
+		decode_outcome in_place = run_once(config);
+		if (!failed_where_it_is(in_place)) return in_place;
+		why = why_of(in_place);
+		copy = copy_of_decoder(config.decoder, why);
+	}
+	if (copy) {
+		decode_runner_config copied = config;
+		copied.decoder = copy->program;
+		copied.confine_read_execute = { copy->folder };
+		decode_outcome confined = run_once(copied);
+		if (!failed_where_it_is(confined)) return confined;
+		why = why_of(confined);
+	}
+	if (config.sandbox == sandbox_mode::required) {
+		decode_outcome refused;
+		refused.sandbox_refused = true;
+		refused.error = "the model decoder cannot run in its sandbox: " + why;
+		return refused;
+	}
+	// The editor says so itself: the child's word on a start it did not get proves nothing (#1054).
+	decode_runner_config bare = config;
+	bare.confine = false;
+	decode_outcome unconfined = run_once(bare);
+	if (unconfined.started) unconfined.sandbox = decoder_sandbox_status{ true, false, false, "the decoder could not be started in its AppContainer: " + why };
+	return unconfined;
+#else
+	return run_once(config);
+#endif
+}
+
+std::optional<edt::decoder_copy> edt::process_decoder::copy_of_decoder(const std::filesystem::path& decoder, std::string& why) const
+{
+	const std::lock_guard lock(m_copy_mutex);
+	if (!m_copy && m_copy_error.empty()) {
+		std::string error;
+		m_copy = make_decoder_copy(decoder, decoder_copy_base(), error);
+		if (!m_copy) m_copy_error = error.empty() ? std::string("no copy of the decoder could be made") : error;
+	}
+	if (!m_copy) why += "; " + m_copy_error;
+	return m_copy;
 }
 
 edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds::task_context* task) const

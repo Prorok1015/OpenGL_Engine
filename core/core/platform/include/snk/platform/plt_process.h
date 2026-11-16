@@ -38,6 +38,19 @@ namespace platform
 	// backslashes right before a '"' (or the closing one) are doubled. Pure, so it is tested on every platform.
 	SNK_API std::wstring quote_windows_arg(std::wstring_view arg);
 
+	// Windows (#1054): how a child is confined. An AppContainer with no capabilities (no network, no user profile, no
+	// file a container may not open), a child process policy and process mitigations (no child processes, no dynamic
+	// code, no extension points, no remote or non-System32-first image loads, strict handle checks, no fonts), and a job
+	// of one process without UI access. The container's SID gets read and write on `read_write` and read and execute on
+	// `read_execute` (inherited by what they hold); nothing else of the machine's access lists is changed.
+	struct process_confinement
+	{
+		// The AppContainer's name (a profile is created on first use only if the system needs one); must not be empty.
+		std::wstring container_name;
+		std::vector<std::filesystem::path> read_write;
+		std::vector<std::filesystem::path> read_execute;
+	};
+
 	struct process_options
 	{
 		// Empty: the working directory of this process.
@@ -58,6 +71,9 @@ namespace platform
 		// apply) go here while stdout's still go to `on_line`. The two callbacks never run at the same time; on
 		// Windows this one runs on a helper thread. Null: stderr shares stdout's pipe.
 		std::function<void(std::string_view line)> on_stderr_line;
+		// Windows: start the child confined (#1054). When the confinement cannot be set up, nothing starts and the
+		// result says so (confinement_failed). Ignored elsewhere.
+		std::optional<process_confinement> confinement;
 	};
 
 	struct process_result
@@ -68,6 +84,9 @@ namespace platform
 		bool cancelled = false;
 		// Could not start (or another system failure); exit_code is then -1.
 		std::string error;
+		// With `error`: process_options::confinement could not be set up (no container SID, an access list that could
+		// not be changed, a start the system refused for the container or its policies). Nothing was started.
+		bool confinement_failed = false;
 
 		explicit operator bool() const { return error.empty() && !cancelled && exit_code == 0; }
 	};
