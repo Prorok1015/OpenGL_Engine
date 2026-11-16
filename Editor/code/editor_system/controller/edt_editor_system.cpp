@@ -986,6 +986,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	}
 }
 
+edt::agent_server* edt::editor_system::agent_server_object()
+{
+	return m_agent ? m_agent->server() : nullptr;
+}
+
+edt::agent_access* edt::editor_system::agent_access_object()
+{
+	return m_agent ? m_agent->access() : nullptr;
+}
+
 void edt::editor_system::tick_live_mode()
 {
 	if (m_live) m_live->tick();

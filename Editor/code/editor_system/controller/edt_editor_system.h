@@ -224,9 +224,9 @@ namespace edt {
 		bool draw_migration_notice();
 
 	public:
-		agent_server* agent_server_object() { return m_agent ? m_agent->server() : nullptr; }
+		agent_server* agent_server_object();
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
-		agent_access* agent_access_object() { return m_agent ? m_agent->access() : nullptr; }
+		agent_access* agent_access_object();
 		// The asset database of the open project (#760); null without a project.
 		asset_database* assets();
 
