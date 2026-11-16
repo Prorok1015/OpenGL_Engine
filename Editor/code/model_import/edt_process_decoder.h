@@ -60,8 +60,8 @@ namespace edt {
 	// between 256 MiB and 8 GiB; `warning` says so when the value was changed.
 	std::uint64_t decoder_memory_limit(std::int64_t configured_mb, std::string& warning);
 
-	// The decoder's sandbox mode from cfg `import/decoder_sandbox` (#1043): "best_effort" or "required"; anything else is
-	// best_effort, and `warning` says so. An agent's import is `required` whatever this is (import_source::sandbox).
+	// The decoder's sandbox mode from cfg `import/decoder_sandbox` (#1043), set by a person only: "on" (the default:
+	// best_effort), "off", or "required" (CI); anything else is "on", and `warning` says so.
 	sandbox_mode decoder_sandbox_mode(std::string_view configured, std::string& warning);
 
 	// An agent's model parsed in the decoder process, with the same shape as the in-process importer: one function per

@@ -35,4 +35,9 @@ namespace decoder_sandbox {
 	// "fs=landlock syscalls=seccomp", "fs=none syscalls=none", ...
 	std::string report_line(const status& applied);
 
+	// The line the child writes on stderr as soon as the sandbox is applied, before it reads the request: the editor's
+	// only word on the sandbox, since anything the child says after the parse may come from a model that took it over.
+	// k_decoder_sandbox_status_prefix + report_line + " why=<text>" when something is missing.
+	std::string status_line(const status& applied);
+
 } // namespace decoder_sandbox

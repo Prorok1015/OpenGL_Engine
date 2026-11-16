@@ -7,7 +7,7 @@
 // read for it by its rule (#1043): this process opens no file but its run folder. The out bundle holds a manifest
 // ({"kind":"scan","requests"|"error"} or {"kind":"import",...}) and, for an import, the resources it stored under
 // memory://. Exit codes: 0 an out bundle was written (a refused model is an "error" inside it), 1 no out bundle could
-// be made, 2 usage, 4 it refused to run without its OS sandbox (#1043, `--sandbox best_effort|required`, one line on stderr
+// be made, 2 usage, 4 it refused to run without its OS sandbox (#1043, `--sandbox off|best_effort|required`, one line on stderr
 // says why). Run it with the working directory a scratch folder: memory:// is ./sandbox there, and the sandbox leaves it
 // nothing else to touch.
 // The self-test flags (--self-test-*) exist only in the test build (SNK_MODEL_DECODER_SELF_TEST), never in the shipped tool.
@@ -151,7 +151,12 @@ struct arguments
 	bool self_test_connect = false;
 	bool self_test_exec = false;
 	bool self_test_sandbox_report = false;
+	// Signal the parent, or make the kernel signal it for this process's I/O (fcntl F_SETOWN, F_SETSIG, O_ASYNC,
+	// F_NOTIFY).
+	bool self_test_signal = false;
 	bool self_test_pretend_no_landlock = false;
+	// Start a second thread before the sandbox is applied: the sandbox must refuse to cover only one of them.
+	bool self_test_extra_thread = false;
 #endif
 };
 
@@ -208,8 +213,12 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_exec = true;
 		} else if (arg == "--self-test-sandbox-report") {
 			parsed.self_test_sandbox_report = true;
+		} else if (arg == "--self-test-signal") {
+			parsed.self_test_signal = true;
 		} else if (arg == "--self-test-pretend-no-landlock") {
 			parsed.self_test_pretend_no_landlock = true;
+		} else if (arg == "--self-test-extra-thread") {
+			parsed.self_test_extra_thread = true;
 #endif
 		} else {
 			return std::nullopt;
@@ -217,7 +226,8 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 	}
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
-		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report) {
+		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
+		|| parsed.self_test_signal || parsed.self_test_extra_thread) {
 		return parsed;
 	}
 #endif
@@ -253,16 +263,6 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 	return manifest;
 }
 
-// What the sandbox applied, for the editor's warning when it ran without it (best_effort).
-boost::json::object sandbox_report(const decoder_sandbox::status& applied)
-{
-	boost::json::object report;
-	report["fs"] = applied.fs ? "landlock" : "none";
-	report["syscalls"] = applied.syscalls ? "seccomp" : "none";
-	if (!applied.why.empty()) report["why"] = applied.why;
-	return report;
-}
-
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 // The self-test probes of the sandbox: 0 when the system refused what the probe tried, 5 when it worked, 6 when it failed
 // in a way that says nothing about the sandbox.
@@ -292,6 +292,27 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		const int error = errno;
 		::close(fd);
 		return connected != 0 && refused(error) == 0 ? 0 : 5;
+	}
+	if (args.self_test_signal) {
+		const pid_t parent = ::getppid();
+		const int directory = ::open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		const int flags = ::fcntl(STDOUT_FILENO, F_GETFL);
+		if (directory < 0 || flags < 0) return 6;	// the probe needs these allowed to test anything
+		bool any_worked = false;
+		const auto tried = [&](int result) {
+			if (result == 0) any_worked = true;
+			else if (refused(errno) != 0) any_worked = true;	// an error other than a refusal: not shown refused
+		};
+		// The kernel's signals are aimed at this process and ignored: a run without the sandbox must not signal the test.
+		std::signal(SIGIO, SIG_IGN);
+		std::signal(SIGUSR1, SIG_IGN);
+		tried(::kill(parent, 0));
+		tried(::fcntl(STDOUT_FILENO, F_SETOWN, ::getpid()));
+		tried(::fcntl(STDOUT_FILENO, F_SETSIG, SIGUSR1));
+		tried(::fcntl(STDOUT_FILENO, F_SETFL, flags | O_ASYNC));
+		tried(::fcntl(directory, F_NOTIFY, DN_MODIFY));
+		::close(directory);
+		return any_worked ? 5 : 0;
 	}
 	if (args.self_test_exec) {
 		// A program that exits 5: an exec that worked is seen as such, not as a refusal.
@@ -335,6 +356,9 @@ int main(int argc, char** argv)
 		std::this_thread::sleep_for(std::chrono::milliseconds(args->self_test_sleep_ms));
 		return 0;
 	}
+	if (args->self_test_extra_thread) {
+		std::thread([] { std::this_thread::sleep_for(std::chrono::minutes(2)); }).detach();
+	}
 #endif
 
 	// The sandbox before anything of the request is read (#1043): whatever the model makes the parser do, it does inside it.
@@ -351,8 +375,11 @@ int main(int argc, char** argv)
 		std::fflush(stderr);
 		return edt::k_decoder_sandbox_exit_code;
 	}
+	std::fputs((decoder_sandbox::status_line(sandbox) + "\n").c_str(), stderr);
+	std::fflush(stderr);
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
-	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report) {
+	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
+		|| args->self_test_signal || args->self_test_extra_thread) {
 		return self_test_probe(*args, sandbox);
 	}
 #endif
@@ -483,7 +510,6 @@ int main(int argc, char** argv)
 		out.manifest = failure_manifest(request->mode == edt::decode_request::mode_kind::scan ? "scan" : "import", e.what());
 	}
 
-	out.manifest["sandbox"] = sandbox_report(sandbox);
 	std::string error;
 	if (!edt::write_bundle(args->out, out, error)) {
 		return fail("out: " + error);

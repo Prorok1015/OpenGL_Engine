@@ -454,42 +454,56 @@ BOOST_AUTO_TEST_CASE(AScanThatTheChildReportedAsFailed_ComesBackWithItsError)
 	BOOST_CHECK_EQUAL(cleaned->error.find('\n'), std::string::npos);
 }
 
-// #1043: the child reports what of its sandbox it applied; the editor reads it only as an object of strings.
-BOOST_AUTO_TEST_CASE(AnAnswer_MayCarryTheSandboxReport_ButOnlyAsAnObjectOfStrings)
+// #1043: the child says how it is sandboxed in its first stderr line, before it reads the request; a later line may be
+// the model's, which must not be able to say the sandbox is on.
+BOOST_AUTO_TEST_CASE(OnlyTheChildsFirstStderrLine_SaysHowItIsSandboxed)
 {
-	std::string problem;
-	edt::decode_bundle scan = scan_answer({});
-	scan.manifest["sandbox"] = boost::json::object{ { "fs", "none" }, { "syscalls", "seccomp" }, { "why", "no Landlock" }, { "later", 1 } };
-	BOOST_CHECK_MESSAGE(edt::accept_scan_answer(scan, problem).has_value(), problem);
-	scan.manifest["sandbox"] = "landlock";
-	BOOST_CHECK(!edt::accept_scan_answer(scan, problem).has_value());
-	scan.manifest["sandbox"] = boost::json::object{ { "fs", 1 } };
-	BOOST_CHECK(!edt::accept_scan_answer(scan, problem).has_value());
+	edt::sandbox_status_reader reader;
+	BOOST_CHECK(reader.line("snk-sandbox-status: fs=none syscalls=seccomp why=no Landlock"));
+	BOOST_CHECK(reader.status().reported);
+	BOOST_CHECK(!reader.status().fs);
+	BOOST_CHECK(reader.status().syscalls);
+	BOOST_CHECK_EQUAL(reader.status().why, "no Landlock");
+	BOOST_CHECK(!reader.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(!reader.status().fs);
 
-	const auto request = request_in();
-	edt::decode_bundle imported = import_answer();
-	imported.manifest["sandbox"] = boost::json::object{ { "fs", "landlock" }, { "syscalls", "seccomp" } };
-	BOOST_CHECK_MESSAGE(edt::accept_import_answer(imported, request, problem).has_value(), problem);
-	imported.manifest["sandbox"] = boost::json::object{ { "why", boost::json::array{} } };
-	BOOST_CHECK(!edt::accept_import_answer(imported, request, problem).has_value());
+	edt::sandbox_status_reader full;
+	BOOST_CHECK(full.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(full.status().reported && full.status().fs && full.status().syscalls);
+	BOOST_CHECK(full.status().why.empty());
+
+	edt::sandbox_status_reader late;
+	BOOST_CHECK(!late.line("some parser warning"));
+	BOOST_CHECK(!late.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(!late.status().reported);
+
+	for (const char* garbled : { "snk-sandbox-status: fs=maybe syscalls=seccomp", "snk-sandbox-status: fs=landlock syscalls=seccomp more",
+			 "snk-sandbox-status: fs=landlock" }) {
+		edt::sandbox_status_reader reading;
+		BOOST_CHECK(reading.line(garbled));
+		BOOST_CHECK_MESSAGE(!reading.status().reported, garbled);
+	}
 }
 
-BOOST_AUTO_TEST_CASE(TheSandboxMode_IsTheStricterOfTheEditorsAndTheImports_AndAnUnknownCfgValueIsBestEffort)
+BOOST_AUTO_TEST_CASE(TheSandboxMode_IsThePersonsSetting_RaisedNeverLoweredByTheImport_AndAnUnknownCfgValueIsOn)
 {
 	using edt::sandbox_mode;
-	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::best_effort, sandbox_mode::best_effort) == sandbox_mode::best_effort);
+	// What an import asks for raises the person's setting, never lowers it.
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::best_effort, sandbox_mode::off) == sandbox_mode::best_effort);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::off, sandbox_mode::off) == sandbox_mode::off);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::off, sandbox_mode::required) == sandbox_mode::required);
 	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::best_effort, sandbox_mode::required) == sandbox_mode::required);
-	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::required, sandbox_mode::best_effort) == sandbox_mode::required);
-	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::required, sandbox_mode::required) == sandbox_mode::required);
+	BOOST_CHECK(edt::effective_sandbox_mode(sandbox_mode::required, sandbox_mode::off) == sandbox_mode::required);
 
 	std::string warning;
-	BOOST_CHECK(edt::decoder_sandbox_mode("best_effort", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(edt::decoder_sandbox_mode("on", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(warning.empty());
+	BOOST_CHECK(edt::decoder_sandbox_mode("off", warning) == sandbox_mode::off);
 	BOOST_CHECK(warning.empty());
 	BOOST_CHECK(edt::decoder_sandbox_mode("required", warning) == sandbox_mode::required);
 	BOOST_CHECK(warning.empty());
-	BOOST_CHECK(edt::decoder_sandbox_mode("off", warning) == sandbox_mode::best_effort);
+	BOOST_CHECK(edt::decoder_sandbox_mode("OFF", warning) == sandbox_mode::best_effort);
 	BOOST_CHECK(warning.find("import/decoder_sandbox") != std::string::npos);
-	BOOST_CHECK(edt::decoder_sandbox_mode("REQUIRED", warning) == sandbox_mode::best_effort);
 	BOOST_CHECK(!warning.empty());
 }
 
@@ -1033,13 +1047,40 @@ BOOST_AUTO_TEST_CASE(AnImportThatAsksForTheRequiredSandbox_FailsWithTheReason_Wh
 	}
 }
 
+// #1043: a sandbox the system has that fails to set up (here: a second thread) fails the import even under `on`, and the
+// error says which setting turns the sandbox off.
+BOOST_AUTO_TEST_CASE(ASandboxThatFailsToSetUp_FailsTheImport_AndNamesTheSettingThatTurnsItOff)
+{
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build does not count its threads");
+		return;
+	}
+#if defined(__linux__)
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	auto config = decoder_config();
+	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
+	config.sandbox = edt::sandbox_mode::best_effort;
+	config.extra_arguments = { "--self-test-extra-thread" };
+	const edt::process_decoder decoder(*rs, config);
+	try {
+		decoder.import(source, nullptr);
+		BOOST_FAIL("a decoder whose sandbox failed to set up decoded a model");
+	} catch (const std::runtime_error& e) {
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("threads") != std::string::npos, e.what());
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("import/decoder_sandbox") != std::string::npos, e.what());
+	}
+#endif
+}
+
 // #1043: the real decoder decodes real models inside Landlock and the seccomp filter (the CI test of the allowlist).
 BOOST_AUTO_TEST_CASE(AGltfWithItsBin_AndAnObjWithItsMtl_DecodeInTheRequiredSandbox)
 {
-	if (test_util::landlock_abi() == 0) {
-		BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
-		return;
-	}
+	if (test_util::skipped_without_landlock()) return;
 	test_util::temp_dir dir{ "process_decoder_sandbox" };
 	const std::string gltf = R"json({"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":36}],
 		"bufferViews":[{"buffer":0,"byteLength":36}],

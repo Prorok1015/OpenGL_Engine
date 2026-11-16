@@ -1,4 +1,6 @@
 #pragma once
+#include <boost/test/unit_test.hpp>
+#include <cstdlib>
 #if defined(__linux__)
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -30,6 +32,17 @@ namespace test_util {
 #else
 		return 0;
 #endif
+	}
+
+	// True when the kernel has no Landlock and a sandbox test should stop. On a CI runner (CI set) that is an error, not a
+	// skip: the sandbox tests would pass there while testing nothing.
+	inline bool skipped_without_landlock()
+	{
+		if (landlock_abi() != 0) return false;
+		const char* ci = std::getenv("CI");
+		if (ci != nullptr && *ci != '\0') BOOST_ERROR("the CI runner has no Landlock: the decoder's sandbox is not tested");
+		else BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
+		return true;
 	}
 
 }

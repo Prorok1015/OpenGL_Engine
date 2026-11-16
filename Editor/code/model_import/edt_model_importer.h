@@ -47,9 +47,8 @@ namespace edt {
 		std::string memory_folder;
 		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
 		bool on_disk = true;
-		// The decoder process's OS sandbox (#1043): the editor's configured mode or this, whichever is stricter. An agent's
-		// import asks for `required`.
-		sandbox_mode sandbox = sandbox_mode::best_effort;
+		// The decoder process's OS sandbox (#1043) this import asks for at least; off asks for nothing beyond the setting.
+		sandbox_mode sandbox = sandbox_mode::off;
 	};
 
 	class model_importer {

@@ -1,5 +1,6 @@
 #include "decoder_sandbox.h"
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -220,7 +221,7 @@ constexpr long k_allowed[] = {
 	__NR_rt_sigaction, __NR_rt_sigprocmask, __NR_rt_sigreturn, __NR_sigaltstack, __NR_getrandom, __NR_clock_gettime,
 	__NR_clock_getres, __NR_clock_nanosleep, __NR_nanosleep, __NR_gettimeofday, __NR_restart_syscall, __NR_gettid,
 	__NR_getpid, __NR_getuid, __NR_geteuid, __NR_getgid, __NR_getegid, __NR_sysinfo, __NR_exit, __NR_exit_group,
-	__NR_unlinkat, __NR_renameat2, __NR_mkdirat, __NR_getdents64, __NR_fcntl, __NR_dup, __NR_dup3, __NR_sched_yield,
+	__NR_unlinkat, __NR_renameat2, __NR_mkdirat, __NR_getdents64, __NR_dup, __NR_dup3, __NR_sched_yield,
 	__NR_sched_getaffinity, __NR_set_robust_list, __NR_ftruncate, __NR_fsync, __NR_fdatasync,
 	__NR_getcwd, __NR_readlinkat, __NR_faccessat, __NR_newfstatat, __NR_statx, __NR_epoll_create1, __NR_epoll_ctl,
 	__NR_epoll_pwait, __NR_eventfd2, __NR_timerfd_create, __NR_timerfd_settime, __NR_timerfd_gettime,
@@ -260,6 +261,7 @@ public:
 	void jump_eq(std::uint32_t value, std::uint8_t if_true, std::uint8_t if_false) { add(BPF_JMP | BPF_JEQ | BPF_K, value, if_true, if_false); }
 	void jump_set(std::uint32_t bits, std::uint8_t if_true, std::uint8_t if_false) { add(BPF_JMP | BPF_JSET | BPF_K, bits, if_true, if_false); }
 	void and_with(std::uint32_t mask) { add(BPF_ALU | BPF_AND | BPF_K, mask, 0, 0); }
+	void append(filter_program& block) { m_code.insert(m_code.end(), block.m_code.begin(), block.m_code.end()); }
 
 	std::vector<sock_filter>& code() { return m_code; }
 
@@ -317,6 +319,25 @@ std::vector<sock_filter> filter_code()
 		program.ret(k_ret_eperm);
 	}
 
+	// fcntl can make the kernel signal another process for this descriptor's I/O (F_SETOWN, F_SETSIG, O_ASYNC, F_NOTIFY,
+	// leases): only the commands that touch this process's own descriptors and locks.
+	{
+		filter_program commands;
+		commands.load(argument_low(1));
+		for (const int command : { F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_SETFD, F_GETFL, F_GETLK, F_SETLK, F_SETLKW, F_OFD_GETLK,
+				 F_OFD_SETLK, F_OFD_SETLKW }) {
+			commands.jump_eq(static_cast<std::uint32_t>(command), 0, 1);
+			commands.ret(k_ret_allow);
+		}
+		commands.jump_eq(static_cast<std::uint32_t>(F_SETFL), 0, 3);
+		commands.load(argument_low(2));
+		commands.jump_set(static_cast<std::uint32_t>(O_ASYNC), 1, 0);
+		commands.ret(k_ret_allow);
+		commands.ret(k_ret_eperm);
+		program.jump_eq(syscall_number(__NR_fcntl), 0, static_cast<std::uint8_t>(commands.code().size()));
+		program.append(commands);
+	}
+
 	// prlimit64 of another process of this user would change the editor's own limits: only 0 (this process) or itself.
 	program.jump_eq(syscall_number(__NR_prlimit64), 0, 5);
 	program.load(argument_low(0));
@@ -337,11 +358,37 @@ std::string install_syscall_filter()
 {
 	std::vector<sock_filter> code = filter_code();
 	const sock_fprog program{ static_cast<unsigned short>(code.size()), code.data() };
+	// TSYNC: a thread started before this point (none should be: apply checks) gets the filter too.
+	const long synced = ::syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC, &program);
+	if (synced == 0) return {};
+	if (synced > 0) return "thread " + std::to_string(synced) + " cannot take the seccomp filter";
+	if (errno != ENOSYS) return errno_text("installing the seccomp filter", errno);
 	if (::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program, 0, 0) != 0) return errno_text("installing the seccomp filter", errno);
 	return {};
 }
 
 #endif // SNK_DECODER_SYSCALL_FILTER
+
+#if !defined(SNK_DECODER_SANITIZER_BUILD)
+// Landlock restricts only the thread that calls landlock_restrict_self: a second thread would decode outside it.
+// -1: /proc/self/status cannot be read.
+int thread_count()
+{
+	const int fd = ::open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+	if (fd < 0) return -1;
+	std::string text;
+	char chunk[1024];
+	for (long got = 0; text.size() < 64 * 1024 && (got = ::read(fd, chunk, sizeof(chunk))) > 0;) text.append(chunk, static_cast<std::size_t>(got));
+	::close(fd);
+	constexpr std::string_view key = "\nThreads:";
+	const std::size_t at = text.find(key);
+	if (at == std::string::npos) return -1;
+	std::size_t digit = text.find_first_not_of(" \t", at + key.size());
+	int count = 0;
+	for (; digit < text.size() && text[digit] >= '0' && text[digit] <= '9' && count < 1000000; ++digit) count = count * 10 + (text[digit] - '0');
+	return count > 0 ? count : -1;
+}
+#endif
 
 // Every descriptor but stdin, stdout and stderr: nothing the editor or a library left open reaches the decode.
 void close_inherited_descriptors()
@@ -361,6 +408,7 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 {
 	status result;
 	const bool required = wanted.mode == edt::sandbox_mode::required;
+	constexpr const char* turned_off = "the OS sandbox is turned off (import/decoder_sandbox)";
 #if defined(__linux__)
 	if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
 		result.refusal = errno_text("no_new_privs cannot be set", errno);
@@ -379,6 +427,18 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 		result.refusal = errno_text("RLIMIT_FSIZE cannot be set", errno);
 		return result;
 	}
+	if (wanted.mode == edt::sandbox_mode::off) {
+		result.why = turned_off;
+		return result;
+	}
+	// A sanitizer's runtime may have a thread of its own (TSan's background thread); such a build is never shipped.
+#if !defined(SNK_DECODER_SANITIZER_BUILD)
+	if (const int threads = thread_count(); threads != 1) {
+		result.refusal = threads < 0 ? std::string("the decoder's threads cannot be counted (/proc/self/status)")
+			: "the decoder has " + std::to_string(threads) + " threads before its sandbox, which would cover only one";
+		return result;
+	}
+#endif
 
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	const landlock_probe fs_probe = probe_landlock(wanted.pretend_no_landlock);
@@ -439,6 +499,10 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 #endif
 	if (!no_filter.empty()) result.why += (result.why.empty() ? "" : "; ") + no_filter;
 #else
+	if (wanted.mode == edt::sandbox_mode::off) {
+		result.why = turned_off;
+		return result;
+	}
 	result.why = "this system has no sandbox for the decoder yet (Landlock and seccomp are Linux only)";
 	if (required) result.refusal = result.why;
 #endif
@@ -448,4 +512,11 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 std::string decoder_sandbox::report_line(const status& applied)
 {
 	return std::string("fs=") + (applied.fs ? "landlock" : "none") + " syscalls=" + (applied.syscalls ? "seccomp" : "none");
+}
+
+std::string decoder_sandbox::status_line(const status& applied)
+{
+	std::string line = std::string(edt::k_decoder_sandbox_status_prefix) + report_line(applied);
+	if (!applied.why.empty()) line += " why=" + applied.why;
+	return line;
 }

@@ -29,6 +29,29 @@ namespace edt {
 		std::vector<std::string> extra_arguments;
 	};
 
+	// What the child said of its OS sandbox (#1043) in its first stderr line, written before it read anything of the request:
+	// after the parse the child may be the model's, so nothing it says later counts.
+	struct decoder_sandbox_status
+	{
+		bool reported = false;
+		bool fs = false;		// Landlock restricts the files it can reach
+		bool syscalls = false;	// the seccomp allowlist is installed
+		std::string why;		// what is missing, escaped, at most 256 bytes
+	};
+
+	// Reads the child's stderr lines in their order: only the first may be the status.
+	class sandbox_status_reader
+	{
+	public:
+		// true: the line was the status line (it is not the model's text and needs no log line).
+		bool line(std::string_view text);
+		const decoder_sandbox_status& status() const { return m_status; }
+
+	private:
+		bool m_first = true;
+		decoder_sandbox_status m_status;
+	};
+
 	struct decode_outcome
 	{
 		// Set when the child ended normally and wrote a readable bundle (its manifest may still say "error").
@@ -39,6 +62,7 @@ namespace edt {
 		bool cancelled = false;
 		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
 		bool sandbox_refused = false;
+		decoder_sandbox_status sandbox;
 
 		bool ok() const { return bundle.has_value(); }
 	};

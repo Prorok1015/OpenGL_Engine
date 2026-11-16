@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -128,10 +129,14 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	// The child's own line when it refuses to run without its sandbox: the reason of the failure (its first 256 bytes).
 	std::mutex refusal_mutex;
 	std::string refusal;
-	options.on_stderr_line = [&budget, &refusal_mutex, &refusal](std::string_view line) {
-		if (line.starts_with(k_decoder_sandbox_refusal_prefix)) {
+	sandbox_status_reader sandbox_status;
+	options.on_stderr_line = [&budget, &refusal_mutex, &refusal, &sandbox_status](std::string_view line) {
+		{
 			const std::lock_guard lock(refusal_mutex);
-			if (refusal.empty()) refusal = text_escape::escaped_text(line.substr(k_decoder_sandbox_refusal_prefix.size()), 256);
+			if (sandbox_status.line(line)) return;
+			if (line.starts_with(k_decoder_sandbox_refusal_prefix) && refusal.empty()) {
+				refusal = text_escape::escaped_text(line.substr(k_decoder_sandbox_refusal_prefix.size()), 256);
+			}
 		}
 		if (budget.take(line.size())) egLOG_WARN("edt/decoder", "{}", decode_log_text(line));
 	};
@@ -155,6 +160,10 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	}
 	timer_wake.notify_all();
 	timer.join();
+	{
+		const std::lock_guard lock(refusal_mutex);
+		outcome.sandbox = sandbox_status.status();
+	}
 
 	if (timed_out.load()) {
 		outcome.timed_out = true;
@@ -188,6 +197,28 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	}
 	outcome.bundle = std::move(read.bundle);
 	return outcome;
+}
+
+bool edt::sandbox_status_reader::line(std::string_view text)
+{
+	const bool first = std::exchange(m_first, false);
+	if (!first || !text.starts_with(k_decoder_sandbox_status_prefix)) return false;
+	text.remove_prefix(k_decoder_sandbox_status_prefix.size());
+	const auto take = [&text](std::string_view word) {
+		if (!text.starts_with(word)) return false;
+		text.remove_prefix(word.size());
+		return true;
+	};
+	decoder_sandbox_status read;
+	if (take("fs=landlock")) read.fs = true;
+	else if (!take("fs=none")) return true;
+	if (take(" syscalls=seccomp")) read.syscalls = true;
+	else if (!take(" syscalls=none")) return true;
+	if (take(" why=")) read.why = text_escape::escaped_text(text, 256);
+	else if (!text.empty()) return true;
+	read.reported = true;
+	m_status = std::move(read);
+	return true;
 }
 
 std::size_t edt::decode_runner::remove_stale_folders()

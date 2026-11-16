@@ -77,36 +77,24 @@ const boost::json::string* string_of(const boost::json::object& object, const ch
 	return value != nullptr && value->is_string() ? &value->as_string() : nullptr;
 }
 
-// The child's word on its OS sandbox (#1043) may be missing; when there, it is an object whose known fields are strings.
-bool sandbox_report_readable(const boost::json::object& manifest)
+// A decoder that ran without all of its sandbox: one WARN per editor run. What it says comes from the child's status line,
+// written before it read the request (decoder_sandbox_status), never from its answer.
+void warn_once_without_sandbox(const edt::decoder_sandbox_status& sandbox)
 {
-	const boost::json::value* report = manifest.if_contains("sandbox");
-	if (report == nullptr) return true;
-	if (!report->is_object()) return false;
-	for (const char* key : { "fs", "syscalls", "why" }) {
-		const boost::json::value* field = report->as_object().if_contains(key);
-		if (field != nullptr && !field->is_string()) return false;
-	}
-	return true;
-}
-
-// A decoder that ran without its sandbox (best_effort on a system without Landlock or seccomp): one WARN per editor run.
-void warn_once_without_sandbox(const boost::json::object& manifest)
-{
-	const boost::json::value* report = manifest.if_contains("sandbox");
-	if (report == nullptr || !report->is_object()) return;
-	const boost::json::object& fields = report->as_object();
-	const boost::json::string* fs_kind = string_of(fields, "fs");
-	const boost::json::string* syscalls = string_of(fields, "syscalls");
-	const bool without_fs = fs_kind != nullptr && *fs_kind == "none";
-	const bool without_syscalls = syscalls != nullptr && *syscalls == "none";
-	if (!without_fs && !without_syscalls) return;
+	if (sandbox.reported && sandbox.fs && sandbox.syscalls) return;
 	static std::once_flag once;
 	std::call_once(once, [&] {
-		const boost::json::string* why = string_of(fields, "why");
-		const std::string reason = why != nullptr && !why->empty() ? text_escape::escaped_text(std::string_view(why->data(), why->size()), 256)
-			: std::format("file system {}, system calls {}", without_fs ? "open" : "restricted", without_syscalls ? "open" : "restricted");
-		egLOG_WARN("edt/decoder", "the model decoder runs without the OS sandbox: {}", reason);
+		if (!sandbox.reported) {
+			egLOG_WARN("edt/decoder", "the model decoder did not say whether it runs in its OS sandbox");
+			return;
+		}
+		const std::string why = sandbox.why.empty() ? std::string() : " (" + sandbox.why + ")";
+		if (!sandbox.fs) {
+			// seccomp alone leaves open and write allowed: without Landlock the files are not protected at all.
+			egLOG_WARN("edt/decoder", "the model decoder runs without its OS sandbox: it can read and write every file this user can{}", why);
+		} else {
+			egLOG_WARN("edt/decoder", "the model decoder runs without its system call filter{}", why);
+		}
 	});
 }
 
@@ -220,10 +208,6 @@ std::optional<edt::scan_requests> edt::accept_scan_answer(const decode_bundle& b
 	const boost::json::string* kind = string_of(manifest, "kind");
 	if (kind == nullptr || *kind != "scan") {
 		problem = "the answer is not the answer to a scan";
-		return std::nullopt;
-	}
-	if (!sandbox_report_readable(manifest)) {
-		problem = "the answer's report on the sandbox cannot be read";
 		return std::nullopt;
 	}
 	if (!bundle.blobs.empty()) {
@@ -451,10 +435,6 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		problem = "the answer is not the answer to an import";
 		return std::nullopt;
 	}
-	if (!sandbox_report_readable(manifest)) {
-		problem = "the answer's report on the sandbox cannot be read";
-		return std::nullopt;
-	}
 	if (const boost::json::string* error = string_of(manifest, "error")) {
 		if (!bundle.blobs.empty()) {
 			problem = "a failed import came with resources";
@@ -595,9 +575,9 @@ std::uint64_t edt::decoder_memory_limit(std::int64_t configured_mb, std::string&
 edt::sandbox_mode edt::decoder_sandbox_mode(std::string_view configured, std::string& warning)
 {
 	warning.clear();
+	if (configured == "on") return sandbox_mode::best_effort;
 	if (const std::optional<sandbox_mode> mode = sandbox_mode_from_name(configured)) return *mode;
-	warning = std::format("import/decoder_sandbox '{}' is neither best_effort nor required, best_effort is used",
-		text_escape::escaped_text(configured, 64));
+	warning = std::format("import/decoder_sandbox '{}' is none of on, off, required: on is used", text_escape::escaped_text(configured, 64));
 	return sandbox_mode::best_effort;
 }
 
@@ -708,11 +688,15 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 		config.timeout = std::min(left, m_config.timeout);
 	}
 	config.sandbox = effective_sandbox_mode(m_config.sandbox, source.sandbox);
+	const sandbox_mode mode = config.sandbox;
 	const decode_runner runner(std::move(config));
 	decode_outcome outcome = runner.run(request, *source.preloaded, files, task != nullptr ? task->stop : std::stop_token{});
 	if (outcome.cancelled) throw ds::task_cancelled{};
 	if (outcome.timed_out) throw std::runtime_error("the model took too long to decode");
 	if (outcome.sandbox_refused) {
+		// Outside `required` the child refuses only when a sandbox the system has failed to set up: a defect, so the person
+		// is told how to go on without it.
+		if (mode != sandbox_mode::required) outcome.error += "; the sandbox can be turned off in the setting import/decoder_sandbox";
 		egLOG_WARN("edt/decoder", "{}", outcome.error);
 		throw std::runtime_error(outcome.error);
 	}
@@ -721,7 +705,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 		throw std::runtime_error(outcome.error.starts_with("the decoder failed") || outcome.error.starts_with("the decoder could not run")
 			? "the decoder failed (more in the editor log)" : "the decoder's answer cannot be used (more in the editor log)");
 	}
-	warn_once_without_sandbox(outcome.bundle->manifest);
+	warn_once_without_sandbox(outcome.sandbox);
 	return outcome;
 }
 

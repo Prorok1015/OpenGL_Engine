@@ -260,11 +260,8 @@ probe_result run_probe(const fs::path& scratch, std::vector<std::string> argumen
 
 BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotOpenAFileOutsideItsFolder_ConnectOrStartAProgram)
 {
+	if (test_util::skipped_without_landlock()) return;
 	const int abi = test_util::landlock_abi();
-	if (abi == 0) {
-		BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
-		return;
-	}
 	const fs::path scratch = dir.path() / "scratch";
 	const fs::path outside = dir.write("outside.txt", "a secret");
 	const fs::path inside = dir.write("scratch/inside.txt", "the child's own");
@@ -286,10 +283,7 @@ BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotOpenAFileOutsideItsFolder_ConnectOrSt
 
 BOOST_AUTO_TEST_CASE(TheSandboxReport_UnderRequired_SaysLandlock_AndSeccompOutsideSanitizerBuilds)
 {
-	if (test_util::landlock_abi() == 0) {
-		BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
-		return;
-	}
+	if (test_util::skipped_without_landlock()) return;
 	const auto report = run_probe(dir.path() / "scratch", { "--sandbox", "required", "--self-test-sandbox-report" });
 	BOOST_REQUIRE_MESSAGE(report.exit_code == 0, report.exit_code << " " << report.err);
 	const std::string expected = test_util::k_decoder_has_syscall_filter ? "fs=landlock syscalls=seccomp\n" : "fs=landlock syscalls=none\n";
@@ -308,7 +302,56 @@ BOOST_AUTO_TEST_CASE(WithoutLandlock_RequiredRefusesToRun_AndBestEffortRunsWitho
 	BOOST_CHECK_EQUAL(best_effort.exit_code, 0);
 	BOOST_CHECK_MESSAGE(best_effort.out.starts_with("fs=none "), best_effort.out);
 }
+
+BOOST_AUTO_TEST_CASE(ASandboxThePersonTurnedOff_IsNotSetUp_EvenWhereTheSystemHasOne)
+{
+	const fs::path scratch = dir.path() / "scratch";
+	const auto off = run_probe(scratch, { "--sandbox", "off", "--self-test-sandbox-report" });
+	BOOST_CHECK_EQUAL(off.exit_code, 0);
+	BOOST_CHECK_EQUAL(off.out, "fs=none syscalls=none\n");
+}
+
+// Fable's review of #1078: fcntl could make the kernel signal the editor (F_SETOWN + O_ASYNC, F_SETSIG, F_NOTIFY).
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotSignalTheEditor_NorMakeTheKernelDoItForIt)
+{
+	const fs::path scratch = dir.path() / "scratch";
+	// The probe works: without the sandbox each of these goes through.
+	const auto unsandboxed = run_probe(scratch, { "--sandbox", "off", "--self-test-signal" });
+	BOOST_CHECK_MESSAGE(unsandboxed.exit_code == 5, "off: " << unsandboxed.exit_code << " " << unsandboxed.err);
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build has no system call filter");
+		return;
+	}
+	const auto sandboxed = run_probe(scratch, { "--sandbox", "best_effort", "--self-test-signal" });
+	BOOST_CHECK_MESSAGE(sandboxed.exit_code == 0, "best_effort: " << sandboxed.exit_code << " " << sandboxed.err);
+}
+
+// Landlock covers only the thread that applies it: a decoder with a second thread before its sandbox must not run.
+BOOST_AUTO_TEST_CASE(AChildWithASecondThreadBeforeItsSandbox_RefusesToRun_EvenInBestEffort)
+{
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build may have a thread of its runtime and does not count them");
+		return;
+	}
+	const auto threaded = run_probe(dir.path() / "scratch", { "--sandbox", "best_effort", "--self-test-extra-thread" });
+	BOOST_CHECK_EQUAL(threaded.exit_code, edt::k_decoder_sandbox_exit_code);
+	BOOST_CHECK_MESSAGE(threaded.err.find("threads") != std::string::npos, threaded.err);
+}
 #endif
+
+// The editor learns how the child is sandboxed from its first stderr line, written before it read the request.
+BOOST_AUTO_TEST_CASE(TheRunner_TakesTheSandboxStatus_FromTheChildsFirstLine)
+{
+	auto cfg = selftest_config();
+	cfg.sandbox = edt::sandbox_mode::best_effort;
+	cfg.extra_arguments = { "--self-test-pretend-no-landlock" };
+	const edt::decode_runner runner(cfg);
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+	BOOST_REQUIRE_MESSAGE(outcome.ok(), outcome.error);
+	BOOST_CHECK(outcome.sandbox.reported);
+	BOOST_CHECK(!outcome.sandbox.fs);
+	BOOST_CHECK_MESSAGE(!outcome.sandbox.why.empty(), outcome.sandbox.why);
+}
 
 BOOST_AUTO_TEST_CASE(AMissingDecoder_IsAFailure_NotACrash)
 {

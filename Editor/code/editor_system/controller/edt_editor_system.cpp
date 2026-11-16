@@ -224,9 +224,9 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
 	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
-	// The decoder's OS sandbox (#1043) for a person's import and a level's model: best_effort (run without it where the
-	// system has none, with one WARN) or required (refuse to decode). An agent's import is always required.
-	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "best_effort");
+	// The decoder's OS sandbox (#1043) for every import, a person's setting: on (run without it where the system has
+	// none, with one WARN), off, or required (CI: refuse to decode without it). An agent's import never changes it.
+	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "on");
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run

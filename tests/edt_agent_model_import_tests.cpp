@@ -167,8 +167,8 @@ struct import_fixture : test_util::scene_env
 	int imports = 0;
 	int scans = 0;
 	bool deadline_was_set = false;
-	edt::sandbox_mode scan_sandbox = edt::sandbox_mode::best_effort;
-	edt::sandbox_mode import_sandbox = edt::sandbox_mode::best_effort;
+	edt::sandbox_mode scan_sandbox = edt::sandbox_mode::required;
+	edt::sandbox_mode import_sandbox = edt::sandbox_mode::required;
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
 	bool scan_leaves_unhashed = false;
@@ -391,22 +391,16 @@ BOOST_AUTO_TEST_CASE(ASelfContainedModel_NeedsOnePrompt)
 }
 
 // #1043: an agent's model is scanned and imported only by a decoder in its OS sandbox, whatever the editor's cfg says.
-BOOST_AUTO_TEST_CASE(AnAgentsModel_AsksForTheRequiredSandbox_ToScanAndToImport_WhereThereIsOne)
+BOOST_AUTO_TEST_CASE(AnAgentsImport_AsksForNoSandboxOfItsOwn_ThePersonsSettingDecides)
 {
+	// Only a person sets the decoder's isolation (import/decoder_sandbox); an agent's import neither raises nor lowers it.
 	const auto started = approved_start(request("hero", "models"), agent);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	finished(started.job);
 	BOOST_REQUIRE_EQUAL(scans, 1);
 	BOOST_REQUIRE_EQUAL(imports, 1);
-#if defined(__linux__)
-	const edt::sandbox_mode expected = edt::sandbox_mode::required;
-#else
-	// Until the Windows sandbox (#1054): best_effort with the visible warning (#1076).
-	const edt::sandbox_mode expected = edt::sandbox_mode::best_effort;
-#endif
-	BOOST_CHECK(scan_sandbox == expected);
-	BOOST_CHECK(import_sandbox == expected);
-	BOOST_CHECK(edt::k_agent_sandbox_mode == expected);
+	BOOST_CHECK(scan_sandbox == edt::sandbox_mode::off);
+	BOOST_CHECK(import_sandbox == edt::sandbox_mode::off);
 }
 
 BOOST_AUTO_TEST_CASE(AModelWithFiles_EndsTheFirstJobWithTheirListAndWritesNothing)
