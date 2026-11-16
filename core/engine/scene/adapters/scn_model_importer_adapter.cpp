@@ -22,11 +22,127 @@
 #include <glm/gtx/euler_angles.hpp>
 
 #include <snk/common/ds/ds_svg_writer.hpp>
+#include <algorithm>
+#include <atomic>
+#include <list>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys);
+namespace {
+
+struct written_file
+{
+	res::tag tag;
+	std::vector<std::byte> bytes;
+	// The import writes it only where it is not there yet: a file the caller has stays as it is.
+	bool only_if_absent = false;
+};
+
+// What an import writes to memory://, kept so that the same bytes can be written again without running assimp (#977).
+class import_sink
+{
+public:
+	import_sink(res::resource_system& resources, bool record) : m_resources(resources), m_record(record) {}
+
+	// A file already there before this import is not written by it: such an import is not remembered, as writing what it
+	// wrote again into another resource system would leave that file out.
+	bool exists(const res::tag& tag)
+	{
+		if (!m_record) return m_resources.exists(tag);
+		m_checked.push_back(tag);
+		const auto same = [&tag](const written_file& file) { return file.tag == tag; };
+		if (std::find_if(m_files.begin(), m_files.end(), same) != m_files.end()) return true;
+		const bool found = m_resources.exists(tag);
+		m_found_before = m_found_before || found;
+		return found;
+	}
+
+	void store(const res::tag& tag, const std::vector<std::byte>& bytes)
+	{
+		m_resources.store(tag, bytes);
+		if (!m_record) return;
+		const bool checked = std::find(m_checked.begin(), m_checked.end(), tag) != m_checked.end();
+		m_files.push_back({ tag, bytes, checked });
+	}
+
+	bool recording() const { return m_record; }
+	bool found_before() const { return m_found_before; }
+	std::vector<written_file>& files() { return m_files; }
+
+private:
+	res::resource_system& m_resources;
+	const bool m_record;
+	std::vector<written_file> m_files;
+	std::vector<res::tag> m_checked;
+	bool m_found_before = false;
+};
+
+struct remembered_import
+{
+	std::vector<std::byte> model;
+	std::vector<written_file> files;
+	// Not stamped: the desc system that asks stamps it (another one can have other versions).
+	json::object prefab;
+
+	std::size_t bytes() const
+	{
+		std::size_t total = model.size();
+		for (const auto& file : files) total += file.bytes.size();
+		return total;
+	}
+};
+
+// Each unit test builds its own engine and imports the same models again: the memory is the tests' (#977).
+// Counts the model and the files only, not the prefab JSON, so the memory held is somewhat more.
+constexpr std::size_t k_remembered_bytes = 256u * 1024u * 1024u;
+
+std::mutex g_imports_mutex;
+// The most recently used first. Only immutable copies: a hit writes them into the resource system that asks.
+std::list<std::pair<res::tag, std::shared_ptr<const remembered_import>>> g_imports;
+std::size_t g_imports_bytes = 0;
+std::atomic<std::size_t> g_assimp_runs{ 0 };
+std::atomic<bool> g_remember_imports{ false };
+
+auto find_import(const res::tag& tag)
+{
+	return std::find_if(g_imports.begin(), g_imports.end(), [&tag](const auto& entry) { return entry.first == tag; });
+}
+
+std::shared_ptr<const remembered_import> remembered(const res::tag& tag, const std::vector<std::byte>& model)
+{
+	if (!g_remember_imports.load()) return nullptr;
+	const std::lock_guard guard(g_imports_mutex);
+	const auto found = find_import(tag);
+	if (found == g_imports.end() || found->second->model != model) return nullptr;
+	g_imports.splice(g_imports.begin(), g_imports, found);
+	return found->second;
+}
+
+void remember(const res::tag& tag, std::shared_ptr<const remembered_import> import)
+{
+	const std::lock_guard guard(g_imports_mutex);
+	// Under the mutex: remember_model_imports(false) may have run since the import began.
+	if (!g_remember_imports.load()) return;
+	if (const auto old = find_import(tag); old != g_imports.end()) {
+		g_imports_bytes -= old->second->bytes();
+		g_imports.erase(old);
+	}
+	const std::size_t bytes = import->bytes();
+	if (bytes > k_remembered_bytes) return;
+	g_imports_bytes += bytes;
+	g_imports.emplace_front(tag, std::move(import));
+	while (g_imports_bytes > k_remembered_bytes) {
+		g_imports_bytes -= g_imports.back().second->bytes();
+		g_imports.pop_back();
+	}
+}
+
+}
+
+void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, import_sink& res_sys);
 
 namespace {
 	glm::quat convert_to_glm(const aiQuaternion& vector) {
@@ -82,36 +198,68 @@ namespace {
 #define TXM_LOG(type) log_material_texture(scene, material, type, #type)
 }
 
+void scn::remember_model_imports(bool on)
+{
+	const std::lock_guard guard(g_imports_mutex);
+	g_remember_imports = on;
+	if (!on) {
+		g_imports.clear();
+		g_imports_bytes = 0;
+	}
+}
+
+std::size_t scn::model_importer_runs()
+{
+	return g_assimp_runs.load();
+}
+
 std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
 	PROFILE_SCOPE("LoadModel.Assimp");
-    // read file via ASSIMP
-    Assimp::Importer importer;
-	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(m_res_sys, tag, data));
-	const aiScene* scene = importer.ReadFile(std::string{ tag.view() }, flags);
-    // check for errors
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
-    {
-        throw std::runtime_error("model '" + std::string{ tag.view() } + "': " + importer.GetErrorString());
-    }
+	const res::tag actual_tag{ std::format("memory://{0}{1}.desc", tag.path(), tag.pure_name()) };
+	json::object prefab;
+	if (const std::shared_ptr<const remembered_import> import = remembered(tag, data)) {
+		for (const written_file& file : import->files) {
+			if (file.only_if_absent && m_res_sys.exists(file.tag)) continue;
+			m_res_sys.store(file.tag, file.bytes);
+		}
+		prefab = import->prefab;
+	}
+	else {
+		Assimp::Importer importer;
+		constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
+		auto* io = new engine_assimp_resource_system_wrapper(m_res_sys, tag, data);
+		importer.SetIOHandler(io);
+		const aiScene* scene = importer.ReadFile(std::string{ tag.view() }, flags);
+		++g_assimp_runs;
+		if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+			throw std::runtime_error("model '" + std::string{ tag.view() } + "': " + importer.GetErrorString());
+		}
 
-	std::string path = std::format("memory://{0}{1}.desc", tag.path(), tag.pure_name());
-	res::tag actual_tag = res::tag{ path };
-    json::object jsdata;
-	jsdata["__type"] = "prefab_desc";
-	process_model(scene, jsdata, tag, actual_tag, m_res_sys);
-	desc_system.stamp_tree(jsdata);
+		prefab["__type"] = "prefab_desc";
+		import_sink sink(m_res_sys, g_remember_imports.load());
+		process_model(scene, prefab, tag, actual_tag, sink);
+		// Side files can change while the model's bytes stay the same.
+		if (sink.recording() && !sink.found_before() && !io->read_other_files()) {
+			auto made = std::make_shared<remembered_import>();
+			made->model = data;
+			made->files = std::move(sink.files());
+			made->prefab = prefab;
+			remember(tag, std::move(made));
+		}
+	}
 
+	desc_system.stamp_tree(prefab);
 	auto instance = desc_system.create_instance("prefab_desc", actual_tag);
-	instance->deserialize(desc_system, jsdata);
-	m_res_sys.store(actual_tag, desc_system.serialize_to_bytes(jsdata));
+	instance->deserialize(desc_system, prefab);
+	m_res_sys.store(actual_tag, desc_system.serialize_to_bytes(prefab));
 	m_res_sys.register_alias(tag, actual_tag);
 
 	return instance;
 }
 
-json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag, res::resource_system& res_sys) {
+json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag,
+	import_sink& res_sys) {
 	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++)
 	{
 		aiString str;
@@ -198,7 +346,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 	return {};
 }
 
-json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag, res::resource_system& res_sys)
+json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag, import_sink& res_sys)
 {
 	TXM_LOG(aiTextureType_DIFFUSE);
 	TXM_LOG(aiTextureType_SPECULAR);
@@ -409,7 +557,7 @@ json::object build_prefab_node(
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	res::tag tag,
 	res::tag prefab_tag,
-	res::resource_system& res_sys,
+	import_sink& res_sys,
 	const std::string& node_path,
 	std::string_view node_key = {})
 {
@@ -518,7 +666,7 @@ json::object build_prefab_node(
 	return jsnode;
 }
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys)
+void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, import_sink& res_sys)
 {
 	// 1. Setup geometry layout from first mesh
 	rnd::geometry_desc geometry;

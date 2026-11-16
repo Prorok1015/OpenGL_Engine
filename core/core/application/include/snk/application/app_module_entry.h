@@ -150,6 +150,9 @@ namespace app::modules {
 		std::uint32_t (*editor_api_version)() = nullptr;
 		// snk_module_layout_key (3.6, #614); null for a module built for 3.5 or older.
 		std::uint64_t (*layout_key)() = nullptr;
+		// Only an editor module (editor API 3.0, #969): snk_editor_layout_key, the key of the editor types' layouts it was
+		// built against (edt::editor_layout_key); the editor's check refuses a module without it.
+		std::uint64_t (*editor_layout_key)() = nullptr;
 	};
 
 	// Empty when a module built by `module_compiler` (snk_module_build_info::compiler) can run in a host built by
@@ -259,7 +262,7 @@ namespace app::modules {
 // The module_entry of the functions SNK_DECLARE_MODULE_PREFIXED(prefix, ...) defines.
 #define SNK_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module, nullptr, &prefix##module_layout_key }
+		&prefix##destroy_module, nullptr, &prefix##module_layout_key, nullptr }
 
 // The game module compiled into a static host (snk_add_game_host, #592): the host gets its entry from here, not from a
 // library it opens. Defined by SNK_DECLARE_MODULE when the module is built with SNK_GAME_MODULE_STATIC.

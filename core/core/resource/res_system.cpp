@@ -503,10 +503,25 @@ void res::resource_system::deliver_held() {
   }
 }
 
-void res::resource_system::add_mount(mount added) {
+bool res::resource_system::add_mount(mount added) {
   ASSERT_MSG(!m_parent, "A resource layer uses the mounts of its root");
+  {
+    std::shared_lock lock(m_registry_mutex);
+    if (m_resolvers.contains(added.protocol)) {
+      egLOG_ERROR("resource/system", "add_mount: {}:// is already served; remount changes the roots of a mount",
+                  added.protocol);
+      return false;
+    }
+  }
   register_mount(added);
-  m_mounts.push_back(std::move(added));
+  // A mount whose resolver was unregistered keeps its record; mount_roots reads the first one, so it is replaced.
+  const auto stale = std::ranges::find_if(m_mounts, [&added](const mount &m) { return m.protocol == added.protocol; });
+  if (stale != m_mounts.end()) {
+    *stale = std::move(added);
+  } else {
+    m_mounts.push_back(std::move(added));
+  }
+  return true;
 }
 
 bool res::resource_system::remount(std::string_view protocol, std::vector<std::filesystem::path> roots) {
@@ -2632,6 +2647,15 @@ res::tag res::resource_system::engine_file(std::string_view relative) const
 	ASSERT_MSG(is_engine_relative(relative), "engine_file('{}'): a path below the engine's root, without a protocol, a leading '/' or '..'", relative);
 	const bool engine_mounted = static_cast<bool>(root().resolver_for(tag::engine));
 	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
+}
+
+std::optional<res::disk_file> res::resource_system::disk_file_holding(const tag& tag,
+	const std::vector<std::byte>& bytes, std::string& differs) const
+{
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->disk_file_holding(tag, bytes, differs);
 }
 
 bool res::resource_system::exists(const tag& tag) const

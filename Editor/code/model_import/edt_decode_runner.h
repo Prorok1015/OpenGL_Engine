@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
+#include "edt_decoder_sandbox.h"
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -21,8 +22,24 @@ namespace edt {
 		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
 		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
 		bundle_limits answer_limits;
+		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
+		// import's.
+		sandbox_mode sandbox = sandbox_mode::best_effort;
 		// Appended to the child's command line; the process tests use snk_model_decoder's --self-test-* flags.
 		std::vector<std::string> extra_arguments;
+	};
+
+	// Reads the child's stderr lines in their order: only the first may be the status.
+	class sandbox_status_reader
+	{
+	public:
+		// true: the line was the status line (it is not the model's text and needs no log line).
+		bool line(std::string_view text);
+		const decoder_sandbox_status& status() const { return m_status; }
+
+	private:
+		bool m_first = true;
+		decoder_sandbox_status m_status;
 	};
 
 	struct decode_outcome
@@ -33,6 +50,11 @@ namespace edt {
 		std::string error;
 		bool timed_out = false;
 		bool cancelled = false;
+		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
+		bool sandbox_refused = false;
+		// The child process was started (it may still have failed, been killed or answered nothing usable).
+		bool started = false;
+		decoder_sandbox_status sandbox;
 
 		bool ok() const { return bundle.has_value(); }
 	};
@@ -59,15 +81,16 @@ namespace edt {
 		bool m_done = false;
 	};
 
-	// Runs the decoder process (#647) for one request. The model's bytes go in the request bundle; the child gets a
-	// clean environment and a scratch folder as its working directory, which is deleted on every path, a kill included.
-	// Blocks: call it from a worker thread.
+	// Runs the decoder process (#647) for one request. The model's bytes and `files` (the side files the editor read for
+	// it, #1043) go in the request bundle; the child gets a clean environment and a scratch folder as its working
+	// directory, which is deleted on every path, a kill included. Blocks: call it from a worker thread.
 	class decode_runner
 	{
 	public:
 		explicit decode_runner(decode_runner_config config);
 
-		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const;
+		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, const std::vector<bundle_blob>& files,
+			std::stop_token stop) const;
 
 		// Deletes the run folders of decoders whose editor process no longer runs (an editor that crashed mid-import):
 		// core::res::remove_stale_scratch_dirs, with its rules (only a private directory of this user, never a link).

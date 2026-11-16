@@ -29,7 +29,11 @@ namespace scn
         virtual Assimp::IOStream* Open(const char* pFile, const char* pMode) override;
 
         virtual void Close(Assimp::IOStream* pFile) override { delete pFile; }
+
+        // Whether the model asked for any file besides its own bytes (#977): such an import is not remembered.
+        bool read_other_files() const { return m_read_other_files; }
     private:
+        bool m_read_other_files = false;
         res::tag source_tag;
 		const std::vector<std::byte>& data;
 		std::unordered_map<res::tag, core::res::res_resolver_interface::async_raw_data> data_map;

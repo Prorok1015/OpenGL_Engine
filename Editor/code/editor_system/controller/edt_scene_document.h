@@ -3,7 +3,7 @@
 #include "edt_scene_history.h"
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_document.h>
-#include <snk/editor/edt_document_history.h>
+#include "edt_document_history.h"
 #include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <cstdint>

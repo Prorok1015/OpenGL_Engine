@@ -71,13 +71,16 @@ struct import_fixture : test_util::scene_env
 		result.scan = [this](const edt::import_source& source, ds::task_context*) {
 			++scans;
 			deadline_was_set = source.deadline != std::chrono::steady_clock::time_point{};
+			scan_sandbox = source.sandbox;
 			edt::model_file_scan scan;
 			scan.error = scan_error;
 			scan.files = listed_files;
 			for (auto& file : scan.files) file.hashed = !scan_leaves_unhashed;
 			for (const auto& file : listed_files) scan.total_bytes += file.size;
+			scan.sandbox = scan_reports;
 			return scan;
 		};
+		result.sandbox_status = [this] { return expected_sandbox; };
 		result.resource_layers = [this] { return std::vector<fs::path>{ res_root }; };
 		result.resources_path = [this] { return res_root; };
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
@@ -91,6 +94,7 @@ struct import_fixture : test_util::scene_env
 	{
 		const fs::path& model = source.path;
 		++imports;
+		import_sandbox = source.sandbox;
 		if (source.allowed) seen_allowed = *source.allowed;
 		if (source.preloaded) seen_bytes.assign(reinterpret_cast<const char*>(source.preloaded->data()), source.preloaded->size());
 		if (during_import) during_import();
@@ -112,6 +116,7 @@ struct import_fixture : test_util::scene_env
 		imported.geom_tag = geometry;
 		imported.prefab_tag = prefab;
 		imported.source_path = model;
+		imported.sandbox = import_reports;
 		return imported;
 	}
 
@@ -165,6 +170,8 @@ struct import_fixture : test_util::scene_env
 	int imports = 0;
 	int scans = 0;
 	bool deadline_was_set = false;
+	edt::sandbox_mode scan_sandbox = edt::sandbox_mode::required;
+	edt::sandbox_mode import_sandbox = edt::sandbox_mode::required;
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
 	bool scan_leaves_unhashed = false;
@@ -172,7 +179,21 @@ struct import_fixture : test_util::scene_env
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
+	// What the fake decoder says of its OS sandbox (#1076), and what the editor expects before a run.
+	edt::decoder_sandbox_status scan_reports{};
+	edt::decoder_sandbox_status import_reports{};
+	edt::decoder_sandbox_status expected_sandbox{};
 };
+
+edt::decoder_sandbox_status sandbox_report(bool fs, std::string why)
+{
+	edt::decoder_sandbox_status reported;
+	reported.reported = true;
+	reported.fs = fs;
+	reported.syscalls = true;
+	reported.why = std::move(why);
+	return reported;
+}
 
 }
 
@@ -384,6 +405,77 @@ BOOST_AUTO_TEST_CASE(ASelfContainedModel_NeedsOnePrompt)
 	BOOST_CHECK_EQUAL(scans, 1);
 	BOOST_CHECK_EQUAL(imports, 1);
 	BOOST_CHECK(deadline_was_set);
+}
+
+// #1043: an agent's model is scanned and imported only by a decoder in its OS sandbox, whatever the editor's cfg says.
+BOOST_AUTO_TEST_CASE(AnAgentsImport_AsksForNoSandboxOfItsOwn_ThePersonsSettingDecides)
+{
+	// Only a person sets the decoder's isolation (import/decoder_sandbox); an agent's import neither raises nor lowers it.
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_REQUIRE_EQUAL(scans, 1);
+	BOOST_REQUIRE_EQUAL(imports, 1);
+	BOOST_CHECK(scan_sandbox == edt::sandbox_mode::off);
+	BOOST_CHECK(import_sandbox == edt::sandbox_mode::off);
+}
+
+// #1076: an agent's question says when the decoder runs without OS isolation, before it ran (the editor's expectation)
+// and after its scan (what the decoder said); a whole sandbox adds nothing.
+BOOST_AUTO_TEST_CASE(BothQuestions_SayWhenTheDecoderRunsWithoutOSIsolation)
+{
+	const std::optional<std::string> whole = service->describe(request("hero", "models"), agent);
+	BOOST_REQUIRE(whole.has_value());
+	BOOST_CHECK(whole->find("isolation") == std::string::npos);
+
+	expected_sandbox = sandbox_report(false, "the kernel has no usable Landlock");
+	const std::optional<std::string> first = service->describe(request("hero", "models"), agent);
+	BOOST_REQUIRE(first.has_value());
+	BOOST_CHECK_MESSAGE(first->find("without OS isolation (the kernel has no usable Landlock)") != std::string::npos, *first);
+	BOOST_CHECK_MESSAGE(first->find("every file") != std::string::npos, *first);
+
+	expected_sandbox = {};
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	scan_reports = sandbox_report(false, "the OS sandbox is turned off (import/decoder_sandbox)");
+	const json::object parked = finished(service->start(request("hero", "models"), agent, true).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(parked.at("files_token").as_string());
+	const std::optional<std::string> text = service->describe(second, agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK_MESSAGE(text->find("without OS isolation (the OS sandbox is turned off") != std::string::npos, *text);
+}
+
+// #1076: what the decoder said of its sandbox goes back to the agent with the job's result, never hidden.
+BOOST_AUTO_TEST_CASE(TheJobsResult_CarriesWhatTheDecoderSaidOfItsSandbox)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	scan_reports = sandbox_report(false, "the kernel has no usable Landlock");
+	const json::object parked = finished(approved_start(request("hero", "models"), agent).job);
+	BOOST_REQUIRE(parked.contains("decoder_sandbox"));
+	const json::object& listed = parked.at("decoder_sandbox").as_object();
+	BOOST_CHECK_EQUAL(std::string(listed.at("fs").as_string()), "none");
+	BOOST_CHECK_EQUAL(std::string(listed.at("syscalls").as_string()), "seccomp");
+	BOOST_CHECK_EQUAL(std::string(listed.at("why").as_string()), "the kernel has no usable Landlock");
+	BOOST_CHECK(std::string(listed.at("warning").as_string()).find("every file") != std::string::npos);
+
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(parked.at("files_token").as_string());
+	import_reports = sandbox_report(true, {});
+	const auto started = approved_start(second, agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	const json::object done = finished(started.job);
+	BOOST_REQUIRE(done.contains("decoder_sandbox"));
+	const json::object& imported = done.at("decoder_sandbox").as_object();
+	BOOST_CHECK_EQUAL(std::string(imported.at("fs").as_string()), "landlock");
+	BOOST_CHECK(!imported.contains("warning"));
+	BOOST_CHECK(!imported.contains("why"));
+}
+
+// An importer that is no decoder process reports nothing, and nothing is added.
+BOOST_AUTO_TEST_CASE(AnImporterThatReportsNoSandbox_AddsNothingToTheResult)
+{
+	const json::object done = finished(approved_start(request("hero", "models"), agent).job);
+	BOOST_CHECK(!done.contains("decoder_sandbox"));
 }
 
 BOOST_AUTO_TEST_CASE(AModelWithFiles_EndsTheFirstJobWithTheirListAndWritesNothing)

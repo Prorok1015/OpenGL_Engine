@@ -731,6 +731,7 @@ namespace {
 				// The asset walk's rule (#854): it neither lists nor enters a skipped entry (hidden, temporary, system, the
 				// project's own code/build/project.snkproj in the project folder); a .resource belongs to its file.
 				if (res::is_skipped_asset_entry(name, is_dir, at_project_folder_root) || (!is_dir && res::is_asset_meta_sidecar(name))) continue;
+				if (res::is_desc_binary_entry(it->path().parent_path(), name, is_dir)) continue;
 				if (!valid_utf8(name)) {
 					++state.bad_names;
 					continue;

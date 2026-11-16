@@ -50,6 +50,11 @@ namespace res
 
 	class resource_system;
 
+	namespace detail {
+		// res_desc_binary.cpp: reads a desc's binary file from the desc's own layer through the root's resolver.
+		struct desc_binary_access;
+	}
+
 	// One hold of resource_system::hold_changes. Move-only; the destructor releases it, also when an exception unwinds.
 	class SNK_API change_hold
 	{
@@ -110,12 +115,19 @@ namespace res
 		resource_system(ds::task_system& tasks, mount_table mounts);
 		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
 		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
-		void add_mount(mount added);
+		// False (logged) when a resolver already serves the protocol: remount changes the roots of a mount. After
+		// unregistrate_resolver the new mount replaces the protocol's old one.
+		bool add_mount(mount added);
 		// Serves a table mount of `protocol` from other `roots` (Play swaps user:// for its own profile). Main thread, while
 		// nothing loads from the protocol. Every resource cached from the protocol (here and in the layers) is signalled
 		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
 		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
 		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
+		// The file on the disk `tag` is read from now, when it holds exactly `bytes` (what a load of it got): nullopt
+		// when its resolver reads no files (a RAM or pack one), a store of it is queued, or there is no file. `differs`
+		// says why a file that is there is not taken (vfs_resolver::disk_file_holding). Any thread.
+		std::optional<disk_file> disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+			std::string& differs) const;
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a
@@ -293,7 +305,8 @@ namespace res
 			return registered;
 		}
 		// Main thread. Returns once the calls into the resolver that are running elsewhere have ended, and destroys it here:
-		// its io thread is joined on this thread, never on its own (#938).
+		// its io thread is joined on this thread, never on its own (#938). A mount keeps its record: mount_roots still
+		// gives its roots until add_mount of the protocol replaces it.
 		void unregistrate_resolver(protocol prt);
 
 		template<class T, class... ARGS>
@@ -782,6 +795,7 @@ namespace res
 
 		// hold_changes (root only): what a resolver reports goes through these first; true when a hold took it in.
 		friend class change_hold;
+		friend struct detail::desc_binary_access;
 		struct held_changes;
 		bool hold_signal(const res::tag& tag);
 		bool hold_batch(const std::string& protocol, const std::vector<file_change>& batch);

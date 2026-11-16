@@ -69,6 +69,7 @@ namespace
 				if (kind_ec) continue;
 				const std::string name = fs_paths::utf8_of(entry.path().filename());
 				if (res::is_skipped_asset_entry(name, is_dir, relative_dir.empty() && state.project_folder[layer])) continue;
+				if (res::is_desc_binary_entry(entry.path().parent_path(), name, is_dir)) continue;
 				slot& found = merged[res::asset_name_key(name, state.case_insensitive)];
 				const bool existed = !found.relative.empty();
 				if (existed) found.shadowed.push_back(found.layer);

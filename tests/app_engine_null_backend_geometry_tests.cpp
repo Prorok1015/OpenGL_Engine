@@ -3,6 +3,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/scene/scn_geometry_holds.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/rnd_material_groups.h>
 #include <snk/scene/scn_model.h>
 #include <cstddef>
 #include <unordered_map>
@@ -71,9 +72,18 @@ BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendGeometry, geometry_engine_fixture)
 // The robot's meshes come from a .glb: without assimp the level has no geometry.
 BOOST_AUTO_TEST_CASE(TheGeometryOfALoadedLevel_IsReadOnce, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
-	load_and_draw("levels/smoke_level.desc", 3);
+	// Past the frames of placeholder textures, so every texture of the level has been asked for and built too.
+	load_and_draw("levels/smoke_level.desc", static_cast<int>(rnd::material_groups::grace_frames) + 2);
 	BOOST_TEST(held() > 0u);
 	BOOST_TEST(robot_geometry_reads() == 1u);
+	// #1030: its textures are read once as well; only the renderer asks for a texture_desc.
+	std::size_t texture_descs = 0;
+	for (const auto& [tag, reads] : memory->resolves) {
+		if (!tag.view().ends_with(".txm.desc")) continue;
+		++texture_descs;
+		BOOST_TEST_CONTEXT(tag.view()) { BOOST_TEST(reads == 1u); }
+	}
+	BOOST_TEST(texture_descs > 0u);
 
 	// Asked for through the root while a world holds it: the same block, not a new read.
 	const auto through_root = storage.require<res::resource_system>().require<rnd::geometry_desc>(k_robot_geometry);

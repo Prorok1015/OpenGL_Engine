@@ -3,7 +3,6 @@
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
 #include "edt_desc_file_commands.h"
-#include "edt_slow_load_notice.h"
 #include "edt_version_notice.h"
 #include "edt_project_trust_service.h"
 #include <snk/command/cmd_log_commands.h>
@@ -47,6 +46,9 @@ namespace cmd  { class command_registry; }
 
 namespace edt {
 	class asset_component;
+	class panels_component;
+	class problems_component;
+	class level_load_component;
 	class asset_database;
 	class agent_server;
 	class agent_access;
@@ -57,16 +59,16 @@ namespace edt {
 	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
-	class migration_panel;
-	class migration_notice_model;
+	class migration_component;
 	struct journal_offer;
 	class live_mode_component;
 	class play_component;
 	class editor_context;
 	class editor_layer;
-	class data_document_host;
+	class asset_open_component;
 	class model_importer;
 	class process_decoder;
+	class decoder_sandbox_notice;
 	class asset_exporter;
 	class agent_model_import;
 	class asset_export_dialog;
@@ -104,7 +106,7 @@ namespace edt {
 		bool begin_level_load(const res::tag& level_tag);
 		// True from begin_level_load until the level is loaded, failed or cancelled. The document still belongs to the
 		// level it had before; only a successful load makes it the new one.
-		bool level_load_in_progress() const { return m_loading_level; }
+		bool level_load_in_progress() const;
 		// The level file the document belongs to (empty for an untitled one); not the one being loaded.
 		const res::tag& current_level_tag() const { return m_state.level_tag; }
 		// The working copy the document's level is read from (`memory://editor/loading/<n>/<name>.desc`).
@@ -164,6 +166,8 @@ namespace edt {
 		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
 		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
 		std::shared_ptr<edt::process_decoder> m_process_decoder;
+		// What the decoders of this run said of their OS sandbox, in Problems (#1076).
+		std::shared_ptr<edt::decoder_sandbox_notice> m_decoder_sandbox;
 		bool m_model_adapter_registered = false;
 #endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
@@ -195,10 +199,7 @@ namespace edt {
 		bool poll_import_pipeline();
 
 		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
-		void create_panels(bool capture_log);
-		void create_viewport_panel();
 		void wire_controller_callbacks();
-		void wire_panel_callbacks();
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
@@ -210,18 +211,6 @@ namespace edt {
 		void draw_agent_status();
 		void draw_agent_policy_notice();
 		void open_agents_panel();
-		// Project > Migrate Project... and --open-migration (#761): the window, with a fresh plan.
-		void open_migration_window();
-		// The window with the question about rolling migration `id` back (#910): the full listing; it runs
-		// (project.migrate_rollback as a person's call) only once the person confirms there.
-		void open_migration_rollback(const std::string& id);
-		// migration_startup's question (#761): Roll Back / Later for an unfinished migration, or why it cannot be rolled back.
-		void offer_migration_rollback(const journal_offer& offer);
-		// Once the project is open and the start level settled (#761): a scan of the project on the io lane, with a snapshot
-		// of the game layer's types; the notice "N files in an old format" when it found a migration is needed.
-		void start_migration_scan(const std::filesystem::path& root);
-		// The notice, bottom right; false once there is nothing to show (the implicit edt/migration_notice ends).
-		bool draw_migration_notice();
 
 	public:
 		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
@@ -239,38 +228,20 @@ namespace edt {
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
-		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
-		std::shared_ptr<inspector_panel>       m_inspector_panel;
-		std::shared_ptr<viewport_panel>        m_viewport_panel;
-		std::shared_ptr<game_view_panel>       m_game_view_panel;
-		std::shared_ptr<console_panel>         m_console_panel;
-		std::shared_ptr<problems_panel>        m_problems_panel;
-		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
-		std::shared_ptr<input_actions_panel>   m_input_actions_panel;
-		// gs::input_actions::revision() the Problems of the source "input" were last made for.
-		std::uint64_t                          m_input_problems_revision = ~std::uint64_t{ 0 };
-		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
-		std::shared_ptr<git_panel>             m_git_panel;
-		std::shared_ptr<world_systems_panel>   m_world_systems_panel;
-		// Project Migration (EPIC-58 S8, #761): floating, closed by default.
-		std::shared_ptr<migration_panel>       m_migration_panel;
-		// The console's feed from the engine log; removed with the editor system.
-		engine::log_sink_handle                m_log_sink;
-		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
+		// What the Problems panel shows and where a row leads (#1004): the publishers sit here. Before the panels, the prefab
+		// editor, the loads and the drop, which report into them, so it goes after them.
+		std::unique_ptr<problems_component> m_problems;
+
+		// The editor's panels (#1004): made, wired to the controllers and registered by panels_component, in the View menu order.
+		std::unique_ptr<panels_component> m_panels;
 
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
 		std::unique_ptr<prefab_editor_component> m_prefab;
 
-		// Data documents (EPIC-56, #793): their windows and the questions about their unsaved changes.
-		desc_file_layout desc_layout();
-		// The kinds of the asset registry first (a module's `.desc` kind, the prefab editor), then any `.desc` as a data
-		// document. `quiet`: a problem or a link, not a double click: a file that is no data document is a log line, no window.
-		bool open_asset(const res::tag& tag, bool quiet);
-		std::unique_ptr<data_document_host> m_data_documents;
+		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
+		std::unique_ptr<asset_open_component> m_asset_open;
 
-		// Async level load (US-24-4)
-		res::res_handle<scn::level_desc> m_loading_level_handle;
 		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
 		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
 		void follow_game_layer_change(bool before);
@@ -280,52 +251,10 @@ namespace edt {
 		res::tag m_level_after_layer_change;
 		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
 		std::uint64_t m_game_layer_generation = 0;
-		// A migration (or rollback) stopped half way: no level of the project is saved until that migration is rolled back,
-		// whatever level is loaded meanwhile, so the files stay as the rollback expects them.
-		migration_save_block m_migration_stopped;
-		// project.migrate writes the project on the io lane (#761): Play, level changes and saves, builds, module reloads
-		// and quitting are refused until it ended (migration_blocker).
-		bool m_migration_running = false;
 		std::optional<std::string> migration_blocker() const;
 		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
 		std::optional<std::string> project_write_blocker();
-		// The notice of a project in an old format (#761) and whether its scan still runs.
-		std::unique_ptr<migration_notice_model> m_migration_notice;
-		std::uint64_t m_migration_scan_job = 0;
-		// Migration and rollback runs started so far: a format check made before one is stale.
-		std::uint64_t m_migration_runs = 0;
-		// Owner of the format check's callback: declared after what it touches, so it dies (and cancels) first. Not the
-		// import's m_lifetime, which exists only with assimp.
-		ds::lifetime m_scan_lifetime{ ds::lifetime_option::cancel_on_destroy };
-		bool m_loading_level = false;
-		slow_load_notice m_slow_load;
 		timed_notice m_save_notice;
-		// The level being loaded: its file and the working copy it is read from. The document takes both only when the load
-		// succeeds (a failed or cancelled load leaves it as it was, and a save in between is refused). Every load has a
-		// working copy of its own (`memory://editor/loading/<n>/<name>.desc`), so one that is abandoned never overwrites
-		// the copy of the level being edited, whatever the two files are called.
-		res::tag m_loading_level_tag;
-		res::tag m_loading_editor_tag;
-		// The root __version of the bytes the load read (0: unknown).
-		int m_loading_file_version = 0;
-		std::uint32_t m_load_serial = 0;
-		// A load that ended without a level: the document keeps what it had, and the load's working copy is removed.
-		void abandon_level_load();
-		// level.cancel_load, Esc in the loading window: the load goes, the level is the one before it. Main thread, as
-		// every load step: it never meets a load half finished.
-		cmd::result cancel_level_load(const cmd::origin& from);
-		// The load is over: forgets its tags and handle. The working copy stays (it is the document's now).
-		void release_level_load();
-		// Removes the working copy of a load (only `memory://editor/loading/...`; the document's other copies are not touched).
-		void erase_loading_copy(const res::tag& copy);
-		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
-		bool poll_level_load(bool* loaded = nullptr);
-
-		// Async asset drop / export auto-add (US-24-5)
-		res::res_handle<desc::desc_base> m_pending_desc_handle;
-		res::tag m_pending_desc_tag;
-		std::string m_pending_desc_key;
-		bool poll_pending_desc();
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
@@ -334,11 +263,13 @@ namespace edt {
 		// Set with editor/exit_after_level_loaded: stops the frame loop once a loaded level settled (CI headless run).
 		std::function<void()> m_stop_after_level_loaded;
 		ds::task_system* m_tasks = nullptr;
-		// Kept while the level waits: the settle holds a reference to it. Declared first, so it is destroyed after it.
-		std::shared_ptr<scn::context_manager> m_settle_contexts;
-		std::optional<scn::level_settle> m_level_settle;
-		void start_level_settle(const res::tag& level);
-		void cancel_level_settle();
+		// The load of a level and the settle after it (US-24-4, #613, #1004); its action is in m_registrations, removed before it.
+		// Declared after m_tasks, which the settle uses.
+		std::unique_ptr<edt::level_load_component> m_level_load;
+		// Project migration (EPIC-58, #761, #1004): the commands, the window, the offer to roll back, the notice and the scan;
+		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
+		// changes and saves, builds, module reloads and quitting (migration_blocker).
+		std::unique_ptr<migration_component> m_migration;
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
@@ -400,14 +331,5 @@ namespace edt {
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
-		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
-		void refresh_world_problems();
-		void go_to(const desc_target& target);
-		world_problem_publisher m_world_problems;
-		// The source "desc" (#596): the scopes "level" (load and hot reload), "drop" and "prefab" (the open preview).
-		desc_problem_publisher m_desc_problems;
-		// The source "play" (#597): the last check before Play.
-		play_preflight_publisher m_play_preflight;
-		std::vector<connection> m_world_problem_connections;
 	};
 }

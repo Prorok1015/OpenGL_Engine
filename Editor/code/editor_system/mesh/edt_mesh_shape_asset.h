@@ -11,7 +11,7 @@ namespace edt::mesh
 	inline constexpr std::string_view geometry_file_suffix = ".geom.desc";
 	inline constexpr int poly_file_version = 1;
 	// __version of a geometry_desc file; a test keeps it equal to the engine's.
-	inline constexpr int geometry_file_version = 1;
+	inline constexpr int geometry_file_version = 2;
 
 	// The two files of a parametric shape (#746): `poly` is the editable source (editor only, nothing at run time refers to it),
 	// `geometry` is what the engine loads. Both are in the form of the repository's descs (pretty JSON, version, a newline at the end).

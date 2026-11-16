@@ -38,12 +38,11 @@ std::optional<std::vector<std::byte>> read_exactly(const fs::path& path, std::ui
 }
 
 // What process_decoder::import asks the decoder for `source`.
-edt::decode_request import_request(const edt::import_source& source, const std::vector<edt::referenced_file>& allowed)
+edt::decode_request import_request(const edt::import_source& source)
 {
 	edt::decode_request request;
 	request.mode = edt::decode_request::mode_kind::import;
 	request.source_path = source.path;
-	request.allowed = allowed;
 	request.limits = source.limits;
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
@@ -63,19 +62,6 @@ edt::decoded_model_adapter::decoded_model_adapter(desc::desc_system& descs, res:
 edt::decoded_model_adapter::decoder_steps edt::decoded_model_adapter::steps_of(std::shared_ptr<const process_decoder> decoder)
 {
 	return edt::steps_of(std::move(decoder));
-}
-
-std::optional<edt::model_location> edt::decoded_model_adapter::locate(const std::vector<fs::path>& roots, const res::tag& tag)
-{
-	for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
-		const std::optional<fs::path> file = res::path_within_dir(*root, tag.relative());
-		std::error_code ec;
-		if (!file || !fs::is_regular_file(*file, ec)) continue;
-		fs::path canonical_root = fs::weakly_canonical(*root, ec);
-		if (ec) canonical_root = root->lexically_normal();
-		return model_location{ *file, std::move(canonical_root) };
-	}
-	return std::nullopt;
 }
 
 std::string edt::decoded_model_adapter::memory_folder_of(const res::tag& tag)
@@ -99,11 +85,23 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	import_source source;
 	source.preloaded = &raw_data;
 	source.memory_folder = memory_folder_of(tag);
-	if (const std::optional<model_location> location = locate(m_resources.mount_roots(tag.protocol()), tag)) {
-		source.path = location->file;
-		source.boundary = location->root;
+	// What decides is the file the bytes were read from, never a file of the same name: memory:// holds what was made
+	// at runtime (the editor keeps it in the project's cache), so its models go by their bytes too.
+	std::optional<res::disk_file> file;
+	if (tag.protocol() != res::tag::memory) {
+		std::string differs;
+		file = m_resources.disk_file_holding(tag, raw_data, differs);
+		if (!differs.empty()) {
+			egLOG_WARN("edt/decoder", "model '{}' goes to the decoder as its bytes alone, it may name no other file: {}",
+				tag.view(), differs);
+		}
+	}
+	if (file) {
+		std::error_code ec;
+		source.boundary = fs::weakly_canonical(file->root, ec);
+		if (ec) source.boundary = file->root.lexically_normal();
+		source.path = std::move(file->file);
 	} else {
-		// Served from memory or a pack: the decoder gets only the bytes, and the model may name no other file.
 		source.path = fs_paths::path_from_utf8(source.memory_folder) / fs_paths::path_from_utf8(tag.name());
 		source.on_disk = false;
 	}
@@ -174,7 +172,7 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 	// What is in memory:// now is read back as a decoder's answer, and checked as one: anyone may change those files.
 	const std::vector<fs::path> roots = m_resources.mount_roots(res::tag::memory);
 	if (roots.empty()) return std::nullopt;
-	const decode_request request = import_request(source, decode.scan.files);
+	const decode_request request = import_request(source);
 	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * 2;
 	decode_bundle answer;
 	answer.manifest["kind"] = "import";

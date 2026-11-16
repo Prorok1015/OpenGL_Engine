@@ -21,6 +21,10 @@
 namespace edt
 {
 	class dialog_service;
+	namespace detail
+	{
+		struct editor_layout_access;
+	}
 
 	// What a running job reports: `fraction` in [0, 1], `note` is the last text given to task_context::set_progress.
 	struct job_progress
@@ -144,6 +148,9 @@ namespace edt
 		void cancel_all_and_wait();
 
 	private:
+		// The editor layout key lists record: launch() builds it in module code.
+		friend struct detail::editor_layout_access;
+
 		struct record
 		{
 			ds::task_handle_base handle;

@@ -8,17 +8,24 @@
 #include <boost/json/parse_options.hpp>
 #include <boost/json/stream_parser.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <format>
 #include <iterator>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <stop_token>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 #include <initializer_list>
-#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -29,6 +36,9 @@ constexpr std::uint64_t k_default_memory_mb = 2048;
 constexpr std::uint64_t k_min_memory_mb = 256;
 constexpr std::uint64_t k_max_memory_mb = 8192;
 constexpr std::size_t k_max_error_bytes = 300;
+constexpr std::size_t k_max_scan_requests = 256;
+constexpr std::size_t k_max_request_name_bytes = 1024;
+constexpr int k_max_scan_rounds = 3;
 
 // What the child says about itself goes to an agent and into a log: cut on a code point boundary, and escaped like the
 // rest of what it prints (control characters, bidi marks, separators).
@@ -44,29 +54,144 @@ std::string cleaned(std::string_view text)
 	return out;
 }
 
+edt::model_file_scan failed_scan(std::string error)
+{
+	edt::model_file_scan scan;
+	scan.error = std::move(error);
+	return scan;
+}
+
+std::string shown_name(const fs::path& path)
+{
+	return text_escape::escaped_text(fs_paths::utf8_of(path.filename()), 256);
+}
+
+std::string too_many_names(std::string_view name)
+{
+	return std::format("the model names '{}' in more than {} ways", text_escape::escaped_text(name, 256), edt::k_max_names_per_file);
+}
+
 const boost::json::string* string_of(const boost::json::object& object, const char* key)
 {
 	const boost::json::value* value = object.if_contains(key);
 	return value != nullptr && value->is_string() ? &value->as_string() : nullptr;
 }
 
-// True when `path` lies in `folder` (lexically; both are as the editor resolved them) and has no ".." in it.
-bool lies_in(const fs::path& path, const fs::path& folder)
+// A decoder that ran without all of its sandbox: one WARN per editor run. What it says comes from the child's status line,
+// written before it read the request (decoder_sandbox_status), never from its answer.
+void warn_once_without_sandbox(const edt::decoder_sandbox_status& sandbox)
 {
-	const fs::path normal = path.lexically_normal();
-	if (!normal.is_absolute()) return false;
-	for (const fs::path& part : normal) {
-		if (part == "..") return false;
-	}
-	const fs::path root = folder.lexically_normal();
-	const auto mismatch = std::mismatch(root.begin(), root.end(), normal.begin(), normal.end());
-	// `root` may end with an empty element ("dir/"): the rest of it is then the empty tail.
-	return mismatch.first == root.end() || (std::next(mismatch.first) == root.end() && mismatch.first->empty());
+	const std::string warning = edt::decoder_sandbox_warning(sandbox);
+	if (warning.empty()) return;
+	static std::once_flag once;
+	std::call_once(once, [&] { egLOG_WARN("edt/decoder", "{}", warning); });
 }
 
 } // namespace
 
-std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem)
+std::vector<edt::provided_entry> edt::provided_entries(const std::vector<provided_file>& files, std::uintmax_t max_total_bytes,
+	std::vector<bundle_blob>& blobs)
+{
+	std::vector<provided_entry> entries;
+	entries.reserve(files.size());
+	std::unordered_map<const std::vector<std::byte>*, std::uint32_t> blob_of;
+	std::vector<std::size_t> names_of;
+	std::uintmax_t total = 0;
+	for (const provided_file& file : files) {
+		provided_entry entry{ file.name, file.relative, file.kind, file.bytes != nullptr };
+		if (file.bytes) {
+			const auto [found, added] = blob_of.try_emplace(file.bytes.get(), static_cast<std::uint32_t>(blob_of.size()));
+			if (added) {
+				total += file.bytes->size();
+				if (total > max_total_bytes) {
+					throw std::runtime_error(std::format("the files of the model together are bigger than {} bytes", max_total_bytes));
+				}
+				names_of.push_back(0);
+			}
+			entry.blob = found->second;
+			if (++names_of[entry.blob] > k_max_names_per_file) throw std::runtime_error(too_many_names(file.relative));
+		}
+		entries.push_back(std::move(entry));
+	}
+	blobs.reserve(blobs.size() + blob_of.size());
+	std::vector<const std::vector<std::byte>*> in_order(blob_of.size(), nullptr);
+	for (const auto& [bytes, index] : blob_of) in_order[index] = bytes;
+	for (std::size_t i = 0; i < in_order.size(); ++i) blobs.push_back({ provided_blob_tag(i), *in_order[i] });
+	return entries;
+}
+
+edt::model_file_scan edt::broker_scan(const import_source& source, const std::function<scan_requests(const std::vector<provided_file>&)>& run_round,
+	ds::task_context* task)
+{
+	const bool has_deadline = source.deadline != std::chrono::steady_clock::time_point{};
+	const auto past_deadline = [&] { return has_deadline && std::chrono::steady_clock::now() >= source.deadline; };
+	constexpr const char* k_too_long = "the model took too long to read";
+
+	// One access for every round: what the model may read, and how much, is counted over the whole scan.
+	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
+	std::vector<provided_file> provided;
+	std::set<std::pair<std::string, model_file_kind>> asked;
+	// One shared_ptr per side file: each name of it carries the same bytes, so the request holds them once.
+	std::map<fs::path, std::shared_ptr<const std::vector<std::byte>>> side_bytes;
+	std::map<fs::path, std::size_t> side_names;
+	for (int round_index = 0;; ++round_index) {
+		if (past_deadline()) return failed_scan(k_too_long);
+		scan_requests answer = run_round(provided);
+		if (!answer.error.empty()) return failed_scan(std::move(answer.error));
+
+		bool new_side_file = false;
+		for (const requested_file& wanted : answer.requested) {
+			// Asked again in a later round (the child reports every name it was not given): already answered.
+			if (!asked.emplace(wanted.name, wanted.kind).second) continue;
+			const resolved_reference resolved = access.resolve(wanted.name, wanted.kind);
+			if (!resolved.error.empty()) {
+				// The parser also asks for names of its own: Assimp's OBJ loader, missing the .mtl, falls back to one built
+				// from the model's path. A side file the rule refuses is missing to the child, like one not on the disk;
+				// a limit, a file that cannot be trusted, and any name of a model that is no file on the disk (#925) fail.
+				const bool missing_by_rule = resolved.refusal == refusal_kind::rule && source.on_disk && wanted.kind == model_file_kind::side_file;
+				if (!missing_by_rule) return failed_scan(resolved.error);
+				egLOG_WARN("edt/decoder", "{}: the side-file rule refuses it, so the model is read without it", resolved.error);
+				new_side_file = true;
+				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
+				continue;
+			}
+			if (past_deadline()) return failed_scan(k_too_long);
+			try {
+				// A texture changes nothing in the parse: the editor only reads and hashes it for the import.
+				if (wanted.kind == model_file_kind::texture) {
+					access.hash_listed(resolved);
+					continue;
+				}
+				new_side_file = true;
+				provided_file file{ wanted.name, {}, model_file_kind::side_file, nullptr };
+				if (resolved.found()) {
+					file.relative = access.relative_name(resolved);
+					if (++side_names[resolved.path] > k_max_names_per_file) return failed_scan(too_many_names(file.relative));
+					std::shared_ptr<const std::vector<std::byte>>& bytes = side_bytes[resolved.path];
+					if (!bytes) {
+						std::optional<std::vector<std::byte>> read = access.read(resolved);
+						if (!read) return failed_scan(std::format("'{}' cannot be read", shown_name(resolved.path)));
+						bytes = std::make_shared<const std::vector<std::byte>>(std::move(*read));
+					}
+					file.bytes = bytes;
+				}
+				provided.push_back(std::move(file));
+			} catch (const std::runtime_error& e) {
+				// Not an image, changed while it was read, over the budget.
+				return failed_scan(e.what());
+			}
+		}
+		if (!new_side_file) break;
+		if (round_index + 1 == k_max_scan_rounds) return failed_scan(std::format("the model asks for its files in more than {} rounds", k_max_scan_rounds));
+		if (task != nullptr) task->throw_if_stopped();
+	}
+	model_file_scan out;
+	out.files = access.files();
+	out.total_bytes = access.listed_bytes();
+	return out;
+}
+
+std::optional<edt::scan_requests> edt::accept_scan_answer(const decode_bundle& bundle, std::string& problem)
 {
 	const boost::json::object& manifest = bundle.manifest;
 	const boost::json::string* kind = string_of(manifest, "kind");
@@ -79,50 +204,33 @@ std::optional<edt::model_file_scan> edt::accept_scan_answer(const decode_bundle&
 		return std::nullopt;
 	}
 	if (const boost::json::string* error = string_of(manifest, "error")) {
-		model_file_scan failed;
+		scan_requests failed;
 		failed.error = cleaned(*error);
 		if (failed.error.empty()) failed.error = "the model could not be read";
 		return failed;
 	}
-	const boost::json::value* found = manifest.if_contains("scan");
-	if (found == nullptr) {
-		problem = "the answer to a scan holds no scan";
+	const boost::json::value* list = manifest.if_contains("requests");
+	if (list == nullptr) {
+		problem = "the answer to a scan holds no requests";
 		return std::nullopt;
 	}
-	std::optional<model_file_scan> scan = model_file_scan_from_json(*found);
-	if (!scan) {
+	if (list->is_array() && list->as_array().size() > k_max_scan_requests) {
+		problem = "the scan asks for more files than it may";
+		return std::nullopt;
+	}
+	std::optional<scan_requests> scan = scan_requests_from_json(manifest);
+	if (!scan || !scan->error.empty()) {
 		problem = "the answer to a scan cannot be read";
 		return std::nullopt;
 	}
-	scan->error = cleaned(scan->error);
-	if (!scan->ok()) return scan;
-
-	if (!request.on_disk && !scan->files.empty()) {
-		problem = "the scan of a model that is not a file on the disk lists files";
-		return std::nullopt;
-	}
-	const fs::path folder = request.boundary.empty() ? request.source_path.parent_path() : request.boundary;
-	if (scan->files.size() > request.limits.max_files) {
-		problem = "the scan lists more files than the limit allows";
-		return std::nullopt;
-	}
-	std::uintmax_t total = 0;
-	std::unordered_set<std::string> seen;
-	for (const referenced_file& file : scan->files) {
-		if (!lies_in(file.path, folder)) {
-			problem = request.boundary.empty() ? "the scan lists a file outside the folder of the model" : "the scan lists a file outside the content root of the model";
-			return std::nullopt;
-		}
-		if (file.size > request.limits.max_file_bytes || (total += file.size) > request.limits.max_total_bytes) {
-			problem = "the scan lists more bytes than the limits allow";
-			return std::nullopt;
-		}
-		if (!seen.insert(file.path.lexically_normal().generic_string()).second) {
-			problem = "the scan lists a file twice";
+	for (const requested_file& file : scan->requested) {
+		const bool readable = !file.name.empty() && file.name.size() <= k_max_request_name_bytes
+			&& std::none_of(file.name.begin(), file.name.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20; });
+		if (!readable) {
+			problem = "the scan asks for a file by a name that cannot be one";
 			return std::nullopt;
 		}
 	}
-	scan->total_bytes = total;
 	return scan;
 }
 
@@ -453,6 +561,15 @@ std::uint64_t edt::decoder_memory_limit(std::int64_t configured_mb, std::string&
 	return mb * k_mib;
 }
 
+edt::sandbox_mode edt::decoder_sandbox_mode(std::string_view configured, std::string& warning)
+{
+	warning.clear();
+	if (configured == "on") return sandbox_mode::best_effort;
+	if (const std::optional<sandbox_mode> mode = sandbox_mode_from_name(configured)) return *mode;
+	warning = std::format("import/decoder_sandbox '{}' is none of on, off, required: on is used", text_escape::escaped_text(configured, 64));
+	return sandbox_mode::best_effort;
+}
+
 edt::decoder_steps edt::steps_of(std::shared_ptr<const process_decoder> decoder)
 {
 	decoder_steps steps;
@@ -481,9 +598,10 @@ std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources
 	return std::nullopt;
 }
 
-edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config)
+edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox)
 	: m_resources(resources)
 	, m_config(std::move(config))
+	, m_on_sandbox(std::move(on_sandbox))
 {
 	if (m_config.decoder.empty()) {
 		const fs::path self = platform::current_executable();
@@ -503,10 +621,42 @@ std::string edt::process_decoder::unavailable_reason() const
 		text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
 }
 
+namespace {
+
+std::mutex g_file_versions_mutex;
+std::unordered_map<std::string, std::string> g_file_versions;
+std::atomic<std::size_t> g_file_version_hashes{ 0 };
+
+}
+
+std::optional<std::string> edt::file_version(const std::filesystem::path& file)
+{
+	std::error_code size_error;
+	std::error_code time_error;
+	const std::uintmax_t size = fs::file_size(file, size_error);
+	const auto written = fs::last_write_time(file, time_error);
+	if (size_error || time_error) return std::nullopt;
+	const std::string key = std::format("{}|{}|{}", fs_paths::generic_utf8_of(file), size,
+		written.time_since_epoch().count());
+
+	// Held while hashing: two decoders made at once hash the file once.
+	const std::lock_guard guard(g_file_versions_mutex);
+	if (const auto found = g_file_versions.find(key); found != g_file_versions.end()) return found->second;
+	++g_file_version_hashes;
+	std::optional<std::string> hash = cmn::sha256_file_hex(file);
+	if (hash) g_file_versions.emplace(key, *hash);
+	return hash;
+}
+
+std::size_t edt::file_version_hashes()
+{
+	return g_file_version_hashes.load();
+}
+
 std::string edt::process_decoder::version() const
 {
 	std::call_once(m_version_once, [this] {
-		if (std::optional<std::string> hash = cmn::sha256_file_hex(m_config.decoder)) {
+		if (std::optional<std::string> hash = edt::file_version(m_config.decoder)) {
 			m_version = std::move(*hash);
 			return;
 		}
@@ -516,18 +666,40 @@ std::string edt::process_decoder::version() const
 	return m_version;
 }
 
-edt::decode_outcome edt::process_decoder::run(const decode_request& request, const import_source& source, ds::task_context* task) const
+edt::decode_outcome edt::process_decoder::run(const decode_request& request, const std::vector<bundle_blob>& files, const import_source& source,
+	ds::task_context* task) const
 {
 	if (source.preloaded == nullptr) throw std::runtime_error("the decoder needs the bytes of the model");
 	decode_runner_config config = m_config;
 	if (source.deadline != std::chrono::steady_clock::time_point{}) {
-		const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
-		config.timeout = std::min(std::max(left, std::chrono::milliseconds(1000)), m_config.timeout);
+		// The scan's rounds and the editor's reads share the one deadline: no round gets time of its own.
+		const auto left = std::chrono::ceil<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
+		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error("the model took too long to decode");
+		config.timeout = std::min(left, m_config.timeout);
 	}
+	config.sandbox = effective_sandbox_mode(m_config.sandbox, source.sandbox);
+	const sandbox_mode mode = config.sandbox;
 	const decode_runner runner(std::move(config));
-	decode_outcome outcome = runner.run(request, *source.preloaded, task != nullptr ? task->stop : std::stop_token{});
+	decode_outcome outcome = runner.run(request, *source.preloaded, files, task != nullptr ? task->stop : std::stop_token{});
+	// Before any check of the answer (#1076): a child that crashed, timed out or answered garbage may have parsed the model
+	// without its sandbox all the same. One that ran without saying how it is sandboxed counts as having none; one that
+	// refused to run, or was cancelled before it said anything, parsed nothing.
+	if (outcome.started && !outcome.cancelled && !outcome.sandbox_refused && !outcome.sandbox.reported) {
+		outcome.sandbox = unreported_decoder_sandbox();
+	}
+	if (outcome.sandbox.reported) {
+		warn_once_without_sandbox(outcome.sandbox);
+		if (m_on_sandbox) m_on_sandbox(outcome.sandbox);
+	}
 	if (outcome.cancelled) throw ds::task_cancelled{};
 	if (outcome.timed_out) throw std::runtime_error("the model took too long to decode");
+	if (outcome.sandbox_refused) {
+		// Outside `required` the child refuses only when a sandbox the system has failed to set up: a defect, so the person
+		// is told how to go on without it.
+		if (mode != sandbox_mode::required) outcome.error += "; the sandbox can be turned off in the setting import/decoder_sandbox";
+		egLOG_WARN("edt/decoder", "{}", outcome.error);
+		throw std::runtime_error(outcome.error);
+	}
 	if (!outcome.ok()) {
 		egLOG_WARN("edt/decoder", "{}", outcome.error);
 		throw std::runtime_error(outcome.error.starts_with("the decoder failed") || outcome.error.starts_with("the decoder could not run")
@@ -545,14 +717,23 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
-	const decode_outcome outcome = run(request, source, task);
-	std::string problem;
-	std::optional<model_file_scan> scan = accept_scan_answer(*outcome.bundle, request, problem);
-	if (!scan) {
-		egLOG_WARN("edt/decoder", "the answer to a scan was refused: {}", problem);
-		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
-	}
-	return std::move(*scan);
+
+	decoder_sandbox_status sandbox;
+	model_file_scan scanned = broker_scan(source, [&](const std::vector<provided_file>& provided) {
+		std::vector<bundle_blob> blobs;
+		request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
+		const decode_outcome outcome = run(request, blobs, source, task);
+		sandbox = outcome.sandbox;
+		std::string problem;
+		std::optional<scan_requests> answer = accept_scan_answer(*outcome.bundle, problem);
+		if (!answer) {
+			egLOG_WARN("edt/decoder", "the answer to a scan was refused: {}", problem);
+			throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
+		}
+		return std::move(*answer);
+	}, task);
+	scanned.sandbox = std::move(sandbox);
+	return scanned;
 }
 
 edt::import_intermediate edt::process_decoder::import(const import_source& source, ds::task_context* task) const
@@ -561,12 +742,36 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	decode_request request;
 	request.mode = decode_request::mode_kind::import;
 	request.source_path = source.path;
-	request.allowed = *source.allowed;
 	request.limits = source.limits;
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
-	const decode_outcome outcome = run(request, source, task);
+
+	// Exactly the listed files, read again and checked against what the person was shown, under every name the model
+	// used for them in the scan.
+	model_file_access access(source.path, source.limits, source.allowed, source.boundary, source.on_disk);
+	std::vector<provided_file> provided;
+	for (const referenced_file& file : *source.allowed) {
+		const std::string name = shown_name(file.path);
+		if (file.names.empty()) throw std::runtime_error(std::format("'{}' was listed without the names the model uses for it", name));
+		if (file.names.size() > k_max_names_per_file) throw std::runtime_error(too_many_names(fs_paths::utf8_of(file.path.filename())));
+		std::shared_ptr<const std::vector<std::byte>> bytes;
+		for (const std::string& reference : file.names) {
+			const resolved_reference resolved = access.resolve(reference, file.kind);
+			if (!resolved.error.empty()) throw std::runtime_error(resolved.error);
+			if (!resolved.found() || resolved.path != file.path) throw std::runtime_error(std::format("'{}' is gone since it was listed", name));
+			if (!bytes) {
+				std::optional<std::vector<std::byte>> content = access.read(resolved);
+				if (!content) throw std::runtime_error(std::format("'{}' cannot be read", name));
+				bytes = std::make_shared<const std::vector<std::byte>>(std::move(*content));
+			}
+			provided.push_back({ reference, access.relative_name(resolved), file.kind, bytes });
+		}
+	}
+	std::vector<bundle_blob> blobs;
+	request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
+	if (task != nullptr) task->throw_if_stopped();
+	const decode_outcome outcome = run(request, blobs, source, task);
 
 	// Nothing of the answer reaches memory:// before it passed every check.
 	std::string problem;
@@ -575,6 +780,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 		egLOG_WARN("edt/decoder", "the answer to an import was refused: {}", problem);
 		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
 	}
+	imported->sandbox = outcome.sandbox;
 	if (!imported->error.empty()) return std::move(*imported);
 
 	// An agent's import never reuses or overwrites a resource it did not store itself. The check and the store are two calls:

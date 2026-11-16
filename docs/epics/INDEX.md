@@ -50,6 +50,7 @@
 | [EPIC-11](desc-driven/EPIC-11.md) | Editor Camera & Render Targets | done |
 | [EPIC-56](desc-driven/EPIC-56.md) | Data Documents & Schema Inspector — документы данных `is_document`, инспектор из схемы, словари, reorder, типизированный пикер ссылок (#26) | done |
 | [EPIC-58](desc-driven/EPIC-58.md) | Data Versioning & Migration — версии форматов, явная миграция проекта с бэкапом и отчётом (#28) | design |
+| [EPIC-79](desc-driven/EPIC-79.md) | Desc Binary Data — большие числовые данные desc (вершины, индексы) в двоичном файле рядом с desc (#1068) | design |
 
 ### Prefab-First
 
@@ -80,6 +81,7 @@
 | [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | frozen — низкий приоритет для «Химеры» |
 | [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | done |
 | [EPIC-57](infrastructure/EPIC-57.md) | Asset Identity & Database — постоянный ID ассета (`.resource`), база ассетов, обратные зависимости (#27) | design |
+| [EPIC-80](infrastructure/EPIC-80.md) | Game Code in wasm Sandbox — один исходник игры: песочница wasm / нативная DLL / нативный статический (#1084) | idea |
 
 ### Render Migration
 

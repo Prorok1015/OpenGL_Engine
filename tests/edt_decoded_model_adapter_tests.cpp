@@ -11,6 +11,7 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -34,6 +35,13 @@ namespace fs = std::filesystem;
 
 const res::tag k_model("res://models/m.obj");
 const res::tag k_prefab("memory://__models/res/models/m.obj/m.prefab.desc");
+
+std::vector<std::byte> text_bytes(std::string_view text)
+{
+	std::vector<std::byte> out(text.size());
+	for (std::size_t i = 0; i < text.size(); ++i) out[i] = static_cast<std::byte>(text[i]);
+	return out;
+}
 
 struct adapter_env
 {
@@ -113,18 +121,23 @@ std::string error_of(const edt::decoded_model_adapter& adapter, const res::tag& 
 
 BOOST_FIXTURE_TEST_SUITE(EdtDecodedModelAdapterTests, adapter_env)
 
-BOOST_AUTO_TEST_CASE(TheModelIsFoundInTheHighestRootThatHasIt)
+// #996: the file the resolver reads the model from, only while it holds the bytes the load got.
+BOOST_AUTO_TEST_CASE(TheModelIsTheFileOfTheHighestRootThatHasIt_WhileItHoldsTheBytes)
 {
-	const auto found = edt::decoded_model_adapter::locate({ dir.path() / "low", dir.path() / "content" }, k_model);
+	std::string differs;
+	const auto found = rs->disk_file_holding(k_model, bytes(), differs);
 	BOOST_REQUIRE(found.has_value());
 	BOOST_TEST(fs::equivalent(found->file, dir.path() / "content" / "models" / "m.obj"));
 	BOOST_TEST(fs::equivalent(found->root, dir.path() / "content"));
+	BOOST_TEST(differs.empty());
 
-	const auto only_low = edt::decoded_model_adapter::locate({ dir.path() / "low" }, k_model);
-	BOOST_REQUIRE(only_low.has_value());
-	BOOST_TEST(fs::equivalent(only_low->root, dir.path() / "low"));
+	// The low root's file is not the one read: the bytes of the low file are not taken from the high one.
+	BOOST_TEST(!rs->disk_file_holding(k_model, text_bytes("low"), differs).has_value());
+	BOOST_TEST(!differs.empty());
 
-	BOOST_TEST(!edt::decoded_model_adapter::locate({ dir.path() / "low", dir.path() / "content" }, res::tag("res://models/none.obj")).has_value());
+	differs.clear();
+	BOOST_TEST(!rs->disk_file_holding(res::tag("res://models/none.obj"), bytes(), differs).has_value());
+	BOOST_TEST(differs.empty());
 }
 
 BOOST_AUTO_TEST_CASE(EachModelPathHasAMemoryFolderOfItsOwn)
@@ -194,6 +207,47 @@ BOOST_AUTO_TEST_CASE(AModelOnTheDisk_GoesToTheDecoderAsAFile)
 	adapter.deserialize(k_model, bytes());
 	BOOST_REQUIRE(scanned.has_value());
 	BOOST_TEST(scanned->on_disk);
+}
+
+// #996: memory:// holds what was made at runtime; on the disk in the editor, still its models go by their bytes.
+BOOST_AUTO_TEST_CASE(AMemoryModel_GoesToTheDecoderAsItsBytesAlone_ThoughItsFolderIsOnTheDisk)
+{
+	dir.write("memory/models/x.obj", "o m");
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	adapter.deserialize(res::tag("memory://models/x.obj"), bytes());
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	BOOST_TEST(scanned->boundary.empty());
+}
+
+// #996: a resolver that reads no files serves the bytes; a file of the same name in the mount's root is not the model.
+BOOST_AUTO_TEST_CASE(AModelFromAResolverThatReadsNoFiles_GoesAsItsBytes_ThoughAFileOfItsNameIsOnTheDisk)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	adapter.deserialize(k_model, bytes());
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	BOOST_TEST(scanned->boundary.empty());
+}
+
+// #996: the file changed (or is another one) after the bytes were read: it is not the model, which goes by its bytes.
+BOOST_AUTO_TEST_CASE(AModelWhoseFileHoldsOtherBytes_GoesAsItsBytes_AndThatIsWarned)
+{
+	std::vector<std::string> warned;
+	const engine::log_sink_handle sink = engine::add_log_sink(
+		[&warned](std::string_view, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) warned.emplace_back(message);
+		});
+	const edt::decoded_model_adapter adapter(*descs, *rs, answering());
+	adapter.deserialize(k_model, text_bytes("o x"));
+	BOOST_REQUIRE(scanned.has_value());
+	BOOST_TEST(!scanned->on_disk);
+	const auto named = std::count_if(warned.begin(), warned.end(), [](const std::string& line) {
+		return line.find("res://models/m.obj") != std::string::npos && line.find("bytes alone") != std::string::npos;
+	});
+	BOOST_TEST(named == 1);
 }
 
 BOOST_AUTO_TEST_CASE(WhatTheDecoderRefusesOrFailsOn_FailsTheLoadNamingTheModel)
@@ -267,13 +321,6 @@ namespace {
 
 const res::tag k_geom("memory://__models/res/models/m.obj/m.geom.desc");
 const fs::path k_side_file = fs::path("content") / "models" / "m.mtl";
-
-std::vector<std::byte> text_bytes(std::string_view text)
-{
-	std::vector<std::byte> out(text.size());
-	for (std::size_t i = 0; i < text.size(); ++i) out[i] = static_cast<std::byte>(text[i]);
-	return out;
-}
 
 struct cache_env : adapter_env
 {

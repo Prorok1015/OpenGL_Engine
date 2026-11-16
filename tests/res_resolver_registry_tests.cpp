@@ -6,6 +6,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -248,6 +250,90 @@ BOOST_AUTO_TEST_CASE(AddingAndRemovingAnAdapterWhileOtherThreadsLookItUp)
 
 	BOOST_TEST(found.load() > 0);
 	BOOST_TEST(rs->registered_extensions(probe_adapter::INFO).empty());
+}
+
+// #1034: the second mount of a protocol either replaces the first (its resolver gone) or is refused.
+namespace {
+
+constexpr std::string_view k_mounted = "mount1034";
+
+std::filesystem::path folder_with(const std::string& name, const std::string& file)
+{
+	const auto folder = std::filesystem::temp_directory_path() / "res_mount_1034" / name;
+	std::filesystem::remove_all(folder);
+	std::filesystem::create_directories(folder);
+	std::ofstream(folder / file) << "text";
+	return folder;
+}
+
+res::mount mount_of(const std::filesystem::path& folder)
+{
+	res::mount made;
+	made.protocol = k_mounted;
+	made.roots = { folder };
+	made.access = res::mount_access::read_only;
+	return made;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AMountAfterItsResolverWasUnregistered_ReplacesTheMountsRoots)
+{
+	const auto first = folder_with("first", "a.txt");
+	const auto second = folder_with("second", "b.txt");
+	BOOST_REQUIRE(rs->add_mount(mount_of(first)));
+	rs->unregistrate_resolver(k_mounted);
+	BOOST_TEST((rs->mount_roots(k_mounted) == std::vector{ first }));
+
+	BOOST_REQUIRE(rs->add_mount(mount_of(second)));
+	BOOST_TEST((rs->mount_roots(k_mounted) == std::vector{ second }));
+	BOOST_TEST(rs->exists(res::tag{ "mount1034://b.txt" }));
+	BOOST_TEST(!rs->exists(res::tag{ "mount1034://a.txt" }));
+	rs->unregistrate_resolver(k_mounted);
+}
+
+BOOST_AUTO_TEST_CASE(AMountOfAProtocolThatIsServed_IsRefused_AndChangesNothing)
+{
+	const auto first = folder_with("served", "a.txt");
+	const auto second = folder_with("refused", "b.txt");
+	BOOST_REQUIRE(rs->add_mount(mount_of(first)));
+
+	BOOST_TEST(!rs->add_mount(mount_of(second)));
+	BOOST_TEST((rs->mount_roots(k_mounted) == std::vector{ first }));
+	BOOST_TEST(rs->exists(res::tag{ "mount1034://a.txt" }));
+	BOOST_TEST(!rs->exists(res::tag{ "mount1034://b.txt" }));
+	rs->unregistrate_resolver(k_mounted);
+}
+
+// #996: the file a tag is read from, while it holds the bytes a load got; none from a resolver that reads no files.
+BOOST_AUTO_TEST_CASE(TheDiskFileOfATag_IsTheOneItsResolverReads_WhileItHoldsTheBytes)
+{
+	const auto low = folder_with("disk_low", "a.txt");
+	const auto high = folder_with("disk_high", "a.txt");
+	std::ofstream(high / "a.txt") << "high";
+	res::mount both = mount_of(low);
+	both.roots.push_back(high);
+	BOOST_REQUIRE(rs->add_mount(std::move(both)));
+	const res::tag tag{ "mount1034://a.txt" };
+
+	std::string differs;
+	const auto found = rs->disk_file_holding(tag, test_util::to_bytes("high"), differs);
+	BOOST_REQUIRE(found.has_value());
+	BOOST_TEST(std::filesystem::equivalent(found->root, high));
+	BOOST_TEST(std::filesystem::equivalent(found->file, high / "a.txt"));
+	BOOST_TEST(differs.empty());
+
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("text"), differs).has_value());
+	BOOST_TEST(!differs.empty());
+	differs.clear();
+	BOOST_TEST(!rs->disk_file_holding(res::tag{ "mount1034://none.txt" }, test_util::to_bytes("text"), differs));
+	BOOST_TEST(differs.empty());
+
+	rs->unregistrate_resolver(k_mounted);
+	rs->registrate_resolver<test_util::ram_resolver>(k_mounted);
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("high"), differs).has_value());
+	BOOST_TEST(differs.empty());
+	rs->unregistrate_resolver(k_mounted);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -8,6 +8,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/resource/res_system.h>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace edt {
 
@@ -22,9 +24,10 @@ namespace edt {
 	// its answer is checked against what was asked before anything of it is stored: these are pure, and the tests feed them
 	// hostile bundles.
 
-	// The answer to a scan: `kind` is "scan", no resources came with it, and every file it lists lies in the folder of the
-	// model and within the limits of the request. A scan the child reported as failed comes back as a scan with its error.
-	std::optional<model_file_scan> accept_scan_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem);
+	// The answer to a scan (#1043): `kind` is "scan", no resources came with it, and it asks for at most 256 files, each by
+	// a name of 1..1024 bytes without a control character. Whether a name may be read is the editor's rule, applied
+	// after this. A scan the child reported as failed comes back with its error.
+	std::optional<scan_requests> accept_scan_answer(const decode_bundle& bundle, std::string& problem);
 
 	// The answer to an import: `kind` is "import", the resources that came with it are exactly its created tags (every one of
 	// them there once), all tags are memory:// tags below the one folder of the prefab, and nothing of the model's path is
@@ -40,19 +43,41 @@ namespace edt {
 	// The text after the last dot of the last segment, in lower case; empty when there is none.
 	std::string file_extension_lowercase(std::string_view path);
 
+	// What the request says of `files` (decode_request::provided), and their bytes as `blobs`: one blob per file, found by
+	// its shared bytes, however many names point at it. Throws std::runtime_error when the files together are bigger than
+	// `max_total_bytes` or one file has more than k_max_names_per_file names.
+	std::vector<provided_entry> provided_entries(const std::vector<provided_file>& files, std::uintmax_t max_total_bytes,
+		std::vector<bundle_blob>& blobs);
+
+	// The editor's side of a scan through the decoder (#1043): `run_round` runs the child once with the files handed over so far
+	// and returns what it asks for (or throws). Every name is resolved, read and hashed by one model_file_access, so its
+	// limits count over the whole scan; at most 3 rounds, all within `source.deadline` (the editor's reads included). A side
+	// file the rule refuses is missing to the child (one WARN); any other refusal fails the scan.
+	model_file_scan broker_scan(const import_source& source, const std::function<scan_requests(const std::vector<provided_file>&)>& run_round,
+		ds::task_context* task);
+
 	// The memory the decoder may use, from cfg `import/decoder_memory_mb`: 2 GiB when unset (0 or less), never unlimited, kept
 	// between 256 MiB and 8 GiB; `warning` says so when the value was changed.
 	std::uint64_t decoder_memory_limit(std::int64_t configured_mb, std::string& warning);
+
+	// The decoder's sandbox mode from cfg `import/decoder_sandbox` (#1043), set by a person only: "on" (the default:
+	// best_effort), "off", or "required" (CI); anything else is "on", and `warning` says so.
+	sandbox_mode decoder_sandbox_mode(std::string_view configured, std::string& warning);
 
 	// An agent's model parsed in the decoder process, with the same shape as the in-process importer: one function per
 	// step of agent_import_options. Blocks (call it from a job). Anything that is not the model's own error (the decoder
 	// was killed or failed, its answer was refused) is thrown as std::runtime_error with a text for the agent; the
 	// resources of an import are stored in `resources` (memory://) only after the answer passed, and erased again when it
-	// does not.
+	// does not. The decoder opens no file of its own (#1043): the editor resolves, reads and hashes every side file by
+	// model_file_access and hands the bytes over; scan asks in up to 3 rounds, import hands over exactly `source.allowed`.
 	class process_decoder
 	{
 	public:
-		process_decoder(res::resource_system& resources, decode_runner_config config);
+		// Called on the thread that ran the decoder, after every run that ended with an answer: what the child said of its
+		// sandbox (#1076: the editor shows it in Problems).
+		using sandbox_listener = std::function<void(const decoder_sandbox_status&)>;
+
+		process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox = {});
 
 		// Empty when the decoder can be run; else why not, naming the file.
 		std::string unavailable_reason() const;
@@ -63,13 +88,21 @@ namespace edt {
 		import_intermediate import(const import_source& source, ds::task_context* task) const;
 
 	private:
-		decode_outcome run(const decode_request& request, const import_source& source, ds::task_context* task) const;
+		decode_outcome run(const decode_request& request, const std::vector<bundle_blob>& files, const import_source& source,
+			ds::task_context* task) const;
 
 		res::resource_system& m_resources;
 		decode_runner_config m_config;
+		sandbox_listener m_on_sandbox;
 		mutable std::once_flag m_version_once;
 		mutable std::string m_version;
 	};
+
+	// The SHA-256 of `file`, hashed once per process for one path, size and write time (#1063): every process_decoder,
+	// and each editor test makes one, asks for the decoder's. Empty when the file cannot be read.
+	std::optional<std::string> file_version(const std::filesystem::path& file);
+	// How many files file_version has hashed in this process.
+	std::size_t file_version_hashes();
 
 	// The steps of a decoder as the importers call them: process_decoder's, or a test's.
 	struct decoder_steps

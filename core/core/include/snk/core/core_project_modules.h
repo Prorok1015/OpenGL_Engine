@@ -27,8 +27,9 @@ namespace core
 		// Whether the manifest's editor modules (kind "editor", #588) are loaded, after the runtime ones: only with
 		// `check_editor_module`, which the editor gives. Without it they are only reported.
 		bool with_editor_modules = false;
-		// Checks an editor module's entry (its editor api version, module_entry::editor_api_version) before its module is
-		// created: empty when the editor can serve it, else why not. A module it refuses is not loaded and the rest runs.
+		// Checks an editor module's entry (its editor api version and layout key, module_entry::editor_api_version and
+		// editor_layout_key) before its module is created: empty when the editor can serve it, else why not. A module it
+		// refuses is not loaded and the rest runs.
 		std::function<std::string(const app::modules::module_entry&)> check_editor_module;
 		// Why the editor modules cannot be unloaded now (one of their callbacks is on the stack: unloading would
 		// destroy code that runs); empty when they can. Asked before every unload and before a reload swaps the game.

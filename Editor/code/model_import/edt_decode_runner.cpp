@@ -1,6 +1,7 @@
 #include "edt_decode_runner.h"
 #include "edt_environment.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/platform/plt_process.h>
 #include <snk/resource/res_shipping_dirs.h>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -29,7 +31,13 @@ struct folder_guard
 	}
 };
 
-std::vector<std::string> clean_environment()
+std::string utf8_text(const fs::path& path)
+{
+	const auto text = path.u8string();
+	return std::string(text.begin(), text.end());
+}
+
+std::vector<std::string> clean_environment(const fs::path& folder)
 {
 	std::vector<std::string> env;
 	const auto keep = [&env](const char* name) {
@@ -38,20 +46,17 @@ std::vector<std::string> clean_environment()
 		}
 	};
 #if defined(_WIN32)
+	(void)folder;
 	keep("SystemRoot");
 	keep("PATH");
 #else
 	// A dev build finds its shared engine through these; nothing else of the editor's environment reaches the child.
 	keep("LD_LIBRARY_PATH");
 	env.push_back("PATH=/usr/bin:/bin");
+	// Whatever asks for a temporary file uses the run folder, the one place the sandbox lets the child write (#1043).
+	env.push_back("TMPDIR=" + utf8_text(folder));
 #endif
 	return env;
-}
-
-std::string utf8_text(const fs::path& path)
-{
-	const auto text = path.u8string();
-	return std::string(text.begin(), text.end());
 }
 
 } // namespace
@@ -69,7 +74,8 @@ edt::decode_runner::decode_runner(decode_runner_config config)
 	}
 }
 
-edt::decode_outcome edt::decode_runner::run(const decode_request& request, const std::vector<std::byte>& source, std::stop_token stop) const
+edt::decode_outcome edt::decode_runner::run(const decode_request& request, const std::vector<std::byte>& source, const std::vector<bundle_blob>& files,
+	std::stop_token stop) const
 {
 	decode_outcome outcome;
 	// A folder this call made itself, private to this user (exclusive, random name, 0700 / owner-only): the same helper
@@ -89,7 +95,9 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 
 	decode_bundle request_bundle;
 	request_bundle.manifest = to_json(sent);
+	request_bundle.blobs.reserve(files.size() + 1);
 	request_bundle.blobs.push_back({ k_decode_source_tag, source });
+	request_bundle.blobs.insert(request_bundle.blobs.end(), files.begin(), files.end());
 	const fs::path request_file = folder / "request.bundle";
 	const fs::path out_file = folder / "out.bundle";
 	std::string write_error;
@@ -114,17 +122,32 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 
 	platform::process_options options;
 	options.working_dir = folder;
-	options.environment = clean_environment();
+	options.environment = clean_environment(folder);
 	options.low_priority = true;
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
 	decode_log_budget budget;
-	options.on_stderr_line = [&budget](std::string_view line) {
+	// The child's own line when it refuses to run without its sandbox: the reason of the failure (its first 256 bytes).
+	std::mutex refusal_mutex;
+	std::string refusal;
+	sandbox_status_reader sandbox_status;
+	options.on_stderr_line = [&budget, &refusal_mutex, &refusal, &sandbox_status](std::string_view line) {
+		{
+			const std::lock_guard lock(refusal_mutex);
+			if (sandbox_status.line(line)) return;
+			if (line.starts_with(k_decoder_sandbox_refusal_prefix) && refusal.empty()) {
+				refusal = text_escape::escaped_text(line.substr(k_decoder_sandbox_refusal_prefix.size()), 256);
+			}
+		}
 		if (budget.take(line.size())) egLOG_WARN("edt/decoder", "{}", decode_log_text(line));
 	};
 	// The child compares its parent with this at start: an editor that died before the child looked is not mistaken for
 	// a live parent (getppid() would then be 1 or a subreaper).
+	// The child limits every file it writes to the largest answer the editor reads (RLIMIT_FSIZE), and enforces the sandbox
+	// mode itself (#1043).
 	std::vector<std::string> arguments{ "--request", utf8_text(request_file), "--out", utf8_text(out_file),
-		"--parent-pid", std::to_string(platform::current_process_id()) };
+		"--parent-pid", std::to_string(platform::current_process_id()),
+		"--sandbox", std::string(sandbox_mode_name(m_config.sandbox)),
+		"--max-output-bytes", std::to_string(largest_bundle_bytes(m_config.answer_limits)) };
 	arguments.insert(arguments.end(), m_config.extra_arguments.begin(), m_config.extra_arguments.end());
 	const platform::process_result result = platform::run_process(m_config.decoder, arguments,
 		options, [&budget](std::string_view line) {
@@ -137,6 +160,11 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	}
 	timer_wake.notify_all();
 	timer.join();
+	{
+		const std::lock_guard lock(refusal_mutex);
+		outcome.sandbox = sandbox_status.status();
+	}
+	outcome.started = result.error.empty();
 
 	if (timed_out.load()) {
 		outcome.timed_out = true;
@@ -152,6 +180,12 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 		outcome.error = "the decoder could not run: " + result.error;
 		return outcome;
 	}
+	if (result.exit_code == k_decoder_sandbox_exit_code) {
+		outcome.sandbox_refused = true;
+		const std::lock_guard lock(refusal_mutex);
+		outcome.error = "the model decoder cannot run in its sandbox: " + (refusal.empty() ? std::string("no reason given") : refusal);
+		return outcome;
+	}
 	if (result.exit_code != 0) {
 		outcome.error = "the decoder failed (exit code " + std::to_string(result.exit_code) + ")";
 		return outcome;
@@ -164,6 +198,28 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	}
 	outcome.bundle = std::move(read.bundle);
 	return outcome;
+}
+
+bool edt::sandbox_status_reader::line(std::string_view text)
+{
+	const bool first = std::exchange(m_first, false);
+	if (!first || !text.starts_with(k_decoder_sandbox_status_prefix)) return false;
+	text.remove_prefix(k_decoder_sandbox_status_prefix.size());
+	const auto take = [&text](std::string_view word) {
+		if (!text.starts_with(word)) return false;
+		text.remove_prefix(word.size());
+		return true;
+	};
+	decoder_sandbox_status read;
+	if (take("fs=landlock")) read.fs = true;
+	else if (!take("fs=none")) return true;
+	if (take(" syscalls=seccomp")) read.syscalls = true;
+	else if (!take(" syscalls=none")) return true;
+	if (take(" why=")) read.why = text_escape::escaped_text(text, 256);
+	else if (!text.empty()) return true;
+	read.reported = true;
+	m_status = std::move(read);
+	return true;
 }
 
 std::size_t edt::decode_runner::remove_stale_folders()

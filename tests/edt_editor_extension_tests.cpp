@@ -25,6 +25,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 // What a game_editor module (#588) leaves behind: nothing. A module registers only through its context; unloading it
 // puts the registries, the subscriptions and the tasks back as they were, and a module of another API major version
@@ -222,6 +223,9 @@ SNK_DECLARE_MODULE_PREFIXED(ext_game_, ext_game_module)
 
 namespace {
 
+// What a module built with these headers exports as snk_editor_layout_key.
+std::uint64_t current_editor_key() { return edt::editor_layout_key(); }
+
 struct extension_fixture : test_util::null_engine_fixture
 {
 	extension_fixture()
@@ -250,7 +254,8 @@ struct extension_fixture : test_util::null_engine_fixture
 
 	// A project whose manifest names a game module and a game_editor, and a host that loads them from compiled-in entries.
 	// `refusal_reason` (optional) gets what the host's check said about the module it refused.
-	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr, std::string* refusal_reason = nullptr)
+	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr, std::string* refusal_reason = nullptr,
+		std::uint64_t (*reported_editor_key)() = nullptr)
 	{
 		std::filesystem::create_directories(dir.path() / "game");
 		prj::project_context project;
@@ -266,13 +271,14 @@ struct extension_fixture : test_util::null_engine_fixture
 		core::project_modules_options options;
 		options.with_editor_modules = true;
 		options.check_editor_module = [refusal_reason](const app::modules::module_entry& entry) {
-			std::string reason = edt::check_editor_api_version(entry.editor_api_version);
+			std::string reason = edt::check_editor_api_version(entry.editor_api_version, entry.editor_layout_key);
 			if (refusal_reason && !reason.empty()) *refusal_reason = reason;
 			return reason;
 		};
 		options.editor_unload_refusal = [this] { return context->module_unload_refusal(); };
 		app::modules::module_entry editor_entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
 		if (reported_editor_api) editor_entry.editor_api_version = reported_editor_api;
+		if (reported_editor_key) editor_entry.editor_layout_key = reported_editor_key;
 		options.compiled_in.emplace("ext_editor", editor_entry);
 		options.compiled_in.emplace("ext_game", SNK_MODULE_ENTRY(ext_game_));
 		return std::make_unique<core::project_module_host>(loader, host_data, std::move(options));
@@ -390,6 +396,46 @@ BOOST_AUTO_TEST_CASE(AResultQueuedBeforeTheUnload_IsNotDeliveredToTheModuleAfter
 	BOOST_CHECK_EQUAL(state.shutdowns, 1);
 }
 
+// #1061: job_service::launch's continuation is the module's code (a template it instantiates), held by the service's own
+// lifetime but queued with the module's task as its origin, so the unload runs it (run_pending_main) before the code goes.
+BOOST_AUTO_TEST_CASE(AJobOfAModule_IsRetiredInsideTheUnload_SoNoContinuationOfItsCodeIsLeftInTheMainQueue)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	int finished = 0;
+	edt::connection on_finished = context->events().job_finished.subscribe(
+		[&finished](std::uint64_t, edt::job_status, const std::string&, const std::optional<boost::json::value>&) { ++finished; });
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.job_bodies_run, 1);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		BOOST_REQUIRE_EQUAL(finished, 0);
+		module.shutdown_services(host_data);
+		// No drain_main in between: only the unload itself can have run the continuation.
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+		BOOST_CHECK_EQUAL(finished, 1);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(finished, 1);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AJobOfAModuleThatNeverRan_IsAlsoRetiredInsideTheUnload)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		module.shutdown_services(host_data);
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
 BOOST_AUTO_TEST_CASE(APreviewOfAModule_IsDestroyedAtUnload_AfterItsTasksStoppedAndBeforeItsKindIsGone_AndNothingArrivesAfterwards)
 {
 	{
@@ -451,25 +497,61 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 	const std::uint32_t host = SNK_EDITOR_API_VERSION;
 	static std::uint32_t reported = 0;
 	reported = host;
-	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }).empty());
+	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key).empty());
 
 	// 2.0 (#663) closed the paths past the scope: a module built against 1.x calls what is gone and is refused, whatever its minor.
 	for (const std::uint32_t old_version : { 0x0001'0000u, 0x0001'0001u, 0x0001'0002u }) {
 		reported = old_version;
-		const std::string older_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
+		const std::string older_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
 		BOOST_CHECK_MESSAGE(older_major.find("rebuild the project") != std::string::npos, older_major);
-		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("2.x") != std::string::npos, older_major);
+		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("3.x") != std::string::npos, older_major);
 	}
 
 	reported = host + (1u << 16);
-	const std::string newer_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
+	const std::string newer_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
 	BOOST_CHECK_MESSAGE(newer_major.find("update the editor") != std::string::npos, newer_major);
 
 	reported = host + 1u;
-	const std::string newer_minor = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
+	const std::string newer_minor = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
 	BOOST_CHECK_MESSAGE(newer_minor.find("minor") != std::string::npos, newer_minor);
 
-	BOOST_CHECK(!edt::check_editor_api_version(nullptr).empty());
+	BOOST_CHECK(!edt::check_editor_api_version(nullptr, &current_editor_key).empty());
+}
+
+// #969: a module of the right version is refused without the editor layout key, or with another one (another layout of
+// the editor's types, another revision of an editor interface, another ImGui).
+BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleWithoutTheEditorKeyOrWithAnotherOne)
+{
+	const auto version = []() -> std::uint32_t { return SNK_EDITOR_API_VERSION; };
+	BOOST_CHECK(edt::check_editor_api_version(version, &current_editor_key).empty());
+
+	const std::string missing = edt::check_editor_api_version(version, nullptr);
+	BOOST_CHECK_MESSAGE(missing.find("snk_editor_layout_key") != std::string::npos, missing);
+	BOOST_CHECK_MESSAGE(missing.find("rebuild the project") != std::string::npos, missing);
+
+	const std::string other = edt::check_editor_api_version(version, []() -> std::uint64_t { return edt::editor_layout_key() ^ 1u; });
+	BOOST_CHECK_MESSAGE(other.find("another layout") != std::string::npos, other);
+	BOOST_CHECK_MESSAGE(other.find("rebuild the project") != std::string::npos, other);
+
+	// A module of editor API 2.x has no key: the version tells it why.
+	const std::string old = edt::check_editor_api_version([]() -> std::uint32_t { return 0x0002'0000u; }, nullptr);
+	BOOST_CHECK_MESSAGE(old.find("2.0") != std::string::npos && old.find("3.x") != std::string::npos, old);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleWithAnotherEditorKey_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
+{
+	const counts before = snapshot();
+	std::string reason;
+	auto host = make_host(nullptr, &reason, []() -> std::uint64_t { return edt::editor_layout_key() ^ 1u; });
+	BOOST_REQUIRE(host->load_all().loaded == std::vector<std::string>{ "ext_game" });
+
+	const auto report = host->load_editor_modules();
+	BOOST_CHECK_MESSAGE(reason.find("rebuild the project") != std::string::npos, reason);
+	BOOST_CHECK(report.loaded.empty());
+	BOOST_CHECK(report.refused == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(!host->has_editor_modules());
+	BOOST_CHECK_EQUAL(state.generations, 0);
+	BOOST_CHECK(snapshot() == before);
 }
 
 BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstEditorApi1_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
@@ -492,7 +574,7 @@ BOOST_AUTO_TEST_CASE(ARefusedModule_TouchesNothing_SoTheGameKeepsWorking)
 {
 	const counts before = snapshot();
 	static std::uint32_t reported = SNK_EDITOR_API_VERSION + (1u << 16);
-	const std::string reason = edt::check_editor_api_version([]() -> std::uint32_t { return reported; });
+	const std::string reason = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
 	BOOST_CHECK(!reason.empty());
 	BOOST_CHECK(snapshot() == before);
 }
