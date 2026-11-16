@@ -13,7 +13,9 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/desc/desc_system.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_panel_registry.h>
@@ -23,6 +25,7 @@
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/resource/res_system.h>
+#include <boost/json/value.hpp>
 #include <imgui.h>
 #include <format>
 #include <fstream>
