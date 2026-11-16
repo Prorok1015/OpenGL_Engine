@@ -110,7 +110,9 @@ namespace res
 		resource_system(ds::task_system& tasks, mount_table mounts);
 		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
 		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
-		void add_mount(mount added);
+		// False (logged) when a resolver already serves the protocol: remount changes the roots of a mount. After
+		// unregistrate_resolver the new mount replaces the protocol's old one.
+		bool add_mount(mount added);
 		// Serves a table mount of `protocol` from other `roots` (Play swaps user:// for its own profile). Main thread, while
 		// nothing loads from the protocol. Every resource cached from the protocol (here and in the layers) is signalled
 		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
@@ -293,7 +295,8 @@ namespace res
 			return registered;
 		}
 		// Main thread. Returns once the calls into the resolver that are running elsewhere have ended, and destroys it here:
-		// its io thread is joined on this thread, never on its own (#938).
+		// its io thread is joined on this thread, never on its own (#938). A mount keeps its record: mount_roots still
+		// gives its roots until add_mount of the protocol replaces it.
 		void unregistrate_resolver(protocol prt);
 
 		template<class T, class... ARGS>
