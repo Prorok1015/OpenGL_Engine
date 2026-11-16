@@ -82,12 +82,14 @@ namespace edt
 	}
 
 	// The editor side of a level reload: realigns the world arrays of `state` with the reloaded level and tells the
-	// world controller which world is active (none at all, or the one to switch to). `desc_lists_worlds` is whether
+	// world controller which world is active (none at all, or the one to switch to). `desc_tags`: the file of each of
+	// `desc_worlds`, same order (scene_document::world_tags). `desc_lists_worlds` is whether
 	// the level desc names any world; if it does but none of them loaded (`desc_worlds` empty) the state is kept.
 	void apply_world_resync(
 		scene_document& state,
 		world_controller& worlds,
 		const std::vector<scn::world_desc>& desc_worlds,
+		const std::vector<res::tag>& desc_tags,
 		bool desc_lists_worlds,
 		const std::function<bool(const scn::world_desc&)>& is_alive);
 

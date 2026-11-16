@@ -57,7 +57,8 @@ namespace gs
 		// entt::registry, boost::json::value and glm::mat4 join the key (#922); no type changes.
 		// 13: the accessors of scene_layer and input_actions and the core of app_data_storage are exports; module code no
 		// longer reads their members inline (#922 PR 3).
-		inline constexpr std::uint64_t layout_revision = 13;
+		// 14: scn::prefab_instance gains content_of at its end (#993).
+		inline constexpr std::uint64_t layout_revision = 14;
 
 		// Numbers the key mixes in as they are, in order: the interfaces' ABI revisions and the third-party versions.
 		template<std::uint64_t... Values>

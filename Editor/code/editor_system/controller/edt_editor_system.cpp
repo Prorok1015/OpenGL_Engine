@@ -67,13 +67,7 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_world_systems_panel.h"
-#include "edt_vcs_service.h"
-#include "edt_forge_account_model.h"
-#include "edt_forge_account_panel.h"
-#include "edt_forge_service.h"
-#include "edt_github_provider.h"
-#include "edt_curl_transport.h"
-#include "edt_repository_watcher.h"
+#include "edt_vcs_component.h"
 #include "edt_live_mode_component.h"
 #include "edt_live_consent.h"
 #include "edt_project_trust_service.h"
@@ -110,7 +104,6 @@
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/platform/plt_process.h>
-#include <snk/platform/plt_secret.h>
 #include <snk/platform/plt_stdio.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_problem_list.h>
@@ -259,8 +252,6 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_build_vs_path, "build/vs_path", "");
 	CFG_VAR_DEF_STRING(cfg_build_vs_min_version, "build/vs_min_version", "17.14");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
-	// The git program of version control (#454); empty: git on PATH.
-	CFG_VAR_DEF_PATH(cfg_vcs_git, "vcs/git", "");
 
 	// The SDK the game module is built against: build/sdk_dir, else the installed editor's, else the engine build
 	// tree's (where this editor was built).
@@ -848,7 +839,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}
 			if (m_agent_import && m_agent_import->running()) return std::string{ "a model import asked for by an agent is running" };
 			if (m_export_dialog_active) return std::string{ "the asset export dialog is open" };
-			if (m_vcs && m_vcs->running_writes() > 0) return std::string{ "a git operation (pull, checkout, commit...) is running" };
+			if (m_vcs && m_vcs->writes_running()) return std::string{ "a git operation (pull, checkout, commit...) is running" };
 #if SNK_HAS_ASSIMP
 			if (m_importing) return std::string{ "a model import is running" };
 #endif
@@ -1116,61 +1107,26 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 
-	vcs_options vcs;
-	vcs.git = *cfg_vcs_git;
-	vcs.project_root = [&data]() -> std::optional<std::filesystem::path> {
+	vcs_component::ports vcs_ports{ *m_context, *m_git_panel };
+	vcs_ports.project_root = [&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
 	};
-	vcs.live_mode_on = [this] { return m_live && m_live->enabled(); };
-	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
-	edt::vcs::repository_watcher::ports watch_ports;
-	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
-	m_repo_watcher = std::make_unique<edt::vcs::repository_watcher>(std::move(watch_ports));
-	m_vcs->set_write_observer([this] {
-		if (m_repo_watcher) m_repo_watcher->begin_own_write();
-	});
+	vcs_ports.live_mode_on = [this] { return m_live && m_live->enabled(); };
+	m_vcs = std::make_unique<vcs_component>(std::move(vcs_ports));
 	if (data.has_value<prj::project_context>()) {
 		const prj::project_context& project = data.require<prj::project_context>();
 		asset_component::ports asset_ports{ *m_context, m_res, *m_asset_browser_panel, project };
-		asset_ports.vcs_busy = [this] { return m_vcs && m_vcs->running_writes() > 0; };
+		asset_ports.vcs_busy = [this] { return m_vcs && m_vcs->writes_running(); };
 		asset_ports.git_dir = [this]() -> std::optional<std::filesystem::path> {
-			return m_vcs ? m_vcs->cached_state().git_dir : std::nullopt;
+			return m_vcs ? m_vcs->git_dir() : std::nullopt;
 		};
 		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		asset_ports.game_layer_generation = [this] { return m_game_layer_generation; };
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
 	}
-	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
-		m_registrations.push_back(std::move(command));
-	}
-	forge_options forge_setup;
-	forge_setup.provider = std::make_shared<forge::github_provider>(forge::make_curl_transport(forge::configured_curl_options()));
-	m_secrets = std::make_shared<platform::secret_store>(platform::make_os_secret_backend());
-	forge_setup.secrets = m_secrets;
-	const std::vector<std::string> forge_hosts = forge_setup.allowed_hosts;
-	m_forge = std::make_unique<forge_service>(*m_vcs, std::move(forge_setup));
-	for (auto& command : register_forge_commands(m_context->actions().commands(), *m_forge)) {
-		m_registrations.push_back(std::move(command));
-	}
-	// #458 PR-4: where a person sets the token of each host. The secret store's calls can block on an OS prompt, so they
-	// run as jobs on the io lane; the job holds its own copies, nothing of it touches the panel.
-	forge_account_model::ports account_ports;
-	account_ports.secrets = m_secrets;
-	account_ports.start_job = [this](std::string label, std::function<boost::json::value()> work) -> std::optional<std::uint64_t> {
-		return m_context->jobs().start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "forge" }, m_forge_lifetime,
-			[work = std::move(work)](ds::task_context&) -> boost::json::value { return work(); });
-	};
-	m_forge_account_panel = std::make_shared<forge_account_panel>(m_context->events(), forge_hosts, std::move(account_ports));
-	add_panel(m_forge_account_panel, dock_slot::floating, false);
-	const auto open_forge_account = [this] {
-		m_context->panels().set_open(m_forge_account_panel->get_id(), true);
-		m_forge_account_panel->focus();
-	};
-	m_git_panel->set_open_account(open_forge_account);
-	m_git_panel->set_describe_target([this](const std::string& remote) { return m_forge->describe_target(remote); });
-	m_registrations.push_back(register_forge_account_action(m_context->actions(), open_forge_account));
+	m_vcs->install(m_registrations);
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
@@ -1325,9 +1281,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}, agent_log_roots_of(options.project_dir));
 		}
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
-		m_vcs->set_policy_file(project_policy);
-		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
-		m_forge->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
+		m_vcs->follow_agent_policy(project_policy, [this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
 		m_agent_access->policy().set_on_changed([this] {
 			if (m_agent_server) m_agent_server->notify_tools_changed();
 		});
@@ -1446,12 +1400,7 @@ void edt::editor_system::tick_live_mode()
 
 void edt::editor_system::tick_repository_watcher()
 {
-	if (!m_repo_watcher || !m_vcs || !m_context) return;
-	// Not info(): after a project switch that would run the blocking repository probe here, every frame.
-	m_repo_watcher->follow(*m_vcs);
-	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
-	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
-	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
+	if (m_vcs && m_context) m_vcs->tick();
 }
 
 edt::asset_database* edt::editor_system::assets()
