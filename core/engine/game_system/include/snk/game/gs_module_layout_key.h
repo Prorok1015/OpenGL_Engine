@@ -132,6 +132,8 @@ namespace gs
 			// task_system::run makes the task's state in module code and then_main hands its callback the result.
 			// task_result<void> is an explicit specialization: <int> stands for the primary template.
 			ds::task_result<void>, ds::task_result<int>, ds::detail::task_state<void>,
+			// game_module::run returns the handle by value: module code builds, copies and destroys it.
+			ds::task_handle_base, ds::task_handle<void>,
 			// Module code copies them: gs::input_actions' exports return them by value or by reference.
 			inp::gamepad_config, inp::user_bindings,
 			// Returned by value from the exports of user_bindings; rng::save and rng::load are inline.
