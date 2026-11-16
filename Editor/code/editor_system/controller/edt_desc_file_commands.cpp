@@ -172,6 +172,7 @@ namespace {
 			return claim_of_open_level(
 				[&](const std::string& open) { return same_file(locate(open)); },
 				[&](const std::string& named) { return same_file(locate(named)); },
+				same_path,
 				[&](const std::vector<fs::path>& roots, std::string_view entry) {
 					// The highest layer that has the file is the one the resolver opens.
 					for (std::size_t i = roots.size(); i-- > 0;) {
@@ -209,9 +210,14 @@ namespace {
 			const std::string wanted = name_key(relative);
 			const std::vector<fs::path> own = layers();
 			const std::optional<fs::path> wanted_file = own.empty() ? std::nullopt : resolver_path(own.back(), relative);
+			const auto same_name = [&](const fs::path& file) {
+				return wanted_file
+					&& name_key(fs_paths::generic_utf8_of(file)) == name_key(fs_paths::generic_utf8_of(*wanted_file));
+			};
 			return claim_of_open_level(
 				[&](const std::string& open) { return name_key(open) == wanted; },
 				[&](const std::string& named) { return name_key(named) == wanted; },
+				same_name,
 				[&](const std::vector<fs::path>& roots, std::string_view entry) {
 					// A new file lands in the top folder: the entry names it when both spell one path there.
 					if (roots.empty() || !wanted_file) return false;
@@ -302,9 +308,11 @@ namespace {
 
 	private:
 		// One pass over the open level's files and their `worlds`. `is_level(name)`: the level file itself; `is_named(path)`:
-		// an entry the path rules accept; `is_resolved(roots, relative)`: an entry compared as the file a mount over `roots` opens.
-		template<class IsLevel, class IsNamed, class IsResolved>
-		level_answer claim_of_open_level(const IsLevel& is_level, const IsNamed& is_named, const IsResolved& is_resolved) const
+		// an entry the path rules accept; `is_opened(file)`: the file the engine:// resolver opens for an entry;
+		// `is_resolved(roots, relative)`: an entry compared as the file a mount over `roots` opens.
+		template<class IsLevel, class IsNamed, class IsOpened, class IsResolved>
+		level_answer claim_of_open_level(const IsLevel& is_level, const IsNamed& is_named, const IsOpened& is_opened,
+			const IsResolved& is_resolved) const
 		{
 			level_answer out;
 			if (!m_deps.open_level_files) return out;
@@ -325,7 +333,11 @@ namespace {
 					for (const res::tag& world_file : world_files_of(world)) {
 						// The project's root may be the engine's base folder: engine:// then names project files.
 						if (world_file.protocol() == res::tag::engine) {
-							if (is_resolved(m_deps.res.mount_roots(res::tag::engine), world_file.relative())) return mine;
+							// Asked of the resolver, not of its roots (#1086). Unmounted, the entry names no file; a
+							// resolver that reads no files leaves it the level's, so the write is asked about.
+							if (!m_deps.res.serves(res::tag::engine)) continue;
+							const std::optional<res::disk_file> opened = m_deps.res.disk_file_of(world_file);
+							if (!opened || is_opened(opened->file)) return mine;
 							continue;
 						}
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());

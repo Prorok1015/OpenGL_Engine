@@ -791,6 +791,27 @@ BOOST_AUTO_TEST_CASE(AWorldUnderAnotherProtocol_BlocksNoWriteToTheProject)
 	BOOST_TEST(fs::exists(res_root / "materials" / "n.mat.desc"));
 }
 
+// #1086: an engine:// resolver that reads no files cannot tell which file an entry is: the entry is the level's.
+BOOST_AUTO_TEST_CASE(AnEngineWorldUnderAResolverThatReadsNoFiles_IsTheLevels)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "m.mat.desc");
+	rs->unregistrate_resolver(res::tag::engine);
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::engine);
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto written = call("desc.write",
+		write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	rs->unregistrate_resolver(res::tag::engine);
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find("belongs to the open level") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "m.mat.desc") == before);
+}
+
 // A guid no file holds, without a path: the resolver loads nothing by it, so no file is the level's through it.
 BOOST_AUTO_TEST_CASE(AWorldEntryThatNamesNothing_BlocksNothing)
 {
