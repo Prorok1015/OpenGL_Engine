@@ -11,6 +11,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_import_vertex_layout.h>
 #include <boost/json.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -268,8 +269,13 @@ void check_uv_and_no_uv(const std::optional<stored_geometry>& geometry)
 		if (vec3_at(data, v, "position").z != 1.f) continue;
 		++without_uv;
 		BOOST_TEST((vec2_at(data, v, "uv") == scn::import_layout::default_uv));
-		BOOST_TEST((vec3_at(data, v, "tangent") == scn::import_layout::default_tangent));
-		BOOST_TEST((vec3_at(data, v, "bitangent") == scn::import_layout::default_bitangent));
+		// The default frame is built from the vertex normal: unit, perpendicular to it, bitangent = cross(n, t).
+		const glm::vec3 normal = vec3_at(data, v, "normal");
+		const glm::vec3 tangent = vec3_at(data, v, "tangent");
+		const glm::vec3 bitangent = vec3_at(data, v, "bitangent");
+		BOOST_TEST(std::abs(glm::length(tangent) - 1.f) < 1e-4f);
+		BOOST_TEST(std::abs(glm::dot(tangent, glm::normalize(normal))) < 1e-4f);
+		BOOST_TEST(glm::length(bitangent - glm::cross(glm::normalize(normal), tangent)) < 1e-4f);
 	}
 	BOOST_TEST(without_uv == 3u);
 }

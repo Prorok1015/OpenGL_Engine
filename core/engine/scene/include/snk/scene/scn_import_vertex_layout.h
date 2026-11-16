@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/driver/rnd_buffer_layout.h>
 #include <glm/glm.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <optional>
@@ -9,6 +10,7 @@
 // #1100: one vertex layout for the whole geometry of an imported model, the union of the attributes of the meshes it
 // holds. A mesh without one of them gets its default here: both importers (engine and editor) write the same stride and
 // the same values, and nothing a model file holds can make a mesh's vertices disagree with the layout.
+// For the two model importers only: not part of the module API.
 namespace scn::import_layout
 {
 	struct vertex_attributes
@@ -28,12 +30,27 @@ namespace scn::import_layout
 		}
 	};
 
-	// A zero normal is NaN after normalize() in the shader; a mesh without tangents is one without uvs, which is normal.
+	// A zero normal is NaN after normalize() in the shader.
 	inline const glm::vec3 default_normal{ 0.f, 0.f, 1.f };
 	inline const glm::vec2 default_uv{ 0.f, 0.f };
-	inline const glm::vec3 default_tangent{ 1.f, 0.f, 0.f };
-	inline const glm::vec3 default_bitangent{ 0.f, 1.f, 0.f };
 	inline const glm::vec4 default_color{ 1.f, 1.f, 1.f, 1.f };
+
+	struct tangent_frame
+	{
+		glm::vec3 tangent;
+		glm::vec3 bitangent;
+	};
+
+	// A mesh without tangents is one without uvs, which is normal: any unit tangent perpendicular to the vertex normal,
+	// bitangent = cross(normal, tangent). For default_normal it is (1, 0, 0) and (0, 1, 0).
+	inline tangent_frame default_tangents(const glm::vec3& normal)
+	{
+		const float length = glm::length(normal);
+		const glm::vec3 n = length > 1e-6f ? normal / length : default_normal;
+		const glm::vec3 reference = std::abs(n.y) < 0.9f ? glm::vec3{ 0.f, 1.f, 0.f } : glm::vec3{ 1.f, 0.f, 0.f };
+		const glm::vec3 tangent = glm::normalize(glm::cross(reference, n));
+		return { tangent, glm::cross(n, tangent) };
+	}
 
 	inline rnd::driver::BufferLayout layout_of(const vertex_attributes& attributes)
 	{
@@ -93,8 +110,11 @@ namespace scn::import_layout
 		if (layout.normal) detail::append(out, vertex.normal.value_or(default_normal));
 		if (layout.uv) detail::append(out, vertex.uv.value_or(default_uv));
 		if (layout.tangents) {
-			detail::append(out, vertex.tangent.value_or(default_tangent));
-			detail::append(out, vertex.bitangent.value_or(default_bitangent));
+			const tangent_frame fallback = vertex.tangent && vertex.bitangent
+				? tangent_frame{ *vertex.tangent, *vertex.bitangent }
+				: default_tangents(vertex.normal.value_or(default_normal));
+			detail::append(out, vertex.tangent.value_or(fallback.tangent));
+			detail::append(out, vertex.bitangent.value_or(fallback.bitangent));
 		}
 		if (layout.color) detail::append(out, vertex.color.value_or(default_color));
 	}
