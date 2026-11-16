@@ -58,6 +58,9 @@ Editor/
     │
     ├── problems/                     # what the Problems panel shows (#1004)
     │   └── edt_problems_component.cpp/h # problems_component: the publishers of the sources `desc`, `world`, `play` (handed out by reference to the prefab editor, the level load, the drop and Play), `go_to_problem`/`go_to`, the fixes of the source `assets`, the input conflicts and the refresh of the world rows; `editor_system` creates it before the prefab editor and calls `install()` and `wire(panel)`
+    ├── agent/                        # what an agent can reach (#1004)
+    │   └── edt_agent_component.cpp/h # agent_component: the MCP server (`editor/agent_server`, `editor/mcp_stdio`), `agent_access` (policy, confirmations), the log.read filter, the argument check of #681, `editor.quit`, the person's HTTP switch (`set_server`); `shutdown()` runs first in `~editor_system`; `access()`/`server()` are null after it. The agents window, the status slot and the notice are still in `editor_system` (next step)
+    │
     ├── level/                        # the load of a level (#1004)
     │   └── edt_level_load_component.cpp/h # level_load_component: the working copy, the "Loading Level" window and its Esc, `level.cancel_load`, the slow-load notice and the settle after a load; `begin_and_watch(tag, ended?)` opens a level and polls it under `edt/load_level`; `level_locator` is where a load's diagnostics lead. `editor_system` creates it, calls `install()` and keeps thin forwarders (`begin_level_load`, `level_load_in_progress`, `tick_level_settle`)
     ├── game_build/                   # Build > Build Game (#434)
