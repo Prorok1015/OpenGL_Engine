@@ -170,7 +170,7 @@ int main(int argc, char* argv[])
 		// A game.dll built against other layouts of the engine's types is refused, not loaded (#614).
 		project_modules.layout_key = gs::engine_module_layout_key();
 		project_modules.check_editor_module = [](const app::modules::module_entry& entry) {
-			return edt::check_editor_api_version(entry.editor_api_version);
+			return edt::check_editor_api_version(entry.editor_api_version, entry.editor_layout_key);
 		};
 		// #921: nothing of build/bin loads unless the person trusts the project, the editor built it, or
 		// --trust-project. A migration runs without the editor: only the flag counts there.

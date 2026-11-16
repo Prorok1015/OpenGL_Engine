@@ -1,6 +1,7 @@
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/common/engine_assert.h>
 #include <cstdint>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -222,7 +223,7 @@ void edt::editor_extension::shutdown_services(ds::app_data_storage&)
 	shutdown_editor();
 }
 
-std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)())
+std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)(), std::uint64_t (*module_layout_key)())
 {
 	if (!module_api_version) {
 		return "not a game_editor module (snk_editor_api_version is missing)";
@@ -242,6 +243,17 @@ std::string edt::check_editor_api_version(std::uint32_t (*module_api_version)())
 	if (app::modules::api_minor(version) > app::modules::api_minor(host)) {
 		return "module needs editor api minor " + std::to_string(app::modules::api_minor(version))
 			+ ", host provides " + std::to_string(app::modules::api_minor(host));
+	}
+	// After the version: a 2.x module has no key, and the version says better why it is refused.
+	if (!module_layout_key) {
+		return "it reports no editor layout key (snk_editor_layout_key missing): declare it with SNK_DECLARE_EDITOR_MODULE "
+			"and rebuild the project against the current SDK";
+	}
+	const std::uint64_t key = module_layout_key();
+	const std::uint64_t host_key = edt::editor_layout_key();
+	if (key != host_key) {
+		return std::format("it was built against an editor whose types have another layout (module editor key {:016x}, "
+			"editor key {:016x}): rebuild the project against the current SDK", key, host_key);
 	}
 	return {};
 }

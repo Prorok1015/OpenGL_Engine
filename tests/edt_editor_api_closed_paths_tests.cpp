@@ -124,9 +124,10 @@ BOOST_AUTO_TEST_CASE(AnAssetKindOrPreviewOfAModule_TakesTheModuleDescsOnly_Whose
 	BOOST_CHECK(true);
 }
 
-BOOST_AUTO_TEST_CASE(TheEditorApiVersion_IsTheMajorOf2)
+// 3.0 (#969): the editor layout key; a module without it is refused.
+BOOST_AUTO_TEST_CASE(TheEditorApiVersion_IsTheMajorOf3)
 {
-	BOOST_CHECK_EQUAL(app::modules::api_major(SNK_EDITOR_API_VERSION), 2u);
+	BOOST_CHECK_EQUAL(app::modules::api_major(SNK_EDITOR_API_VERSION), 3u);
 	BOOST_CHECK_EQUAL(app::modules::api_minor(SNK_EDITOR_API_VERSION), 0u);
 }
 

@@ -255,7 +255,7 @@ app::modules::module_entry editor_needs_b_entry()
 
 std::string check_editor_entry(const app::modules::module_entry& entry)
 {
-	return edt::check_editor_api_version(entry.editor_api_version);
+	return edt::check_editor_api_version(entry.editor_api_version, entry.editor_layout_key);
 }
 
 app::modules::module_entry self_reload_entry()
@@ -1132,6 +1132,30 @@ BOOST_AUTO_TEST_CASE(a_module_without_the_editor_api_entry_is_refused_by_the_che
 
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_editor" });
 	BOOST_TEST(!loader.state("test_editor").has_value());
+}
+
+// #969: an editor module built against other editor types (another editor key), or one that reports none, is refused
+// before it is created; the game goes on.
+BOOST_AUTO_TEST_CASE(an_editor_module_with_another_editor_layout_key_or_without_one_is_refused)
+{
+	auto other_key = editor_probe_entry();
+	other_key.editor_layout_key = []() -> std::uint64_t { return edt::editor_layout_key() ^ 1u; };
+	auto no_key = editor_probe_entry();
+	no_key.editor_layout_key = nullptr;
+	for (const app::modules::module_entry& entry : { other_key, no_key }) {
+		BOOST_TEST(check_editor_entry(entry).find("rebuild the project") != std::string::npos);
+		core::project_modules_options options = options_for(&refusal);
+		options.compiled_in["test_editor"] = entry;
+		core::project_module_host refusing(loader, root, options);
+		const auto report = refusing.load_editor_modules();
+
+		BOOST_TEST(report.loaded.empty());
+		BOOST_TEST(report.refused == std::vector<std::string>{ "test_editor" });
+		BOOST_TEST(!loader.state("test_editor").has_value());
+		BOOST_TEST((loader.state("reload_game") == app::modules::module_state::initialized));
+		BOOST_TEST(g_editor_events.empty());
+	}
+	BOOST_TEST(check_editor_entry(editor_probe_entry()).empty());
 }
 
 BOOST_AUTO_TEST_CASE(a_game_reload_unloads_the_editor_modules_first_and_loads_them_again_after_the_swap)

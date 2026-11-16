@@ -9,24 +9,30 @@ revision does not (#922).
 
 A game module built against an engine fills or calls the vtable of these interfaces inline, by slot. The layout key
 (gs::module_layout_key, snk/game/gs_module_layout_key.h) sees no vtable: it mixes in the <interface>_abi_revision
-constant declared next to each interface instead. The pin file holds, per interface, its header, the constant, the
+constant declared next to each interface instead. A game_editor module does the same with the editor's interfaces,
+whose constants the editor layout key mixes in (edt::editor_layout_key, snk/editor/edt_editor_layout_key.h, #969): their
+pins carry "key": "editor"; a pin without "key" is the game's, any other value is an error. Each key has its revision:
+layout_revision (gs_module_layout.h) and editor_layout_revision (edt_editor_layout.h), recorded under the same names at
+the top of the pin file. The pin file holds, per interface, its header, the constant, the key, the
 revision, the ordered list of its base classes and the ordered list of the virtual functions the class declares. The
 check fails when:
   - the bases or the virtual functions in the header differ from the pinned ones while the constant still has the pinned
-    revision: raise the constant by one (gs_module_layout.h raises layout_revision with it, see the rule above
-    SNK_MODULE_API_VERSION) and record the new lists with --update;
+    revision: raise the constant by one (and its key's revision with it, see the rule above SNK_MODULE_API_VERSION) and
+    record the new lists with --update;
   - the constant differs from the pinned revision: record it with --update;
-  - the header, the class or the constant is gone, or the key header does not name the constant;
-  - layout_revision (gs_module_layout.h) differs from the "layout_revision" the pin file records: record it with --update;
-  - a constant listed in "retired" is also an active pin;
+  - the header, the class or the constant is gone, or its key header does not name the constant;
+  - a key's revision in its layout header differs from the one the pin file records: record it with --update;
+  - a constant listed in "retired" is also an active pin, or a pin names an unknown key;
   - with --base-pins (the pin file of the base branch, a path relative to the current directory):
       - an interface pinned in both files has other bases or virtual functions in each and a revision that is not
-        strictly higher in this branch. This catches a pin file edited by hand to match changed headers;
+        strictly higher in this branch, or its key's revision is not strictly higher than the base's. This catches a
+        pin file edited by hand to match changed headers;
       - a pin of the base branch (matched by its constant) is missing here. Restore it, or retire it: add
         {"constant": "<name>_abi_revision", "reason": "<one line>"} to the top-level "retired" list and raise
-        layout_revision. A retired entry stays in the file afterwards. Renaming a constant is a removal plus a new pin;
-      - a pin was retired relative to the base and "layout_revision" is not higher than the base's. A base file without
-        "layout_revision" (older format) has an unknown revision: the retirement passes with a note.
+        its key's revision. A retired entry stays in the file afterwards. Renaming a constant is a removal plus a new pin;
+      - a pin was retired relative to the base and its key's revision is not higher than the base's. A base file without
+        "layout_revision" (older format) has an unknown game revision: the change passes with a note; one without
+        "editor_layout_revision" reads it as 0.
     A pin only in this branch is new and passes. A missing or malformed --base-pins file is an error: the caller leaves
     the flag out when the base has none.
 --update refuses the first case too: it records changed lists only with a raised revision. It keeps "retired".
@@ -55,7 +61,19 @@ from pathlib import Path
 DEFAULT_PINS = 'tools/ci/vtable_pins.json'
 KEY_HEADER = 'core/engine/game_system/include/snk/game/gs_module_layout_key.h'
 LAYOUT_HEADER = 'core/engine/game_system/include/snk/game/gs_module_layout.h'
+EDITOR_KEY_HEADER = 'Editor/code/editor_system/include/snk/editor/edt_editor_layout_key.h'
+EDITOR_LAYOUT_HEADER = 'Editor/code/editor_system/include/snk/editor/edt_editor_layout.h'
 TOOL = 'check_vtable_pins'
+
+# The keys a pin can belong to (its "key", "game" when absent): where its revision constant must be mixed in, and the
+# revision of that key, a constant of its layout header recorded under the same name at the top of the pin file.
+# `base_default` is what a base pin file without that revision reads as: None = unknown (a note), a number = that.
+KEYS = {
+    'game': {'key_header': KEY_HEADER, 'layout_header': LAYOUT_HEADER, 'revision': 'layout_revision',
+             'list': 'interface_abi_revisions', 'base_default': None},
+    'editor': {'key_header': EDITOR_KEY_HEADER, 'layout_header': EDITOR_LAYOUT_HEADER,
+               'revision': 'editor_layout_revision', 'list': 'editor_interface_abi_revisions', 'base_default': 0},
+}
 
 BUILTIN_WORDS = {'bool', 'char', 'char8_t', 'char16_t', 'char32_t', 'wchar_t', 'short', 'int', 'long', 'signed',
                  'unsigned', 'float', 'double', 'void', 'auto', 'const', 'volatile'}
@@ -302,10 +320,26 @@ def revision_of(header_text, constant):
     return int(match.group(1)) if match else None
 
 
-def layout_revision_of(read):
-    """The `layout_revision` constant of the layout header, or None."""
-    text = read(LAYOUT_HEADER)
-    return None if text is None else revision_of(text, 'layout_revision')
+def key_of(entry):
+    """The key a pin belongs to, or None when its "key" names none."""
+    key = entry.get('key', 'game')
+    return key if key in KEYS else None
+
+
+def key_problems(pins):
+    return [f"{DEFAULT_PINS}: {entry['class']} ({entry['constant']}) has \"key\": {json.dumps(entry.get('key'))}: "
+            f"expected one of {', '.join(json.dumps(k) for k in KEYS)} (none = \"game\")"
+            for entry in pins['interfaces'] if key_of(entry) is None]
+
+
+def layout_revision_of(read, key='game'):
+    """The revision constant of the key's layout header, or None."""
+    text = read(KEYS[key]['layout_header'])
+    return None if text is None else revision_of(text, KEYS[key]['revision'])
+
+
+def no_revision_error(key):
+    return f"{KEYS[key]['layout_header']}: no `inline constexpr std::uint64_t {KEYS[key]['revision']} = <n>;`"
 
 
 def retired_constants(pins):
@@ -358,26 +392,31 @@ def describe_change(before, after, labels=('pinned', 'now')):
     return '\n'.join(lines)
 
 
-def raise_hint(constant, revision):
-    return (f'A module built before calls them by slot: raise {constant} to {revision + 1} and layout_revision in '
-            f'gs_module_layout.h, then run python3 tools/ci/check_vtable_pins.py --update.')
+def raise_hint(constant, revision, key='game'):
+    return (f'A module built before calls them by slot: raise {constant} to {revision + 1} and {KEYS[key]["revision"]} '
+            f'in {Path(KEYS[key]["layout_header"]).name}, then run python3 tools/ci/check_vtable_pins.py --update.')
 
 
 def check(pins, read):
     """The problems of the pin file against the headers of the same tree."""
-    errors = retired_problems(pins)
-    current = layout_revision_of(read)
-    if current is None:
-        errors.append(f'{LAYOUT_HEADER}: no `inline constexpr std::uint64_t layout_revision = <n>;`')
-    elif pins.get('layout_revision') != current:
-        errors.append(f'layout_revision is {current}, the pin file says {pins.get("layout_revision")}: run '
-                      f'python3 tools/ci/check_vtable_pins.py --update and commit {DEFAULT_PINS}')
-    key_text = read(KEY_HEADER)
+    errors = retired_problems(pins) + key_problems(pins)
+    for key, spec in KEYS.items():
+        current = layout_revision_of(read, key)
+        if current is None:
+            errors.append(no_revision_error(key))
+        elif pins.get(spec['revision']) != current:
+            errors.append(f'{spec["revision"]} is {current}, the pin file says {pins.get(spec["revision"])}: run '
+                          f'python3 tools/ci/check_vtable_pins.py --update and commit {DEFAULT_PINS}')
+    key_texts = {key: read(spec['key_header']) for key, spec in KEYS.items()}
     for entry in pins['interfaces']:
+        key = key_of(entry)
+        if key is None:
+            continue
         pin, revision, problems = current_state(entry, read)
         errors += problems
+        key_text = key_texts[key]
         if key_text is not None and not re.search(r'\b' + re.escape(entry['constant']) + r'\b', strip_comments(key_text)):
-            errors.append(f"{KEY_HEADER}: does not mix {entry['constant']} into the key (interface_abi_revisions)")
+            errors.append(f"{KEYS[key]['key_header']}: does not mix {entry['constant']} into the key ({KEYS[key]['list']})")
         if problems:
             continue
         pinned = pinned_of(entry)
@@ -387,7 +426,7 @@ def check(pins, read):
             errors.append(f'{where}: not pinned yet: run python3 tools/ci/check_vtable_pins.py --update')
         elif differs(pinned, pin) and revision == pinned_revision:
             errors.append(f'{where}: its base classes or virtual functions changed but {entry["constant"]} is still '
-                          f'{revision}. {raise_hint(entry["constant"], revision)}\n' + describe_change(pinned, pin))
+                          f'{revision}. {raise_hint(entry["constant"], revision, key)}\n' + describe_change(pinned, pin))
         elif revision != pinned_revision:
             errors.append(f'{where}: {entry["constant"]} is {revision}, the pin file says {pinned_revision}: run '
                           f'python3 tools/ci/check_vtable_pins.py --update and commit {DEFAULT_PINS}')
@@ -397,56 +436,87 @@ def check(pins, read):
 def check_against_base(pins, base_pins):
     """(errors, notes) of the pin file against the base branch's: a pin edited by hand to match changed headers passes
     check() but changes here without a higher revision, and a pin cannot vanish without being retired."""
-    errors = []
+    errors = key_problems(pins)
     notes = []
     base = {entry['constant']: entry for entry in base_pins['interfaces']}
     head = {entry['constant']: entry for entry in pins['interfaces']}
+
+    def raised(key):
+        """(raised, here, base) of the key's revision: unknown in the base (None) counts as raised, with a note."""
+        name = KEYS[key]['revision']
+        base_value = base_pins.get(name, KEYS[key]['base_default'])
+        value = pins.get(name)
+        if not isinstance(base_value, int):
+            return None, value, base_value
+        return isinstance(value, int) and value > base_value, value, base_value
+
+    changed_unknown = []
     for constant, entry in head.items():
         before = base.get(constant)
-        if before is None or before.get('virtuals') is None or entry.get('virtuals') is None:
+        key = key_of(entry)
+        if key is None or before is None or before.get('virtuals') is None or entry.get('virtuals') is None:
+            continue
+        if not differs(pinned_of(before), pinned_of(entry)):
             continue
         revision = entry.get('revision')
         base_revision = before.get('revision')
-        if differs(pinned_of(before), pinned_of(entry)) and not (
-                isinstance(revision, int) and isinstance(base_revision, int) and revision > base_revision):
+        change = describe_change(pinned_of(before), pinned_of(entry), ('base branch', 'this branch'))
+        if not (isinstance(revision, int) and isinstance(base_revision, int) and revision > base_revision):
             errors.append(f"{entry['header']}: {entry['class']}: its pinned base classes or virtual functions differ "
                           f"from the base branch's pin file but {constant} is {revision} here and {base_revision} "
-                          f"there, not higher. {raise_hint(constant, base_revision or 0)}\n"
-                          + describe_change(pinned_of(before), pinned_of(entry), ('base branch', 'this branch')))
+                          f"there, not higher. {raise_hint(constant, base_revision or 0, key)}\n" + change)
+            continue
+        ok, value, base_value = raised(key)
+        name = KEYS[key]['revision']
+        if ok is None:
+            changed_unknown.append((constant, name))
+        elif not ok:
+            errors.append(f"{entry['header']}: {entry['class']}: its pinned base classes or virtual functions differ "
+                          f"from the base branch's pin file but {name} is {value} here and {base_value} there, not "
+                          f"higher: raise it in {Path(KEYS[key]['layout_header']).name} and run python3 "
+                          f"tools/ci/check_vtable_pins.py --update\n" + change)
+    for constant, name in changed_unknown:
+        notes.append(f"{TOOL}: note: the base branch's pin file records no {name}: the change of {constant} is "
+                     f"accepted without comparing it")
     retired = retired_constants(pins)
-    removed = []
+    removed = {}
     for constant, before in base.items():
         if constant in head:
             continue
+        key = key_of(before) or 'game'
         if constant in retired:
-            removed.append(constant)
+            removed.setdefault(key, []).append(constant)
         else:
             errors.append(f"{before['header']}: {before['class']} ({constant}) is pinned in the base branch but not "
                           f"here: its vtable would no longer be checked. Restore the pin, or add "
                           f'{{"constant": "{constant}", "reason": "..."}} to "retired" in {DEFAULT_PINS} and raise '
-                          f'layout_revision in gs_module_layout.h, then run python3 tools/ci/check_vtable_pins.py '
-                          f'--update')
-    if removed:
-        base_layout = base_pins.get('layout_revision')
-        layout = pins.get('layout_revision')
-        if not isinstance(base_layout, int):
-            notes.append(f"{TOOL}: note: the base branch's pin file records no layout_revision: the retirement of "
-                         f"{', '.join(removed)} is accepted without comparing it")
-        elif not isinstance(layout, int) or layout <= base_layout:
-            errors.append(f"{', '.join(removed)} retired but layout_revision is {layout} here and {base_layout} in the "
-                          f"base branch's pin file: raise it in gs_module_layout.h and run python3 "
-                          f"tools/ci/check_vtable_pins.py --update")
+                          f'{KEYS[key]["revision"]} in {Path(KEYS[key]["layout_header"]).name}, then run python3 '
+                          f'tools/ci/check_vtable_pins.py --update')
+    for key, constants in removed.items():
+        ok, value, base_value = raised(key)
+        name = KEYS[key]['revision']
+        if ok is None:
+            notes.append(f"{TOOL}: note: the base branch's pin file records no {name}: the retirement of "
+                         f"{', '.join(constants)} is accepted without comparing it")
+        elif not ok:
+            errors.append(f"{', '.join(constants)} retired but {name} is {value} here and {base_value} in the "
+                          f"base branch's pin file: raise it in {Path(KEYS[key]['layout_header']).name} and run "
+                          f"python3 tools/ci/check_vtable_pins.py --update")
     return errors, notes
 
 
 def update(pins, read):
     """The pins with the current lists and revisions, or the errors that forbid recording them."""
-    errors = retired_problems(pins)
+    errors = retired_problems(pins) + key_problems(pins)
     updated = []
-    layout = layout_revision_of(read)
-    if layout is None:
-        errors.append(f'{LAYOUT_HEADER}: no `inline constexpr std::uint64_t layout_revision = <n>;`')
+    layouts = {}
+    for key, spec in KEYS.items():
+        layouts[spec['revision']] = layout_revision_of(read, key)
+        if layouts[spec['revision']] is None:
+            errors.append(no_revision_error(key))
     for entry in pins['interfaces']:
+        if key_of(entry) is None:
+            continue
         pin, revision, problems = current_state(entry, read)
         errors += problems
         if problems:
@@ -457,9 +527,12 @@ def update(pins, read):
                           f"{entry['constant']} above {entry.get('revision')} before recording them\n"
                           + describe_change(pinned, pin))
             continue
-        updated.append({'class': entry['class'], 'header': entry['header'], 'constant': entry['constant'],
-                        'revision': revision, 'bases': pin['bases'], 'virtuals': pin['virtuals']})
-    recorded = {'layout_revision': layout, 'interfaces': updated, 'retired': pins.get('retired', [])}
+        recorded_entry = {'class': entry['class'], 'header': entry['header'], 'constant': entry['constant']}
+        if 'key' in entry:
+            recorded_entry['key'] = entry['key']
+        recorded_entry.update({'revision': revision, 'bases': pin['bases'], 'virtuals': pin['virtuals']})
+        updated.append(recorded_entry)
+    recorded = dict(layouts, interfaces=updated, retired=pins.get('retired', []))
     return (recorded if not errors else None), errors
 
 
@@ -480,8 +553,9 @@ def load_pins(path):
             isinstance(e, dict) and isinstance(e.get('constant'), str) and isinstance(e.get('reason'), str)
             and e['reason'].strip() for e in retired):
         raise SystemExit(f'{TOOL}: {path}: "retired" is a list of {{"constant", "reason"}} entries, reason not empty')
-    if 'layout_revision' in pins and not isinstance(pins['layout_revision'], int):
-        raise SystemExit(f'{TOOL}: {path}: "layout_revision" is an integer')
+    for spec in KEYS.values():
+        if spec['revision'] in pins and not isinstance(pins[spec['revision']], int):
+            raise SystemExit(f'{TOOL}: {path}: "{spec["revision"]}" is an integer')
     return pins
 
 
@@ -553,7 +627,10 @@ namespace demo {
 
     key = 'using interface_abi_revisions = layout_values<demo::iface_abi_revision>;'
     layout = 'inline constexpr std::uint64_t layout_revision = 12;'
-    files = {'h.h': header, KEY_HEADER: key, LAYOUT_HEADER: layout}
+    editor_key = 'using editor_interface_abi_revisions = layout_values<>;'
+    editor_layout = 'inline constexpr std::uint64_t editor_layout_revision = 1;'
+    files = {'h.h': header, KEY_HEADER: key, LAYOUT_HEADER: layout, EDITOR_KEY_HEADER: editor_key,
+             EDITOR_LAYOUT_HEADER: editor_layout}
     pins_in = {'interfaces': [{'class': 'iface', 'header': 'h.h', 'constant': 'iface_abi_revision'}]}
     pins, errors = update(pins_in, files.get)
     expect(not errors and pins['interfaces'][0]['virtuals'] == expected, f'a first --update gives {errors}')
@@ -599,7 +676,11 @@ namespace demo {
     hand_rebased = {'interfaces': [dict(pins['interfaces'][0], bases=['public other'])]}
     errors, _ = check_against_base(hand_rebased, pins)
     expect(len(errors) == 1 and 'public other' in errors[0], f'a hand-edited base gives {errors}')
-    expect(check_against_base(repinned, pins) == ([], []), 'a raised revision differs from the base branch')
+    expect(check_against_base(dict(repinned, layout_revision=13), pins) == ([], []),
+           'a raised revision differs from the base branch')
+    # A changed game pin needs layout_revision above the base's too (#969).
+    errors, _ = check_against_base(repinned, pins)
+    expect(len(errors) == 1 and 'layout_revision is 12 here' in errors[0], f'a change without a new layout gives {errors}')
     second = dict(pins['interfaces'][0], constant='other_abi_revision', virtuals=['void f()'])
     grown = {'interfaces': pins['interfaces'] + [second]}
     expect(check_against_base(grown, pins) == ([], []), 'a new pin differs from the base branch')
@@ -626,8 +707,8 @@ namespace demo {
 
     # A changed list needs a revision above the base's, not only another one.
     def with_revision(source, revision):
-        return {'interfaces': [dict(source['interfaces'][0], revision=revision,
-                                    virtuals=repinned['interfaces'][0]['virtuals'])]}
+        return {'layout_revision': 13, 'interfaces': [dict(source['interfaces'][0], revision=revision,
+                                                           virtuals=repinned['interfaces'][0]['virtuals'])]}
     expect(check_against_base(with_revision(pins, 2), pins) == ([], []), 'a raised revision with a new list fails')
     errors, _ = check_against_base(with_revision(pins, 0), pins)
     expect(len(errors) == 1 and 'not higher' in errors[0], f'a lowered revision gives {errors}')
@@ -637,6 +718,64 @@ namespace demo {
     stale = dict(files, **{LAYOUT_HEADER: layout.replace('12', '13')})
     errors = check(pins, stale.get)
     expect(len(errors) == 1 and 'layout_revision is 13' in errors[0], f'another layout_revision gives {errors}')
+
+    # The editor key (#969): an entry with "key": "editor" is mixed into the editor key header and its changes raise
+    # editor_layout_revision; entries without "key" are the game's.
+    editor_header = header.replace('iface', 'panel')
+    editor_files = dict(files, **{'e.h': editor_header,
+                                  EDITOR_KEY_HEADER: 'using editor_interface_abi_revisions = layout_values<panel_abi_revision>;'})
+    both_in = {'interfaces': pins_in['interfaces'] + [
+        {'class': 'panel', 'header': 'e.h', 'constant': 'panel_abi_revision', 'key': 'editor'}]}
+    both, errors = update(both_in, editor_files.get)
+    expect(not errors and both['editor_layout_revision'] == 1 and both['interfaces'][1]['key'] == 'editor'
+           and 'key' not in both['interfaces'][0], f'--update of an editor pin gives {errors}')
+    expect(check(both, editor_files.get) == [], f'an unchanged tree with an editor pin gives {check(both, editor_files.get)}')
+    stale_editor = dict(editor_files, **{EDITOR_LAYOUT_HEADER: editor_layout.replace('1', '2')})
+    errors = check(both, stale_editor.get)
+    expect(len(errors) == 1 and 'editor_layout_revision is 2' in errors[0], f'another editor_layout_revision gives {errors}')
+
+    # An editor revision constant the editor key header does not mix in, or one only the game key mixes in.
+    unmixed_editor = dict(editor_files, **{EDITOR_KEY_HEADER: 'using editor_interface_abi_revisions = layout_values<>;',
+                                           KEY_HEADER: key.replace('>', ', panel_abi_revision>')})
+    errors = check(both, unmixed_editor.get)
+    expect(len(errors) == 1 and 'does not mix panel_abi_revision' in errors[0]
+           and 'editor_interface_abi_revisions' in errors[0], f'an editor revision outside the editor key gives {errors}')
+
+    # An unknown key is an error, in check, --update and against the base branch.
+    odd = {'interfaces': both['interfaces'][:1] + [dict(both['interfaces'][1], key='tools')],
+           'layout_revision': 12, 'editor_layout_revision': 1}
+    errors = check(odd, editor_files.get)
+    expect(len(errors) == 1 and '"tools"' in errors[0], f'an unknown key gives {errors}')
+    _, errors = update(odd, editor_files.get)
+    expect(len(errors) == 1 and '"tools"' in errors[0], f'--update of an unknown key gives {errors}')
+    errors, _ = check_against_base(odd, both)
+    expect(len(errors) == 1 and '"tools"' in errors[0], f'an unknown key against the base gives {errors}')
+
+    # An editor entry that changes needs editor_layout_revision above the base's, not layout_revision.
+    changed_virtuals = both['interfaces'][1]['virtuals'] + ['void extra()']
+    editor_changed = dict(both, interfaces=[both['interfaces'][0],
+                                            dict(both['interfaces'][1], revision=2, virtuals=changed_virtuals)])
+    errors, _ = check_against_base(dict(editor_changed, layout_revision=13), both)
+    expect(len(errors) == 1 and 'editor_layout_revision is 1 here and 1 there' in errors[0],
+           f'an editor change without a new editor_layout_revision gives {errors}')
+    expect(check_against_base(dict(editor_changed, editor_layout_revision=2), both) == ([], []),
+           'an editor change with a raised editor_layout_revision fails')
+    # Only a game entry changes: no editor revision is needed.
+    game_changed = dict(both, layout_revision=13, interfaces=[
+        dict(both['interfaces'][0], revision=2, virtuals=repinned['interfaces'][0]['virtuals']), both['interfaces'][1]])
+    expect(check_against_base(game_changed, both) == ([], []), 'a game change asks for an editor revision')
+    # A base without editor_layout_revision reads as 0: the first editor pins pass, a change against it too.
+    expect(check_against_base(both, pins) == ([], []), 'the first editor pins fail against a base without them')
+    old_base = {key: value for key, value in both.items() if key != 'editor_layout_revision'}
+    expect(check_against_base(editor_changed, old_base) == ([], []),
+           'an editor change against a base without editor_layout_revision fails')
+    # An editor pin is retired with a raised editor_layout_revision.
+    without_panel = dict(both, interfaces=both['interfaces'][:1],
+                         retired=[{'constant': 'panel_abi_revision', 'reason': 'gone'}])
+    errors, _ = check_against_base(without_panel, both)
+    expect(len(errors) == 1 and 'editor_layout_revision' in errors[0], f'an editor retirement, same revision gives {errors}')
+    expect(check_against_base(dict(without_panel, editor_layout_revision=2), both) == ([], []),
+           'an editor retirement with a raised editor_layout_revision fails')
     print(f'{TOOL}: self-test passed')
 
 
