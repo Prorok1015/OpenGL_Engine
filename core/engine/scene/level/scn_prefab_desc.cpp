@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -689,11 +690,21 @@ namespace {
 		node.has_transform = true;
 	}
 
-	void apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& record)
+	// What applying records found, for find_stale_records; a null sink collects nothing (and the skipped records are logged as before).
+	struct stale_sink
+	{
+		// A record handed to the instance at `prefix` below the node, where it is number `position` of its records.
+		struct forward { std::size_t record; std::vector<uint64_t> prefix; std::size_t position; };
+		std::vector<scn::stale_override> stale;
+		std::vector<forward> forwarded;
+	};
+
+	// False: the record names a component the node does not have and cannot add it (its target is gone).
+	bool apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& record, bool quiet)
 	{
 		if (record.component == scn::transform_pseudo_component) {
 			apply_transform_record(node, record);
-			return;
+			return true;
 		}
 
 		auto it = node.components.find(record.component);
@@ -701,9 +712,10 @@ namespace {
 			if (record.path.empty() && (record.value.is_object() || record.value.is_string())) {
 				node.components.emplace(record.component, scn::parse_component(desc_system, owner, record.value, record.component));
 			} else {
-				egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", record.component, record.path);
+				if (!quiet) egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", record.component, record.path);
+				return false;
 			}
-			return;
+			return true;
 		}
 		// The component's type decides, not the record's key: a typed component may well have a field called "path".
 		const prefab_comp_node& held = it->second;
@@ -712,23 +724,27 @@ namespace {
 		if (record.path.empty() && whole_reference) {
 			// a plain reference to a desc replaces the component whole
 			it->second = scn::parse_component(desc_system, owner, record.value, record.component);
-			return;
+			return true;
 		}
 		if (record.path.empty() && !record.value.is_object()) {
 			egLOG_WARN("desc", "override: component '{}' can only be merged with an object at ''", record.component);
-			return;
+			return true;
 		}
 		it->second.edits.push_back({ record.path, json::value(record.value, json::storage_ptr{}) });
+		return true;
 	}
 
 	// Applies the records to a tree that is already a private copy. A record that targets a node below an
 	// instance of another prefab is handed down to that instance, which resolves it once it is expanded.
 	// `marks` follows what the records do to the tree; a node they add is inside `depth_of_records` open prefabs.
+	// With a `sink`, a record whose node or component is gone is reported there instead of logged.
 	void apply_records(const scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root,
-		const std::vector<scn::override_record>& records, std::vector<scope_mark>& marks, std::size_t depth_of_records)
+		const std::vector<scn::override_record>& records, std::vector<scope_mark>& marks, std::size_t depth_of_records,
+		stale_sink* sink = nullptr)
 	{
 		auto& desc_system = assembler.get_desc_system();
-		for (const auto& record : records) {
+		for (std::size_t index = 0; index < records.size(); ++index) {
+			const auto& record = records[index];
 			prefab_node* parent = nullptr;
 			prefab_node* node = &root;
 			added_nodes added{ marks, {}, depth_of_records };
@@ -741,6 +757,13 @@ namespace {
 						scn::override_record forwarded = record;
 						forwarded.target.erase(forwarded.target.begin(), forwarded.target.begin() + depth);
 						node->overrides.push_back(std::move(forwarded));
+						if (sink) {
+							sink->forwarded.push_back({ index, std::vector<uint64_t>(record.target.begin(), record.target.begin() + depth),
+								node->overrides.size() - 1 });
+						}
+					} else if (sink) {
+						sink->stale.push_back({ index, scn::stale_override::reason::node_gone,
+							std::format("node {} is not part of '{}' any more", desc::format_node_id(record.target[depth]), node->name) });
 					} else {
 						egLOG_WARN("desc", "override: no node {} below '{}', record skipped", desc::format_node_id(record.target[depth]), node->name);
 					}
@@ -762,7 +785,12 @@ namespace {
 					if (!record.path.empty()) {
 						egLOG_WARN("desc", "override: 'remove' of '{}' with a path is not supported, skipped", record.component);
 					} else if (record.component == scn::transform_pseudo_component || node->components.erase(record.component) == 0) {
-						egLOG_WARN("desc", "override: no component '{}' to remove on '{}'", record.component, node->name);
+						if (sink && record.component != scn::transform_pseudo_component) {
+							sink->stale.push_back({ index, scn::stale_override::reason::component_gone,
+								std::format("component '{}' is not on '{}' any more", record.component, node->name) });
+						} else {
+							egLOG_WARN("desc", "override: no component '{}' to remove on '{}'", record.component, node->name);
+						}
 					}
 				} else if (!parent) {
 					egLOG_WARN("desc", "override: the root of an instance cannot be removed, record skipped");
@@ -775,7 +803,10 @@ namespace {
 				break;
 
 			case scn::override_op::set:
-				apply_set_record(desc_system, owner, *node, record);
+				if (!apply_set_record(desc_system, owner, *node, record, sink != nullptr) && sink) {
+					sink->stale.push_back({ index, scn::stale_override::reason::component_gone,
+						std::format("component '{}' is not on '{}' any more", record.component, node->name) });
+				}
 				break;
 			}
 		}
@@ -797,7 +828,7 @@ namespace {
 	// Only the root of a prefab is inside it here: what `node` attaches below itself, and what its records add, is
 	// content of the file `node` is from, so `made.marks` says for each such node of `out` how much it is inside.
 	bool materialize(const scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source,
-		std::span<const res::tag> open, std::size_t roots, expansion& made, marks_view own)
+		std::span<const res::tag> open, std::size_t roots, expansion& made, marks_view own, stale_sink* sink = nullptr)
 	{
 		// Taken before this call opens anything: `node` is content of a file that is inside this much.
 		const std::size_t depth = open.size() + made.chain.size();
@@ -850,7 +881,7 @@ namespace {
 			if (ignored) out.components.erase(*ignored);
 		}
 		out.overrides.clear();
-		apply_records(assembler, *owner, out, node.overrides, made.marks, depth);
+		apply_records(assembler, *owner, out, node.overrides, made.marks, depth, sink);
 		return true;
 	}
 
@@ -966,6 +997,74 @@ bool scn::expand_instance(const ecs_assembler& assembler, const prefab_desc::pre
 	if (!materialize(assembler, node, out, source, open, known ? 1 : 0, made, {})) return false;
 	keep_in_default_resource(out);
 	return true;
+}
+
+namespace {
+
+// The records of `node` that find nothing to change when it is expanded, by their number among `node.overrides`. A record handed
+// down to a nested instance is judged there: each nested instance is expanded once, whatever number of records it was handed. `open`
+// are the prefabs `node` is inside, as in a spawn: a prefab that instantiates itself is refused at once, so a cycle ends. `guard`
+// bounds the nesting that is followed. A node that cannot be expanded (no prefab, no records) reports nothing.
+std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembler, const prefab_node& node,
+	std::span<const res::tag> open, std::size_t guard)
+{
+	std::vector<scn::stale_override> found;
+	if (guard == 0) return found;
+	prefab_node out;
+	res::tag source;
+	expansion made;
+	stale_sink sink;
+	if (!materialize(assembler, node, out, source, open, 0, made, {}, &sink)) return found;
+	found = std::move(sink.stale);
+
+	std::vector<res::tag> inside(open.begin(), open.end());
+	if (!source.string().empty()) inside.push_back(source);
+	std::vector<std::pair<std::vector<uint64_t>, std::vector<const stale_sink::forward*>>> by_instance;
+	for (const auto& note : sink.forwarded) {
+		auto group = std::ranges::find(by_instance, note.prefix, &decltype(by_instance)::value_type::first);
+		if (group == by_instance.end()) {
+			by_instance.emplace_back(note.prefix, std::vector<const stale_sink::forward*>{});
+			group = std::prev(by_instance.end());
+		}
+		group->second.push_back(&note);
+	}
+	for (const auto& [prefix, notes] : by_instance) {
+		const prefab_node* nested = &out;
+		for (const uint64_t id : prefix) {
+			auto child = std::ranges::find(nested->children, id, &prefab_node::node_id);
+			if (child == nested->children.end()) { nested = nullptr; break; }
+			nested = &*child;
+		}
+		if (!nested) continue;
+		const std::vector<scn::stale_override> inner = stale_in_node(assembler, *nested, inside, guard - 1);
+		for (const auto* note : notes) {
+			for (const scn::stale_override& entry : inner) {
+				if (entry.index != note->position) continue;
+				found.push_back(entry);
+				found.back().index = note->record;
+			}
+		}
+	}
+	return found;
+}
+
+}
+
+std::vector<scn::stale_override> scn::find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node)
+{
+	constexpr std::size_t nesting_followed = 64;
+	std::vector<stale_override> found = stale_in_node(assembler, node, {}, nesting_followed);
+	std::ranges::sort(found, {}, &stale_override::index);
+	return found;
+}
+
+std::size_t scn::prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node)
+{
+	const std::vector<stale_override> found = find_stale_records(assembler, node);
+	for (auto it = found.rbegin(); it != found.rend(); ++it) {
+		node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(it->index));
+	}
+	return found.size();
 }
 
 scn::spawn_limits scn::set_spawn_limits(const spawn_limits& limits)
