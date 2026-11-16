@@ -66,6 +66,16 @@ namespace res
 		virtual ::res::file_operation rename(const ::res::tag& from, const ::res::tag& to) override;
 		virtual bool exists(const ::res::tag& tag) const override;
 
+		// The file of `tag` from the layer that holds `anchor` (the top layer when none does), read on the calling thread:
+		// a file paired with another (a desc's binary file, #1068) never comes from a layer the other is not in.
+		::platform::beneath::read_result read_beside(const ::res::tag& anchor, const ::res::tag& tag, std::uint64_t max_bytes,
+			std::vector<std::byte>& out) const;
+		// Whether `anchor` resolves to the top layer of a writable mount: the layer a store of its pair writes to.
+		bool writes_beside(const ::res::tag& anchor) const;
+		// The last step of a two-file save: `target` gets the bytes of `staged` (replaced like a store) and `staged` is
+		// removed. Both in the top root and under the write policy; works without file_operations.
+		::res::file_operation commit_staged(const ::res::tag& staged, const ::res::tag& target);
+
 	private:
 		bool is_shadowed(const fs::path& path) const;
 		bool exists_below_top(const tag& tag) const;

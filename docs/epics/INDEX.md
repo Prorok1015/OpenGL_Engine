@@ -50,6 +50,7 @@
 | [EPIC-11](desc-driven/EPIC-11.md) | Editor Camera & Render Targets | done |
 | [EPIC-56](desc-driven/EPIC-56.md) | Data Documents & Schema Inspector — документы данных `is_document`, инспектор из схемы, словари, reorder, типизированный пикер ссылок (#26) | done |
 | [EPIC-58](desc-driven/EPIC-58.md) | Data Versioning & Migration — версии форматов, явная миграция проекта с бэкапом и отчётом (#28) | design |
+| [EPIC-79](desc-driven/EPIC-79.md) | Desc Binary Data — большие числовые данные desc (вершины, индексы) в двоичном файле рядом с desc (#1068) | in progress |
 
 ### Prefab-First
 
