@@ -1,0 +1,120 @@
+{
+	"memory://models/obj_lines/wire.desc": {
+		"json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "fadf3ecaf2c5571f",
+			"children": [
+				{
+					"__id": "f227392535ae83a5",
+					"name": "Wire",
+					"children": [
+						{
+							"__id": "dd914f668a8fb7cd",
+							"name": "mesh_Wire",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://models/obj_lines/wire.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 4,
+									"ind_begin": 0,
+									"ind_end": 4,
+									"material": {
+										"__type": "material_desc",
+										"__version": 1,
+										"__parent": "res://base_material.desc",
+										"name": "DefaultMaterial",
+										"uniforms": {
+											"albedo": [
+												6.000000238418579E-1,
+												6.000000238418579E-1,
+												6.000000238418579E-1,
+												1E0
+											],
+											"emissive": [
+												0E0,
+												0E0,
+												0E0,
+												1E0
+											],
+											"shininess": 0E0
+										},
+										"defines": [
+											"LIGHTS_ENABLED"
+										],
+										"queue": "mix",
+										"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+									}
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"memory://models/obj_lines/wire.geom.desc": {
+		"json": {
+			"__type": "geometry_desc",
+			"__parent": "res://base_geometry.desc",
+			"topology": "lines",
+			"layout": {
+				"position": "vec3"
+			},
+			"indices": [
+				0,
+				1,
+				2,
+				3
+			],
+			"vertices": {
+				"numbers": {
+					"count": 48,
+					"sum": 7.64E2,
+					"magnitude": 7.64E2,
+					"min": 0E0,
+					"max": 1.28E2
+				}
+			},
+			"bounds": []
+		},
+		"geometry": {
+			"topology": "lines",
+			"stride": 12,
+			"vertices": 4,
+			"indices": [
+				0,
+				1,
+				2,
+				3
+			],
+			"elements": {
+				"position": [
+					{
+						"count": 4,
+						"sum": 3E0,
+						"magnitude": 3E0,
+						"min": 0E0,
+						"max": 1E0
+					},
+					{
+						"count": 4,
+						"sum": 1E0,
+						"magnitude": 1E0,
+						"min": 0E0,
+						"max": 1E0
+					},
+					{
+						"count": 4,
+						"sum": 0E0,
+						"magnitude": 0E0,
+						"min": 0E0,
+						"max": 0E0
+					}
+				]
+			}
+		}
+	}
+}

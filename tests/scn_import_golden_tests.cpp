@@ -156,6 +156,21 @@ json::value summarized(const json::value& value)
 			for (const auto& item : items) values.push_back(item.to_number<double>());
 			return json::object{ { "numbers", figures_of(values) } };
 		}
+		// Rows of numbers (the skin weights of each vertex): the figures of each column.
+		const bool rows = items.size() > k_kept_array && std::all_of(items.begin(), items.end(), [](const json::value& item) {
+			return item.is_array() && std::all_of(item.as_array().begin(), item.as_array().end(), [](const json::value& cell) { return cell.is_number(); });
+		});
+		if (rows) {
+			std::vector<std::vector<double>> columns;
+			for (const auto& row : items) {
+				const json::array& cells = row.as_array();
+				if (columns.size() < cells.size()) columns.resize(cells.size());
+				for (std::size_t c = 0; c < cells.size(); ++c) columns[c].push_back(cells[c].to_number<double>());
+			}
+			json::array figures;
+			for (const auto& column : columns) figures.push_back(figures_of(column));
+			return json::object{ { "rows", json::object{ { "count", items.size() }, { "columns", std::move(figures) } } } };
+		}
 		json::array out;
 		out.reserve(items.size());
 		for (const auto& item : items) out.push_back(summarized(item));
