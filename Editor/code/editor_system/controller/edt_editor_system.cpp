@@ -58,7 +58,6 @@
 #include "edt_agent_model_import.h"
 #include "edt_decoder_sandbox_notice.h"
 #include "edt_scene_commands.h"
-#include "edt_agent_sessions.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_migration_commands.h"
@@ -639,10 +638,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				[this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); } })) {
 		m_registrations.push_back(std::move(command));
 	}
-	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
-	for (auto& command : m_agent_sessions->register_commands(m_context->actions().commands())) {
-		m_registrations.push_back(std::move(command));
-	}
 	// A7 (#451): the agent's edits of code/ through code://; without a code folder they answer no_project.
 	for (auto& command : register_code_commands(m_context->actions().commands(), { m_res, &m_context->events() })) {
 		m_registrations.push_back(std::move(command));
@@ -858,9 +853,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_prefab->drop_dirty_document();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
-		agent_ports.session_closed = [this](const std::string& session) {
-			if (m_agent_sessions) m_agent_sessions->session_closed(session);
-		};
 		// The guard is in place before the server can take a call.
 		m_vcs->guard_config_files(editor_config_files());
 		m_agent = std::make_unique<agent_component>(std::move(agent_ports));

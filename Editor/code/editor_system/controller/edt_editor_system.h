@@ -55,7 +55,6 @@ namespace edt {
 	class agent_component;
 	class agent_ui_component;
 	class file_menu;
-	class agent_sessions;
 	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
@@ -265,8 +264,6 @@ namespace edt {
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
 		std::unique_ptr<edt::game_build_component> m_build;
-		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
-		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 		// Version control and the code host (#458, #1004): git, the repository watcher, pull requests, the tokens and the Git
 		// Account window; its commands are in m_registrations, removed before it. Before the asset database, whose callbacks ask it
 		// whether a git write runs, so the database goes first.
