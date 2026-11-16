@@ -6,6 +6,7 @@
 #include "edt_model_file_access.h"
 #include "edt_model_importer.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_system.h>
 #include <cstdint>
 #include <cstddef>
@@ -32,8 +33,11 @@ namespace edt {
 	// The answer to an import: `kind` is "import", the resources that came with it are exactly its created tags (every one of
 	// them there once), all tags are memory:// tags below the one folder of the prefab, and nothing of the model's path is
 	// taken from the child (the request's is). An import the child reported as failed comes back with `error` set and no
-	// resources.
-	std::optional<import_intermediate> accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem);
+	// resources. The geometry is decoded as the loader decodes it (#1068 PR3b): triangles as its desc and binary file
+	// <stem>.geom.bin (created, never listed), lines and points as arrays. With `geometry`, a pair is encoded again by the
+	// editor's writer from the decoded data, for the caller to store instead of the child's bytes.
+	std::optional<import_intermediate> accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem,
+		rnd::geometry_files* geometry = nullptr);
 
 	// Whether `relative` (below the folder of an import named `stem`) is a name an import gives a resource: <stem>.prefab.desc,
 	// <stem>.geom.desc, materials/*.mat.desc, textures/*.txm.desc and images, __embedded_txm/* descs and images. Never a model

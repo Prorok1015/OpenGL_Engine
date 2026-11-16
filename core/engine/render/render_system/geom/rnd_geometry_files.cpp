@@ -258,6 +258,27 @@ std::string rnd::read_geometry_file(res::resource_system& system, const res::tag
 	return {};
 }
 
+std::string rnd::decode_geometry_files(const res::tag& file, const boost::json::object& desc, std::span<const std::byte> binary,
+	geometry_desc& out)
+{
+	PROFILE_SCOPE("geometry file decode");
+	try {
+		detail::read_geometry_json(out, desc);
+		if (detail::binary_state_of(out) == detail::geometry_binary_state::not_loaded) {
+			detail::decode_geometry_binary(file, binary, out);
+		} else if (!binary.empty()) {
+			return std::format("geometry '{}' holds its data as arrays, but a binary file came with it", file.view());
+		} else {
+			detail::check_geometry_arrays(file, out);
+		}
+	} catch (const res::load_error& e) {
+		return e.what();
+	} catch (const std::exception& e) {
+		return std::format("geometry '{}': {}", file.view(), e.what());
+	}
+	return {};
+}
+
 bool rnd::holds_geometry_arrays(const boost::json::object& desc)
 {
 	const boost::json::value* vertices = desc.if_contains("vertices");
