@@ -8,6 +8,7 @@
 #include <snk/resource/res_shipping_dirs.h>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #if !defined(_WIN32)
 #include <csignal>
@@ -403,11 +404,13 @@ BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotUseIoUring_PtraceOrStartAProcess)
 	for (const char* call : { "io_uring", "ptrace", "fork" }) {
 		BOOST_TEST_CONTEXT(call) {
 			const auto unsandboxed = run_call(scratch, "off", call);
-			if (unsandboxed.exit_code != 5) {
-				// The system already refuses it (io_uring off by sysctl, a container profile): nothing left to show.
-				BOOST_TEST_MESSAGE(call << " is refused without the sandbox too (" << unsandboxed.exit_code << ")");
+			// Only io_uring may be refused by the system itself (sysctl, container profile): ptrace and fork must work.
+			if (std::string_view(call) == "io_uring" && unsandboxed.exit_code == 0) {
+				BOOST_TEST_MESSAGE("io_uring is refused without the sandbox too: not shown");
 				continue;
 			}
+			BOOST_REQUIRE_MESSAGE(unsandboxed.exit_code == 5,
+				call << ", off: " << unsandboxed.exit_code << " " << unsandboxed.err);
 			const auto sandboxed = run_call(scratch, "best_effort", call);
 			BOOST_CHECK_MESSAGE(sandboxed.exit_code == 0, call << ": " << sandboxed.exit_code << " " << sandboxed.err);
 		}
