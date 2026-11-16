@@ -182,6 +182,7 @@ void edt::agent_component::shutdown()
 		};
 		m_log_filter = nullptr;
 	}
+	// The default policy values (push to agent/*, origin, flags off), as before when the access was empty: a closure that names no member.
 	m_ports.vcs.follow_agent_policy({}, [] { return vcs_policy{}; });
 	m_access.reset();
 	if (m_argument_checks) {
