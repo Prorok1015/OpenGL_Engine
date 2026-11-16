@@ -384,4 +384,42 @@ BOOST_AUTO_TEST_CASE(Load_ReportsSchemaErrorsFromTheFile)
 	check_error(prj::load_manifest(dir.path()), "$.engine_version");
 }
 
+// #1031: how far one spawn of prefabs goes; a value out of its bounds is warned about and the default is used.
+BOOST_AUTO_TEST_CASE(Parse_PrefabLimitsAreOptional_AndOutOfTheirBoundsTheDefault)
+{
+	const prj::prefab_spawn_limits defaults;
+	const auto none = prj::parse_manifest(k_minimal_manifest);
+	BOOST_REQUIRE(none.data.has_value());
+	BOOST_TEST(none.data->prefab_limits.nesting_depth == defaults.nesting_depth);
+	BOOST_TEST(none.data->prefab_limits.nodes_per_spawn == defaults.nodes_per_spawn);
+
+	const auto set = prj::parse_manifest(
+		minimal_with("prefab_limits", R"({ "nesting_depth": 20, "nodes_per_spawn": 5000 })"));
+	BOOST_REQUIRE(set.data.has_value());
+	BOOST_TEST(set.data->prefab_limits.nesting_depth == 20u);
+	BOOST_TEST(set.data->prefab_limits.nodes_per_spawn == 5000u);
+	BOOST_TEST(set.warnings.empty());
+
+	const auto out = prj::parse_manifest(
+		minimal_with("prefab_limits", R"({ "nesting_depth": 0, "nodes_per_spawn": 100000001 })"));
+	BOOST_REQUIRE(out.data.has_value());
+	BOOST_TEST(out.data->prefab_limits.nesting_depth == defaults.nesting_depth);
+	BOOST_TEST(out.data->prefab_limits.nodes_per_spawn == defaults.nodes_per_spawn);
+	BOOST_REQUIRE(out.warnings.size() == 2u);
+	BOOST_TEST(out.warnings[0].find("$.prefab_limits.nesting_depth") != std::string::npos);
+	BOOST_TEST(out.warnings[1].find("$.prefab_limits.nodes_per_spawn") != std::string::npos);
+
+	const auto unknown = prj::parse_manifest(minimal_with("prefab_limits", R"({ "depth": 3 })"));
+	BOOST_REQUIRE(unknown.data.has_value());
+	BOOST_REQUIRE(unknown.warnings.size() == 1u);
+	BOOST_TEST(unknown.warnings[0].find("$.prefab_limits.depth") != std::string::npos);
+
+	check_error(prj::parse_manifest(minimal_with("prefab_limits", "3")), "$.prefab_limits");
+	for (const std::string_view bad : { "-1", "1.5", R"("16")", "true" }) {
+		BOOST_TEST_INFO("nesting_depth: " << bad);
+		const std::string limits = "{ \"nesting_depth\": " + std::string{ bad } + " }";
+		check_error(prj::parse_manifest(minimal_with("prefab_limits", limits)), "$.prefab_limits.nesting_depth");
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

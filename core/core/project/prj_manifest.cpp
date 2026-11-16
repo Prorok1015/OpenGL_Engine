@@ -259,12 +259,53 @@ namespace
 		return ref;
 	}
 
+	std::size_t parse_limit(const json::object& limits, std::string_view key, std::size_t fallback, std::size_t low,
+		std::size_t high, std::vector<std::string>& warnings)
+	{
+		const auto* value = limits.if_contains(json::string_view{ key.data(), key.size() });
+		if (!value) {
+			return fallback;
+		}
+		const std::string path = std::format("$.prefab_limits.{}", key);
+		std::uint64_t number = 0;
+		if (value->is_uint64()) {
+			number = value->get_uint64();
+		} else if (value->is_int64() && value->get_int64() >= 0) {
+			number = static_cast<std::uint64_t>(value->get_int64());
+		} else {
+			fail(path, "expected a non-negative integer");
+		}
+		if (number < low || number > high) {
+			warnings.push_back(std::format("{}: {} is outside [{}, {}], the default {} is used", path, number, low, high,
+				fallback));
+			return fallback;
+		}
+		return static_cast<std::size_t>(number);
+	}
+
+	prj::prefab_spawn_limits parse_prefab_limits(const json::value& value, std::vector<std::string>& warnings)
+	{
+		if (!value.is_object()) {
+			fail("$.prefab_limits", "expected an object");
+		}
+		const auto& object = value.get_object();
+		warn_unknown_fields(object, { "nesting_depth", "nodes_per_spawn" }, "$.prefab_limits", warnings);
+		using limits = prj::prefab_spawn_limits;
+		const limits defaults;
+		limits result;
+		result.nesting_depth = parse_limit(object, "nesting_depth", defaults.nesting_depth, limits::k_min_nesting_depth,
+			limits::k_max_nesting_depth, warnings);
+		result.nodes_per_spawn = parse_limit(object, "nodes_per_spawn", defaults.nodes_per_spawn,
+			limits::k_min_nodes_per_spawn, limits::k_max_nodes_per_spawn, warnings);
+		return result;
+	}
+
 	prj::manifest parse_object(const json::object& root, std::vector<std::string>& warnings)
 	{
 		warn_unknown_fields(root,
 			// migrated_with and applied_steps belong to project migration (tools/project_migration), not to struct manifest.
 			{ "format_version", "name", "engine_version", "start_scene", "input_actions", "content_roots", "modules", "platforms",
-				"migrated_with", "applied_steps" },
+				"prefab_limits", "migrated_with", "applied_steps" },
 			"$", warnings);
 
 		const auto required = [&root](std::string_view key) -> const json::value& {
@@ -310,6 +351,10 @@ namespace
 				fail("$.input_actions", "expected a res:// tag inside the project");
 			}
 			result.input_actions = std::string{ text };
+		}
+
+		if (const auto* limits = root.if_contains("prefab_limits")) {
+			result.prefab_limits = parse_prefab_limits(*limits, warnings);
 		}
 
 		if (const auto* roots = root.if_contains("content_roots")) {

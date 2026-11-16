@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -27,6 +28,20 @@ namespace prj
 		bool optional = false;
 	};
 
+	// How far one spawn of prefabs goes (#924, #1031): "prefab_limits" of the manifest. Out of the bounds: the default.
+	struct prefab_spawn_limits
+	{
+		static constexpr std::size_t k_min_nesting_depth = 1;
+		static constexpr std::size_t k_max_nesting_depth = 64;
+		static constexpr std::size_t k_min_nodes_per_spawn = 1'000;
+		static constexpr std::size_t k_max_nodes_per_spawn = 100'000'000;
+
+		// Prefab instances open one inside another; plain children and the file a spawn starts from do not count.
+		std::size_t nesting_depth = 16;
+		// Nodes one spawn or hot reload builds: a few small files that fan out would otherwise build K^depth entities.
+		std::size_t nodes_per_spawn = 1'000'000;
+	};
+
 	struct manifest
 	{
 		int format_version = k_manifest_format_version;
@@ -41,6 +56,7 @@ namespace prj
 		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.1).
 		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
 		std::string input_actions;
+		prefab_spawn_limits prefab_limits;
 	};
 
 	struct manifest_error
