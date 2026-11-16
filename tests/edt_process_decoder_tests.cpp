@@ -2,12 +2,19 @@
 #include "edt_process_decoder.h"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 // What the editor accepts of the decoder process's answer (#647 PR 2): checked before anything is stored, and what the
 // process-backed import does with a decoder that is missing, slow, cancelled or lied to.
@@ -486,6 +493,248 @@ BOOST_AUTO_TEST_CASE(TheLogOfARun_IsCutAfterTwoHundredLinesOrSixtyFourKiB_Once)
 	BOOST_CHECK(bytes.take(40 * 1024));
 	BOOST_CHECK(!bytes.take(40 * 1024));
 	BOOST_CHECK(!bytes.take(1));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The editor's side of a scan through the decoder (#1043), with a fake child: what it hands over, how often, and when it
+// stops.
+namespace {
+
+struct warn_capture
+{
+	warn_capture()
+	{
+		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::warn) lines.push_back(std::format("{}: {}", category, message));
+		});
+	}
+
+	std::size_t count(std::string_view part) const
+	{
+		return static_cast<std::size_t>(std::count_if(lines.begin(), lines.end(), [&](const std::string& line) { return line.find(part) != std::string::npos; }));
+	}
+
+	std::vector<std::string> lines;
+	engine::log_sink_handle sink;	// last: removed first
+};
+
+edt::scan_requests asking(const std::vector<std::string>& side_files)
+{
+	edt::scan_requests out;
+	for (const std::string& name : side_files) out.requested.push_back({ name, edt::model_file_kind::side_file });
+	return out;
+}
+
+std::shared_ptr<const std::vector<std::byte>> shared_text(std::string_view text)
+{
+	return std::make_shared<const std::vector<std::byte>>(text_bytes(text));
+}
+
+struct broker_env
+{
+	broker_env()
+	{
+		dir.write("m/m.obj", "mtllib a.mtl\n");
+		dir.write("m/a.mtl", std::string(60, 'a'));
+		dir.write("m/b.mtl", std::string(60, 'b'));
+		dir.write("m/sub/keep.txt", "x");
+		dir.write("outside.mtl", "newmtl outside");
+		source.path = dir.path() / "m" / "m.obj";
+	}
+
+	test_util::temp_dir dir{ "broker_scan" };
+	edt::import_source source;
+	int calls = 0;
+};
+
+}
+
+BOOST_AUTO_TEST_SUITE(EdtProvidedEntriesTests)
+
+BOOST_AUTO_TEST_CASE(OneFileUnderManyNames_TravelsAsOneBlob)
+{
+	const auto mtl = shared_text("newmtl x");
+	const auto bin = shared_text("buffer");
+	const std::vector<edt::provided_file> files = {
+		{ "a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl },
+		{ "./a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl },
+		{ "gone.mtl", "", edt::model_file_kind::side_file, nullptr },
+		{ "b.bin", "b.bin", edt::model_file_kind::side_file, bin },
+		{ "sub/../a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl } };
+	std::vector<edt::bundle_blob> blobs;
+	const std::vector<edt::provided_entry> entries = edt::provided_entries(files, 1024, blobs);
+	BOOST_REQUIRE_EQUAL(entries.size(), 5u);
+	BOOST_REQUIRE_EQUAL(blobs.size(), 2u);
+	BOOST_CHECK_EQUAL(blobs[0].tag, edt::provided_blob_tag(0));
+	BOOST_CHECK(blobs[0].bytes == *mtl);
+	BOOST_CHECK_EQUAL(blobs[1].tag, edt::provided_blob_tag(1));
+	BOOST_CHECK(blobs[1].bytes == *bin);
+	BOOST_CHECK(entries[0].present && entries[1].present && entries[4].present && entries[3].present);
+	BOOST_CHECK_EQUAL(entries[0].blob, 0u);
+	BOOST_CHECK_EQUAL(entries[1].blob, 0u);
+	BOOST_CHECK_EQUAL(entries[4].blob, 0u);
+	BOOST_CHECK_EQUAL(entries[3].blob, 1u);
+	BOOST_CHECK(!entries[2].present);
+	BOOST_CHECK_EQUAL(entries[2].blob, 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheFilesTogetherOverTheBudget_OrOneFileUnderTooManyNames_AreRefused)
+{
+	const auto mtl = shared_text("newmtl x");
+	std::vector<edt::bundle_blob> blobs;
+	// The same bytes under many names count once.
+	const std::vector<edt::provided_file> twice = { { "a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl },
+		{ "./a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl } };
+	BOOST_CHECK_NO_THROW(edt::provided_entries(twice, mtl->size(), blobs));
+	const std::vector<edt::provided_file> two_files = { { "a.mtl", "a.mtl", edt::model_file_kind::side_file, mtl },
+		{ "b.mtl", "b.mtl", edt::model_file_kind::side_file, shared_text("newmtl y") } };
+	blobs.clear();
+	BOOST_CHECK_THROW(edt::provided_entries(two_files, mtl->size() + 1, blobs), std::runtime_error);
+
+	std::vector<edt::provided_file> many;
+	std::string name = "a.mtl";
+	for (std::size_t i = 0; i <= edt::k_max_names_per_file; ++i) {
+		many.push_back({ name, "a.mtl", edt::model_file_kind::side_file, mtl });
+		name = "./" + name;
+	}
+	blobs.clear();
+	BOOST_CHECK_THROW(edt::provided_entries(many, 1024, blobs), std::runtime_error);
+	many.pop_back();
+	blobs.clear();
+	BOOST_CHECK_NO_THROW(edt::provided_entries(many, 1024, blobs));
+	BOOST_CHECK_EQUAL(blobs.size(), 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(EdtBrokerScanTests, broker_env)
+
+BOOST_AUTO_TEST_CASE(AChildThatAsksForANewSideFileEveryRound_FailsAfterThreeRounds)
+{
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		return asking({ std::format("missing{}.mtl", calls) });
+	}, nullptr);
+	BOOST_CHECK_EQUAL(calls, 3);
+	BOOST_CHECK_MESSAGE(scan.error.find("more than 3 rounds") != std::string::npos, scan.error);
+}
+
+BOOST_AUTO_TEST_CASE(ARepeatedRequest_IsAnsweredOnce_AndEndsTheScan)
+{
+	std::size_t handed = 0;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>& provided) {
+		++calls;
+		handed = provided.size();
+		return asking({ "a.mtl" });
+	}, nullptr);
+	BOOST_CHECK_MESSAGE(scan.ok(), scan.error);
+	BOOST_CHECK_EQUAL(calls, 2);
+	BOOST_CHECK_EQUAL(handed, 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheBudget_CountsOverEveryRound)
+{
+	source.limits.max_file_bytes = 64;
+	source.limits.max_total_bytes = 100;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		return asking({ calls == 1 ? "a.mtl" : "b.mtl" });
+	}, nullptr);
+	BOOST_CHECK_EQUAL(calls, 2);
+	BOOST_CHECK_MESSAGE(scan.error.find("together are bigger than 100 bytes") != std::string::npos, scan.error);
+}
+
+BOOST_AUTO_TEST_CASE(ADeadlineThatHasPassed_RunsNoRound)
+{
+	source.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		return asking({});
+	}, nullptr);
+	BOOST_CHECK_EQUAL(calls, 0);
+	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+}
+
+BOOST_AUTO_TEST_CASE(ADeadlineThatPassesDuringARound_StopsTheScanBeforeTheNext)
+{
+	source.deadline = std::chrono::steady_clock::now() + std::chrono::hours(1);
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		source.deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+		return asking({ "a.mtl" });
+	}, nullptr);
+	BOOST_CHECK_EQUAL(calls, 1);
+	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+}
+
+BOOST_AUTO_TEST_CASE(ASideFileTheRuleRefuses_IsMissingToTheChild_WithOneWarning)
+{
+	const warn_capture warnings;
+	std::vector<edt::provided_file> second;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>& provided) {
+		++calls;
+		if (calls == 1) return asking({ "../outside.mtl" });
+		second = provided;
+		return asking({});
+	}, nullptr);
+	BOOST_CHECK_MESSAGE(scan.ok(), scan.error);
+	BOOST_CHECK_EQUAL(calls, 2);
+	BOOST_REQUIRE_EQUAL(second.size(), 1u);
+	BOOST_CHECK_EQUAL(second[0].name, "../outside.mtl");
+	BOOST_CHECK(second[0].bytes == nullptr);
+	BOOST_CHECK_EQUAL(warnings.count("side-file rule"), 1u);
+	BOOST_CHECK(scan.files.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASideFileOverALimit_FailsTheScan)
+{
+	const warn_capture warnings;
+	source.limits.max_file_bytes = 4;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		return asking({ "a.mtl" });
+	}, nullptr);
+	BOOST_CHECK_EQUAL(calls, 1);
+	BOOST_CHECK_MESSAGE(scan.error.find("too big") != std::string::npos, scan.error);
+	BOOST_CHECK_EQUAL(warnings.count("side-file rule"), 0u);
+}
+
+BOOST_AUTO_TEST_CASE(OneSideFileUnderManyNames_IsReadOnce_AndSharesOneBlob)
+{
+	std::vector<edt::provided_file> second;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>& provided) {
+		++calls;
+		if (calls == 1) return asking({ "a.mtl", "./a.mtl", "sub/../a.mtl" });
+		second = provided;
+		return asking({});
+	}, nullptr);
+	BOOST_REQUIRE_MESSAGE(scan.ok(), scan.error);
+	BOOST_REQUIRE_EQUAL(second.size(), 3u);
+	BOOST_REQUIRE(second[0].bytes != nullptr);
+	BOOST_CHECK(second[1].bytes == second[0].bytes);
+	BOOST_CHECK(second[2].bytes == second[0].bytes);
+	std::vector<edt::bundle_blob> blobs;
+	const std::vector<edt::provided_entry> entries = edt::provided_entries(second, source.limits.max_total_bytes, blobs);
+	BOOST_CHECK_EQUAL(entries.size(), 3u);
+	BOOST_CHECK_EQUAL(blobs.size(), 1u);
+	BOOST_REQUIRE_EQUAL(scan.files.size(), 1u);
+	BOOST_CHECK_EQUAL(scan.files[0].names.size(), 3u);
+}
+
+BOOST_AUTO_TEST_CASE(OneSideFileUnderMoreThanEightNames_FailsTheScan)
+{
+	std::vector<std::string> names;
+	std::string name = "a.mtl";
+	for (std::size_t i = 0; i <= edt::k_max_names_per_file; ++i) {
+		names.push_back(name);
+		name = "./" + name;
+	}
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
+		++calls;
+		return asking(names);
+	}, nullptr);
+	BOOST_CHECK_MESSAGE(scan.error.find("in more than 8 ways") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

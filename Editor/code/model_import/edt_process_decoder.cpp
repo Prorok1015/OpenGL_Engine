@@ -9,8 +9,10 @@
 #include <boost/json/stream_parser.hpp>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <format>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
@@ -18,9 +20,9 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 #include <initializer_list>
-#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -49,19 +51,6 @@ std::string cleaned(std::string_view text)
 	return out;
 }
 
-// What the request says of `files`, and the bytes of the ones on the disk as the blobs that carry them.
-std::vector<edt::provided_entry> entries_of(const std::vector<edt::provided_file>& files, std::vector<edt::bundle_blob>& blobs)
-{
-	std::vector<edt::provided_entry> entries;
-	entries.reserve(files.size());
-	for (std::size_t i = 0; i < files.size(); ++i) {
-		const edt::provided_file& file = files[i];
-		entries.push_back({ file.name, file.relative, file.kind, file.bytes != nullptr });
-		if (file.bytes) blobs.push_back({ edt::provided_blob_tag(i), *file.bytes });
-	}
-	return entries;
-}
-
 edt::model_file_scan failed_scan(std::string error)
 {
 	edt::model_file_scan scan;
@@ -74,6 +63,11 @@ std::string shown_name(const fs::path& path)
 	return text_escape::escaped_text(fs_paths::utf8_of(path.filename()), 256);
 }
 
+std::string too_many_names(std::string_view name)
+{
+	return std::format("the model names '{}' in more than {} ways", text_escape::escaped_text(name, 256), edt::k_max_names_per_file);
+}
+
 const boost::json::string* string_of(const boost::json::object& object, const char* key)
 {
 	const boost::json::value* value = object.if_contains(key);
@@ -81,6 +75,108 @@ const boost::json::string* string_of(const boost::json::object& object, const ch
 }
 
 } // namespace
+
+std::vector<edt::provided_entry> edt::provided_entries(const std::vector<provided_file>& files, std::uintmax_t max_total_bytes,
+	std::vector<bundle_blob>& blobs)
+{
+	std::vector<provided_entry> entries;
+	entries.reserve(files.size());
+	std::unordered_map<const std::vector<std::byte>*, std::uint32_t> blob_of;
+	std::vector<std::size_t> names_of;
+	std::uintmax_t total = 0;
+	for (const provided_file& file : files) {
+		provided_entry entry{ file.name, file.relative, file.kind, file.bytes != nullptr };
+		if (file.bytes) {
+			const auto [found, added] = blob_of.try_emplace(file.bytes.get(), static_cast<std::uint32_t>(blob_of.size()));
+			if (added) {
+				total += file.bytes->size();
+				if (total > max_total_bytes) {
+					throw std::runtime_error(std::format("the files of the model together are bigger than {} bytes", max_total_bytes));
+				}
+				names_of.push_back(0);
+			}
+			entry.blob = found->second;
+			if (++names_of[entry.blob] > k_max_names_per_file) throw std::runtime_error(too_many_names(file.relative));
+		}
+		entries.push_back(std::move(entry));
+	}
+	blobs.reserve(blobs.size() + blob_of.size());
+	std::vector<const std::vector<std::byte>*> in_order(blob_of.size(), nullptr);
+	for (const auto& [bytes, index] : blob_of) in_order[index] = bytes;
+	for (std::size_t i = 0; i < in_order.size(); ++i) blobs.push_back({ provided_blob_tag(i), *in_order[i] });
+	return entries;
+}
+
+edt::model_file_scan edt::broker_scan(const import_source& source, const std::function<scan_requests(const std::vector<provided_file>&)>& run_round,
+	ds::task_context* task)
+{
+	const bool has_deadline = source.deadline != std::chrono::steady_clock::time_point{};
+	const auto past_deadline = [&] { return has_deadline && std::chrono::steady_clock::now() >= source.deadline; };
+	constexpr const char* k_too_long = "the model took too long to read";
+
+	// One access for every round: what the model may read, and how much, is counted over the whole scan.
+	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
+	std::vector<provided_file> provided;
+	std::set<std::pair<std::string, model_file_kind>> asked;
+	// One shared_ptr per side file: each name of it carries the same bytes, so the request holds them once.
+	std::map<fs::path, std::shared_ptr<const std::vector<std::byte>>> side_bytes;
+	std::map<fs::path, std::size_t> side_names;
+	for (int round_index = 0;; ++round_index) {
+		if (past_deadline()) return failed_scan(k_too_long);
+		scan_requests answer = run_round(provided);
+		if (!answer.error.empty()) return failed_scan(std::move(answer.error));
+
+		bool new_side_file = false;
+		for (const requested_file& wanted : answer.requested) {
+			// Asked again in a later round (the child reports every name it was not given): already answered.
+			if (!asked.emplace(wanted.name, wanted.kind).second) continue;
+			const resolved_reference resolved = access.resolve(wanted.name, wanted.kind);
+			if (!resolved.error.empty()) {
+				// The parser also asks for names of its own: Assimp's OBJ loader, missing the .mtl, falls back to one built
+				// from the model's path. A side file the rule refuses is missing to the child, like one not on the disk;
+				// a limit, a file that cannot be trusted, and any name of a model that is no file on the disk (#925) fail.
+				const bool missing_by_rule = resolved.refusal == refusal_kind::rule && source.on_disk && wanted.kind == model_file_kind::side_file;
+				if (!missing_by_rule) return failed_scan(resolved.error);
+				egLOG_WARN("edt/decoder", "{}: the side-file rule refuses it, so the model is read without it", resolved.error);
+				new_side_file = true;
+				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
+				continue;
+			}
+			if (past_deadline()) return failed_scan(k_too_long);
+			try {
+				// A texture changes nothing in the parse: the editor only reads and hashes it for the import.
+				if (wanted.kind == model_file_kind::texture) {
+					access.hash_listed(resolved);
+					continue;
+				}
+				new_side_file = true;
+				provided_file file{ wanted.name, {}, model_file_kind::side_file, nullptr };
+				if (resolved.found()) {
+					file.relative = access.relative_name(resolved);
+					if (++side_names[resolved.path] > k_max_names_per_file) return failed_scan(too_many_names(file.relative));
+					std::shared_ptr<const std::vector<std::byte>>& bytes = side_bytes[resolved.path];
+					if (!bytes) {
+						std::optional<std::vector<std::byte>> read = access.read(resolved);
+						if (!read) return failed_scan(std::format("'{}' cannot be read", shown_name(resolved.path)));
+						bytes = std::make_shared<const std::vector<std::byte>>(std::move(*read));
+					}
+					file.bytes = bytes;
+				}
+				provided.push_back(std::move(file));
+			} catch (const std::runtime_error& e) {
+				// Not an image, changed while it was read, over the budget.
+				return failed_scan(e.what());
+			}
+		}
+		if (!new_side_file) break;
+		if (round_index + 1 == k_max_scan_rounds) return failed_scan(std::format("the model asks for its files in more than {} rounds", k_max_scan_rounds));
+		if (task != nullptr) task->throw_if_stopped();
+	}
+	model_file_scan out;
+	out.files = access.files();
+	out.total_bytes = access.listed_bytes();
+	return out;
+}
 
 std::optional<edt::scan_requests> edt::accept_scan_answer(const decode_bundle& bundle, std::string& problem)
 {
@@ -521,8 +617,10 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 	if (source.preloaded == nullptr) throw std::runtime_error("the decoder needs the bytes of the model");
 	decode_runner_config config = m_config;
 	if (source.deadline != std::chrono::steady_clock::time_point{}) {
-		const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
-		config.timeout = std::min(std::max(left, std::chrono::milliseconds(1000)), m_config.timeout);
+		// The scan's rounds and the editor's reads share the one deadline: no round gets time of its own.
+		const auto left = std::chrono::ceil<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
+		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error("the model took too long to decode");
+		config.timeout = std::min(left, m_config.timeout);
 	}
 	const decode_runner runner(std::move(config));
 	decode_outcome outcome = runner.run(request, *source.preloaded, files, task != nullptr ? task->stop : std::stop_token{});
@@ -546,13 +644,9 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
 
-	// One access for every round: what the model may read, and how much, is counted over the whole scan.
-	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
-	std::vector<provided_file> provided;
-	std::set<std::pair<std::string, model_file_kind>> asked;
-	for (int round = 0;; ++round) {
+	return broker_scan(source, [&](const std::vector<provided_file>& provided) {
 		std::vector<bundle_blob> blobs;
-		request.provided = entries_of(provided, blobs);
+		request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
 		const decode_outcome outcome = run(request, blobs, source, task);
 		std::string problem;
 		std::optional<scan_requests> answer = accept_scan_answer(*outcome.bundle, problem);
@@ -560,45 +654,8 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 			egLOG_WARN("edt/decoder", "the answer to a scan was refused: {}", problem);
 			throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
 		}
-		if (!answer->error.empty()) return failed_scan(std::move(answer->error));
-
-		bool new_side_file = false;
-		for (const requested_file& wanted : answer->requested) {
-			if (!asked.emplace(wanted.name, wanted.kind).second) continue;
-			const resolved_reference resolved = access.resolve(wanted.name, wanted.kind);
-			// A model that is no file on the disk may name no other file at all (#925): that fails its load.
-			if (!resolved.error.empty() && (wanted.kind == model_file_kind::texture || !source.on_disk)) return failed_scan(resolved.error);
-			if (!resolved.error.empty()) {
-				// The parser also asks for names of its own: Assimp's OBJ loader, missing the .mtl, falls back to one built
-				// from the model's path. A side file the rule refuses is missing to the child, like one not on the disk.
-				egLOG_WARN("edt/decoder", "{}: the side-file rule refuses it, so the model is read without it", resolved.error);
-				new_side_file = true;
-				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
-				continue;
-			}
-			// A texture changes nothing in the parse: the editor only reads and hashes it for the import.
-			if (wanted.kind == model_file_kind::texture) {
-				access.hash_listed(resolved);
-				continue;
-			}
-			new_side_file = true;
-			provided_file file{ wanted.name, {}, model_file_kind::side_file, nullptr };
-			if (resolved.found()) {
-				std::optional<std::vector<std::byte>> bytes = access.read(resolved);
-				if (!bytes) throw std::runtime_error(std::format("'{}' cannot be read", shown_name(resolved.path)));
-				file.relative = access.relative_name(resolved);
-				file.bytes = std::make_shared<const std::vector<std::byte>>(std::move(*bytes));
-			}
-			provided.push_back(std::move(file));
-		}
-		if (!new_side_file) break;
-		if (round + 1 == k_max_scan_rounds) return failed_scan(std::format("the model asks for its files in more than {} rounds", k_max_scan_rounds));
-		if (task != nullptr) task->throw_if_stopped();
-	}
-	model_file_scan out;
-	out.files = access.files();
-	out.total_bytes = access.listed_bytes();
-	return out;
+		return std::move(*answer);
+	}, task);
 }
 
 edt::import_intermediate edt::process_decoder::import(const import_source& source, ds::task_context* task) const
@@ -619,6 +676,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	for (const referenced_file& file : *source.allowed) {
 		const std::string name = shown_name(file.path);
 		if (file.names.empty()) throw std::runtime_error(std::format("'{}' was listed without the names the model uses for it", name));
+		if (file.names.size() > k_max_names_per_file) throw std::runtime_error(too_many_names(fs_paths::utf8_of(file.path.filename())));
 		std::shared_ptr<const std::vector<std::byte>> bytes;
 		for (const std::string& reference : file.names) {
 			const resolved_reference resolved = access.resolve(reference, file.kind);
@@ -633,7 +691,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 		}
 	}
 	std::vector<bundle_blob> blobs;
-	request.provided = entries_of(provided, blobs);
+	request.provided = provided_entries(provided, source.limits.max_total_bytes, blobs);
 	if (task != nullptr) task->throw_if_stopped();
 	const decode_outcome outcome = run(request, blobs, source, task);
 

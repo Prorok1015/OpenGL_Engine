@@ -123,8 +123,9 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	edt::decode_request request;
 	request.mode = edt::decode_request::mode_kind::import;
 	request.source_path = std::filesystem::path("some") / "model.obj";
-	request.provided.push_back({ "../tex/skin.png", "tex/skin.png", edt::model_file_kind::texture, true });
-	request.provided.push_back({ "/abs/models/missing.bin", "", edt::model_file_kind::side_file, false });
+	request.provided.push_back({ "../tex/skin.png", "tex/skin.png", edt::model_file_kind::texture, true, 3 });
+	request.provided.push_back({ "/abs/models/missing.bin", "", edt::model_file_kind::side_file, false, 0 });
+	request.provided.push_back({ "./../tex/skin.png", "tex/skin.png", edt::model_file_kind::texture, true, 3 });
 	request.limits.max_files = 7;
 	request.limits.max_file_bytes = 18446744073709551000ull;
 	request.deadline_ms = 90000;
@@ -137,7 +138,10 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	BOOST_REQUIRE(back.has_value());
 	BOOST_CHECK(back->mode == edt::decode_request::mode_kind::import);
 	BOOST_CHECK(back->source_path == request.source_path);
-	BOOST_REQUIRE_EQUAL(back->provided.size(), 2u);
+	BOOST_REQUIRE_EQUAL(back->provided.size(), 3u);
+	BOOST_CHECK_EQUAL(back->provided[0].blob, 3u);
+	BOOST_CHECK_EQUAL(back->provided[2].blob, 3u);
+	BOOST_CHECK_EQUAL(back->provided[1].blob, 0u);
 	BOOST_CHECK_EQUAL(back->provided[0].name, "../tex/skin.png");
 	BOOST_CHECK_EQUAL(back->provided[0].relative, "tex/skin.png");
 	BOOST_CHECK(back->provided[0].kind == edt::model_file_kind::texture);
@@ -198,12 +202,24 @@ BOOST_AUTO_TEST_CASE(ARequest_WithAProvidedFileOfABadForm_IsRefused)
 	BOOST_CHECK(!with_entry("kind", "model").has_value());
 	BOOST_CHECK(!with_entry("kind", 1).has_value());
 	BOOST_CHECK(!with_entry("present", "true").has_value());
+	BOOST_CHECK(!with_entry("blob", 1).has_value());
+	BOOST_CHECK(!with_entry("blob", "-1").has_value());
+	BOOST_CHECK(!with_entry("blob", "4294967296").has_value());
+	BOOST_CHECK(with_entry("blob", "4294967295").has_value());
+	{
+		boost::json::object object = edt::to_json(request);
+		object["provided"].as_array()[0].as_object().erase("blob");
+		BOOST_CHECK(!edt::decode_request_from_json(object).has_value());
+	}
 
 	// A file that is not on the disk has no name below the boundary.
 	request.provided[0].present = false;
 	BOOST_CHECK(!edt::decode_request_from_json(edt::to_json(request)).has_value());
 	request.provided[0].relative.clear();
 	BOOST_CHECK(edt::decode_request_from_json(edt::to_json(request)).has_value());
+	// Nor bytes of its own.
+	request.provided[0].blob = 1;
+	BOOST_CHECK(!edt::decode_request_from_json(edt::to_json(request)).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(TheRequestsOfAScan_RoundTrip_AndAnErrorStandsAlone)

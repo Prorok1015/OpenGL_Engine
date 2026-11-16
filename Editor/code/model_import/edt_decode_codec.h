@@ -33,7 +33,7 @@ namespace edt {
 
 	// What the editor asks of the decoder process. The bytes of the model file travel as a bundle blob named
 	// k_decode_source_tag, not in the JSON: the editor already read and verified them. So do the bytes of every file it
-	// hands over, as provided_blob_tag(<index in decode_request::provided>).
+	// hands over, as provided_blob_tag(<provided_entry::blob>): one blob per file, however many names point at it.
 	inline constexpr const char* k_decode_source_tag = "memory://decode_input/source";
 	inline constexpr const char* k_decode_file_tag_prefix = "memory://decode_input/file/";
 
@@ -43,13 +43,14 @@ namespace edt {
 	}
 
 	// A file handed to the decoder (provided_file without its bytes). `present` false: the file is not on the disk, and
-	// `relative` is empty.
+	// `relative` is empty. `blob`: the index of the blob with its bytes, shared by every name of the file; 0 when not present.
 	struct provided_entry
 	{
 		std::string name{};
 		std::string relative{};
 		model_file_kind kind = model_file_kind::texture;
 		bool present = false;
+		std::uint32_t blob = 0;
 	};
 
 	struct decode_request

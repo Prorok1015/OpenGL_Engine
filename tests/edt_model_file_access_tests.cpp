@@ -9,6 +9,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 // The files a model may make an agent's import read (#548): its folder without hidden names, images checked by their
 // bytes, a bounded number of files and bytes, and only what the person was shown.
@@ -90,14 +93,21 @@ BOOST_AUTO_TEST_CASE(AnythingOutsideTheModelFolder_IsRefused)
 	BOOST_CHECK(access.files().empty());
 }
 
-BOOST_AUTO_TEST_CASE(ATextureThatIsNoImage_IsRefused_ByItsNameAndByItsBytes)
+BOOST_AUTO_TEST_CASE(ATextureThatIsNoImage_IsRefused_ByItsName_AndByItsBytesWhenRead)
 {
 	auto access = make();
 	const auto by_name = access.resolve("notes.txt", edt::model_file_kind::texture);
 	BOOST_CHECK(!by_name.error.empty());
+	BOOST_CHECK(by_name.refusal == edt::refusal_kind::rule);
+	// resolve() opens nothing (#1043): the bytes are checked by read(), on what it read.
 	const auto by_bytes = access.resolve("fake.png", edt::model_file_kind::texture);
-	BOOST_CHECK(!by_bytes.error.empty());
-	BOOST_CHECK(by_bytes.error.find("no image") != std::string::npos);
+	BOOST_REQUIRE(by_bytes.found());
+	try {
+		access.hash_listed(by_bytes);
+		BOOST_ERROR("a texture that is no image was read");
+	} catch (const std::runtime_error& e) {
+		BOOST_CHECK(std::string(e.what()).find("no image") != std::string::npos);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ASideFile_IsABinBesideAGltf_NothingElse)
@@ -339,6 +349,86 @@ BOOST_AUTO_TEST_CASE(AModelGivenOnlyAsBytes_ReadsNoOtherFile_EvenOneThatIsThere)
 	BOOST_CHECK(access.files().empty());
 	BOOST_CHECK_EQUAL(access.listed_bytes(), 0u);
 }
+
+BOOST_AUTO_TEST_CASE(ANameThatIsAShareADeviceOrAStream_IsRefusedByTheRule_BeforeTheDiskIsAsked)
+{
+	dir.write("models/m.obj", "o m");
+	dir.write("models/x.mtl", "newmtl x");
+	edt::model_file_access access(dir.path() / "models" / "m.obj", {});
+	for (const char* reference : { "//host/share/x.mtl", "\\\\host\\share\\x.mtl", "\\\\?\\C:\\x.mtl", "\\\\.\\pipe\\x.mtl", "C:x.mtl",
+			"x.mtl:stream", "sub/x.mtl:stream:$DATA" }) {
+		BOOST_TEST_CONTEXT(reference) {
+			const auto refused = access.resolve(reference, edt::model_file_kind::side_file);
+			BOOST_CHECK(!refused.found());
+			BOOST_CHECK(!refused.error.empty());
+			BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+		}
+	}
+	BOOST_CHECK(!access.resolve(std::string("x.mtl\0.png", 10), edt::model_file_kind::side_file).error.empty());
+	BOOST_CHECK(access.files().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnAbsoluteSideFile_IsReadOnlyInsideTheModelFolder)
+{
+	dir.write("models/m.obj", "o m");
+	dir.write("models/x.mtl", "newmtl x");
+	dir.write("other.mtl", "newmtl y");
+	edt::model_file_access access(dir.path() / "models" / "m.obj", {});
+	const auto inside = access.resolve((dir.path() / "models" / "x.mtl").string(), edt::model_file_kind::side_file);
+	BOOST_CHECK_MESSAGE(inside.found(), inside.error);
+	const auto outside = access.resolve((dir.path() / "other.mtl").string(), edt::model_file_kind::side_file);
+	BOOST_CHECK(!outside.found());
+	BOOST_CHECK(outside.error.find("outside the folder of the model") != std::string::npos);
+	BOOST_CHECK(outside.refusal == edt::refusal_kind::rule);
+	const auto climbing = access.resolve((dir.path() / "models" / ".." / "other.mtl").string(), edt::model_file_kind::side_file);
+	BOOST_CHECK(!climbing.found());
+	BOOST_CHECK(climbing.refusal == edt::refusal_kind::rule);
+}
+
+BOOST_AUTO_TEST_CASE(ARefusal_SaysWhetherTheRuleALimitOrTheFileRefusedIt)
+{
+	BOOST_CHECK(make().resolve("../outside.png", edt::model_file_kind::texture).refusal == edt::refusal_kind::rule);
+	BOOST_CHECK(make().resolve(".env", edt::model_file_kind::side_file).refusal == edt::refusal_kind::rule);
+	edt::model_file_limits tiny;
+	tiny.max_file_bytes = 4;
+	BOOST_CHECK(make(tiny).resolve("mesh.bin", edt::model_file_kind::side_file).refusal == edt::refusal_kind::limit);
+	fs::create_directories(dir.path() / "models" / "folder.png");
+	BOOST_CHECK(make().resolve("folder.png", edt::model_file_kind::texture).refusal == edt::refusal_kind::other);
+	BOOST_CHECK(make().resolve("skin.png", edt::model_file_kind::texture).refusal == edt::refusal_kind::none);
+}
+
+BOOST_AUTO_TEST_CASE(OneFile_MayBeNamedInAtMostEightWays)
+{
+	auto access = make();
+	std::string name = "skin.png";
+	for (std::size_t i = 0; i < edt::k_max_names_per_file; ++i) {
+		BOOST_REQUIRE_MESSAGE(access.resolve(name, edt::model_file_kind::texture).found(), name);
+		name = "./" + name;
+	}
+	const auto ninth = access.resolve(name, edt::model_file_kind::texture);
+	BOOST_CHECK(!ninth.found());
+	BOOST_CHECK(ninth.error.find("in more than 8 ways") != std::string::npos);
+	BOOST_CHECK(ninth.refusal == edt::refusal_kind::limit);
+	BOOST_CHECK_EQUAL(access.files().at(0).names.size(), edt::k_max_names_per_file);
+	// A name it already has is no new one.
+	BOOST_CHECK(access.resolve("skin.png", edt::model_file_kind::texture).found());
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(AFifoInsteadOfATexture_IsNeverOpened)
+{
+	const fs::path fifo = dir.path() / "models" / "pipe.png";
+	BOOST_REQUIRE_EQUAL(::mkfifo(fifo.c_str(), 0600), 0);
+	auto access = make();
+	// Nobody writes to the FIFO: opening it would block this test for good.
+	const auto refused = access.resolve("pipe.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!refused.found());
+	BOOST_CHECK(refused.error.find("not a plain file") != std::string::npos);
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::other);
+	BOOST_CHECK(!access.read(refused).has_value());
+	BOOST_CHECK(access.files().empty());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
 

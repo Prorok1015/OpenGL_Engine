@@ -652,7 +652,13 @@ edt::model_file_scan edt::model_importer::scan_files(const import_source& source
 					scan.error = "the model took too long to read";
 					return scan;
 				}
-				access.hash_listed(reference);
+				try {
+					access.hash_listed(reference);
+				} catch (const std::runtime_error& e) {
+					// Not an image, changed while read, over the budget: the bytes are checked here, not by resolve().
+					scan.error = e.what();
+					return scan;
+				}
 			}
 		}
 	}

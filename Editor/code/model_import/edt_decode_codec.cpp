@@ -319,6 +319,7 @@ boost::json::object edt::to_json(const decode_request& request)
 		entry["relative"] = file.relative;
 		entry["kind"] = kind_text(file.kind);
 		entry["present"] = file.present;
+		entry["blob"] = u64_to(file.blob);
 		provided.emplace_back(std::move(entry));
 	}
 	out["provided"] = std::move(provided);
@@ -360,11 +361,13 @@ std::optional<edt::decode_request> edt::decode_request_from_json(const boost::js
 		const auto relative = string_from(entry.if_contains("relative"));
 		const auto kind = kind_from(entry.if_contains("kind"));
 		const json::value* present = entry.if_contains("present");
-		if (!name || !relative || !kind || !present || !present->is_bool()) return std::nullopt;
-		// A file that is there has its name below the boundary; one that is not has none.
+		const auto blob = u64_from(entry.if_contains("blob"));
+		if (!name || !relative || !kind || !present || !present->is_bool() || !blob) return std::nullopt;
+		// A file that is there has its name below the boundary; one that is not has none, and no blob.
 		if (!fits_name(*name, 1) || !fits_name(*relative, present->as_bool() ? 1 : 0)) return std::nullopt;
-		if (!present->as_bool() && !relative->empty()) return std::nullopt;
-		request.provided.push_back({ *name, *relative, *kind, present->as_bool() });
+		if (!present->as_bool() && (!relative->empty() || *blob != 0)) return std::nullopt;
+		if (*blob > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+		request.provided.push_back({ *name, *relative, *kind, present->as_bool(), static_cast<std::uint32_t>(*blob) });
 	}
 
 	const json::value* limits = object.if_contains("limits");

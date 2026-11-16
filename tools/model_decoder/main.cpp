@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -194,7 +195,7 @@ int fail(const std::string& message)
 	return 1;
 }
 
-// The index in decode_request::provided that a blob's tag names; SIZE_MAX when it names none.
+// The blob index (provided_entry::blob) that a blob's tag names; SIZE_MAX when it names none.
 std::size_t provided_index(const std::string& tag)
 {
 	const std::string_view prefix = edt::k_decode_file_tag_prefix;
@@ -268,14 +269,14 @@ int main(int argc, char** argv)
 #endif
 
 	const std::vector<std::byte>* source = nullptr;
-	std::vector<std::vector<std::byte>*> file_bytes(request->provided.size(), nullptr);
+	std::map<std::size_t, std::vector<std::byte>*> file_bytes;
 	for (edt::bundle_blob& blob : request_bundle.bundle->blobs) {
 		if (blob.tag == edt::k_decode_source_tag) {
 			source = &blob.bytes;
 			continue;
 		}
 		const std::size_t index = provided_index(blob.tag);
-		if (index >= file_bytes.size() || blob.tag != edt::provided_blob_tag(index)) {
+		if (index > UINT32_MAX || blob.tag != edt::provided_blob_tag(index)) {
 			return fail("request: it carries bytes that belong to no file of the request");
 		}
 		file_bytes[index] = &blob.bytes;
@@ -283,16 +284,25 @@ int main(int argc, char** argv)
 	if (!source) {
 		return fail("request: the model bytes are missing");
 	}
+	// Every name of one file shares its one blob: the bytes are held once, however many names the model used.
+	std::map<std::size_t, std::shared_ptr<const std::vector<std::byte>>> shared_bytes;
 	std::vector<edt::provided_file> files;
 	files.reserve(request->provided.size());
-	for (std::size_t i = 0; i < request->provided.size(); ++i) {
-		const edt::provided_entry& entry = request->provided[i];
-		if (entry.present != (file_bytes[i] != nullptr)) {
-			return fail("request: the bytes of the files do not match the list of files");
-		}
+	for (const edt::provided_entry& entry : request->provided) {
 		std::shared_ptr<const std::vector<std::byte>> bytes;
-		if (file_bytes[i]) bytes = std::make_shared<const std::vector<std::byte>>(std::move(*file_bytes[i]));
+		if (entry.present) {
+			const auto found = file_bytes.find(entry.blob);
+			if (found == file_bytes.end()) {
+				return fail("request: a file of the request names bytes it does not carry");
+			}
+			std::shared_ptr<const std::vector<std::byte>>& shared = shared_bytes[entry.blob];
+			if (!shared) shared = std::make_shared<const std::vector<std::byte>>(std::move(*found->second));
+			bytes = shared;
+		}
 		files.push_back({ entry.name, entry.relative, entry.kind, std::move(bytes) });
+	}
+	if (shared_bytes.size() != file_bytes.size()) {
+		return fail("request: it carries bytes that belong to no file of the request");
 	}
 
 	// No watcher threads in the child.

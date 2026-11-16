@@ -68,6 +68,14 @@ namespace edt {
 		bool ok() const { return error.empty(); }
 	};
 
+	// Why resolve() refused a name. `rule`: the name may never be read (outside the folder, hidden, a kind of file or a
+	// spelling the rule does not allow, a model that is no file on the disk); `limit`: a count or size limit; `other`:
+	// the file on the disk cannot be trusted (not a plain file, its size, time or identity unreadable).
+	enum class refusal_kind { none, rule, limit, other };
+
+	// How many names one file may be asked for by: each name hands the decoder process its bytes again.
+	inline constexpr std::size_t k_max_names_per_file = 8;
+
 	struct resolved_reference
 	{
 		std::filesystem::path path;
@@ -76,6 +84,7 @@ namespace edt {
 		file_id id{};
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
+		refusal_kind refusal = refusal_kind::none;
 		bool found() const { return !path.empty() && error.empty(); }
 	};
 
@@ -124,6 +133,8 @@ namespace edt {
 
 		std::filesystem::path m_root_file;
 		std::filesystem::path m_dir;
+		// The model's folder as it was given, not resolved: an absolute name is checked against it before the disk is asked.
+		std::filesystem::path m_dir_as_given;
 		// m_dir, or the folder around it the import may read from.
 		std::filesystem::path m_boundary;
 		std::string m_root_extension;

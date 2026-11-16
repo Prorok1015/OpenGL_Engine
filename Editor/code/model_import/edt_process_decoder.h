@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace edt {
 
@@ -40,6 +41,19 @@ namespace edt {
 
 	// The text after the last dot of the last segment, in lower case; empty when there is none.
 	std::string file_extension_lowercase(std::string_view path);
+
+	// What the request says of `files` (decode_request::provided), and their bytes as `blobs`: one blob per file, found by
+	// its shared bytes, however many names point at it. Throws std::runtime_error when the files together are bigger than
+	// `max_total_bytes` or one file has more than k_max_names_per_file names.
+	std::vector<provided_entry> provided_entries(const std::vector<provided_file>& files, std::uintmax_t max_total_bytes,
+		std::vector<bundle_blob>& blobs);
+
+	// The editor's side of a scan through the decoder (#1043): `run_round` runs the child once with the files handed over so far
+	// and returns what it asks for (or throws). Every name is resolved, read and hashed by one model_file_access, so its
+	// limits count over the whole scan; at most 3 rounds, all within `source.deadline` (the editor's reads included). A side
+	// file the rule refuses is missing to the child (one WARN); any other refusal fails the scan.
+	model_file_scan broker_scan(const import_source& source, const std::function<scan_requests(const std::vector<provided_file>&)>& run_round,
+		ds::task_context* task);
 
 	// The memory the decoder may use, from cfg `import/decoder_memory_mb`: 2 GiB when unset (0 or less), never unlimited, kept
 	// between 256 MiB and 8 GiB; `warning` says so when the value was changed.
