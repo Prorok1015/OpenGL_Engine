@@ -8,6 +8,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/resource/res_system.h>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -70,6 +71,12 @@ namespace edt {
 		mutable std::once_flag m_version_once;
 		mutable std::string m_version;
 	};
+
+	// The SHA-256 of `file`, hashed once per process for one path, size and write time (#1063): every process_decoder,
+	// and each editor test makes one, asks for the decoder's. Empty when the file cannot be read.
+	std::optional<std::string> file_version(const std::filesystem::path& file);
+	// How many files file_version has hashed in this process.
+	std::size_t file_version_hashes();
 
 	// The steps of a decoder as the importers call them: process_decoder's, or a test's.
 	struct decoder_steps

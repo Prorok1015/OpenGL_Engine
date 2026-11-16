@@ -8,12 +8,15 @@
 #include <boost/json/parse_options.hpp>
 #include <boost/json/stream_parser.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <format>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <stop_token>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <unordered_set>
@@ -503,10 +506,42 @@ std::string edt::process_decoder::unavailable_reason() const
 		text_escape::escaped_text(fs_paths::generic_utf8_of(m_config.decoder), 1024));
 }
 
+namespace {
+
+std::mutex g_file_versions_mutex;
+std::unordered_map<std::string, std::string> g_file_versions;
+std::atomic<std::size_t> g_file_version_hashes{ 0 };
+
+}
+
+std::optional<std::string> edt::file_version(const std::filesystem::path& file)
+{
+	std::error_code size_error;
+	std::error_code time_error;
+	const std::uintmax_t size = fs::file_size(file, size_error);
+	const auto written = fs::last_write_time(file, time_error);
+	if (size_error || time_error) return std::nullopt;
+	const std::string key = std::format("{}|{}|{}", fs_paths::generic_utf8_of(file), size,
+		written.time_since_epoch().count());
+
+	// Held while hashing: two decoders made at once hash the file once.
+	const std::lock_guard guard(g_file_versions_mutex);
+	if (const auto found = g_file_versions.find(key); found != g_file_versions.end()) return found->second;
+	++g_file_version_hashes;
+	std::optional<std::string> hash = cmn::sha256_file_hex(file);
+	if (hash) g_file_versions.emplace(key, *hash);
+	return hash;
+}
+
+std::size_t edt::file_version_hashes()
+{
+	return g_file_version_hashes.load();
+}
+
 std::string edt::process_decoder::version() const
 {
 	std::call_once(m_version_once, [this] {
-		if (std::optional<std::string> hash = cmn::sha256_file_hex(m_config.decoder)) {
+		if (std::optional<std::string> hash = edt::file_version(m_config.decoder)) {
 			m_version = std::move(*hash);
 			return;
 		}
