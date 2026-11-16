@@ -22,6 +22,14 @@ namespace edt {
 		return configured == sandbox_mode::required || requested == sandbox_mode::required ? sandbox_mode::required : sandbox_mode::best_effort;
 	}
 
+	// What an agent's import asks for. Only Linux has the decoder's OS sandbox yet; elsewhere the owner's interim rule (#1078)
+	// is best_effort with the visible warning, until the Windows sandbox (#1054) lands and this becomes `required` everywhere.
+#if defined(__linux__)
+	inline constexpr sandbox_mode k_agent_sandbox_mode = sandbox_mode::required;
+#else
+	inline constexpr sandbox_mode k_agent_sandbox_mode = sandbox_mode::best_effort;
+#endif
+
 	constexpr std::string_view sandbox_mode_name(sandbox_mode mode)
 	{
 		return mode == sandbox_mode::required ? "required" : "best_effort";

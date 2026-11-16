@@ -34,7 +34,7 @@
 - механизма **нет** (Landlock: ENOSYS/EOPNOTSUPP/EPERM от проверки ABI или ABI < 1; seccomp: `PR_GET_SECCOMP` → EINVAL; не Linux): `required` — выход с кодом 4 и одной строкой причины в stderr, редактор проваливает импорт/загрузку с текстом «the model decoder cannot run in its sandbox: <причина>»; `best_effort` — работа без него, в ответе `"sandbox":{"fs":"none","syscalls":...,"why":...}`, редактор пишет один WARN за запуск;
 - механизм **есть, но настройка не удалась** (любой вызов landlock_*/seccomp после успешной проверки ABI, no_new_privs, RLIMIT_FSIZE): код 4 в обоих режимах, ребёнок никогда не продолжает.
 
-Импорт человека и модели уровня (`res://`) — cfg `import/decoder_sandbox` (`best_effort` по умолчанию, `required`; иное значение — `best_effort` с WARN). Импорт агента — всегда `required` (`import_source::sandbox`), сильнейший из двух режимов побеждает. Следствие: пока нет песочницы Windows (#1054) и macOS, импорт модели агентом там отказывает.
+Импорт человека и модели уровня (`res://`) — cfg `import/decoder_sandbox` (`best_effort` по умолчанию, `required`; иное значение — `best_effort` с WARN). Импорт агента — `required` на Linux (`import_source::sandbox`, `edt::k_agent_sandbox_mode`), сильнейший из двух режимов побеждает. Решение владельца на переходный период: на Windows и macOS, пока там нет песочницы (#1054), импорт агента идёт в `best_effort` с видимым предупреждением (#1076); эту ветку убирает PR, вливающий #1054.
 
 **Сборки с санитайзерами** (тестовые, не поставляются): seccomp не ставится (рантайм санитайзера делает вызовы, которых нет в списке) — `syscalls=none`, и `required` там выполняется одним Landlock. Landlock ставится; проверка утечек LSan выполняется до него (она читает `/proc`) и на выходе больше не запускается.
 
