@@ -716,7 +716,7 @@ BOOST_AUTO_TEST_CASE(a_record_turns_stale_when_the_prefab_file_changes_under_an_
 	BOOST_REQUIRE(cache.stale(inst)->empty());
 
 	rs->store(rig, test_util::to_bytes(R"({"__type":"prefab_desc","__version":4,"children":[]})"));
-	rs->signal_changed(rig);
+	rs->evict_cached(rig);
 	pump();
 
 	const auto stale = cache.stale(inst);
