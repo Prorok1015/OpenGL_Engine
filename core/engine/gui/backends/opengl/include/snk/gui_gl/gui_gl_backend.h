@@ -18,16 +18,27 @@ namespace gui::gl
         void set_dpi_scale(float scale) override { m_dpi_scale = scale; }
         // TTF bytes for the UI font; before init(). Empty or not a font: the built-in ImGui font stays.
         void set_ui_font_bytes(std::vector<std::byte> bytes) { m_ui_font.set_bytes(std::move(bytes)); }
-        void set_icon_font_bytes(std::vector<std::byte> bytes) { m_ui_font.set_icon_bytes(std::move(bytes)); }
-        // Before init().
-        void set_theme(gui::theme t) { m_theme = t; }
+        // Before init() it is the look the first frame has; after it, the next new_frame() rebuilds the font atlas
+        // and the style with it. Empty font bytes: the built-in ImGui font (and no icons).
+        void set_theme(const gui::theme_style& style, std::vector<std::byte> text_font,
+            std::vector<std::byte> icon_font);
         void rebuild_fonts(float scale) override;
         virtual void new_frame() override;
         virtual void render() override;
         virtual void shutdown() override;
     private:
+        void apply_pending_theme();
+
+        struct pending_theme {
+            gui::theme_style style;
+            std::vector<std::byte> text_font;
+            std::vector<std::byte> icon_font;
+        };
+
         float m_dpi_scale = 1.f;
-        gui::theme m_theme = gui::theme::classic;
+        bool m_initialized = false;
+        gui::theme_style m_style;
+        std::unique_ptr<pending_theme> m_pending_theme;
         gui::ui_font m_ui_font;
         // Unscaled style, so a scale change re-applies ScaleAllSizes from scratch instead of compounding.
         std::unique_ptr<ImGuiStyle> m_base_style;

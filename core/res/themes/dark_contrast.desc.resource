@@ -1,7 +1,7 @@
 {
     "__type" : "resource_meta",
     "__version" : 1,
-    "__guid" : "16af436b-d45e-4d1c-917c-1ea1372f08d2",
+    "__guid" : "8b8432b2-c175-470c-b5e2-2ab3e6f69b6e",
     "importer" : "",
     "settings" : {},
     "flags" : []
