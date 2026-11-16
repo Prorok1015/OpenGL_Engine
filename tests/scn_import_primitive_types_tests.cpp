@@ -72,6 +72,20 @@ f 1/1 2/2 3/3
 p 1 2
 )";
 
+// Two meshes: a triangle object and a line object beside it; the line mesh keeps nothing in the triangle geometry.
+constexpr std::string_view OBJ_TRIANGLE_BESIDE_LINES = R"(v 0 0 0
+v 1 0 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+o Tri
+f 1/1 2/2 3/3
+o Wire
+l 1/1 2/2
+l 2/2 3/3
+)";
+
 bool contains(std::string_view text, std::string_view part)
 {
 	return text.find(part) != std::string_view::npos;
@@ -199,6 +213,19 @@ int first_mesh_index_count(const json::value& node)
 
 }
 
+// How many mesh nodes the engine importer made.
+int mesh_node_count(const json::value& node)
+{
+	int count = 0;
+	if (const auto* components = node.as_object().if_contains("components"); components && components->is_object()) {
+		if (components->as_object().contains("mesh_node_desc")) ++count;
+	}
+	if (const auto* children = node.as_object().if_contains("children"); children && children->is_array()) {
+		for (const auto& child : children->as_array()) count += mesh_node_count(child);
+	}
+	return count;
+}
+
 BOOST_FIXTURE_TEST_SUITE(ScnImportPrimitiveTypesTests, primitive_types_fixture)
 
 // ---- engine importer (scn::model_importer_adapter) ----
@@ -249,6 +276,20 @@ BOOST_AUTO_TEST_CASE(AMixedMeshOfTrianglesAndPoints_KeepsOnlyItsTriangles_InTheE
 	BOOST_TEST(warnings.names_dropped("mixed_point.obj", "Mixed", 2u, "point"));
 }
 
+// A mesh that keeps no face gets no mesh node: it would draw nothing.
+BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEngineImporter)
+{
+	const warn_capture warnings;
+	const auto prefab = engine_import("beside.obj", OBJ_TRIANGLE_BESIDE_LINES);
+	BOOST_REQUIRE(prefab);
+	check_no_stray_primitives(engine_geometry("beside"), 1u);
+	json::object out;
+	prefab->serialize(out);
+	BOOST_TEST(mesh_node_count(out) == 1);
+	BOOST_TEST(first_mesh_index_count(out) == 3);
+	BOOST_TEST(warnings.names_dropped("beside.obj", "Wire", 2u, "line"));
+}
+
 // ---- editor importer (edt::model_importer) ----
 
 BOOST_AUTO_TEST_CASE(ALinesOnlyObj_HasNoLineInATriangleGeometry_InTheEditorImporter)
@@ -287,6 +328,16 @@ BOOST_AUTO_TEST_CASE(AMixedMeshOfTrianglesAndPoints_KeepsOnlyItsTriangles_InTheE
 	BOOST_TEST((rnd::topology_of(geometry->desc) == rnd::geometry_topology::triangles));
 	check_no_stray_primitives(geometry, 1u);
 	BOOST_TEST(warnings.names_dropped("mixed_point.obj", "Mixed", 2u, "point"));
+}
+
+BOOST_AUTO_TEST_CASE(ALineMeshBesideATriangleMesh_IsDropped_InTheEditorImporter)
+{
+	const warn_capture warnings;
+	const edt::import_intermediate imported = editor_import("beside.obj", OBJ_TRIANGLE_BESIDE_LINES);
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	check_no_stray_primitives(stored(imported.geom_tag), 1u);
+	BOOST_TEST(mesh_node_count(imported.prefab_json) == 1);
+	BOOST_TEST(warnings.names_dropped("beside.obj", "Wire", 2u, "line"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

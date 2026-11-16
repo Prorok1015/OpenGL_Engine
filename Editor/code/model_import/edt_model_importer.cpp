@@ -37,26 +37,38 @@ void checkpoint(ds::task_context* ctx)
 	if (ctx) ctx->throw_if_stopped();
 }
 
-// What the meshes of `scene` hold; aiProcess_Triangulate leaves lines and points as they are.
-rnd::geometry_topology geometry_topology_of(const aiScene* scene)
+// What the one geometry of `scene` keeps (#1092): triangles when any mesh has them, else lines, else points. Faces of
+// another kind are dropped; aiProcess_Triangulate leaves lines and points as they are.
+rnd::geometry_topology kept_topology_of(const aiScene* scene)
 {
-	bool triangles = false;
 	bool lines = false;
 	bool points = false;
-	bool other = false;
 	for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
 		const unsigned int types = scene->mMeshes[i]->mPrimitiveTypes;
-		triangles = triangles || (types & aiPrimitiveType_TRIANGLE) != 0;
+		if ((types & (aiPrimitiveType_TRIANGLE | aiPrimitiveType_POLYGON)) != 0) return rnd::geometry_topology::triangles;
 		lines = lines || (types & aiPrimitiveType_LINE) != 0;
 		points = points || (types & aiPrimitiveType_POINT) != 0;
-		other = other || (types & aiPrimitiveType_POLYGON) != 0;
-	}
-	if (other || static_cast<int>(triangles) + static_cast<int>(lines) + static_cast<int>(points) > 1) {
-		return rnd::geometry_topology::mixed;
 	}
 	if (lines) return rnd::geometry_topology::lines;
 	if (points) return rnd::geometry_topology::points;
 	return rnd::geometry_topology::triangles;
+}
+
+// The faces the one geometry keeps, and the model file named when others are dropped.
+struct kept_faces
+{
+	rnd::geometry_topology topology = rnd::geometry_topology::triangles;
+	unsigned int face_size = 3;
+	std::string source;
+};
+
+kept_faces kept_faces_of(const aiScene* scene, std::string source)
+{
+	kept_faces out;
+	out.topology = kept_topology_of(scene);
+	out.face_size = out.topology == rnd::geometry_topology::lines ? 2u : (out.topology == rnd::geometry_topology::points ? 1u : 3u);
+	out.source = std::move(source);
+	return out;
 }
 
 // Assimp polls it while it reads a file; false aborts the import (the importer then returns no scene).
@@ -406,8 +418,31 @@ std::string unique_child_name(std::unordered_set<std::string>& used_names, const
 	return candidate;
 }
 
-void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry)
+// Appends the vertices and the faces of `kept.face_size` indices of `mesh`; false (nothing appended) when it has none.
+// The faces dropped are counted in one warning naming the model file and the mesh.
+bool process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry, const kept_faces& kept)
 {
+	unsigned int kept_count = 0;
+	unsigned int dropped_lines = 0;
+	unsigned int dropped_points = 0;
+	unsigned int dropped_other = 0;
+	for (unsigned int i = 0; i < mesh->mNumFaces; ++i) {
+		const unsigned int count = mesh->mFaces[i].mNumIndices;
+		if (count == kept.face_size) ++kept_count;
+		else if (count == 2) ++dropped_lines;
+		else if (count == 1) ++dropped_points;
+		else ++dropped_other;
+	}
+	if (dropped_lines + dropped_points + dropped_other > 0) {
+		egLOG_WARN("edt/import", "model '{}': mesh '{}': dropped {} line(s) and {} point(s){}: the geometry holds {} only",
+			kept.source, mesh->mName.C_Str(), dropped_lines, dropped_points,
+			dropped_other > 0 ? std::format(" and {} other face(s)", dropped_other) : std::string{},
+			rnd::topology_name(kept.topology));
+	}
+	if (kept_count == 0) {
+		return false;
+	}
+
 	// Validate layout offsets once before the loop (PERF-06)
 	{
 		size_t expected_stride = sizeof(glm::vec3); // position
@@ -446,10 +481,12 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 
 	for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
 		const aiFace& face = mesh->mFaces[i];
+		if (face.mNumIndices != kept.face_size) continue;
 		for (unsigned int j = 0; j < face.mNumIndices; j++)
 			geometry.indices.push_back(face.mIndices[j]);
 
-		if (has_uvs) {
+		// Only a triangle has uv bounds; it has exactly 3 indices here.
+		if (has_uvs && kept.face_size == 3) {
 			for (unsigned int j = 0; j + 2 < face.mNumIndices; j += 3) {
 				auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
 				auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
@@ -464,6 +501,7 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 			}
 		}
 	}
+	return true;
 }
 
 // ─── Skinning weights ────────────────────────────────────────────────────────
@@ -513,6 +551,7 @@ json::object build_prefab_node(
 	const aiScene* scene,
 	aiNode* node,
 	rnd::geometry_desc& geometry,
+	const kept_faces& kept,
 	res::tag geom_tag,
 	const std::unordered_map<std::string, int>& bone_index_map,
 	const std::unordered_set<std::string>& animated_node_names,
@@ -572,7 +611,9 @@ json::object build_prefab_node(
 		std::size_t vx_begin = geometry.vertices.size() / geometry.layout.get_stride();
 		std::size_t ind_begin = geometry.indices.size();
 
-		process_mesh_geometry(scene, mesh, geometry);
+		if (!process_mesh_geometry(scene, mesh, geometry, kept)) {
+			continue; // nothing of it is drawn (#1092)
+		}
 
 		std::size_t vx_end = geometry.vertices.size() / geometry.layout.get_stride();
 		std::size_t ind_end = geometry.indices.size();
@@ -616,7 +657,7 @@ json::object build_prefab_node(
 		// Same-named siblings (and a node named like a mesh child) must not collapse into one key.
 		std::string child_key = unique_child_name(used_child_names, child_name);
 		children.push_back(build_prefab_node(
-			scene, child_node, geometry, geom_tag, bone_index_map,
+			scene, child_node, geometry, kept, geom_tag, bone_index_map,
 			animated_node_names, skin_weights, mem_prefix, model_dir, res_sys, out_tags, prefab_tag,
 			node_path + "/" + child_key, child_key));
 	}
@@ -916,8 +957,9 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	// 8. Build prefab tree + skinning weights
 	std::filesystem::path model_dir = abs_path.parent_path();
 	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
+	const kept_faces kept = kept_faces_of(scene, abs_path.string());
 	json::object prefab_root = build_prefab_node(
-		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
+		scene, scene->mRootNode, geometry, kept, geom_tag, bone_index_map,
 		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, tags, prefab_tag,
 		scene->mRootNode->mName.C_Str());
 
@@ -977,7 +1019,7 @@ edt::import_intermediate edt::model_importer::import_background(const import_sou
 	rnd::geometry_file_options geometry_options;
 	geometry_options.header["__parent"] = "res://base_geometry.desc";
 	geometry_options.bounds = !geometry.bounds.empty();
-	geometry_options.topology = geometry_topology_of(scene);
+	geometry_options.topology = kept.topology;
 	const bool has_meshes = !geometry.vertices.empty();
 	const bool triangles = has_meshes && geometry_options.topology == rnd::geometry_topology::triangles;
 	const bool binary = triangles && source.binary_geometry;
