@@ -60,7 +60,8 @@ namespace edt {
 		// and what is in memory:// passes accept_import_answer; nullopt (with `problem` when it was refused) otherwise.
 		std::optional<import_intermediate> cached(const std::string& key, const import_source& source, std::string& problem) const;
 		void remember(const std::string& folder, cached_decode decode) const;
-		void forget(const std::string& folder) const;
+		// Drops the last decode of `folder`; the resources it made, which erase_memory_folder falls back to.
+		std::vector<res::tag> forget(const std::string& folder) const;
 
 		// Held from emptying a model's folder until its import is in: two loads of one model do not erase each other.
 		std::shared_ptr<std::mutex> folder_lock(const std::string& folder) const;

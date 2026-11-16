@@ -47,6 +47,9 @@ namespace edt {
 		std::string memory_folder;
 		// False: only `preloaded` is the model, `path` names no file (model_file_access's on_disk).
 		bool on_disk = true;
+		// The geometry as <stem>.geom.desc with its binary file <stem>.geom.bin (EPIC-79); false: JSON arrays, what the
+		// decoder process answers until its answer carries the binary file (#1068 PR3b).
+		bool binary_geometry = true;
 		// The decoder process's OS sandbox (#1043) this import asks for at least; off asks for nothing beyond the setting.
 		sandbox_mode sandbox = sandbox_mode::off;
 	};

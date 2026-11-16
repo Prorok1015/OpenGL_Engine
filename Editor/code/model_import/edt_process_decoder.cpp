@@ -580,17 +580,15 @@ edt::decoder_steps edt::steps_of(std::shared_ptr<const process_decoder> decoder)
 	return steps;
 }
 
-std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources, const std::string& folder)
+std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources, const std::string& folder,
+	const std::vector<res::tag>* known)
 {
-	const std::vector<fs::path> roots = resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return std::nullopt;
-	const fs::path dir = roots.back() / fs_paths::path_from_utf8(folder);
-	std::error_code ec;
-	if (!fs::is_directory(dir, ec)) return std::nullopt;
-	std::vector<res::tag> found;
-	for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
-		if (it->is_regular_file(ec)) found.emplace_back(res::tag::memory, folder + fs_paths::generic_utf8_of(it->path().lexically_relative(dir)));
+	std::optional<std::vector<res::tag>> listed = resources.files_under(res::tag::memory, folder);
+	if (!listed) {
+		egLOG_WARN("edt/decoder", "memory:// cannot list '{}': only what this run made there is erased", folder);
+		listed.emplace(known ? *known : std::vector<res::tag>{});
 	}
+	const std::vector<res::tag>& found = *listed;
 	for (const res::tag& tag : found) resources.erase(tag);
 	for (const res::tag& tag : found) {
 		if (resources.exists(tag)) return tag;

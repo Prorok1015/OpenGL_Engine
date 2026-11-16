@@ -172,6 +172,7 @@ namespace {
 			return claim_of_open_level(
 				[&](const std::string& open) { return same_file(locate(open)); },
 				[&](const std::string& named) { return same_file(locate(named)); },
+				same_path,
 				[&](const std::vector<fs::path>& roots, std::string_view entry) {
 					// The highest layer that has the file is the one the resolver opens.
 					for (std::size_t i = roots.size(); i-- > 0;) {
@@ -209,9 +210,14 @@ namespace {
 			const std::string wanted = name_key(relative);
 			const std::vector<fs::path> own = layers();
 			const std::optional<fs::path> wanted_file = own.empty() ? std::nullopt : resolver_path(own.back(), relative);
+			const auto same_name = [&](const fs::path& file) {
+				return wanted_file
+					&& name_key(fs_paths::generic_utf8_of(file)) == name_key(fs_paths::generic_utf8_of(*wanted_file));
+			};
 			return claim_of_open_level(
 				[&](const std::string& open) { return name_key(open) == wanted; },
 				[&](const std::string& named) { return name_key(named) == wanted; },
+				same_name,
 				[&](const std::vector<fs::path>& roots, std::string_view entry) {
 					// A new file lands in the top folder: the entry names it when both spell one path there.
 					if (roots.empty() || !wanted_file) return false;
@@ -302,9 +308,11 @@ namespace {
 
 	private:
 		// One pass over the open level's files and their `worlds`. `is_level(name)`: the level file itself; `is_named(path)`:
-		// an entry the path rules accept; `is_resolved(roots, relative)`: an entry compared as the file a mount over `roots` opens.
-		template<class IsLevel, class IsNamed, class IsResolved>
-		level_answer claim_of_open_level(const IsLevel& is_level, const IsNamed& is_named, const IsResolved& is_resolved) const
+		// an entry the path rules accept; `is_opened(file)`: the file the engine:// resolver opens for an entry;
+		// `is_resolved(roots, relative)`: an entry compared as the file a mount over `roots` opens.
+		template<class IsLevel, class IsNamed, class IsOpened, class IsResolved>
+		level_answer claim_of_open_level(const IsLevel& is_level, const IsNamed& is_named, const IsOpened& is_opened,
+			const IsResolved& is_resolved) const
 		{
 			level_answer out;
 			if (!m_deps.open_level_files) return out;
@@ -325,7 +333,16 @@ namespace {
 					for (const res::tag& world_file : world_files_of(world)) {
 						// The project's root may be the engine's base folder: engine:// then names project files.
 						if (world_file.protocol() == res::tag::engine) {
-							if (is_resolved(m_deps.res.mount_roots(res::tag::engine), world_file.relative())) return mine;
+							// Asked of the resolver, not of its roots (#1086). Unmounted, the entry names no file; a
+							// resolver that reads no files leaves it the level's, so the write is asked about.
+							if (!m_deps.res.serves(res::tag::engine)) continue;
+							const std::optional<res::disk_file> opened = m_deps.res.disk_file_of(world_file);
+							if (!opened || is_opened(opened->file)) return mine;
+							// A file the agent puts in the top folder would shadow a world read from a lower one.
+							const std::vector<fs::path> engine_roots = m_deps.res.mount_roots(res::tag::engine);
+							const std::optional<fs::path> top = engine_roots.empty() ? std::nullopt
+								: resolver_path(engine_roots.back(), world_file.relative());
+							if (top && is_opened(*top)) return mine;
 							continue;
 						}
 						const edt::agent_level_path named = edt::check_agent_folder(world_file.view());
@@ -444,6 +461,25 @@ namespace {
 		return out;
 	}
 
+	// Mesh data is written by the editor, never as a desc: a geometry keeps its vertices in a binary file beside the desc
+	// (EPIC-79), an editable mesh is the editor's (EPIC-77). Empty when `relative` and the content's `__type` are neither.
+	std::string mesh_file_refusal(std::string_view relative, const json::value& content)
+	{
+		std::string lower(relative);
+		std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const json::value* type = content.is_object() ? content.as_object().if_contains("__type") : nullptr;
+		const std::string_view type_name = type && type->is_string() ? view_of(type->as_string()) : std::string_view{};
+		if (lower.ends_with(".geom.desc") || type_name == "geometry_desc") {
+			return std::format("'res://{}': a geometry is written by the editor with its binary file (a model import: file.import_model, a mesh save), "
+				"not by desc.create or desc.write", relative);
+		}
+		if (lower.ends_with(".poly.desc") || type_name == "poly_mesh_desc") {
+			return std::format("'res://{}': an editable mesh is written by the editor's mesh tools, not by desc.create or desc.write",
+				relative);
+		}
+		return {};
+	}
+
 	std::string type_of_text(std::string_view text)
 	{
 		boost::system::error_code ec;
@@ -477,6 +513,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -505,6 +544,9 @@ namespace {
 		{
 			const request_path path = path_of(call);
 			if (!path.ok()) return cmd::result::failure(cmd::codes::invalid_args, path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
 			if (std::optional<std::string> why = m_files.write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
 			const located_file found = m_files.locate(path.relative);
 			if (!found.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, found.error);
@@ -554,6 +596,7 @@ namespace {
 			};
 			const request_path path = path_of(call);
 			if (!path.ok()) return refused(path.error);
+			if (std::string why = mesh_file_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) return refused(why);
 			if (std::optional<std::string> why = m_files.write_blocked()) return refused_message(*why);
 			const std::string shown_path = edt::forge::escaped_text(path.relative, 1024);
 			const located_file found = m_files.locate(path.relative);
@@ -887,7 +930,10 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 	add("desc.create", "Create a desc file (*.desc) in the project's res/ folder from a JSON object with a `__type`; never replaces a file. "
 			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
 			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough. "
-			"Content with a guid is answered `busy` while the editor's asset index is still being built",
+			"Content with a guid is answered `busy` while the editor's asset index is still being built. "
+			"*.geom.desc and *.poly.desc files (and content whose `__type` is geometry_desc or poly_mesh_desc) are refused: mesh data is written only by the editor, "
+			"a geometry's vertices living in a binary file next to the desc (EPIC-79); a geometry comes from a model import (file.import_model), "
+			"an editable mesh from the editor's mesh editing (no tool)",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"res://levels/a.desc or levels/a.desc: inside the project, *.desc only"},
 			"desc":{"type":"object","description":"the file's content; the editor writes __version and the header order"}},
@@ -895,7 +941,9 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 		version_result, true, false, cmd::agent_category::scene_edit, cmd::danger::none, &desc_commands::create);
 	add("desc.write", "Replace an existing desc file of the project's res/ folder (a person confirms each time). `version` must be the one desc.read gave, "
 			"else `stale`; the content is checked against the schemas like desc.create. The file of the open level is refused (`busy`), "
-			"and so is content with a guid while the asset index is still being built",
+			"and so is content with a guid while the asset index is still being built. "
+			"*.geom.desc and *.poly.desc files (and content whose `__type` is geometry_desc or poly_mesh_desc) are refused as in desc.create: mesh data is written "
+			"only by the editor, a geometry's vertices living in a binary file next to the desc (EPIC-79); a new geometry comes from a model import (file.import_model)",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},
 			"desc":{"type":"object","description":"the whole new content"}},
