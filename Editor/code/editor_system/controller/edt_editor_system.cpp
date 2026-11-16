@@ -41,22 +41,11 @@
 #include "edt_data_document_host.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
-#include "edt_model_importer.h"
-#include "edt_process_decoder.h"
-#if SNK_HAS_ASSIMP
-#include "edt_decoded_model_adapter.h"
-#include "edt_person_model_import.h"
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
-#endif
-#include "edt_asset_exporter.h"
-#include "edt_asset_export_dialog.h"
-#include "edt_async_import_task.h"
+#include "edt_import_component.h"
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
 #include "edt_template_ids.h"
-#include "edt_agent_model_import.h"
-#include "edt_decoder_sandbox_notice.h"
 #include "edt_scene_commands.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
@@ -229,11 +218,6 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_hot_reload_dump_snapshot, "hot_reload/dump_snapshot", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
-	// The memory the decoder process may use for an agent's model (#647), in MiB; 0: 2048. Kept between 256 and 8192.
-	CFG_VAR_DEF_INT(cfg_import_decoder_memory_mb, "import/decoder_memory_mb", 0);
-	// The decoder's OS sandbox (#1043) for every import, a person's setting: on (run without it where the system has
-	// none, with one WARN), off, or required (CI: refuse to decode without it). An agent's import never changes it.
-	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "on");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
 
 	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
@@ -266,22 +250,13 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
-#if SNK_HAS_ASSIMP
-	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys))
-#endif
-	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 {
 }
 
 edt::editor_system::~editor_system()
 {
 	if (m_agent) m_agent->shutdown();
-#if SNK_HAS_ASSIMP
-	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
-	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
-	erase_import_folder(m_import_folder);
-	erase_import_folder(m_dialog_import_folder);
-#endif
+	if (m_import) m_import->shutdown();
 	// The layer may outlive this system: no game layout drawn through it any more.
 	if (editor_layer) {
 		editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
@@ -354,73 +329,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[&res = m_res] { return res.get_resource_layers(); } }));
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
-	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs(), m_res);
-	{
-		edt::agent_import_options import_options;
-#if SNK_HAS_ASSIMP
-		// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
-		// no fallback to parsing it here: without the decoder the command says so.
-		{
-			std::string memory_warning;
-			edt::decode_runner_config decoder_config;
-			decoder_config.memory_limit_bytes = edt::decoder_memory_limit(static_cast<std::int64_t>(*cfg_import_decoder_memory_mb), memory_warning);
-			if (!memory_warning.empty()) egLOG_WARN("Editor/Import", "{}", memory_warning);
-			std::string sandbox_warning;
-			decoder_config.sandbox = edt::decoder_sandbox_mode(*cfg_import_decoder_sandbox, sandbox_warning);
-			if (!sandbox_warning.empty()) egLOG_WARN("Editor/Import", "{}", sandbox_warning);
-			// Read once, here: what a person set before the editor started is the mode for the whole run (#1076).
-			const edt::sandbox_mode sandbox_mode = decoder_config.sandbox;
-			m_decoder_sandbox = std::make_shared<edt::decoder_sandbox_notice>(m_context->problems(), sandbox_mode,
-				edt::expected_decoder_sandbox(sandbox_mode));
-			// The decoder runs on worker threads; Problems is the main thread's. The resource system may run the decoder after
-			// this system is gone: the notice then is too, and nothing is posted.
-			auto on_sandbox = [&tasks = data.require<ds::task_system>(), notice = std::weak_ptr(m_decoder_sandbox)](const edt::decoder_sandbox_status& status) {
-				if (!notice.lock()) return;
-				tasks.post_main([notice, status] {
-					if (const auto alive = notice.lock()) alive->seen(status);
-				});
-			};
-			m_process_decoder = std::make_shared<edt::process_decoder>(m_res, std::move(decoder_config), std::move(on_sandbox));
-		}
-		// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
-		// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
-		if (const std::string why = m_process_decoder->unavailable_reason(); !why.empty()) {
-			egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
-		}
-		m_res.registrate_adapter<edt::decoded_model_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(m_res),
-			edt::decoded_model_adapter::steps_of(m_process_decoder));
-		m_model_adapter_registered = true;
-		m_res.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
-		// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk.
-		std::string earlier_imports = "__imports/";
-		erase_import_folder(earlier_imports);
-		import_options.import = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
-			return decoder->import(source, task);
-		};
-		import_options.scan = [decoder = m_process_decoder.get()](const edt::import_source& source, ds::task_context* task) {
-			return decoder->scan(source, task);
-		};
-		import_options.sandbox_status = [notice = std::weak_ptr(m_decoder_sandbox)] {
-			const auto alive = notice.lock();
-			return alive ? alive->current() : edt::decoder_sandbox_status{};
-		};
-		import_options.unavailable_reason = [decoder = m_process_decoder.get()] {
-			const std::string why = decoder->unavailable_reason();
-			return why.empty() ? why : "model import for agents is not available: " + why;
-		};
-#endif
-		import_options.resource_layers = [this] { return m_res.get_resource_layers(); };
-		import_options.resources_path = [this] { return m_res.get_resources_path(); };
-		import_options.blocker = [this]() -> std::optional<std::string> {
-			if (m_play && m_play->active()) return std::string{ "Stop Play to import." };
-			if (m_export_dialog_active) return std::string{ "an import is waiting in the editor's export dialog" };
-#if SNK_HAS_ASSIMP
-			if (m_importing) return std::string{ "an import is already running in the editor" };
-#endif
-			return std::nullopt;
-		};
-		m_agent_import = std::make_unique<edt::agent_model_import>(*m_asset_exporter, m_context->jobs(), m_res, std::move(import_options));
-	}
+	m_import = std::make_unique<import_component>(import_component::ports{ .context = *m_context, .resources = m_res, .desc = desc_system,
+		.tasks = data.require<ds::task_system>(), .layer = *editor_layer,
+		.play = [this]() -> const play_session* { return m_play; },
+		.exported = [this](const res::tag& tag) {
+			if (m_state.editor_tag.is_valid()) m_asset_open->add_exported_to_scene(tag);
+		} });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
@@ -594,9 +508,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return std::nullopt;
 	};
 #if SNK_HAS_ASSIMP
-	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
+	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_import->start_import(abs_path); };
 #endif
-	hooks.agent_import = m_agent_import.get();
+	hooks.agent_import = m_import->agent_import();
 	hooks.exit = m_exit_action;
 	hooks.exit_blocker = [this] { return migration_blocker(); };
 	hooks.resources_path = m_res.get_resources_path();
@@ -674,12 +588,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id)) {
 				return std::string{ "a reload of the game module is waiting" };
 			}
-			if (m_agent_import && m_agent_import->running()) return std::string{ "a model import asked for by an agent is running" };
-			if (m_export_dialog_active) return std::string{ "the asset export dialog is open" };
+			if (m_import->agent_import_running()) return std::string{ "a model import asked for by an agent is running" };
+			if (m_import->dialog_open()) return std::string{ "the asset export dialog is open" };
 			if (m_vcs && m_vcs->writes_running()) return std::string{ "a git operation (pull, checkout, commit...) is running" };
-#if SNK_HAS_ASSIMP
-			if (m_importing) return std::string{ "a model import is running" };
-#endif
+			if (m_import->person_import_running()) return std::string{ "a model import is running" };
 			return std::nullopt;
 		},
 		.unsaved_reason = [this]() -> std::optional<std::string> {
@@ -1034,162 +946,6 @@ void edt::editor_system::follow_game_layer_change(bool before)
 		m_level_load->begin(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
-
-// ─── Import pipeline ────────────────────────────────────────────────────────
-
-bool edt::editor_system::poll_import_pipeline()
-{
-	if (m_export_dialog_active) {
-		bool still_open = m_export_dialog->render();
-		if (!still_open) {
-			m_export_dialog_active = false;
-#if SNK_HAS_ASSIMP
-			erase_import_folder(m_dialog_import_folder);
-#endif
-			auto exported_tag = m_export_dialog->get_exported_tag();
-			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()) {
-				m_asset_open->add_exported_to_scene(exported_tag);
-			}
-			return false;
-		}
-		return true;
-	}
-
-#if SNK_HAS_ASSIMP
-	if (m_importing) {
-		return poll_import_progress();
-	}
-#endif
-	return false;
-}
-
-#if SNK_HAS_ASSIMP
-void edt::editor_system::start_import(const std::filesystem::path& abs_path)
-{
-	if (m_importing) return;
-	if (m_agent_import && m_agent_import->running()) {
-		m_context->dialogs().message(message_level::info, "An import asked for by an agent is running: wait for it, or cancel it in the job list.");
-		return;
-	}
-	if (refused_during_play(m_play, m_context->dialogs(), "Stop Play to import.")) return;
-
-	m_importing = true;
-	m_import_finished = false;
-	m_import_spinner_t = 0.f;
-	m_import_result.reset();
-	m_import_failure.clear();
-	// The name of a file someone else may have made: shown in the popup, the job list and the log only escaped.
-	m_import_name = text_escape::escaped_text(fs_paths::utf8_of(abs_path.filename()), 256);
-	m_import_folder = edt::person_import_folder(abs_path, ++m_import_serial);
-	// The model is parsed in the decoder process (#987), never here: the job reads the file and waits for the decoder.
-	m_import_job = m_context->jobs().start(ds::lane::compute,
-		{ "Import " + m_import_name, "import" }, m_lifetime,
-		[decoder = edt::steps_of(m_process_decoder), &resources = m_res, abs_path,
-			folder = m_import_folder](ds::task_context& ctx) -> edt::import_intermediate {
-			return edt::person_model_import(abs_path, folder, decoder, resources, ctx);
-		},
-		[this](ds::task_result<edt::import_intermediate>& result) {
-			if (!m_importing) return;
-			m_import_finished = true;
-			if (result.ok()) {
-				m_import_result = std::move(*result.value);
-			} else {
-				m_import_failure = result.error;
-			}
-		});
-	editor_layer->register_implicit("edt/import_model", [this] { return poll_import_pipeline(); });
-}
-
-void edt::editor_system::finish_import()
-{
-	erase_import_folder(m_import_folder);
-	m_importing = false;
-	m_import_finished = false;
-	m_import_job = 0;
-	m_import_result.reset();
-	m_import_failure.clear();
-	m_import_name.clear();
-}
-
-bool edt::editor_system::poll_import_progress()
-{
-	// Not running and not finished: the job was cancelled and its result discarded.
-	const bool waiting = !m_import_finished && m_context->jobs().is_running(m_import_job);
-
-	if (waiting) {
-		ImGui::OpenPopup("Importing##edt_import");
-		if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
-			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-		{
-			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-				m_context->jobs().cancel(m_import_job);
-				finish_import();
-				ImGui::CloseCurrentPopup();
-				ImGui::EndPopup();
-				return false;
-			}
-			m_import_spinner_t += ImGui::GetIO().DeltaTime;
-			const char* spinners[] = { "|", "/", "-", "\\" };
-			int idx = static_cast<int>(m_import_spinner_t * 8.f) % 4;
-			ImGui::Text("%s  Importing '%s'...", spinners[idx], m_import_name.c_str());
-			ImGui::EndPopup();
-		}
-		return true;
-	}
-
-	ImGui::OpenPopup("Importing##edt_import");
-	if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::CloseCurrentPopup();
-		ImGui::EndPopup();
-	}
-
-	if (!m_import_result) {
-		if (!m_import_failure.empty()) {
-			egLOG("Editor/Import", "Async import failed: {}", m_import_failure);
-		}
-		finish_import();
-		return false;
-	}
-
-	auto intermediate = std::move(*m_import_result);
-	// The dialog takes the folder over; finish_import erases what is left of any other outcome.
-	std::string folder = std::exchange(m_import_folder, std::string{});
-	const std::string name = m_import_name;
-	finish_import();
-
-	if (!intermediate.error.empty()) {
-		erase_import_folder(folder);
-		egLOG("Editor/Import", "Import of '{}' failed: {}", name, intermediate.error);
-		m_context->dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", name, intermediate.error));
-		return false;
-	}
-
-	auto result = m_model_importer->finalize_on_main(std::move(intermediate));
-	if (result.prefab) {
-		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
-		m_dialog_import_folder = std::move(folder);
-		m_export_dialog->open(std::move(result));
-		m_export_dialog_active = true;
-		return true;
-	}
-
-	egLOG("Editor/Import", "Failed to finalize import");
-	erase_import_folder(folder);
-	return false;
-}
-
-void edt::editor_system::erase_import_folder(std::string& folder)
-{
-	if (folder.empty()) return;
-	if (const std::optional<res::tag> left = edt::erase_memory_folder(m_res, folder)) {
-		egLOG_WARN("Editor/Import", "'{}' of an import cannot be removed", left->view());
-	}
-	folder.clear();
-}
-#endif
 
 // ─── Level load ─────────────────────────────────────────────────────────────
 
