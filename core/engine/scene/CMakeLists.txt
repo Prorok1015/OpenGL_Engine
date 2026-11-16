@@ -19,4 +19,4 @@ snk_component_headers(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PUBLIC snk::render PRIVATE snk::resource_system PRIVATE snk::input_system PRIVATE snk::window PRIVATE snk::ecs PRIVATE snk::engine_logger)
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::desc_system)
 # scene/hot_reload (scn_context_manager.cpp) and the project's start level (scn_start_level.cpp, #591).
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)
