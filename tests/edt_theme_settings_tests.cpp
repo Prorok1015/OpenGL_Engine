@@ -247,7 +247,7 @@ BOOST_AUTO_TEST_CASE(ABuiltInPreset_IsNotSaved)
 	BOOST_REQUIRE(model.working() != nullptr);
 
 	BOOST_TEST(model.save().has_value());
-	BOOST_TEST(edt_ram->files.empty() || edt_file("themes/light.desc").empty());
+	BOOST_TEST((edt_ram->files.empty() || edt_file("themes/light.desc").empty()));
 }
 
 BOOST_AUTO_TEST_CASE(WithoutARenderer_NothingIsAppliedOrWritten)
