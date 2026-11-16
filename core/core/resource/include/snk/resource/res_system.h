@@ -123,6 +123,11 @@ namespace res
 		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
 		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
 		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
+		// The file on the disk `tag` is read from now, when it holds exactly `bytes` (what a load of it got): nullopt
+		// when its resolver reads no files (a RAM or pack one), a store of it is queued, or there is no file. `differs`
+		// says why a file that is there is not taken (vfs_resolver::disk_file_holding). Any thread.
+		std::optional<disk_file> disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+			std::string& differs) const;
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a

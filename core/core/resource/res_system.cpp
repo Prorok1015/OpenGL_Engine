@@ -2649,6 +2649,15 @@ res::tag res::resource_system::engine_file(std::string_view relative) const
 	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
 
+std::optional<res::disk_file> res::resource_system::disk_file_holding(const tag& tag,
+	const std::vector<std::byte>& bytes, std::string& differs) const
+{
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->disk_file_holding(tag, bytes, differs);
+}
+
 bool res::resource_system::exists(const tag& tag) const
 {
 	const resolver_lease found = root().resolver_for(tag.protocol());

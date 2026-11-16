@@ -305,4 +305,35 @@ BOOST_AUTO_TEST_CASE(AMountOfAProtocolThatIsServed_IsRefused_AndChangesNothing)
 	rs->unregistrate_resolver(k_mounted);
 }
 
+// #996: the file a tag is read from, while it holds the bytes a load got; none from a resolver that reads no files.
+BOOST_AUTO_TEST_CASE(TheDiskFileOfATag_IsTheOneItsResolverReads_WhileItHoldsTheBytes)
+{
+	const auto low = folder_with("disk_low", "a.txt");
+	const auto high = folder_with("disk_high", "a.txt");
+	std::ofstream(high / "a.txt") << "high";
+	res::mount both = mount_of(low);
+	both.roots.push_back(high);
+	BOOST_REQUIRE(rs->add_mount(std::move(both)));
+	const res::tag tag{ "mount1034://a.txt" };
+
+	std::string differs;
+	const auto found = rs->disk_file_holding(tag, test_util::to_bytes("high"), differs);
+	BOOST_REQUIRE(found.has_value());
+	BOOST_TEST(std::filesystem::equivalent(found->root, high));
+	BOOST_TEST(std::filesystem::equivalent(found->file, high / "a.txt"));
+	BOOST_TEST(differs.empty());
+
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("text"), differs).has_value());
+	BOOST_TEST(!differs.empty());
+	differs.clear();
+	BOOST_TEST(!rs->disk_file_holding(res::tag{ "mount1034://none.txt" }, test_util::to_bytes("text"), differs));
+	BOOST_TEST(differs.empty());
+
+	rs->unregistrate_resolver(k_mounted);
+	rs->registrate_resolver<test_util::ram_resolver>(k_mounted);
+	BOOST_TEST(!rs->disk_file_holding(tag, test_util::to_bytes("high"), differs).has_value());
+	BOOST_TEST(differs.empty());
+	rs->unregistrate_resolver(k_mounted);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
