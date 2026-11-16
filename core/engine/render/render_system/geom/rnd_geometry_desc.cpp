@@ -1,8 +1,18 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include "rnd_geometry_binary.h"
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/common/eng_profiler.h>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <format>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -139,6 +149,223 @@ namespace ds {
 	}
 }
 
+namespace
+{
+	struct binary_entry
+	{
+		rnd::detail::geometry_binary_state state = rnd::detail::geometry_binary_state::none;
+		rnd::detail::geometry_binary_ranges ranges;
+	};
+
+	// By address: geometry_desc has no member for it. Never destroyed, so a geometry freed at exit still finds it.
+	struct binary_registry
+	{
+		std::mutex mutex;
+		std::unordered_map<const rnd::geometry_desc*, binary_entry> entries;
+	};
+
+	binary_registry& registry()
+	{
+		static binary_registry* const made = new binary_registry;
+		return *made;
+	}
+
+	void copy_binary(const rnd::geometry_desc& from, const rnd::geometry_desc& to)
+	{
+		binary_registry& reg = registry();
+		std::lock_guard lock(reg.mutex);
+		const auto found = reg.entries.find(&from);
+		if (found == reg.entries.end()) {
+			reg.entries.erase(&to);
+			return;
+		}
+		binary_entry copy = found->second;
+		reg.entries.insert_or_assign(&to, std::move(copy));
+	}
+
+	// A range object: recorded for the adapter. Anything else is not a range (an array, read as before).
+	std::optional<res::binary_range> range_at(const json::value& value, std::string_view path)
+	{
+		if (!value.is_object()) {
+			return std::nullopt;
+		}
+		std::string error;
+		auto range = res::binary_range_from_json(value, error);
+		if (!range) {
+			throw res::load_error(res::diagnostic_kind::load, path, std::format("{}: {}", path, error));
+		}
+		return range;
+	}
+
+	bool is_float_type(rnd::driver::SHADER_DATA_TYPE type)
+	{
+		using rnd::driver::SHADER_DATA_TYPE;
+		return type == SHADER_DATA_TYPE::FLOAT || type == SHADER_DATA_TYPE::VEC2_F || type == SHADER_DATA_TYPE::VEC3_F
+			|| type == SHADER_DATA_TYPE::VEC4_F;
+	}
+
+	const rnd::driver::BufferElement* element_named(const rnd::driver::BufferLayout& layout, std::string_view name)
+	{
+		for (const auto& element : layout) {
+			if (element.Name == name) {
+				return &element;
+			}
+		}
+		return nullptr;
+	}
+
+	[[noreturn]] void refuse_data(const res::tag& file, std::string_view path, const std::string& reason)
+	{
+		throw res::load_error(res::diagnostic_kind::load, path, std::format("geometry '{}': {}: {}", file.view(), path, reason));
+	}
+
+	float float_at(const std::vector<std::byte>& vertices, std::size_t offset)
+	{
+		float value = 0.0f;
+		std::memcpy(&value, vertices.data() + offset, sizeof(value));
+		return value;
+	}
+}
+
+rnd::detail::geometry_binary_state rnd::detail::binary_state_of(const geometry_desc& geometry)
+{
+	binary_registry& reg = registry();
+	std::lock_guard lock(reg.mutex);
+	const auto found = reg.entries.find(&geometry);
+	return found == reg.entries.end() ? geometry_binary_state::none : found->second.state;
+}
+
+std::optional<rnd::detail::geometry_binary_ranges> rnd::detail::binary_ranges_of(const geometry_desc& geometry)
+{
+	binary_registry& reg = registry();
+	std::lock_guard lock(reg.mutex);
+	const auto found = reg.entries.find(&geometry);
+	if (found == reg.entries.end() || found->second.state != geometry_binary_state::not_loaded) {
+		return std::nullopt;
+	}
+	return found->second.ranges;
+}
+
+void rnd::detail::set_binary_ranges(const geometry_desc& geometry, geometry_binary_ranges ranges)
+{
+	binary_registry& reg = registry();
+	std::lock_guard lock(reg.mutex);
+	reg.entries.insert_or_assign(&geometry, binary_entry{ geometry_binary_state::not_loaded, std::move(ranges) });
+}
+
+void rnd::detail::set_binary_loaded(const geometry_desc& geometry)
+{
+	binary_registry& reg = registry();
+	std::lock_guard lock(reg.mutex);
+	reg.entries[&geometry].state = geometry_binary_state::loaded;
+}
+
+void rnd::detail::forget_binary(const geometry_desc& geometry)
+{
+	binary_registry& reg = registry();
+	std::lock_guard lock(reg.mutex);
+	reg.entries.erase(&geometry);
+}
+
+void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
+{
+	const std::size_t stride = geometry.layout.get_stride();
+	if (stride == 0) {
+		refuse_data(file, "/layout", "the vertex layout is empty");
+	}
+	if (geometry.vertices.size() % stride != 0) {
+		refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
+	}
+	const std::size_t vertex_count = geometry.vertices.size() / stride;
+	if (geometry.indices.size() % 3 != 0) {
+		refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
+	}
+	for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
+		if (geometry.indices[i] >= vertex_count) {
+			refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
+		}
+	}
+
+	const auto* position = element_named(geometry.layout, "position");
+	if (position == nullptr || !is_float_type(position->Type)) {
+		refuse_data(file, "/layout/position", "the layout has no float 'position'");
+	}
+	// The CPU reads these two: positions for the scene, uv for the bounds.
+	for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
+		if (element == nullptr || !is_float_type(element->Type)) {
+			continue;
+		}
+		const std::size_t components = element->Size / sizeof(float);
+		for (std::size_t v = 0; v < vertex_count; ++v) {
+			for (std::size_t c = 0; c < components; ++c) {
+				const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
+				if (!std::isfinite(value)) {
+					refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
+				}
+			}
+		}
+	}
+}
+
+void rnd::detail::rebuild_bounds(geometry_desc& geometry)
+{
+	PROFILE_SCOPE("geometry_desc bounds rebuild");
+	geometry.bounds.clear();
+	geometry.rtree = {};
+	const std::size_t stride = geometry.layout.get_stride();
+	const auto* uv = element_named(geometry.layout, "uv");
+	const bool has_uv = uv != nullptr && uv->Type == rnd::driver::SHADER_DATA_TYPE::VEC2_F && stride != 0;
+	const auto uv_of = [&](unsigned int vertex) {
+		if (!has_uv) {
+			return ds::point2d{ 0.0f };
+		}
+		const std::size_t at = vertex * stride + uv->Offset;
+		return ds::point2d{ float_at(geometry.vertices, at), float_at(geometry.vertices, at + sizeof(float)) };
+	};
+	geometry.bounds.reserve(geometry.indices.size() / 3);
+	for (std::size_t i = 0; i + 2 < geometry.indices.size(); i += 3) {
+		ds::bbox box;
+		for (std::size_t k = 0; k < 3; ++k) {
+			ds::expand(box, uv_of(geometry.indices[i + k]));
+		}
+		geometry.bounds.push_back({ box, static_cast<std::uint32_t>(geometry.bounds.size()) });
+	}
+	for (const auto& [box, triangle] : geometry.bounds) {
+		geometry.rtree.insert(box, triangle);
+	}
+}
+
+rnd::geometry_desc::geometry_desc(const geometry_desc& other)
+	: desc::desc_base(other)
+	, layout(other.layout)
+	, indices(other.indices)
+	, vertices(other.vertices)
+	, bounds(other.bounds)
+	, rtree(other.rtree)
+{
+	copy_binary(other, *this);
+}
+
+rnd::geometry_desc& rnd::geometry_desc::operator=(const geometry_desc& other)
+{
+	if (this == &other) {
+		return *this;
+	}
+	desc::desc_base::operator=(other);
+	layout = other.layout;
+	indices = other.indices;
+	vertices = other.vertices;
+	bounds = other.bounds;
+	rtree = other.rtree;
+	copy_binary(other, *this);
+	return *this;
+}
+
+rnd::geometry_desc::~geometry_desc()
+{
+	detail::forget_binary(*this);
+}
+
 void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::object& resource)
 {
 	auto& json_layout = resource.at("layout");
@@ -152,16 +379,24 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		layout = rnd::driver::BufferLayout{ elements };
 	}
 
+	detail::geometry_binary_ranges ranges;
 	{
 		auto& json_indices = resource.at("indices");
-		if (!json_indices.as_array().empty())
+		ranges.indices = range_at(json_indices, "/indices");
+		if (ranges.indices) {
+			indices.clear();
+		} else if (!json_indices.as_array().empty()) {
 			indices = json::value_to<decltype(indices)>(json_indices);
+		}
 	}
 
 	{
+		const json::value& json_value = resource.at("vertices");
+		ranges.vertices = range_at(json_value, "/vertices");
 		// One byte a number: a model's vertices are millions of them, so not value_to element by element (#1022).
-		const json::array& json_vertices = resource.at("vertices").as_array();
-		if (!json_vertices.empty()) {
+		if (ranges.vertices) {
+			vertices.clear();
+		} else if (const json::array& json_vertices = json_value.as_array(); !json_vertices.empty()) {
 			std::vector<std::byte> read;
 			read.reserve(json_vertices.size());
 			for (const json::value& item : json_vertices) {
@@ -170,6 +405,16 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 			vertices = std::move(read);
 		}
 	}
+
+	if (ranges.vertices || ranges.indices) {
+		// The data is the binary file's: stored bounds are not trusted, the adapter builds them from the checked data.
+		ranges.wants_bounds = resource.contains("bounds");
+		bounds.clear();
+		rtree = {};
+		detail::set_binary_ranges(*this, std::move(ranges));
+		return;
+	}
+	detail::forget_binary(*this);
 
 	if (resource.contains("bounds"))
 	{
@@ -188,6 +433,17 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 
 void rnd::geometry_desc::serialize(json::object& resource) const
 {
+	// Until the writer of the binary file (PR3a), a geometry read from one is never written as arrays nor as nothing.
+	switch (detail::binary_state_of(*this)) {
+	case detail::geometry_binary_state::not_loaded:
+		throw std::runtime_error(std::format("geometry '{}': its binary data was not loaded (it was not read as a geometry), "
+			"an empty mesh is not written", get_tag().view()));
+	case detail::geometry_binary_state::loaded:
+		throw std::runtime_error(std::format("geometry '{}' was read from its binary file: it is not written back as arrays",
+			get_tag().view()));
+	case detail::geometry_binary_state::none:
+		break;
+	}
 	resource["__type"] = "geometry_desc";
 	resource["layout"] = json::value_from(layout);
 	resource["indices"] = json::value_from(indices);

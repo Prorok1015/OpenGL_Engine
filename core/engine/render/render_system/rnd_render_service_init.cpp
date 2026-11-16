@@ -77,6 +77,10 @@ namespace {
 void engine::render::register_render_descs(desc::desc_system& desc_sys)
 {
 	desc_sys.register_desc<rnd::geometry_desc>("geometry_desc");
+	// Version 2 may keep "vertices" and "indices" in the binary file next to the desc (EPIC-79): an older engine
+	// refuses such a file instead of reading ranges as arrays. Arrays stay valid, so the step changes nothing.
+	desc_sys.register_migration("geometry_desc", 1, "nothing: arrays stay valid, version 2 may also hold binary ranges",
+		[](json::object&, desc::migration_context&) {});
 	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
 	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
@@ -87,6 +91,7 @@ void engine::render::unregister_render_descs(desc::desc_system& desc_sys)
 	desc_sys.unregister_desc("texture_cubemap_desc");
 	desc_sys.unregister_desc("texture_2d_desc");
 	desc_sys.unregister_desc("texture_desc");
+	desc_sys.unregister_migrations("geometry_desc");
 	desc_sys.unregister_desc("geometry_desc");
 }
 
