@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,10 +83,21 @@ namespace res
 		explicit operator bool() const { return error == desc_binary_error::none; }
 	};
 
+	// What a read may do with a staged file a save left behind.
+	enum class desc_binary_recovery : std::uint8_t
+	{
+		// Read it when it matches the desc and the binary file does not; write nothing.
+		use_staged,
+		// Save and editor paths only: also commit it, or delete it when stale, under the save lock.
+		commit,
+	};
+
 	struct desc_binary_written
 	{
 		// For the desc, in the order of the chunks.
 		std::vector<binary_range> ranges;
+		// The staged file as written: commit_pending commits only these bytes.
+		std::vector<std::byte> file;
 		// Empty on success.
 		std::string error;
 
@@ -122,6 +135,8 @@ namespace res
 		inline constexpr std::size_t range_alignment = 16;
 		// Binary data is denser than its JSON text, so the geometry JSON limit bounds it with room to spare.
 		inline constexpr std::uint64_t max_file_bytes = max_geometry_json_bytes;
+		// More ranges in one request are refused.
+		inline constexpr std::size_t max_ranges = 64;
 
 		// `<name>.<ext>.desc` -> `<name>.<ext>.bin` in the same folder; nullopt for any other name.
 		SNK_API std::optional<tag> binary_tag(const tag& desc);
@@ -138,17 +153,31 @@ namespace res
 		SNK_API desc_binary_data parse(std::string_view file_name, std::span<const std::byte> file,
 			std::span<const binary_range> ranges, bool verify_hash);
 
-		// The ranges of the binary file of `desc`, from the layer the desc comes from; refused before reading when the
-		// ranges or the file exceed `max_bytes`. A staged file next to it means a save did not finish: then hashes are
-		// checked whatever `verify_hash` says, and the staged file is used when it matches the desc and the binary file
-		// does not (and committed when the desc's layer is writable).
-		SNK_API desc_binary_data read(resource_system& system, const tag& desc, std::span<const binary_range> ranges,
-			bool verify_hash, std::uint64_t max_bytes = max_file_bytes);
+		// Serializes in this process a save of `desc` (write_pending, the desc's store, commit_pending) and a committing
+		// read; other processes are kept off only by the compare before a remove. Nests on one thread.
+		class SNK_API save_lock
+		{
+		public:
+			explicit save_lock(const tag& desc);
+			~save_lock();
+			save_lock(const save_lock&) = delete;
+			save_lock& operator=(const save_lock&) = delete;
 
-		// Step 1 of a save: writes the staged file of `desc` and returns the ranges for the desc. Then the caller writes
-		// the desc (step 2) and calls commit_pending (step 3). Throws std::logic_error for a tag outside limit_writes_to.
+		private:
+			std::shared_ptr<std::recursive_mutex> m_mutex;
+		};
+
+		// The ranges of the binary file of `desc`, from the desc's layer, refused before reading over `max_bytes`.
+		// A staged file left by a save is used when it matches the desc and the binary file does not (EPIC-79 section 5).
+		SNK_API desc_binary_data read(resource_system& system, const tag& desc, std::span<const binary_range> ranges,
+			bool verify_hash, std::uint64_t max_bytes = max_file_bytes,
+			desc_binary_recovery recovery = desc_binary_recovery::use_staged);
+
+		// Step 1 of a save, under a save_lock the caller holds through step 3: writes the staged file of `desc` and returns
+		// the ranges for the desc. Throws std::logic_error for a tag outside limit_writes_to.
 		SNK_API desc_binary_written write_pending(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks);
-		// Replaces the binary file of `desc` with its staged file and removes the staged one.
-		SNK_API file_operation commit_pending(resource_system& system, const tag& desc);
+		// Step 3: the binary file gets `written.file`, refused when the staged file no longer holds it. Throws like
+		// write_pending.
+		SNK_API file_operation commit_pending(resource_system& system, const tag& desc, const desc_binary_written& written);
 	}
 }

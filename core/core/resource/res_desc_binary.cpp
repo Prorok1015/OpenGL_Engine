@@ -4,6 +4,7 @@
 #include <format>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <boost/json/string.hpp>
 #include <snk/common/hash/sha256.h>
@@ -23,7 +24,8 @@ namespace res::detail
 			std::vector<std::byte> bytes;
 		};
 
-		// `file` from the layer `anchor` comes from. A resolver that is not a vfs one has no layers: its own read.
+		// `file` from the layer `anchor` comes from. A resolver that is not a vfs one has no layers and no size before a
+		// read: its own read, the size checked after.
 		static read_outcome read_beside(resource_system& system, const tag& anchor, const tag& file, std::uint64_t max_bytes)
 		{
 			read_outcome out;
@@ -41,7 +43,7 @@ namespace res::detail
 			const auto data = lease->resolve(file);
 			data->wait();
 			if (data->has_error()) {
-				out.status = ::platform::beneath::read_status::missing;
+				out.status = lease->exists(file) ? ::platform::beneath::read_status::failed : ::platform::beneath::read_status::missing;
 				out.error = data->error_msg;
 			} else if (data->data.size() > max_bytes) {
 				out.status = ::platform::beneath::read_status::too_large;
@@ -52,6 +54,26 @@ namespace res::detail
 			return out;
 		}
 
+		static bool exists_beside(resource_system& system, const tag& anchor, const tag& file)
+		{
+			const resource_system::resolver_lease lease = system.root().resolver_for(file.protocol());
+			if (!lease) {
+				return false;
+			}
+			if (const auto* vfs = dynamic_cast<const vfs_resolver*>(lease.operator->())) {
+				return vfs->exists_beside(anchor, file);
+			}
+			return lease->exists(file);
+		}
+
+		// Whether the protocol of `anchor` is mounted over several folders, where its layer is found again by name.
+		static bool layered(resource_system& system, const tag& anchor)
+		{
+			const resource_system::resolver_lease lease = system.root().resolver_for(anchor.protocol());
+			const auto* vfs = lease ? dynamic_cast<const vfs_resolver*>(lease.operator->()) : nullptr;
+			return vfs != nullptr && vfs->root_count() > 1;
+		}
+
 		static bool writes_beside(resource_system& system, const tag& anchor)
 		{
 			const resource_system::resolver_lease lease = system.root().resolver_for(anchor.protocol());
@@ -59,7 +81,8 @@ namespace res::detail
 			return vfs != nullptr && vfs->writes_beside(anchor);
 		}
 
-		static file_operation commit(resource_system& system, const tag& staged, const tag& target)
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		static file_operation commit(resource_system& system, const tag& staged, const tag& target, const std::vector<std::byte>& bytes)
 		{
 			system.check_writable(staged);
 			system.check_writable(target);
@@ -71,7 +94,19 @@ namespace res::detail
 			if (vfs == nullptr) {
 				return file_operation::failure(std::format("protocol '{}' cannot commit a staged file", staged.protocol()));
 			}
-			return vfs->commit_staged(staged, target);
+			return vfs->commit_staged(staged, target, bytes);
+		}
+
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		static file_operation remove_if_same(resource_system& system, const tag& staged, const std::vector<std::byte>& bytes)
+		{
+			system.check_writable(staged);
+			const resource_system::resolver_lease lease = system.root().resolver_for(staged.protocol());
+			auto* vfs = lease ? dynamic_cast<vfs_resolver*>(lease.operator->()) : nullptr;
+			if (vfs == nullptr) {
+				return file_operation::failure(std::format("protocol '{}' cannot remove a staged file", staged.protocol()));
+			}
+			return vfs->remove_if_same(staged, bytes);
 		}
 	};
 }
@@ -104,6 +139,10 @@ namespace
 		std::uint64_t& extent)
 	{
 		extent = 0;
+		if (ranges.size() > res::desc_binary::max_ranges) {
+			return refuse(res::desc_binary_error::range, std::format("{}: {} ranges in one request, at most {} are read",
+				file_name, ranges.size(), res::desc_binary::max_ranges));
+		}
 		std::vector<std::size_t> order;
 		order.reserve(ranges.size());
 		for (std::size_t i = 0; i < ranges.size(); ++i) {
@@ -164,6 +203,110 @@ namespace
 	bool is_lower_hex(std::string_view text)
 	{
 		return std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+	}
+
+	// One recursive mutex per binary file, alive while a save_lock holds it.
+	struct save_lock_table
+	{
+		std::mutex mutex;
+		std::unordered_map<std::string, std::weak_ptr<std::recursive_mutex>> entries;
+	};
+
+	std::shared_ptr<std::recursive_mutex> save_mutex_of(const res::tag& desc)
+	{
+		static save_lock_table table;
+		const auto binary = res::desc_binary::binary_tag(desc);
+		const std::string key{ binary ? binary->view() : desc.view() };
+		std::lock_guard lock(table.mutex);
+		std::erase_if(table.entries, [](const auto& entry) { return entry.second.expired(); });
+		std::weak_ptr<std::recursive_mutex>& slot = table.entries[key];
+		if (auto alive = slot.lock()) {
+			return alive;
+		}
+		auto made = std::make_shared<std::recursive_mutex>();
+		slot = made;
+		return made;
+	}
+
+	// commit mode, the save lock held: the verified staged bytes become the binary file.
+	void commit_recovered(res::resource_system& system, const res::tag& desc, const res::tag& staged, const res::tag& binary,
+		const std::vector<std::byte>& bytes)
+	{
+		if (!res::detail::desc_binary_access::writes_beside(system, desc)) {
+			return;
+		}
+		try {
+			if (const auto committed = res::detail::desc_binary_access::commit(system, staged, binary, bytes); !committed) {
+				egLOG_WARN("resource/desc_binary", "Could not finish the save of '{}': {}", binary.view(), committed.error);
+			}
+		} catch (const std::logic_error& ex) {
+			egLOG_WARN("resource/desc_binary", "Could not finish the save of '{}': {}", binary.view(), ex.what());
+		}
+	}
+
+	// commit mode, the save lock held: the binary file matches the desc, so a staged file is left over.
+	void remove_stale(res::resource_system& system, const res::tag& desc, const res::tag& staged, std::uint64_t max_bytes)
+	{
+		using access = res::detail::desc_binary_access;
+		if (!access::writes_beside(system, desc)) {
+			return;
+		}
+		const auto stale = access::read_beside(system, desc, staged, max_bytes);
+		if (stale.status != ::platform::beneath::read_status::ok) {
+			return;
+		}
+		try {
+			if (const auto removed = access::remove_if_same(system, staged, stale.bytes); !removed) {
+				egLOG_WARN("resource/desc_binary", "A stale staged file stays: {}", removed.error);
+			} else {
+				egLOG_INFO("resource/desc_binary", "Removed '{}': the binary file next to it already matches the desc", staged.view());
+			}
+		} catch (const std::logic_error& ex) {
+			egLOG_WARN("resource/desc_binary", "A stale staged file '{}' stays: {}", staged.view(), ex.what());
+		}
+	}
+
+	res::desc_binary_data read_pair(res::resource_system& system, const res::tag& desc, const res::tag& binary, const res::tag& staged,
+		std::span<const res::binary_range> ranges, bool verify_hash, std::uint64_t max_bytes, bool commit)
+	{
+		using access = res::detail::desc_binary_access;
+		using ::platform::beneath::read_status;
+		const std::string binary_name{ binary.view() };
+		// Over several folders the desc's layer is found again by name: only the hashes tell its own binary file.
+		const bool check = verify_hash || access::layered(system, desc);
+		// A staged file means a save did not finish: then the binary file is checked to tell which of the two is current.
+		const bool has_staged = access::exists_beside(system, desc, staged);
+		res::desc_binary_data result;
+		{
+			const auto primary = access::read_beside(system, desc, binary, max_bytes);
+			result = from_read(binary_name, primary, ranges, check || has_staged, max_bytes);
+		}
+		if (!has_staged) {
+			return result;
+		}
+		if (result) {
+			if (commit) {
+				remove_stale(system, desc, staged, max_bytes);
+			}
+			return result;
+		}
+
+		const auto pending = access::read_beside(system, desc, staged, max_bytes);
+		if (pending.status != read_status::ok) {
+			egLOG_WARN("resource/desc_binary", "{}; the staged file next to it cannot be read either", result.message);
+			return result;
+		}
+		res::desc_binary_data recovered = res::desc_binary::parse(staged.view(), pending.bytes, ranges, true);
+		if (!recovered) {
+			egLOG_WARN("resource/desc_binary", "{}; the staged file does not match the desc either: {}", result.message, recovered.message);
+			return result;
+		}
+		recovered.from_staged = true;
+		egLOG_WARN("resource/desc_binary", "{}; a save did not finish, using '{}', which matches the desc", result.message, staged.view());
+		if (commit) {
+			commit_recovered(system, desc, staged, binary, pending.bytes);
+		}
+		return recovered;
 	}
 }
 
@@ -226,14 +369,19 @@ std::optional<res::binary_range> res::binary_range_from_json(const boost::json::
 			error = std::format("a binary range has no '{}'", key);
 			return std::nullopt;
 		}
+		// Up to 2^53: a reader that keeps JSON numbers as doubles still gets the exact value.
+		constexpr std::uint64_t max_exact = std::uint64_t{ 1 } << 53;
+		std::optional<std::uint64_t> found;
 		if (field->is_uint64()) {
-			return field->get_uint64();
+			found = field->get_uint64();
+		} else if (field->is_int64() && field->get_int64() >= 0) {
+			found = static_cast<std::uint64_t>(field->get_int64());
 		}
-		if (field->is_int64() && field->get_int64() >= 0) {
-			return static_cast<std::uint64_t>(field->get_int64());
+		if (!found || *found > max_exact) {
+			error = std::format("'{}' of a binary range is not an integer from 0 to 2^53", key);
+			return std::nullopt;
 		}
-		error = std::format("'{}' of a binary range is not a non-negative integer", key);
-		return std::nullopt;
+		return found;
 	};
 	const auto text_of = [&](std::string_view key) -> std::optional<std::string> {
 		const auto* field = object->if_contains(key);
@@ -377,50 +525,38 @@ res::desc_binary_data res::desc_binary::parse(std::string_view file_name, std::s
 	return out;
 }
 
+res::desc_binary::save_lock::save_lock(const tag& desc)
+	: m_mutex(save_mutex_of(desc))
+{
+	m_mutex->lock();
+}
+
+res::desc_binary::save_lock::~save_lock()
+{
+	m_mutex->unlock();
+}
+
 res::desc_binary_data res::desc_binary::read(resource_system& system, const tag& desc, std::span<const binary_range> ranges,
-	bool verify_hash, std::uint64_t max_bytes)
+	bool verify_hash, std::uint64_t max_bytes, desc_binary_recovery recovery)
 {
 	const auto binary = binary_tag(desc);
 	const auto staged = staged_tag(desc);
 	if (!binary || !staged) {
 		return refuse(desc_binary_error::missing, std::format("'{}' is not named <name>.<ext>.desc: it has no binary file", desc.view()));
 	}
-	const std::string binary_name{ binary->view() };
 	std::uint64_t extent = 0;
-	if (auto refused = check_ranges(binary_name, ranges, extent)) {
+	if (auto refused = check_ranges(binary->view(), ranges, extent)) {
 		return std::move(*refused);
 	}
 	if (extent > max_bytes) {
 		return refuse(desc_binary_error::too_large,
-			std::format("{}: the ranges reach byte {}, over the limit of {} bytes", binary_name, extent, max_bytes));
+			std::format("{}: the ranges reach byte {}, over the limit of {} bytes", binary->view(), extent, max_bytes));
 	}
-
-	using access = detail::desc_binary_access;
-	const auto primary = access::read_beside(system, desc, *binary, max_bytes);
-	const auto pending = access::read_beside(system, desc, *staged, max_bytes);
-	const bool has_staged = pending.status == ::platform::beneath::read_status::ok;
-	desc_binary_data result = from_read(binary_name, primary, ranges, verify_hash || has_staged, max_bytes);
-	if (result || !has_staged) {
-		return result;
+	if (recovery == desc_binary_recovery::commit) {
+		const save_lock lock(desc);
+		return read_pair(system, desc, *binary, *staged, ranges, verify_hash, max_bytes, true);
 	}
-
-	desc_binary_data recovered = parse(staged->view(), pending.bytes, ranges, true);
-	if (!recovered) {
-		egLOG_WARN("resource/desc_binary", "{}; the staged file does not match the desc either: {}", result.message, recovered.message);
-		return result;
-	}
-	recovered.from_staged = true;
-	egLOG_WARN("resource/desc_binary", "{}; a save did not finish, using '{}', which matches the desc", result.message, staged->view());
-	if (access::writes_beside(system, desc)) {
-		try {
-			if (const auto committed = commit_pending(system, desc); !committed) {
-				egLOG_WARN("resource/desc_binary", "Could not finish the save of '{}': {}", binary_name, committed.error);
-			}
-		} catch (const std::logic_error& ex) {
-			egLOG_WARN("resource/desc_binary", "Could not finish the save of '{}': {}", binary_name, ex.what());
-		}
-	}
-	return recovered;
+	return read_pair(system, desc, *binary, *staged, ranges, verify_hash, max_bytes, false);
 }
 
 res::desc_binary_written res::desc_binary::write_pending(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks)
@@ -436,19 +572,26 @@ res::desc_binary_written res::desc_binary::write_pending(resource_system& system
 		out.ranges.clear();
 		return out;
 	}
+	const save_lock lock(desc);
 	if (!system.store_sync(*staged, *file)) {
 		out.ranges.clear();
 		out.error = std::format("'{}' could not be written (see the log)", staged->view());
+		return out;
 	}
+	out.file = std::move(*file);
 	return out;
 }
 
-res::file_operation res::desc_binary::commit_pending(resource_system& system, const tag& desc)
+res::file_operation res::desc_binary::commit_pending(resource_system& system, const tag& desc, const desc_binary_written& written)
 {
 	const auto binary = binary_tag(desc);
 	const auto staged = staged_tag(desc);
 	if (!binary || !staged) {
 		return file_operation::failure(std::format("'{}' is not named <name>.<ext>.desc: it has no binary file", desc.view()));
 	}
-	return detail::desc_binary_access::commit(system, *staged, *binary);
+	if (!written || written.file.empty()) {
+		return file_operation::failure(std::format("'{}': nothing was staged to commit", binary->view()));
+	}
+	const save_lock lock(desc);
+	return detail::desc_binary_access::commit(system, *staged, *binary, written.file);
 }

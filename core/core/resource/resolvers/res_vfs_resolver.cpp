@@ -640,16 +640,32 @@ bool res::vfs_resolver::exists_below_top(const tag& tag) const
 	return false;
 }
 
+std::optional<fs::path> res::vfs_resolver::beside_layer(const tag& anchor, std::string& error) const
+{
+	if (entries_stack.empty()) {
+		error = "no folder is mounted";
+		return std::nullopt;
+	}
+	{
+		std::shared_lock lock(m_pending_mutex);
+		// A store not on disk yet lands in the top root: the anchor's layer then is the top one.
+		if (m_pending_writes.contains(anchor)) {
+			return entries_stack.top();
+		}
+	}
+	auto found = resolve_tag(anchor);
+	if (!found.has_value()) {
+		error = std::format("'{}' escapes the resource root", anchor.view());
+		return std::nullopt;
+	}
+	return std::move(found->first);
+}
+
 platform::beneath::read_result res::vfs_resolver::read_beside(const tag& anchor, const tag& tag, std::uint64_t max_bytes,
 	std::vector<std::byte>& out) const
 {
 	out.clear();
 	platform::beneath::read_result result;
-	if (entries_stack.empty()) {
-		result.error = "no folder is mounted";
-		return result;
-	}
-	bool anchor_pending = false;
 	core::res::res_resolver_interface::async_raw_data pending;
 	{
 		std::shared_lock lock(m_pending_mutex);
@@ -658,22 +674,15 @@ platform::beneath::read_result res::vfs_resolver::read_beside(const tag& anchor,
 			result.error = "erased";
 			return result;
 		}
-		anchor_pending = m_pending_writes.contains(anchor);
 		if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end()) {
 			pending = it->second;
 		}
 	}
-	// A store not on disk yet lands in the top root: the anchor's layer then is the top one.
-	fs::path layer = entries_stack.top();
-	if (!anchor_pending) {
-		auto found = resolve_tag(anchor);
-		if (!found.has_value()) {
-			result.error = std::format("'{}' escapes the resource root", anchor.view());
-			return result;
-		}
-		layer = std::move(found->first);
+	auto layer = beside_layer(anchor, result.error);
+	if (!layer.has_value()) {
+		return result;
 	}
-	if (pending && pending->is_ready() && layer == entries_stack.top()) {
+	if (pending && pending->is_ready() && *layer == entries_stack.top()) {
 		if (pending->data.size() > max_bytes) {
 			result.status = platform::beneath::read_status::too_large;
 			return result;
@@ -682,18 +691,46 @@ platform::beneath::read_result res::vfs_resolver::read_beside(const tag& anchor,
 		result.status = platform::beneath::read_status::ok;
 		return result;
 	}
-	const auto path = safe_path(layer, tag);
+	const auto path = safe_path(*layer, tag);
 	if (!path.has_value()) {
 		result.error = std::format("'{}' escapes the resource root, or ends in a link", tag.view());
 		return result;
 	}
-	const fs::path relative = path->lexically_relative(layer);
+	const fs::path relative = path->lexically_relative(*layer);
 	platform::beneath::read_request request;
-	request.root = std::move(layer);
+	request.root = std::move(*layer);
 	request.folder = relative.parent_path();
 	request.leaf = relative.filename();
 	request.max_bytes = max_bytes;
 	return platform::beneath::read_beneath(request, out);
+}
+
+bool res::vfs_resolver::exists_beside(const tag& anchor, const tag& tag) const
+{
+	bool pending = false;
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_erased.contains(tag)) {
+			return false;
+		}
+		pending = m_pending_writes.contains(tag);
+	}
+	std::string error;
+	const auto layer = beside_layer(anchor, error);
+	if (!layer.has_value()) {
+		return false;
+	}
+	if (pending && *layer == entries_stack.top()) {
+		return true;
+	}
+	const auto path = safe_path(*layer, tag);
+	std::error_code ec;
+	return path.has_value() && fs::exists(fs::symlink_status(*path, ec));
+}
+
+std::size_t res::vfs_resolver::root_count() const
+{
+	return entries_stack.size();
 }
 
 bool res::vfs_resolver::writes_beside(const tag& anchor) const
@@ -711,7 +748,94 @@ bool res::vfs_resolver::writes_beside(const tag& anchor) const
 	return found.has_value() && found->first == entries_stack.top();
 }
 
-res::file_operation res::vfs_resolver::commit_staged(const tag& staged, const tag& target)
+bool res::vfs_resolver::holds_exactly(const tag& tag, const fs::path& path, const std::vector<std::byte>& bytes,
+	std::string& why) const
+{
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_erased.contains(tag)) {
+			why = "it was erased";
+			return false;
+		}
+		if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end()) {
+			if (it->second->is_ready() && it->second->data == bytes) {
+				return true;
+			}
+			why = "a store with other bytes is queued for it";
+			return false;
+		}
+	}
+	const fs::path relative = path.lexically_relative(entries_stack.top());
+	platform::beneath::read_request request;
+	request.root = entries_stack.top();
+	request.folder = relative.parent_path();
+	request.leaf = relative.filename();
+	// A larger file differs anyway: it is not read.
+	request.max_bytes = bytes.size();
+	std::vector<std::byte> found;
+	const auto read = platform::beneath::read_beneath(request, found);
+	switch (read.status) {
+	case platform::beneath::read_status::ok:
+		if (found == bytes) {
+			return true;
+		}
+		why = "its bytes changed";
+		return false;
+	case platform::beneath::read_status::missing:
+		why = "it does not exist";
+		return false;
+	case platform::beneath::read_status::too_large:
+		why = "its bytes changed";
+		return false;
+	case platform::beneath::read_status::not_regular:
+		why = "it is not a regular file";
+		return false;
+	case platform::beneath::read_status::failed:
+		break;
+	}
+	why = read.error;
+	return false;
+}
+
+std::string res::vfs_resolver::remove_if_same_on_io(const tag& tag, const fs::path& path, const std::vector<std::byte>& bytes)
+{
+	// The stores of this process run on this thread: none can land between the compare and the remove.
+	std::string why;
+	if (!holds_exactly(tag, path, bytes, why)) {
+		return std::format("kept, {}", why);
+	}
+	return remove_on_io(tag, path);
+}
+
+res::file_operation res::vfs_resolver::remove_if_same(const tag& tag, const std::vector<std::byte>& bytes)
+{
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "remove_if_same on the io thread would wait for itself");
+	if (tag.protocol() != protocol) {
+		return file_operation::failure(std::format("'{}' is not in protocol '{}'", tag.view(), protocol));
+	}
+	std::string why;
+	const auto path = writable_path(tag, why);
+	if (!path) {
+		return file_operation::failure(std::move(why));
+	}
+	auto done = std::make_shared<std::promise<std::string>>();
+	auto result = done->get_future();
+	boost::asio::post(io, [this, tag, path = *path, &bytes, done] {
+		std::string error;
+		try {
+			error = remove_if_same_on_io(tag, path, bytes);
+		} catch (const std::exception& ex) {
+			error = ex.what();
+		}
+		done->set_value(std::move(error));
+	});
+	if (std::string error = result.get(); !error.empty()) {
+		return file_operation::failure(std::format("'{}': {}", tag.view(), error));
+	}
+	return file_operation::success();
+}
+
+res::file_operation res::vfs_resolver::commit_staged(const tag& staged, const tag& target, const std::vector<std::byte>& bytes)
 {
 	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "commit_staged on the io thread would wait for itself");
 	if (staged.protocol() != protocol || target.protocol() != protocol) {
@@ -725,28 +849,10 @@ res::file_operation res::vfs_resolver::commit_staged(const tag& staged, const ta
 	if (!writable_path(target, why)) {
 		return file_operation::failure(std::move(why));
 	}
-
-	std::vector<std::byte> bytes;
-	bool from_pending = false;
-	{
-		std::shared_lock lock(m_pending_mutex);
-		if (auto it = m_pending_writes.find(staged); it != m_pending_writes.end() && it->second->is_ready()) {
-			bytes = it->second->data;
-			from_pending = true;
-		}
-	}
-	if (!from_pending) {
-		const fs::path relative = source->lexically_relative(entries_stack.top());
-		platform::beneath::read_request request;
-		request.root = entries_stack.top();
-		request.folder = relative.parent_path();
-		request.leaf = relative.filename();
-		request.max_bytes = res::max_external_file_bytes;
-		const auto read = platform::beneath::read_beneath(request, bytes);
-		if (read.status != platform::beneath::read_status::ok) {
-			return file_operation::failure(std::format("'{}' cannot be read: {}", staged.view(),
-				read.status == platform::beneath::read_status::missing ? std::string{ "it does not exist" } : read.error));
-		}
+	// Another save may have staged newer bytes since they were checked: then this commit is not the last step.
+	if (!holds_exactly(staged, *source, bytes, why)) {
+		return file_operation::failure(std::format("'{}' no longer holds the bytes to commit ({}): nothing was written",
+			staged.view(), why));
 	}
 	// Replaced through a temp file and a rename like every store: the old target stays whole until the new one is in.
 	if (!store_sync(target, bytes)) {
@@ -755,16 +861,16 @@ res::file_operation res::vfs_resolver::commit_staged(const tag& staged, const ta
 
 	auto done = std::make_shared<std::promise<std::string>>();
 	auto result = done->get_future();
-	boost::asio::post(io, [this, staged, path = *source, done] {
+	boost::asio::post(io, [this, staged, path = *source, &bytes, done] {
 		std::string error;
 		try {
-			error = remove_on_io(staged, path);
+			error = remove_if_same_on_io(staged, path, bytes);
 		} catch (const std::exception& ex) {
 			error = ex.what();
 		}
 		done->set_value(std::move(error));
 	});
-	// The pair is whole once the target is written: a staged file left behind only costs disk space.
+	// The pair is whole once the target is written: a staged file left behind is stale, or the next save's own.
 	if (std::string error = result.get(); !error.empty()) {
 		egLOG_WARN("resource/write", "Committed '{}', but '{}' stays: {}", target.view(), staged.view(), error);
 	}

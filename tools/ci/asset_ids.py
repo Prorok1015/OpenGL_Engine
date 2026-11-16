@@ -65,7 +65,16 @@ def is_ignored_asset_name(name):
         return True
     if ascii_lower(name) in ('thumbs.db', 'desktop.ini'):
         return True
-    return len(name) > 4 and ascii_lower(name[-4:]) == '.tmp'
+    def ends_with_lower(suffix):
+        return len(name) > len(suffix) and ascii_lower(name[-len(suffix):]) == suffix
+    if ends_with_lower('.tmp') or ends_with_lower('.bin.new'):
+        return True
+    # What res::desc_binary::binary_tag makes of "<name>.<ext>.desc"; a plain x.bin stays an asset.
+    if not ends_with_lower('.bin'):
+        return False
+    stem = name[:-len('.bin')]
+    dot = stem.rfind('.')
+    return dot > 0 and dot + 1 != len(stem)
 
 
 # ---- res::write_pretty_json ----
