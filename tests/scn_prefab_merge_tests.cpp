@@ -560,6 +560,83 @@ BOOST_AUTO_TEST_CASE(NestedInstance_RecordForAMissingNodeOrComponentIsSkipped)
 	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "arm")).hp == 12); // the valid record still applies
 }
 
+BOOST_AUTO_TEST_CASE(StaleRecords_AreFound_ForANodeAndAComponentThePrefabHasNotGotAnyMore)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(
+		R"({"target":["00000000000000ff"],"component":"stat","path":"/hp","value":1},)"
+		R"({"target":[],"component":"nope","path":"/x","value":1},)"
+		R"({"target":[],"op":"remove","component":"nope"},)"
+		+ on_arm(R"("component":"stat","path":"/hp","value":12)")).c_str());
+	const std::size_t records = inst.get_root().overrides.size();
+
+	const auto stale = scn::find_stale_records(*assembler, inst.get_root());
+
+	BOOST_REQUIRE_EQUAL(stale.size(), 3u);
+	BOOST_TEST(stale[0].index == 0u);
+	BOOST_TEST((stale[0].why == scn::stale_override::reason::node_gone));
+	BOOST_TEST(stale[0].what.find("00000000000000ff") != std::string::npos);
+	BOOST_TEST(stale[1].index == 1u);
+	BOOST_TEST((stale[1].why == scn::stale_override::reason::component_gone));
+	BOOST_TEST(stale[1].what.find("nope") != std::string::npos);
+	BOOST_TEST(stale[2].index == 2u);
+	BOOST_TEST((stale[2].why == scn::stale_override::reason::component_gone));
+	BOOST_TEST(inst.get_root().overrides.size() == records); // finding changes nothing
+}
+
+BOOST_AUTO_TEST_CASE(StaleRecords_AnInstanceWhoseRecordsAllResolveHasNone)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(INSTANCE_PREFAB);
+	BOOST_TEST(scn::find_stale_records(*assembler, inst.get_root()).empty());
+}
+
+BOOST_AUTO_TEST_CASE(StaleRecords_ARecordOnANodeAnEarlierRecordAddsIsNotStale)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(
+		R"({"target":[],"op":"add_node","value":{"__id":"00000000000000e1","name":"extra","components":{"stat":{"__type":"stat_desc","hp":1}}}},)"
+		R"({"target":["00000000000000e1"],"component":"stat","path":"/hp","value":5})").c_str());
+	BOOST_TEST(scn::find_stale_records(*assembler, inst.get_root()).empty());
+}
+
+BOOST_AUTO_TEST_CASE(StaleRecords_ARecordHandedToANestedInstanceIsJudgedThere)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	put("mid.prefab.desc", R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000b1","name":"holder","components":{"base":"memory://t/base.prefab.desc"}}]})");
+	auto outer = parse(R"({"__type":"prefab_desc","__version":3,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/mid.prefab.desc"}},
+		"overrides":[
+			{"target":["00000000000000b1","00000000000000a1"],"component":"transform","path":"/position","value":[3,3,3]},
+			{"target":["00000000000000b1","00000000000000ff"],"component":"stat","path":"/hp","value":1}]})");
+
+	const auto stale = scn::find_stale_records(*assembler, outer.get_root());
+
+	BOOST_REQUIRE_EQUAL(stale.size(), 1u);
+	BOOST_TEST(stale[0].index == 1u); // its number among the records written here, not in the nested instance
+	BOOST_TEST((stale[0].why == scn::stale_override::reason::node_gone));
+}
+
+BOOST_AUTO_TEST_CASE(StaleRecords_PruneRemovesOnlyThem_AndTheRestStillApplies)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(
+		R"({"target":["00000000000000ff"],"component":"stat","path":"/hp","value":1},)"
+		R"({"target":[],"op":"remove","component":"nope"},)"
+		+ on_arm(R"("component":"stat","path":"/hp","value":12)")).c_str());
+	scn::prefab_desc::prefab_node node = inst.get_root();
+
+	BOOST_TEST(scn::prune_stale_records(*assembler, node) == 2u);
+
+	BOOST_REQUIRE_EQUAL(node.overrides.size(), 1u);
+	BOOST_TEST(scn::find_stale_records(*assembler, node).empty());
+	entt::registry reg;
+	auto e = reg.create();
+	assemble_prefab_node(*assembler, reg, e, node);
+	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "arm")).hp == 12);
+}
+
 BOOST_AUTO_TEST_CASE(NestedInstance_RecordsReachThroughAnInstanceInsideTheBase)
 {
 	put("base.prefab.desc", BASE_PREFAB);
