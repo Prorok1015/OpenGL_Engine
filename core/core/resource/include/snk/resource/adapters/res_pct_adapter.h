@@ -3,6 +3,7 @@
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/resources/res_resource_picture.h>
+#include <snk/resource/res_image_format.h>
 #include <snk/common/snk_api.h>
 #include <string_view>
 #include <optional>
@@ -19,7 +20,7 @@ namespace res
 		};
 
 		static constexpr auto HEADER_SIZE = sizeof(raw_image_header);
-		static constexpr auto EXTENSION = std::string_view{ "raw" };
+		static constexpr auto EXTENSION = image_format::raw_extension;
 		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "raw" }});
 
 		std::optional<raw_image_header> read_header(const std::vector<std::byte>& data) const;
@@ -32,11 +33,13 @@ namespace res
 
 		virtual std::vector<std::byte> serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const override;
 	};
+	static_assert(raw_image_adapter::HEADER_SIZE == image_format::raw_header_size,
+		"image_format::raw_header is the header raw_image_adapter reads");
 
 	class SNK_API pct_adapter : public core::res::adapter_interface
 	{
 	public:
-		static constexpr auto EXTENSIONS = std::array{std::string_view{ "pct" }, std::string_view{ "png" }, std::string_view{ "jpeg" }, std::string_view{ "jpg" }};
+		static constexpr auto EXTENSIONS = image_format::picture_extensions;
 		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "pct" }, std::string{ "png" }, std::string{ "jpeg" }, std::string{ "jpg" }} );
 		// What one picture may decode to: no side longer than a GPU takes, and no more pixel bytes than this.
 		static constexpr int max_side = 16384;

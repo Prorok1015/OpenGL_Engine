@@ -52,6 +52,8 @@ add_subdirectory("application")
 add_subdirectory("input")
 add_subdirectory("windows/window_service")
 add_subdirectory("desc")
+# The pure encoders of an import (#1077): resource, render and scene link it, the model decoder links it alone.
+add_subdirectory("model_codec")
 add_subdirectory("resource")
 add_subdirectory("ecs")
 add_subdirectory("video/drivers/impls/opengl")

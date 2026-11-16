@@ -1022,11 +1022,62 @@ BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtProcessDecoderTests, test_util::scene_env)
 
+// #1077: the decoder has no desc system and stores its prefab unstamped; the editor stamps the prefab blob it accepts with
+// its own, and that stamped JSON is what it builds and stores.
+BOOST_AUTO_TEST_CASE(AnAcceptedPrefab_IsStampedByTheEditorsDescSystem)
+{
+	std::string problem;
+	const edt::decode_bundle bundle = import_answer();
+	const auto as_sent = edt::accept_import_answer(bundle, request_in(), problem);
+	BOOST_REQUIRE_MESSAGE(as_sent.has_value(), problem);
+	BOOST_TEST(!as_sent->prefab_json.contains("__version"));
+
+	const auto accepted = edt::accept_import_answer(bundle, request_in(), problem, nullptr, descs.get());
+	BOOST_REQUIRE_MESSAGE(accepted.has_value(), problem);
+	boost::json::object expected = boost::json::parse(R"json({"__type":"prefab_desc","geometry":"memory://m/m.geom.desc"})json").as_object();
+	descs->stamp_tree(expected);
+	BOOST_TEST(accepted->prefab_json.contains("__version"));
+	BOOST_TEST(boost::json::serialize(accepted->prefab_json) == boost::json::serialize(expected));
+}
+
+// A prefab blob that is no JSON object is refused when it is to be stamped.
+BOOST_AUTO_TEST_CASE(APrefabThatIsNoObject_IsRefused_WhenItIsStamped)
+{
+	edt::decode_bundle bundle = import_answer();
+	bundle.blobs[0].bytes = text_bytes("[1,2]");
+	std::string problem;
+	BOOST_TEST(!edt::accept_import_answer(bundle, request_in(), problem, nullptr, descs.get()).has_value());
+}
+
+// With a desc system the prefab comes from its blob, not from the manifest's copy: the blob is held to the rules of every
+// desc of the import, and a __version the decoder sent is replaced by the editor's.
+BOOST_AUTO_TEST_CASE(AHostilePrefabBlob_IsRefusedOnTheStampedPath_AndASentVersionIsTheEditors)
+{
+	const auto request = request_in();
+	std::string problem;
+	const auto refused = [&](const char* text) {
+		auto bundle = import_answer();
+		bundle.blobs[0].bytes = text_bytes(text);
+		return !edt::accept_import_answer(bundle, request, problem, nullptr, descs.get()).has_value();
+	};
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","geometry":"user://x.geom.desc"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","__guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"})json"));
+	BOOST_CHECK(refused(R"json({"__type":"prefab_desc","__parent":"edt://settings/x"})json"));
+
+	auto bundle = import_answer();
+	bundle.blobs[0].bytes = text_bytes(R"json({"__type":"prefab_desc","__version":999,"geometry":"memory://m/m.geom.desc"})json");
+	const auto accepted = edt::accept_import_answer(bundle, request, problem, nullptr, descs.get());
+	BOOST_REQUIRE_MESSAGE(accepted.has_value(), problem);
+	boost::json::object expected = boost::json::parse(R"json({"__type":"prefab_desc","geometry":"memory://m/m.geom.desc"})json").as_object();
+	descs->stamp_tree(expected);
+	BOOST_TEST(boost::json::serialize(accepted->prefab_json) == boost::json::serialize(expected));
+}
+
 BOOST_AUTO_TEST_CASE(AMissingDecoder_IsUnavailable_WithAReasonThatNamesTheFile)
 {
 	edt::decode_runner_config config;
 	config.decoder = fs::temp_directory_path() / "no_such_folder" / "snk_model_decoder";
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	const std::string why = decoder.unavailable_reason();
 	BOOST_CHECK_MESSAGE(why.find("snk_model_decoder") != std::string::npos, why);
 	BOOST_CHECK_MESSAGE(why.find("not found") != std::string::npos, why);
@@ -1040,8 +1091,8 @@ BOOST_AUTO_TEST_CASE(TwoDecodersOfOneFile_HashItOnce_AndAChangedFileIsHashedAgai
 	config.decoder = dir.write("decoder.bin", "the first build");
 	const std::size_t before = edt::file_version_hashes();
 
-	const edt::process_decoder first(*rs, config);
-	const edt::process_decoder second(*rs, config);
+	const edt::process_decoder first(*rs, *descs, config);
+	const edt::process_decoder second(*rs, *descs, config);
 	const std::string version = first.version();
 	BOOST_TEST(!version.empty());
 	BOOST_TEST(second.version() == version);
@@ -1049,7 +1100,7 @@ BOOST_AUTO_TEST_CASE(TwoDecodersOfOneFile_HashItOnce_AndAChangedFileIsHashedAgai
 
 	// Another build in its place: another size, so another version.
 	dir.write("decoder.bin", "the second, longer build");
-	const edt::process_decoder third(*rs, config);
+	const edt::process_decoder third(*rs, *descs, config);
 	BOOST_TEST(third.version() != version);
 	BOOST_TEST(edt::file_version_hashes() == before + 2u);
 }
@@ -1059,7 +1110,7 @@ BOOST_AUTO_TEST_CASE(AnUnreadableDecoder_HasNoVersion)
 	edt::decode_runner_config config;
 	config.decoder = fs::temp_directory_path() / "no_such_folder" / "snk_model_decoder";
 	BOOST_TEST(!edt::file_version(config.decoder).has_value());
-	BOOST_TEST(edt::process_decoder(*rs, config).version().empty());
+	BOOST_TEST(edt::process_decoder(*rs, *descs, config).version().empty());
 }
 
 #if SNK_HAS_ASSIMP
@@ -1099,7 +1150,7 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	source.preloaded = &bytes;
 	source.allowed = &nothing;
 
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	BOOST_REQUIRE(decoder.unavailable_reason().empty());
 	const edt::import_intermediate through_process = decoder.import(source, nullptr);
 	BOOST_REQUIRE_MESSAGE(through_process.error.empty(), through_process.error);
@@ -1128,6 +1179,42 @@ BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSameResourcesAsOneInTheP
 	BOOST_CHECK(process_blobs == own_blobs);
 }
 
+// #1077: the decoder stores the prefab unstamped and the editor stamps it when it accepts the answer: the prefab it stores
+// and builds from is byte for byte the one an import in this process stores, versions included.
+BOOST_AUTO_TEST_CASE(AnImportThroughTheProcess_StoresTheSamePrefabBytesAsOneInTheProcess)
+{
+	test_util::temp_dir dir{ "process_decoder" };
+	const fs::path model = dir.write("m/tri.obj", k_triangle_obj);
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = model;
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
+	BOOST_REQUIRE(decoder.unavailable_reason().empty());
+	const edt::import_intermediate through_process = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(through_process.error.empty(), through_process.error);
+	BOOST_TEST(through_process.prefab_json.contains("__version"));
+	std::vector<std::byte> process_prefab;
+	{
+		const auto block = rs->fetch_data(through_process.prefab_tag);
+		BOOST_REQUIRE(block != nullptr);
+		process_prefab = block->get();
+	}
+	for (const res::tag& tag : through_process.created_tags) rs->erase(tag);
+
+	edt::model_importer importer(*descs, *rs);
+	const edt::import_intermediate in_process = importer.import_background(source);
+	BOOST_REQUIRE_MESSAGE(in_process.error.empty(), in_process.error);
+	BOOST_REQUIRE(in_process.prefab_tag == through_process.prefab_tag);
+	const auto block = rs->fetch_data(in_process.prefab_tag);
+	BOOST_REQUIRE(block != nullptr);
+	BOOST_TEST((block->get() == process_prefab));
+	BOOST_TEST(boost::json::serialize(in_process.prefab_json) == boost::json::serialize(through_process.prefab_json));
+}
+
 BOOST_AUTO_TEST_CASE(AScanThroughTheProcess_OfASelfContainedModel_ListsNoFiles)
 {
 	test_util::temp_dir dir{ "process_decoder" };
@@ -1136,7 +1223,7 @@ BOOST_AUTO_TEST_CASE(AScanThroughTheProcess_OfASelfContainedModel_ListsNoFiles)
 	edt::import_source source;
 	source.path = model;
 	source.preloaded = &bytes;
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	const edt::model_file_scan scan = decoder.scan(source, nullptr);
 	BOOST_CHECK_MESSAGE(scan.ok(), scan.error);
 	BOOST_CHECK(scan.files.empty());
@@ -1153,7 +1240,7 @@ BOOST_AUTO_TEST_CASE(ASideFileThatChangedAfterItWasListed_FailsTheImportInTheEdi
 	source.path = model;
 	source.preloaded = &bytes;
 
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	const edt::model_file_scan listed = decoder.scan(source, nullptr);
 	BOOST_REQUIRE_MESSAGE(listed.ok(), listed.error);
 	BOOST_REQUIRE_EQUAL(listed.files.size(), 1u);
@@ -1191,7 +1278,7 @@ BOOST_AUTO_TEST_CASE(ATextureThatAnMtlNamesOutsideTheFolder_FailsTheScanByTheEdi
 	source.path = model;
 	source.preloaded = &bytes;
 
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	const edt::model_file_scan scan = decoder.scan(source, nullptr);
 	BOOST_CHECK(!scan.ok());
 	BOOST_CHECK_MESSAGE(scan.error.find("outside") != std::string::npos, scan.error);
@@ -1214,7 +1301,7 @@ BOOST_AUTO_TEST_CASE(AGltfWithItsBin_IsScannedAndImportedThroughTheEditor)
 	source.path = model;
 	source.preloaded = &bytes;
 
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	const edt::model_file_scan listed = decoder.scan(source, nullptr);
 	BOOST_REQUIRE_MESSAGE(listed.ok(), listed.error);
 	BOOST_REQUIRE_EQUAL(listed.files.size(), 1u);
@@ -1242,7 +1329,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatIsSlow_FailsTheImportWithoutStoringAnything)
 	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 	config.timeout = std::chrono::milliseconds(1000);
 	config.extra_arguments = { "--self-test-sleep", "60000" };
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	try {
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder that sleeps was not stopped");
@@ -1264,7 +1351,7 @@ BOOST_AUTO_TEST_CASE(AnImportThatAsksForTheRequiredSandbox_FailsWithTheReason_Wh
 	auto config = decoder_config();
 	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 	config.extra_arguments = { "--self-test-pretend-no-landlock" };
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	try {
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder without its sandbox decoded a model that required it");
@@ -1293,7 +1380,7 @@ BOOST_AUTO_TEST_CASE(ASandboxThatFailsToSetUp_FailsTheImport_AndNamesTheSettingT
 	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 	config.sandbox = edt::sandbox_mode::best_effort;
 	config.extra_arguments = { "--self-test-extra-thread" };
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	try {
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder whose sandbox failed to set up decoded a model");
@@ -1319,7 +1406,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_E
 	auto silent = decoder_config();
 	silent.decoder = "/usr/bin/false";
 	std::vector<edt::decoder_sandbox_status> heard;
-	const edt::process_decoder failing(*rs, silent, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
+	const edt::process_decoder failing(*rs, *descs, silent, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
 	BOOST_CHECK_THROW(failing.import(source, nullptr), std::runtime_error);
 	BOOST_REQUIRE_EQUAL(heard.size(), 1u);
 	BOOST_CHECK(heard.front().reported);
@@ -1331,7 +1418,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_E
 	refusing.sandbox = edt::sandbox_mode::required;
 	refusing.extra_arguments = { "--self-test-pretend-no-landlock" };
 	std::vector<edt::decoder_sandbox_status> refused_heard;
-	const edt::process_decoder refuser(*rs, refusing, [&refused_heard](const edt::decoder_sandbox_status& status) {
+	const edt::process_decoder refuser(*rs, *descs, refusing, [&refused_heard](const edt::decoder_sandbox_status& status) {
 		refused_heard.push_back(status);
 	});
 	BOOST_CHECK_THROW(refuser.import(source, nullptr), std::runtime_error);
@@ -1354,7 +1441,7 @@ BOOST_AUTO_TEST_CASE(AGltfWithItsBin_AndAnObjWithItsMtl_DecodeInTheRequiredSandb
 	dir.write("o/tri.mtl", "newmtl m\nKd 1 0 0\n");
 	const std::pair<fs::path, std::string> models[] = { { dir.write("g/tri.gltf", gltf), gltf }, { dir.write("o/tri.obj", obj), obj } };
 
-	const edt::process_decoder decoder(*rs, decoder_config());
+	const edt::process_decoder decoder(*rs, *descs, decoder_config());
 	for (const auto& [model, text] : models) {
 		BOOST_TEST_CONTEXT(model.filename().string()) {
 			const std::vector<std::byte> bytes = bytes_of(text);
@@ -1385,7 +1472,7 @@ BOOST_AUTO_TEST_CASE(ACancelledImport_KillsTheDecoder_AndStoresNothing)
 	auto config = decoder_config();
 	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 	config.extra_arguments = { "--self-test-sleep", "60000" };
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 
 	std::stop_source stop;
 	ds::task_context ctx;

@@ -49,3 +49,14 @@ if(SNK_ENGINE_SHARED)
 		install(FILES $<TARGET_PDB_FILE:snk_model_import_assimp> DESTINATION bin OPTIONAL COMPONENT editor)
 	endif()
 endif()
+
+# snk_model_import_core (#1077): the same reading of a model (mdl_import.h) for the model decoder process, static and without
+# the engine: the codecs from snk_model_codec, assimp linked in. Nothing but the decoder links it, so no binary holds it next
+# to snk_engine. Compiled under core/ it gets SNK_ENGINE_BUILD in a shared build (cmake/SnkTarget.cmake), like the archives
+# it is linked with: SNK_API is the export side everywhere in the decoder, never dllimport of a DLL it does not load.
+add_library(snk_model_import_core STATIC mdl_assimp_io.cpp mdl_assimp_io.h mdl_import.cpp)
+add_library(snk::model_import_core ALIAS snk_model_import_core)
+target_include_directories(snk_model_import_core PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+	PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(snk_model_import_core PUBLIC snk::model_codec PUBLIC snk::common PRIVATE snk::engine_logger PRIVATE assimp
+	PRIVATE $<BUILD_LOCAL_INTERFACE:snk::sanitizers>)
