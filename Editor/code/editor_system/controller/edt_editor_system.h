@@ -56,8 +56,7 @@ namespace edt {
 	class agents_panel;
 	class file_menu;
 	class agent_sessions;
-	class game_builder;
-	class game_reloader;
+	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
 	class migration_panel;
@@ -343,9 +342,9 @@ namespace edt {
 		void start_level_settle(const res::tag& level);
 		void cancel_level_settle();
 		std::unique_ptr<edt::file_menu> m_file_menu;
-		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
-		std::unique_ptr<edt::game_builder> m_game_builder;
-		std::unique_ptr<edt::game_reloader> m_game_reloader;
+		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
+		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
+		std::unique_ptr<edt::game_build_component> m_build;
 		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
 		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 		// Version control and the code host (#458, #1004): git, the repository watcher, pull requests, the tokens and the Git

@@ -56,6 +56,7 @@ Editor/
     │   └── edt_live_mode.cpp/h       # live_mode: owns live_build in the editor: code:// feed, toggle, menu-bar status, live.* tools (#445)
     │
     ├── game_build/                   # Build > Build Game (#434)
+    │   ├── edt_game_build_component.h/.cpp # game_build_component (#1004): the builder and the reloader with everything they ask of the editor (trust, Play snapshot, swap gate, waits) and the Build Settings commands; `editor_system` creates it before live mode, calls `install()`, and hands its `builder()`/`reloader()` on
     │   ├── edt_build_diagnostics.h   # build_output_parser (MSVC/GCC/Clang/ld/CMake lines -> problems)
     │   ├── edt_build_settings.cpp/h  # build_settings: <root>/.snk/build.json (parse/merge/load, update_build_settings read-merge-write, pure)
     │   ├── edt_build_settings_model.cpp/h # build_settings_model (Build Settings state, no ImGui), preset_for_configuration, build.settings.get (#444)
