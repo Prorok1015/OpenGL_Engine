@@ -207,7 +207,7 @@ BOOST_AUTO_TEST_CASE(TheGeometry_IsExportedWithItsBinaryFile_AndAnOldArrayFileIs
 	BOOST_REQUIRE(geometry != exported.end());
 	const res::tag desc_tag = *geometry;
 	const res::tag binary_tag = *res::desc_binary::binary_tag(desc_tag);
-	BOOST_TEST(std::ranges::find(written, binary_tag) != written.end());
+	BOOST_TEST((std::ranges::find(written, binary_tag) != written.end()));
 	BOOST_TEST(rs->exists(binary_tag));
 	BOOST_TEST(!rs->exists(*res::desc_binary::staged_tag(desc_tag)));
 
@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(TheGeometry_IsExportedWithItsBinaryFile_AndAnOldArrayFileIs
 	});
 	std::vector<res::tag> again;
 	import_and_export(again);
-	BOOST_TEST(std::ranges::find(again, desc_tag) != again.end());
+	BOOST_TEST((std::ranges::find(again, desc_tag) != again.end()));
 	BOOST_TEST(!rnd::holds_geometry_arrays(json::parse(files_on_disk().at(desc_tag.string())).as_object()));
 	std::lock_guard lock(said_mutex);
 	BOOST_REQUIRE(warned.size() == 1u);
@@ -271,7 +271,7 @@ BOOST_AUTO_TEST_CASE(AModelOfLines_IsImportedAndExportedInJsonArrays)
 
 	const auto geometry = std::ranges::find_if(exported, [](const res::tag& tag) { return tag.view().ends_with(".geom.desc"); });
 	BOOST_REQUIRE(geometry != exported.end());
-	BOOST_TEST(std::ranges::find(written, *geometry) != written.end());
+	BOOST_TEST((std::ranges::find(written, *geometry) != written.end()));
 	BOOST_TEST(!rs->exists(*res::desc_binary::binary_tag(*geometry)));
 	const std::string text = files_on_disk().at(geometry->string());
 	BOOST_TEST(std::ranges::count(text, '\n') <= 1);
