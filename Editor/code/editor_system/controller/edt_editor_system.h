@@ -53,8 +53,7 @@ namespace edt {
 	class agent_server;
 	class agent_access;
 	class agent_component;
-	class agent_policy_model;
-	class agents_panel;
+	class agent_ui_component;
 	class file_menu;
 	class agent_sessions;
 	class game_build_component;
@@ -208,10 +207,6 @@ namespace edt {
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
-		// The agents window (#449): the status bar slot, the notice and opening the window.
-		void draw_agent_status();
-		void draw_agent_policy_notice();
-		void open_agents_panel();
 
 	public:
 		agent_server* agent_server_object();
@@ -299,24 +294,9 @@ namespace edt {
 		std::vector<registration> m_registrations;
 
 		// What an agent can reach (the MCP server, the policy, the log filter, editor.quit). Declared before the agents window
-		// below, which reads its access: that goes first, then this one (shutdown() already ran at the top of ~editor_system).
+		// (m_agent_ui) below, which reads its access: that goes first, then this one (shutdown() already ran at the top of ~editor_system).
 		std::unique_ptr<agent_component> m_agent;
-		// The policy part of the agents window (#449); after m_agent, whose access it reads, so it is destroyed first.
-		std::unique_ptr<agent_policy_model> m_agent_policy_model;
-		std::shared_ptr<agents_panel> m_agents_panel;
-		// The last actions an agent made (editor_events::agent_action), for the status bar slot.
-		struct recent_agent_action
-		{
-			std::string command;
-			std::string target;
-			std::string session;
-			std::chrono::steady_clock::time_point at;
-		};
-		std::deque<recent_agent_action> m_recent_agent_actions;
-		// The pending loosenings (as text) the person sent away with "Later"; empty = not dismissed. A different set shows the notice again.
-		std::string m_policy_notice_dismissed_key;
-		std::chrono::steady_clock::time_point m_policy_refreshed{};
-		// The listener of editor_events::agent_action (the status bar slot); dropped first.
-		std::vector<connection> m_session_connections;
+		// The agents window, its status slot and notice (#449): reads the access of m_agent, so it is destroyed first.
+		std::unique_ptr<agent_ui_component> m_agent_ui;
 	};
 }

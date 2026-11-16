@@ -90,8 +90,7 @@
 #include "edt_agent_server.h"
 #include "edt_agent_server_settings.h"
 #include "edt_agent_component.h"
-#include "edt_agent_policy_model.h"
-#include "edt_agents_panel.h"
+#include "edt_agent_ui_component.h"
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
@@ -278,7 +277,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 edt::editor_system::~editor_system()
 {
 	if (m_agent) m_agent->shutdown();
-	m_session_connections.clear();
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_model_adapter_registered) m_res.unregistrate_adapter(scn::model_importer_adapter::INFO);
@@ -867,29 +865,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_vcs->guard_config_files(editor_config_files());
 		m_agent = std::make_unique<agent_component>(std::move(agent_ports));
 		m_agent->install(m_registrations);
-		auto& commands = data.require<cmd::command_registry>();
-		editor_events& events = m_context->events();
-
-		// The agents window (#449). Nothing here is a command an agent could call: the buttons call the model directly.
-		m_agent_policy_model = std::make_unique<agent_policy_model>(m_agent->access()->policy(), [&commands] { return commands.list(); });
-		agents_panel_services services;
-		services.server = [this] { return m_agent->server(); };
-		services.set_server = [this](bool enabled, std::uint16_t port) { return m_agent->set_server(enabled, port); };
-		services.chosen_port = [this] { return load_agent_server_settings(m_agent->settings_file()).port; };
-		m_agents_panel = std::make_shared<agents_panel>(*m_agent_policy_model, std::move(services));
-		m_registrations.push_back(m_context->panels().add({ .id = m_agents_panel->get_id(), .title = m_agents_panel->get_title(),
-			.slot = dock_slot::floating, .open_by_default = false, .panel = m_agents_panel }));
-		m_registrations.push_back(m_context->actions().add({ .id = "agent.settings.open", .label = "Agents...",
-			.execute = no_args([this] { open_agents_panel(); }),
-			.expose_as_tool = false, .category = cmd::agent_category::not_for_agents }));
-		m_session_connections.push_back(events.agent_action.subscribe([this](const agent_action_info& info) {
-			m_recent_agent_actions.push_back({ info.command, info.target, info.session, std::chrono::steady_clock::now() });
-			while (m_recent_agent_actions.size() > 8) m_recent_agent_actions.pop_front();
-		}));
-		editor_layer->register_implicit("edt/agent_policy_notice", [this, headless] {
-			if (!headless) draw_agent_policy_notice();
-			return true;
-		});
+		m_agent_ui = std::make_unique<agent_ui_component>(agent_ui_component::ports{ .context = *m_context, .layer = *editor_layer,
+			.commands = data.require<cmd::command_registry>(), .agent = *m_agent, .headless = headless });
+		m_agent_ui->install(m_registrations);
 	}
 }
 
@@ -987,7 +965,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 
 	editor_layer->set_menu_bar_status([this] {
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
-		draw_agent_status();
+		if (m_agent_ui) m_agent_ui->draw_status();
 		m_play_component->draw_status();
 		draw_save_notice();
 		if (const auto trust = m_trust.lock()) {
@@ -997,98 +975,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		}
 		m_live->draw_status();
 	});
-}
-
-void edt::editor_system::open_agents_panel()
-{
-	if (m_agents_panel == nullptr) return;
-	m_context->panels().set_open(m_agents_panel->get_id(), true);
-	m_agents_panel->focus();
-}
-
-void edt::editor_system::draw_agent_policy_notice()
-{
-	if (agent_access_object() == nullptr) return;
-	if (!agent_access_object()->policy().project_pending_approval()) {
-		m_policy_notice_dismissed_key.clear();
-		return;
-	}
-	// agent_access::frame reads the files every frame while the server is active; a waiting policy must also notice, about once
-	// a second, that its file was fixed or changed again. Nothing is done while no policy waits (the idle editor).
-	if (agent_server_object() == nullptr || !agent_server_object()->active()) {
-		const auto now = std::chrono::steady_clock::now();
-		if (now - m_policy_refreshed >= std::chrono::seconds(1)) {
-			m_policy_refreshed = now;
-			agent_access_object()->policy().refresh();
-			if (!agent_access_object()->policy().project_pending_approval()) return;
-		}
-	}
-	std::string pending_key;
-	for (const policy_loosening& change : agent_access_object()->policy().pending_loosenings()) {
-		pending_key += change.what + '|' + cmd::to_string(change.from) + '|' + cmd::to_string(change.to) + '\n';
-	}
-	if (m_policy_notice_dismissed_key == pending_key) return;
-	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),
-		ImGuiCond_Always, ImVec2(1.f, 1.f));
-	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
-		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
-	if (ImGui::Begin("Agent policy##agent_policy_notice", nullptr, flags)) {
-		ImGui::TextUnformatted("The project's agent policy waits for your approval.");
-		if (ImGui::Button("Open")) {
-			open_agents_panel();
-			m_policy_notice_dismissed_key = pending_key;
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Later")) m_policy_notice_dismissed_key = pending_key;
-	}
-	ImGui::End();
-}
-
-void edt::editor_system::draw_agent_status()
-{
-	if (agent_access_object() == nullptr || agent_server_object() == nullptr) return;
-	const bool pending = agent_access_object()->policy().project_pending_approval();
-	// Before any ImGui call: for a person who does not use agents the menu bar is what it was.
-	if (!pending && !agent_server_object()->active()) return;
-
-	const std::vector<agent_session_info> sessions = agent_server_object()->sessions();
-	const std::size_t connected = sessions.size() + (agent_server_object()->stdio_session().empty() ? 0u : 1u);
-	const std::size_t questions = agent_access_object()->confirmations().pending().size();
-	const bool flash = !m_recent_agent_actions.empty()
-		&& std::chrono::steady_clock::now() - m_recent_agent_actions.back().at < std::chrono::seconds(2);
-
-	std::string label = pending ? std::string("Agent policy: approve")
-		: questions > 0 ? std::format("Agent: {} waiting", questions) : std::format("Agent: {}", connected);
-	label += "###agent_status";
-	const ImVec4 color = pending || questions > 0 ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f)
-		: flash ? ImVec4(0.4f, 0.85f, 0.4f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
-	const float width = ImGui::CalcTextSize(label.c_str(), nullptr, true).x;
-	ImGui::PushStyleColor(ImGuiCol_Text, color);
-	const bool clicked = ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2(width, 0.f));
-	ImGui::PopStyleColor();
-	if (clicked) ImGui::OpenPopup("agent_status_popup");
-	if (ImGui::BeginPopup("agent_status_popup")) {
-		if (pending) ImGui::TextUnformatted("The project's agent policy waits for your approval.");
-		if (m_recent_agent_actions.empty()) {
-			ImGui::TextDisabled("No agent action yet.");
-		}
-		for (auto it = m_recent_agent_actions.rbegin(); it != m_recent_agent_actions.rend(); ++it) {
-			// Paths and ids of ours, but shown as plain text all the same.
-			const std::string line = it->command + "  " + it->target;
-			ImGui::TextUnformatted(line.c_str());
-		}
-		ImGui::Separator();
-		for (const agent_session_info& session : sessions) {
-			ImGui::PushID(session.id.c_str());
-			ImGui::TextUnformatted(session.client_name.empty() ? "(unnamed)" : session.client_name.c_str());
-			ImGui::SameLine();
-			if (ImGui::SmallButton("Disconnect")) agent_server_object()->close_session(session.id);
-			ImGui::PopID();
-		}
-		if (ImGui::MenuItem("Settings...")) open_agents_panel();
-		ImGui::EndPopup();
-	}
 }
 
 void edt::editor_system::draw_save_notice()
