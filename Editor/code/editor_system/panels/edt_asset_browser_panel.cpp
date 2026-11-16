@@ -2,6 +2,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -18,16 +19,31 @@ namespace edt
 		return s;
 	}
 
+	struct file_icon {
+		const char* glyph;
+		const char* text;
+	};
+
+	static file_icon icon_of_extension(const std::string& ext)
+	{
+		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return {gui::icon::model, "[3D] "};
+		if (ext == ".desc")                                                      return {gui::icon::desc, "[D]  "};
+		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
+		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp")                  return {gui::icon::image, "[IMG]"};
+		if (ext == ".vert" || ext == ".frag" || ext == ".geom" || ext == ".glsl") return {gui::icon::file_code, "[SHD]"};
+		if (ext == ".wav"  || ext == ".ogg"  || ext == ".mp3")                  return {gui::icon::sound, "[SND]"};
+		return {gui::icon::file, "[F]  "};
+	}
+
+	static const char* folder_icon()
+	{
+		return gui::ui_font_has_icons() ? gui::icon::folder : "[/]";
+	}
+
 	const char* asset_browser_panel::get_file_icon(const std::filesystem::path& p) const
 	{
-		std::string ext = to_lower(fs_paths::utf8_of(p.extension()));
-		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return "[3D] ";
-		if (ext == ".desc")                                                      return "[D]  ";
-		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
-		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp")                  return "[IMG]";
-		if (ext == ".vert" || ext == ".frag" || ext == ".geom" || ext == ".glsl") return "[SHD]";
-		if (ext == ".wav"  || ext == ".ogg"  || ext == ".mp3")                  return "[SND]";
-		return "[F]  ";
+		const file_icon icon = icon_of_extension(to_lower(fs_paths::utf8_of(p.extension())));
+		return gui::ui_font_has_icons() ? icon.glyph : icon.text;
 	}
 
 	// ─── lifecycle ────────────────────────────────────────────────────────────
@@ -167,7 +183,7 @@ namespace edt
 					continue;
 			}
 			std::string label = src.is_dir
-				? "[/] " + src.name
+				? std::string(folder_icon()) + " " + src.name
 				: std::string(get_file_icon(src.path)) + " " + src.name;
 			m_entries.push_back({std::move(src), std::move(label)});
 		}
@@ -281,7 +297,7 @@ namespace edt
 			{
 				bool at_root = m_current_rel.empty();
 				if (at_root) ImGui::BeginDisabled();
-				if (ImGui::Selectable("[/] .."))
+				if (ImGui::Selectable((std::string(folder_icon()) + " ..").c_str()))
 					navigate_to(m_current_rel.parent_path());
 				if (at_root) ImGui::EndDisabled();
 			}

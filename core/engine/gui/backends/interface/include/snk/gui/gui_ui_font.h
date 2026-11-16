@@ -6,6 +6,14 @@
 
 namespace gui
 {
+	// Whether the current font has the icon glyphs (gui_icons.h); during a frame. Without them, an icon string would
+	// draw as '?' boxes, so the caller shows a text placeholder instead. The classic theme loads no icons.
+	inline bool ui_font_has_icons()
+	{
+		ImFont* font = ImGui::GetFont();
+		return font && font->FindGlyphNoFallback(icon::first) != nullptr;
+	}
+
 	// The UI font: a TTF kept as bytes (the atlas does not own them) plus the glyph ranges built for it.
 	// Both must outlive the atlas, and rebuild_fonts adds the font again, so the object lives as long as the backend.
 	// Without usable bytes it adds ImGui's built-in font, so a missing font file changes nothing.
