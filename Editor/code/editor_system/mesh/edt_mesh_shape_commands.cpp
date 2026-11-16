@@ -353,7 +353,7 @@ namespace edt::mesh
 		rebuild.id = "shape.rebuild";
 		rebuild.summary = "Rebuild both files of a parametric shape from new parameters (a person confirms each time). `version` is the one shape.create "
 			"or shape.rebuild gave, else `stale`. Without kind and params the stored ones are used. A mesh edited by hand is refused";
-		rebuild.args_schema = parse_schema(std::format(R"({{"type":"object","properties":{{"path":{{"type":"string","minLength":1,"description":"res://shapes/a.poly.desc"}},
+		rebuild.args_schema = parse_schema(std::format(R"({{"type":"object","properties":{{"path":{{"type":"string","minLength":1,"description":"shapes/a.poly.desc with or without the res protocol"}},
 			"version":{{"type":"string","minLength":1}},{}}},"required":["path","version"],"additionalProperties":false}})", kinds));
 		rebuild.result_schema = parse_schema(result);
 		rebuild.mutates = true;

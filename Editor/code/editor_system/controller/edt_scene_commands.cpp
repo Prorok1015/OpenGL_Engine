@@ -1140,7 +1140,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 			R"("parent")"),
 		ref_result, &node_create);
 	add("shape.add_base", "Create a node under `parent` with a mesh of a ready-made unit shape (box, plane, sphere, cylinder, capsule_s, capsule_m, capsule_l: "
-			"res://shapes/<shape>.geom.desc) and `scale` as its size; the same creation as scene.node.create",
+			"shapes/<shape>.geom.desc in the resources) and `scale` as its size; the same creation as scene.node.create",
 		args_with(std::string(R"("parent":@REF@,"shape":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"scale":{"type":"array","items":{"type":"number"}},)")
 			+ std::string(R"("material":{"type":"string","description":"a material desc tag, res://..."},)") + std::string(index_arg_schema), R"("parent","shape")"),
 		ref_result, &shape_add_base);
