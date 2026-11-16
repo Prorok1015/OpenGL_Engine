@@ -131,7 +131,9 @@ namespace edt {
 	decoder_steps steps_of(std::shared_ptr<const process_decoder> decoder);
 
 	// Erases every file below memory://`folder` (ending in '/'): the decoder overwrites nothing, and memory:// is on the disk,
-	// so an earlier run left its files there. The tag of a file that is still there afterwards, if any.
-	std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder);
+	// so an earlier run left its files there. The files are those the resolver of memory:// lists; one that cannot list
+	// them gets `known` erased (what the caller made there) and a warning. The tag of a file still there after, if any.
+	std::optional<res::tag> erase_memory_folder(res::resource_system& resources, const std::string& folder,
+		const std::vector<res::tag>* known = nullptr);
 
 } // namespace edt

@@ -129,13 +129,13 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 		}
 	}
 	if (!imported) {
-		forget(source.memory_folder);
+		const std::vector<res::tag> made_before = forget(source.memory_folder);
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
 		const model_file_scan found = step([&] { return m_decoder.scan(source, nullptr); });
 		if (!found.ok()) throw refuse(found.error);
 		source.allowed = &found.files;
 
-		if (const std::optional<res::tag> left = erase_memory_folder(m_resources, source.memory_folder)) {
+		if (const std::optional<res::tag> left = erase_memory_folder(m_resources, source.memory_folder, &made_before)) {
 			throw refuse(std::format("'{}', left in memory:// by an earlier load of the model, cannot be removed", left->view()));
 		}
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
@@ -170,25 +170,21 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 	}
 
 	// What is in memory:// now is read back as a decoder's answer, and checked as one: anyone may change those files.
-	const std::vector<fs::path> roots = m_resources.mount_roots(res::tag::memory);
-	if (roots.empty()) return std::nullopt;
 	const decode_request request = import_request(source);
 	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * 2;
 	decode_bundle answer;
 	answer.manifest["kind"] = "import";
 	answer.manifest["import"] = to_json(decode.imported);
 	for (const res::tag& resource : decode.imported.created_tags) {
-		const std::optional<fs::path> file = res::path_within_dir(roots.back(), resource.relative());
-		std::error_code ec;
-		const std::uintmax_t size = file ? fs::file_size(*file, ec) : 0;
-		// Gone (erased, or the folder was swept): decoded again like a model seen for the first time.
-		if (!file || ec) return std::nullopt;
-		if (size > blob_limit) {
+		// As the resource system serves it now, whichever resolver serves memory:// (#1086).
+		std::optional<std::vector<std::byte>> bytes{ std::in_place };
+		const platform::beneath::read_result read = m_resources.read_now(resource, blob_limit, *bytes);
+		if (read.status == platform::beneath::read_status::too_large) {
 			problem = std::format("'{}' is bigger than a resource of the import may be", resource.view());
 			return std::nullopt;
 		}
-		std::optional<std::vector<std::byte>> bytes = read_exactly(*file, size);
-		if (!bytes) return std::nullopt;
+		// Gone (erased, or the folder was swept): decoded again like a model seen for the first time.
+		if (read.status != platform::beneath::read_status::ok) return std::nullopt;
 		// A resource that still passes the checks of an answer but is not what the decoder made is not taken either.
 		const auto stored = std::find_if(decode.imported.created_digests.begin(), decode.imported.created_digests.end(),
 			[&resource](const auto& entry) { return entry.first == resource; });
@@ -207,10 +203,14 @@ void edt::decoded_model_adapter::remember(const std::string& folder, cached_deco
 	m_cache.insert_or_assign(folder, std::move(decode));
 }
 
-void edt::decoded_model_adapter::forget(const std::string& folder) const
+std::vector<res::tag> edt::decoded_model_adapter::forget(const std::string& folder) const
 {
 	const std::lock_guard guard(m_cache_mutex);
-	m_cache.erase(folder);
+	const auto found = m_cache.find(folder);
+	if (found == m_cache.end()) return {};
+	std::vector<res::tag> made = std::move(found->second.imported.created_tags);
+	m_cache.erase(found);
+	return made;
 }
 
 std::shared_ptr<std::mutex> edt::decoded_model_adapter::folder_lock(const std::string& folder) const

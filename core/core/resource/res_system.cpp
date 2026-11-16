@@ -2649,6 +2649,64 @@ res::tag res::resource_system::engine_file(std::string_view relative) const
 	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
 
+bool res::resource_system::serves(std::string_view protocol) const
+{
+	return static_cast<bool>(root().resolver_for(protocol));
+}
+
+std::optional<res::disk_file> res::resource_system::disk_file_of(const tag& tag) const
+{
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->disk_file_of(tag);
+}
+
+platform::beneath::read_result res::resource_system::read_now(const tag& tag, std::uint64_t max_bytes,
+	std::vector<std::byte>& out) const
+{
+	ASSERT_MSG(!m_tasks.on_main() || ds::task_system::on_worker(), "read_now('{}') waits: not on the main thread",
+		tag.view());
+	out.clear();
+	platform::beneath::read_result result;
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
+		result.error = not_mounted_error(tag);
+		return result;
+	}
+	if (const auto* vfs = dynamic_cast<const vfs_resolver*>(found.operator->())) {
+		return vfs->read_beside(tag, tag, max_bytes, out);
+	}
+	const auto data = found->resolve(tag);
+	if (!data) {
+		result.error = std::format("'{}': its resolver gave nothing to read", tag.view());
+		return result;
+	}
+	data->wait();
+	if (data->has_error()) {
+		result.status = found->exists(tag) ? platform::beneath::read_status::failed
+			: platform::beneath::read_status::missing;
+		result.error = data->error_msg;
+		return result;
+	}
+	if (data->data.size() > max_bytes) {
+		result.status = platform::beneath::read_status::too_large;
+		return result;
+	}
+	out = data->data;
+	result.status = platform::beneath::read_status::ok;
+	return result;
+}
+
+std::optional<std::vector<res::tag>> res::resource_system::files_under(std::string_view protocol,
+	std::string_view folder) const
+{
+	const resolver_lease found = root().resolver_for(protocol);
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->files_under(folder);
+}
+
 std::optional<res::disk_file> res::resource_system::disk_file_holding(const tag& tag,
 	const std::vector<std::byte>& bytes, std::string& differs) const
 {
