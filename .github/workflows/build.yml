@@ -1235,6 +1235,27 @@ jobs:
           tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
 
+      # #1109: the same tour under every theme, for the owner to pick the editor's look from the artifact
+      # (headless_out/themes/<variant>/). No reference: only a crash or an error in the log fails a run.
+      # dark_neutral_noto is that theme on the current font, to compare the fonts.
+      - name: Theme snapshots
+        run: |
+          shoot() {
+            local variant="$1"; shift
+            local out="headless_out/themes/$variant"
+            mkdir -p "$out"
+            sed "s|@OUT@|$out|g" tools/headless/theme_tour.actions > "$out/tour.actions"
+            tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions "$out/tour.actions" --size 1920x1080 \
+              --shot "$out/final.png" \
+              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc "$@"
+            tools/headless/check_smoke.sh "$out/final.png" "$out/editor.log" 200x200+860+450 0
+          }
+          shoot classic gui/theme classic
+          shoot dark_neutral gui/theme dark_neutral
+          shoot dark_contrast gui/theme dark_contrast
+          shoot light gui/theme light
+          shoot dark_neutral_noto gui/theme dark_neutral gui/font noto
+
       # #713: every run above started with the repository root as the working directory (a GL backend under Xvfb included):
       # none of them may have left the layout file or a log folder there.
       - name: Smoke runs leave nothing in the working directory

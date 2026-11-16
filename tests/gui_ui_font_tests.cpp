@@ -141,4 +141,25 @@ BOOST_AUTO_TEST_CASE(TheShippedFontHasCyrillicGlyphs)
 	BOOST_TEST(added->FindGlyphNoFallback('A') != nullptr);
 }
 
+BOOST_AUTO_TEST_CASE(TheThemeFontHasCyrillicAndTheIconsMergeIntoIt)
+{
+	const std::filesystem::path fonts = std::filesystem::path{ SNK_CORE_RES_DIR } / "fonts";
+	gui::ui_font font;
+	font.set_bytes(read_bytes(fonts / "Inter-Regular.ttf"));
+	font.set_icon_bytes(read_bytes(fonts / "lucide-icons.ttf"));
+	BOOST_REQUIRE(font.usable());
+	BOOST_REQUIRE(font.has_icons());
+
+	ImFontAtlas atlas;
+	ImFont* added = font.add_to(atlas, 14.f);
+	BOOST_REQUIRE(added != nullptr);
+	BOOST_REQUIRE(atlas.Build());
+
+	BOOST_TEST(atlas.Fonts.Size == 1);
+	BOOST_TEST(added->FindGlyphNoFallback(0x0416) != nullptr); // Ж
+	BOOST_TEST(added->FindGlyphNoFallback('A') != nullptr);
+	BOOST_TEST(added->FindGlyphNoFallback(gui::icon::first) != nullptr);
+	BOOST_TEST(added->FindGlyphNoFallback(gui::icon::last) != nullptr);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

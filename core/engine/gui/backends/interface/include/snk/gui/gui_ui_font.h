@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/gui/gui_icons.h>
 #include <imgui.h>
 #include <cstddef>
 #include <vector>
@@ -43,12 +44,27 @@ namespace gui
 			m_ranges.clear();
 		}
 
+		// The icon font (gui_icons.h), merged into the UI font so a label can mix text and icons.
+		// Before the first add_to.
+		void set_icon_bytes(std::vector<std::byte> bytes) { m_icon_bytes = std::move(bytes); }
+
 		bool has_bytes() const { return !m_bytes.empty(); }
 		bool usable() const { return looks_like_font(m_bytes); }
+		bool has_icons() const { return looks_like_font(m_icon_bytes); }
 		const ImVector<ImWchar>& ranges() const { return m_ranges; }
 
-		// Adds the UI font (or the built-in one when there is no usable font) at `size_px`.
+		// Adds the UI font (or the built-in one when there is no usable font) at `size_px`, with the icons merged in.
 		ImFont* add_to(ImFontAtlas& atlas, float size_px)
+		{
+			ImFont* font = add_text_font(atlas, size_px);
+			if (font && has_icons()) {
+				merge_icons(atlas, size_px);
+			}
+			return font;
+		}
+
+	private:
+		ImFont* add_text_font(ImFontAtlas& atlas, float size_px)
 		{
 			if (usable()) {
 				if (m_ranges.empty()) {
@@ -65,8 +81,21 @@ namespace gui
 			return atlas.AddFontDefault(&cfg);
 		}
 
-	private:
+		void merge_icons(ImFontAtlas& atlas, float size_px)
+		{
+			// The atlas keeps the pointer to the ranges.
+			static constexpr ImWchar ranges[] = { icon::first, icon::last, 0 };
+			ImFontConfig cfg;
+			cfg.MergeMode = true;
+			cfg.FontDataOwnedByAtlas = false;
+			cfg.PixelSnapH = true;
+			cfg.GlyphMinAdvanceX = size_px;
+			const int size = static_cast<int>(m_icon_bytes.size());
+			atlas.AddFontFromMemoryTTF(m_icon_bytes.data(), size, size_px, &cfg, ranges);
+		}
+
 		std::vector<std::byte> m_bytes;
+		std::vector<std::byte> m_icon_bytes;
 		ImVector<ImWchar> m_ranges;
 	};
 }

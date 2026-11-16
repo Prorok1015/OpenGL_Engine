@@ -25,15 +25,15 @@ void gui::gl::gl_imgui_backend::init()
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
 
-    ImGui::StyleColorsDark();
+    gui::apply_theme(m_theme, ImGui::GetStyle());
     m_base_style = std::make_unique<ImGuiStyle>(ImGui::GetStyle());
 
     if (m_ui_font.has_bytes() && !m_ui_font.usable()) {
         egLOG_WARN("gui", "UI font data is not a TrueType/OpenType font, using the built-in ImGui font");
     }
     // Apply OS DPI scale so the UI looks correct on high-DPI monitors
-    if (m_dpi_scale > 1.f || m_ui_font.usable()) {
-        m_ui_font.add_to(*io.Fonts, floorf(13.f * m_dpi_scale));
+    if (m_dpi_scale > 1.f || m_ui_font.usable() || m_ui_font.has_icons()) {
+        m_ui_font.add_to(*io.Fonts, floorf(gui::theme_font_px(m_theme) * m_dpi_scale));
     }
     if (m_dpi_scale > 1.f) {
         ImGui::GetStyle().ScaleAllSizes(m_dpi_scale);
@@ -55,7 +55,7 @@ void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
     ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplOpenGL3_DestroyFontsTexture();
     io.Fonts->Clear();
-    m_ui_font.add_to(*io.Fonts, floorf(13.f * scale));
+    m_ui_font.add_to(*io.Fonts, floorf(gui::theme_font_px(m_theme) * scale));
     // ImGui_ImplOpenGL3_NewFrame recreates the texture from the new atlas.
 
     ImGui::GetStyle() = *m_base_style;

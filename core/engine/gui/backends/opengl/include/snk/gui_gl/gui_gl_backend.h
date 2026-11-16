@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/gui/gui_backend_interface.h>
+#include <snk/gui/gui_theme.h>
 #include <snk/gui/gui_ui_font.h>
 #include <cstddef>
 #include <vector>
@@ -17,12 +18,16 @@ namespace gui::gl
         void set_dpi_scale(float scale) override { m_dpi_scale = scale; }
         // TTF bytes for the UI font; before init(). Empty or not a font: the built-in ImGui font stays.
         void set_ui_font_bytes(std::vector<std::byte> bytes) { m_ui_font.set_bytes(std::move(bytes)); }
+        void set_icon_font_bytes(std::vector<std::byte> bytes) { m_ui_font.set_icon_bytes(std::move(bytes)); }
+        // Before init().
+        void set_theme(gui::theme t) { m_theme = t; }
         void rebuild_fonts(float scale) override;
         virtual void new_frame() override;
         virtual void render() override;
         virtual void shutdown() override;
     private:
         float m_dpi_scale = 1.f;
+        gui::theme m_theme = gui::theme::classic;
         gui::ui_font m_ui_font;
         // Unscaled style, so a scale change re-applies ScaleAllSizes from scratch instead of compounding.
         std::unique_ptr<ImGuiStyle> m_base_style;
