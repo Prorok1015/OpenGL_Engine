@@ -1150,6 +1150,31 @@ BOOST_AUTO_TEST_CASE(WhereNoContainerCanStart_OnDecodesWithoutIt_AndTheEditorSay
 	for (const res::tag& tag : imported.created_tags) rs->erase(tag);
 }
 
+// #1054: another editor of another build removes the copies it does not use: a copy that is gone is made again, and
+// the decoder still runs in its AppContainer.
+BOOST_AUTO_TEST_CASE(ACopyOfTheDecoderThatWasRemoved_IsMadeAgain)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	auto config = decoder_config();
+	config.sandbox = edt::sandbox_mode::required;
+	const edt::process_decoder decoder(*rs, config);
+	const edt::import_intermediate first = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(first.error.empty(), first.error);
+	for (const res::tag& tag : first.created_tags) rs->erase(tag);
+
+	std::error_code ec;
+	fs::remove_all(edt::decoder_copy_base() / fs::path(config.decoder).stem(), ec);
+	const edt::import_intermediate again = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(again.error.empty(), again.error);
+	BOOST_CHECK_MESSAGE(again.sandbox.fs && again.sandbox.syscalls, again.sandbox.why);
+	for (const res::tag& tag : again.created_tags) rs->erase(tag);
+}
+
 // #1054: in its AppContainer the decoder says so; the setting `on` asks for nothing more.
 BOOST_AUTO_TEST_CASE(OnWindows_TheDecoderRunsInItsAppContainer)
 {

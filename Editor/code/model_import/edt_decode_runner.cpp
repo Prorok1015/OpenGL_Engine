@@ -27,7 +27,7 @@ struct folder_guard
 	~folder_guard()
 	{
 		std::error_code ec;
-		fs::remove_all(path, ec);
+		core::res::remove_tree_without_following(path, ec);
 	}
 };
 

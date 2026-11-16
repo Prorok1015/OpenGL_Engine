@@ -40,7 +40,7 @@ namespace platform
 
 	// Windows (#1054): how a child is confined. An AppContainer with no capabilities (no network, no user profile, no
 	// file a container may not open), a child process policy and process mitigations (no child processes, no dynamic
-	// code, no extension points, no remote or non-System32-first image loads, strict handle checks, no fonts), and a job
+	// code, no extension points, no images from remote paths (the C/C++ runtime beside the program wins over an older one in System32), strict handle checks, no fonts), and a job
 	// of one process without UI access. The container's SID gets read and write on `read_write` and read and execute on
 	// `read_execute` (inherited by what they hold); nothing else of the machine's access lists is changed.
 	struct process_confinement

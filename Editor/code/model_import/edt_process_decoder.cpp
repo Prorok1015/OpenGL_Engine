@@ -730,17 +730,25 @@ edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, co
 		const std::lock_guard lock(m_copy_mutex);
 		copy = m_copy;
 	}
+	const bool copy_from_before = copy.has_value();
 	if (!copy) {
 		decode_outcome in_place = run_once(config);
 		if (!failed_where_it_is(in_place)) return in_place;
 		why = why_of(in_place);
 		copy = copy_of_decoder(config.decoder, why);
 	}
-	if (copy) {
+	const auto run_copy = [&](const decoder_copy& from) {
 		decode_runner_config copied = config;
-		copied.decoder = copy->program;
-		copied.confine_read_execute = { copy->folder };
-		decode_outcome confined = run_once(copied);
+		copied.decoder = from.program;
+		copied.confine_read_execute = { from.folder };
+		return run_once(copied);
+	};
+	if (copy) {
+		decode_outcome confined = run_copy(*copy);
+		if (failed_where_it_is(confined) && copy_from_before) {
+			copy = renew_copy(config.decoder, *copy, why);
+			if (copy) confined = run_copy(*copy);
+		}
 		if (!failed_where_it_is(confined)) return confined;
 		why = why_of(confined);
 	}
@@ -771,6 +779,19 @@ std::optional<edt::decoder_copy> edt::process_decoder::copy_of_decoder(const std
 	}
 	if (!m_copy) why += "; " + m_copy_error;
 	return m_copy;
+}
+
+std::optional<edt::decoder_copy> edt::process_decoder::renew_copy(const std::filesystem::path& decoder, const decoder_copy& stale,
+	std::string& why) const
+{
+	{
+		const std::lock_guard lock(m_copy_mutex);
+		if (m_copy && m_copy->folder == stale.folder) {
+			m_copy.reset();
+			m_copy_error.clear();
+		}
+	}
+	return copy_of_decoder(decoder, why);
 }
 
 edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds::task_context* task) const

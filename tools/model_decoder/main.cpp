@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <cstddef>
 #include <new>
 #include <optional>
 #include <filesystem>
@@ -68,6 +70,7 @@
 #endif
 #include <Windows.h>
 #include <shellapi.h>
+#include <winioctl.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -161,6 +164,9 @@ struct arguments
 	bool self_test_pretend_no_landlock = false;
 	// Start a second thread before the sandbox is applied: the sandbox must refuse to cover only one of them.
 	bool self_test_extra_thread = false;
+	// Plant a link in the run folder that points at this folder (a symlink; Windows: a junction): the editor must remove
+	// the run folder without going through it (#1054). Exit 5: planted, 0: refused.
+	fs::path self_test_link_out;
 #endif
 };
 
@@ -223,6 +229,8 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_pretend_no_landlock = true;
 		} else if (arg == "--self-test-extra-thread") {
 			parsed.self_test_extra_thread = true;
+		} else if (arg == "--self-test-link-out" && has_value) {
+			parsed.self_test_link_out = args[++i];
 #endif
 		} else {
 			return std::nullopt;
@@ -231,7 +239,7 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
 		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
-		|| parsed.self_test_signal || parsed.self_test_extra_thread) {
+		|| parsed.self_test_signal || parsed.self_test_extra_thread || !parsed.self_test_link_out.empty()) {
 		return parsed;
 	}
 #endif
@@ -267,6 +275,37 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 	return manifest;
 }
 
+#if defined(SNK_MODEL_DECODER_SELF_TEST) && defined(_WIN32)
+// A junction ./escape -> `target` (a mount point reparse point, which any user may set on an empty folder of theirs).
+bool plant_junction(const fs::path& target)
+{
+	if (!CreateDirectoryW(L"escape", nullptr)) return false;
+	const HANDLE folder = CreateFileW(L"escape", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (folder == INVALID_HANDLE_VALUE) return false;
+	const std::wstring substitute = L"\\??\\" + fs::absolute(target).wstring();
+	const auto name_bytes = static_cast<WORD>(substitute.size() * sizeof(wchar_t));
+	// REPARSE_DATA_BUFFER (MountPointReparseBuffer), spelled out: the type is in the driver kit's headers only.
+	std::vector<std::byte> buffer(8 + 8 + name_bytes + 2 * sizeof(wchar_t));
+	const auto put16 = [&buffer](std::size_t at, WORD value) { std::memcpy(buffer.data() + at, &value, sizeof(value)); };
+	const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+	std::memcpy(buffer.data(), &tag, sizeof(tag));
+	put16(4, static_cast<WORD>(buffer.size() - 8));	// ReparseDataLength
+	put16(8, 0);									// SubstituteNameOffset
+	put16(10, name_bytes);							// SubstituteNameLength
+	put16(12, static_cast<WORD>(name_bytes + sizeof(wchar_t)));	// PrintNameOffset
+	put16(14, 0);									// PrintNameLength
+	std::memcpy(buffer.data() + 16, substitute.data(), name_bytes);
+	DWORD returned = 0;
+	const BOOL set = DeviceIoControl(folder, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0,
+		&returned, nullptr);
+	const DWORD error = GetLastError();
+	CloseHandle(folder);
+	SetLastError(error);
+	return set != FALSE;
+}
+#endif
+
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 // The self-test probes of the sandbox: 0 when the system refused what the probe tried, 5 when it worked, 6 when it failed
 // in a way that says nothing about the sandbox.
@@ -296,6 +335,9 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		const int error = errno;
 		::close(fd);
 		return connected != 0 && refused(error) == 0 ? 0 : 5;
+	}
+	if (!args.self_test_link_out.empty()) {
+		return ::symlink(args.self_test_link_out.c_str(), "escape") == 0 ? 5 : refused(errno);
 	}
 	if (args.self_test_signal) {
 		const pid_t parent = ::getppid();
@@ -336,6 +378,9 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		if (file == INVALID_HANDLE_VALUE) return refused(GetLastError());
 		CloseHandle(file);
 		return 5;
+	}
+	if (!args.self_test_link_out.empty()) {
+		return plant_junction(args.self_test_link_out) ? 5 : refused(GetLastError());
 	}
 	if (args.self_test_connect) {
 		WSADATA wsa{};
@@ -433,7 +478,7 @@ int main(int argc, char** argv)
 	std::fflush(stderr);
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
-		|| args->self_test_signal || args->self_test_extra_thread) {
+		|| args->self_test_signal || args->self_test_extra_thread || !args->self_test_link_out.empty()) {
 		return self_test_probe(*args, sandbox);
 	}
 #endif

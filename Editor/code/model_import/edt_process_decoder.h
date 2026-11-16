@@ -97,6 +97,8 @@ namespace edt {
 			const import_source& source, std::stop_token stop) const;
 		// The copy of the decoder a container runs from, made once a session; nullopt with `why` extended when it cannot be.
 		std::optional<decoder_copy> copy_of_decoder(const std::filesystem::path& decoder, std::string& why) const;
+		// `stale` did not run: another editor of another build may have removed it. Made again, once per failure.
+		std::optional<decoder_copy> renew_copy(const std::filesystem::path& decoder, const decoder_copy& stale, std::string& why) const;
 
 		res::resource_system& m_resources;
 		decode_runner_config m_config;

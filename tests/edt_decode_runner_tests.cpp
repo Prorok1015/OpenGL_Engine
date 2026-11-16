@@ -412,6 +412,23 @@ BOOST_AUTO_TEST_CASE(AConfinementThatCannotBeSetUp_StartsNothing_AndSaysSo)
 }
 #endif
 
+// #1054: a child may plant a link in its run folder that points at the user's files (a symlink; on Windows a junction).
+// Removing the run folder after it removes the link, never what it points at. With the sandbox off, so the link is made.
+BOOST_AUTO_TEST_CASE(ALinkTheChildPlantedInItsFolder_IsRemoved_NotFollowed)
+{
+	const fs::path kept = dir.write("outside/keep.txt", "the user's");
+	auto cfg = selftest_config();
+	cfg.sandbox = edt::sandbox_mode::off;
+	cfg.extra_arguments = { "--self-test-link-out", (dir.path() / "outside").string() };
+	const edt::decode_runner runner(cfg);
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+#if defined(__linux__) || defined(_WIN32)
+	BOOST_CHECK_MESSAGE(outcome.exit_code == 5, "the link was not planted: " << outcome.exit_code << " " << outcome.error);
+#endif
+	BOOST_CHECK(fs::exists(kept));
+	BOOST_CHECK(scratch_is_empty());
+}
+
 // The editor learns how the child is sandboxed from its first stderr line, written before it read the request.
 BOOST_AUTO_TEST_CASE(TheRunner_TakesTheSandboxStatus_FromTheChildsFirstLine)
 {
