@@ -64,9 +64,10 @@ Smoke базовая линия: 1×0.000%, 4×0.193%, 1×1.431%.
 aibranch layout_revision = 15 (после #1073). Запись каждого изменения — docs/abi/changes/<issue>.md.
 
 ## Влито 2026-11-16 (последнее сверху)
-- 5af03e9 #1118 (closes #1004!) · cf4c46c #1116 (11b) · d5e2a3b #1113 (#1108 PR1) · 5ae5adf #1114 (11a) · 0edd233 #1110 (#1109 PR1) · f312f39 #1111 (import step) · 74aee07 #1107 (PR3b) · 802b343 #1101 (closes #1100) · 0779d2d #1106 (closes #1082) · 5521248 #1104 (10b) · cc7a850 #1094 (closes #1092) · 780c7c0 #1095 (10a) · f50701f #1091 (EPIC-79 PR3a) · 0b0208f #1096 (closes #1086) · 8cd9607 #1089 (closes #1076) · be97c94 #1088 (#1004 шаг 9) · 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
+- 75e561c #1121 (#148 PR1) · edc2a4f #1120 · 5ebea38 #1117 (#1108 PR2, closes #1112) · 5af03e9 #1118 (closes #1004!) · cf4c46c #1116 (11b) · d5e2a3b #1113 (#1108 PR1) · 5ae5adf #1114 (11a) · 0edd233 #1110 (#1109 PR1) · f312f39 #1111 (import step) · 74aee07 #1107 (PR3b) · 802b343 #1101 (closes #1100) · 0779d2d #1106 (closes #1082) · 5521248 #1104 (10b) · cc7a850 #1094 (closes #1092) · 780c7c0 #1095 (10a) · f50701f #1091 (EPIC-79 PR3a) · 0b0208f #1096 (closes #1086) · 8cd9607 #1089 (closes #1076) · be97c94 #1088 (#1004 шаг 9) · 8ea2eb9 #1087 (closes #996) · 4cd289b #1083 (#1004 8c) · 25d3ed9 #1079 (EPIC-79 PR2) · b3f6784 #1078 (#1043 PR2 Linux sandbox) · a701d55 #1081 (closes #1031) · e49f525 #1080 (closes #1034) · b37d698 #1075 (#1004 8b) · 00c1256 #1074 (EPIC-79 PR1) · 48e9cae #1073 (closes #1060, layout 15) · 2315152 #1072 (closes #969)
 - docs: 699ea204 CONSTRAINT_22–25 · e2cde2c EPIC-80
 - Заведены сегодня: #1082 #1084 #1085 #1086 #1090 #1092 #1093 #1097
 
 ## Nightly
+Nightly 16.11 вечер: run 43949595575 на 5ebea38 (после #1117) — полностью зелёный (Windows package, SDK, TSan).
 Последний зелёный: run 43778265307 (16.11). Напоминание trig_01SYFRYmJWG8GYZ8gDi8tUfa на 17.11 00:04Z; запуск: gh workflow run nightly.yml --ref aibranch -R Prorok1015/OpenGL_Engine (если есть новые коммиты).
