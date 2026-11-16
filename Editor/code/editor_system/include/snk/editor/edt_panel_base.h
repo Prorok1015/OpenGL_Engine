@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_api.h"
+#include <cstdint>
 #include <string>
 #include <string_view>
 // ImGuiWindowFlags is an imgui integer typedef (int). Re-declared here to keep <imgui.h>
@@ -9,6 +10,9 @@ using ImGuiWindowFlags = int;
 
 namespace edt
 {
+	// +1 on any change to the virtual functions below: the editor layout key mixes it in, tools/ci/vtable_pins.json pins them (#969).
+	inline constexpr std::uint32_t panel_base_abi_revision = 1;
+
 	class SNK_EDITOR_API panel_base
 	{
 	public:

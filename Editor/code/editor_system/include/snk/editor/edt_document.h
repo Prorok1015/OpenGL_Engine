@@ -32,6 +32,11 @@ namespace edt
 		cmd::origin origin;
 	};
 
+	// +1 on any change to the virtual functions of document (previewable_document's own revision below): the editor layout
+	// key mixes them in, tools/ci/vtable_pins.json pins them (#969).
+	inline constexpr std::uint32_t document_abi_revision = 1;
+	inline constexpr std::uint32_t previewable_document_abi_revision = 1;
+
 	// Something the editor edits and can show a title, a dirty mark and a source for. document_manager owns the
 	// documents and hands out their ids.
 	class SNK_EDITOR_API document

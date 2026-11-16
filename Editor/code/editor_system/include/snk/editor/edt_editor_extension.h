@@ -28,7 +28,10 @@
 // previews of a module are module_asset_kind_desc / module_asset_preview_desc: their callbacks get the editor_module_context,
 // not the editor_context or the editor_services. A 1.x module is refused by the host (check_editor_api_version): rebuild the
 // project against the new SDK.
-#define SNK_EDITOR_API_VERSION 0x0002'0000u
+// 3.0 (#969): the module also exports snk_editor_layout_key (edt::editor_layout_key, edt_editor_layout_key.h), the key of
+// the editor types, editor interface revisions and ImGui it was built against. The host refuses a module without it or
+// with another key; a 2.x module has none and is refused: rebuild the project.
+#define SNK_EDITOR_API_VERSION 0x0003'0000u
 
 namespace edt
 {
@@ -148,6 +151,9 @@ namespace edt
 		registration_scope& m_scope;
 	};
 
+	// +1 on any change to the virtual functions below: the editor layout key mixes it in, tools/ci/vtable_pins.json pins them (#969).
+	inline constexpr std::uint32_t editor_extension_abi_revision = 1;
+
 	// The base of a game_editor module. The host puts the editor_context in the storage it hands over; the module only
 	// writes register_editor. Declare it with SNK_DECLARE_EDITOR_MODULE. The host always calls shutdown_services before
 	// it destroys the module, also when shutdown_editor throws: destroying the module first would run its queued
@@ -180,23 +186,32 @@ namespace edt
 		std::unique_ptr<editor_module_context> m_context;
 	};
 
-	// Empty when the host can use a module that reports `module_api_version` (the function a module exports as
-	// snk_editor_api_version; null when it has none): the major equals SNK_EDITOR_API_VERSION's and the minor is not
-	// above it. Otherwise why not. The host checks this before it creates the module.
-	[[nodiscard]] SNK_EDITOR_API std::string check_editor_api_version(std::uint32_t (*module_api_version)());
+	// Empty when the host can use a module that reports `module_api_version` and `module_layout_key` (the functions a
+	// module exports as snk_editor_api_version and snk_editor_layout_key; null when it has none): the major equals
+	// SNK_EDITOR_API_VERSION's, the minor is not above it and the key is the editor's own editor_layout_key(). Otherwise
+	// why not. The host checks this before it creates the module.
+	[[nodiscard]] SNK_EDITOR_API std::string check_editor_api_version(std::uint32_t (*module_api_version)(),
+		std::uint64_t (*module_layout_key)());
 }
 
-// The four module functions (SNK_DECLARE_MODULE) plus snk_editor_api_version.
+// The four module functions (SNK_DECLARE_MODULE) plus snk_editor_api_version and snk_editor_layout_key.
 #define SNK_DECLARE_EDITOR_MODULE_PREFIXED(prefix, Type) \
 	SNK_DECLARE_MODULE_PREFIXED(prefix, Type) \
 	extern "C" SNK_MODULE_EXPORT std::uint32_t prefix##editor_api_version() \
 	{ \
 		return SNK_EDITOR_API_VERSION; \
+	} \
+	extern "C" SNK_MODULE_EXPORT std::uint64_t prefix##editor_layout_key() \
+	{ \
+		return ::edt::editor_layout_key(); \
 	}
 
 #define SNK_DECLARE_EDITOR_MODULE(Type) SNK_DECLARE_EDITOR_MODULE_PREFIXED(snk_, Type)
 
-// The module_entry of an editor module declared with SNK_DECLARE_EDITOR_MODULE_PREFIXED(prefix, ...): the five functions.
+// The module_entry of an editor module declared with SNK_DECLARE_EDITOR_MODULE_PREFIXED(prefix, ...): its functions.
 #define SNK_EDITOR_MODULE_ENTRY(prefix) \
 	::app::modules::module_entry{ &prefix##module_api_version, &prefix##module_build_info, &prefix##create_module, \
-		&prefix##destroy_module, &prefix##editor_api_version, &prefix##module_layout_key }
+		&prefix##destroy_module, &prefix##editor_api_version, &prefix##module_layout_key, &prefix##editor_layout_key }
+
+// Last: the key's list names the types above (edt::editor_layout_key, which the declare macro exports).
+#include <snk/editor/edt_editor_layout_key.h>

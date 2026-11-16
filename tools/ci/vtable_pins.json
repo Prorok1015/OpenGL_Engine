@@ -1,5 +1,6 @@
 {
   "layout_revision": 14,
+  "editor_layout_revision": 1,
   "interfaces": [
     {
       "class": "module_interface",
@@ -220,6 +221,76 @@
         "void upload_objects(std::span<const object_data>, std::span<const glm::mat4>)",
         "void bind_object(std::uint32_t, const res::tag&)",
         "bool draw_fits(const res::tag&, std::uint32_t, std::uint32_t, std::uint32_t)"
+      ]
+    },
+    {
+      "class": "editor_extension",
+      "header": "Editor/code/editor_system/include/snk/editor/edt_editor_extension.h",
+      "constant": "editor_extension_abi_revision",
+      "key": "editor",
+      "revision": 1,
+      "bases": [
+        "public app::modules::module_interface"
+      ],
+      "virtuals": [
+        "void register_editor(editor_module_context&)",
+        "void shutdown_editor()"
+      ]
+    },
+    {
+      "class": "panel_base",
+      "header": "Editor/code/editor_system/include/snk/editor/edt_panel_base.h",
+      "constant": "panel_base_abi_revision",
+      "key": "editor",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~panel_base()",
+        "void on_before_begin()",
+        "void on_render()",
+        "void on_hidden()"
+      ]
+    },
+    {
+      "class": "document",
+      "header": "Editor/code/editor_system/include/snk/editor/edt_document.h",
+      "constant": "document_abi_revision",
+      "key": "editor",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~document()",
+        "std::string_view kind() const",
+        "const std::string& title() const",
+        "const res::tag& source() const",
+        "bool is_dirty() const",
+        "std::uint64_t generation() const",
+        "bool can_save() const",
+        "save_result save()",
+        "save_result save_as(const res::tag&)",
+        "bool undo()",
+        "bool redo()",
+        "std::optional<history_entry> next_undo_entry() const",
+        "std::optional<history_entry> next_redo_entry() const",
+        "bool has_agent_changes() const",
+        "bool edits_locked() const",
+        "void accept_agent_changes()",
+        "void bind_events(editor_events*)"
+      ]
+    },
+    {
+      "class": "previewable_document",
+      "header": "Editor/code/editor_system/include/snk/editor/edt_document.h",
+      "constant": "previewable_document_abi_revision",
+      "key": "editor",
+      "revision": 1,
+      "bases": [
+        "public document"
+      ],
+      "virtuals": [
+        "void open(const res::tag&)",
+        "void close()",
+        "bool is_open() const"
       ]
     }
   ],
