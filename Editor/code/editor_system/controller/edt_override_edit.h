@@ -55,6 +55,8 @@ namespace edt::override_edit
 		void invalidate();
 		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
 		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
+		// The records of `owner` that find nothing to change in the prefab any more (scn::find_stale_records), kept like the others.
+		std::shared_ptr<const std::vector<scn::stale_override>> stale(const prefab_node& owner);
 
 	private:
 		template<typename T>
@@ -74,6 +76,7 @@ namespace edt::override_edit
 		uint64_t m_generation = 0;
 		std::vector<entry<std::optional<prefab_node>>> m_bases;
 		std::vector<entry<std::vector<listed_node>>> m_children;
+		std::vector<entry<std::vector<scn::stale_override>>> m_stale;
 	};
 
 	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.

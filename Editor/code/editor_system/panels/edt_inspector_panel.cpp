@@ -1,4 +1,5 @@
 #include "edt_inspector_panel.h"
+#include "edt_instance_overrides_view.h"
 #include <snk/editor/edt_inspector_registry.h>
 #include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
@@ -265,6 +266,12 @@ namespace edt
 				ImGui::PopID();
 				if (m_readonly) ImGui::EndDisabled();
 			}
+		}
+
+		// The records of an instance node, its prefab and the stale ones (#149).
+		if (!m_readonly) {
+			const auto stale = m_view_cache ? m_view_cache->stale(node) : nullptr;
+			changed |= draw_instance_overrides(node, stale.get(), instance_overrides_hooks{ .open_prefab = m_open_prefab });
 		}
 
 		ImGui::Separator();

@@ -355,6 +355,7 @@ void edt::override_edit::view_cache::invalidate()
 {
 	m_bases.clear();
 	m_children.clear();
+	m_stale.clear();
 }
 
 res::tag edt::override_edit::view_cache::active_file() const
@@ -390,6 +391,17 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	}
 	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target, active_file()));
 	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	return value;
+}
+
+std::shared_ptr<const std::vector<scn::stale_override>> edt::override_edit::view_cache::stale(const prefab_node& owner)
+{
+	sync_generation();
+	for (const auto& e : m_stale) {
+		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id) return e.value;
+	}
+	auto value = std::make_shared<const std::vector<scn::stale_override>>(scn::find_stale_records(*m_services.assembler(), owner));
+	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value });
 	return value;
 }
 

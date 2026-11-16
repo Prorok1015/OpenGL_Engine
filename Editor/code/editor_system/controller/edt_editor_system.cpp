@@ -352,6 +352,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc() });
 
+	m_panels->inspector()->set_open_prefab([this](const res::tag& tag) { m_prefab->open(tag); });
+
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
 		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
 		.browser = *m_panels->asset_browser(),
