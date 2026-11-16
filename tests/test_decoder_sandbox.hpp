@@ -34,14 +34,19 @@ namespace test_util {
 #endif
 	}
 
-	// True when the kernel has no Landlock and a sandbox test should stop. On a CI runner (CI set) that is an error, not a
-	// skip: the sandbox tests would pass there while testing nothing.
+	// True when there is no Landlock and a sandbox test should stop. On a Linux CI runner (CI set) that is an error, not a
+	// skip: the sandbox tests would pass there while testing nothing. Other systems have no sandbox yet (#1054).
 	inline bool skipped_without_landlock()
 	{
 		if (landlock_abi() != 0) return false;
+#if defined(__linux__)
 		const char* ci = std::getenv("CI");
-		if (ci != nullptr && *ci != '\0') BOOST_ERROR("the CI runner has no Landlock: the decoder's sandbox is not tested");
-		else BOOST_TEST_MESSAGE("skipped: the kernel has no Landlock");
+		if (ci != nullptr && *ci != '\0') {
+			BOOST_ERROR("the CI runner has no Landlock: the decoder's sandbox is not tested");
+			return true;
+		}
+#endif
+		BOOST_TEST_MESSAGE("skipped: this system has no Landlock");
 		return true;
 	}
 
