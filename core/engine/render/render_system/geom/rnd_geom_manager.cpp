@@ -24,7 +24,8 @@ rnd::geom_manager::~geom_manager()
 void rnd::geom_manager::watch(const res::tag& geom_tag)
 {
 	if (watched.insert(geom_tag).second) {
-		m_res_sys.watch(geom_tag, this, [this](const res::tag& changed) { on_changed(changed); });
+		// keep_dependencies: the CPU desc is dropped after the upload, and a change of its .bin (EPIC-79) must still reach it.
+		m_res_sys.watch(geom_tag, this, [this](const res::tag& changed) { on_changed(changed); }, true);
 	}
 }
 
