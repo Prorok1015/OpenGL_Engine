@@ -25,7 +25,6 @@
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
 #include "edt_module_swap_gate.h"
-#include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -54,8 +53,7 @@ namespace edt {
 	class agent_access;
 	class agent_component;
 	class agent_ui_component;
-	class file_menu;
-	class agent_sessions;
+	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
 	class vcs_component;
@@ -66,12 +64,7 @@ namespace edt {
 	class editor_context;
 	class editor_layer;
 	class asset_open_component;
-	class model_importer;
-	class process_decoder;
-	class decoder_sandbox_notice;
-	class asset_exporter;
-	class agent_model_import;
-	class asset_export_dialog;
+	class import_component;
 	class scene_hierarchy_panel;
 	class inspector_panel;
 	class viewport_panel;
@@ -160,43 +153,8 @@ namespace edt {
 		// Input
 		inp::input_router* m_input_router = nullptr;
 
-		// Import/export
-#if SNK_HAS_ASSIMP
-		std::unique_ptr<edt::model_importer> m_model_importer;
-		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
-		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
-		std::shared_ptr<edt::process_decoder> m_process_decoder;
-		// What the decoders of this run said of their OS sandbox, in Problems (#1076).
-		std::shared_ptr<edt::decoder_sandbox_notice> m_decoder_sandbox;
-		bool m_model_adapter_registered = false;
-#endif
-		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
-		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
-		// The model import an agent asks for (#548): after the exporter it uses, before the context's job service goes.
-		std::unique_ptr<edt::agent_model_import> m_agent_import;
-#if SNK_HAS_ASSIMP
-		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
-		bool m_importing = false;
-		bool m_import_finished = false;
-		std::uint64_t m_import_job = 0;
-		std::string m_import_name;
-		float m_import_spinner_t = 0.f;
-		std::optional<import_intermediate> m_import_result;
-		// Set when the job itself failed (exception); a failed import reports through m_import_result->error.
-		std::string m_import_failure;
-		// The memory:// folders of the import in flight and of the one the export dialog shows (#987). The first goes with
-		// finish_import whatever the outcome (a cancelled job never reports), the second when the dialog closes.
-		std::string m_import_folder;
-		std::string m_dialog_import_folder;
-		std::uint64_t m_import_serial = 0;
-		void erase_import_folder(std::string& folder);
-		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
-		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
-		void start_import(const std::filesystem::path& abs_path);
-		bool poll_import_progress();
-		void finish_import();
-#endif
-		bool poll_import_pipeline();
+		// Import/export (the decoder, the person's import, the exporter, the agent's import)
+		std::unique_ptr<edt::import_component> m_import;
 
 		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
 		void wire_controller_callbacks();
@@ -249,7 +207,6 @@ namespace edt {
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
-		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
 		// Set with editor/exit_after_level_loaded: stops the frame loop once a loaded level settled (CI headless run).
 		std::function<void()> m_stop_after_level_loaded;
@@ -261,12 +218,10 @@ namespace edt {
 		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
 		// changes and saves, builds, module reloads and quitting (migration_blocker).
 		std::unique_ptr<migration_component> m_migration;
-		std::unique_ptr<edt::file_menu> m_file_menu;
+		std::unique_ptr<edt::file_menu_component> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
 		std::unique_ptr<edt::game_build_component> m_build;
-		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
-		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 		// Version control and the code host (#458, #1004): git, the repository watcher, pull requests, the tokens and the Git
 		// Account window; its commands are in m_registrations, removed before it. Before the asset database, whose callbacks ask it
 		// whether a git write runs, so the database goes first.

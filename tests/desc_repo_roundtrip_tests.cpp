@@ -3,6 +3,7 @@
 #include <snk/desc/desc_template_files.h>
 #include <snk/model_import/mdl_model_adapter.h>
 #include <snk/render/rnd_render_service_init.h>
+#include <snk/gui/gui_gui_service_init.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -71,6 +72,7 @@ struct repo_fixture : test_util::scene_env
 		: adapter(*rs, *descs)
 	{
 		engine::render::register_render_descs(*descs);
+		engine::gui::register_gui_descs(*descs);
 		// Levels reference models that are imported into prefabs while they load.
 		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
 		// Serve the repository's res:// and edt:// files from RAM so the test never touches the working directory.
@@ -84,6 +86,7 @@ struct repo_fixture : test_util::scene_env
 
 	~repo_fixture()
 	{
+		engine::gui::unregister_gui_descs(*descs);
 		engine::render::unregister_render_descs(*descs);
 	}
 
