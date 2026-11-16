@@ -56,7 +56,6 @@ namespace prj
 		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.1).
 		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
 		std::string input_actions;
-		prefab_spawn_limits prefab_limits;
 	};
 
 	struct manifest_error
@@ -73,6 +72,9 @@ namespace prj
 		std::optional<manifest_error> error;
 		// Non-fatal findings, such as unknown fields kept for forward compatibility.
 		std::vector<std::string> warnings;
+		// "prefab_limits" of the manifest. Not in struct manifest: a module reads project_context, whose fields after
+		// the manifest would move (#1031).
+		prefab_spawn_limits prefab_limits;
 	};
 
 	// Strict JSON (no comments, no trailing commas).

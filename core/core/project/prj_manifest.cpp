@@ -300,7 +300,8 @@ namespace
 		return result;
 	}
 
-	prj::manifest parse_object(const json::object& root, std::vector<std::string>& warnings)
+	prj::manifest parse_object(const json::object& root, std::vector<std::string>& warnings,
+		prj::prefab_spawn_limits& prefab_limits)
 	{
 		warn_unknown_fields(root,
 			// migrated_with and applied_steps belong to project migration (tools/project_migration), not to struct manifest.
@@ -354,7 +355,7 @@ namespace
 		}
 
 		if (const auto* limits = root.if_contains("prefab_limits")) {
-			result.prefab_limits = parse_prefab_limits(*limits, warnings);
+			prefab_limits = parse_prefab_limits(*limits, warnings);
 		}
 
 		if (const auto* roots = root.if_contains("content_roots")) {
@@ -456,7 +457,7 @@ prj::manifest_result prj::parse_manifest(std::string_view text)
 	}
 
 	try {
-		result.data = parse_object(root.get_object(), result.warnings);
+		result.data = parse_object(root.get_object(), result.warnings, result.prefab_limits);
 	} catch (const manifest_failure& failure) {
 		result.error = manifest_error{ failure.json_path, failure.reason };
 	}

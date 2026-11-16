@@ -28,7 +28,7 @@ scn::spawn_limits scn::project_spawn_limits(const ds::app_data_storage &store) {
   if (!store.has_value<prj::project_context>()) {
     return {};
   }
-  const prj::prefab_spawn_limits &limits = store.require<prj::project_context>().data.prefab_limits;
+  const prj::prefab_spawn_limits &limits = store.require<prj::project_context>().prefab_limits;
   return {limits.nesting_depth, limits.nodes_per_spawn};
 }
 

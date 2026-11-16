@@ -36,6 +36,7 @@ prj::open_result prj::open_project(const fs::path& path)
 	}
 	context.manifest_file = context.root / manifest_file.filename();
 	context.data = std::move(*loaded.data);
+	context.prefab_limits = loaded.prefab_limits;
 	context.engine_match = compare_engine_versions(context.data.engine, current_engine_version());
 
 	for (const auto& rel : context.data.content_roots) {

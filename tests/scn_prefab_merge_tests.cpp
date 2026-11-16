@@ -2430,8 +2430,8 @@ BOOST_AUTO_TEST_CASE(TheSpawnLimitsAreTheOpenProjects_TheDefaultsWithoutOne)
 	BOOST_TEST(scn::project_spawn_limits(none).nodes_per_spawn == scn::spawn_limits{}.nodes_per_spawn);
 
 	prj::project_context project;
-	project.data.prefab_limits.nesting_depth = 20;
-	project.data.prefab_limits.nodes_per_spawn = 5'000;
+	project.prefab_limits.nesting_depth = 20;
+	project.prefab_limits.nodes_per_spawn = 5'000;
 	ds::app_data_storage store;
 	store.construct<prj::project_context>(std::move(project));
 	const scn::spawn_limits limits = scn::project_spawn_limits(store);
