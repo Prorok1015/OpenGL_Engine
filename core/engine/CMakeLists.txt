@@ -8,8 +8,9 @@ if(SNK_ENGINE_SHARED)
 	# add_compile_definitions) need it for the SNK_API import side.
 	target_compile_definitions(snk_engine INTERFACE SNK_ENGINE_SHARED)
 	if(MSVC)
-		# imgui is exported by snk_engine. In-tree targets under core/ never link snk_engine, so
-		# this cannot clash with their PRIVATE dllexport (see snk_apply_target_defaults).
+		# imgui is exported by snk_engine. In-tree targets under core/ never link snk_engine (but the model import
+		# library, which is not built as part of it), so this cannot clash with their PRIVATE dllexport (see
+		# snk_apply_target_defaults).
 		target_compile_definitions(snk_engine INTERFACE "IMGUI_API=__declspec(dllimport)")
 		# STL members in exported classes: consumers share the engine's /MD CRT (see snk_target_defaults).
 		target_compile_options(snk_engine INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/wd4251> $<$<COMPILE_LANGUAGE:CXX>:/wd4275>)
@@ -60,8 +61,8 @@ add_subdirectory("image")
 
 # Shared variant: snk_engine carries ALL engine and core component code. Archives are linked
 # whole so nothing is dropped just because the library itself references no symbol from it (the
-# editor and the tests do). imgui and assimp are included because the editor calls them directly
-# and must not link a second copy of their globals.
+# editor and the tests do). imgui is included because the editor calls it directly and must not link a second copy
+# of its globals. assimp is not in the engine: snk_model_import_assimp owns it (#1108).
 # $<LINK_LIBRARY:WHOLE_ARCHIVE,x> cannot be used: the components also reach each other (and
 # snk_engine) through their PRIVATE links as plain items, and CMake rejects an item that is both
 # whole-archive and default. The linker options below act on the archive files directly; the
@@ -71,13 +72,9 @@ if(SNK_ENGINE_SHARED)
 		snk::core snk::common snk::engine_logger snk::config_system snk::application snk::window
 		snk::resource_system snk::desc_system snk::command snk::project snk::platform snk::ecs snk::drv_opengl snk::drv_null snk::drv_validation snk::input_system snk::render
 		snk::game snk::scene snk::gui snk::gui_gl_backend snk::image imgui)
-	if(SNK_WITH_ASSIMP)
-		list(APPEND _snk_whole_archive assimp)
-	endif()
 	if(MSVC)
-		# assimp.lib carries a .res (assimp.rc): whole-archiving it reports LNK1241 as the plain
-		# link-line occurrence adds the same resource again. Its symbols are pulled on demand.
-		list(REMOVE_ITEM _snk_whole_archive assimp)
+		# An archive that carries a .res (assimp.rc did, LNK1241) must not be whole-archived: the plain link-line
+		# occurrence adds the same resource again. None of these does.
 		foreach(_lib IN LISTS _snk_whole_archive)
 			target_link_options(snk_engine PRIVATE "LINKER:/WHOLEARCHIVE:$<TARGET_FILE:${_lib}>")
 		endforeach()
@@ -88,7 +85,6 @@ if(SNK_ENGINE_SHARED)
 		endforeach()
 		target_link_options(snk_engine PRIVATE "LINKER:--whole-archive" ${_snk_wa_files} "LINKER:--no-whole-archive")
 	endif()
-	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874). Without assimp on MSVC on
-	# purpose: the DLL exports only SNK_API, so its consumers link their own copy of assimp (editor_system, model_import).
+	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874).
 	set_property(GLOBAL PROPERTY SNK_ENGINE_CARRIED ${_snk_whole_archive})
 endif()

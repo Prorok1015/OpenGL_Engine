@@ -3,11 +3,12 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_async_import_task.h"
+#include "edt_import_problems.h"
 #include "edt_model_importer.h"
 #include <snk/common/hash/sha256.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -413,7 +414,7 @@ struct golden_fixture : test_util::scene_env
 {
 	golden_fixture()
 	{
-		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
+		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
 
 	// Engine importer: the model and its side files in memory://models/<model>/, loaded as a prefab.
@@ -469,6 +470,33 @@ BOOST_AUTO_TEST_CASE(TheEditorImporter_WritesTheSnapshotOfEachModel)
 			check_snapshot(model.name + ".editor.json", env.editor_snapshot(model));
 		}
 	}
+}
+
+// #1108: a texture the model names that is not there is reported by the import (and, for a person, in Problems) and
+// gets neither a desc nor a sampler; the editor's import once wrote both for a file it never read.
+BOOST_AUTO_TEST_CASE(TheEditorImporter_ReportsAMissingTexture_AndGivesItNoSampler)
+{
+	golden_fixture env;
+	test_util::temp_dir dir{ "scn_import_missing_texture" };
+	dir.write("lost.mtl", "newmtl skin\nKd 1 1 1\nmap_Kd missing.png\n");
+	dir.write("lost.obj", "mtllib lost.mtl\nv -1 -1 0\nv 1 -1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0.5 1\nvn 0 0 1\no Tri\nusemtl skin\nf 1/1/1 2/2/1 3/3/1\n");
+	edt::model_importer importer(*env.descs, *env.rs);
+	edt::import_source source;
+	source.path = dir.path() / "lost.obj";
+	const edt::import_intermediate result = importer.import_background(source);
+	BOOST_TEST_REQUIRE(result.error.empty(), result.error);
+	BOOST_TEST((result.missing_textures == std::vector<std::string>{ "missing.png" }));
+
+	const auto material = env.ram->files.find(res::tag{ "memory://lost/materials/skin.mat.desc" });
+	BOOST_REQUIRE(material != env.ram->files.end());
+	const json::object desc = json::parse(std::string_view(reinterpret_cast<const char*>(material->second.data()), material->second.size())).as_object();
+	BOOST_TEST(!desc.contains("samplers"));
+	BOOST_TEST(!env.rs->exists(res::tag{ "memory://lost/textures/missing.png.txm.desc" }));
+
+	const std::vector<edt::problem> problems = edt::import_problems(result, "lost.obj");
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST((problems.front().severity == edt::problem_severity::warning));
+	BOOST_TEST(problems.front().message.find("missing.png") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(TheComparison_AcceptsFloatNoise_AndRefusesAChange)

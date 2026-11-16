@@ -5,7 +5,9 @@
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#if SNK_HAS_ASSIMP
+#include <snk/model_import/mdl_model_adapter.h>
+#endif
 #include <boost/json/parse.hpp>
 #include <cstddef>
 #include <memory>
@@ -95,8 +97,9 @@ BOOST_AUTO_TEST_CASE(TheCheck_FollowsTheRegisteredModelAdapter_AndLetsImportMode
 	// No model adapter (a build without the importer): nothing would parse it, nothing is refused.
 	BOOST_TEST(!check(command_named("component.add"), names_a_model));
 
-	resources.registrate_adapter<no_model_adapter>(scn::model_importer_adapter::INFO);
-	BOOST_TEST(resources.registered_extensions(scn::model_importer_adapter::INFO).size() == scn::model_importer_adapter::INFO.extensions.size());
+#if SNK_HAS_ASSIMP
+	resources.registrate_adapter<no_model_adapter>(mdl::model_adapter::INFO);
+	BOOST_TEST(resources.registered_extensions(mdl::model_adapter::INFO).size() == mdl::model_adapter::INFO.extensions.size());
 	const std::optional<cmd::result> refused = check(command_named("component.add"), names_a_model);
 	BOOST_REQUIRE(refused);
 	BOOST_TEST(refused->code == cmd::codes::denied);
@@ -106,9 +109,10 @@ BOOST_AUTO_TEST_CASE(TheCheck_FollowsTheRegisteredModelAdapter_AndLetsImportMode
 	BOOST_TEST(!check(command_named("file.import_model"), agent_call(R"json({"path":"/home/me/robot.glb"})json")));
 	BOOST_TEST(!check(command_named("component.add"), agent_call(R"json({"fields":{"material":"res://materials/a.desc"}})json")));
 
-	resources.unregistrate_adapter(scn::model_importer_adapter::INFO);
-	BOOST_TEST(resources.registered_extensions(scn::model_importer_adapter::INFO).empty());
+	resources.unregistrate_adapter(mdl::model_adapter::INFO);
+	BOOST_TEST(resources.registered_extensions(mdl::model_adapter::INFO).empty());
 	BOOST_TEST(!check(command_named("component.add"), names_a_model));
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

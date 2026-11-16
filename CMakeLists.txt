@@ -51,7 +51,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# PIC everywhere (third-party included: assimp, glfw, ... end up inside a shared engine library
+# PIC everywhere (third-party included: glfw, ... end up inside a shared engine library, assimp in the model import one
 # when SNK_ENGINE_SHARED is on). Must be set before any target is created.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -188,6 +188,10 @@ add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 target_link_libraries(unit_tests PRIVATE snk::project_migration)
+# The model import library (#1108): the engine's model adapter and the editor's importer run in the tests.
+if(TARGET snk::model_import_assimp)
+	target_link_libraries(unit_tests PRIVATE snk::model_import_assimp)
+endif()
 # The MCP server module is tested on its own (tests/mcp_*.cpp): a fake host over sockets and in process. The socket tests use Asio directly.
 target_link_libraries(unit_tests PRIVATE snk::mcp_server PRIVATE Boost::asio)
 # The tests create the null and validation backends: their public headers (snk/driver_null, snk/driver_validation).
@@ -219,9 +223,6 @@ if(TARGET snk_model_decoder)
 	# without their models.
 	add_custom_command(TARGET unit_tests POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:snk_model_decoder> $<TARGET_FILE_DIR:unit_tests>)
-	# edt_decoded_model_adapter_tests drives the decoder's assimp IO system directly (its headers only, in a shared build).
-	snk_usage_only(_unit_tests_assimp assimp)
-	target_link_libraries(unit_tests PRIVATE ${_unit_tests_assimp})
 	target_compile_definitions(unit_tests PRIVATE SNK_MODEL_DECODER_PATH="$<TARGET_FILE:snk_model_decoder>"
 		SNK_MODEL_DECODER_SELFTEST_PATH="$<TARGET_FILE:snk_model_decoder_selftest>")
 endif()

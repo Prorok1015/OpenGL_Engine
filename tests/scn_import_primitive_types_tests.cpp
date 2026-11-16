@@ -7,7 +7,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_import_vertex_layout.h>
 #include <boost/json.hpp>
@@ -167,7 +167,7 @@ struct primitive_types_fixture : test_util::scene_env
 {
 	primitive_types_fixture()
 	{
-		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
+		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
 
 	// The geometry desc a memory:// tag holds, read as the loader reads it; nothing when no desc was stored.
@@ -313,7 +313,7 @@ int mesh_node_count(const json::value& node)
 
 BOOST_FIXTURE_TEST_SUITE(ScnImportPrimitiveTypesTests, primitive_types_fixture)
 
-// ---- engine importer (scn::model_importer_adapter) ----
+// ---- engine importer (mdl::model_adapter) ----
 
 // Red before the fix under ASan (CI "Linux ASan+UBSan"): the UV loop reads face.mIndices[j + 2] of a 2-index face.
 BOOST_AUTO_TEST_CASE(ALinesOnlyObj_DoesNotOverflow_InTheEngineImporter)

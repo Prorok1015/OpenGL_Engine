@@ -111,11 +111,11 @@ Editor/
     └── CMakeLists.txt
 
 code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code
-    ├── edt_model_importer.cpp/h      # model_importer (assimp -> memory:// descs), scan_files, import_background
+    ├── edt_model_importer.cpp/h      # model_importer (mdl::import_model -> memory:// descs), scan_files, import_background
     ├── edt_decode_{bundle,codec,runner}.cpp/h  # the decoder process (#647): bundle file format, JSON of request/scan/import, decode_runner (scratch folder 0700, kill on deadline/cancel, stale-folder cleanup)
-    ├── edt_filesystem_assimp_io.cpp/h
+    ├── edt_model_file_source.cpp/h   # mdl::file_source of the import: the model from memory, side files through model_file_access
     ├── edt_model_file_access.cpp/h   # what a model may make the import read (#548)
-    └── edt_async_import_task.h       # import_intermediate: background-thread import result
+    └── edt_async_import_task.h       # import_intermediate: background-thread import result (missing_textures: the person's import shows them in Problems, source `import`)
 
 code/file_identity/                   # snk::file_identity (#888): no engine, no importer; editor_system and model_import link it
     └── edt_file_identity.cpp/h       # file id + SHA-256 (#622); file_id_reader takes ids from a folder's listing on Windows
@@ -380,7 +380,7 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 
 ## Model Import Pipeline
 
-Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_adapter` (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
+Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/model_import`, #1108); a game and the tools load them through `mdl::model_adapter`, the editor through the decoder process (`edt::decoded_model_adapter`) (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
 - Outputs `prefab_desc` (not legacy prototype)
 - Geometry stored at `memory://path/name.geom.desc` (separate resource)
 - Mesh nodes → `mesh_node_desc` components referencing geometry by tag

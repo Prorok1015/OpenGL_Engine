@@ -164,7 +164,11 @@ edt::file_menu_component::file_menu_component(ports from)
 	m_ports.level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 }
 
-edt::file_menu_component::~file_menu_component() = default;
+edt::file_menu_component::~file_menu_component()
+{
+	// The level controller is declared before this component and outlives it: it must not call into a notice that is gone.
+	m_ports.level_ctrl.on_file_upgraded = nullptr;
+}
 
 std::optional<std::string> edt::file_menu_component::migration_blocker() const
 {

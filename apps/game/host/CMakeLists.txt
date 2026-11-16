@@ -5,3 +5,7 @@ add_library(snk::game_host ALIAS game_host)
 snk_component_headers(game_host)
 # Installed with the static SDK as snk::game_host: the sanitizer flags stay build-tree only, as for the components.
 target_link_libraries(game_host PUBLIC snk::engine PUBLIC snk::engine_api PRIVATE $<BUILD_LOCAL_INTERFACE:snk::sanitizers>)
+# Levels name .glb/.gltf/.obj/.fbx models: the model import library (#1108), with assimp only.
+if(TARGET snk::model_import_assimp)
+	target_link_libraries(game_host PRIVATE snk::model_import_assimp)
+endif()

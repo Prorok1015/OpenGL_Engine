@@ -76,8 +76,7 @@
 				"offset": 96,
 				"size": 12,
 				"layout": "u32"
-			},
-			"bounds": []
+			}
 		},
 		"geometry": {
 			"topology": "triangles",

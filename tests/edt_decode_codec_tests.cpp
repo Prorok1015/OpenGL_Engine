@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_decode_codec.h"
 #include <boost/json/serialize.hpp>
+#include <string>
+#include <vector>
 
 // What the decoder process and the editor exchange besides the resources (#647): the files the editor hands over (#1043),
 // what a scan asks for and an import's fields. The readers refuse a form another process could write wrongly or on purpose.
@@ -83,6 +85,7 @@ BOOST_AUTO_TEST_CASE(AnImport_RoundTrips_AndTakesNoTagButMemory)
 	imported.source_path = std::filesystem::path("some") / "robot.glb";
 	imported.prefab_json["name"] = "robot";
 	imported.skin_weights = { { 1, 2, 4000000000u }, {} };
+	imported.missing_textures = { "lost.png" };
 
 	const auto back = edt::import_intermediate_from_json(edt::to_json(imported));
 	BOOST_REQUIRE(back.has_value());
@@ -93,6 +96,7 @@ BOOST_AUTO_TEST_CASE(AnImport_RoundTrips_AndTakesNoTagButMemory)
 	BOOST_CHECK_EQUAL(boost::json::serialize(back->prefab_json), boost::json::serialize(imported.prefab_json));
 	BOOST_REQUIRE_EQUAL(back->skin_weights.size(), 2u);
 	BOOST_CHECK_EQUAL(back->skin_weights[0][2], 4000000000u);
+	BOOST_CHECK((back->missing_textures == std::vector<std::string>{ "lost.png" }));
 
 	for (const char* bad : { "res://robot.prefab.desc", "memory://../x", "user://settings" }) {
 		BOOST_TEST_CONTEXT(bad) {
@@ -106,6 +110,37 @@ BOOST_AUTO_TEST_CASE(AnImport_RoundTrips_AndTakesNoTagButMemory)
 	BOOST_CHECK(!edt::import_intermediate_from_json(weights).has_value());
 	weights["skin_weights"] = boost::json::array{ boost::json::array{ 5000000000ull } };
 	BOOST_CHECK(!edt::import_intermediate_from_json(weights).has_value());
+}
+
+// #1108: the importer lists at most 256 missing textures of at most 1024 bytes each and counts the rest; a longer list is
+// not the importer's answer.
+BOOST_AUTO_TEST_CASE(MissingTextures_RoundTripWithTheirCount_AndAListOverTheLimitIsRefused)
+{
+	edt::import_intermediate imported;
+	imported.geom_tag = res::tag("memory://m/m.geom.desc");
+	imported.prefab_tag = res::tag("memory://m/m.prefab.desc");
+	imported.missing_textures = std::vector<std::string>(256, "lost.png");
+	imported.missing_textures_not_listed = 7;
+	const auto back = edt::import_intermediate_from_json(edt::to_json(imported));
+	BOOST_REQUIRE(back.has_value());
+	BOOST_CHECK_EQUAL(back->missing_textures.size(), 256u);
+	BOOST_CHECK_EQUAL(back->missing_textures_not_listed, 7u);
+
+	boost::json::object too_many = edt::to_json(imported);
+	too_many["missing_textures"].as_array().emplace_back("one.png");
+	BOOST_CHECK(!edt::import_intermediate_from_json(too_many).has_value());
+
+	boost::json::object too_long = edt::to_json(imported);
+	too_long["missing_textures"] = boost::json::array{ std::string(1025, 'x') };
+	BOOST_CHECK(!edt::import_intermediate_from_json(too_long).has_value());
+
+	boost::json::object empty_name = edt::to_json(imported);
+	empty_name["missing_textures"] = boost::json::array{ "" };
+	BOOST_CHECK(!edt::import_intermediate_from_json(empty_name).has_value());
+
+	boost::json::object negative = edt::to_json(imported);
+	negative["missing_textures_not_listed"] = -1;
+	BOOST_CHECK(!edt::import_intermediate_from_json(negative).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ADigest_RoundTripsThroughHex_AndRefusesBadText)

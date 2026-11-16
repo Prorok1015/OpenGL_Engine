@@ -13,7 +13,7 @@
 #include <snk/resource/res_vfs_test_hook.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <algorithm>
 #include <atomic>
@@ -521,13 +521,13 @@ BOOST_AUTO_TEST_CASE(GenRobot_ImportAndGeometryLoad_AreTimed)
 	BOOST_REQUIRE(!model.empty());
 
 	// assimp runs: nothing remembered from another case.
-	scn::remember_model_imports(false);
+	mdl::remember_model_imports(false);
 	struct remember_again
 	{
-		~remember_again() { scn::remember_model_imports(true); }
+		~remember_again() { mdl::remember_model_imports(true); }
 	} restore;
 
-	scn::model_importer_adapter importer(storage.require<desc::desc_system>(), root());
+	mdl::model_adapter importer(storage.require<desc::desc_system>(), root());
 	const res::tag geometry_tag{ "memory://objects/robot/gen_robot.geom.desc" };
 	clock::time_point start = clock::now();
 	const auto prefab = importer(res::tag{ "res://objects/robot/gen_robot.glb" }, model);
