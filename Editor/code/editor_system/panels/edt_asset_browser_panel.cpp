@@ -314,9 +314,14 @@ namespace edt
 					ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 				const bool picked = ImGui::Selectable(e.label.c_str(), !e.src.is_dir && e.src.relative == m_selected_rel);
 				if (m_ui_probe) {
-					if (ImGui::IsItemVisible()) {
-						const ImVec2 item_min = ImGui::GetItemRectMin();
-						const ImVec2 item_max = ImGui::GetItemRectMax();
+					// A row the list cuts off is "visible" to ImGui; only its part inside the list counts, so a
+					// driver that aims at the centre does not land below the list.
+					const ImDrawList* list = ImGui::GetWindowDrawList();
+					const ImVec2 item_min{ std::max(ImGui::GetItemRectMin().x, list->GetClipRectMin().x),
+						std::max(ImGui::GetItemRectMin().y, list->GetClipRectMin().y) };
+					const ImVec2 item_max{ std::min(ImGui::GetItemRectMax().x, list->GetClipRectMax().x),
+						std::min(ImGui::GetItemRectMax().y, list->GetClipRectMax().y) };
+					if (ImGui::IsItemVisible() && item_max.x - item_min.x >= 2.f && item_max.y - item_min.y >= 2.f) {
 						m_ui_probe->report("asset_browser", e.src.name, item_min.x, item_min.y, item_max.x, item_max.y);
 					} else {
 						m_ui_probe->report_hidden("asset_browser", e.src.name);
