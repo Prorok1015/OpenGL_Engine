@@ -773,7 +773,7 @@ BOOST_AUTO_TEST_CASE(LinesAndPoints_InArrays_AreAccepted_WholeLinesOnly_AndIndic
 
 	const std::vector<std::byte> no_vertices = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc",)json"
 		R"json("layout":{"position":"vec3"},"topology":"points","indices":[0,1,2],"vertices":[]})json");
-	BOOST_TEST(refused(answer_with_geometry(no_vertices, std::nullopt), "past the"));
+	BOOST_TEST(refused(answer_with_geometry(no_vertices, std::nullopt), "no vertex to index"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

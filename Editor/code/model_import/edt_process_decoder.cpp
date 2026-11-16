@@ -456,7 +456,10 @@ std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& g
 		if (binary_blob != nullptr) return "a binary file came with a geometry that does not refer to one";
 		// Arrays are only lines or points named as such: triangles, a mixed or unknown topology would be stored as the
 		// child wrote them.
-		if ((holds("vertices") || holds("indices")) && !lines_or_points) {
+		if (!holds("vertices") && !holds("indices")) {
+			return {};	// no data (a model without meshes): the loader takes the layout from its parent
+		}
+		if (!lines_or_points) {
 			return "a geometry in arrays that is not lines or points";
 		}
 	} else {
@@ -467,6 +470,10 @@ std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& g
 	rnd::geometry_desc data;
 	const std::span<const std::byte> binary = binary_blob != nullptr ? std::span<const std::byte>(binary_blob->bytes) : std::span<const std::byte>{};
 	if (std::string why = rnd::decode_geometry_files(geom_tag, desc, binary, data); !why.empty()) return why;
+	// The loader lets indices over no vertex load (they draw nothing); the child's answer has no such geometry.
+	if (!data.indices.empty() && (data.vertices.empty() || data.layout.get_stride() == 0)) {
+		return "indices with no vertex to index";
+	}
 	if (topology == rnd::geometry_topology::lines && data.indices.size() % 2 != 0) {
 		return std::format("{} indices are not whole lines", data.indices.size());
 	}

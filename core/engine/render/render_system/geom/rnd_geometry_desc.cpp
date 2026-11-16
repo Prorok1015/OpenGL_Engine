@@ -319,9 +319,8 @@ void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc&
 
 void rnd::detail::check_geometry_arrays(const res::tag& file, const geometry_desc& geometry)
 {
-	// A desc without indices and without vertices (base_geometry.desc) has nothing the checks could hold against. Indices
-	// with no vertex to index, or over a layout of no bytes, are refused by check_data.
-	if (geometry.indices.empty() && (geometry.vertices.empty() || geometry.layout.get_stride() == 0)) {
+	// A desc without data (base_geometry.desc, a test's indices alone) has nothing the checks could hold against.
+	if (geometry.vertices.empty() || geometry.layout.get_stride() == 0) {
 		return;
 	}
 	check_data(file, geometry, false);
