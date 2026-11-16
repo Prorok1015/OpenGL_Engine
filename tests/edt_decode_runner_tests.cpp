@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "test_decoder_sandbox.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_decode_runner.h"
 #include <chrono>
@@ -213,6 +214,144 @@ BOOST_AUTO_TEST_CASE(AChild_DoesNotOutliveTheProcessThatStartedIt)
 	if (!gone) ::kill(static_cast<pid_t>(child_pid), SIGKILL);
 }
 #endif
+
+// #1043: a child that cannot have the sandbox the run requires ends with exit code 4 before it reads the request; the
+// runner says why, from the child's own line.
+BOOST_AUTO_TEST_CASE(AChildThatCannotHaveTheRequiredSandbox_IsRefused_WithItsReason)
+{
+	auto cfg = selftest_config();
+	cfg.sandbox = edt::sandbox_mode::required;
+	cfg.extra_arguments = { "--self-test-pretend-no-landlock" };
+	const edt::decode_runner runner(cfg);
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+	BOOST_CHECK(!outcome.ok());
+	BOOST_CHECK(outcome.sandbox_refused);
+	BOOST_CHECK_MESSAGE(outcome.error.starts_with("the model decoder cannot run in its sandbox: "), outcome.error);
+	BOOST_CHECK_MESSAGE(outcome.error.find("Landlock") != std::string::npos, outcome.error);
+	BOOST_CHECK(scratch_is_empty());
+}
+
+#if defined(__linux__)
+namespace {
+
+struct probe_result
+{
+	int exit_code = -1;
+	std::string out;
+	std::string err;
+};
+
+// The test build of the decoder run by hand in a run folder of its own, with the sandbox flags and a self-test probe.
+probe_result run_probe(const fs::path& scratch, std::vector<std::string> arguments)
+{
+	fs::create_directories(scratch);
+	fs::permissions(scratch, fs::perms::owner_all, fs::perm_options::replace);
+	platform::process_options options;
+	options.working_dir = scratch;
+	probe_result result;
+	options.on_stderr_line = [&result](std::string_view line) { result.err += std::string(line) + "\n"; };
+	const auto run = platform::run_process(SNK_MODEL_DECODER_SELFTEST_PATH, arguments, options,
+		[&result](std::string_view line) { result.out += std::string(line) + "\n"; }, {});
+	result.exit_code = run.exit_code;
+	return result;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotOpenAFileOutsideItsFolder_ConnectOrStartAProgram)
+{
+	if (test_util::skipped_without_landlock()) return;
+	const int abi = test_util::landlock_abi();
+	const fs::path scratch = dir.path() / "scratch";
+	const fs::path outside = dir.write("outside.txt", "a secret");
+	const fs::path inside = dir.write("scratch/inside.txt", "the child's own");
+
+	const auto opened_outside = run_probe(scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
+	BOOST_CHECK_MESSAGE(opened_outside.exit_code == 0, "open outside: " << opened_outside.exit_code << " " << opened_outside.err);
+	// The probe itself works: what lies in its own folder opens.
+	const auto opened_inside = run_probe(scratch, { "--sandbox", "required", "--self-test-open", inside.string() });
+	BOOST_CHECK_MESSAGE(opened_inside.exit_code == 5, "open inside: " << opened_inside.exit_code << " " << opened_inside.err);
+
+	// Without the filter (a sanitizer build) only Landlock refuses TCP, from ABI 4.
+	if (test_util::k_decoder_has_syscall_filter || abi >= 4) {
+		const auto connected = run_probe(scratch, { "--sandbox", "required", "--self-test-connect" });
+		BOOST_CHECK_MESSAGE(connected.exit_code == 0, "connect: " << connected.exit_code << " " << connected.err);
+	}
+	const auto executed = run_probe(scratch, { "--sandbox", "required", "--self-test-exec" });
+	BOOST_CHECK_MESSAGE(executed.exit_code == 0, "exec: " << executed.exit_code << " " << executed.err);
+}
+
+BOOST_AUTO_TEST_CASE(TheSandboxReport_UnderRequired_SaysLandlock_AndSeccompOutsideSanitizerBuilds)
+{
+	if (test_util::skipped_without_landlock()) return;
+	const auto report = run_probe(dir.path() / "scratch", { "--sandbox", "required", "--self-test-sandbox-report" });
+	BOOST_REQUIRE_MESSAGE(report.exit_code == 0, report.exit_code << " " << report.err);
+	const std::string expected = test_util::k_decoder_has_syscall_filter ? "fs=landlock syscalls=seccomp\n" : "fs=landlock syscalls=none\n";
+	BOOST_CHECK_EQUAL(report.out, expected);
+}
+
+BOOST_AUTO_TEST_CASE(WithoutLandlock_RequiredRefusesToRun_AndBestEffortRunsWithoutIt)
+{
+	const fs::path scratch = dir.path() / "scratch";
+	const auto required = run_probe(scratch, { "--sandbox", "required", "--self-test-pretend-no-landlock", "--self-test-sandbox-report" });
+	BOOST_CHECK_EQUAL(required.exit_code, edt::k_decoder_sandbox_exit_code);
+	BOOST_CHECK_MESSAGE(required.err.starts_with(std::string(edt::k_decoder_sandbox_refusal_prefix)), required.err);
+	BOOST_CHECK(required.out.empty());
+
+	const auto best_effort = run_probe(scratch, { "--sandbox", "best_effort", "--self-test-pretend-no-landlock", "--self-test-sandbox-report" });
+	BOOST_CHECK_EQUAL(best_effort.exit_code, 0);
+	BOOST_CHECK_MESSAGE(best_effort.out.starts_with("fs=none "), best_effort.out);
+}
+
+BOOST_AUTO_TEST_CASE(ASandboxThePersonTurnedOff_IsNotSetUp_EvenWhereTheSystemHasOne)
+{
+	const fs::path scratch = dir.path() / "scratch";
+	const auto off = run_probe(scratch, { "--sandbox", "off", "--self-test-sandbox-report" });
+	BOOST_CHECK_EQUAL(off.exit_code, 0);
+	BOOST_CHECK_EQUAL(off.out, "fs=none syscalls=none\n");
+}
+
+// Fable's review of #1078: fcntl could make the kernel signal the editor (F_SETOWN + O_ASYNC, F_SETSIG, F_NOTIFY).
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotSignalTheEditor_NorMakeTheKernelDoItForIt)
+{
+	const fs::path scratch = dir.path() / "scratch";
+	// The probe works: without the sandbox each of these goes through.
+	const auto unsandboxed = run_probe(scratch, { "--sandbox", "off", "--self-test-signal" });
+	BOOST_CHECK_MESSAGE(unsandboxed.exit_code == 5, "off: " << unsandboxed.exit_code << " " << unsandboxed.err);
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build has no system call filter");
+		return;
+	}
+	const auto sandboxed = run_probe(scratch, { "--sandbox", "best_effort", "--self-test-signal" });
+	BOOST_CHECK_MESSAGE(sandboxed.exit_code == 0, "best_effort: " << sandboxed.exit_code << " " << sandboxed.err);
+}
+
+// Landlock covers only the thread that applies it: a decoder with a second thread before its sandbox must not run.
+BOOST_AUTO_TEST_CASE(AChildWithASecondThreadBeforeItsSandbox_RefusesToRun_EvenInBestEffort)
+{
+	if (!test_util::k_decoder_has_syscall_filter) {
+		BOOST_TEST_MESSAGE("skipped: a sanitizer build may have a thread of its runtime and does not count them");
+		return;
+	}
+	const auto threaded = run_probe(dir.path() / "scratch", { "--sandbox", "best_effort", "--self-test-extra-thread" });
+	BOOST_CHECK_EQUAL(threaded.exit_code, edt::k_decoder_sandbox_exit_code);
+	BOOST_CHECK_MESSAGE(threaded.err.find("threads") != std::string::npos, threaded.err);
+}
+#endif
+
+// The editor learns how the child is sandboxed from its first stderr line, written before it read the request.
+BOOST_AUTO_TEST_CASE(TheRunner_TakesTheSandboxStatus_FromTheChildsFirstLine)
+{
+	auto cfg = selftest_config();
+	cfg.sandbox = edt::sandbox_mode::best_effort;
+	cfg.extra_arguments = { "--self-test-pretend-no-landlock" };
+	const edt::decode_runner runner(cfg);
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+	BOOST_REQUIRE_MESSAGE(outcome.ok(), outcome.error);
+	BOOST_CHECK(outcome.sandbox.reported);
+	BOOST_CHECK(!outcome.sandbox.fs);
+	BOOST_CHECK_MESSAGE(!outcome.sandbox.why.empty(), outcome.sandbox.why);
+}
 
 BOOST_AUTO_TEST_CASE(AMissingDecoder_IsAFailure_NotACrash)
 {

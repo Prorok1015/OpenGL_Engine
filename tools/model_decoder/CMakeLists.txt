@@ -12,7 +12,7 @@ endif()
 # config_system is in snk_engine when it is shared: its headers only, or the binary carries a second registry (#874).
 snk_usage_only(_model_decoder_config snk::config_system)
 foreach(_target snk_model_decoder snk_model_decoder_selftest)
-	add_executable(${_target} main.cpp)
+	add_executable(${_target} main.cpp decoder_sandbox.cpp)
 	target_link_libraries(${_target} PRIVATE snk::model_import snk::engine snk::engine_api ${_model_decoder_config} snk::sanitizers)
 	if(SNK_ENGINE_SHARED AND MSVC)
 		target_link_libraries(${_target} PRIVATE Boost::json)

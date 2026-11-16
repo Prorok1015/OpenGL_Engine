@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
+#include "edt_decoder_sandbox.h"
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -21,8 +22,34 @@ namespace edt {
 		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
 		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
 		bundle_limits answer_limits;
+		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
+		// import's.
+		sandbox_mode sandbox = sandbox_mode::best_effort;
 		// Appended to the child's command line; the process tests use snk_model_decoder's --self-test-* flags.
 		std::vector<std::string> extra_arguments;
+	};
+
+	// What the child said of its OS sandbox (#1043) in its first stderr line, written before it read anything of the request:
+	// after the parse the child may be the model's, so nothing it says later counts.
+	struct decoder_sandbox_status
+	{
+		bool reported = false;
+		bool fs = false;		// Landlock restricts the files it can reach
+		bool syscalls = false;	// the seccomp allowlist is installed
+		std::string why;		// what is missing, escaped, at most 256 bytes
+	};
+
+	// Reads the child's stderr lines in their order: only the first may be the status.
+	class sandbox_status_reader
+	{
+	public:
+		// true: the line was the status line (it is not the model's text and needs no log line).
+		bool line(std::string_view text);
+		const decoder_sandbox_status& status() const { return m_status; }
+
+	private:
+		bool m_first = true;
+		decoder_sandbox_status m_status;
 	};
 
 	struct decode_outcome
@@ -33,6 +60,9 @@ namespace edt {
 		std::string error;
 		bool timed_out = false;
 		bool cancelled = false;
+		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
+		bool sandbox_refused = false;
+		decoder_sandbox_status sandbox;
 
 		bool ok() const { return bundle.has_value(); }
 	};

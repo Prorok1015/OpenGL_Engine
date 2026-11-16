@@ -402,6 +402,22 @@ BOOST_AUTO_TEST_CASE(AnAbsoluteSideFile_IsReadOnlyInsideTheModelFolder)
 	BOOST_CHECK(climbing.refusal == edt::refusal_kind::rule);
 }
 
+// #1043: a relative name whose ".." leaves the folder is refused by its spelling, before anything asks the disk about it.
+BOOST_AUTO_TEST_CASE(ARelativeNameThatClimbsOutOfTheFolder_IsRefusedByItsSpelling_AndOneThatStaysInsideResolves)
+{
+	dir.write("models/deep/m.obj", "o m");
+	dir.write("models/deep/x.mtl", "newmtl x");
+	dir.write("x.mtl", "newmtl y");
+	edt::model_file_access access(dir.path() / "models" / "deep" / "m.obj", {});
+	const auto climbing = access.resolve("../../x.mtl", edt::model_file_kind::side_file);
+	BOOST_CHECK(!climbing.found());
+	BOOST_CHECK(climbing.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(climbing.error.find("outside the folder of the model") != std::string::npos, climbing.error);
+	const auto staying = access.resolve("sub/../x.mtl", edt::model_file_kind::side_file);
+	BOOST_CHECK_MESSAGE(staying.found(), staying.error);
+	BOOST_CHECK(access.resolve("..\\..\\x.mtl", edt::model_file_kind::side_file).refusal == edt::refusal_kind::rule);
+}
+
 BOOST_AUTO_TEST_CASE(ARefusal_SaysWhetherTheRuleALimitOrTheFileRefusedIt)
 {
 	BOOST_CHECK(make().resolve("../outside.png", edt::model_file_kind::texture).refusal == edt::refusal_kind::rule);
