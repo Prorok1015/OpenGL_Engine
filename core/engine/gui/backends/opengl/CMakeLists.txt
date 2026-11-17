@@ -1,20 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
 project(gui_gl_backend)
-add_library(gui_gl_backend)
-file(GLOB_RECURSE SE_DEBUG_UI_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-target_sources(${PROJECT_NAME} PRIVATE ${SE_DEBUG_UI_SOURCES})
+add_library(gui_gl_backend STATIC)
+add_library(snk::gui_gl_backend ALIAS gui_gl_backend)
+file(GLOB_RECURSE SE_GUI_GL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+target_sources(${PROJECT_NAME} PRIVATE ${SE_GUI_GL_SOURCES})
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# Public header: include/snk/gui_gl/gui_gl_backend.h (the concrete backend gui_init constructs).
+snk_component_headers(${PROJECT_NAME} SDK_INTERNAL)
 
-target_sources(${PROJECT_NAME} PRIVATE 
-"${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_glfw.cpp"
+# Core ImGui sources are built by the reusable `imgui` target. Only the renderer backend impl
+# (which depends on glad) is compiled here; the platform half is gui::platform_backend.
+target_sources(${PROJECT_NAME} PRIVATE
 "${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui.cpp" 
-"${THIRD_PARTY_PATH}/imgui/imgui_draw.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui_widgets.cpp" 
-"${THIRD_PARTY_PATH}/imgui/imgui_tables.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui_demo.cpp"
-"${THIRD_PARTY_PATH}/imgui/misc/cpp/imgui_stdlib.cpp"
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE gui_backend_interface PRIVATE glfw PRIVATE drv_interface PRIVATE drv_opengl)
+# Third-party source inside a project target (which carries -Werror / /WX): its warnings stay visible
+# but are not errors (#258).
+set_source_files_properties("${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp" PROPERTIES
+	COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/WX-,-Wno-error>")
+
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::gui_backend_interface PRIVATE imgui PRIVATE snk::drv_interface)
+# No drv_opengl link: imgui_impl_opengl3 uses its embedded loader (no IMGUI_IMPL_OPENGL_LOADER_* define is set anywhere).

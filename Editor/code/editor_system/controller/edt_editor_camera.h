@@ -1,7 +1,8 @@
 #pragma once
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
+#include <entt/entity/fwd.hpp>
 
 namespace edt {
 
@@ -10,8 +11,11 @@ namespace edt {
 
 	// Persistent state (survives hot-reload)
 	struct editor_camera_state {
-		glm::vec3 position      { 0.f, 2.f, 5.f };
-		glm::vec3 rotation      { 0.f, 45.f, 0.f };           // pitch/yaw/roll radians
+		// The default pose is the identity matrix (position + rotation * (0, 0, distance)): the camera
+		// renders from the origin until it moves, and the pose rebuilt after a world reload is the same.
+		// The orbit pivot sits `distance` in front of it so zoom and orbit work from the first input.
+		glm::vec3 position      { 0.f, 0.f, -1.f };
+		glm::vec3 rotation      { 0.f, 0.f, 0.f };            // pitch/yaw/roll radians
 		float     distance      = 1.f;
 		float     movement_speed  = 3.f;
 		float     rotating_speed  = glm::radians(90.f);
@@ -22,5 +26,14 @@ namespace edt {
 		// Render target tag for editor camera
 		static constexpr std::string_view RT_TAG = "memory://__editor_camera_rt";
 	};
+
+	// Copies the pose of the editor camera entity of `reg` into `state` (no-op when there is none).
+	void save_camera_state(entt::registry& reg, editor_camera_state& state);
+	// Replaces the editor camera entity of `reg` with one built from `state`. The mouse controller starts switched off:
+	// only the panel that is the one under the mouse switches it on (set_editor_camera_input), so a game camera or
+	// another panel never shares its input (#545).
+	void inject_camera(entt::registry& reg, const editor_camera_state& state);
+	// Lets the editor camera of `reg` read the mouse (true) or not.
+	void set_editor_camera_input(entt::registry& reg, bool enabled);
 
 } // namespace edt

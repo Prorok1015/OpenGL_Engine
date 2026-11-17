@@ -11,6 +11,7 @@ namespace edt
 
 	void console_panel::add_log(log_level level, std::string message)
 	{
+		std::lock_guard lock(m_mutex);
 		if (m_logs.size() >= max_log_entries)
 			m_logs.erase(m_logs.begin(), m_logs.begin() + (max_log_entries / 4));
 		m_logs.push_back({level, std::move(message)});
@@ -18,17 +19,20 @@ namespace edt
 
 	void console_panel::clear()
 	{
+		std::lock_guard lock(m_mutex);
 		m_logs.clear();
 	}
 
 	std::size_t console_panel::get_error_count() const
 	{
+		std::lock_guard lock(m_mutex);
 		return std::count_if(m_logs.begin(), m_logs.end(),
 			[](const log_entry& e) { return e.level == log_level::error; });
 	}
 
 	std::size_t console_panel::get_warning_count() const
 	{
+		std::lock_guard lock(m_mutex);
 		return std::count_if(m_logs.begin(), m_logs.end(),
 			[](const log_entry& e) { return e.level == log_level::warning; });
 	}
@@ -42,8 +46,13 @@ namespace edt
 		ImGui::Checkbox("Error", &m_show_errors);
 		ImGui::Separator();
 
+		std::vector<log_entry> logs_copy;
+		{
+			std::lock_guard lock(m_mutex);
+			logs_copy = m_logs;
+		}
 		ImGui::BeginChild("log_scroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-		for (const auto& entry : m_logs) {
+		for (const auto& entry : logs_copy) {
 			if (entry.level == log_level::info    && !m_show_info)     continue;
 			if (entry.level == log_level::warning && !m_show_warnings) continue;
 			if (entry.level == log_level::error   && !m_show_errors)   continue;

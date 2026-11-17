@@ -1,0 +1,202 @@
+#include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include <snk/desc/desc_template_files.h>
+#include <snk/model_import/mdl_model_adapter.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/gui/gui_gui_service_init.h>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string_view>
+#include <utility>
+
+// Every .desc the repository ships (core/res + the test project's res layers, Editor/data as edt://) must load, be a fixed point of the engine's own save, and
+// carry the current __version on every typed object. When a format changes, run tools/desc_resave on
+// core/res, projects/sandbox/res and Editor/data: this test fails on files that are still in an older format.
+
+namespace json = boost::json;
+namespace fs = std::filesystem;
+
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
+#endif
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
+#endif
+#ifndef SNK_CORE_RES_DIR
+#error "SNK_CORE_RES_DIR must point at core/res"
+#endif
+
+namespace {
+
+struct repo_file {
+	res::tag tag;
+	std::vector<std::byte> bytes;
+	bool is_desc = false;
+};
+
+// Read once: the images next to the descs (skybox faces) are loaded by descs that reference them.
+const std::vector<repo_file>& repo_files()
+{
+	static const std::vector<repo_file> files = [] {
+		std::vector<repo_file> out;
+		// Base layer first; a file of the editor layer replaces the base file at the same path. Editor/data is its own protocol.
+		const std::pair<fs::path, std::string_view> roots[] = {
+			{ fs::path{ SNK_CORE_RES_DIR }, res::tag::default_protocol() },
+			{ (fs::path{ SNK_TEST_PROJECT_DIR } / "res"), res::tag::default_protocol() },
+			{ fs::path{ SNK_EDITOR_DATA_DIR }, "edt" },
+		};
+		for (const auto& [root, protocol] : roots) {
+			for (const auto& entry : fs::recursive_directory_iterator(root)) {
+				if (!entry.is_regular_file()) continue;
+				std::ifstream in(entry.path(), std::ios::binary);
+				std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+				repo_file file;
+				file.tag = res::tag{ protocol, fs::relative(entry.path(), root).generic_string() };
+				file.bytes.resize(text.size());
+				std::memcpy(file.bytes.data(), text.data(), text.size());
+				file.is_desc = entry.path().extension() == ".desc";
+				std::erase_if(out, [&](const repo_file& f) { return f.tag == file.tag; });
+				out.push_back(std::move(file));
+			}
+		}
+		std::ranges::sort(out, {}, [](const repo_file& f) -> const std::string& { return f.tag.string(); });
+		return out;
+	}();
+	return files;
+}
+
+struct repo_fixture : test_util::scene_env
+{
+	repo_fixture()
+		: adapter(*rs, *descs)
+	{
+		engine::render::register_render_descs(*descs);
+		engine::gui::register_gui_descs(*descs);
+		// Levels reference models that are imported into prefabs while they load.
+		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
+		// Serve the repository's res:// and edt:// files from RAM so the test never touches the working directory.
+		rs->unregistrate_resolver(res::tag::default_protocol());
+		auto& ram_res = rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+		auto& ram_edt = rs->registrate_resolver<test_util::ram_resolver>("edt");
+		for (const auto& file : repo_files()) {
+			(file.tag.protocol() == "edt" ? ram_edt : ram_res).files[file.tag] = file.bytes;
+		}
+	}
+
+	~repo_fixture()
+	{
+		engine::gui::unregister_gui_descs(*descs);
+		engine::render::unregister_render_descs(*descs);
+	}
+
+	template<class Fn>
+	void for_each_desc(Fn&& fn)
+	{
+		std::size_t count = 0;
+		for (const auto& file : repo_files()) {
+			if (!file.is_desc) continue;
+			const std::string_view text{ reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size() };
+			if (desc::is_template_file_of_unknown_type(file.tag.string(), text, *descs)) continue;
+			++count;
+			BOOST_TEST_CONTEXT(file.tag.string()) {
+				fn(file.tag, file);
+			}
+		}
+		BOOST_TEST(count > 0u);
+	}
+
+	std::shared_ptr<desc::desc_base> load_desc(const res::tag& tag)
+	{
+		return require_loaded<desc::desc_base>(tag).get_sync();
+	}
+
+	// The adapter's read of saved bytes, with the "__parent" it names loaded first, as the resource system does.
+	std::shared_ptr<res::resource_entry> read_back(const res::tag& tag, const std::vector<std::byte>& bytes)
+	{
+		res::res_deps deps;
+		for (res::res_dep& dep : adapter.collect_dependencies(tag, bytes)) {
+			auto parent = load_desc(dep.target);
+			BOOST_REQUIRE(parent);
+			deps.add(std::move(dep), parent);
+		}
+		return adapter.deserialize(tag, bytes, deps);
+	}
+
+	static json::value parse(const std::vector<std::byte>& bytes)
+	{
+		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+	}
+
+	// Every object with a string __type, anywhere in the tree.
+	void check_versions(const json::value& value)
+	{
+		if (value.is_object()) {
+			const auto& obj = value.as_object();
+			if (auto type = obj.if_contains("__type"); type && type->is_string()) {
+				const int expected = descs->current_version(std::string{ type->as_string() });
+				auto version = obj.if_contains("__version");
+				BOOST_TEST_REQUIRE((version && version->is_int64()), "'" << type->as_string() << "' has no __version");
+				BOOST_TEST(version->as_int64() == expected, "'" << type->as_string() << "'");
+			}
+			for (const auto& member : obj) check_versions(member.value());
+		}
+		else if (value.is_array()) {
+			for (const auto& element : value.as_array()) check_versions(element);
+		}
+	}
+
+	core::desc::desc_adapter_t adapter;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(DescRepoRoundtripTests, repo_fixture)
+
+BOOST_AUTO_TEST_CASE(EveryRepositoryDescLoads)
+{
+	for_each_desc([this](const res::tag& tag, const repo_file&) {
+		BOOST_CHECK(load_desc(tag) != nullptr);
+	});
+}
+
+BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
+{
+	for_each_desc([this](const res::tag& tag, const repo_file& file) {
+		auto loaded = load_desc(tag);
+		BOOST_REQUIRE(loaded);
+		const auto saved = parse(adapter.serialize(tag, loaded));
+		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res, projects/sandbox/res and Editor/data");
+	});
+}
+
+BOOST_AUTO_TEST_CASE(SaveIsIdempotent)
+{
+	for_each_desc([this](const res::tag& tag, const repo_file&) {
+		auto loaded = load_desc(tag);
+		BOOST_REQUIRE(loaded);
+		const auto first = adapter.serialize(tag, loaded);
+		auto reloaded = read_back(tag, first);
+		BOOST_REQUIRE(reloaded);
+		BOOST_CHECK(parse(adapter.serialize(tag, reloaded)) == parse(first));
+	});
+}
+
+BOOST_AUTO_TEST_CASE(EveryTypedObjectHasItsCurrentVersion)
+{
+	for_each_desc([this](const res::tag&, const repo_file& file) {
+		check_versions(parse(file.bytes));
+	});
+}
+
+BOOST_AUTO_TEST_CASE(SavedFilesAreIndentedAndEndWithANewline)
+{
+	for_each_desc([](const res::tag&, const repo_file& file) {
+		BOOST_CHECK(file.bytes.size() > 2u);
+		const std::string text(reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size());
+		BOOST_CHECK(text.find('\n') != std::string::npos);
+		BOOST_CHECK(text.back() == '\n');
+	});
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,2172 @@
+#include <boost/test/unit_test.hpp>
+#include "test_manual_tasks.hpp"
+#include "edt_agent_access.h"
+#include "edt_agent_confirmations.h"
+#include "edt_agent_log_filter.h"
+#include "edt_agent_policy.h"
+#include "test_agent_confirmations.hpp"
+#include "test_temp_dir.hpp"
+#include "edt_file_menu.h"
+#include "edt_mcp_bridge_host.h"
+#include "mcp_test_support.hpp"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_job_service.h>
+#include <snk/common/fs_paths.h>
+#include <snk/common/text_escape.h>
+#include <snk/mcp/mcp_endpoint.h>
+#include <snk/command/cmd_registry.h>
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+// edt::mcp_bridge_host: the editor's side of the MCP server. Which commands an agent sees (decided by the agent policy,
+// fail closed), the questions and the waiting behind a call, the end of an MCP session, and that every call hops to the main thread. The task system is manual here, so the test is the frame loop and the
+// worker thread that stands for the server's I/O thread is an ordinary std::thread.
+
+namespace {
+
+namespace json = boost::json;
+
+json::value json_of(std::string_view text)
+{
+	return json::parse(text);
+}
+
+std::string text_of(const json::value& value)
+{
+	const json::string& text = value.as_string();
+	return std::string(text.data(), text.size());
+}
+
+constexpr const char* capture_result_schema = R"({
+	"type": "object",
+	"properties": {
+		"viewport": { "type": "string" },
+		"width": { "type": "integer" },
+		"height": { "type": "integer" },
+		"format": { "type": "string" },
+		"png_base64": { "type": "string" }
+	},
+	"required": ["viewport", "width", "height", "format", "png_base64"],
+	"additionalProperties": false
+})";
+
+constexpr const char* capture_args_schema = R"({"type":"object","properties":{"viewport":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"max_side":{"type":"integer"},"max_pixels":{"type":"integer"},"max_source_pixels":{"type":"integer"}},"additionalProperties":false})";
+
+struct bridge_fixture
+{
+	test_util::temp_dir dir{ "edt_mcp_bridge" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	cmd::command_registry commands;
+	std::chrono::steady_clock::time_point current{};
+	// Where the answers of the tests' calls land: it must outlive `access`, whose destructor answers the calls still waiting.
+	std::optional<mcp::call_result> answered;
+	edt::agent_access access{ commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json", [this] { return current; } };
+	edt::editor_events events;
+	std::vector<std::string> closed_sessions;
+	edt::connection session_listener;
+	edt::mcp_bridge_host bridge{ commands, tasks, access, [this](const std::string& session) { events.agent_session_closed.emit(session); } };
+	std::vector<cmd::registration> registrations;
+
+	bridge_fixture()
+	{
+		access.set_questions_routed(true);
+		// Wired the way editor_system wires it: one signal, the confirmations listen to it.
+		session_listener = events.agent_session_closed.subscribe([this](const std::string& session) {
+			closed_sessions.push_back(session);
+			access.confirmations().drop_session(session);
+		});
+	}
+
+	~bridge_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+		session_listener.disconnect();
+	}
+
+	std::size_t drain()
+	{
+		return tasks.drain_main(std::chrono::hours(1));
+	}
+
+	void write_project_policy(std::string_view text)
+	{
+		const std::filesystem::path file = dir.path() / ".snk" / "agent_policy.json";
+		std::filesystem::create_directories(file.parent_path());
+		std::ofstream out(file, std::ios::binary | std::ios::trunc);
+		out << text;
+		out.close();
+		// The file watcher compares the time and the size: make a rewrite visible even within one clock tick.
+		std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::seconds(++rewrites));
+		access.policy().refresh();
+		// These tests are about what the file says; a file that is not usable stays unapproved (and denies).
+		access.policy().set_approval_allowed(true);
+		access.policy().approve_project_layer(access.policy().project());
+	}
+
+	int rewrites = 0;
+
+	cmd::command_desc make(std::string id)
+	{
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.category = cmd::agent_category::read;
+		desc.summary = "A command";
+		desc.invoke = [](const cmd::call&) { return cmd::result::success(); };
+		return desc;
+	}
+
+	void add(cmd::command_desc desc)
+	{
+		cmd::registration registration = commands.add(std::move(desc));
+		BOOST_REQUIRE(registration.active());
+		registrations.push_back(std::move(registration));
+	}
+
+	std::vector<mcp::tool_info> list_tools()
+	{
+		std::optional<std::vector<mcp::tool_info>> tools;
+		bridge.list_tools([&tools](std::vector<mcp::tool_info> listed) { tools = std::move(listed); });
+		BOOST_REQUIRE_MESSAGE(!tools.has_value(), "list_tools answered before the main-thread drain");
+		drain();
+		BOOST_REQUIRE(tools.has_value());
+		return std::move(*tools);
+	}
+
+	mcp::call_result call_tool(const std::string& name, const std::string& args = "{}", const std::string& session = "session-1")
+	{
+		std::optional<mcp::call_result> result;
+		mcp::request_context context;
+		context.session_id = session;
+		bridge.call_tool(context, name, json_of(args), nullptr, [&result](mcp::call_result r) { result = std::move(r); });
+		drain();
+		BOOST_REQUIRE(result.has_value());
+		return std::move(*result);
+	}
+
+	mcp::resource_result read_resource(const std::string& uri)
+	{
+		std::optional<mcp::resource_result> result;
+		bridge.read_resource({}, uri, [&result](mcp::resource_result r) { result = std::move(r); });
+		drain();
+		BOOST_REQUIRE(result.has_value());
+		return std::move(*result);
+	}
+};
+
+std::vector<std::string> names_of(const std::vector<mcp::tool_info>& tools)
+{
+	std::vector<std::string> names;
+	for (const mcp::tool_info& tool : tools) {
+		names.push_back(tool.name);
+	}
+	return names;
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtAgentPolicyTests, bridge_fixture)
+
+BOOST_AUTO_TEST_CASE(ReadCommands_AreListedByDefault)
+{
+	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture", "scene.query", "problems.list", "vcs.status" }) {
+		cmd::command_desc desc = make(id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(edt::agent_may_use(desc, access.policy()));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheOwnersDefaultTable_DecidesWhatElseIsListed)
+{
+	using cmd::agent_category;
+	const std::pair<agent_category, bool> table[] = {
+		{ agent_category::read, true }, { agent_category::scene_edit, true }, { agent_category::code_edit, true },
+		{ agent_category::code_files, true }, { agent_category::cmake_presets, true }, { agent_category::build, false },
+		{ agent_category::live, false }, { agent_category::play, true },
+	};
+	for (const auto& [category, listed] : table) {
+		cmd::command_desc desc = make("x.y");
+		desc.category = category;
+		desc.mutates = category != agent_category::read;
+		BOOST_TEST_CONTEXT(cmd::to_string(category)) {
+			BOOST_TEST(edt::agent_may_use(desc, access.policy()) == listed);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ACommandWithoutACategoryOrForNobody_IsHiddenWhateverThePolicySays)
+{
+	write_project_policy(R"({"version":1,"categories":{"read":"allow","scene_edit":"allow","build":"allow"},"commands":{"a.unset":"allow","a.nobody":"allow"}})");
+	cmd::command_desc unset = make("a.unset");
+	unset.category = cmd::agent_category::unset;
+	cmd::command_desc nobody = make("a.nobody");
+	nobody.category = cmd::agent_category::not_for_agents;
+	BOOST_TEST(!edt::agent_may_use(unset, access.policy()));
+	BOOST_TEST(!edt::agent_may_use(nobody, access.policy()));
+}
+
+BOOST_AUTO_TEST_CASE(GitCommands_AreListedByTheirOwnCategory)
+{
+	cmd::command_desc push = make("vcs.push");
+	push.category = cmd::agent_category::vcs_push;
+	push.mutates = true;
+	cmd::command_desc status = make("vcs.status");
+	status.category = cmd::agent_category::vcs_read;
+	BOOST_TEST(edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(edt::agent_may_use(status, access.policy()));
+
+	write_project_policy(R"({"version":1,"categories":{"vcs_push":"deny"}})");
+	BOOST_TEST(!edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(edt::agent_may_use(status, access.policy()));
+
+	write_project_policy(R"({"version":1,"categories":{"vcs_push":"allow","vcs_read":"deny"}})");
+	BOOST_TEST(edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(!edt::agent_may_use(status, access.policy()));
+}
+
+BOOST_AUTO_TEST_CASE(ACommandNotOfferedAsATool_IsHidden)
+{
+	cmd::command_desc desc = make("log.read");
+	desc.expose_as_tool = false;
+	BOOST_TEST(!edt::agent_may_use(desc, access.policy()));
+}
+
+BOOST_AUTO_TEST_CASE(BuildCommands_AreHiddenByDefault_AndListedOnlyWhenThePersonAllowedThem)
+{
+	cmd::command_desc build = make("build.cleanup");
+	build.category = cmd::agent_category::build;
+	build.mutates = true;
+	BOOST_TEST(!edt::agent_may_use(build, access.policy()));
+
+	write_project_policy(R"({"version":1,"categories":{"build":"allow"}})");
+	BOOST_TEST(edt::agent_may_use(build, access.policy()));
+
+	// A command that runs the project's CMake code stays at deny until its very own entry says otherwise.
+	cmd::command_desc risky = make("build.game_module");
+	risky.category = cmd::agent_category::build;
+	risky.mutates = true;
+	risky.risk = cmd::danger::deny_by_default;
+	BOOST_TEST(!edt::agent_may_use(risky, access.policy()));
+	write_project_policy(R"({"version":1,"categories":{"build":"allow"},"commands":{"build.game_module":"ask"}})");
+	BOOST_TEST(edt::agent_may_use(risky, access.policy()));
+}
+
+BOOST_AUTO_TEST_CASE(ABrokenPolicyFile_HidesEverythingEvenReads)
+{
+	write_project_policy("{ this is not json");
+	BOOST_TEST(!edt::agent_may_use(make("log.read"), access.policy()));
+	cmd::command_desc scene = make("scene.node.rename");
+	scene.category = cmd::agent_category::scene_edit;
+	BOOST_TEST(!edt::agent_may_use(scene, access.policy()));
+}
+
+BOOST_AUTO_TEST_CASE(TheLiveSwitch_IsTheConsentForTheLiveTools)
+{
+	bool live_on = false;
+	access.policy().set_live_mode([&live_on] { return live_on; });
+	cmd::command_desc status = make("live.status");
+	status.category = cmd::agent_category::live;
+	int runs = 0;
+	status.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success(json::object{});
+	};
+	add(std::move(status));
+
+	BOOST_TEST(list_tools().empty());
+	const mcp::call_result refused = call_tool("live_status");
+	BOOST_TEST(refused.is_error);
+	BOOST_TEST(runs == 0);
+
+	live_on = true;
+	BOOST_TEST((names_of(list_tools()) == std::vector<std::string>{ "live_status" }));
+	BOOST_TEST(!call_tool("live_status").is_error);
+	BOOST_TEST(runs == 1);
+
+	live_on = false;
+	BOOST_TEST(list_tools().empty());
+	BOOST_TEST(call_tool("live_status").is_error);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AMutatingCommandCannotBeRegisteredAsRead)
+{
+	cmd::command_desc desc = make("log.read");
+	desc.mutates = true;
+	cmd::registration registration = commands.add(std::move(desc));
+	BOOST_TEST(!registration.active());
+	BOOST_TEST(!commands.contains("log.read"));
+}
+
+BOOST_AUTO_TEST_CASE(AResourceIsHiddenForACommandThePolicyOnlyAsksAbout)
+{
+	add(make("log.read"));
+	std::optional<std::vector<mcp::resource_info>> listed;
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(listed->size() == 1u);
+
+	write_project_policy(R"({"version":1,"commands":{"log.read":"ask"}})");
+	listed.reset();
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(listed->empty());
+	BOOST_TEST(!read_resource("snk://log").found);
+	// The tool stays: calling it asks.
+	BOOST_TEST((names_of(list_tools()) == std::vector<std::string>{ "log_read" }));
+}
+
+BOOST_AUTO_TEST_CASE(ThePolicyChangingBetweenTheListAndTheCall_IsDecidedAtCallTime)
+{
+	int runs = 0;
+	cmd::command_desc desc = make("log.read");
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+	BOOST_TEST((names_of(list_tools()) == std::vector<std::string>{ "log_read" }));
+
+	write_project_policy(R"({"version":1,"commands":{"log.read":"deny"}})");
+	const mcp::call_result refused = call_tool("log_read");
+
+	BOOST_TEST(refused.is_error);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AChangedPolicyFile_TellsTheClientsToAskForTheToolsAgain)
+{
+	int changes = 0;
+	access.policy().set_on_changed([&changes] { ++changes; });
+	access.policy().refresh();
+	BOOST_TEST(changes == 0);
+	write_project_policy(R"({"version":1,"categories":{"read":"deny"}})");
+	BOOST_TEST(changes >= 1);
+	const int after_first = changes;
+	access.policy().refresh();
+	BOOST_TEST(changes == after_first);
+}
+
+BOOST_AUTO_TEST_CASE(ToolName_IsTheIdWithUnderscoresAndTheVersion)
+{
+	cmd::command_desc desc;
+	desc.id = "viewport.capture";
+	BOOST_TEST(edt::agent_tool_name(desc) == "viewport_capture");
+	desc.version = 2;
+	BOOST_TEST(edt::agent_tool_name(desc) == "viewport_capture_v2");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeToolsTests, bridge_fixture)
+
+BOOST_AUTO_TEST_CASE(ListTools_ExposesWhatThePolicyAllows)
+{
+	cmd::command_desc read = make("log.read");
+	read.args_schema = json_of(R"({"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false})");
+	read.result_schema = json_of(R"({"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]})");
+	add(std::move(read));
+	// No category: nobody classified it.
+	cmd::command_desc unclassified = make("job.cancel");
+	unclassified.mutates = true;
+	unclassified.category = cmd::agent_category::unset;
+	add(std::move(unclassified));
+	cmd::command_desc for_people = make("file.save");
+	for_people.category = cmd::agent_category::not_for_agents;
+	add(std::move(for_people));
+	// A category the owner's table denies.
+	cmd::command_desc build = make("app.advance");
+	build.category = cmd::agent_category::build;
+	add(std::move(build));
+	cmd::command_desc hidden = make("dialog.list");
+	hidden.expose_as_tool = false;
+	add(std::move(hidden));
+	add(make("job.list"));
+
+	const std::vector<mcp::tool_info> tools = list_tools();
+	BOOST_TEST((names_of(tools) == std::vector<std::string>{ "log_read", "job_list" }));
+	BOOST_TEST(tools[0].description == "A command");
+	BOOST_TEST(tools[0].read_only);
+	BOOST_TEST(!tools[0].destructive);
+	BOOST_TEST(!tools[0].idempotent);
+	BOOST_TEST(!tools[0].open_world);
+	BOOST_TEST(json::serialize(tools[0].input_schema) == R"({"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false})");
+	BOOST_TEST(tools[0].output_schema.is_object());
+}
+
+BOOST_AUTO_TEST_CASE(ListTools_AnnotationsSayWhatAToolDoes)
+{
+	cmd::command_desc edit = make("scene.node.rename");
+	edit.category = cmd::agent_category::scene_edit;
+	edit.mutates = true;
+	add(std::move(edit));
+	cmd::command_desc risky = make("code.delete");
+	risky.category = cmd::agent_category::code_files;
+	risky.mutates = true;
+	risky.risk = cmd::danger::confirm;
+	add(std::move(risky));
+	// Marked destructive by itself (it removes a file), though nothing about its risk says so.
+	cmd::command_desc removes = make("code.rename");
+	removes.category = cmd::agent_category::code_files;
+	removes.mutates = true;
+	removes.destructive = true;
+	add(std::move(removes));
+	// A read command is never destructive, whatever the flag says.
+	cmd::command_desc odd = make("log.read");
+	odd.destructive = true;
+	add(std::move(odd));
+
+	const std::vector<mcp::tool_info> tools = list_tools();
+	BOOST_REQUIRE_EQUAL(tools.size(), 4u);
+	for (const mcp::tool_info& tool : tools) {
+		BOOST_TEST_CONTEXT(tool.name) {
+			BOOST_TEST(tool.read_only == (tool.name == "log_read"));
+			BOOST_TEST(!tool.open_world);
+			BOOST_TEST(tool.destructive == (tool.name == "code_delete" || tool.name == "code_rename"));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ListTools_FollowsTheRegistry)
+{
+	BOOST_TEST(list_tools().empty());
+	add(make("log.read"));
+	BOOST_TEST(list_tools().size() == 1u);
+	registrations.clear();
+	BOOST_TEST(list_tools().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ListTools_ACaptureToolDeclaresNoOutputSchema)
+{
+	cmd::command_desc capture = make("viewport.capture");
+	capture.result_schema = json_of(capture_result_schema);
+	add(std::move(capture));
+	const std::vector<mcp::tool_info> tools = list_tools();
+	BOOST_REQUIRE_EQUAL(tools.size(), 1u);
+	BOOST_TEST(tools[0].output_schema.is_null());
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_RunsOnTheMainThreadInTheDrainAsTheAgent)
+{
+	std::thread::id ran_on;
+	cmd::origin seen;
+	int runs = 0;
+	cmd::command_desc desc = make("log.read");
+	desc.args_schema = json_of(R"({"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false})");
+	desc.result_schema = json_of(R"({"type":"object","properties":{"limit":{"type":"integer"}},"required":["limit"]})");
+	desc.invoke = [&](const cmd::call& request) {
+		++runs;
+		ran_on = std::this_thread::get_id();
+		seen = request.from;
+		return cmd::result::success(json::object{ { "limit", request.args.as_object().at("limit") } });
+	};
+	add(std::move(desc));
+
+	// From another thread, the way the server's I/O thread calls it.
+	std::optional<mcp::call_result> result;
+	std::thread::id caller;
+	std::thread worker([&] {
+		caller = std::this_thread::get_id();
+		mcp::request_context context;
+		context.session_id = "abc";
+		bridge.call_tool(context, "log_read", json_of(R"({"limit":3})"), nullptr, [&result](mcp::call_result r) { result = std::move(r); });
+	});
+	worker.join();
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(!result.has_value());
+	BOOST_TEST(tasks.pending_main(ds::main_class::general) == 1u);
+
+	BOOST_TEST(drain() == 1u);
+	BOOST_REQUIRE(result.has_value());
+	BOOST_TEST(runs == 1);
+	BOOST_TEST((ran_on == std::this_thread::get_id()));
+	BOOST_TEST((ran_on != caller));
+	BOOST_TEST((seen == cmd::origin::agent("abc")));
+	BOOST_TEST(!result->is_error);
+	BOOST_TEST(json::serialize(result->structured) == R"({"limit":3})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AToolThatIsNotListedDoesNotExist)
+{
+	int runs = 0;
+	const std::pair<const char*, cmd::agent_category> hidden_commands[] = {
+		{ "job.cancel", cmd::agent_category::unset }, { "file.save", cmd::agent_category::not_for_agents },
+		{ "app.advance", cmd::agent_category::build },
+	};
+	for (const auto& [id, category] : hidden_commands) {
+		cmd::command_desc desc = make(id);
+		desc.category = category;
+		desc.mutates = std::string(id) == "job.cancel";
+		desc.invoke = [&runs](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		add(std::move(desc));
+	}
+	for (const char* name : { "job_cancel", "file_save", "app_advance", "job.cancel", "nothing" }) {
+		const mcp::call_result result = call_tool(name);
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(result.is_error);
+			BOOST_REQUIRE_EQUAL(result.content.size(), 1u);
+			BOOST_TEST(result.content[0].text.find("unknown tool") != std::string::npos);
+		}
+	}
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AFailureIsAnErrorResultWithTheCode)
+{
+	cmd::command_desc desc = make("log.read");
+	desc.args_schema = json_of(R"({"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false})");
+	add(std::move(desc));
+	cmd::command_desc failing = make("job.get");
+	failing.invoke = [](const cmd::call&) { return cmd::result::failure(cmd::codes::not_found, "no job 7"); };
+	add(std::move(failing));
+	cmd::command_desc throwing = make("job.list");
+	throwing.invoke = [](const cmd::call&) -> cmd::result { throw std::runtime_error("boom"); };
+	add(std::move(throwing));
+
+	const mcp::call_result invalid = call_tool("log_read", R"({"limit":"many"})");
+	BOOST_TEST(invalid.is_error);
+	BOOST_REQUIRE_EQUAL(invalid.content.size(), 1u);
+	BOOST_TEST(invalid.content[0].text.rfind("invalid_args", 0) == 0u);
+
+	const mcp::call_result missing = call_tool("job_get");
+	BOOST_TEST(missing.is_error);
+	BOOST_TEST(missing.content.at(0).text == "not_found: no job 7");
+
+	const mcp::call_result thrown = call_tool("job_list");
+	BOOST_TEST(thrown.is_error);
+	// What the exception says stays in the log: the agent gets a plain refusal.
+	BOOST_TEST(thrown.content.at(0).text == "failed: the command failed");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACapturedPngBecomesAnImageBlock)
+{
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [](const cmd::call&) {
+		return cmd::result::success(json_of(R"({"viewport":"scene","width":2,"height":1,"format":"png","png_base64":"QUJD"})"));
+	};
+	add(std::move(capture));
+
+	const mcp::call_result result = call_tool("viewport_capture");
+	BOOST_TEST(!result.is_error);
+	BOOST_REQUIRE_EQUAL(result.content.size(), 2u);
+	BOOST_TEST((result.content[0].type == mcp::content_block::kind::image));
+	BOOST_TEST(result.content[0].data == "QUJD");
+	BOOST_TEST(result.content[0].mime_type == "image/png");
+	BOOST_TEST((result.content[1].type == mcp::content_block::kind::text));
+	BOOST_REQUIRE(result.structured.is_object());
+	BOOST_TEST(!result.structured.as_object().contains("png_base64"));
+	BOOST_TEST(result.structured.at("width").as_int64() == 2);
+	BOOST_TEST(text_of(result.structured.at("viewport")) == "scene");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	for (const char* args : { R"({"width":4096})", R"({"height":2049})", R"({"width":8192,"height":8192})", R"({"viewport":"scene","width":2049})" }) {
+		const mcp::call_result refused = call_tool("viewport_capture", args);
+		BOOST_TEST_CONTEXT(args) {
+			BOOST_TEST(refused.is_error);
+			BOOST_REQUIRE_EQUAL(refused.content.size(), 1u);
+			BOOST_TEST(refused.content[0].text.find("limited to 2048") != std::string::npos);
+		}
+	}
+	BOOST_TEST(seen.empty());
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":2048,"height":2048})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"height":600})").is_error);
+	// No size named: the view is fitted to a default longest side, not returned at the native size of a possibly huge view.
+	BOOST_TEST(!call_tool("viewport_capture", "{}").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// The ceilings travel with the request: the command derives the side the agent did not name and checks it against them.
+	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[1] == R"({"height":600,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[2] == R"({"max_side":1280,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentCannotSwitchFitOnOrOffItself)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	// The schema has no `fit`: the command decides it from the arguments, so an argument of that name is refused.
+	BOOST_TEST(call_tool("viewport_capture", R"({"fit":true})").is_error);
+	BOOST_TEST(call_tool("viewport_capture", R"({"max_side":100,"fit":false})").is_error);
+	BOOST_TEST(seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACaptureWithOnlyMaxSideIsFittedNotRefused)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"viewport":"game","max_side":1000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"max_side":5000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":300,"max_side":100})").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// No width or height is added, so the command fits the view into max_side.
+	BOOST_TEST(seen[0] == R"({"viewport":"game","max_side":1000,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// Over the ceiling of an agent: lowered, never raised.
+	BOOST_TEST(seen[1] == R"({"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	// A named size is left alone, the command refuses it when the derived side is over max_side.
+	BOOST_TEST(seen[2] == R"({"width":300,"max_side":100,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":100,"max_side":512,"max_pixels":1000})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":100,"max_side":8192,"max_pixels":33554432,"max_source_pixels":33554432})").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 2u);
+	BOOST_TEST(seen[0] == R"({"width":100,"max_side":512,"max_pixels":1000,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[1] == R"({"width":100,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+}
+
+// The real File menu actions behind the bridge: what an agent can do with a level (#547).
+BOOST_AUTO_TEST_CASE(CallTool_AnAgentSavesTheLevelAndOpensAnotherOne)
+{
+	edt::dialog_service dialogs;
+	edt::action_registry actions{ commands };
+	bool dirty = true;
+	std::vector<std::string> calls;
+	edt::file_menu_hooks hooks;
+	hooks.has_scene = [] { return true; };
+	hooks.is_dirty = [&dirty] { return dirty; };
+	hooks.level_path = [] { return std::string("levels/current.desc"); };
+	hooks.new_level = [] {};
+	hooks.quick_save = [&] { calls.push_back("quick_save"); dirty = false; return true; };
+	hooks.save_level_as = [&](const std::string& path) { calls.push_back("save_as:" + path); dirty = false; return true; };
+	hooks.discard_changes = [&dirty] { dirty = false; };
+	hooks.load_level_tag = [&](const std::string& path) -> std::optional<std::string> { calls.push_back("load_tag:" + path); return std::nullopt; };
+	hooks.exit = [] {};
+	hooks.resources_path = "/proj/res";
+	hooks.inspect_level = [](const std::string& path) {
+		return path == "levels/current.desc" || path == "levels/next.desc" ? edt::level_file_state::file : edt::level_file_state::missing;
+	};
+	edt::file_menu menu(dialogs, actions, hooks);
+	menu.register_actions();
+
+	const std::vector<std::string> tools = names_of(list_tools());
+	const auto listed = [&tools](const char* name) { return std::find(tools.begin(), tools.end(), name) != tools.end(); };
+	for (const char* name : { "file_save", "file_save_as", "file_open" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(listed(name)); }
+	}
+	for (const char* name : { "file_new", "file_exit", "file_open_project" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!listed(name)); }
+	}
+
+	// Unsaved changes are not dropped by an open: an error, whether or not the agent asks to discard them.
+	BOOST_TEST(call_tool("file_open", R"({"path":"levels/next.desc"})").is_error);
+	BOOST_TEST(call_tool("file_open", R"({"path":"levels/next.desc","discard_unsaved":true})").is_error);
+	BOOST_TEST(dirty);
+	BOOST_TEST(calls.empty());
+
+	BOOST_TEST(!call_tool("file_save").is_error);
+	BOOST_TEST(!call_tool("file_open", R"({"path":"res://levels/next.desc"})").is_error);
+	BOOST_TEST(!call_tool("file_save_as", R"({"path":"levels/copy.desc"})").is_error);
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save", "load_tag:levels/next.desc", "save_as:levels/copy.desc" }));
+
+	// A path out of the project, or over another existing file, is refused.
+	for (const char* path : { "../escape.desc", "/etc/x.desc", "C:/x.desc", "memory://x.desc", "levels/next.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			BOOST_TEST(call_tool("file_save_as", json::serialize(json::object{ { "path", path } })).is_error);
+		}
+	}
+	BOOST_TEST(calls.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACompareGetsTheSourceCeilingOfACapture)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc compare = make("capture.compare");
+	compare.args_schema = json_of(R"json({"type":"object","properties":{"reference":{"type":"string"},"max_source_pixels":{"type":"integer"}},"required":["reference"],"additionalProperties":false})json");
+	compare.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(compare));
+
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png"})json").is_error);
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png","max_source_pixels":33554432})json").is_error);
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png","max_source_pixels":1000})json").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// Only the source ceiling: a comparison is at full size, so nothing is scaled down.
+	BOOST_TEST(seen[0] == R"json({"reference":"res://r.png","max_source_pixels":8388608})json");
+	BOOST_TEST(seen[1] == R"json({"reference":"res://r.png","max_source_pixels":8388608})json");
+	BOOST_TEST(seen[2] == R"json({"reference":"res://r.png","max_source_pixels":1000})json");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)
+{
+	cmd::command_desc big = make("log.read");
+	big.result_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
+	big.invoke = [](const cmd::call&) {
+		return cmd::result::success(json::object{ { "text", std::string(17u * 1024u * 1024u, 'x') } });
+	};
+	add(std::move(big));
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [](const cmd::call&) {
+		return cmd::result::success(json::object{ { "viewport", "scene" }, { "width", 1 }, { "height", 1 }, { "format", "png" },
+			{ "png_base64", std::string(17u * 1024u * 1024u, 'A') } });
+	};
+	add(std::move(capture));
+
+	const mcp::call_result text = call_tool("log_read");
+	BOOST_TEST(text.is_error);
+	BOOST_REQUIRE_EQUAL(text.content.size(), 1u);
+	BOOST_TEST(text.content[0].text.find("too large") != std::string::npos);
+	BOOST_TEST(text.structured.is_null());
+
+	const mcp::call_result image = call_tool("viewport_capture", R"({"width":10})");
+	BOOST_TEST(image.is_error);
+	BOOST_REQUIRE_EQUAL(image.content.size(), 1u);
+	BOOST_TEST((image.content[0].type == mcp::content_block::kind::text));
+	BOOST_TEST(image.content[0].text.find("too large") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(HostGoneBeforeTheDrain_AnswersWithAnError)
+{
+	add(make("log.read"));
+	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, tasks, access);
+	std::optional<mcp::call_result> result;
+	std::optional<std::vector<mcp::tool_info>> tools;
+	doomed->call_tool({}, "log_read", json_of("{}"), nullptr, [&result](mcp::call_result r) { result = std::move(r); });
+	doomed->list_tools([&tools](std::vector<mcp::tool_info> listed) { tools = std::move(listed); });
+	doomed.reset();
+
+	drain();
+	BOOST_REQUIRE(result.has_value());
+	BOOST_TEST(result->is_error);
+	BOOST_REQUIRE(tools.has_value());
+	BOOST_TEST(tools->empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeResourcesTests, bridge_fixture)
+
+BOOST_AUTO_TEST_CASE(ListResources_OnlyThoseWhoseCommandExists)
+{
+	std::optional<std::vector<mcp::resource_info>> listed;
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(listed->empty());
+
+	add(make("log.read"));
+	cmd::command_desc capture = make("viewport.capture");
+	capture.result_schema = json_of(capture_result_schema);
+	add(std::move(capture));
+	listed.reset();
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	std::vector<std::string> uris;
+	for (const mcp::resource_info& r : *listed) {
+		uris.push_back(r.uri);
+	}
+	BOOST_TEST((uris == std::vector<std::string>{ "snk://log", "snk://viewport/scene.png", "snk://viewport/game.png" }));
+}
+
+BOOST_AUTO_TEST_CASE(ReadResource_RunsTheCommandAndReturnsTextOrABlob)
+{
+	std::vector<std::string> viewports;
+	cmd::command_desc log = make("log.read");
+	log.result_schema = json_of(R"({"type":"object","properties":{"entries":{"type":"array"}},"required":["entries"]})");
+	log.invoke = [](const cmd::call&) { return cmd::result::success(json_of(R"({"entries":[]})")); };
+	add(std::move(log));
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [&viewports](const cmd::call& request) {
+		viewports.push_back(text_of(request.args.as_object().at("viewport")));
+		return cmd::result::success(json_of(R"({"viewport":"game","width":1,"height":1,"format":"png","png_base64":"QUJD"})"));
+	};
+	add(std::move(capture));
+
+	const mcp::resource_result text = read_resource("snk://log");
+	BOOST_REQUIRE(text.found);
+	BOOST_REQUIRE_EQUAL(text.contents.size(), 1u);
+	BOOST_TEST(text.contents[0].uri == "snk://log");
+	BOOST_TEST(text.contents[0].mime_type == "application/json");
+	BOOST_TEST(!text.contents[0].is_blob);
+	BOOST_TEST(text.contents[0].text == R"({"entries":[]})");
+
+	const mcp::resource_result image = read_resource("snk://viewport/game.png");
+	BOOST_REQUIRE(image.found);
+	BOOST_REQUIRE_EQUAL(image.contents.size(), 1u);
+	BOOST_TEST(image.contents[0].is_blob);
+	BOOST_TEST(image.contents[0].blob == "QUJD");
+	BOOST_TEST(image.contents[0].mime_type == "image/png");
+	BOOST_TEST((viewports == std::vector<std::string>{ "game" }));
+}
+
+BOOST_AUTO_TEST_CASE(ReadResource_UnknownOrUnavailableOrFailing)
+{
+	BOOST_TEST(!read_resource("snk://nope").found);
+	// Known resource, command not registered.
+	BOOST_TEST(!read_resource("snk://log").found);
+
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [](const cmd::call&) { return cmd::result::failure(cmd::codes::not_found, "unknown viewport 'game'"); };
+	add(std::move(capture));
+	const mcp::resource_result failed = read_resource("snk://viewport/game.png");
+	BOOST_TEST(!failed.found);
+	BOOST_TEST(failed.error == "not_found: unknown viewport 'game'");
+}
+
+BOOST_AUTO_TEST_CASE(Headless_AToolThatNeedsADisplay_IsListedMarked_AndEveryCallIsUnavailable)
+{
+	int runs = 0;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.needs_display = true;
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+	// Hidden by the policy (build is denied by default): it stays hidden, needs_display or not.
+	cmd::command_desc hidden = make("build.game_module");
+	hidden.category = cmd::agent_category::build;
+	hidden.needs_display = true;
+	add(std::move(hidden));
+	add(make("log.read"));
+
+	for (const mcp::tool_info& tool : list_tools()) {
+		BOOST_TEST_CONTEXT(tool.name) { BOOST_TEST(!tool.unavailable_headless); }
+	}
+
+	commands.set_headless(true);
+	const std::vector<mcp::tool_info> tools = list_tools();
+	BOOST_TEST((names_of(tools) == std::vector<std::string>{ "viewport_capture", "log_read" }));
+	for (const mcp::tool_info& tool : tools) {
+		BOOST_TEST_CONTEXT(tool.name) { BOOST_TEST(tool.unavailable_headless == (tool.name == "viewport_capture")); }
+	}
+
+	const mcp::call_result result = call_tool("viewport_capture");
+	BOOST_TEST(result.is_error);
+	BOOST_REQUIRE_EQUAL(result.content.size(), 1u);
+	BOOST_TEST(result.content[0].text.starts_with("unavailable_headless: "));
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Headless_AViewportResource_IsUnavailableHeadless)
+{
+	int runs = 0;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.needs_display = true;
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success(json_of(R"({"viewport":"scene","width":1,"height":1,"format":"png","png_base64":"QUJD"})"));
+	};
+	add(std::move(capture));
+	BOOST_TEST(read_resource("snk://viewport/scene.png").found);
+
+	commands.set_headless(true);
+	for (const char* uri : { "snk://viewport/scene.png", "snk://viewport/game.png" }) {
+		const mcp::resource_result result = read_resource(uri);
+		BOOST_TEST_CONTEXT(uri) {
+			BOOST_TEST(!result.found);
+			BOOST_TEST(result.error.starts_with("unavailable_headless: "));
+		}
+	}
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ReadResource_AMutatingCommandIsNeverRead)
+{
+	int runs = 0;
+	cmd::command_desc log = make("log.read");
+	log.mutates = true;
+	log.category = cmd::agent_category::scene_edit;
+	log.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(log));
+	BOOST_TEST(!read_resource("snk://log").found);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// A command of the code_files category: the owner's table says `ask`.
+struct question_fixture : bridge_fixture
+{
+	int attempts = 0;
+	int runs = 0;
+
+	question_fixture()
+	{
+		access.set_person_present(true);
+	}
+
+	// A waiting call answers into this class's members and the test's locals: answered while they are alive, before
+	// any of them is destroyed.
+	~question_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+	}
+
+	void add_code_command(std::function<cmd::result()> body = {})
+	{
+		cmd::command_desc desc = make("code.create");
+		desc.category = cmd::agent_category::code_files;
+		desc.mutates = true;
+		desc.args_schema = json_of(R"({"type":"object"})");
+		desc.invoke = [this, body = std::move(body)](const cmd::call&) {
+			++attempts;
+			if (body) {
+				cmd::result outcome = body();
+				if (outcome.ok) ++runs;
+				return outcome;
+			}
+			++runs;
+			return cmd::result::success();
+		};
+		add(std::move(desc));
+	}
+
+	void start_call(const std::string& name, const std::string& session = "session-1")
+	{
+		answered.reset();
+		mcp::request_context context;
+		context.session_id = session;
+		bridge.call_tool(context, name, json_of(R"({"path":"a.cpp"})"), nullptr, [this](mcp::call_result r) { answered = std::move(r); });
+		drain();
+	}
+
+	std::uint64_t the_question()
+	{
+		const auto waiting = access.confirmations().pending();
+		BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+		return waiting.front().id;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeQuestionTests, question_fixture)
+
+BOOST_AUTO_TEST_CASE(AnAskedCall_WaitsForAPerson_ThenRunsOnce)
+{
+	add_code_command();
+	start_call("code_create");
+
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(runs == 0);
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST(waiting[0].command == "code.create");
+	BOOST_TEST(waiting[0].session == "session-1");
+
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ADeclinedCall_NeverRuns)
+{
+	add_code_command();
+	start_call("code_create");
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::deny));
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+// The model import of an agent through the policy gate: the person is asked about exactly the file, and a no reads nothing.
+namespace {
+
+struct import_question_fixture : question_fixture
+{
+	import_question_fixture()
+	{
+		dir.write("models/robot.glb", "glb");
+		edt::agent_import_options options;
+		options.import = [this](const edt::import_source&, ds::task_context*) {
+			++imports;
+			return edt::import_intermediate{};
+		};
+		options.scan = [](const edt::import_source&, ds::task_context*) { return edt::model_file_scan{}; };
+		options.resource_layers = [] { return std::vector<std::filesystem::path>{}; };
+		options.resources_path = [this] { return dir.path() / "res"; };
+		service = std::make_unique<edt::agent_model_import>(exporter, jobs, resources, std::move(options));
+		hooks.agent_import = service.get();
+		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
+		menu->register_actions();
+	}
+
+	~import_question_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+		menu.reset();
+		service.reset();
+	}
+
+	void ask_for_import(const std::string& extra = {})
+	{
+		answered.reset();
+		mcp::request_context context;
+		context.session_id = "session-1";
+		const std::string path = json::serialize(json::string((dir.path() / "models" / "robot.glb").string()));
+		bridge.call_tool(context, "file_import_model", json_of("{\"path\":" + path + extra + "}"), nullptr,
+			[this](mcp::call_result r) { answered = std::move(r); });
+		drain();
+	}
+
+	res::resource_system resources{ tasks };
+	edt::job_service jobs{ tasks };
+	edt::asset_exporter exporter{ resources };
+	edt::dialog_service dialogs;
+	edt::action_registry actions{ commands };
+	edt::file_menu_hooks hooks;
+	std::unique_ptr<edt::agent_model_import> service;
+	std::unique_ptr<edt::file_menu> menu;
+	int imports = 0;
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AModelImportAsksAboutExactlyThatFile_AndANoReadsNothing, import_question_fixture)
+{
+	ask_for_import();
+	BOOST_TEST(!answered.has_value());
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST(waiting[0].command == "file.import_model");
+	// The path as the question shows it (#991): '/' separators, escaped.
+	const std::string shown = text_escape::escaped_text(fs_paths::generic_utf8_of(dir.path() / "models" / "robot.glb"), 1024);
+	BOOST_TEST(waiting[0].detail.find(shown) != std::string::npos);
+	BOOST_TEST(waiting[0].detail.find("3 bytes") != std::string::npos);
+	BOOST_TEST(waiting[0].detail.find("assets/robot") != std::string::npos);
+	BOOST_TEST(!waiting[0].can_grant_session);
+
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::deny));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(imports == 0);
+	BOOST_TEST(jobs.running_count() == 0u);
+	BOOST_TEST(!service->running());
+}
+
+BOOST_FIXTURE_TEST_CASE(AModelImportThePersonAllows_StartsOneJobForThatFile, import_question_fixture)
+{
+	ask_for_import();
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_REQUIRE(answered->structured.is_object());
+	BOOST_TEST(answered->structured.as_object().at("job").as_int64() > 0);
+	BOOST_TEST(service->running());
+	while (tasks.run_one(ds::lane::compute)) {}
+	drain();
+	BOOST_TEST(imports == 1);
+}
+
+BOOST_AUTO_TEST_CASE(NobodyToAsk_AnAskIsADenyAtOnce)
+{
+	add_code_command();
+	access.set_person_present(false);
+	start_call("code_create");
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(access.confirmations().pending().empty());
+}
+
+BOOST_AUTO_TEST_CASE(NoAnswerInTime_IsADeny)
+{
+	add_code_command();
+	start_call("code_create");
+	current += edt::agent_confirmations::timeout + std::chrono::seconds(1);
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(InvalidArguments_AreRefusedWithoutAQuestion)
+{
+	cmd::command_desc desc = make("code.create");
+	desc.category = cmd::agent_category::code_files;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object","properties":{"path":{"type":"string"}},"additionalProperties":false})");
+	add(std::move(desc));
+
+	mcp::request_context context;
+	context.session_id = "session-1";
+	bridge.call_tool(context, "code_create", json_of(R"({"path":7})"), nullptr, [this](mcp::call_result r) { answered = std::move(r); });
+	drain();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("invalid_args", 0) == 0u);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheEndOfTheSession_DeclinesItsWaitingCallAndTellsTheEditorOnce)
+{
+	add_code_command();
+	start_call("code_create", "gone");
+	BOOST_REQUIRE(!answered.has_value());
+
+	bridge.session_closed("gone");
+	BOOST_TEST(closed_sessions.empty());
+	drain();
+
+	BOOST_TEST((closed_sessions == std::vector<std::string>{ "gone" }));
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(access.confirmations().pending().empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheEndOfTheSession_LeavesAnotherSessionsQuestionAlone)
+{
+	add_code_command();
+	start_call("code_create", "kept");
+	std::optional<mcp::call_result> kept = std::move(answered);
+	BOOST_REQUIRE(!kept.has_value());
+
+	bridge.session_closed("other");
+	drain();
+
+	BOOST_TEST(access.confirmations().pending().size() == 1u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(ABusyCommandAfterAnApproval_IsTriedAgainWithoutAskingTheSecondTime)
+{
+	// The person has just clicked "Allow": for a frame an ImGui item is active and the command says `busy`.
+	add_code_command([this] {
+		return attempts == 1 ? cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit") : cmd::result::success();
+	});
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(attempts == 1);
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(access.confirmations().pending().empty());
+
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(attempts == 2);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ABusyCommandAfterAnApproval_GivesUpAfterFiveSeconds)
+{
+	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+
+	current += std::chrono::seconds(2);
+	access.confirmations().tick();
+	BOOST_TEST(!answered.has_value());
+
+	current += edt::agent_confirmations::busy_wait;
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("busy", 0) == 0u);
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ABusyCommandThatNeedsNoQuestion_IsTriedAgainEveryFrame)
+{
+	cmd::command_desc desc = make("scene.node.rename");
+	desc.category = cmd::agent_category::scene_edit;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object"})");
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		if (attempts < 3) return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+	start_call("scene_node_rename");
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(attempts == 1);
+
+	access.confirmations().tick();
+	BOOST_TEST(!answered.has_value());
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(attempts == 3);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AWaitingBusyCall_EndsWithItsSession)
+{
+	cmd::command_desc desc = make("scene.node.rename");
+	desc.category = cmd::agent_category::scene_edit;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object"})");
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+	};
+	add(std::move(desc));
+	start_call("scene_node_rename", "gone");
+	BOOST_TEST(!answered.has_value());
+
+	bridge.session_closed("gone");
+	drain();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	access.confirmations().tick();
+	BOOST_TEST(attempts == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_NeverSpendsTheTicketOfAnIdenticalQuestionThatWaits)
+{
+	add_code_command([this] {
+		return attempts == 1 ? cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit") : cmd::result::success();
+	});
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	// The same call again: the ticket the first one spent is gone, so this one is a question of its own.
+	std::optional<mcp::call_result> second;
+	mcp::request_context context;
+	context.session_id = "session-1";
+	bridge.call_tool(context, "code_create", json_of(R"({"path":"a.cpp"})"), nullptr, [&second](mcp::call_result r) { second = std::move(r); });
+	drain();
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+
+	access.confirmations().tick();
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(!second.has_value());
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+
+	// The person's click on the second question still works.
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(second.has_value());
+	BOOST_TEST(!second->is_error);
+
+	access.confirmations().tick();
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(runs == 2);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfThePolicyTurnsToDenyBeforeTheNextTick)
+{
+	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	write_project_policy(R"({"version":1,"categories":{"code_files":"deny"}})");
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfNobodyCanBeAskedAnyMore)
+{
+	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	access.set_person_present(false);
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(ABusyLiveCall_IsDeniedIfLiveModeIsSwitchedOffBeforeTheNextTick)
+{
+	bool live_on = true;
+	access.policy().set_live_mode([&live_on] { return live_on; });
+	cmd::command_desc desc = make("live.rebuild_now");
+	desc.category = cmd::agent_category::live;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object"})");
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+	};
+	add(std::move(desc));
+	start_call("live_rebuild_now");
+	BOOST_REQUIRE(!answered.has_value());
+
+	live_on = false;
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(attempts == 1);
+	access.policy().set_live_mode(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ACallJudgedByAnotherCategory_AsksForThatCategory_AndTheGrantAndTheBusyRetryFollowIt)
+{
+	// code.write is code_edit, but a write to CMakeLists.txt is judged as cmake_presets.
+	cmd::command_desc desc = make("code.write");
+	desc.category = cmd::agent_category::code_edit;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})");
+	desc.category_of = [](const cmd::call& request) {
+		return request.args.as_object().at("path").as_string() == "CMakeLists.txt" ? cmd::agent_category::cmake_presets
+			: cmd::agent_category::code_edit;
+	};
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		if (attempts == 1) return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+
+	// code_edit asks by default, so a plain file is asked about too.
+	mcp::request_context context;
+	context.session_id = "session-1";
+	std::optional<mcp::call_result> cmake;
+	bridge.call_tool(context, "code_write", json_of(R"({"path":"CMakeLists.txt"})"), nullptr, [&cmake](mcp::call_result r) { cmake = std::move(r); });
+	drain();
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST((waiting[0].category == cmd::agent_category::cmake_presets));
+
+	// "Allow until the end of the session" is for the category that asked; the call is busy once and runs on the next tick.
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_session));
+	BOOST_TEST(!cmake.has_value());
+	BOOST_TEST(access.confirmations().pending().empty());
+	access.confirmations().tick();
+	BOOST_REQUIRE(cmake.has_value());
+	BOOST_TEST(!cmake->is_error);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(access.grants().has("session-1", cmd::agent_category::cmake_presets));
+	BOOST_TEST(!access.grants().has("session-1", cmd::agent_category::code_edit));
+
+	// The grant does not cover the plain file: it is code_edit, which still asks.
+	std::optional<mcp::call_result> plain;
+	bridge.call_tool(context, "code_write", json_of(R"({"path":"a.cpp"})"), nullptr, [&plain](mcp::call_result r) { plain = std::move(r); });
+	drain();
+	BOOST_TEST(!plain.has_value());
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+	BOOST_TEST((access.confirmations().pending().front().category == cmd::agent_category::code_edit));
+	// `plain` is a local: the question still waiting would be answered into it after it is gone, when the fixture goes.
+	access.confirmations().decline_all("the test is over");
+	BOOST_TEST(plain.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ASessionGrant_AllowsTheNextCallOfThatCategoryWithoutAQuestion)
+{
+	add_code_command();
+	start_call("code_create");
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_session));
+	BOOST_REQUIRE(answered.has_value());
+
+	start_call("code_create");
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(runs == 2);
+	BOOST_TEST(access.confirmations().pending().empty());
+
+	start_call("code_create", "another-session");
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(access.confirmations().pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeSessionEndTests, bridge_fixture)
+
+namespace {
+
+mcp::http_request endpoint_request(std::string method, std::string body)
+{
+	mcp::http_request request;
+	request.method = std::move(method);
+	request.target = "/mcp";
+	request.body = std::move(body);
+	request.headers.push_back({ "host", "127.0.0.1:4711" });
+	request.headers.push_back({ "authorization", std::string("Bearer ") + mcp_test::test_token });
+	request.headers.push_back({ "content-type", "application/json" });
+	return request;
+}
+
+std::string open_session(mcp::endpoint& endpoint)
+{
+	std::string session;
+	endpoint.handle(endpoint_request("POST", R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})"),
+		[&session](mcp::http_response response) {
+			for (const mcp::http_header& header : response.headers) {
+				if (header.name == "Mcp-Session-Id") session = header.value;
+			}
+		});
+	return session;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(EveryWayASessionEnds_ReachesTheEditorOnce)
+{
+	std::chrono::steady_clock::time_point clock{};
+	mcp::endpoint_config config;
+	config.token = mcp_test::test_token;
+	config.info.name = "test";
+	config.session_idle_timeout = std::chrono::minutes(30);
+	config.clock = [&clock] { return clock; };
+	mcp::endpoint endpoint(bridge, config);
+	endpoint.set_port(4711);
+
+	const std::string disconnected = open_session(endpoint);
+	const std::string idle = open_session(endpoint);
+	const std::string kept = open_session(endpoint);
+	BOOST_REQUIRE(!disconnected.empty() && !idle.empty() && !kept.empty());
+
+	// An explicit close (DELETE).
+	mcp::http_request close = endpoint_request("DELETE", {});
+	close.headers.push_back({ "mcp-session-id", disconnected });
+	endpoint.handle(close, [](mcp::http_response) {});
+	drain();
+	BOOST_TEST((closed_sessions == std::vector<std::string>{ disconnected }));
+
+	// The idle timeout (30 minutes without a request); `kept` is used in between.
+	clock += std::chrono::minutes(20);
+	mcp::http_request ping = endpoint_request("POST", R"({"jsonrpc":"2.0","id":2,"method":"ping"})");
+	ping.headers.push_back({ "mcp-session-id", kept });
+	endpoint.handle(ping, [](mcp::http_response) {});
+	clock += std::chrono::minutes(15);
+	endpoint.expire_idle_sessions();
+	drain();
+	BOOST_TEST((closed_sessions == std::vector<std::string>{ disconnected, idle }));
+
+	// The server stopping with the editor tells nobody: the listeners are going too.
+	bridge.stop_reporting();
+	endpoint.close_all();
+	drain();
+	BOOST_TEST(closed_sessions.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ACallQueuedBeforeASessionWasEndedOnPurpose_DoesNotRun)
+{
+	int runs = 0;
+	cmd::command_desc desc = make("probe.read");
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+
+	std::optional<mcp::call_result> from_ended;
+	std::optional<mcp::call_result> from_other;
+	mcp::request_context ended;
+	ended.session_id = "closed-by-the-person";
+	mcp::request_context other;
+	other.session_id = "still-there";
+	bridge.call_tool(ended, "probe_read", json_of("{}"), nullptr, [&from_ended](mcp::call_result r) { from_ended = std::move(r); });
+	bridge.call_tool(other, "probe_read", json_of("{}"), nullptr, [&from_other](mcp::call_result r) { from_other = std::move(r); });
+	// The person closes the session while its call still waits for the main thread's queue.
+	bridge.end_sessions({ "closed-by-the-person" });
+	drain();
+
+	BOOST_REQUIRE(from_ended.has_value() && from_other.has_value());
+	BOOST_TEST(from_ended->is_error);
+	BOOST_TEST(!from_other->is_error);
+	BOOST_TEST(runs == 1);
+	// And a later call of the ended session is refused too.
+	BOOST_TEST(call_tool("probe_read", "{}", "closed-by-the-person").is_error);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ASessionEndingAfterTheBridgeIsGone_ReachesNobody)
+{
+	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, tasks, access,
+		[this](const std::string& session) { closed_sessions.push_back(session); });
+	doomed->session_closed("late");
+	doomed.reset();
+	BOOST_CHECK_NO_THROW(drain());
+	BOOST_TEST(closed_sessions.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtMcpBridgeTeardownTests)
+
+// The editor goes away while a call waits for a person (run under ASan): the answer still reaches the client's closure,
+// and that closure holds neither the bridge nor the access.
+BOOST_AUTO_TEST_CASE(TheEditorClosingWithAWaitingCall_DeclinesItAndTouchesNothingFreed)
+{
+	test_util::temp_dir dir{ "edt_mcp_bridge_teardown" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	cmd::command_registry commands;
+	int runs = 0;
+	cmd::command_desc desc;
+	desc.id = "code.create";
+	desc.category = cmd::agent_category::code_files;
+	desc.mutates = true;
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	cmd::registration registration = commands.add(std::move(desc));
+
+	auto access = std::make_unique<edt::agent_access>(commands, dir.path() / "project.json", dir.path() / "personal.json");
+	access->set_questions_routed(true);
+	access->set_person_present(true);
+	auto bridge = std::make_unique<edt::mcp_bridge_host>(commands, tasks, *access);
+
+	std::vector<mcp::call_result> answers;
+	mcp::request_context context;
+	context.session_id = "s1";
+	bridge->call_tool(context, "code_create", json_of("{}"), nullptr, [&answers](mcp::call_result r) { answers.push_back(std::move(r)); });
+	tasks.drain_main(std::chrono::hours(1));
+	BOOST_REQUIRE(answers.empty());
+	BOOST_REQUIRE_EQUAL(access->confirmations().pending().size(), 1u);
+
+	// The server stops first (the bridge goes), then the access: the question is answered "denied" on the way out.
+	bridge.reset();
+	access.reset();
+
+	BOOST_REQUIRE_EQUAL(answers.size(), 1u);
+	BOOST_TEST(answers[0].is_error);
+	BOOST_TEST(runs == 0);
+	BOOST_CHECK_NO_THROW(tasks.drain_main(std::chrono::hours(1)));
+}
+
+BOOST_AUTO_TEST_CASE(ABridgeGoneBeforeThePersonAnswers_StillDeliversTheAnswerOnce)
+{
+	test_util::temp_dir dir{ "edt_mcp_bridge_teardown2" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	cmd::command_registry commands;
+	int runs = 0;
+	cmd::command_desc desc;
+	desc.id = "code.create";
+	desc.category = cmd::agent_category::code_files;
+	desc.mutates = true;
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	cmd::registration registration = commands.add(std::move(desc));
+
+	std::chrono::steady_clock::time_point current{};
+	edt::agent_access access(commands, dir.path() / "project.json", dir.path() / "personal.json", [&current] { return current; });
+	access.set_questions_routed(true);
+	access.set_person_present(true);
+	auto bridge = std::make_unique<edt::mcp_bridge_host>(commands, tasks, access);
+	std::vector<mcp::call_result> answers;
+	mcp::request_context context;
+	context.session_id = "s1";
+	bridge->call_tool(context, "code_create", json_of("{}"), nullptr, [&answers](mcp::call_result r) { answers.push_back(std::move(r)); });
+	tasks.drain_main(std::chrono::hours(1));
+	bridge.reset();
+
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE_EQUAL(answers.size(), 1u);
+	BOOST_TEST(!answers[0].is_error);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+constexpr const char* job_result_schema = R"json({"type":"object","properties":{"job":{"type":"integer","minimum":0}},"required":["job"],"additionalProperties":false})json";
+
+struct progress_note
+{
+	double progress = 0;
+	double total = 0;
+	std::string message;
+};
+
+// What one tools/call got back: the notifications/progress sent for it and its answers (one at most).
+struct call_outcome
+{
+	std::vector<progress_note> notes;
+	std::vector<mcp::call_result> answers;
+};
+
+// A bridge that follows jobs (mcp_bridge_options) over a job_service of the manual task system and the fake clock. The
+// test raises the job progress itself; in the editor job_service::pump raises it once per frame.
+struct job_bridge_fixture : bridge_fixture
+{
+	edt::job_service jobs{ tasks, &events };
+	ds::lifetime job_owner{ ds::lifetime_option::cancel_on_destroy };
+	// Empty until a test fills it: the bridge then hands everything out as it is.
+	cmd::log_read_filter log_filter;
+	edt::mcp_bridge_host held_bridge{ commands, tasks, access, [this](const std::string& session) { events.agent_session_closed.emit(session); },
+		bridge_options() };
+	edt::job_service::job_id last_job = 0;
+
+	job_bridge_fixture()
+	{
+		add(job_command("test.job_ok", [](ds::task_context&) { return json_of(R"json({"lines":3})json"); }));
+		cmd::command_desc none = make("test.job_none");
+		none.starts_job = true;
+		none.result_schema = json_of(R"json({"type":"object","properties":{"started":{"type":"boolean"},"job":{"type":"integer"}},"required":["started","job"],"additionalProperties":false})json");
+		none.invoke = [](const cmd::call&) { return cmd::result::success(json_of(R"json({"started":false,"job":0})json")); };
+		add(std::move(none));
+	}
+
+	edt::mcp_bridge_options bridge_options()
+	{
+		edt::mcp_bridge_options options;
+		options.jobs = &jobs;
+		options.events = &events;
+		options.clock = [this] { return current; };
+		options.log_filter = &log_filter;
+		return options;
+	}
+
+	template<class Work>
+	cmd::command_desc job_command(std::string id, Work work)
+	{
+		cmd::command_desc desc = make(std::move(id));
+		desc.result_schema = json_of(job_result_schema);
+		desc.starts_job = true;
+		desc.invoke = [this, work](const cmd::call&) {
+			last_job = jobs.start_with_result(ds::lane::io, ds::task_desc{ "test job", "test", true }, job_owner, work);
+			return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(last_job) } });
+		};
+		return desc;
+	}
+
+	std::shared_ptr<call_outcome> start_call(const std::string& name, bool wants_progress, json::value request_id = 1,
+		const std::string& session = "session-1")
+	{
+		auto outcome = std::make_shared<call_outcome>();
+		mcp::request_context context;
+		context.session_id = session;
+		context.request_id = std::move(request_id);
+		context.wants_progress = wants_progress;
+		held_bridge.call_tool(context, name, json_of("{}"),
+			[outcome](double progress, double total, std::string_view message) { outcome->notes.push_back({ progress, total, std::string(message) }); },
+			[outcome](mcp::call_result result) { outcome->answers.push_back(std::move(result)); });
+		drain();
+		return outcome;
+	}
+
+	// Runs the queued jobs and delivers their end on the main thread.
+	void finish_jobs()
+	{
+		test_util::pump(tasks);
+	}
+};
+
+const json::object& structured(const call_outcome& outcome)
+{
+	BOOST_REQUIRE_EQUAL(outcome.answers.size(), 1u);
+	BOOST_REQUIRE(!outcome.answers[0].is_error);
+	return outcome.answers[0].structured.as_object();
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeJobProgressTests, job_bridge_fixture)
+
+BOOST_AUTO_TEST_CASE(WithAToken_TheAnswerWaitsForTheJob_AndItsProgressIsThrottled)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_REQUIRE(jobs.is_running(last_job));
+
+	events.job_progress.emit(last_job, 0.125f, "counting 12%");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+	BOOST_TEST(outcome->notes[0].progress == 0.125);
+	BOOST_TEST(outcome->notes[0].total == 1.0);
+	BOOST_TEST(outcome->notes[0].message == "counting 12%");
+
+	current += std::chrono::milliseconds(100);
+	events.job_progress.emit(last_job, 0.25f, "receiving 20%");
+	current += std::chrono::milliseconds(100);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50%");
+	held_bridge.tick();
+	BOOST_TEST(outcome->notes.size() == 1u);
+
+	// The slot opens: the latest value goes out, the one it replaced never does.
+	current += std::chrono::milliseconds(100);
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 2u);
+	BOOST_TEST(outcome->notes[1].progress == 0.5);
+	BOOST_TEST(outcome->notes[1].message == "receiving 50%");
+
+	current += std::chrono::milliseconds(50);
+	events.job_progress.emit(last_job, 0.875f, "resolving 87%");
+	BOOST_TEST(outcome->notes.size() == 2u);
+	BOOST_TEST(outcome->answers.empty());
+
+	// The last value before the end is not lost, and the answer comes after it.
+	finish_jobs();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 3u);
+	BOOST_TEST(outcome->notes[2].message == "resolving 87%");
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	BOOST_TEST(answer.at("result").at("lines").as_int64() == 3);
+	BOOST_TEST(!answer.contains("error"));
+}
+
+BOOST_AUTO_TEST_CASE(WithoutAToken_TheJobIsAnsweredAtOnce)
+{
+	const auto outcome = start_call("test_job_ok", false);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(!answer.contains("status"));
+
+	events.job_progress.emit(last_job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST(outcome->notes.empty());
+	BOOST_TEST(outcome->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AJobThatAlreadyEnded_IsAnsweredAtOnceWithItsOutcome)
+{
+	const edt::job_service::job_id failed = jobs.start_with_result(ds::lane::io, ds::task_desc{ "test job", "test", true }, job_owner,
+		[](ds::task_context&) -> json::value { throw std::runtime_error("no remote"); });
+	finish_jobs();
+	BOOST_REQUIRE(!jobs.is_running(failed));
+	cmd::command_desc given = make("test.job_given");
+	given.result_schema = json_of(job_result_schema);
+	given.starts_job = true;
+	given.invoke = [failed](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(failed) } }); };
+	add(std::move(given));
+
+	const auto outcome = start_call("test_job_given", true);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("no remote") != std::string::npos);
+	BOOST_TEST(!answer.contains("result"));
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AResultWithoutAJob_IsAnsweredAtOnce)
+{
+	const auto outcome = start_call("test_job_none", true);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("started").as_bool() == false);
+	BOOST_TEST(!answer.contains("status"));
+}
+
+BOOST_AUTO_TEST_CASE(Cancelled_CancelsTheJob_AndAnswersNothing)
+{
+	const auto outcome = start_call("test_job_ok", true, json::value("call-7"));
+	const edt::job_service::job_id job = last_job;
+
+	// Another session's request with the same id, or another id, is not this call.
+	held_bridge.cancel_request("session-2", json::value("call-7"));
+	held_bridge.cancel_request("session-1", json::value("call-8"));
+	drain();
+	BOOST_TEST(!jobs.info(job)->cancel_requested);
+
+	held_bridge.cancel_request("session-1", json::value("call-7"));
+	drain();
+	BOOST_TEST(jobs.info(job)->cancel_requested);
+	events.job_progress.emit(job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST((jobs.info(job)->status == edt::job_status::cancelled));
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheEndOfTheSession_CancelsTheJob_AndAnswersNothing)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	const edt::job_service::job_id job = last_job;
+	const auto other = start_call("test_job_ok", true, json::value(1), "session-2");
+	const edt::job_service::job_id other_job = last_job;
+
+	held_bridge.session_closed("session-1");
+	drain();
+	BOOST_TEST(closed_sessions == std::vector<std::string>{ "session-1" });
+	BOOST_TEST(jobs.info(job)->cancel_requested);
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	// The other session's call is answered when its job ends.
+	const json::object& answer = structured(*other);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == other_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+}
+
+BOOST_AUTO_TEST_CASE(PastTheHoldLimit_TheAnswerSaysRunning_AndForwardingStops)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	events.job_progress.emit(last_job, 0.25f, "a quarter");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+
+	current += edt::mcp_bridge_options{}.hold_limit - std::chrono::milliseconds(1);
+	held_bridge.tick();
+	BOOST_TEST(outcome->answers.empty());
+
+	current += std::chrono::milliseconds(1);
+	held_bridge.tick();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "running");
+	BOOST_TEST(jobs.is_running(last_job));
+
+	current += std::chrono::seconds(1);
+	events.job_progress.emit(last_job, 0.75f, "later");
+	finish_jobs();
+	BOOST_TEST(outcome->notes.size() == 1u);
+	BOOST_TEST(outcome->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ADestroyedBridge_DropsTheCallsItHeld)
+{
+	auto outcome = std::make_shared<call_outcome>();
+	{
+		edt::mcp_bridge_host local{ commands, tasks, access, {}, bridge_options() };
+		mcp::request_context context;
+		context.session_id = "session-1";
+		context.request_id = 3;
+		context.wants_progress = true;
+		local.call_tool(context, "test_job_ok", json_of("{}"), nullptr, [outcome](mcp::call_result result) { outcome->answers.push_back(std::move(result)); });
+		drain();
+		BOOST_TEST(outcome->answers.empty());
+	}
+	events.job_progress.emit(last_job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST((jobs.info(last_job)->status == edt::job_status::done));
+}
+
+BOOST_AUTO_TEST_CASE(AJobTool_DeclaresTheOutcomeFields)
+{
+	cmd::command_desc reporter = make("test.job_report");
+	reporter.result_schema = json_of(job_result_schema);
+	add(std::move(reporter));
+	int seen = 0;
+	for (const mcp::tool_info& tool : list_tools()) {
+		const bool starts_job = tool.name == "test_job_ok";
+		if (!starts_job && tool.name != "test_job_report") {
+			continue;
+		}
+		++seen;
+		const json::object& properties = tool.output_schema.at("properties").as_object();
+		BOOST_TEST_CONTEXT(tool.name) {
+			BOOST_TEST(properties.contains("job"));
+			BOOST_TEST(properties.contains("status") == starts_job);
+			BOOST_TEST(properties.contains("result") == starts_job);
+			BOOST_TEST(properties.contains("error") == starts_job);
+		}
+	}
+	BOOST_TEST(seen == 2);
+}
+
+BOOST_AUTO_TEST_CASE(AHeldJobThatFails_IsAnsweredWithItsError)
+{
+	add(job_command("test.job_fail", [](ds::task_context&) -> json::value { throw std::runtime_error("no remote"); }));
+	const auto outcome = start_call("test_job_fail", true);
+	BOOST_TEST(outcome->answers.empty());
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("no remote") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnOversizedJobResult_IsLeftOut_TheJobAndItsStatusStay)
+{
+	add(job_command("test.job_huge", [](ds::task_context&) { return json::value(json::string(9u * 1024u * 1024u, 'x')); }));
+	const auto outcome = start_call("test_job_huge", true);
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	BOOST_TEST(!answer.contains("result"));
+	BOOST_TEST(answer.at("result_dropped").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(AJobTheCommandDidNotStart_IsNotHeld)
+{
+	// Reports a job (as live.status does with the live build): answered at once, and cancelling it touches nothing.
+	const auto started = start_call("test_job_ok", false);
+	const edt::job_service::job_id job = last_job;
+	cmd::command_desc reporter = make("test.job_report");
+	reporter.result_schema = json_of(job_result_schema);
+	reporter.invoke = [job](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(job) } }); };
+	add(std::move(reporter));
+
+	const auto outcome = start_call("test_job_report", true, json::value(9));
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(!answer.contains("status"));
+	held_bridge.cancel_request("session-1", json::value(9));
+	drain();
+	BOOST_TEST(!jobs.info(job)->cancel_requested);
+	BOOST_TEST(started->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ACancelBeforeTheCallIsHeld_CancelsTheJob_AndAnswersNothing)
+{
+	// code_files: the owner's table asks a person, so the call waits before its command runs.
+	cmd::command_desc asked = job_command("test.job_asked", [](ds::task_context&) { return json_of("{}"); });
+	asked.category = cmd::agent_category::code_files;
+	asked.mutates = true;
+	add(std::move(asked));
+	access.set_person_present(true);
+
+	const auto outcome = start_call("test_job_asked", true, json::value(5));
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	held_bridge.cancel_request("session-1", json::value(5));
+	drain();
+
+	test_util::show_confirmations_and_wait(access.confirmations(), current);
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(last_job != 0);
+	BOOST_TEST(jobs.info(last_job)->cancel_requested);
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASessionThatEndsBeforeTheCallIsHeld_DeclinesTheCall_AndStartsNoJob)
+{
+	cmd::command_desc asked = job_command("test.job_asked", [](ds::task_context&) { return json_of("{}"); });
+	asked.category = cmd::agent_category::code_files;
+	asked.mutates = true;
+	add(std::move(asked));
+	access.set_person_present(true);
+
+	const auto outcome = start_call("test_job_asked", true, json::value(5));
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	held_bridge.session_closed("session-1");
+	drain();
+	// The question goes with the session (the fixture wires drop_session to agent_session_closed, as the editor does):
+	// the call is declined as any waiting call is, and the command never runs.
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(last_job == 0u);
+	finish_jobs();
+	BOOST_REQUIRE_EQUAL(outcome->answers.size(), 1u);
+	BOOST_TEST(outcome->answers[0].is_error);
+}
+
+BOOST_AUTO_TEST_CASE(Progress_IsSentOnlyWhenItGrows)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50%");
+	current += std::chrono::seconds(1);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50% (1 MiB)");
+	events.job_progress.emit(last_job, 0.25f, "went back");
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+
+	events.job_progress.emit(last_job, 0.75f, "receiving 75%");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 2u);
+	BOOST_TEST(outcome->notes[1].progress == 0.75);
+
+	// Within the interval: an equal value only refreshes the note of the one waiting.
+	current += std::chrono::milliseconds(10);
+	events.job_progress.emit(last_job, 0.875f, "resolving 87%");
+	events.job_progress.emit(last_job, 0.75f, "resolving 87% (late note)");
+	current += std::chrono::seconds(1);
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 3u);
+	BOOST_TEST(outcome->notes[2].progress == 0.875);
+	BOOST_TEST(outcome->notes[2].message == "resolving 87% (late note)");
+}
+
+BOOST_AUTO_TEST_CASE(AtMost16CallsOfASession_AreHeld)
+{
+	std::vector<std::shared_ptr<call_outcome>> held;
+	for (int i = 0; i < 16; ++i) {
+		held.push_back(start_call("test_job_ok", true, json::value(i)));
+		BOOST_TEST(held.back()->answers.empty());
+	}
+	const auto extra = start_call("test_job_ok", true, json::value(16));
+	const json::object& answer = structured(*extra);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(!answer.contains("status"));
+	// Another session has its own share.
+	const auto other = start_call("test_job_ok", true, json::value(0), "session-2");
+	BOOST_TEST(other->answers.empty());
+}
+
+// #935: what a held call hands the agent goes through the filter of log.read, as job.get's answer does.
+BOOST_AUTO_TEST_CASE(AHeldCallsAnswerAndItsProgressNotes_AreRewrittenForTheAgent)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_paths", [](ds::task_context&) {
+		return json_of(R"json({"text":"+open /etc/secret/key","error":{"code":"git_failed","message":"fatal: cannot read /etc/secret/key","stderr_tail":"at /home/dev/games/demo/a.txt"}})json");
+	}));
+
+	const auto outcome = start_call("test_job_paths", true);
+	BOOST_TEST(outcome->answers.empty());
+	events.job_progress.emit(last_job, 0.5f, "reading /etc/secret/key");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+	BOOST_TEST(outcome->notes[0].message == "reading <path>");
+
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	const json::object& result = answer.at("result").as_object();
+	BOOST_TEST(text_of(result.at("text")) == "+open /etc/secret/key");
+	BOOST_TEST(text_of(result.at("error").at("code")) == "git_failed");
+	BOOST_TEST(text_of(result.at("error").at("message")) == "fatal: cannot read <path>");
+	BOOST_TEST(text_of(result.at("error").at("stderr_tail")) == "at <project>/a.txt");
+}
+
+// #935: a migration answer's `text` (beside `code`) is a message; the {text, truncated} of a diff is not.
+BOOST_AUTO_TEST_CASE(AHeldCallsAnswer_HasTheTextOfAMigrationAnswerRewritten_NotOfADiff)
+{
+	edt::agent_log_roots roots;
+	roots.project = { "/home/dev/games/demo" };
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_migrates", [](ds::task_context&) {
+		return json_of(R"json({"code":2,"status":"refused","id":"m1","text":"rollback of m1: cannot open /etc/secret/key"})json");
+	}));
+	add(job_command("test.job_diffs", [](ds::task_context&) {
+		return json_of(R"json({"text":"+open /etc/secret/key","truncated":false})json");
+	}));
+
+	const auto migrated = start_call("test_job_migrates", true);
+	BOOST_TEST(migrated->answers.empty());
+	finish_jobs();
+	const json::object& report = structured(*migrated).at("result").as_object();
+	BOOST_TEST(text_of(report.at("text")) == "rollback of m1: cannot open <path>");
+	BOOST_TEST(report.at("code").as_int64() == 2);
+
+	const auto diffed = start_call("test_job_diffs", true, json::value(2));
+	BOOST_TEST(diffed->answers.empty());
+	finish_jobs();
+	const json::object& diff = structured(*diffed).at("result").as_object();
+	BOOST_TEST(text_of(diff.at("text")) == "+open /etc/secret/key");
+	BOOST_TEST(diff.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AHeldCallsError_IsRewrittenForTheAgent_AlsoWhenTheJobEndedBeforeTheCall)
+{
+	edt::agent_log_roots roots;
+	roots.disk = edt::agent_log_disk({}, { "/etc" });
+	edt::install_agent_log_filter(log_filter, [] { return false; }, roots);
+	add(job_command("test.job_fails", [](ds::task_context&) -> json::value { throw std::runtime_error("cannot open /etc/secret/key"); }));
+
+	const auto held = start_call("test_job_fails", true);
+	BOOST_TEST(held->answers.empty());
+	const edt::job_service::job_id failed = last_job;
+	finish_jobs();
+	const json::object& answer = structured(*held);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("cannot open <path>") != std::string::npos);
+	BOOST_TEST(text_of(answer.at("error")).find("/etc") == std::string::npos);
+
+	cmd::command_desc given = make("test.job_given");
+	given.result_schema = json_of(job_result_schema);
+	given.starts_job = true;
+	given.invoke = [failed](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(failed) } }); };
+	add(std::move(given));
+	const auto late = start_call("test_job_given", true, json::value(2));
+	const json::object& late_answer = structured(*late);
+	BOOST_TEST(text_of(late_answer.at("error")).find("cannot open <path>") != std::string::npos);
+	BOOST_TEST(text_of(late_answer.at("error")).find("/etc") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

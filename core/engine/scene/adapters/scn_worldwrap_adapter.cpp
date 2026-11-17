@@ -1,20 +1,67 @@
-#include "scn_worldwrap_adapter.h"
-#include "desc_system.h"
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_json_body.h>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
-scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system)
-	: m_res_system(res_system)
-	, m_desc_system(desc_system)
+scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system&, ::desc::desc_system& desc_system)
+	: m_desc_system(desc_system)
 {
+}
+
+std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::res::tag& tag, const std::vector<std::byte>& data) const
+{
+    // Most files have no parent: skip parsing them twice.
+    constexpr std::string_view marker = "\"__parent\"";
+    const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+    if (text.find(marker) == std::string_view::npos) {
+        return {};
+    }
+
+    auto json_body = ::res::parse_json_body(tag.view(), data);
+    try {
+        m_desc_system.migrate_tree(json_body, tag.view());
+    } catch (const std::exception& e) {
+        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': " + e.what());
+    }
+
+    const auto* type = json_body.if_contains("__type");
+    const auto* parent = json_body.if_contains("__parent");
+    if (!type || !type->is_string() || !parent || json::value_to<std::string>(*type) != scn::world_desc::__type) {
+        return {};
+    }
+    const ::res::tag parent_tag = json::value_to<::res::tag>(*parent);
+    // Refused before it is a dependency, so it is never loaded (#697); deserialize then fails as with a missing parent.
+    if (!::res::reference_problem(parent_tag, tag.protocol()).empty()) {
+        return {};
+    }
+    auto dep = ::res::make_dep<::desc::desc_base>(parent_tag);
+    dep.failure_kind = ::res::diagnostic_kind::missing_parent;
+    dep.json_path = "/__parent";
+    return { std::move(dep) };
 }
 
 std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
 {
-    std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-    json::parse_options options;
-    options.max_depth = 128;
-    auto json_body = json::parse(json_data, {}, options).as_object();
+    return deserialize(tag, data, ::res::res_deps{});
+}
 
-    ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
+std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
+{
+    auto json_body = ::res::parse_json_body(tag.view(), data);
+
+    try {
+        m_desc_system.migrate_tree(json_body, tag.view());
+    } catch (const std::exception& e) {
+        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': " + e.what());
+    }
+
+    if (!json_body.contains("__type")) {
+        throw ::res::load_error(::res::diagnostic_kind::unknown_type, "/__type",
+            "world desc '" + std::string{ tag.view() } + "' does not contain __type field");
+    }
 
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
 
@@ -23,8 +70,17 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     if (type_id == scn::world_desc::__type) {
         if (json_body.contains("__parent")) {
             auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
-            auto parent = m_res_system.require_sync<::desc::desc_base>(parent_tag);
-            parent->copy_to(*instance);
+            if (std::string why = ::res::reference_problem(parent_tag, tag.protocol()); !why.empty()) {
+                throw ::res::load_error(::res::diagnostic_kind::reference, "/__parent",
+                    "world desc '" + std::string{ tag.view() } + "': " + why);
+            }
+            const auto parent_desc = deps.get<::desc::desc_base>(parent_tag);
+            if (!parent_desc) {
+                throw ::res::load_error(::res::diagnostic_kind::missing_parent, "/__parent",
+                    "world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
+            }
+            parent_desc->copy_to(*instance);
+            instance->set_parent(parent_tag);
         }
     }
 
@@ -38,9 +94,12 @@ std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, c
     const auto& desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
     json::object body;
     desc_res->serialize(body);
-    std::string data = json::serialize(body);
-    std::vector<std::byte> byte_data;
-    byte_data.resize(data.size());
-    std::memcpy(byte_data.data(), data.data(), data.size());
-    return byte_data;
+    m_desc_system.reduce_to_parent(*desc_res, body);
+    m_desc_system.stamp_tree(body);
+    json::value file{ std::move(body) };
+    // As desc_adapter_t: only a res:// file is in the asset index.
+    if (tag.protocol() == ::res::tag::default_protocol()) {
+        m_desc_system.write_references_over(file, tag);
+    }
+    return m_desc_system.serialize_to_bytes(file);
 }

@@ -1,0 +1,21 @@
+name: Install Linux packages
+description: >
+  apt-get update + install of the given packages with download retries, connection timeouts and up to three attempts
+  of the whole step; an index that cannot be fetched (security.ubuntu.com down) does not block the install (#724).
+  See tools/ci/apt_install.sh.
+
+inputs:
+  packages:
+    description: Space-separated Ubuntu package names.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: apt-get update and install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        # shellcheck disable=SC2086 # the list is split into packages on purpose
+        "${GITHUB_WORKSPACE}/tools/ci/apt_install.sh" ${PACKAGES}

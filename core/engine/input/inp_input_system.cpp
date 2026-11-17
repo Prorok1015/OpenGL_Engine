@@ -1,5 +1,15 @@
-#include "inp_input_system.h"
-#include <engine_log.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/common/logger/engine_log.h>
+
+void inp::input_system::on_window_focus_lost(wnd::handle win)
+{
+	if (const auto it = m_window_layers.find(win); it != m_window_layers.end()) {
+		for (auto& layer : it->second) {
+			layer.processor->on_focus_lost(win);
+		}
+	}
+	m_focused_window = nullptr;
+}
 
 void inp::input_system::on_input_event(wnd::handle win, const inp::input_event& event)
 {

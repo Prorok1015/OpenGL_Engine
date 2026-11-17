@@ -1,6 +1,6 @@
-#include "scn_bone_desc.h"
-#include "scn_model.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_bone_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_glm_json_convert.h>
 
 void scn::bone_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
@@ -18,5 +18,8 @@ void scn::bone_desc::serialize(json::object& data) const
 
 void scn::assemble_bone(entt::registry& reg, entt::entity e, const bone_desc& desc, std::string_view name)
 {
-	reg.emplace_or_replace<scn::bone_component>(e, scn::bone_component{ .offset = desc.offset_matrix, .index = desc.index });
+	reg.emplace_or_replace<scn::bone_component>(e, scn::bone_component{
+		.offset = desc.offset_matrix,
+		.index = desc.index
+	});
 }

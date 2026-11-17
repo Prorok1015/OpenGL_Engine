@@ -1,0 +1,113 @@
+#include <boost/test/unit_test.hpp>
+#include <snk/application/app_module_entry.h>
+#include <snk/game/gs_module_layout_key.h>
+#include <snk/scene/scn_engine_component_list.h>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <utility>
+
+// #614: the layout key a module reports is evaluated from the headers it was built with; the host compares it with the
+// engine's own before it creates the module.
+
+namespace {
+
+std::uint64_t g_reported = 0;
+std::uint64_t reported_key() { return g_reported; }
+
+app::modules::module_entry entry_reporting(std::uint64_t key)
+{
+	g_reported = key;
+	app::modules::module_entry entry;
+	entry.layout_key = &reported_key;
+	return entry;
+}
+
+// The key of `Values` with the value at `Raised` one higher.
+template<std::size_t Raised, std::uint64_t... Values, std::size_t... I>
+constexpr std::uint64_t key_with_raised(gs::detail::layout_values<Values...>, std::index_sequence<I...>)
+{
+	return gs::detail::layout_of<gs::detail::layout_values<(I == Raised ? Values + 1u : Values)...>>();
+}
+
+template<std::uint64_t... Values, std::size_t... I>
+constexpr bool raising_each_changes_the_key(gs::detail::layout_values<Values...> values, std::index_sequence<I...> order)
+{
+	const std::uint64_t key = gs::detail::layout_of<gs::detail::layout_values<Values...>>();
+	return ((key_with_raised<I>(values, order) != key) && ...);
+}
+
+template<std::uint64_t... Values>
+constexpr bool raising_each_changes_the_key(gs::detail::layout_values<Values...> values)
+{
+	return raising_each_changes_the_key(values, std::make_index_sequence<sizeof...(Values)>{});
+}
+
+}
+
+BOOST_AUTO_TEST_SUITE(gs_module_layout_tests)
+
+// Every CI configuration (Debug, Release, sanitizers, MSVC) runs this: a binary built with these headers and the engine
+// of the same build agree, so a module rebuilt with the project loads.
+BOOST_AUTO_TEST_CASE(a_binary_built_with_the_engine_headers_has_the_engine_key)
+{
+	static_assert(gs::module_layout_key() != 0u);
+	BOOST_TEST(gs::module_layout_key() == gs::engine_module_layout_key());
+	BOOST_TEST(SNK_DETAIL_MODULE_LAYOUT_KEY == gs::engine_module_layout_key());
+}
+
+BOOST_AUTO_TEST_CASE(a_size_or_alignment_change_of_a_listed_type_changes_the_key)
+{
+	struct grown { std::uint64_t a = 0; std::uint64_t b = 0; };
+	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() != gs::detail::layout_of<grown>());
+	BOOST_TEST((gs::detail::layout_of<std::uint32_t, std::uint64_t>() != gs::detail::layout_of<std::uint64_t, std::uint32_t>()));
+	BOOST_TEST(gs::detail::layout_of<std::uint64_t>() == gs::detail::layout_of<std::uint64_t>());
+}
+
+// #922: the engine components enter the key as one scn::type_list.
+BOOST_AUTO_TEST_CASE(a_type_added_to_a_listed_type_list_changes_the_key)
+{
+	struct stand_in { std::uint64_t a = 0; };
+	using before = scn::type_list<std::uint32_t>;
+	using after = scn::type_list<std::uint32_t, stand_in>;
+	static_assert(gs::detail::layout_of<std::uint16_t, before>() != gs::detail::layout_of<std::uint16_t, after>());
+	static_assert(gs::detail::layout_of<std::uint16_t, after>() == gs::detail::layout_of<std::uint16_t, std::uint32_t, stand_in>());
+	static_assert(gs::detail::layout_of<std::uint16_t, scn::type_list<>>() == gs::detail::layout_of<std::uint16_t>());
+	BOOST_TEST((gs::detail::layout_of<before>() != gs::detail::layout_of<after>()));
+}
+
+// #922: a raised <interface>_abi_revision or another version of EnTT, Boost or glm gives another key.
+BOOST_AUTO_TEST_CASE(a_raised_abi_revision_or_another_third_party_version_changes_the_key)
+{
+	using gs::detail::layout_of;
+	using gs::detail::layout_values;
+	static_assert(layout_of<std::uint16_t, layout_values<1u, 1u>>() != layout_of<std::uint16_t, layout_values<1u, 2u>>());
+	static_assert(layout_of<layout_values<1u, 2u>>() != layout_of<layout_values<2u, 1u>>());
+	static_assert(layout_of<std::uint16_t, layout_values<>>() == layout_of<std::uint16_t>());
+	static_assert(raising_each_changes_the_key(gs::detail::interface_abi_revisions{}));
+	static_assert(raising_each_changes_the_key(gs::detail::third_party_versions{}));
+	BOOST_TEST((layout_of<layout_values<1u>>() != layout_of<layout_values<2u>>()));
+}
+
+BOOST_AUTO_TEST_CASE(the_host_refuses_another_key_and_lets_the_same_or_an_unknown_one_through)
+{
+	const std::uint64_t host = gs::engine_module_layout_key();
+	BOOST_TEST(app::modules::check_module_layout(entry_reporting(host), host).empty());
+	BOOST_TEST(app::modules::check_module_layout(entry_reporting(0u), host).empty());
+	BOOST_TEST(app::modules::check_module_layout(entry_reporting(host ^ 1u), 0u).empty());
+	const std::string why = app::modules::check_module_layout(entry_reporting(host ^ 1u), host);
+	BOOST_TEST(why.find("another layout") != std::string::npos);
+	BOOST_TEST(why.find("rebuild the project") != std::string::npos);
+}
+
+// #1060: game_module::run hands module code a task handle by value.
+BOOST_AUTO_TEST_CASE(the_key_lists_the_task_handle_a_module_gets_by_value)
+{
+	using gs::detail::list_contains;
+	using gs::detail::module_layout_types;
+	static_assert(list_contains<ds::task_handle_base, module_layout_types>::value);
+	static_assert(list_contains<ds::task_handle<void>, module_layout_types>::value);
+	BOOST_TEST(gs::module_layout_key() != 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

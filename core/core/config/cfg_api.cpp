@@ -1,30 +1,32 @@
-#include "cfg_api.h"
+#include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/fs_paths.h>
+#include <algorithm>
+#include <cstddef>
+#include <fstream>
+#include <stdexcept>
 #include <unordered_map>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <variant>
+#include <vector>
 #include <yaml-cpp/yaml.h>
 #include <boost/program_options.hpp>
-#include <iostream>
+#include <cstdio>
+#include <sstream>
 
 namespace po = boost::program_options;
-using config_types = std::variant<int, float, bool, std::string>;
 
 bool is_initialized = false;
+namespace {
+	std::filesystem::path loaded_config_file;
+}
 
 constexpr auto EXTENDS_KEY = "extends";
 constexpr auto SEPARATOR = '/';
 
 namespace cfg {
-	struct tag
-	{
-		tag(std::string_view path)
-			: id(std::hash<std::string_view>{}(path)) {
-		}
-
-		auto operator<=>(const tag&) const = default;
-
-		std::size_t id;
-	};
-
 	struct config_manager
 	{
 		static config_manager& instance()
@@ -33,24 +35,64 @@ namespace cfg {
 			return instance;
 		}
 
-		std::unordered_map<std::string, cfg::variable_base*> registered_variables;
-		std::unordered_map<std::string, cfg::variable_map*>  registered_prefixes;
+		// Several variables may share a name: every one is updated, and each one leaves on its own.
+		std::unordered_map<std::string, std::vector<cfg::variable_base*>> registered_variables;
+		std::unordered_map<std::string, std::vector<cfg::variable_map*>>  registered_prefixes;
+
+		void update_variable(std::string_view name, const std::filesystem::path& location, std::string_view value)
+		{
+			if (auto it = registered_variables.find(std::string{ name }); it != registered_variables.end()) {
+				for (auto* var : it->second) {
+					var->update(location, value);
+				}
+			}
+		}
+
+		// Every variable of the name takes the list; one that is not a list reports it and keeps its value.
+		void update_list(std::string_view name, const std::vector<std::string>& values)
+		{
+			if (auto it = registered_variables.find(std::string{ name }); it != registered_variables.end()) {
+				for (auto* var : it->second) {
+					if (!var->update_list(values)) {
+						cfg::warn_wrong_kind(name, "a list was given but the variable is not a list");
+					}
+				}
+			}
+		}
 	};
+
+	template<class T>
+	void remove_registration(std::unordered_map<std::string, std::vector<T*>>& map, std::string_view name, T* var)
+	{
+		const auto it = map.find(std::string{ name });
+		if (it == map.end()) {
+			return;
+		}
+		std::erase(it->second, var);
+		if (it->second.empty()) {
+			map.erase(it);
+		}
+	}
 
 } // namespace cfg
 
-namespace std {
-	template <>
-	struct hash<cfg::tag>
-	{
-		std::size_t operator()(const cfg::tag& k) const
-		{
-			return k.id;
-		}
-	};
-} // namespace std
-
 namespace {
+
+// Empty when `sequence` is a flat list of scalars (copied to `values`); otherwise why it is not one.
+std::string read_flat_list(const YAML::Node& sequence, std::vector<std::string>& values)
+{
+	for (const auto& element : sequence) {
+		if (element.IsNull()) {
+			return "null elements are not allowed in a list";
+		}
+		if (!element.IsScalar()) {
+			return "nested lists and maps are not allowed in a list";
+		}
+		values.push_back(element.as<std::string>());
+	}
+	return {};
+}
+
 void load_map(const std::filesystem::path& config_location, const std::string& parent, YAML::Node map_node)
 {
 	for (auto it = map_node.begin(); it != map_node.end(); ++it) {
@@ -63,9 +105,8 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 		if (value.IsScalar()) {
 			std::string val_str = value.as<std::string>();
 			auto& mgr = cfg::config_manager::instance();
-			auto var_it = mgr.registered_variables.find(current);
-			if (var_it != mgr.registered_variables.end()) {
-				var_it->second->update(config_location, val_str);
+			if (mgr.registered_variables.contains(current)) {
+				mgr.update_variable(current, config_location, val_str);
 			} else {
 				// Check prefix variables by walking up the path.
 				// "a/b/c/d" → try "a/b/c" (suffix "d"), then "a/b" (suffix "c/d"), then "a" (suffix "b/c/d").
@@ -78,11 +119,20 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 					std::string suffix = current.substr(sep + 1);
 					auto pfx_it = mgr.registered_prefixes.find(prefix);
 					if (pfx_it != mgr.registered_prefixes.end()) {
-						pfx_it->second->update_entry(suffix, val_str);
+						for (auto* map : pfx_it->second) {
+							map->update_entry(suffix, val_str);
+						}
 						break;
 					}
 					path = prefix;
 				}
+			}
+		} else if (value.IsSequence()) {
+			std::vector<std::string> values;
+			if (const std::string problem = read_flat_list(value, values); !problem.empty()) {
+				cfg::warn_wrong_kind(current, problem);
+			} else if (cfg::config_manager::instance().registered_variables.contains(current)) {
+				cfg::config_manager::instance().update_list(current, values);
 			}
 		} else if (value.IsMap()) {
 			load_map(config_location, current, value);
@@ -90,14 +140,24 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 	}
 }
 
-void load_config_file(std::filesystem::path file_path)
+YAML::Node load_yaml_file(const std::filesystem::path& file)
 {
-	YAML::Node config = YAML::LoadFile(std::filesystem::absolute(file_path).string());
+	// Not YAML::LoadFile: its narrow file name cannot hold, on MSVC, a path outside the active code page.
+	std::ifstream in(file, std::ios::binary);
+	if (!in) {
+		throw YAML::BadFile(fs_paths::utf8_of(file));
+	}
+	return YAML::Load(in);
+}
+
+void load_config_file_with_extends(std::filesystem::path file_path)
+{
+	YAML::Node config = load_yaml_file(std::filesystem::absolute(file_path));
 	if (config[EXTENDS_KEY]) {
 		// TODO: add assert if its not a sequence
 		for (auto it = config[EXTENDS_KEY].begin(); it != config[EXTENDS_KEY].end(); ++it) {
 			auto file = file_path.parent_path() / it->as<std::string>();
-			load_config_file(file);
+			load_config_file_with_extends(file);
 		}
 	}
 	
@@ -113,66 +173,374 @@ void cfg::initialize_configs(std::filesystem::path init_file)
 	}
 	is_initialized = true;
 
-	load_config_file(init_file);
+	loaded_config_file = std::filesystem::absolute(init_file).lexically_normal();
+	load_config_file_with_extends(init_file);
+}
+
+std::filesystem::path cfg::loaded_config_path()
+{
+	return loaded_config_file;
+}
+
+std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
+	const std::filesystem::path& default_config)
+{
+	if (explicit_config) {
+		return explicit_config;
+	}
+	// A relative default would resolve against the working directory and could load someone else's config.
+	std::error_code ec;
+	if (default_config.is_absolute() && std::filesystem::is_regular_file(default_config, ec)) {
+		return default_config;
+	}
+	return std::nullopt;
+}
+
+std::string cfg::no_config_message(const std::filesystem::path& default_config)
+{
+	if (!default_config.is_absolute()) {
+		return "no configuration: pass --config <file> (the program's own folder could not be found, so there is no "
+			"default config)";
+	}
+	return "no configuration: pass --config <file>, or keep the config next to the program (" +
+		fs_paths::generic_utf8_of(default_config.lexically_normal()) + ")";
+}
+
+std::string cfg::startup_error_message(const std::exception& error)
+{
+	if (loaded_config_file.empty()) {
+		return std::string("command line: ") + error.what();
+	}
+	return "config " + fs_paths::generic_utf8_of(loaded_config_file) + " could not be loaded: " + error.what();
 }
 
 bool cfg::initialize_configs(int argc, char* argv[])
 {
+	return initialize_configs(argc, argv, {});
+}
+
+bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path& default_config)
+{
 	po::options_description desc("Allowed options");
 	desc.add_options()
-		("help,c", "call list of variables")
+		("help,h", "call list of variables")
 		("config,c", po::value<std::string>(), "set a path to a config entry")
-		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var");
+		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
+		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")
+		("allow-engine-version-mismatch", "open a project made for an older engine version without asking")
+		("trust-project", "trust the project opened at start: its game and editor modules from build/bin are loaded "
+			"without asking (project/trust)")
+		("non-interactive,n", "do not wait for answers, take the safe one (this is not --yes). Today it covers the "
+			"engine version check: a project made for another engine version is refused with exit code 3 instead of "
+			"asking; an older one still opens with --allow-engine-version-mismatch")
+		("headless", "run the editor without a display: no window, no GPU, no ImGui panels; needs --project and "
+			"implies --non-interactive. The log goes to stderr")
+		("mcp-stdio", "serve MCP to an agent over stdin/stdout (newline-delimited JSON-RPC, one client). stdout carries "
+			"the protocol only: the log and everything else go to stderr. Closing stdin ends the session; with --headless "
+			"it also ends the editor (unsaved changes are dropped)")
+		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
+			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
+			"Missing or broken: every agent request is denied")
+		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
+			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
+			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)")
+		("migrate", "editor only, with --headless: migrate the project's data to this engine and exit (EPIC-58). Exit code: "
+			"0 done or nothing to do, 1 a migration is needed (--dry-run), 2 refused, 4 files left as they are (unknown type, "
+			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish, -1 (255) an "
+			"unexpected error")
+		("dry-run", "with --migrate: print the plan, write nothing")
+		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
+		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")
+		("migrate-rollback", po::value<std::string>(), "editor only, with --headless: put the project back as it was before "
+			"migration <id> (.snk/migrations/<id>) and exit")
+		("open-migration", "editor only: once the project is open, open the Project Migration window with its plan (what "
+			"Migrate... of the engine version question restarts the editor with); ignored with --headless");
 	
 	po::variables_map vm;
-	po::store(po::parse_command_line(argc, argv, desc), vm);
+	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
+	const int style = po::command_line_style::default_style & ~po::command_line_style::allow_guessing;
+	const po::parsed_options parsed = po::command_line_parser(argc, argv).options(desc).style(style).run();
+	po::store(parsed, vm);
 	po::notify(vm);
 
 	if (vm.count("help")) {
-		std::cout << desc << "\n";
-		std::cout << "Config variables:\n";
+		std::ostringstream help_text;
+		help_text << desc << "\nConfig variables:\n";
 		for (const auto& [name, var] : cfg::config_manager::instance().registered_variables) {
-			std::cout << "--set " << name << "\n";
+			help_text << "--set " << name << "\n";
 		}
+		std::fputs(help_text.str().c_str(), stdout);
 		return false;
 	}
 
+	std::optional<std::filesystem::path> explicit_config;
 	if (vm.count("config")) {
-		std::string config_path = vm["config"].as<std::string>();
-		cfg::initialize_configs(config_path);
+		explicit_config = vm["config"].as<std::string>();
+	}
+	if (const auto file = config_to_load(explicit_config, default_config)) {
+		cfg::initialize_configs(*file);
+	}
+
+	// Before --set, so that `--set project/...` still wins like every other --set.
+	const auto set_registered = [](std::string_view name, std::string_view value) {
+		cfg::config_manager::instance().update_variable(name, std::filesystem::current_path(), value);
+	};
+	if (vm.count("project")) {
+		set_registered("project/file", vm["project"].as<std::string>());
+	}
+	// Always written here: a config file must not trust a project, only this flag (or --set) can (#921).
+	set_registered("project/trust", vm.count("trust-project") ? "true" : "false");
+	if (vm.count("allow-engine-version-mismatch")) {
+		set_registered("project/allow_engine_version_mismatch", "true");
+	}
+	if (vm.count("non-interactive") || vm.count("headless")) {
+		set_registered("app/non_interactive", "true");
+	}
+	if (vm.count("mcp-stdio")) {
+		set_registered("editor/mcp_stdio", "true");
+	}
+	if (vm.count("open-migration")) {
+		set_registered("editor/open_migration", "true");
+	}
+	if (vm.count("agent-policy")) {
+		set_registered("editor/agent_policy_file", vm["agent-policy"].as<std::string>());
+	}
+	if (vm.count("game")) {
+		set_registered("editor/start_mode", "game");
+		// Its own key: the editor checks it is a res:// tag, which editor/startup_level is not held to.
+		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
+			set_registered("editor/game_level", level);
+		}
+	}
+	const bool migrate = vm.count("migrate") > 0;
+	const bool rollback = vm.count("migrate-rollback") > 0;
+	if (!migrate && (vm.count("dry-run") || vm.count("force") || vm.count("report"))) {
+		throw std::invalid_argument("--dry-run, --force and --report go with --migrate");
+	}
+	if (migrate && rollback) {
+		throw std::invalid_argument("--migrate and --migrate-rollback are separate runs");
+	}
+	if (migrate || rollback) {
+		if (!vm.count("headless")) {
+			throw std::invalid_argument("--migrate and --migrate-rollback run with --headless (from the editor's window: S8 of EPIC-58)");
+		}
+		if (vm.count("mcp-stdio") || vm.count("game")) {
+			throw std::invalid_argument("--migrate and --migrate-rollback take neither --mcp-stdio nor --game");
+		}
+		set_registered("migration/command", migrate ? "migrate" : "rollback");
+		if (rollback) set_registered("migration/rollback_id", vm["migrate-rollback"].as<std::string>());
+		if (vm.count("dry-run")) set_registered("migration/dry_run", "true");
+		if (vm.count("force")) set_registered("migration/force", "true");
+		if (vm.count("report")) set_registered("migration/report", vm["report"].as<std::string>());
+		// A migration is how a project of an older engine is brought to this one. It writes into the project only
+		// through its own writer: no log file, no .cache or user folders (mounted read-only, as a shipped game is),
+		// and nothing reloads under it.
+		set_registered("project/allow_engine_version_mismatch", "true");
+		set_registered("logger/file", "");
+		set_registered("res/read_only_project", "true");
+		set_registered("res/watch_files", "false");
+		set_registered("scene/hot_reload", "false");
+	}
+	if (vm.count("headless")) {
+		set_registered("editor/headless", "true");
+		set_registered("project/required", "true");
+		set_registered("window/system", "null");
+		set_registered("render/backend", "null");
 	}
 
 	if (vm.count("set")) {
 		auto& tokens = vm["set"].as<std::vector<std::string>>();
-		for (int i = 1; i < tokens.size(); i += 2) {
-			std::string name = tokens[i - 1];
-			std::string val = tokens[i];
-			auto var_it = cfg::config_manager::instance().registered_variables.find(name);
-			if (var_it != cfg::config_manager::instance().registered_variables.end()) {
-				var_it->second->update(std::filesystem::current_path(), val);
-			}
+		for (std::size_t i = 1; i < tokens.size(); i += 2) {
+			cfg::set_variable(tokens[i - 1], tokens[i]);
 		}
 	}
 
 	return true;
 }
 
+bool cfg::load_config_file(const std::filesystem::path& file)
+{
+	try {
+		load_config_file_with_extends(file);
+		return true;
+	} catch (const YAML::Exception& e) {
+		egLOG_ERROR("config", "cannot load '{}': {}", fs_paths::utf8_of(file), e.what());
+		return false;
+	}
+}
+
+bool cfg::load_config_text(std::string_view yaml_text, const std::filesystem::path& location)
+{
+	try {
+		load_map(location, "", YAML::Load(std::string{ yaml_text }));
+		return true;
+	} catch (const YAML::Exception& e) {
+		egLOG_ERROR("config", "invalid yaml: {}", e.what());
+		return false;
+	}
+}
+
+namespace {
+
+// nullopt (after a warning) when `value` starts a flow sequence that is not a flat list of scalars.
+std::optional<std::vector<std::string>> parse_list_argument(std::string_view name, std::string_view value)
+{
+	const auto first = value.find_first_not_of(" \t");
+	if (first == std::string_view::npos || value[first] != '[') {
+		return std::vector<std::string>{ std::string{ value } };
+	}
+	try {
+		const YAML::Node node = YAML::Load(std::string{ value });
+		if (node.IsSequence()) {
+			std::vector<std::string> values;
+			if (const std::string problem = read_flat_list(node, values); problem.empty()) {
+				return values;
+			} else {
+				cfg::warn_wrong_kind(name, "--set: " + problem);
+				return std::nullopt;
+			}
+		}
+	} catch (const YAML::Exception&) {
+	}
+	cfg::warn_wrong_kind(name, "--set expects a flat list such as \"[a, b]\" (quote elements that start with '*' or hold ',')");
+	return std::nullopt;
+}
+
+}
+
+void cfg::set_variable(std::string_view name, std::string_view value)
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end()) {
+		return;
+	}
+	bool list_parsed = false;
+	std::optional<std::vector<std::string>> list;
+	for (auto* var : it->second) {
+		if (!var->is_list()) {
+			var->update(std::filesystem::current_path(), value);
+			continue;
+		}
+		if (!list_parsed) {
+			list = parse_list_argument(name, value);
+			list_parsed = true;
+		}
+		if (list) {
+			var->update_list(*list);
+		}
+	}
+}
+
+std::string cfg::format_list(const std::vector<std::string>& values)
+{
+	std::string out = "[";
+	for (std::size_t i = 0; i < values.size(); ++i) {
+		if (i != 0) {
+			out += ',';
+		}
+		out += '"';
+		for (const char ch : values[i]) {
+			switch (ch) {
+			case '"': out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (static_cast<unsigned char>(ch) < 0x20) {
+					char escaped[8];
+					std::snprintf(escaped, sizeof(escaped), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(ch)));
+					out += escaped;
+				} else {
+					out += ch;
+				}
+			}
+		}
+		out += '"';
+	}
+	out += ']';
+	return out;
+}
+
+void cfg::warn_wrong_kind(std::string_view name, std::string_view problem)
+{
+	egLOG_WARN("config", "'{}': {}; the value is ignored", name, problem);
+}
+
+namespace {
+	// std::sto* skip leading blanks and stop at the first character that is not part of the number; only blanks may
+	// follow it here.
+	template<class T, class Parse>
+	std::optional<T> parse_number(std::string_view text, Parse parse)
+	{
+		const std::string owned{ text };
+		try {
+			std::size_t used = 0;
+			const T value = parse(owned, &used);
+			if (owned.find_first_not_of(" \t", used) != std::string::npos) {
+				return std::nullopt;
+			}
+			return value;
+		} catch (const std::invalid_argument&) {
+			return std::nullopt;
+		} catch (const std::out_of_range&) {
+			return std::nullopt;
+		}
+	}
+}
+
+std::optional<int> cfg::parse_int(std::string_view text)
+{
+	return parse_number<int>(text, [](const std::string& s, std::size_t* used) { return std::stoi(s, used); });
+}
+
+std::optional<float> cfg::parse_float(std::string_view text)
+{
+	return parse_number<float>(text, [](const std::string& s, std::size_t* used) { return std::stof(s, used); });
+}
+
 void cfg::registrate_variable(std::string_view name, variable_base* var)
 {
-	cfg::config_manager::instance().registered_variables[std::string{ name }] = var;
+	cfg::config_manager::instance().registered_variables[std::string{ name }].push_back(var);
 }
 
 void cfg::unregistrate_variable(std::string_view name, variable_base* var)
 {
-	cfg::config_manager::instance().registered_variables.erase(std::string{ name });
+	cfg::remove_registration(cfg::config_manager::instance().registered_variables, name, var);
 }
 
 void cfg::registrate_prefix(std::string_view prefix, variable_map* var)
 {
-	cfg::config_manager::instance().registered_prefixes[std::string{ prefix }] = var;
+	cfg::config_manager::instance().registered_prefixes[std::string{ prefix }].push_back(var);
 }
 
 void cfg::unregistrate_prefix(std::string_view prefix, variable_map* var)
 {
-	cfg::config_manager::instance().registered_prefixes.erase(std::string{ prefix });
+	cfg::remove_registration(cfg::config_manager::instance().registered_prefixes, prefix, var);
+}
+
+std::optional<std::vector<std::string>> cfg::config_view::list(std::string_view name) const
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end()) {
+		return std::nullopt;
+	}
+	for (const auto* var : it->second) {
+		if (auto values = var->list()) {
+			return values;
+		}
+	}
+	return std::nullopt;
+}
+
+std::optional<std::string> cfg::config_view::value(std::string_view name) const
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end() || it->second.empty()) {
+		return std::nullopt;
+	}
+	return it->second.front()->text();
 }

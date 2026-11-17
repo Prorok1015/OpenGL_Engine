@@ -1,0 +1,5 @@
+{
+	"__type": "camera_desc",
+	"fov": 50,
+	"transform": { "position": [1, 2, 3], "rotation": [0, 90, 0] }
+}

@@ -1,0 +1,948 @@
+#include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/adapters/res_text_adapter.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
+#include <boost/json.hpp>
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+// A resource layer (#220 PR-4, MODULE_LAYER.md): a resource_system over a parent that shares its resolvers and
+// signals, and keeps in its own cache only what its own adapters load.
+
+namespace {
+
+struct layer_fixture : test_util::ram_res_env {
+	layer_fixture() { layer.emplace(*rs); }
+	~layer_fixture() { layer.reset(); }
+
+	template<class T>
+	res::res_handle<T> load(res::resource_system& system, const res::tag& tag)
+	{
+		auto handle = system.require<T>(tag);
+		pump();
+		return handle;
+	}
+
+	std::optional<res::resource_system> layer;
+};
+
+// A node is its label, then the value of each dependency in brackets: "l(b(x))". Raw data: the label on the first
+// line, one dependency tag per line after it.
+std::vector<std::string> lines_of(const std::vector<std::byte>& raw)
+{
+	std::vector<std::string> lines;
+	std::istringstream stream(std::string(reinterpret_cast<const char*>(raw.data()), raw.size()));
+	for (std::string line; std::getline(stream, line);) {
+		if (!line.empty()) lines.push_back(line);
+	}
+	return lines;
+}
+
+struct base_node : res::text_resource {
+	base_node(const res::tag& tag, std::string text) : res::text_resource(tag, {}) { content = std::move(text); }
+};
+
+// Only a layer has an adapter for it.
+struct layer_node : res::text_resource {
+	layer_node(const res::tag& tag, std::string text) : res::text_resource(tag, {}) { content = std::move(text); }
+};
+
+template<class NODE>
+std::shared_ptr<res::resource_entry> build_node(const res::tag& tag, const std::vector<std::byte>& raw, const res::res_deps& deps)
+{
+	const auto lines = lines_of(raw);
+	std::string text = lines.empty() ? std::string{} : lines.front();
+	if (!deps.empty()) {
+		text += "(";
+		for (std::size_t i = 0; i < deps.size(); ++i) {
+			if (i) text += ",";
+			text += deps.get<base_node>(deps.entries()[i].dep.target)->str();
+		}
+		text += ")";
+	}
+	return std::make_shared<NODE>(tag, std::move(text));
+}
+
+std::vector<res::res_dep> node_dependencies(const std::vector<std::byte>& raw)
+{
+	std::vector<res::res_dep> deps;
+	const auto lines = lines_of(raw);
+	for (std::size_t i = 1; i < lines.size(); ++i) {
+		deps.push_back(res::make_dep<base_node>(res::tag{ lines[i] }));
+	}
+	return deps;
+}
+
+struct base_node_adapter : core::res::adapter_interface {
+	static inline auto INFO = res::adapter_info::make<base_node>({ "node" });
+	std::vector<res::res_dep> collect_dependencies(const res::tag&, const std::vector<std::byte>& raw) const override { return node_dependencies(raw); }
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw, const res::res_deps& deps) const override
+	{
+		return build_node<base_node>(tag, raw, deps);
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+};
+
+// Counts its instances: a module's adapter must be gone with the layer, whatever the root still loads.
+struct layer_node_adapter : core::res::adapter_interface {
+	static inline auto INFO = res::adapter_info::make<layer_node>({ "lnode" });
+	static inline std::atomic<int> alive{ 0 };
+	layer_node_adapter() { ++alive; }
+	~layer_node_adapter() override { --alive; }
+	std::vector<res::res_dep> collect_dependencies(const res::tag&, const std::vector<std::byte>& raw) const override { return node_dependencies(raw); }
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw, const res::res_deps& deps) const override
+	{
+		return build_node<layer_node>(tag, raw, deps);
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+};
+
+struct slow_node : res::text_resource {
+	explicit slow_node(const res::tag& tag) : res::text_resource(tag, {}) {}
+};
+
+// Holds its deserialize on a worker until `release`: a load that is already running when the loads are stopped.
+struct blocking_adapter : core::res::adapter_interface {
+	static inline auto INFO = res::adapter_info::make<slow_node>({ "slow" });
+	static inline std::atomic<bool> entered{ false };
+	static inline std::atomic<bool> release{ false };
+	static inline std::atomic<bool> finished{ false };
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>&) const override
+	{
+		entered = true;
+		for (int waited_ms = 0; !release && waited_ms < 10'000; ++waited_ms) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		finished = true;
+		return std::make_shared<slow_node>(tag);
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+};
+
+// One adapter per type level, to see which one built the resource.
+struct item_base : res::resource_entry {
+	std::string made_by;
+};
+struct item_derived : item_base {
+	using base_type = item_base;
+};
+struct item_adapter : core::res::adapter_interface {
+	explicit item_adapter(std::string who) : who(std::move(who)) {}
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag&, const std::vector<std::byte>&) const override
+	{
+		auto item = std::make_shared<item_derived>();
+		item->made_by = who;
+		return item;
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+	std::string who;
+};
+
+// Holds the data of every request while `gate` is set, until release(): a load whose raw data arrives late.
+class gated_resolver : public test_util::ram_resolver
+{
+public:
+	explicit gated_resolver(const std::string_view prt) : ram_resolver(prt) {}
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		if (!gate) {
+			return ram_resolver::resolve(tag);
+		}
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		std::lock_guard lock(mutex);
+		held.emplace_back(block, files.at(tag));
+		return block;
+	}
+
+	void release()
+	{
+		decltype(held) taken;
+		{
+			std::lock_guard lock(mutex);
+			taken.swap(held);
+		}
+		for (auto& [block, data] : taken) {
+			block->set_ready(std::move(data));
+		}
+	}
+
+	// Like release(), but every held request fails.
+	void fail()
+	{
+		decltype(held) taken;
+		{
+			std::lock_guard lock(mutex);
+			taken.swap(held);
+		}
+		for (auto& [block, data] : taken) {
+			block->set_error("gated failure");
+		}
+	}
+
+	std::atomic<bool> gate{ false };
+	mutable std::mutex mutex;
+	mutable std::vector<std::pair<std::shared_ptr<core::res::res_control_block<std::vector<std::byte>>>, std::vector<std::byte>>> held;
+};
+
+struct game_desc : desc::desc_base {
+	int value = 0;
+
+	void deserialize(desc::desc_system&, const boost::json::object& obj) override
+	{
+		if (const auto* v = obj.if_contains("value")) value = static_cast<int>(v->to_number<std::int64_t>());
+	}
+	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
+};
+
+// A desc with an inline sub-desc: desc_system stores the inline object under a memory tag of the owner.
+struct holder_desc : desc::desc_base {
+	res::res_handle<desc::desc_base> inner;
+
+	void deserialize(desc::desc_system& ds, const boost::json::object& obj) override
+	{
+		inner = ds.get_field_desc<desc::desc_base>(*this, obj.at("inner"));
+	}
+	void serialize(boost::json::object&) const override {}
+};
+
+// A module only reads the base through its layer.
+static_assert(std::is_same_v<decltype(std::declval<const res::resource_system&>().parent()), const res::resource_system*>);
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(res_layer_tests, layer_fixture)
+
+BOOST_AUTO_TEST_CASE(a_type_without_a_layer_adapter_is_the_parents_block)
+{
+	const auto tag = put("a.txt", "hello");
+	const auto base = load<res::text_resource>(*rs, tag);
+	const auto through_layer = load<res::text_resource>(*layer, tag);
+	BOOST_TEST((through_layer.get_control_block() == base.get_control_block()));
+	BOOST_REQUIRE(through_layer.is_ready());
+	BOOST_TEST(through_layer.get()->str() == "hello");
+	BOOST_TEST(layer->live_resources() == 0u);
+	BOOST_TEST(layer->parent() == &*rs);
+}
+
+BOOST_AUTO_TEST_CASE(the_layers_own_adapter_loads_into_the_layer)
+{
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto tag = put("a.txt", "hello");
+	const auto base = load<res::text_resource>(*rs, tag);
+	auto own = load<res::text_resource>(*layer, tag);
+	BOOST_TEST((own.get_control_block() != base.get_control_block()));
+	BOOST_REQUIRE(own.is_ready());
+	BOOST_TEST(own.get()->str() == "hello");
+	BOOST_TEST(layer->live_resources() == 1u);
+	own = {};
+	BOOST_TEST(layer->live_resources() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_change_signalled_on_the_root_reaches_the_layer)
+{
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto tag = put("a.txt", "old");
+	const auto first = load<res::text_resource>(*layer, tag);
+	int notified = 0;
+	layer->watch(tag, this, [&notified](const res::tag&) { ++notified; });
+
+	rs->store(tag, test_util::to_bytes("new"));
+	rs->signal_changed(tag);
+	pump();
+	BOOST_TEST(notified == 1);
+	const auto second = load<res::text_resource>(*layer, tag);
+	BOOST_TEST((second.get_control_block() != first.get_control_block()));
+	BOOST_REQUIRE(second.is_ready());
+	BOOST_TEST(second.get()->str() == "new");
+	layer->unwatch(tag, this);
+}
+
+BOOST_AUTO_TEST_CASE(a_change_signalled_on_the_layer_reaches_the_root)
+{
+	const auto tag = put("a.txt", "old");
+	const auto first = load<res::text_resource>(*rs, tag);
+	rs->store(tag, test_util::to_bytes("new"));
+	layer->signal_changed(tag);
+	pump();
+	const auto second = load<res::text_resource>(*rs, tag);
+	BOOST_TEST((second.get_control_block() != first.get_control_block()));
+	BOOST_REQUIRE(second.is_ready());
+	BOOST_TEST(second.get()->str() == "new");
+}
+
+BOOST_AUTO_TEST_CASE(destroying_the_layer_cancels_its_pending_loads)
+{
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto tag = put("a.txt", "hello");
+	const auto pending = layer->require<res::text_resource>(tag); // not pumped: its load task is still queued
+	BOOST_TEST(!pending.is_ready());
+	layer.reset();
+	pump();
+	BOOST_TEST(pending.has_error());
+}
+
+// #653: what the destructor does to the loads, with the layer still there.
+BOOST_AUTO_TEST_CASE(stop_loading_cancels_the_pending_loads_and_every_later_one)
+{
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto pending = layer->require<res::text_resource>(put("a.txt", "hello")); // not pumped: still queued
+	BOOST_TEST(!pending.is_ready());
+
+	layer->stop_loading();
+	pump();
+	BOOST_TEST(pending.has_error());
+	BOOST_TEST(pending.error_text() == "Load cancelled");
+
+	const auto later = layer->require<res::text_resource>(put("b.txt", "later"));
+	pump();
+	BOOST_TEST(later.has_error());
+	BOOST_TEST(later.error_text() == "Load cancelled");
+
+	layer->stop_loading();
+	layer.reset();
+	pump();
+}
+
+BOOST_AUTO_TEST_CASE(stop_loading_of_the_root_leaves_its_finished_resources)
+{
+	const auto tag = put("a.txt", "hello");
+	const auto loaded = load<res::text_resource>(*rs, tag);
+	BOOST_REQUIRE(loaded.is_ready());
+
+	layer.reset();
+	rs->stop_loading();
+	BOOST_TEST(loaded.is_ready());
+	BOOST_TEST(loaded.get()->str() == "hello");
+}
+
+// #657: a load that waits for a dependency still in flight when the loads stop (a desc whose __parent was loading at
+// exit) must not be kept alive by the wait: the layer goes with nothing of its own referenced.
+BOOST_AUTO_TEST_CASE(stop_loading_drops_the_waits_of_a_dependency_still_in_flight)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag dependency{ "gate://parent.node" };
+	gate.files[dependency] = test_util::to_bytes("parent");
+	gate.gate = true;
+	layer->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	const auto child = put("child.lnode", "child\n" + dependency.string());
+
+	{
+		const auto pending = layer->require<layer_node>(child);
+		pump(); // the child is read and waits for its dependency, which the gate holds
+		BOOST_REQUIRE(!pending.is_ready());
+		layer->stop_loading();
+		pump();
+		BOOST_TEST(pending.has_error());
+	}
+	BOOST_TEST(layer->live_resources() == 0u);
+
+	gate.release();
+	pump();
+	BOOST_TEST(layer->live_resources() == 0u);
+}
+
+// #675: once the loads stopped, a wait asked for afterwards (a main-thread when_all on a block of the parent still in
+// flight) is refused at once, and nothing of it goes into the graph, where it would hold both blocks until the end.
+BOOST_AUTO_TEST_CASE(a_wait_asked_for_after_stop_loading_is_refused_and_leaves_the_graph_alone)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag dependency{ "gate://parent.txt" };
+	gate.files[dependency] = test_util::to_bytes("parent");
+	gate.gate = true;
+	const auto in_flight = rs->require<res::text_resource>(dependency);
+	pump();
+	BOOST_REQUIRE(!in_flight.is_ready());
+	BOOST_REQUIRE(!in_flight.has_error());
+
+	layer->stop_loading();
+	BOOST_REQUIRE(layer->wait_graph_nodes() == 0u);
+	{
+		const auto joined = res::when_all(*layer, in_flight);
+		BOOST_TEST(joined.has_error());
+		BOOST_TEST(joined.error_text().find("Load cancelled") != std::string::npos);
+		BOOST_TEST(layer->wait_graph_nodes() == 0u);
+	}
+
+	gate.release();
+	pump();
+	BOOST_TEST(in_flight.is_ready());
+	BOOST_TEST(layer->wait_graph_nodes() == 0u);
+}
+
+// #675: blocks that have all finished settle a wait at once, so a stopped layer still joins them.
+BOOST_AUTO_TEST_CASE(a_wait_on_finished_blocks_after_stop_loading_is_ready)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag first{ "gate://first.txt" };
+	const res::tag second{ "gate://second.txt" };
+	gate.files[first] = test_util::to_bytes("first");
+	gate.files[second] = test_util::to_bytes("second");
+	const auto a = rs->require<res::text_resource>(first);
+	const auto b = rs->require<res::text_resource>(second);
+	pump();
+	BOOST_REQUIRE(a.is_ready());
+	BOOST_REQUIRE(b.is_ready());
+
+	layer->stop_loading();
+	const auto joined = res::when_all(*layer, a, b);
+	BOOST_TEST(joined.is_ready());
+	BOOST_TEST(!joined.has_error());
+	BOOST_TEST(layer->wait_graph_nodes() == 0u);
+}
+
+// #657: the warning of a destroyed layer names what is still held, so the holder can be found.
+BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_the_resources_still_held)
+{
+	std::mutex m;
+	std::vector<std::string> warnings;
+	auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || message.find("still referenced") == std::string_view::npos) return;
+		std::lock_guard lock(m);
+		warnings.emplace_back(message);
+	});
+
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	const auto tag = put("held.txt", "held");
+	const auto held = load<res::text_resource>(*layer, tag);
+	BOOST_REQUIRE(held.is_ready());
+	layer.reset();
+
+	std::lock_guard lock(m);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings.front().find("1 resources loaded through a destroyed layer are still referenced: ") == 0u);
+	BOOST_TEST(warnings.front().find(std::string{ tag.view() } + " (refs 1)") != std::string::npos);
+	BOOST_TEST(warnings.front().find("more)") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(a_destroyed_layer_names_eight_resources_and_counts_the_rest)
+{
+	std::mutex m;
+	std::vector<std::string> warnings;
+	auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn || message.find("still referenced") == std::string_view::npos) return;
+		std::lock_guard lock(m);
+		warnings.emplace_back(message);
+	});
+
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	std::vector<res::res_handle<res::text_resource>> held;
+	for (int i = 0; i < 10; ++i) {
+		held.push_back(load<res::text_resource>(*layer, put("held" + std::to_string(i) + ".txt", "held")));
+		BOOST_REQUIRE(held.back().is_ready());
+	}
+	layer.reset();
+
+	std::lock_guard lock(m);
+	BOOST_REQUIRE(warnings.size() == 1u);
+	const std::string& warning = warnings.front();
+	BOOST_TEST(warning.find("10 resources loaded through a destroyed layer are still referenced: ") == 0u);
+	BOOST_TEST(warning.ends_with(" (+2 more)"));
+	// Sorted by tag: held0..held7 are named, held8 and held9 are the two counted.
+	BOOST_TEST(warning.find(std::string{ tag_of("held7.txt").view() }) != std::string::npos);
+	BOOST_TEST(warning.find(std::string{ tag_of("held8.txt").view() }) == std::string::npos);
+}
+
+// The base's empty game layer has no limit: its writes go to the root's resolvers.
+BOOST_AUTO_TEST_CASE(a_layer_without_a_write_limit_stores_and_erases_in_the_root)
+{
+	const auto tag = tag_of("stored.txt");
+	BOOST_TEST(layer->store(tag, test_util::to_bytes("x")));
+	BOOST_TEST(rs->exists(tag));
+	BOOST_TEST(layer->exists(tag));
+	BOOST_TEST(layer->erase(tag));
+	BOOST_TEST(!rs->exists(tag));
+	BOOST_TEST((layer->get_resource_layers() == rs->get_resource_layers()));
+}
+
+// A game module's layer writes only under memory://modules/<name>/ (#405, MODULE_LAYER.md): the base stays as it was,
+// and reads still go through to it.
+BOOST_AUTO_TEST_CASE(a_module_layer_writes_only_under_its_prefix)
+{
+	layer->limit_writes_to("memory://modules/game/");
+	const res::tag own{ "memory://modules/game/stored.txt" };
+	BOOST_TEST(layer->store(own, test_util::to_bytes("x")));
+	BOOST_TEST(rs->exists(own));
+	BOOST_TEST(layer->erase(own));
+	BOOST_TEST(!rs->exists(own));
+
+	const auto base = tag_of("base.txt");
+	BOOST_REQUIRE(rs->store(base, test_util::to_bytes("base")));
+	BOOST_TEST(layer->exists(base));
+	BOOST_CHECK_THROW(layer->store(base, test_util::to_bytes("changed")), std::logic_error);
+	BOOST_CHECK_THROW(layer->erase(base), std::logic_error);
+	BOOST_TEST(rs->exists(base));
+	BOOST_TEST(load<res::text_resource>(*layer, base).get()->str() == "base");
+
+	// A pin of a tag not stored yet would be written out: refused before anything is pinned.
+	const auto pinned = tag_of("pinned.txt");
+	BOOST_CHECK_THROW(layer->pin_resource(pinned, res::text_resource{ pinned, test_util::to_bytes("p") }), std::logic_error);
+	BOOST_TEST(layer->pinned_count() == 0u);
+
+	for (const char* refused : { "res://stored.txt", "memory://modules/other/stored.txt", "memory://modules/game/../other/x",
+			"memory://modules/game/", "memory://modules/gamex/stored.txt" }) {
+		BOOST_TEST_CONTEXT(refused) {
+			BOOST_CHECK_THROW(layer->store(res::tag{ refused }, test_util::to_bytes("x")), std::logic_error);
+			BOOST_CHECK_THROW(layer->erase(res::tag{ refused }), std::logic_error);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_desc_type_of_the_layer_loads_only_through_the_layer)
+{
+	desc::desc_system base_descs{ *rs };
+	rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(base_descs));
+	{
+		desc::desc_system layer_descs{ *layer };
+		layer_descs.register_desc<game_desc>("game_desc");
+		layer->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*layer), std::ref(layer_descs));
+
+		const auto tag = put("g.desc", R"({ "__type": "game_desc", "value": 3 })");
+		{
+			const auto through_layer = load<desc::desc_base>(*layer, tag);
+			BOOST_REQUIRE(through_layer.is_ready());
+			const auto* game = dynamic_cast<const game_desc*>(through_layer.get().get());
+			BOOST_REQUIRE(game != nullptr);
+			BOOST_TEST(game->value == 3);
+			BOOST_TEST(layer->live_resources() == 1u);
+		}
+		BOOST_TEST(load<desc::desc_base>(*rs, tag).has_error());
+		layer.reset(); // the layer's adapter uses layer_descs: the layer goes first
+	}
+	rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
+}
+
+// An inline sub-desc in a module's layer is kept under the layer's own prefix (#408 review): the layer's write limit
+// does not stop a level with an inline texture or material from loading.
+BOOST_AUTO_TEST_CASE(an_inline_desc_loads_in_a_layer_with_a_write_limit)
+{
+	desc::desc_system base_descs{ *rs };
+	rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(base_descs));
+	{
+		layer->limit_writes_to("memory://modules/game/");
+		desc::desc_system layer_descs{ *layer };
+		layer_descs.register_desc<game_desc>("game_desc");
+		layer_descs.register_desc<holder_desc>("holder_desc");
+		layer->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*layer), std::ref(layer_descs));
+
+		const auto tag = put("h.desc", R"({ "__type": "holder_desc", "inner": { "__type": "game_desc", "value": 5 } })");
+		{
+			const auto holder = load<desc::desc_base>(*layer, tag);
+			BOOST_REQUIRE(holder.is_ready());
+			const auto* loaded = dynamic_cast<const holder_desc*>(holder.get().get());
+			BOOST_REQUIRE(loaded != nullptr);
+			pump();
+			BOOST_REQUIRE(loaded->inner.is_ready());
+			const std::string_view inner_tag = loaded->inner.get_tag().view();
+			BOOST_TEST(inner_tag.starts_with("memory://modules/game/overrides/"));
+			BOOST_TEST(desc::is_override_tag(inner_tag));
+			const auto* inner = dynamic_cast<const game_desc*>(loaded->inner.get().get());
+			BOOST_REQUIRE(inner != nullptr);
+			BOOST_TEST(inner->value == 5);
+		}
+		layer.reset();
+	}
+	rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
+}
+
+// #406: the owner holds what res_handle::then captures, also while the resource is still loading.
+BOOST_AUTO_TEST_CASE(the_owner_holds_the_callback_of_a_resource_still_loading)
+{
+	const auto tag = put("loading.txt", "text");
+	const auto handle = rs->require<res::text_resource>(tag);
+	BOOST_REQUIRE(!handle.is_ready());
+
+	auto capture = std::make_shared<int>(0);
+	const std::weak_ptr<int> watched = capture;
+	int calls = 0;
+	auto owner = std::make_unique<ds::lifetime>();
+	handle.then(*owner, [capture, &calls](res::text_resource&) { ++calls; });
+	capture.reset();
+	BOOST_TEST(!watched.expired());
+	owner.reset();
+	BOOST_TEST(watched.expired());
+	pump();
+	BOOST_TEST(handle.is_ready());
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(the_most_specific_adapter_wins_across_the_chain)
+{
+	rs->registrate_adapter<item_adapter>(res::adapter_info::make<item_derived>({ "item" }), std::string{ "base" });
+	layer->registrate_adapter<item_adapter>(res::adapter_info::make<item_base>({ "item" }), std::string{ "layer" });
+	const auto tag = put("a.item", "x");
+
+	// The base's adapter for the derived type beats the layer's for its base type: the parent's block.
+	const auto derived = load<item_derived>(*layer, tag);
+	BOOST_REQUIRE(derived.is_ready());
+	BOOST_TEST(derived.get()->made_by == "base");
+	BOOST_TEST((derived.get_control_block() == load<item_derived>(*rs, tag).get_control_block()));
+
+	// For the base type the layer's own adapter is the most specific one.
+	const auto base = load<item_base>(*layer, tag);
+	BOOST_REQUIRE(base.is_ready());
+	BOOST_TEST(base.get()->made_by == "layer");
+}
+
+BOOST_AUTO_TEST_CASE(a_change_below_a_base_resource_reaches_the_layer_resource_built_on_it)
+{
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	const auto x = put("x.node", "x");
+	const auto b = put("b.node", "b\n" + x.string());
+	const auto l = put("l.lnode", "l\n" + b.string());
+
+	const auto first = load<layer_node>(*layer, l);
+	BOOST_REQUIRE(first.is_ready());
+	BOOST_TEST(first.get()->str() == "l(b(x))");
+	int notified = 0;
+	layer->watch(l, this, [&notified](const res::tag&) { ++notified; });
+
+	rs->store(x, test_util::to_bytes("x2"));
+	rs->signal_changed(x); // the base evicts b; the layer must evict l, which is built on b
+	pump();
+	BOOST_TEST(notified == 1);
+	const auto second = load<layer_node>(*layer, l);
+	BOOST_REQUIRE(second.is_ready());
+	BOOST_TEST(second.get()->str() == "l(b(x2))");
+	layer->unwatch(l, this);
+}
+
+BOOST_AUTO_TEST_CASE(destroying_the_layer_releases_what_it_kept_in_the_parent)
+{
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	const auto x = put("x.node", "x");
+	const auto b = put("b.node", "b\n" + x.string());
+	const auto l = put("l.lnode", "l\n" + b.string());
+
+	BOOST_REQUIRE(load<layer_node>(*layer, l).is_ready());
+	BOOST_TEST(rs->layer_needs_count() > 0u);
+	layer.reset();
+	BOOST_TEST(rs->layer_needs_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(destroying_the_layer_drops_its_adapters_while_the_root_still_loads)
+{
+	rs->unregistrate_resolver(res::tag::memory);
+	auto& gated = rs->registrate_resolver<gated_resolver>(res::tag::memory);
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	BOOST_REQUIRE(layer_node_adapter::alive == 1);
+	const auto x = put("x.node", "x");
+	const auto l = put("l.lnode", "l\n" + x.string());
+
+	const auto pending = layer->require<layer_node>(l); // its raw data is there; x will not be
+	gated.gate = true;
+	pump(); // l waits for the parent's block of x
+	BOOST_REQUIRE(!pending.is_ready());
+
+	layer.reset();
+	BOOST_TEST(layer_node_adapter::alive == 0); // nothing on the root's side kept it
+	BOOST_TEST(pending.has_error());
+
+	gated.gate = false;
+	gated.release(); // the parent's block settles after the layer is gone
+	pump();
+	BOOST_TEST(pending.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(erasing_through_a_layer_leaves_the_base_pins)
+{
+	const auto tag = put("o.txt", "o");
+	rs->warmup<res::text_resource>(tag);
+	layer->warmup<res::text_resource>(tag);
+	pump();
+	BOOST_REQUIRE(rs->pinned_count() == 1u);
+	BOOST_REQUIRE(layer->pinned_count() == 1u);
+
+	BOOST_TEST(layer->erase(tag));
+	BOOST_TEST(!rs->exists(tag)); // the data is the root's resolvers': gone for everyone
+	BOOST_TEST(rs->pinned_count() == 1u);
+	BOOST_TEST(layer->pinned_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_layer_leaves_the_base_cache_as_it_was)
+{
+	const auto a = put("a.txt", "a");
+	const auto held = load<res::text_resource>(*rs, a);
+	const std::size_t before = rs->live_resources();
+
+	layer->registrate_adapter<res::text_adapter>(res::text_adapter::INFO);
+	{
+		const auto own = load<res::text_resource>(*layer, put("c.txt", "c"));
+		BOOST_REQUIRE(own.is_ready());
+		BOOST_TEST(rs->live_resources() == before); // the layer's own resources are not in the base cache
+	}
+	layer.reset();
+	BOOST_TEST(rs->live_resources() == before);
+	BOOST_TEST((load<res::text_resource>(*rs, a).get_control_block() == held.get_control_block()));
+}
+
+BOOST_AUTO_TEST_CASE(a_warmup_in_a_layer_serves_the_current_block)
+{
+	const auto tag = put("w.txt", "old");
+	layer->warmup<res::text_resource>(tag);
+	pump();
+	const auto first = load<res::text_resource>(*layer, tag);
+	BOOST_REQUIRE(first.is_ready());
+
+	rs->store(tag, test_util::to_bytes("new"));
+	rs->signal_changed(tag);
+	pump();
+	const auto second = load<res::text_resource>(*layer, tag);
+	BOOST_REQUIRE(second.is_ready());
+	BOOST_TEST(second.get()->str() == "new"); // not the pinned old block
+}
+
+// Real threads (TSan): the layer goes while its loads wait for the root's blocks, which settle afterwards.
+BOOST_AUTO_TEST_CASE(destroying_a_layer_during_threaded_loads)
+{
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	auto& gated = root.registrate_resolver<gated_resolver>(res::tag::memory);
+	root.registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	const res::tag x{ "memory://threaded/x.node" };
+	BOOST_REQUIRE(root.store(x, test_util::to_bytes("x")));
+	// Stored before any load: the pool threads resolve the dependencies while the test goes on.
+	constexpr int rounds = 20;
+	std::vector<res::tag> tops;
+	for (int round = 0; round < rounds; ++round) {
+		tops.emplace_back("memory://threaded/l" + std::to_string(round) + ".lnode");
+		BOOST_REQUIRE(root.store(tops.back(), test_util::to_bytes("l\n" + x.string())));
+	}
+
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			const res::tag& l = tops[static_cast<std::size_t>(round)];
+			auto in_layer = std::make_unique<res::resource_system>(root);
+			in_layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+			gated.gate = (round % 2) == 0; // half the rounds hold the raw data back until the layer is gone
+			const auto pending = in_layer->require<layer_node>(l);
+			std::this_thread::sleep_for(std::chrono::microseconds(200 * (round % 5)));
+			in_layer.reset();
+			BOOST_TEST(layer_node_adapter::alive == 0);
+			gated.gate = false;
+			gated.release();
+			threaded.drain_main(std::chrono::milliseconds(50));
+			root.signal_changed(x); // a fresh x for the next round
+		}
+	}
+	threaded.drain_main(std::chrono::milliseconds(50));
+}
+
+// #653: stop_loading returns only once a deserialize running on a worker has finished, so the types it builds may go
+// right after it.
+BOOST_AUTO_TEST_CASE(stop_loading_waits_for_a_deserialize_already_running)
+{
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	root.registrate_resolver<test_util::ram_resolver>(res::tag::memory);
+	root.registrate_adapter<blocking_adapter>(blocking_adapter::INFO);
+	blocking_adapter::entered = false;
+	blocking_adapter::release = false;
+	blocking_adapter::finished = false;
+	const res::tag tag{ "memory://threaded/a.slow" };
+	BOOST_REQUIRE(root.store(tag, test_util::to_bytes("a")));
+
+	[[maybe_unused]] const auto pending = root.require<slow_node>(tag);
+	for (int waited_ms = 0; !blocking_adapter::entered && waited_ms < 10'000; ++waited_ms) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	BOOST_REQUIRE(blocking_adapter::entered);
+
+	std::atomic<bool> stopped{ false };
+	std::atomic<bool> stopped_while_running{ false };
+	std::thread releaser([&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		stopped_while_running = stopped.load();
+		blocking_adapter::release = true;
+	});
+	root.stop_loading();
+	stopped = true;
+	releaser.join();
+
+	BOOST_TEST(!stopped_while_running);
+	BOOST_TEST(blocking_adapter::finished);
+	threaded.drain_main(std::chrono::milliseconds(50));
+}
+
+// #416 / #409: a callback of a layer's user (a game module) on a BASE block that fails on a worker while its owner goes
+// on the main thread. The worker drops the callback (drop_held) while ~lifetime empties the same slot: the callback's
+// captures go exactly once, before ~lifetime returns or by the worker under the slot's lock (TSan).
+BOOST_AUTO_TEST_CASE(a_base_block_failing_on_a_worker_while_the_callback_owner_goes)
+{
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	auto& gated = root.registrate_resolver<gated_resolver>(res::tag::memory);
+	constexpr int rounds = 50;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			const res::tag tag{ "memory://threaded/base" + std::to_string(round) + ".txt" };
+			BOOST_REQUIRE(root.store(tag, test_util::to_bytes("text")));
+			auto in_layer = std::make_unique<res::resource_system>(root);
+			auto owner = std::make_unique<ds::lifetime>();
+			gated.gate = true;
+			const auto handle = in_layer->require<res::text_resource>(tag); // the base's adapter: a block of the root
+			auto capture = std::make_shared<int>(0);
+			const std::weak_ptr<int> watched = capture;
+			int calls = 0;
+			handle.then(*owner, [capture, &calls](res::text_resource&) { ++calls; });
+			capture.reset();
+
+			std::thread worker([&gated] { gated.fail(); });
+			owner.reset();
+			worker.join();
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!handle.has_error() && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(handle.has_error());
+			in_layer.reset();
+			gated.gate = false;
+			threaded.drain_main(std::chrono::milliseconds(50));
+			BOOST_TEST(watched.expired());
+			BOOST_TEST(calls == 0);
+		}
+	}
+}
+
+// #422: the same interleaving made deterministic. The worker that drops the callback is held inside the destruction
+// of its functor (a capture's destructor) until the main thread has started ~lifetime of the owner; ~lifetime must not
+// return before that destruction has finished, or a game module's library could close under the worker.
+BOOST_AUTO_TEST_CASE(the_owner_waits_for_a_worker_that_destroys_its_dropped_callback)
+{
+	struct latch_state {
+		std::atomic<bool> in_destructor{ false };
+		std::atomic<bool> owner_going{ false };
+		std::atomic<bool> destroyed{ false };
+	};
+	struct blocking_capture {
+		std::shared_ptr<latch_state> state;
+		~blocking_capture()
+		{
+			state->in_destructor = true;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!state->owner_going && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			// The owner is in ~lifetime now; it must wait for this destructor, not return first.
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			state->destroyed = true;
+		}
+	};
+
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	auto& gated = root.registrate_resolver<gated_resolver>(res::tag::memory);
+	constexpr int rounds = 10;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			const res::tag tag{ "memory://latched/base" + std::to_string(round) + ".txt" };
+			BOOST_REQUIRE(root.store(tag, test_util::to_bytes("text")));
+			auto in_layer = std::make_unique<res::resource_system>(root);
+			auto owner = std::make_unique<ds::lifetime>();
+			gated.gate = true;
+			const auto handle = in_layer->require<res::text_resource>(tag); // the base's adapter: a block of the root
+			auto state = std::make_shared<latch_state>();
+			{
+				auto capture = std::make_shared<blocking_capture>();
+				capture->state = state;
+				handle.then(*owner, [capture](res::text_resource&) {});
+			}
+
+			gated.fail(); // the block fails on a pool task, which drops the callback there
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!state->in_destructor && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(state->in_destructor.load());
+			state->owner_going = true;
+			owner.reset();
+			BOOST_TEST(state->destroyed.load()); // ~lifetime returned only after the worker was done with it
+
+			while (!handle.has_error() && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(handle.has_error());
+			in_layer.reset();
+			gated.gate = false;
+			threaded.drain_main(std::chrono::milliseconds(50));
+		}
+	}
+}
+
+// #941: a wait given up on a later dependency (here: the node itself, a cycle) takes back the edge it added to an earlier
+// one that is still loading; else both blocks stay in the graph until the loads stop.
+BOOST_AUTO_TEST_CASE(a_wait_that_fails_on_a_cycle_takes_back_its_earlier_edges)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag held{ "gate://held.node" };
+	gate.files[held] = test_util::to_bytes("held");
+	gate.gate = true;
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	const res::tag self = tag_of("self.node");
+	put("self.node", "self\n" + held.string() + "\n" + self.string());
+	{
+		const auto loading = rs->require<base_node>(self);
+		pump();
+		BOOST_TEST(loading.has_error());
+		BOOST_TEST(rs->wait_graph_nodes() == 0u, "the edge to the held dependency went with the wait");
+	}
+	gate.release();
+	pump();
+	BOOST_TEST(rs->wait_graph_nodes() == 0u);
+}
+
+// #941: the same for a chain that would grow deeper than k_max_dependency_depth (32 edges).
+BOOST_AUTO_TEST_CASE(a_wait_that_fails_on_a_too_deep_chain_takes_back_its_earlier_edges)
+{
+	auto& gate = rs->registrate_resolver<gated_resolver>("gate");
+	const res::tag held{ "gate://held.node" };
+	gate.files[held] = test_util::to_bytes("held");
+	gate.gate = true;
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	// b0 -> b1 -> ... -> b31 -> held: 32 edges, all waiting for the gate.
+	constexpr int k_chain = 32;
+	for (int i = 0; i < k_chain; ++i) {
+		const std::string next = i + 1 < k_chain ? tag_of("b" + std::to_string(i + 1) + ".node").string() : held.string();
+		put("b" + std::to_string(i) + ".node", "b" + std::to_string(i) + "\n" + next);
+	}
+	const auto chain = rs->require<base_node>(tag_of("b0.node"));
+	pump();
+	BOOST_REQUIRE(rs->wait_graph_nodes() == static_cast<std::size_t>(k_chain + 1));
+
+	// top -> held is added first, then top -> b0 would make 33 edges.
+	put("top.node", "top\n" + held.string() + "\n" + tag_of("b0.node").string());
+	{
+		const auto top = rs->require<base_node>(tag_of("top.node"));
+		pump();
+		BOOST_TEST(top.has_error());
+		BOOST_TEST(top.error_text().find("deeper than") != std::string::npos);
+		BOOST_TEST(rs->wait_graph_nodes() == static_cast<std::size_t>(k_chain + 1), "top and its edge to held are gone");
+	}
+	gate.release();
+	pump();
+	BOOST_TEST(chain.is_ready());
+	BOOST_TEST(rs->wait_graph_nodes() == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

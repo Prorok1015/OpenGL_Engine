@@ -1,0 +1,10 @@
+{
+	"__type": "world_desc",
+	"__version": 2,
+	"name": "w_v2",
+	"systems": [],
+	"children": [
+		{ "__id": "00000000000000a1", "name": "a" },
+		{ "__id": "00000000000000a2", "name": "inst", "components": { "prefab_desc": { "__type": "prefab_desc", "__version": 2, "__parent": "res://prefabs/p_v2.prefab.desc" } } }
+	]
+}

@@ -1,0 +1,513 @@
+#pragma once
+#include "edt_asset_references.h"
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_asset_walk.h>
+#include <snk/resource/res_file_change.h>
+#include <snk/resource/res_stamp.h>
+#include <snk/resource/res_tag.h>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <unordered_map>
+#include <vector>
+#include <snk/platform/plt_file_lock.h>
+#include "edt_file_identity.h"
+
+namespace res
+{
+	class resource_system;
+}
+
+namespace edt
+{
+	class job_service;
+	// Orders the writes of the cache file (asset_database.cpp).
+	struct asset_cache_writer;
+	// What one batch of changes lists of the layers' folders (asset_database.cpp).
+	class asset_layer_lookup;
+
+	// Names that differ only in letter case are one name (Windows).
+	inline constexpr bool platform_case_insensitive = res::asset_names_case_insensitive;
+
+	// One file of the resource tree as the asset database knows it (EPIC-57 section 4.3).
+	struct asset_record
+	{
+		res::tag path;
+		// Index into the layers (lowest first) of the layer whose file wins for the path.
+		std::size_t layer = 0;
+		// Lower layers that hold an entry of the same name, shadowed by this one (Problems warns about an engine asset
+		// a project file covers, R28).
+		std::vector<std::size_t> shadowed_layers;
+		// From the file's .resource; none: the file has no ID yet ("no ID", S57-4).
+		std::optional<res::asset_id> id;
+		std::int64_t size = 0;
+		std::int64_t mtime = 0; // ticks of std::filesystem::file_time_type
+		bool has_meta = false;
+		// The layer whose .resource the record read (any layer may hold it); meaningful only with has_meta.
+		std::size_t meta_layer = 0;
+		std::int64_t meta_size = 0;
+		std::int64_t meta_mtime = 0;
+		// Which file on the disk the file and its .resource are: part of their stamps, as a file renamed over another keeps
+		// its size and time (#888). Invalid where the file system tells none (see known_file_id).
+		file_id content_id;
+		file_id meta_id;
+		// Why the .resource next to the file could not be read (with the path of the bad field); empty when it was read.
+		std::string meta_error;
+		std::vector<std::string> flags;
+		// The kind of asset by suffix: desc, texture, model, shader or file.
+		std::string type;
+		// "fnv1a64:<16 hex digits>"; empty until the background pass hashed the file.
+		std::string content_hash;
+		// The "__type" of a desc file's root, once hashed; none for any other file (or a desc without one).
+		std::optional<std::string> desc_type;
+		// The direct references of a desc file, once hashed (#774, EPIC-57 section 6.3); none for any other file.
+		raw_reference_list references;
+		// A desc file bigger than asset_database::max_desc_bytes: its references (and __type) were not read.
+		bool references_skipped = false;
+		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
+		// std::filesystem::file_time_type::clock: a stamp this close to its check may not have moved for a change made
+		// just after (one tick of a coarse file system), so the cache trusts what was learned from it only after it was
+		// read again. Kept apart, so a .resource carried over from an older check leaves the file's own check alone.
+		std::int64_t content_checked_at = 0;
+		std::int64_t meta_checked_at = 0;
+
+		// Everything but the times of the checks: what the record says of the file.
+		bool same_as(const asset_record& other) const;
+	};
+
+	// A .resource without its file.
+	struct asset_orphan
+	{
+		res::tag meta_path;
+		std::optional<res::asset_id> id;
+		// Index into the layers (lowest first) of the layer that holds the .resource.
+		std::size_t layer = 0;
+		// The content hash of the file the .resource belonged to, when the database knew it; empty otherwise.
+		std::string last_hash;
+
+		bool operator==(const asset_orphan&) const = default;
+	};
+
+	// What a fix of the asset database (or its undo) came to: `error` says why it did not happen.
+	struct asset_fix_result
+	{
+		bool ok = false;
+		std::string error;
+		// A failed undo stays in the history: reading, renaming or writing failed, not a file changed since.
+		bool keep = false;
+	};
+
+	// Where the database keeps its cache: <root>/<relative>, every folder below the root and the files reached without
+	// following a link (prj::write_project_file, prj::read_project_file), so a project cannot point it outside itself.
+	struct asset_cache_location
+	{
+		std::filesystem::path root;
+		// A chain of plain names, e.g. ".cache/asset_db".
+		std::filesystem::path relative;
+	};
+
+	// What a walk of the layers found, built off the main thread.
+	struct asset_scan
+	{
+		std::vector<asset_record> records;
+		std::vector<asset_orphan> orphans;
+		// .resource files the walk read (an unchanged one known from the cache is not read).
+		std::size_t meta_reads = 0;
+		// Layers whose files the file system gives no identity: their hashes follow size and time alone.
+		std::set<std::size_t> layers_without_ids;
+	};
+
+	// Where the stamps take a file's identity from: file_id_of, or a stand-in in tests.
+	using file_id_source = std::function<file_id(const std::filesystem::path&)>;
+
+	// An identity a stamp can rely on: one the file system told, and not the zero some network and synchronised file
+	// systems answer for every file.
+	bool known_file_id(const file_id& id);
+
+	// What the background pass reads of one file: its hash and, for a desc, its "__type".
+	struct asset_content
+	{
+		bool ok = false;
+		std::string error;
+		// The file's size and time before and after the read: equal when nothing wrote it meanwhile.
+		std::int64_t size = 0;
+		std::int64_t mtime = 0;
+		bool unchanged = false;
+		std::string content_hash;
+		std::optional<std::string> desc_type;
+		raw_reference_list references;
+		// A desc bigger than the limit of the read: neither its "__type" nor its references were read.
+		bool references_skipped = false;
+		// The string "__guid" of a desc's root, as written (not checked).
+		std::optional<std::string> root_guid;
+	};
+
+	// What one batch of file changes did to the database.
+	struct asset_batch
+	{
+		// (from, to): a file that went away and one that came with the guid of its .resource.
+		std::vector<std::pair<res::tag, res::tag>> moved;
+		std::vector<res::tag> added;
+		std::vector<res::tag> removed;
+		std::vector<res::tag> changed;
+		// What a walk found (apply_scan), against a watcher's report: it may name any number of files.
+		bool from_walk = false;
+	};
+
+	// The kind of asset of a path by its suffix (lowercase compare).
+	std::string asset_type_of(std::string_view path);
+
+	// res::holds_id_before of two records (EPIC-57 section 10): the lowest layer, then the oldest, then the smaller path.
+	// Problems and the asset index both go by it, and so does the project migration's index.
+	bool holds_id_before(const asset_record& a, const asset_record& b);
+
+	// Walks `layers` (lowest first, as resource_system::get_resource_layers gives them) merged as the asset browser merges
+	// them (an upper layer shadows a name below, case folded when `case_insensitive`), and reads every file's .resource. In
+	// every layer, an entry that redirects (a link, a junction) is neither listed nor entered, and hidden folders are
+	// skipped. `stopped` (may be empty) ends the walk early.
+	// `known` (may be null): records by path text, from the cache or the last walk; a file whose .resource has the size
+	// and time recorded there, older than stamp_granularity before its check, keeps the record's ID and flags without
+	// the .resource being read again.
+	// `id_of` (empty: file_id_of) gives the files' identities.
+	asset_scan scan_asset_layers(const std::vector<std::filesystem::path>& layers, const std::function<bool()>& stopped = {},
+		const std::map<std::string, asset_record>* known = nullptr, bool case_insensitive = platform_case_insensitive,
+		const file_id_source& id_of = {});
+
+	// Writes the cache file of `records` (the format load_cache reads) through prj::write_project_file. The error, nullopt on
+	// success.
+	std::optional<std::string> write_cache(const asset_cache_location& cache, const std::vector<std::filesystem::path>& layers,
+		const std::map<std::string, asset_record>& records);
+
+	// Hashes the file at `relative` below `layer_root` through a read that follows no link (platform::beneath), in chunks;
+	// a desc file of at most `max_desc_bytes` is parsed for its "__type" too.
+	asset_content read_asset_content(const std::filesystem::path& layer_root, const std::filesystem::path& relative,
+		bool is_desc, std::uint64_t max_desc_bytes);
+
+	// The editor's asset database (EPIC-57 section 4.3, S57-3): ID <-> path, size and time, content hash, kind and desc
+	// type of every file of res://, built from the files' .resource. The walk and the hashing run on job_service (lane
+	// io); their results are applied on the main thread. Main thread only.
+	class asset_database
+	{
+	public:
+		// A desc file up to this is parsed for its "__type" and its references: a level may be this big.
+		static constexpr std::uint64_t max_desc_bytes = k_level_file_limit;
+		static constexpr std::size_t hash_batch = 64;
+		static constexpr int max_depth = res::asset_walk_max_depth;
+		// Batches that arrive during a walk wait for it, up to this many changes; past it one more walk follows instead.
+		static constexpr std::size_t max_deferred_changes = 4096;
+		// A larger cache is not read (the walk then reads every file).
+		static constexpr std::uint64_t max_cache_bytes = 16u * 1024u * 1024u;
+		// A file stamp within this of the time it was checked is not trusted (res::racy_stamp): a .resource with one is
+		// read again by every walk and batch, a file's hash once more when the stamp is older than this (#973, #975).
+		static constexpr std::chrono::seconds stamp_granularity = res::k_stamp_granularity;
+		// A git index or HEAD written this recently means a git operation may still be writing files (#765).
+		static constexpr std::chrono::seconds git_quiet_time{ 5 };
+		// A file from outside written this recently may still be written, copied or moved: it waits for its ID.
+		static constexpr std::chrono::seconds new_file_quiet_time{ 5 };
+		// A file without ID that went away this recently and one of its size and time that comes are a move.
+		static constexpr std::chrono::seconds move_window{ 60 };
+		// A file waiting for its hash this long (it cannot be read) stops waiting for an ID.
+		static constexpr std::chrono::seconds pending_timeout{ 60 };
+		// poll() looks at the files waiting for an ID at most this often.
+		static constexpr std::chrono::seconds poll_interval{ 1 };
+
+		// `events` (may be null) tells the database about a job someone cancelled (job.cancel): its work is queued again
+		// and goes on at the next rebuild. Without it a cancelled hashing job is only noticed by rebuild().
+		// `cache` (cache://asset_db/; no root: no cache): the walk starts from assets.json there, so it reads only what
+		// changed; the records of the cache are not published before the first walk confirmed them. The cache is written
+		// back off the main thread when something changed and the work is done, and once more when the database goes.
+		// Only the holder of the lock file next to it writes: a second editor on the project reads the cache and keeps
+		// its database in memory.
+		asset_database(job_service& jobs, editor_events* events, std::vector<std::filesystem::path> layers,
+			asset_cache_location cache = {});
+		~asset_database();
+		asset_database(const asset_database&) = delete;
+		asset_database& operator=(const asset_database&) = delete;
+
+		// Walks the layers again; what is known stays until the walk's result arrives. A walk already running is cancelled.
+		void rebuild();
+		// Names merged with their letter case folded (default: the platform's). Set before the first rebuild(); for tests
+		// of the Windows rules on any system.
+		void set_case_insensitive(bool value) { m_case_insensitive = value; }
+		bool case_insensitive() const { return m_case_insensitive; }
+		// A walk is running.
+		bool scanning() const { return m_scanning; }
+		// The first walk has given its result: the records are the tree's, not only the cache's.
+		bool walked_once() const { return m_walked_once; }
+		// Walks whose result was applied: the records are the tree's as of then.
+		std::uint64_t walks_applied() const { return m_walks_applied; }
+		// Grows whenever changes waiting behind a walk were dropped (more than the limit): what they said is known only
+		// after the next walk, so nothing may be decided by them until then.
+		std::uint64_t changes_dropped() const { return m_changes_dropped; }
+		// Tests only: the limit of changes waiting behind a walk (max_deferred_changes).
+		void set_max_deferred_for_tests(std::size_t limit) { m_max_deferred = limit; }
+		// Files whose hash is not known yet (queued or running); not those read again beside a hash they keep (#975).
+		std::size_t pending_hashes() const;
+		// This database holds the lock of the cache and writes it.
+		bool writes_cache() const { return m_lock != nullptr; }
+		// The cache gave the records before the first walk.
+		bool loaded_from_cache() const { return m_loaded_from_cache; }
+		// Files read so far: .resource files and files hashed. For tests of the cache.
+		std::size_t files_read() const { return m_files_read; }
+		// Where the stamps take files' identities from (tests: a file system that tells none). Before the first walk.
+		void set_file_id_source(file_id_source source) { m_file_id = std::move(source); }
+		// Writes the cache now, on the calling thread, when something changed since it was last written (and the lock is
+		// held).
+		void save();
+
+		// Follows the changes below res:// of `resources` (resource_system::subscribe_changes) until the database goes.
+		void attach(res::resource_system& resources);
+		// Applies one batch of changes below res:// (main thread, as resource_system delivers them): every file or
+		// .resource named is looked up again in the layers, as the walk would find it. A file that went away and one that
+		// came carrying the same guid in their .resource are a move, whatever the watcher called them; a folder that came
+		// or went walks the tree again (once more after a running walk). Changes below hidden folders are ignored. While a
+		// walk runs (or before the first one), the batch waits and is applied after the walk's result: the return is
+		// then empty and on_batch is called when it is applied.
+		asset_batch apply_changes(std::span<const res::file_change> changes);
+		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
+		// the resource_system's own handling after it).
+		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
+		// The number (resource_system::delivering_batch) of the last batch from attach()'s resource_system the records hold:
+		// a batch that waits behind a walk counts once it is applied after it. For resource_system::apply_asset_batch.
+		std::uint64_t applied_through() const { return m_applied_through; }
+
+		// New files get an ID (#765, EPIC-57 section 6.1): a file of the top layer without a .resource in any layer that
+		// a batch after the first walk reports as created, or a later walk adds, gets <file>.resource with a new ID (a
+		// desc: the valid "__guid" of its root, read by the hashing pass, unless another file has that ID). Not for OS
+		// litter or temporaries, nor for what matches a file without ID that went away (a move). The editor's own write
+		// (file_change::self) gets it in that batch (a desc once hashed); a file from outside waits for its hash and to
+		// be new_file_quiet_time old, and gets none when an orphan had that hash (a move: "Link" in Problems), nor while
+		// a git operation runs. Files the first walk finds are left as they are (migration).
+		// `busy` (may be empty): the editor's own git operation is running.
+		void set_vcs_busy(std::function<bool()> busy) { m_vcs_busy = std::move(busy); }
+		// The repository's git folder (index, HEAD), asked at every check (may be empty: no git folder is looked at).
+		void set_git_dir_provider(std::function<std::optional<std::filesystem::path>()> provider) { m_git_dir = std::move(provider); }
+		// Looks at the files waiting for an ID again (a git operation may have ended); at most every poll_interval
+		// unless `force`. Cheap when none waits. Also queues again the hashes whose racy stamp has aged (#975). Main
+		// thread, once per frame.
+		void poll(bool force = false);
+		// Files from outside waiting for an ID (their hash, the quiet time, the end of a git operation).
+		std::size_t pending_ids() const { return m_pending_ids.size(); }
+		// The last look at those files found a git operation running, so they wait for it.
+		bool ids_held_by_git() const { return m_ids_held_by_git; }
+		// Tests only: the steady time the database reads (poll throttle, move_window, pending_timeout).
+		void set_clock_for_tests(std::function<std::chrono::steady_clock::time_point()> clock) { m_clock = std::move(clock); }
+		// Tests only: the file clock (ticks of std::filesystem::file_time_type) a hash's racy stamp is aged by.
+		void set_file_clock_for_tests(std::function<std::int64_t()> clock) { m_file_clock = std::move(clock); }
+		// Hashes read while their file's stamp was racy, waiting to be read once more (#975). For tests.
+		std::size_t aging_hashes() const { return m_aging.size(); }
+
+		const asset_record* find(const res::tag& path) const;
+		// As find, and when names are case insensitive the file of that name in any letter case (the record has the
+		// spelling on the disk).
+		const asset_record* find_any_case(const res::tag& path) const;
+		std::vector<const asset_record*> find(const res::asset_id& id) const;
+		const std::map<std::string, asset_record>& records() const { return m_records; }
+		// IDs that more than one file carries.
+		std::vector<res::asset_id> duplicates() const;
+		const std::vector<asset_orphan>& orphans() const { return m_orphans; }
+		// Grows whenever anything the database holds changed.
+		std::uint64_t revision() const { return m_revision; }
+		// Grows when what the asset index answers by may have changed: a record with an ID came or went, or its ID,
+		// path, layer or time changed (not a hash). Only a walk or a batch moves it, so set_on_batch hears of each step.
+		std::uint64_t id_revision() const { return m_id_revision; }
+		const std::vector<std::filesystem::path>& layers() const { return m_layers; }
+		// The project's own layer (the highest): the only one the fixes below write to.
+		std::size_t top_layer() const { return m_layers.empty() ? 0 : m_layers.size() - 1; }
+
+		// Fixes for the person (Problems, S57-4), never for an agent. Each one is applied to the database at once (as a
+		// batch of changes, so set_on_batch hears of it) and can be undone through the short history below.
+		// Writes <file>.resource with a new ID for a file of the top layer that has no .resource in any layer; never
+		// replaces one.
+		asset_fix_result create_meta(const res::tag& file);
+		// Renames the orphan .resource `meta` to <file>.resource, both in the top layer (an orphan of a lower layer is
+		// refused); never replaces one.
+		asset_fix_result link_orphan(const res::tag& meta, const res::tag& file);
+		// Gives the .resource of `file` (in the top layer) a new ID, keeping everything else it holds.
+		asset_fix_result new_id_for_copy(const res::tag& file);
+
+		static constexpr std::size_t max_history = 32;
+		// The label of the fix undo_last() would take back; none when there is nothing to undo.
+		std::optional<std::string> next_undo_label() const;
+		// Takes back the last fix and forgets it. Refused (and forgotten) when its file changed since the fix.
+		asset_fix_result undo_last();
+
+	private:
+		struct history_entry
+		{
+			std::string label;
+			std::function<asset_fix_result()> undo;
+		};
+
+		void push_history(std::string label, std::function<asset_fix_result()> undo);
+		// Looks up the files (res:// path text without the protocol; a .resource stands for its file) again, their
+		// .resource read again whatever its stamp says: at once, or, while a walk runs, as a batch deferred until it ends
+		// (the fix is on the disk at once and shows then).
+		void refresh(const std::vector<std::string>& relatives);
+		// An orphan of `meta_path` made without a known hash takes this one (an undone link, possibly deferred).
+		std::string take_orphan_hash(const res::tag& meta_path);
+		void apply_scan(asset_scan scan);
+		enum class walk_end { applied, failed, cancelled };
+		// After a walk ended: the batches that waited, then the walk asked for meanwhile; a cancelled walk is started
+		// again once.
+		void after_walk(walk_end end);
+		// Pairs `gone` and `came` (keys of m_records) by guid into `batch` (moved, added, removed).
+		void pair_moves(std::vector<asset_record> gone, const std::vector<std::string>& came, asset_batch& batch);
+		void hash_next();
+		// Remembers a record whose hash came from a racy stamp (#975).
+		void note_hash(const std::string& key, const asset_record& record);
+		// Queues again the noted hashes whose stamp has aged and not moved.
+		void rehash_aged();
+		// m_by_id and, case insensitive, m_by_folded.
+		void index_id(const asset_record& record);
+		void unindex_id(const asset_record& record);
+		void on_job_finished(std::uint64_t id, job_status status);
+		void load_cache();
+		// Through m_file_id, else m_ids.
+		file_id id_of(const std::filesystem::path& path);
+		// Once per layer: its files have no identity, so their hashes follow size and time alone.
+		void warn_without_ids(std::size_t layer);
+		// Once per layer: a file of an unchanged size and time told another identity on two looks in a row (sshfs
+		// without use_ino, some SMB servers), so each look reads it again.
+		void watch_identity(const asset_record& before, const asset_record& now);
+		// The record the walk would make of `relative` (res:// path text without the protocol, any letter case when case
+		// insensitive) now; none when it would make none. `before_of` gives what is known of a path text (may be null).
+		std::optional<asset_record> look_up(const std::string& relative, asset_layer_lookup& lookup,
+			const std::function<const asset_record*(const std::string&)>& before_of);
+		void save_when_idle();
+		// Writes the cache in the background when something changed (a write already running: once more after it).
+		void start_save();
+		std::filesystem::path cache_file() const;
+		// The keys of the hashing job that ended without an answer for them go back into the queue.
+		void requeue_in_flight();
+		// Writes the .resource of the record `key` with a new ID when it still has none in any layer (not a fix: no
+		// history).
+		void give_id(const std::string& key);
+		// Gives an ID to each file waiting for one that is ready; drops those that went or got a .resource.
+		void give_pending_ids();
+		// A git operation may be writing files: the editor's own, or one seen in the repository's git folder.
+		bool git_busy();
+		// The record `key` came after the first walk: it waits for an ID when it is a new file of the top layer.
+		void queue_new_file(const std::string& key, bool own);
+		// Records without ID that went away: what comes with their size and time is a move.
+		void remember_gone(const std::vector<asset_record>& gone);
+		bool matches_gone(const asset_record& record);
+		std::chrono::steady_clock::time_point steady_now() const { return m_clock ? m_clock() : std::chrono::steady_clock::now(); }
+
+		job_service& m_jobs;
+		std::vector<std::filesystem::path> m_layers;
+		std::map<std::string, asset_record> m_records; // by path text
+		std::multimap<res::asset_id, std::string> m_by_id;
+		// Path text by its merge key, case insensitive only: finds a record under another letter case.
+		std::unordered_multimap<std::string, std::string> m_by_folded;
+		std::vector<asset_orphan> m_orphans;
+		std::vector<std::string> m_unhashed;
+		std::vector<std::string> m_in_flight;
+		// Records whose hash was read while their stamp was racy (#975), by key: read once more when the stamp is older
+		// than stamp_granularity, if it is still the same.
+		struct aging_hash
+		{
+			std::int64_t size = 0;
+			std::int64_t mtime = 0;
+		};
+		std::unordered_map<std::string, aging_hash> m_aging;
+		// The file time at which the first of m_aging may be due: poll() looks at none before.
+		std::int64_t m_next_aging = (std::numeric_limits<std::int64_t>::max)();
+		// Hashes read again beside the record's (key, the file time of the check): the record keeps its hash and
+		// references until the new ones come, and changes only when they differ.
+		std::vector<std::pair<std::string, std::int64_t>> m_reverify;
+		// Those of m_reverify a hashing job is reading now.
+		std::vector<std::pair<std::string, std::int64_t>> m_verifying;
+		std::function<std::int64_t()> m_file_clock;
+		std::uint64_t m_hash_job = 0;
+		std::uint64_t m_scan_job = 0;
+		bool m_scanning = false;
+		// A walk's result was applied: m_records is what the layers hold, not m_cached.
+		bool m_walked_once = false;
+		// The last batch received from attach()'s resource_system, and the last one applied (applied_through).
+		std::uint64_t m_received_through = 0;
+		std::uint64_t m_applied_through = 0;
+		std::uint64_t m_walks_applied = 0;
+		std::uint64_t m_changes_dropped = 0;
+		std::size_t m_max_deferred = max_deferred_changes;
+		// A folder changed during a walk: one more walk follows it.
+		bool m_walk_again = false;
+		// The last walk was cancelled and started again; cleared by an applied walk.
+		bool m_walk_retried = false;
+		// File changes that came during a walk (or before the first), applied after it.
+		std::vector<res::file_change> m_deferred;
+		bool m_case_insensitive = platform_case_insensitive;
+		std::uint64_t m_scan_number = 0;
+		std::uint64_t m_revision = 0;
+		std::uint64_t m_id_revision = 0;
+		asset_cache_location m_cache;
+		// Shared with a background write, so the lock is held until that write is done.
+		std::shared_ptr<platform::file_lock> m_lock;
+		// Records read from the cache: what the first walk starts from; not published.
+		std::map<std::string, asset_record> m_cached;
+		std::uint64_t m_save_job = 0;
+		bool m_save_again = false;
+		// Shared with a background write: one write at a time, and an older snapshot never replaces a newer one.
+		std::shared_ptr<asset_cache_writer> m_writer;
+		std::uint64_t m_snapshots = 0;
+		bool m_loaded_from_cache = false;
+		bool m_dirty = false;
+		std::size_t m_files_read = 0;
+		file_id_source m_file_id;
+		// The listings of one batch of changes (apply_changes): a new one for each.
+		file_id_reader m_ids;
+		// By path text: looks in a row at which the file kept its size and time but told another identity.
+		std::unordered_map<std::string, int> m_id_flips;
+		std::set<std::size_t> m_warned_unstable_ids;
+		// Layers already warned of having no file identities: once per layer.
+		std::set<std::size_t> m_warned_without_ids;
+		res::resource_system* m_resources = nullptr;
+		std::function<void(const asset_batch&)> m_on_batch;
+		std::vector<history_entry> m_history;
+		// Records (by path text) whose .resource the next look-up reads whatever its stamp: a fix rewrote it, possibly
+		// within one tick of a coarse clock.
+		std::set<std::string> m_force_meta;
+		// By merge key of the .resource path text: last_hash for the orphan an undone link brings back (take_orphan_hash).
+		std::map<std::string, std::string> m_orphan_hashes;
+		struct pending_id
+		{
+			std::chrono::steady_clock::time_point since;
+			// Written by the editor: no wait for the quiet time, an orphan or git.
+			bool own = false;
+		};
+		// Records (by path text) waiting for an ID: for their hash, quiet time or the end of a git operation.
+		std::map<std::string, pending_id> m_pending_ids;
+		// A waiting desc's root "__guid" from the hashing pass (none: it has no string one).
+		std::map<std::string, std::optional<std::string>> m_root_guids;
+		struct gone_file
+		{
+			std::int64_t size = 0;
+			std::int64_t mtime = 0;
+			std::string content_hash;
+			std::chrono::steady_clock::time_point at;
+		};
+		std::vector<gone_file> m_gone_without_id;
+		std::function<bool()> m_vcs_busy;
+		bool m_ids_held_by_git = false;
+		std::function<std::optional<std::filesystem::path>()> m_git_dir;
+		// An ID is being written: the batch its refresh applies gives none itself.
+		bool m_giving_ids = false;
+		std::chrono::steady_clock::time_point m_last_poll{};
+		std::function<std::chrono::steady_clock::time_point()> m_clock;
+		connection m_job_finished;
+		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
+	};
+}

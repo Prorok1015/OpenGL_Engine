@@ -1,19 +1,14 @@
-#include "gui_system.h"
-#include "engine_assert.h"
-#include "rnd_render_system.h"
-#include "wnd_window_system.h"
-#include "eng_profiler.h"
+#include <snk/gui/gui_system.h>
+#include <snk/gui/gui_platform_backend.h>
+#include <imgui.h>
+#include <snk/common/engine_assert.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/window/wnd_window_system.h>
+#include <snk/common/eng_profiler.h>
 
-gui::gui_system* p_gui_system = nullptr;
-
-gui::gui_system& gui::get_system()
-{
-	ASSERT_MSG(p_gui_system, "DebugUi system is nullptr!");
-	return *p_gui_system;
-}
-
-gui::gui_system::gui_system(gui::imgui_backend_interface* backend_)
+gui::gui_system::gui_system(gui::imgui_backend_interface* backend_, gui::platform_backend* platform_)
 	: backend(backend_)
+	, m_platform(platform_)
 {
 }
 
@@ -32,16 +27,6 @@ void gui::gui_system::render_menues()
 	}
 }
 
-//void gui::gui_system::switch_input(inp::KEYBOARD_BUTTONS code, inp::KEY_ACTION action)
-//{
-//	if (code == inp::KEYBOARD_BUTTONS::F5 && action == inp::KEY_ACTION::UP)
-//	{
-//		gs::get_system().set_enable_input(layout.get_is_show_main_menu());
-//		layout.set_show_main_menu(!layout.get_is_show_main_menu());
-//		ImGui::SetWindowFocus();
-//	}
-//}
-
 void gui::gui_system::set_is_input_enabled(bool enable)
 {
 	if (is_input_enabled == enable) {
@@ -54,7 +39,27 @@ void gui::gui_system::set_is_input_enabled(bool enable)
 void gui::gui_system::render()
 {
 	PROFILE_SCOPE("GuiRender");
+	if (m_pending_scale > 0.f) {
+		if (m_pending_scale != m_applied_scale) {
+			backend->rebuild_fonts(m_pending_scale);
+			m_applied_scale = m_pending_scale;
+		}
+		m_pending_scale = 0.f;
+	}
 	backend->new_frame();
+	m_platform->new_frame();
+	ImGui::NewFrame();
+	// DockSpace is managed at the editor level (edt_dockspace)
 	render_menues();
 	backend->render();
+}
+
+void gui::gui_system::run_without_drawing(const std::function<void()>& body)
+{
+	PROFILE_SCOPE("GuiNoDraw");
+	backend->new_frame();
+	m_platform->new_frame();
+	ImGui::NewFrame();
+	body();
+	ImGui::EndFrame();
 }

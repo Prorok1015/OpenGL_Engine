@@ -1,0 +1,7 @@
+# Item 8: run with --size 1280x720 and --size 1920x1080; shot name via final screenshot too
+sleep 18
+click 700 300 5
+sleep 0.3
+drag 700 300 701 300
+sleep 4
+shot headless_out/checklist/40_resize.png

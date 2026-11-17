@@ -1,0 +1,44 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-005
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-005
+title: frame_allocator_reset() missing in engine loop (standalone leak)
+type: bugfix
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: memory
+
+[DESCRIPTION]
+ds::frame_allocator_reset() вызывается только в Editor (edt_frame_loop_service.cpp), а в движковом
+цикле core/engine/game_system/gs_loop_service.cpp::on_step его НЕТ. В standalone-движке (без Editor)
+bump-буфер frame_allocator (2 MB) заполняется за несколько кадров, далее каждый pmr::vector уходит в
+heap-fallback (mem_linear_allocator.cpp) и не освобождается при reset → монотонный рост памяти.
+
+[MOTIVATION]
+Реальное нарушение в коде (не теоретическое правило), найдено агентом по памяти. Высокий ROI: фикс на
+1 строку устраняет утечку в боевом (не-editor) цикле. Сейчас замаскировано тем, что активный путь —
+Editor, который ресетит.
+
+[ACCEPTANCE]
+- ds::frame_allocator_reset() вызывается в начале каждого кадра в gs_loop_service::on_step (как в Editor).
+- Дополнительно (опц.): heap-fallback linear_resource при переполнении 2 MB логируется (egLOG_WARN),
+  чтобы переполнение не маскировалось молча.
+- Проверено: нет двойного reset (Editor использует свой loop-service, движковый — свой).
+
+[OUT_OF_SCOPE]
+- Memory-трекинг/overlay — это EPIC-44.
+- Тюнинг размера frame-буфера.
+
+[LINKS]
+workplan:
+external_id:
+epic: docs/epics/infrastructure/EPIC-44.md
+related_items:
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow discovery (multi-agent audit; concrete latent bug)

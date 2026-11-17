@@ -1,5 +1,7 @@
 # Epics Index
 
+> Задачи ведутся в GitHub Issues: https://github.com/Prorok1015/OpenGL_Engine/issues (номер эпика указан как `(#N)`). Полный манифест: [`../agent/tracker/manifest.json`](../agent/tracker/manifest.json). Эпики без номера EPIC (этапы C/D фазы 0) перечислены в [ARCHITECTURE_REVIEW.md](../roadmap/ARCHITECTURE_REVIEW.md) §7, эпики «Химеры» — в [CHIMERA_ROADMAP.md](../roadmap/CHIMERA_ROADMAP.md) §5.
+
 ## Themes
 
 | Theme | Folder | Описание |
@@ -22,19 +24,21 @@
 | [EPIC-02](editor/EPIC-02.md) | Inspector — динамическая инспекция компонентов | done |
 | [EPIC-03](editor/EPIC-03.md) | Asset Browser — просмотр и импорт ассетов | done |
 | [EPIC-04](editor/EPIC-04.md) | Scene Save/Load — сохранение и управление сценами | done |
-| [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | in_progress |
+| [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | done |
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
-| [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
-| [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
-| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | in_progress |
+| [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor (#35) | planned |
+| [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo (#29) | done |
+| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
-| [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
-| [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
-| [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
-| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | in_progress |
-| [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение | planned |
-| [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора | planned |
-| [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | planned |
+| [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов (#30) | in_progress |
+| [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы (#36) | planned |
+| [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов (#37) | planned |
+| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | done |
+| [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение (#38) | planned |
+| [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора (#20) | planned |
+| [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | frozen — низкий приоритет для «Химеры» |
+| [EPIC-42](editor/EPIC-42.md) | Workspace & Game Project System — разделение движка и игровых данных (#19, переработан по ADR-02) | planned |
+| [EPIC-77](editor/EPIC-77.md) | Mesh Modeller — полноценный моделлер в редакторе: полигональный меш, инструменты, сохранение в `*.geom.desc` (#1007) | design |
 
 ### Desc-Driven Architecture
 
@@ -44,6 +48,9 @@
 | [EPIC-09](desc-driven/EPIC-09.md) | Scene Editing Operations | done |
 | [EPIC-10](desc-driven/EPIC-10.md) | Inspector & Hierarchy Redesign | done |
 | [EPIC-11](desc-driven/EPIC-11.md) | Editor Camera & Render Targets | done |
+| [EPIC-56](desc-driven/EPIC-56.md) | Data Documents & Schema Inspector — документы данных `is_document`, инспектор из схемы, словари, reorder, типизированный пикер ссылок (#26) | done |
+| [EPIC-58](desc-driven/EPIC-58.md) | Data Versioning & Migration — версии форматов, явная миграция проекта с бэкапом и отчётом (#28) | design |
+| [EPIC-79](desc-driven/EPIC-79.md) | Desc Binary Data — большие числовые данные desc (вершины, индексы) в двоичном файле рядом с desc (#1068) | design |
 
 ### Prefab-First
 
@@ -52,21 +59,29 @@
 | [EPIC-12](prefab-first/EPIC-12.md) | Model Importer → Prefab Output | done |
 | [EPIC-13](prefab-first/EPIC-13.md) | Remove Prototype Descs | done |
 | [EPIC-14](prefab-first/EPIC-14.md) | Component UI Registry — type-safe editor | done |
-| [EPIC-33](prefab-first/EPIC-33.md) | Skinning & Animation Refactoring — префаб-совместимая архитектура | planned |
+| [EPIC-33](prefab-first/EPIC-33.md) | Skinning & Animation Refactoring — префаб-совместимая архитектура | frozen — функциональная часть готова, остальное заморожено: карточной игре не нужен skinning v2 |
 
 ### Infrastructure
 
 | ID | Title | Status |
 |---|---|---|
 | [EPIC-23](infrastructure/EPIC-23.md) | Logger Migration — spdlog Integration | done |
-| [EPIC-28](infrastructure/EPIC-28.md) | Resource Cache — кеш по тегу + типу ресурса | planned |
-| [EPIC-29](infrastructure/EPIC-29.md) | Service Layer Refactoring — удаление game_system, единый паттерн сервисов | planned |
-| [EPIC-31](infrastructure/EPIC-31.md) | Assert System — информативные ассерты с диалогом и стек-трейсом | planned |
-| [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | planned |
-| [EPIC-35](infrastructure/EPIC-35.md) | Engine Model Importer Adapter — модернизация для runtime/mods | planned |
-| [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | in_progress |
+| [EPIC-28](infrastructure/EPIC-28.md) | Resource Cache — кеш по тегу + типу ресурса (#25) | planned |
+| [EPIC-29](infrastructure/EPIC-29.md) | Service Layer Refactoring — удаление game_system, единый паттерн сервисов (#6, переопределён: «сервисы и готовность к DLL») | planned |
+| [EPIC-31](infrastructure/EPIC-31.md) | Assert System — информативные ассерты с диалогом и стек-трейсом | frozen — ассерты выполнены в фазе 0 (этап B), диалог заморожен |
+| [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | frozen — низкий приоритет для «Химеры» |
+| [EPIC-35](infrastructure/EPIC-35.md) | Engine Model Importer Adapter — модернизация для runtime/mods | frozen — низкий приоритет для «Химеры» |
+| [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | done |
 | [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | done |
-| [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | in_progress |
+| [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | done |
+| [EPIC-41](infrastructure/EPIC-41.md) | CMake Build System — продакшн-качество сборки (#11, остаток) | planned |
+| [EPIC-43](infrastructure/EPIC-43.md) | Memory Allocators — система управления памятью движка | done |
+| [EPIC-44](infrastructure/EPIC-44.md) | Memory Profiling & Container Aliases — трекинг памяти и удобные контейнеры (#49) | planned |
+| [EPIC-46](infrastructure/EPIC-46.md) | Tracy Profiler Integration — внешний профайлер для детального анализа | frozen — низкий приоритет для «Химеры» |
+| [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | frozen — низкий приоритет для «Химеры» |
+| [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | done |
+| [EPIC-57](infrastructure/EPIC-57.md) | Asset Identity & Database — постоянный ID ассета (`.resource`), база ассетов, обратные зависимости (#27) | design |
+| [EPIC-80](infrastructure/EPIC-80.md) | Game Code in wasm Sandbox — один исходник игры: песочница wasm / нативная DLL / нативный статический (#1084) | idea |
 
 ### Render Migration
 
@@ -78,6 +93,8 @@
 | [EPIC-19](render-migration/EPIC-19.md) | Pipeline Wiring — подключение конвейера | done |
 | [EPIC-20](render-migration/EPIC-20.md) | Game Loop Migration — миграция игрового цикла | done |
 | [EPIC-21](render-migration/EPIC-21.md) | Legacy Renderer Removal — удаление renderer_3d | done |
+| [EPIC-45](render-migration/EPIC-45.md) | Render Pipeline Optimization — оптимизация экстракции и рендер пассов (поглощён #15) | planned |
+| [EPIC-48](render-migration/EPIC-48.md) | Skeleton & Skinning Pipeline v2 — desc-driven скелет + GPU batching | frozen — низкий приоритет для «Химеры» (карточной игре skinning v2 не нужен) |
 
 ---
 
@@ -111,14 +128,31 @@ EPIC-22 (Asset Import Pipeline)
         └── EPIC-35 (Engine Model Importer Adapter — модернизация)
 
 EPIC-36 (Editor VFS Protocol edt://)  ← standalone, no deps
+  └── EPIC-42 (Workspace & Game Project System)  ← depends on EPIC-36
 
 EPIC-37 (Unit Test Coverage)  ← standalone, no deps
 
 EPIC-38 (res::tag formatter)  ← standalone, no deps
 
-EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger)
+EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger) — done
+  └── EPIC-46 (Tracy Profiler Integration)  ← depends on EPIC-39
 
 EPIC-40 (Icon Font)  ← standalone, no deps
+
+EPIC-41 (CMake Build System)  ← standalone, no deps
+  └── US-41-7 координируется с EPIC-34 US-34-8 (assimp_importer)
+
+EPIC-43 (Memory Allocators)  ← standalone, мотивация из EPIC-39 (Profiling)
+  ├── EPIC-44 (Memory Profiling & Container Aliases)  ← depends on EPIC-43
+  └── EPIC-45 (Render Pipeline Optimization)  ← depends on EPIC-43, EPIC-39
+
+EPIC-47 (ds::string_id)  ← standalone, no deps
+
+EPIC-49 (Componentization & Module Wiring)  ← координируется с EPIC-41 (CMake) + EPIC-29 (Service Layer)
+  net-new: public/private границы, scene↔render развязка, тяжёлые заголовки, depends_on/топосорт, frame-stage реестр
+
+EPIC-33 (Skinning & Animation Refactoring)
+  └── EPIC-48 (Skeleton & Skinning Pipeline v2)  ← depends on EPIC-33, EPIC-45
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

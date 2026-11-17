@@ -1,0 +1,52 @@
+name: Boost tarball
+description: >
+  Puts the Boost 1.84 tarball that cmake/ThirdParty.cmake fetches on disk, checked against its pinned SHA256,
+  and exports SNK_BOOST_URL so that FetchContent reads it from there (#626). The tarball is kept in its own
+  cache entry, shared by every job and OS; on a miss it is downloaded with retries, mirror after mirror.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Boost tarball
+      id: restore
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.boost-tarball
+        key: boost-tarball-1.84.0-2e64e5d79a738d0fa6fb546c6e5c2bd28f88d268a2a080546f74e5ff98f29d0e
+        enableCrossOsArchive: true
+
+    - name: Download Boost tarball
+      shell: bash
+      env:
+        BOOST_SHA256: 2e64e5d79a738d0fa6fb546c6e5c2bd28f88d268a2a080546f74e5ff98f29d0e
+        # Only byte-identical copies of the CMake-ready release tarball can go here: the hash is checked.
+        BOOST_MIRRORS: >-
+          https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
+      run: |
+        set -euo pipefail
+        dir="${GITHUB_WORKSPACE}/.boost-tarball"
+        file="${dir}/boost-1.84.0.tar.xz"
+        mkdir -p "${dir}"
+        matches() { [ -f "${file}" ] && echo "${BOOST_SHA256}  ${file}" | sha256sum --check --status; }
+        if ! matches; then
+          rm -f "${file}"
+          for attempt in 1 2 3 4; do
+            for url in ${BOOST_MIRRORS}; do
+              echo "Downloading ${url} (attempt ${attempt})"
+              if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 -o "${file}.part" "${url}" \
+                && mv "${file}.part" "${file}" && matches; then
+                break 2
+              fi
+              rm -f "${file}" "${file}.part"
+            done
+            sleep $((attempt * 15))
+          done
+        fi
+        if ! matches; then
+          echo "::error title=Boost::the Boost tarball could not be downloaded from any mirror (#626)"
+          exit 1
+        fi
+        if [ "${RUNNER_OS}" = "Windows" ]; then
+          file="$(cygpath -m "${file}")"
+        fi
+        echo "SNK_BOOST_URL=${file}" >> "${GITHUB_ENV}"

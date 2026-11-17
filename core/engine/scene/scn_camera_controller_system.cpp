@@ -1,14 +1,20 @@
-#include "scn_camera_controller_system.h"
-#include "scn_camera_controller_component.hpp"
-#include "scn_model.h"
-#include "inp_input_system.h"
-#include "ecs_event.hpp"
+#include <snk/scene/scn_camera_controller_system.h>
+#include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/input/inp_events.hpp>
+#include <snk/ecs/ecs_event.hpp>
 
 void update_camera_matrix_system(const inp::input_state& state,
+                                 const inp::input_focus& focus,
                                  ecs::event<scn::transform_updated>& event,
                                  entt::view<entt::get_t<scn::local_transform, scn::mouse_controller_component>> view)
 {
+    if (!focus.active) return;
+
     for (auto&& [ent, local, controller] : view.each()) {
+        if (!controller.input_enabled) continue;
+
         auto& rotation = controller.rotation;
         auto& pos = controller.position;
         auto& last_mouse_pos = controller.last_mouse_pos;
@@ -43,7 +49,7 @@ void update_camera_matrix_system(const inp::input_state& state,
 
         glm::mat4 orientation = glm::toMat4(glm::quat(rotation));
         local.local = glm::translate(pos) * orientation * glm::translate(glm::mat4(1.0), glm::vec3(0, 0, distance));
-        if (is_moving || is_rotating || state.scroll.y > 0)
+        if (is_moving || is_rotating || state.scroll.y != 0.f)
             event.emit(ent);
     }
 }
@@ -56,6 +62,10 @@ void clear_input_state_system(inp::input_state& state)
 
 void scn::init_mouse_controller_system(ecs::system_factory& factory)
 {
-    factory.register_automatic_system<update_camera_matrix_system>("scn::update_camera_matrix_system");
-    factory.register_automatic_system<clear_input_state_system>("inp::clear_input_state");
+    // pre_update: the camera writes local_transform and emits transform_updated, so it has to run
+    // before the transform phase or its world matrix lags a frame behind
+    factory.register_system<update_camera_matrix_system>("scn::update_camera_matrix_system",
+        { .phase = ecs::phase::pre_update, .run_in_edit = true });
+    factory.register_system<clear_input_state_system>("inp::clear_input_state",
+        { .phase = ecs::phase::late_update, .after = { "scn::update_camera_matrix_system" }, .run_in_edit = true });
 }

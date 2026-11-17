@@ -1,0 +1,214 @@
+[META]
+framework: claude-framework
+file_id: QUICK_LINKS
+class: custom
+version: 1.0.0
+
+[QUICK_LINKS]
+overview: Fast navigation to important files and concepts
+
+[CORE_LAYER]
+# Note: the "core" static lib lives under core/core/ ; the "engine" lib under core/engine/.
+# There is NO top-level Engine/ or Editor/panels/ — see EDITOR_LAYER below.
+
+ECS Framework:
+  → core/core/ecs/include/snk/ecs/ecs_system_interface.hpp (empty system_interface base)
+  → core/core/ecs/include/snk/ecs/ecs_system.h (system_factory, register_system with {phase, after, before, run_in_edit})
+  → core/core/ecs/include/snk/ecs/ecs_traits.hpp (function_traits, is_view)
+  → core/core/ecs/include/snk/ecs/ecs_entity.h (entity helpers)
+
+Resource System:
+  → core/core/resource/include/snk/resource/res_system.h (resource_system: load/caching)
+  → core/core/resource/include/snk/resource/res_tag.h (res::tag; single-arg parses protocol from string)
+  → core/core/resource/adapters/ (Assimp/stb/text adapter pipeline)
+  → core/core/resource/resolvers/ (VFS resolvers, e.g. res_vfs_resolver)
+
+Descriptor System:
+  → core/core/desc/include/snk/desc/desc_system.h (desc::desc_system)
+  → core/core/desc/include/snk/desc/desc_base.hpp (descriptor base)
+  → docs/epics/desc-driven/ (architecture docs)
+
+Command Registry:
+  → core/core/command/include/snk/command/cmd_registry.h (cmd::command_registry: id, JSON schemas, invoke; main thread only)
+  → core/core/command/include/snk/command/cmd_main_thread_queue.h (cmd::main_thread_queue: post from any thread, run by the ds::task_system main drain)
+  → core/core/command/include/snk/command/cmd_json_schema.h (cmd::json_schema: schema subset validator)
+
+Memory Allocators:
+  → core/core/common/include/snk/common/mem_allocator.h (ds::frame_allocator(), frame_allocator_reset())
+  → core/core/common/include/snk/common/mem_linear_allocator.h (custom scope)
+  → core/core/common/include/snk/common/mem_pool_allocator.h (O(1) alloc/free)
+  → core/core/common/include/snk/common/mem_stack_allocator.h (LIFO markers)
+
+Logging / Assert:
+  → core/core/common/include/snk/common/logger/engine_log.h (egLOG_* macros, namespace eg = engine)
+  → core/core/common/include/snk/common/engine_assert.h (ASSERT_MSG/ASSERT_FAIL, _DEBUG only)
+
+Configuration:
+  → core/core/config/include/snk/config/cfg_api.h (read-only cfg::config_view, what a game module gets)
+  → core/core/config/include_base/snk/config/cfg_variables.h (cfg::variable, CFG_VAR_*: base-only, not in the SDK)
+
+Application:
+  → core/core/application/include/snk/application/app_module_interface.h (module_interface lifecycle, depends_on)
+  → core/core/application/include/snk/application/app_module_loader.hpp (register/initialize/shutdown_all_services)
+  → core/core/common/include/snk/common/ds/ds_store.hpp (ds::app_data_storage service locator DI)
+
+[ENGINE_LAYER]
+Scene Management:
+  → core/engine/scene/include/snk/scene/level/scn_context_set.h (scn::context_set; for_each = id order)
+  → core/engine/scene/include/snk/scene/level/scn_world_context.h (scn::world_context: one world)
+  → core/engine/scene/include/snk/scene/level/scn_set_channel.h (blackboard + mail between contexts of a set)
+  → core/engine/scene/include/snk/scene/level/scn_context_manager.h (level load, context sets)
+  → core/engine/scene/include/snk/scene/scn_ecs_assembler.h (desc → ECS registry assembly)
+
+Rendering Pipeline:
+  → core/engine/render/render_system/include/snk/render/rnd_render_system.h (render system)
+  → core/engine/render/render_system/include/snk/render/rnd_frame_assembler.h (frame assembly)
+  → core/engine/render/render_system/passes/ (z_prepass, opaque, skybox, transparent, composition, debug)
+  → core/engine/scene/include/snk/scene/level/scn_render_data_extractor.h (geometry→render_packet)
+  → core/engine/scene/level/scn_render_data_extractor.cpp (also extracts lights→packet)
+
+Load diagnostics (#595):
+  → core/core/resource/include/snk/resource/res_diagnostics.h: res::diagnostic (resource + JSON pointer + reason),
+    recorded on the control block by adapters (res::load_error, report_load_warning) and the dependency graph;
+    res::diagnostics_collector walks a settled request (deps, field descs; inline memory:// copies reported at the
+    owner's file and path); edt::job_service::start_collecting binds one to a job
+
+Animation & Skinning:
+  → core/engine/scene/scn_animation_* , scn_skinning_desc.* (EPIC-33)
+  → core/engine/render/render_system/skinning/ (rnd::skinning_manager)
+  → game code: scn::play_animation(reg, model_root, clip, loop, speed) in snk/scene/scn_animation.h (#563);
+    same clip while playing keeps its time, a stopped one restarts; only the entity holding the controller
+
+Input System:
+  → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h , inp_input_router.h
+
+GUI:
+  → core/engine/gui/gui_system/ (gui::system, ImGui integration)
+
+[EDITOR_LAYER]
+# Editor sources live under Editor/code/editor_system/ — see Editor/CLAUDE.md for the
+# full controller/panel decomposition. There is NO Editor/panels/ or Editor/editor_app.h.
+Main Editor:
+  → Editor/main.cpp (module bootstrap: Core → Engine → Editor)
+  → Editor/config/editor.cfg (settings; resource.path = ../../projects/sandbox/res/ when run without --project)
+  → Editor/code/editor_system/controller/edt_editor_system.cpp/h (coordinator)
+  → Editor/code/editor_system/controller/edt_level_controller.cpp/h (level I/O, derive_world_arrays)
+
+ImGui Panels: (Editor/code/editor_system/panels/, all extend edt::panel_base)
+  → edt_inspector_panel.h
+  → edt_scene_hierarchy_panel.h
+  → edt_asset_browser_panel.h
+  → edt_prefab_editor_panel.h (EPIC-25)
+  → edt_viewport_panel.h , edt_console_panel.h , edt_dockspace.h
+
+Gizmo Transform:
+  → Editor/code/editor_system/gizmo/edt_transform_gizmo.hpp (pure ImGui DrawList)
+
+Input / File Dialog:
+  → Editor/code/editor_system/input/edt_input_manager.h , edt_input_binding.h , edt_file_dialog.h
+
+[DESCRIPTOR_FILES]
+Level & World:
+  → projects/sandbox/res/levels/ (.desc level files)
+  → Editor/data/templates/ (desc templates, edt://templates/)
+
+Objects & Assets:
+  → projects/sandbox/res/objects/ (imported objects / prefab descs)
+  → projects/sandbox/res/assets/ (editor layer, wins) , core/res/shaders/ , core/res/skybox/ (engine base layer; res:// = core/res under the project's res)
+
+[BUILD_SYSTEM]
+Main CMake:
+  → CMakeLists.txt (root)
+  → core/CMakeLists.txt (adds core/core + core/engine targets)
+  → Editor/CMakeLists.txt
+
+Build Output:
+  → build/Editor/ (editor build artifacts)
+  → build/unit_tests.exe (test executable; Windows/Ninja)
+
+[TESTING]
+Test Suite:
+  → tests/ (all test files)
+  → Build: cmake --preset dev-debug && cmake --build build/dev-debug (ccache + PCH via SNK_COMPILER_CACHE / SNK_PCH)
+  → Run: ./unit_tests
+  → Single: ./unit_tests --run_test=DSBitFlagsTests
+
+[DOCUMENTATION]
+Project Docs:
+  → docs/agent/ (Claude documentation)
+  → docs/agent/learning/ (self-learning guides)
+  → docs/epics/ (task management)
+  → docs/epics/INDEX.md (epic registry)
+
+CLAUDE Guidelines:
+  → CLAUDE.md (root, critical rules)
+  → docs/agent/ARCHITECTURE.toon (system design)
+  → docs/agent/CONSTRAINTS.toon (hard rules)
+  → docs/agent/CODE_CONVENTIONS.toon (naming/style)
+
+[IMPORTANT_CONCEPTS]
+Frame Allocator (Memory):
+  → See: CONSTRAINTS.toon [CONSTRAINT_1-3]
+  → Code: core/core/common/include/snk/common/mem_allocator.h
+  → Pattern: std::pmr::vector<T>(ds::frame_allocator())
+
+Multi-World ECS:
+  → See: ARCHITECTURE.toon [ECS_SYSTEM], CONSTRAINTS [13B][13C]
+  → Code: core/core/ecs/ directory
+  → No world limit; context_set::for_each = id order; cross-context data: docs/roadmap/design/WORLD_MESSAGING.md
+
+Descriptor Inheritance:
+  → See: ARCHITECTURE.toon [DESCRIPTOR_SYSTEM]
+  → Files: level_desc → world_desc → prefab_desc
+  → Hot-reload: Changes auto-apply to scenes
+
+Resource System:
+  → See: ARCHITECTURE.toon [RESOURCE_SYSTEM]
+  → Tag-based: res::tag{"res://path/to/resource"} (single-arg parses protocol)
+  → VFS: res:// (filesystem), memory:// (runtime)
+
+[EPIC_QUICK_LINKS]
+Current Work:
+  → EPIC-25: docs/epics/editor/EPIC-25.md (Prefab Editor)
+  → EPIC-33: docs/epics/prefab-first/EPIC-33.md (Animation)
+
+Recent Completions:
+  → EPIC-43: Memory Allocators (done)
+  → EPIC-39: Profiling Infrastructure (done)
+  → EPIC-37: Unit Test Coverage (done)
+
+Render Pipeline:
+  → EPIC-16-21: Complete pipeline (done)
+  → EPIC-45: Optimization (planned)
+
+[COMMON_TASKS]
+Add new System:
+  1. File: core/engine/<module>/<prefix>_<name>_system.cpp (e.g. scn_transform_system.cpp)
+  2. Inherit: ecs::system_interface (state only); logic = free/member fn
+  3. Register: sfactory.register_system<&fn>(name, { .phase = ecs::phase::update, .after = {...} }[, instance])
+
+Add new ImGui Panel:
+  1. File: Editor/code/editor_system/panels/edt_<name>_panel.h
+  2. Extend: edt::panel_base (on_render() body; base wraps ImGui::Begin/End)
+  3. Register: add as shared_ptr member, registered via editor_context::panels().add(...) (panel_registry) and keep the returned registration
+
+Add new Descriptor Type:
+  1. File: core/engine/scene/scn_<name>_desc.h (inherit desc::desc_base)
+  2. Register desc + spawner: register_scene_types in core/engine/scene/scn_registration_scope.cpp (assemble_*)
+  3. Unregister: automatic (registration_scope destructor)
+
+Load Resource:
+  1. Tag: res::tag{"res://path/to/asset"}
+  2. Load: resource_system&.require<T>(tag) (injected; require_sync<T> blocks; no global get_system())
+  3. Wait: res_handle<T>, optional .then(callback) for async
+
+Create Entity (data-driven):
+  1. Source: prefab/world desc nodes (.desc), not code
+  2. Assemble: ecs_assembler builds the registry from the world_desc
+  3. Edit: Inspector or in-scene gizmo (editor re-serializes desc)
+
+[CONFIG_REFERENCE]
+Editor Config File:
+  → Editor/config/editor.cfg
+  → Override: --set key=value CLI args
+  → Variables: CFG_VAR_DEF_* macros

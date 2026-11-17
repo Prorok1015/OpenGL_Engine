@@ -1,6 +1,7 @@
 #include "rnd_gl_vertex_array.h"
 #include "glad/glad.h"
 #include "open_gl_specific.h"
+#include <snk/common/logger/engine_log.h>
 
 static GLenum ShaderDataTypeToOpenGLBaseType(rnd::driver::SHADER_DATA_TYPE type)
 {
@@ -18,6 +19,7 @@ static GLenum ShaderDataTypeToOpenGLBaseType(rnd::driver::SHADER_DATA_TYPE type)
 	case SHADER_DATA_TYPE::VEC3_I:     return GL_INT;
 	case SHADER_DATA_TYPE::VEC4_I:     return GL_INT;
 	case SHADER_DATA_TYPE::BOOL:     return GL_BOOL;
+	case SHADER_DATA_TYPE::UNKNOWN:  break;
 	}
 
 	return 0;
@@ -49,7 +51,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 	auto vertexBuffer = std::static_pointer_cast<gl::buffer>(vertexBuffer_in);
 	const auto& layout = vertexBuffer->get_layout();
 
-	int binding_index = m_VertexBuffers.size();
+	const GLuint binding_index = static_cast<GLuint>(m_VertexBuffers.size());
 	glVertexArrayVertexBuffer(vertex_array_id, binding_index, vertexBuffer->get_id(), 0/*offset*/, layout.get_stride());
 	
 	for (const auto& element : layout)
@@ -64,7 +66,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			uint32_t count = element.get_component_count();
 			GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 			GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-			glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, element.Offset);
+			glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, static_cast<GLuint>(element.Offset));
 			CHECK_GL_ERROR();
 			glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 			CHECK_GL_ERROR();
@@ -82,7 +84,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			uint32_t count = element.get_component_count();
 			GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 			//GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-			glVertexArrayAttribIFormat(vertex_array_id, m_VertexBufferIndex, count, type, element.Offset);
+			glVertexArrayAttribIFormat(vertex_array_id, m_VertexBufferIndex, count, type, static_cast<GLuint>(element.Offset));
 			CHECK_GL_ERROR();
 			glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 			CHECK_GL_ERROR();
@@ -99,7 +101,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			{
 				GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 				GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-				std::size_t offset = (element.Offset + sizeof(float) * count * i);
+				const GLuint offset = static_cast<GLuint>(element.Offset + sizeof(float) * count * i);
 				glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, offset);
 				glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 				glEnableVertexArrayAttrib(vertex_array_id, m_VertexBufferIndex);
@@ -108,15 +110,14 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			glVertexArrayBindingDivisor(vertex_array_id, binding_index, 1);
 			
 		} break;
+		case SHADER_DATA_TYPE::UNKNOWN:
+			egLOG_WARN("opengl/vertex_array", "vertex element '{}' has an unknown data type and is skipped", element.Name);
+			break;
 
 		}
 	}
 
 	m_VertexBuffers.push_back(vertexBuffer);
-}
-
-void rnd::driver::gl::vertex_array::remove_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer)
-{
 }
 
 void rnd::driver::gl::vertex_array::set_index_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& indexBuffer)

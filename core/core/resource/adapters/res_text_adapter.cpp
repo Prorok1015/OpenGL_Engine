@@ -1,4 +1,4 @@
-#include "res_text_adapter.h"
+#include <snk/resource/adapters/res_text_adapter.h>
 
 std::shared_ptr<res::text_resource> res::text_adapter::operator()(res::tag tag, const std::vector<std::byte>& data) const
 {
@@ -12,6 +12,6 @@ std::vector<std::byte> res::text_adapter::serialize(const res::tag& tag, const s
 	auto& data = text_res->str();
 	std::vector<std::byte> byte_data;
 	byte_data.resize(data.size());
-	std::memcpy(byte_data.data(), data.data(), data.size());
+	if (!data.empty()) std::memcpy(byte_data.data(), data.data(), data.size());
 	return byte_data;
 }

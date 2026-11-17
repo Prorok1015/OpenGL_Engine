@@ -1,0 +1,84 @@
+#pragma once
+#include <snk/common/common.h>
+#include <snk/common/snk_api.h>
+// json::object appears only as a reference parameter in the pure-virtual serialize/deserialize
+// below, so a forward declaration suffices - this keeps full <boost/json.hpp> out of the ~25
+// headers that include desc_base.hpp (EPIC-49 US-49-4). TUs that actually call json methods
+// include <boost/json.hpp> themselves.
+#include <boost/json/fwd.hpp>
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_tag.h>
+#include <snk/resource/resources/res_resource_base.h>
+#include <cstdint>
+
+namespace json = boost::json;
+
+namespace desc
+{
+	class desc_system;
+
+	// +1 on any change to the virtual functions desc_base declares (resource_entry has its own): the module layout key mixes
+	// it in, tools/ci/vtable_pins.json pins them (#922).
+	inline constexpr std::uint32_t desc_base_abi_revision = 1;
+
+	class desc_base : public res::resource_entry
+	{
+		friend desc_system;
+	public:
+		desc_base() = default;
+		// Do not copy m_guid - a copy is a new file, so it must get its own __guid (same as m_tag).
+		desc_base(const desc_base& other) : res::resource_entry(), type(other.type) {};
+		desc_base(desc_base&&) = default;
+		desc_base& operator=(desc_base&&) = default;
+		virtual ~desc_base() = default;
+
+		// Copies this desc into `other`. An override assigns member-wise when `other` has its own type
+		// (copy_to_same); the default, and any other type, goes through serialize/deserialize.
+		virtual void copy_to(desc_base& other) const { copy_through_json(other); }
+		virtual void deserialize(desc::desc_system& desc_system, const json::object&) = 0;
+		virtual void serialize(json::object&) const = 0;
+
+		desc_base& operator=(const desc_base& other)
+		{
+			// Do not copy m_tag or m_guid - resource identity is per-instance.
+			type = other.type;
+			return *this;
+		}
+
+		std::string_view get_type() const { return type; }
+		std::string_view kind_name() const override { return type; }
+
+		// The root __guid the file was read with, written back by a save of a res:// file; empty for a file without one.
+		// Not the asset's ID (that is its .resource, EPIC-57): a project's migration takes it out, nothing makes one up.
+		const std::string& get_guid() const { return m_guid; }
+		void set_guid(std::string guid) { m_guid = std::move(guid); }
+
+		// The "__parent" this desc was read on top of; invalid: none. Saving writes it and only the fields that differ from
+		// the parent (#812). Like m_guid it names a file, so a copy starts without one.
+		const res::tag& get_parent() const { return m_parent; }
+		void set_parent(res::tag parent) { m_parent = std::move(parent); }
+
+	protected:
+		void set_type(const std::string_view type) { this->type = std::string{ type }; }
+
+		template<typename T>
+		void copy_to_same(const T& self, desc_base& other) const
+		{
+			if (T* typed = dynamic_cast<T*>(&other)) {
+				*typed = self;
+				return;
+			}
+			copy_through_json(other);
+		}
+
+		// serialize(this) -> deserialize(other): only keys both types know cross over. Needs the desc_system the
+		// instances were created by; without one nothing is copied.
+		SNK_API void copy_through_json(desc_base& other) const;
+
+	private:
+		std::string type;
+		std::string m_guid;
+		desc_system* m_system = nullptr;
+		res::tag m_parent;
+	};
+}

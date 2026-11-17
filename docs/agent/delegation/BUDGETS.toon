@@ -1,0 +1,83 @@
+[META]
+framework: claude-framework
+file_id: delegation.BUDGETS
+class: universal
+version: 1.0.0
+
+[BUDGETS]
+overview: Concrete thresholds and response-length caps that make delegation decisions and subagent outputs predictable
+principle: Every delegation crosses a budget boundary. Unbounded prompts produce unbounded responses; unbounded responses defeat the point of delegating.
+
+[COST_THRESHOLDS]
+# Rough heuristics for "should this be delegated". Tokens here = approximate; count by eye.
+
+expected_tool_output_tokens:
+  < 1000         → inline (no delegation cost justified)
+  1000 .. 5000   → inline IF main thread will use the full content; delegate IF only a summary is needed
+  5000 .. 20000  → delegate (distill to summary)
+  > 20000        → delegate ALWAYS (never let the main thread see this)
+
+files_to_read_for_orientation:
+  1 .. 3         → inline
+  4 .. 10        → delegate to Explore (medium thoroughness)
+  > 10           → delegate to Explore (very thorough) with tight report cap
+
+tool_calls_to_reach_answer_estimate:
+  ≤ 3            → inline
+  4 .. 8         → delegate IF the intermediate outputs are not themselves the answer
+  > 8            → delegate ALWAYS
+
+[RESPONSE_BUDGETS]
+# Every spawned subagent prompt MUST specify how long its report can be.
+# Pick from this menu; do not invent ad-hoc phrasings.
+
+tier_terse:       "Respond in under 50 words."
+  use_for: yes/no answers, single fact extraction, pass/fail reports
+tier_brief:       "Respond in under 150 words."
+  use_for: grep summaries, small exploration answers, classification with reasoning
+tier_standard:    "Respond in under 300 words."
+  use_for: default Explore / Plan output, mid-sized synthesis
+tier_detailed:    "Respond in under 600 words."
+  use_for: multi-file plan with step list + risks, thorough audit
+tier_unbounded:   (never)
+  use_for: — never omit the cap; "as needed" is not a budget
+
+[OUTPUT_SHAPE_CONTRACT]
+# Along with the word cap, specify the STRUCTURE of the response.
+# A word cap without structure → verbose prose. Structure + cap → the thing you actually need.
+
+Good examples:
+  - "Return a bulleted list: file:line — one-sentence description. Max 10 bullets."
+  - "Return: PASS/FAIL, then on FAIL one line per failing test."
+  - "Return: architecture summary (80 words), then top-5 files with purpose (10 words each)."
+  - "Return: ordered steps (numbered), critical files (bulleted), risks (bulleted)."
+
+Bad examples:
+  - "Summarize what you found." (no shape)
+  - "Tell me about the code." (no shape, no cap)
+  - "Be concise." (no concrete cap)
+
+[PARALLEL_BUDGET]
+When spawning N parallel subagents in one message:
+  - Each subagent gets its own independent budget (they do not share)
+  - Prefer N ≤ 5 per message; beyond that, overhead of reading N reports eats savings
+  - Each subagent's prompt must be fully self-contained (no shared context across them)
+
+[BACKGROUND_BUDGET]
+When spawning with run_in_background: true:
+  - Still set a response budget — background does not mean unlimited
+  - Do NOT spawn >3 background agents concurrently; notifications will arrive faster than you can integrate them
+
+[BUDGET_VIOLATION_RECOVERY]
+If a subagent returns MORE than its budget allowed:
+  1. Do NOT re-ingest the overflow into the main thread context
+  2. Extract only the first N words / the structured summary section
+  3. If the over-long report contained critical detail, spawn a second haiku subagent:
+     "Summarize the following in 100 words: <paste subagent output>"
+  4. Adjust the prompt for next time — the budget instruction was too soft
+
+[HARD_RULES]
+- Never write "as needed" or "as much as necessary" — these produce unbounded output
+- Never omit the response budget entirely
+- Never let a subagent's raw output flow back into main context unfiltered when trigger 2 fires
+- If you find yourself reading >500 words of subagent output, the prompt was under-specified

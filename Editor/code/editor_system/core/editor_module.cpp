@@ -1,19 +1,53 @@
-#include "editor_module.h"
+#include <snk/editor/editor_module.h>
 #include "edt_editor_init.h"
-#include "res_system.h"
-#include "resources/res_resource_picture.h"
-#include "wnd_window_system.h"
-#include "inp_input_system.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_picture.h>
+#include <snk/window/wnd_window_system.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/game/gs_input_actions.h>
 #include "edt_editor_system.h"
-#include "cfg_api.h"
-#include "adapters/scn_model_importer_adapter.h"
-#include "desc/desc_system.h"
+#include "edt_data_protocol.h"
+#include "edt_project_trust_service.h"
+#include <snk/common/fs_paths.h>
+#include <snk/config/cfg_variables.h>
+#include <filesystem>
+#include <snk/desc/desc_system.h>
+#include <snk/project/prj_project.h>
 
-#include "rnd_frame_assembler.h"
-#include "level/scn_render_data_extractor.h"
-#include "skinning/rnd_skinning_manager.h"
+#include <snk/render/rnd_frame_assembler.h>
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
 
 CFG_VAR_EXT_PATH(cfg_res_path);
+CFG_VAR_DEF_PATH(cfg_edt_data_path, "editor/data_path", "../data/");
+CFG_VAR_DEF_PATH(cfg_edt_user_data_path, "editor/user_data_path", "");
+// The gui module's own variable (gui/layout_file), read here to see whether the config or --set already gave a value.
+CFG_VAR_DEF_PATH(cfg_gui_layout_file_seen, "gui/layout_file", "");
+cfg::variable<std::vector<std::string>> cfg_edt_write_patterns{ "editor/edt_write_patterns", edt::default_write_patterns() };
+
+void editor::apply_default_settings()
+{
+	if (!cfg_gui_layout_file_seen->empty()) {
+		return;
+	}
+	const std::filesystem::path user_data = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
+	if (!user_data.is_absolute()) {
+		return;
+	}
+	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
+}
+
+std::function<bool(std::string_view, const std::filesystem::path&)> editor::project_trust_gate(
+	ds::app_data_storage& data, bool trust_flag)
+{
+	if (data.has_value<edt::project_trust_service>()) {
+		data.require<edt::project_trust_service>().set_flag_trust(trust_flag);
+	}
+	return [&data, trust_flag](std::string_view name, const std::filesystem::path& copy) {
+		if (!data.has_value<edt::project_trust_service>()) return trust_flag;
+		return data.require<edt::project_trust_service>().allow_library(name, copy);
+	};
+}
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {
@@ -27,14 +61,28 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
 
-	auto& desc_system = data.require<desc::desc_system>();
-	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system));
+	const auto user_data_path = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
+	edt::register_data_protocol(res, cfg_edt_data_path, user_data_path, *cfg_edt_write_patterns);
+	// An unusable user folder (the home directory was not found) leaves the player's bindings in memory only.
+	if (user_data_path.is_absolute() && data.has_value<gs::input_actions>()) {
+		data.require<gs::input_actions>().set_user_folder(user_data_path / "settings" / "input_bindings");
+	}
 
-	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
-	ds::fixed_vector<wnd::window_image, 2> images;
-	images.emplace_back(logo->data(), logo->size().x, logo->size().y, wnd::window_image::TYPE::LOGO);
-	win_service.get_active_window()->set_logo(images);
-	win_service.get_active_window()->set_title("Snake Editor");
+	// With assimp, editor_system::init registers the adapter of .glb/.gltf/.obj/.fbx: through the decoder process (#925).
+#if !SNK_HAS_ASSIMP
+	egLOG_WARN("Editor/Import", "built without assimp (SNK_WITH_ASSIMP=OFF): .glb/.gltf/.obj/.fbx models cannot be loaded or imported");
+#endif
+
+	auto logo = res.require_sync<res::picture_resource>(res::tag("edt://icons/editor_engine_logo.png"));
+	// A missing logo is cosmetic: keep starting the editor without it.
+	if (const auto logo_res = logo.get_sync(); ENGINE_VERIFY(logo_res, "editor logo failed to load, window icon skipped")) {
+		ds::fixed_vector<wnd::window_image, 2> images;
+		images.emplace_back(logo_res->data(), logo_res->size().x, logo_res->size().y, wnd::window_image::TYPE::LOGO);
+		win_service.get_active_window()->set_logo(images);
+	}
+	win_service.get_active_window()->set_title(data.has_value<prj::project_context>()
+		? "Snake Editor - " + data.require<prj::project_context>().data.name
+		: std::string{ "Snake Editor" });
 
 	data.require<edt::editor_system>().init(data);
 }

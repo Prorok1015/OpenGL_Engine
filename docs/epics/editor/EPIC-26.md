@@ -2,6 +2,7 @@
 
 **Theme:** editor
 **Status:** planned
+**Issue:** [#36](https://github.com/Prorok1015/OpenGL_Engine/issues/36)
 **Depends on:** EPIC-08 (Desc-Driven Core), EPIC-14 (Component UI Registry)
 
 ---
@@ -136,7 +137,7 @@ namespace scn {
 ### US-26-2 — Миграция `material_desc` на ссылку `shader_desc`
 
 **Файлы:**
-- `core/engine/scene/scn_material_desc.h/.cpp` — заменить inline shader fields на `res::tag shader`
+- `core/engine/scene/include/snk/scene/scn_material_desc.h/.cpp` — заменить inline shader fields на `res::tag shader`
 - `core/engine/scene/scn_material_desc.cpp` — десериализация: поддержать оба формата (legacy + новый)
 - `Editor/res/*.desc` — обновить material файлы
 
@@ -164,8 +165,8 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ### US-26-3 — Рефакторинг `shader_config` и `ShaderManager`
 
 **Файлы:**
-- `core/engine/render/render_system/shader/rnd_scene_shader_desc.h/.cpp`
-- `core/engine/render/render_system/shader/rnd_shader_manager.h/.cpp`
+- `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h/.cpp`
+- `core/engine/render/render_system/include/snk/render/shader/rnd_shader_manager.h/.cpp`
 
 **Изменения:**
 - `shader_config::constant_data::program` теперь может инициализироваться из `shader_desc` (удобный конструктор)

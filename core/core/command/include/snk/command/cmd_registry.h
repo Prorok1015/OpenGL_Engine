@@ -1,0 +1,149 @@
+#pragma once
+#include "cmd_policy.h"
+#include "cmd_registration.h"
+#include "cmd_types.h"
+#include <boost/json/value.hpp>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+#include <snk/common/snk_api.h>
+
+namespace cmd
+{
+	// JSON Schema of a command without arguments (and of a result that carries nothing).
+	SNK_API boost::json::value no_args_schema();
+
+	// The commands of a process in registration order, whoever asks for them: menus, shortcuts, tests, scripts,
+	// agents. The engine, the game and the editor register into the same type.
+	// Main thread only (the thread that created the registry), enforced by `invoke`. Commands may add and remove
+	// registrations while they run. Other threads go through main_thread_queue.
+	class SNK_API command_registry
+	{
+	public:
+		command_registry();
+		~command_registry();
+		command_registry(const command_registry&) = delete;
+		command_registry& operator=(const command_registry&) = delete;
+
+		// Errors are logged and nothing is registered (the registration is not active): an empty id, no `invoke`,
+		// a taken id, a schema check_schema refuses, an args_schema that is not "type":"object", version 0.
+		[[nodiscard]] registration add(command_desc desc);
+
+		bool contains(std::string_view id) const;
+		std::size_t size() const;
+		// Counts every registration and every unregistration: a change of the set of commands that keeps `size()` (a module
+		// reloaded) still moves it.
+		std::uint64_t generation() const { return m_changes; }
+		// Stays valid until the command is unregistered.
+		const command_desc* find(std::string_view id) const;
+		// False for an unknown id; true when the command has no `enabled`.
+		bool is_enabled(std::string_view id) const;
+		// Every command in registration order.
+		std::vector<const command_desc*> list() const;
+
+		// Fails, and the command does not run, if it does not exist, is disabled or the arguments do not match
+		// its schema (see codes). A result that breaks result_schema is replaced by result_invalid.
+		result invoke(std::string_view id, const call& request);
+		result invoke(std::string_view id, boost::json::value args, origin from = origin::ui());
+
+		bool on_main_thread() const noexcept { return std::this_thread::get_id() == m_main_thread; }
+
+		// A process without a display (--headless): a `needs_display` command answers `unavailable_headless` to every
+		// caller, before its arguments are checked and before the policy gate is asked.
+		void set_headless(bool headless) { m_headless = headless; }
+		bool headless() const noexcept { return m_headless; }
+
+		// The policy for calls from agents (origin `agent`; the other origins are not asked): `invoke` asks the gate
+		// before it checks the arguments or runs anything. Without a gate nothing is checked here. null removes it.
+		// - allow: the command runs.
+		// - deny: `denied`, the command does not run.
+		// - ask: with a person to ask (`gate->can_ask()`) the answer is `confirmation_required` with a one-time ticket in
+		//   `value["ticket"]`; without one (headless) it is `denied`. After a person approved the ticket, the same call
+		//   (same command, the same arguments, the same agent session) with `call::confirmation` set to it runs once;
+		//   any other call with it, a second use, or one before the approval is `denied`. The gate is asked again on
+		//   that call, so a policy that turned to deny meanwhile wins. A command sees call::confirmation only on a call
+		//   that spent a ticket a person approved for it: the policy allowing a call that names another ticket (one
+		//   still waiting, one declined) hands the command the call without it (#931).
+		void set_policy_gate(std::shared_ptr<policy_gate> gate);
+		// The gate set with set_policy_gate; null without one.
+		policy_gate* gate() const noexcept { return m_gate.get(); }
+
+		// A rule on the arguments of every call from an agent, asked after the policy gate and before the schema:
+		// a result refuses the call, nullopt lets it go on. Unlike the gate, no policy lifts it (#681). null removes it.
+		using agent_argument_check = std::function<std::optional<result>(const command_desc& command, const call& request)>;
+		void set_agent_argument_check(agent_argument_check check);
+
+		// A person said yes to the ticket of a confirmation_required answer. False for a ticket that is unknown or
+		// has expired.
+		bool approve(std::string_view ticket);
+		// Forgets a ticket (the person said no, or did not answer in time).
+		void discard(std::string_view ticket);
+		std::size_t pending_confirmations() const;
+
+		// What a ticket was issued for, as the registry bound it: the confirmation UI shows this, never the agent's own text.
+		struct pending_confirmation
+		{
+			std::string command;
+			// The arguments as serialized when the ticket was issued.
+			std::string args;
+			// Why the policy asked.
+			std::string reason;
+			// command_desc::describe of the call, as the ticket was issued; empty: none.
+			std::string detail;
+			std::string session;
+			// The category the policy asked for (policy_decision::category): what "allow for this session" grants.
+			agent_category category = agent_category::unset;
+			bool approved = false;
+		};
+		std::optional<pending_confirmation> confirmation_of(std::string_view ticket);
+
+		// A ticket lives this long from its issue.
+		static constexpr std::chrono::seconds confirmation_lifetime{ 120 };
+		// One agent session cannot fill the list for the others: past this many waiting tickets of a session its next ask is
+		// `denied`; the same call asked again gets the ticket it already has. And a ceiling for all sessions together.
+		static constexpr std::size_t max_pending_confirmations_per_session = 8;
+		static constexpr std::size_t max_pending_confirmations = 128;
+		// Tests: the time tickets expire by.
+		void set_clock(std::function<std::chrono::steady_clock::time_point()> now);
+
+	private:
+		struct entry;
+
+		struct confirmation_ticket
+		{
+			std::string id;
+			std::string command;
+			std::string args;
+			std::string session;
+			std::string reason;
+			std::string detail;
+			agent_category category = agent_category::unset;
+			std::chrono::steady_clock::time_point expires;
+			bool approved = false;
+		};
+
+		// Main thread only, like everything of the registry (m_tickets, the gate).
+		// nullopt: the call may go on; `confirmed` then tells whether it spent a ticket a person approved for it.
+		std::optional<result> apply_policy(const command_desc& command, const call& request, bool& confirmed);
+		void drop_expired_tickets();
+		std::chrono::steady_clock::time_point now() const;
+
+		std::shared_ptr<policy_gate> m_gate;
+		agent_argument_check m_agent_argument_check;
+		std::function<std::chrono::steady_clock::time_point()> m_clock;
+		std::vector<confirmation_ticket> m_tickets;
+		std::vector<std::shared_ptr<entry>> m_commands;
+		std::uint64_t m_changes = 0;
+		std::uint64_t m_next_key = 1;
+		std::thread::id m_main_thread = std::this_thread::get_id();
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+		bool m_headless = false;
+	};
+}

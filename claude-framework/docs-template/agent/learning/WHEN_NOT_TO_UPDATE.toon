@@ -1,0 +1,81 @@
+[WHEN_NOT_TO_UPDATE]
+overview: Explicit VETO list - do NOT update docs for these reasons
+purpose: Prevent documentation bloat and maintain focus on real constraints
+
+[VETO_1_OBVIOUS_FROM_CODE]
+rule: Don't document what anyone can read in 5 minutes
+examples_veto:
+  - "Vector uses templates for generics" ❌
+  - "The loop iterates through array elements" ❌
+  - "Function X returns nullptr on error" ❌
+  - "this->member_var is a private field" ❌
+why: Code is self-documenting for obvious things
+
+[VETO_2_IMPLEMENTATION_DETAILS]
+rule: Don't document internal implementation unless it's a constraint
+examples_veto:
+  - "malloc() inside core_engine constructor allocates 16KB" ❌
+  - "HashMap uses open addressing with quadratic probing" ❌
+  - "This variable is stored on stack, not heap" ❌
+why: Implementation can change. Only architectural constraints matter.
+
+[VETO_3_TEMPORARY_OBSERVATIONS]
+rule: Don't document things that might not be true tomorrow
+examples_veto:
+  - "Performance: this function is slow, needs optimization" ❌
+  - "TODO: refactor Layer 3 to use different algorithm" ❌
+  - "This looks like a bug but might be intentional" ❌
+  - "Should be faster if we used..." ❌
+why: Observations decay. Only permanent rules matter.
+
+[VETO_4_PERSONAL_OPINIONS]
+rule: Don't document preferences unless it's a stated rule
+examples_veto:
+  - "I think we should use boost instead of custom code" ❌
+  - "This design is suboptimal, should be..." ❌
+  - "This would be cleaner if written differently" ❌
+why: You are assistant, not architect. Only stated rules apply.
+
+[VETO_5_SPECULATION]
+rule: Don't document if you're not 100% sure
+examples_veto:
+  - "Probably the relay server does X..." ❌
+  - "I think this might be how it works..." ❌
+  - "Based on the pattern, layer 3 probably..." ❌
+why: Uncertainty spreads. Wait for verification or ask user.
+
+[VETO_6_REDUNDANT_INFO]
+rule: Don't duplicate what's already documented
+examples_veto:
+  - Adding info already in ARCHITECTURE.toon to CONSTRAINTS.toon ❌
+  - Restating info from PROJECT.toon in MODULES.toon ❌
+  - "Reminding" about weak_ptr again when already mentioned ❌
+why: Check existing docs first. Link instead of duplicate.
+
+[VETO_7_OBVIOUS_PATTERNS]
+rule: Don't document universal programming practices
+examples_veto:
+  - "All functions validate input before use" ❌
+  - "Error codes are checked before proceeding" ❌
+  - "Memory is freed after allocation" ❌
+why: Standard practice. Only Mirage-specific constraints matter.
+
+[VETO_8_UNVERIFIED_USER_CLAIM]
+rule: If user says something but code contradicts → ask first
+examples_veto:
+  - User: "We never use std::string"
+    Code: Uses std::string everywhere ❌
+  - User: "Layer 2 has no disk access"
+    Code: Has mmap call ❌
+why: Verify before documenting. Docs represent ground truth.
+
+[QUICK_CHECK]
+Before updating, ask yourself:
+□ Is this documented elsewhere already?
+□ Would someone see this immediately reading the code?
+□ Is this a temporary observation, not a permanent rule?
+□ Am I 100% certain this is true?
+□ Is this Mirage-specific or universal programming?
+□ Does the code match what user told me?
+
+If ANY checkbox is YES → DON'T UPDATE

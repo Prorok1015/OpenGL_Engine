@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(render)
-add_library(render)
+add_library(render STATIC)
+add_library(snk::render ALIAS render)
 
 file(GLOB_RECURSE SE_RENDER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RENDER_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
+# rnd_render_service_init.cpp includes the swapchain headers of the drivers (snk/driver_gl, snk/driver_null,
+# snk/driver_validation) through the PRIVATE links to drv_opengl, drv_null and drv_validation below.
 
-
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE window PRIVATE resource_system PRIVATE desc_system PRIVATE input_system PUBLIC drv_interface PRIVATE engine_logger)
+# rnd_material_desc.h (the material description the compiler takes) is built on the desc system, so it is a public dependency.
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PUBLIC snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::drv_validation PRIVATE snk::config_system PRIVATE snk::engine_logger PRIVATE snk::command PRIVATE snk::image)
+# rnd_geometry_files.h includes rnd_geometry_encode.h, whose encoders live in snk_model_codec (#1077).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::model_codec)

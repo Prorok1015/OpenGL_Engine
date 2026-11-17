@@ -1,5 +1,7 @@
 #include "rnd_gl_texture.h"
 #include "open_gl_specific.h"
+#include "rnd_gl_framebuffers.h"
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 namespace rnd::driver::gl 
@@ -116,8 +118,9 @@ namespace rnd::driver::gl
 		}
 	}
 
-	texture::texture(const texture_header& hdr)
+	texture::texture(const texture_header& hdr, std::shared_ptr<framebuffer_registry> framebuffers)
 		: texture_interface(hdr)
+		, m_framebuffers(std::move(framebuffers))
 		, target(texture_type_to_gl_target(hdr.type))
 	{
 		create_texture();
@@ -140,6 +143,9 @@ namespace rnd::driver::gl
 
 	texture::~texture() 
 	{
+		if (m_framebuffers) {
+			m_framebuffers->evict_texture(framebuffer_object());
+		}
 		if (header.type == TEXTURE_TYPE::RENDERBUFFER) {
 			glDeleteRenderbuffers(1, &id);
 		} else {
@@ -202,6 +208,10 @@ namespace rnd::driver::gl
 									 extent.width, extent.height, 
 									 header.type == TEXTURE_TYPE::TEXTURE_3D ? extent.depth : extent.layers * extent.faces);
 					break;
+
+				case TEXTURE_TYPE::RENDERBUFFER:
+					ASSERT_FAIL("renderbuffer storage is set before this switch");
+					break;
 			}
 		}
 		CHECK_GL_ERROR();
@@ -212,6 +222,10 @@ namespace rnd::driver::gl
 							uint32_t level, uint32_t layer, uint32_t face) 
 	{
 		if (!data || header.type == TEXTURE_TYPE::RENDERBUFFER) return;
+
+		// Rows as the engine keeps them, without padding: with GL's default of 4 a row of R8 or RGB8 whose byte length
+		// is no multiple of 4 is read past the end of the buffer (#926).
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
 		auto [internal_format, format, type] = get_gl_format(header.data.format);
 
@@ -243,6 +257,10 @@ namespace rnd::driver::gl
 			case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY:
 				glTextureSubImage3D(id, level, x_offset, y_offset, layer * 6 + face,
 								  width, height, 1, format, type, data);
+				break;
+
+			case TEXTURE_TYPE::RENDERBUFFER:
+				ASSERT_FAIL("renderbuffer is rejected before this switch");
 				break;
 		}
 		CHECK_GL_ERROR();

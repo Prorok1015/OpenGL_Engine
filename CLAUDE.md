@@ -1,235 +1,195 @@
-# CLAUDE.md
+<!-- framework-meta: framework=claude-framework class=parameterized target=CLAUDE.md version=1.3.0 -->
+<!-- The line above is a framework marker. Do NOT remove it. It tells PATCH_PROMPT which template produced this file. -->
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md — OpenGL Engine & Editor
 
-## Build Commands
+## 🎯 Project
+
+**OpenGL Engine** — C++20 3D graphics engine with real-time scene editor, multi-world ECS, data-driven rendering pipeline, and asset management system.
+
+Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
+
+## 📂 Structure
+
+- **Core** — ECS, resource system, descriptors, memory allocators, configuration
+- **Engine** — Scene management, render pipeline, animation, input systems
+- **Editor** — ImGui-based scene editor with prefab and shader support
+
+📚 **Documentation:**
+- 👉 [Full project structure](PROJECT_STRUCTURE.md)
+- 🤖 [Agent documentation index](docs/agent/README.toon) — Compact, modular
+- 🏗️ [ARCHITECTURE.toon](docs/agent/ARCHITECTURE.toon) — System design & layers
+- 🎨 [CODE_CONVENTIONS.toon](docs/agent/CODE_CONVENTIONS.toon) — Naming & style
+- ⚡ [CONSTRAINTS.toon](docs/agent/CONSTRAINTS.toon) — Hard rules & limits
+- 🔗 [QUICK_LINKS.toon](docs/agent/QUICK_LINKS.toon) — File navigation
+- 📋 [docs/epics/INDEX.md](docs/epics/INDEX.md) — Task management (epics and their statuses)
+
+## ⚠️ Critical Rules (STRICT!)
+
+### No iostream, no std::cout/cerr
+- **Use:** `#include <snk/common/logger/engine_log.h>` → `egLOG`/`egLOG_INFO`, `egLOG_WARN`, `egLOG_ERROR` (also `egLOG_TRACE`/`egLOG_DEBUG`)
+- **Signature:** first arg is a category string, then `std::format` args: `egLOG_WARN("resource", "not found: {}", tag)`
+- **Why:** Formatted, filterable per-category logging routed through spdlog
+
+### Never store frame-allocator pointers across frames
+- **What:** `std::pmr::vector<T>(ds::frame_allocator())` invalidated at frame reset
+- **Why:** Frame allocator memory reclaimed at `ds::frame_allocator_reset()` (frame start)
+- **Fix:** Always transfer data or use `std::make_shared<T>()` for persistence
+
+### Always reserve() before pushing frame-temp data
+- **Pattern:** `std::pmr::vector<T> v(ds::frame_allocator()); v.reserve(est); ...`
+- **Why:** Avoids grow-and-copy within bump allocator (wastes memory)
+
+### C++20 only, snake_case, tabs (size 4)
+- **Headers:** `#pragma once`, include order: module → stdlib → third-party → project
+- **Braces:** functions on new line, control flow same line
+- **Assertions:** `ASSERT_MSG`/`ASSERT_FAIL` from `<snk/common/engine_assert.h>`, never `assert()`
+
+### ImGui: `End()` is unconditional
+- **Pattern:** `if (ImGui::Begin("Name")) { ...draw... } ImGui::End();` (same for `BeginChild`/`EndChild`)
+- **Exception:** `BeginPopup*`/`BeginMenu`/`BeginTable`/etc. → call `End*` only if `Begin*` returned true
+- **Ref:** `Editor/code/editor_system/panels/edt_panel_base.cpp`
+
+### Module ABI: layout of listed engine types = major bump
+- **What:** changing the size or alignment of a type in `gs::module_layout_key()` (`snk/game/gs_module_layout_key.h`) is a major bump of `SNK_MODULE_API_VERSION`; add a type there when module code constructs, copies or allocates it (an engine template instantiated in the module). Engine-created types a module only reads (`scene_layer`, `world_context`, `module_context`...) stay out: append fields at their end (minor), never reorder or remove (major). Everything a module calls or implements virtually is pinned: it is in the key as the `<interface>_abi_revision` next to the interface (#922): any change to its virtual functions or base classes raises it by one (and `layout_revision`), `tools/ci/check_vtable_pins.py` in the CI job Plan fails a change that does not (against the headers and the base commit's pins, so a hand-edited pin fails too; a changed list needs a revision strictly above the base's, and a pin is removed only via `retired` plus a raised `layout_revision`), then re-pin with `--update` (`tools/ci/vtable_pins.json`); a new such interface gets a constant, an entry in `interface_abi_revisions` and in the pin file. The key also mixes in the EnTT/Boost/glm versions and the sizes of `entt::registry`, `boost::json::value`, `glm::mat4`. A library module built with the static CRT (`/MT`) or reporting layout key 0 is refused when opened. Editor-module types and interfaces go in the editor key instead (`edt::editor_layout_key`, `snk/editor/edt_editor_layout_key.h`, `editor_layout_revision`, pins with `"key": "editor"`, #969). The key does not catch a reorder of fields of one size, a vtable change of an interface outside the pin file or what the pin script cannot parse (macros, an override without `virtual`): those are a major bump by hand
+- **Frozen by size (#922):** engine components, the ctx types and events a module reads (`scn::delta_time`, `inp::action_state`, `inp::action_event`...), channel types and structs passed by value are in the key too: a new field changes the key. Element types of public containers inside listed structs are in the key as well (a container's size does not show its element's). A new engine component = register it and add it to `scn_engine_component_list.h` (the `EngineComponentCatalog` test fails otherwise)
+- **Accessors are exports (#922 PR 3):** an accessor of an engine service is an exported function, not inline; inline/template code in `scn_scene_layer.h`, `gs_input_actions.h`, `ds_store.hpp` touches no `m_` member (`AbiInlineBoundaryTests`)
+- **Why:** a `game.dll` allocates those types itself; the host refuses a module with another layout key (#614), but modules older than 3.6 carry no key
+- **Record every ABI change in its own file (#1056):** `docs/abi/changes/<issue>.md` (format: its `README.md`), never a line above `SNK_MODULE_API_VERSION` or next to `layout_revision`; a new `layout_revision` is named in it as `layout_revision <N>`. `tools/ci/check_abi_changes.py` in the CI job Plan fails a change of `layout_revision`, an API version, the pins or a new `SNK_API` line in an `include/` header that adds none. The history up to #1056 is `docs/abi/HISTORY.md`
+- **Ref:** `docs/roadmap/design/MODULE_LAYER.md` (Ключ раскладки модуля), the rule above `SNK_MODULE_API_VERSION`, `docs/abi/`
+
+### Never bypass resource cache
+- **Use:** get `res::resource_system&` by injection (constructor parameter / `app_data_storage` in composition code), then `.require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
+- **No global accessor:** `res::get_system()` (and `rnd::`/`gui::get_system()`) no longer exist — never reintroduce a global/singleton; inject `res::resource_system&`
+- **Never:** hardcode filenames, new/load directly from disk
+
+## 🗣️ Conventions
+
+- **Language:** English (code/comments), Russian (docs/epics/)
+- **Namespaces:** 2-4 letter abbrev (`ds`, `ecs`, `scn`, `rnd`, `res`, `edt`, etc.)
+- **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_context_set.cpp`, `res_system.h`)
+- **Private members:** `m_` prefix (`m_worlds`)
+- **Components:** POD structs, optional `_component` suffix
+- **Systems:** free functions or `ecs::system_interface` instances, registered explicitly (`layer.systems().register_system<&fn>(name)` in `gs::game_module::register_content`); worlds list them by name
+
+## 🎫 Task Tracking — GitHub Issues (primary)
+
+All work is tracked in [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues) — status and progress live there, not in markdown.
+
+- **Epic** = issue with label `epic`; its stories are native **sub-issues** (one issue per user story `US-NN-X`: description, files, AC checklist, link to the epic).
+- **Bug** = issue with label `bug`, attached to its epic when there is one.
+- **Labels:** `epic` `story` `bug` `tech-debt` `docs` `ci` · themes `editor` `render` `ecs` `resource` `infrastructure` `desc` `chimera` · priority `P0`–`P2`.
+- **Milestones:** Фаза 0 — этап C / этап D, M1–M6 (Chimera roadmap), Этап Б (ТЗ).
+- **Design docs stay in the repo:** `docs/epics/**/EPIC-NN.md`, `docs/roadmap/*.md` hold motivation and architecture; each links to its issue (`**Issue:** #N`) and each epic issue links back.
+- **Before starting work:** find the issue (or create one for non-trivial work); read the linked design doc.
+- **Commits:** reference the issue — `refs #N` while in progress, `closes #N` in the commit that finishes it; close the issue (and tick AC) when done. Bugs found mid-task → new `bug` issue, not a silent fix in an unrelated commit.
+- **Session handoff:** [`docs/agent/handoff/PHASE0-STATUS.md`](docs/agent/handoff/PHASE0-STATUS.md) — current phase, what's done, key issues and agreements.
+
+## 📚 Backlog (session scratch)
+
+The agent keeps a lightweight backlog at `docs/agent/backlog/`. Use it when the user says "do this later", when workflow phases produce out-of-scope follow-ups, or when side-quests should be captured without breaking the current task.
+
+👉 **Start here:** [`BACKLOG-RULES.toon`](docs/agent/backlog/BACKLOG-RULES.toon)
+
+Then use these guides:
+- 🧩 [`SCHEMA.toon`](docs/agent/backlog/SCHEMA.toon) — Item format (7-line INDEX entry + detail file)
+- 🔁 [`LIFECYCLE.toon`](docs/agent/backlog/LIFECYCLE.toon) — proposed → accepted → in-progress → done
+- 🛠️ [`OPERATIONS.toon`](docs/agent/backlog/OPERATIONS.toon) — add / list / show / update / activate / archive
+- 🔄 [`SYNC.toon`](docs/agent/backlog/SYNC.toon) — Manual sync with external trackers (none configured)
+
+Data: [`INDEX.toon`](docs/agent/backlog/INDEX.toon) (flat index) + `items/<id>.toon` (details, on demand).
+
+Note: the local backlog is only for short-lived follow-ups within a session; anything that outlives the session goes to GitHub Issues (`sync_target: github`, see `SYNC.toon` → `[PROJECT_POLICY]`).
+
+## 🗺️ Development Workflow (MANDATORY)
+
+For features / refactors / non-trivial bugfixes — do NOT start coding immediately. Run: **DISCOVER → PLAN → CONFIRM → IMPLEMENT → VERIFY → REPORT**.
+
+👉 **Start here:** [`WORKFLOW.toon`](docs/agent/workflow/WORKFLOW.toon)
+
+- 📋 [`PHASES.toon`](docs/agent/workflow/PHASES.toon) — 6 phases and exit criteria
+- ✨ [`FEATURE.toon`](docs/agent/workflow/FEATURE.toon) — New-feature rules
+- 🔧 [`REFACTOR.toon`](docs/agent/workflow/REFACTOR.toon) — Behavior-preserving change rules
+- 🐛 [`BUGFIX.toon`](docs/agent/workflow/BUGFIX.toon) — Reproduce-first bug-fix rules
+- 🚦 [`GATES.toon`](docs/agent/workflow/GATES.toon) — Where to STOP and ask
+- 💾 [`STATE_TRACKING.toon`](docs/agent/workflow/STATE_TRACKING.toon) — TodoWrite + `.claude/workplan/*.md`
+- ⏩ [`ESCAPE_HATCH.toon`](docs/agent/workflow/ESCAPE_HATCH.toon) — When workflow may be skipped
+- ✅ [`CI_PR.toon`](docs/agent/workflow/CI_PR.toon) — Deliver via draft PR, CI is the verification; agents never build locally
+
+Rules of thumb:
+- No production code before an approved plan
+- "Sounds good" / "maybe" are NOT approval — only explicit "yes / proceed"
+- At start of every turn, check `.claude/workplan/` and resume from recorded phase
+- Code is verified by CI on a draft PR, not locally — agents do not build or run tests themselves (CI is free, run PRs in parallel)
+
+## 🤝 Delegation to Subagents
+
+Before any non-trivial task, decide whether to do it inline or delegate. Delegation saves main-context tokens and routes mechanical work to cheaper models (e.g. Haiku).
+
+👉 **Start here:** [`DELEGATION.toon`](docs/agent/delegation/DELEGATION.toon)
+
+- 🎯 [`TRIGGERS.toon`](docs/agent/delegation/TRIGGERS.toon) — When delegation is required
+- 🧭 [`ROUTING.toon`](docs/agent/delegation/ROUTING.toon) — Which model for which task
+- 📐 [`PATTERNS.toon`](docs/agent/delegation/PATTERNS.toon) — Copy-paste `Agent()` invocations
+- 🚫 [`ANTI_PATTERNS.toon`](docs/agent/delegation/ANTI_PATTERNS.toon) — When NOT to delegate
+- ⏱️ [`BUDGETS.toon`](docs/agent/delegation/BUDGETS.toon) — Token thresholds and length caps
+
+## 🤖 Self-Learning & Documentation Updates
+
+When you discover rules or architectural patterns:
+
+👉 **Start here:** [`SELF-LEARNING.toon`](docs/agent/learning/SELF-LEARNING.toon)
+
+- 📖 [`WHEN_TO_UPDATE.toon`](docs/agent/learning/WHEN_TO_UPDATE.toon) — Criteria
+- ❌ [`WHEN_NOT_TO_UPDATE.toon`](docs/agent/learning/WHEN_NOT_TO_UPDATE.toon) — Veto list
+- 🎯 [`FILES_REFERENCE.toon`](docs/agent/learning/FILES_REFERENCE.toon) — Which file
+- 📝 [`HOW_TO_UPDATE.toon`](docs/agent/learning/HOW_TO_UPDATE.toon) — Process
+- 💡 [`EXAMPLES.toon`](docs/agent/learning/EXAMPLES.toon) — Real examples
+- 🛡️ [`GUARDRAILS.toon`](docs/agent/learning/GUARDRAILS.toon) — Safety checks
+
+Commit format: `git commit -m "docs: [type] brief desc\n\nSource: ...\nFile: ...\n\nCo-Authored-By: ..."`
+
+## 📋 Current Status
+
+- Status and progress: GitHub Issues + milestones (open/closed); current phase summary in `docs/agent/handoff/PHASE0-STATUS.md`
+
+👉 **All tasks:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues) · [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones) · design index [docs/epics/INDEX.md](docs/epics/INDEX.md)
+
+## 🚀 Build & Test
 
 ```bash
-# Full build (from repo root)
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-
-# Build produces two targets:
-#   Editor/editor     - the scene editor application
-#   unit_tests        - Boost.Test unit test suite
-
-# Run all tests
-cd build && ./unit_tests
-
-# Run a single test suite
-./unit_tests --run_test=DSBitFlagsTests
-
-# Run a single test case
-./unit_tests --run_test=DSBitFlagsTests/DefaultConstructor
-
-# Run editor with config
-./Editor/editor --config ../Editor/config/editor.cfg
+cmake --preset dev-debug                      # Ninja, build/dev-debug; ccache/sccache + PCH on by default
+cmake --build build/dev-debug --target editor unit_tests
+build/dev-debug/unit_tests [--run_test=SuiteName]
+build/dev-debug/Editor/editor --config Editor/config/editor.cfg
+# presets: dev-debug dev-release release no-assimp, and ci-* (the exact CI configurations, e.g. ci-linux-asan); CMake 3.27+
+# without presets: mkdir build && cd build && cmake .. && make -j$(nproc)   (cache/PCH options still apply)
 ```
 
-No linter is configured. No CI pipeline exists — only a Nix dev environment in `.idx/dev.nix`.
+Build speed (CMake options, so local/IDE/CI behave the same):
+- `SNK_COMPILER_CACHE=AUTO|ON|OFF` — launcher via ccache (sccache on Windows); a user-set `CMAKE_<LANG>_COMPILER_LAUNCHER` wins
+- `SNK_PCH=AUTO|ON|OFF` — one shared PCH (`cmake/pch/snk_pch.h`) for project targets; AUTO = ON except MSVC with a cache. Missing include that PCH hides? Build with `-DSNK_PCH=OFF` (CI job `ci-linux-clang-debug` does). MSVC + shared engine + PCH is the CI job `Windows MSVC Shared+PCH` (on PRs that touch headers/CMake/workflows) (preset `ci-windows-msvc-pch-debug`, #557): the PCH owner `snk_pch` gets no `IMGUI_API`, so `core/` (dllexport) and the rest (dllimport) can both reuse it
+- `SNK_WARNINGS_AS_ERRORS=ON|OFF` — `-Werror` (GCC/Clang) / `/WX` (MSVC) for project targets only, never for `lib3dparty`/Boost/Assimp; ON in every preset and in CI. New compiler with fresh warnings? Build locally with `-DSNK_WARNINGS_AS_ERRORS=OFF`, then fix them
+- `SNK_WITH_ASSIMP=ON|OFF` — assimp lives only in the model import library `core/model_import` (`snk::model_import_assimp`, namespace `mdl`, #1108: `mdl::import_model`, the resource adapter `mdl::model_adapter`): shared next to `snk_engine` (installed with the editor), static in a static build; the engine never links it, a game host, the tools, the editor's `snk::model_import` and the tests do. OFF (preset `no-assimp`, CI `ci-linux-no-assimp`): assimp and that library are not configured, the model adapter and the editor model import are not compiled or registered (`SNK_HAS_ASSIMP=0`), "Import Model" is disabled; loading a `.glb/.gltf/.obj/.fbx` logs "No adapter found" and fails the load. Tests that need it (`scn_model_importer_tests`, `edt_import_cancel_tests`, `edt_import_export_format_tests`, `desc_repo_roundtrip_tests`) are left out. Nothing but `core/model_import` includes assimp, and `core/engine` has no `#if SNK_HAS_ASSIMP`; guard new importer-dependent code outside the engine with `#if SNK_HAS_ASSIMP` and its links with `if(TARGET snk::model_import_assimp)`
+- `SNK_ENGINE_SHARED=ON|OFF` — ON (default, every preset but `ci-linux-clang-debug`/`*-static*`): the engine is one shared library (`snk_engine.dll`/`.so`); the editor and game modules (`game.dll`) always use it (R11, #223). OFF: the static engine (Shipping, #23) — builds the engine, `unit_tests` and the SDK, **no editor executable**. CI keeps one static build with tests (Linux Clang Debug). A binary that links the shared engine must not link an engine component (`snk::config_system`, `snk::resource_system`...) again: take its headers with `snk_usage_only()`; `snk_check_engine_copies()` fails the configure otherwise (a second copy of its globals crashed `desc_resave` at exit, #874)
+- SDK/release (#223): one prefix holds both engines from two builds — `snk::engine` (+ `snk::engine_api`) and `snk::engine_static`; Release + PDB, the MSVC runtime in `bin/`; the Debug engine (`d` postfix) is a separate zip unpacked on top. Built and checked by `.github/workflows/windows-package.yml` (`tools/ci/package_windows.sh`, `check_windows_package.sh`), used by nightly.yml and release.yml
+- `SNK_ASSIMP_FORMATS=MINIMAL|ALL` — MINIMAL (default) builds only the glTF/glb, OBJ, FBX importers and no exporters; `release` preset and `release.yml` use ALL. Need another format locally? `-DSNK_ASSIMP_FORMATS=ALL`
 
-## Architecture Overview
 
-### Layer Hierarchy (CMake library dependency order)
-
-```
-editor (executable)
-  └── engine (static lib) — render, scene, gui, input, game systems
-        └── core (static lib) — ecs, window, resource, desc, config, application, video
-              └── common (INTERFACE) — glm, boost headers, data structures
-                    └── Third-party (git submodules in lib3dparty/)
-```
-
-Boost 1.84.0 is fetched via CMake FetchContent (json, hana, program_options, asio, test).
-
-### Module System
-
-Application boots via a priority-ordered module chain: **CORE → ENGINE → EDITOR → GAME**.
-
-Each module implements `app::modules::module_interface` with three lifecycle phases:
-1. `register_services()` — add types to `app_data_storage`
-2. `initialize_services()` — resolve dependencies from storage, perform setup
-3. `shutdown_services()` — cleanup in reverse order
-
-Bootstrap sequence in `Editor/main.cpp`:
-```
-module_loader.add_module(core_module, engine_module, editor_module)
-→ register_all_services(storage)
-→ initialize_all_services(storage)  // sorted by priority
-→ app.run(storage)                  // main loop via app_loop_service_interface
-→ shutdown_all_services(storage)    // reverse order
-```
-
-### Service Locator (`ds::app_data_storage`)
-
-Type-safe DI container with parent-child scoping. Default policy: `shared_storage_policy` (uses `shared_ptr`).
-
-```cpp
-data.construct<MyService>(args...);       // register
-auto& svc = data.require<MyService>();    // get (asserts if missing)
-auto ptr = data.require_shared<MyService>(); // get (nullptr if missing)
-```
-
-### ECS
-
-EnTT-based with engine extensions. Supports up to 5 independent worlds via `world_salt` + `bind_res<WorldID, T>`. Systems inherit `ecs::system_interface` and are auto-registered via `system_factory`. Dependencies are auto-resolved from registry context using `invoker<Candidate>`.
-
-### Resource System
-
-Resources identified by `res::tag`. Pipeline: `VFS Resolver → Adapter (Assimp/stb/text) → Cache (weak or pinned)`. Protocols: `res://` (filesystem), `memory://` (runtime). Supports async loading via `res_handle<T>` with `.then()` callbacks.
-
-### Descriptor System
-
-JSON-based resource definitions with inheritance chain: `level_desc → world_desc → prefab_desc → prefab_node → prefab_comp_node`. Files use `.desc` extension.
-
-### Configuration System
-
-Macro-based tunables: `CFG_VAR_DEF_INT(name, "path.to.var", default)`. Override via `.cfg` files or CLI `--set path.to.var=value`.
-
-## Code Conventions
-
-- **C++20**, no extensions. Tabs (size 4) for indentation.
-- **Namespaces**: 3-4 letter abbreviations — `ds`, `ecs`, `scn`, `gui`, `rnd`, `res`, `inp`, `edt`, `gs`, `cfg`, `wnd`.
-- **Naming**: `snake_case` everywhere. Private members end with `_`. Enums/macros `UPPER_CASE`.
-- **Files**: `prefix_name.hpp`/`.cpp` where prefix matches namespace (e.g., `ds_store.hpp`, `scn_renderer.cpp`).
-- **Headers**: `#pragma once`. Include order: module header → stdlib → third-party → project.
-- **Braces**: new line for functions, same line for control flow.
-- **Components**: POD structs, suffix `_component` if name isn't self-descriptive.
-- **Assertions**: Use `ASSERT_MSG`/`ASSERT_FAIL` from `engine_assert.h`. Use `engine_log.h` for logging, not `std::cout`.
-- **Containers**: Prefer `ds::fixed_vector<T, N>` in performance-critical code when max size is known.
-- **ImGui**: Follow `Begin()`/check return/`End()` pattern. Editor logic in `edt` namespace.
-- **GLM**: Include only what's needed. Use `scn_glm_json_convert.h` for serialization.
-
-## Testing
-
-Boost.Test framework. Tests live in `unittests/`. Each file is a `BOOST_AUTO_TEST_SUITE` with `BOOST_AUTO_TEST_CASE` entries. The main entry point `unittests/unit_tests.cpp` defines `BOOST_TEST_MODULE AllTests`. New test files are auto-discovered via `file(GLOB)` in the root CMakeLists.txt — just add a `.cpp` file to `unittests/`.
-
-## Task Management — Epics & User Stories
-
-Все задачи ведутся через систему эпиков в `docs/epics/`. Язык документации — **русский** (описания, мотивация, AC), технические идентификаторы — латиница.
-
-### Иерархия
-
-```
-INDEX.md                          ← реестр всех эпиков, граф зависимостей
-  └── <theme>/EPIC-NN.md          ← эпик: цель, дизайн, задачи, критерии
-        └── US-NN-X (внутри эпика) ← user story: конкретная единица работы
-```
-
-| Юнит | Что это | Где живёт | Что содержит |
-|------|---------|-----------|-------------|
-| **INDEX.md** | Единый реестр | `docs/epics/INDEX.md` | Таблица тем, таблица всех эпиков со статусами, граф зависимостей |
-| **EPIC-NN.md** | Эпик — крупная фича или рефакторинг (5–15 user stories) | `docs/epics/<theme>/EPIC-NN.md` | Метаданные, мотивация, архитектура, список US, критерии завершения, риски |
-| **US-NN-X** | User Story — минимальная единица работы (1 коммит – 1 день) | Секция внутри EPIC-NN.md | Файлы, описание, acceptance criteria (чеклист) |
-
-### Темы (Theme)
-
-Тема — тематическая папка в `docs/epics/`. Каждый эпик принадлежит ровно одной теме.
-
-| Папка | Описание |
-|-------|---------|
-| `editor/` | UI-панели, инструменты, pipeline ассетов |
-| `desc-driven/` | Переход к world_desc как источнику правды |
-| `prefab-first/` | Префабная иерархия, type-safe редактор |
-| `render-migration/` | Data-driven рендер конвейер |
-| `infrastructure/` | Логгер, профайлер, сборка, ассерты |
-
-Новую тему можно добавить, создав папку и строку в таблице Themes в INDEX.md.
-
-### Статусы
-
-Три статуса, одинаковые для эпиков и user stories:
-
-| Статус | Значение |
-|--------|---------|
-| `planned` | Описан, но работа не начата |
-| `in_progress` | Активная работа (для эпика — хотя бы одна US в работе) |
-| `done` | Завершён, все критерии выполнены |
-
-### Нумерация
-
-- **EPIC-NN** — глобальный автоинкремент по всему проекту (не по теме). Следующий ID = максимальный существующий + 1.
-- **US-NN-X** — `NN` = номер эпика, `X` = порядковый номер внутри эпика. Пример: `US-33-4` = четвёртая story в EPIC-33.
-
-### Формат INDEX.md
-
-```markdown
-# Epics Index
-
-## Themes
-| Theme | Folder | Описание |
-|---|---|---|
-
-## All Epics
-
-### <Theme Name>
-| ID | Title | Status |
-|---|---|---|
-| [EPIC-NN](<theme>/EPIC-NN.md) | Заголовок | planned/in_progress/done |
-
-## Dependency graph
-(ASCII-дерево зависимостей между эпиками)
-```
-
-### Формат EPIC-NN.md
-
-```markdown
-# EPIC-NN: Заголовок
-
-**Status:** planned|in_progress|done
-**Theme:** <theme-folder-name>
-**Dependencies:** EPIC-X, EPIC-Y (или "none")
+CI (#830, details in [`CI_PR.toon`](docs/agent/workflow/CI_PR.toon)):
+- Every PR event (drafts too): 6 fast jobs — Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke. Marking a draft ready does not re-run them on a head SHA where all six passed. A PR of `docs/**` and `*.md` only runs Plan and CI summary alone
+- Non-draft PR that touches any header (`.h`/`.hpp`/`.inl`, `SNK_API` headers live outside `include/` too), `CMakeLists.txt`, `*.cmake`/`*.cmake.in`, `cmake/**`, `CMakePresets.json` or `.github/**` (or 3000+ files; and every push to main, and to aibranch until it is removed): + Windows MSVC Shared+PCH, Linux GCC Shared. Other PRs no longer build Linux GCC Shared
+- Required checks: `Plan`, `CI summary` (red when the plan or any job it asked for did not pass) and the 6 fast jobs
+- Nightly on main (`nightly.yml`, 23:37 UTC by schedule, or by hand): Linux TSan, SDK package (Linux, with and without assimp), Windows package (Release/Debug/check), extract benchmark. The schedule fires from the default branch, main; a night with no new commit since the last green one runs nothing. A red night (a failed plan too) opens or comments the issue "Nightly CI red" (bug, ci, P0) with the run and the commits since the last green night: fix it first, before new work
 
 ---
 
-## Мотивация
+## 📊 Context Optimization
 
-Почему нужен этот эпик. Какие проблемы решает. 1–3 абзаца.
+This CLAUDE.md is deliberately compact. For details:
+- **Agent documentation** (TOON): `docs/agent/` (load on demand)
+- **Memory rules** (cross-session): `MEMORY_RULES.md`
+- **Framework state**: `.claude-framework` (do not edit manually)
+- **Framework version**: 1.3.0
 
-## Архитектурное решение
-
-(Опционально, для сложных эпиков)
-Диаграммы, псевдокод, новые структуры данных.
-
-## User Stories
-
-### US-NN-1: Заголовок задачи
-**Файлы:** `path/to/file.cpp`, `path/to/file.h`
-**Зависимости:** US-NN-X (если есть)
-
-Описание: что сделать и почему.
-
-**AC:**
-- [ ] Конкретный критерий 1
-- [ ] Конкретный критерий 2
-
-### US-NN-2: ...
-
----
-
-## Порядок выполнения
-
-(ASCII-граф или список — какие US можно параллелить, какие блокируют друг друга)
-
-## Риски
-
-(Опционально)
-- Риск → митигация
-
-## Критерии завершения эпика
-
-- [ ] Глобальный критерий 1 (интеграционный, не повторяет AC отдельных US)
-- [ ] Глобальный критерий 2
-```
-
-### Правила работы
-
-1. **Перед началом работы** — прочитай `docs/epics/INDEX.md`, найди текущий эпик.
-2. **Перед началом US** — прочитай весь эпик, пойми контекст и зависимости.
-3. **При завершении US** — отметь `- [x]` в AC внутри эпика.
-4. **При завершении эпика** — поставь `**Status:** done` в эпике и обнови статус в INDEX.md.
-5. **При создании нового эпика** — создай файл в нужной теме, добавь строку в INDEX.md и обнови граф зависимостей.
-6. **Не меняй ID** уже существующих эпиков и user stories.
-7. **Файловые пути** в US указывай относительно корня репозитория.
-8. **AC должны быть проверяемыми** — «работает корректно» плохо; «модель backpack загружается и рендерится с анимацией» хорошо.
+The key: Load only what you need, when you need it. 🎯

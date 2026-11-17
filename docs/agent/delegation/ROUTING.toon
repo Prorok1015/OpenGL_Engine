@@ -1,0 +1,86 @@
+[META]
+framework: claude-framework
+file_id: delegation.ROUTING
+class: universal
+version: 1.0.0
+
+[ROUTING]
+overview: Which model to pick for a delegated subtask, based on task complexity
+principle: Route by cognitive load, not by optimism. If unsure between two tiers, pick the cheaper one AND specify the output shape tightly.
+
+[MODEL_TIERS]
+# Ordered from cheapest to most expensive. Capability roughly doubles per tier.
+# Exact IDs may shift across framework versions; the tier name is what matters.
+
+[TIER.haiku]
+id_hint: claude-haiku-4-5-* (or latest haiku)
+relative_cost: 1×
+good_at:
+  - Deterministic transformations (rename, reformat, translate format A→B)
+  - Pattern-based generation from an example (boilerplate, scaffolds)
+  - Simple grep-and-summarize ("does file X mention Y?")
+  - Fact extraction from a single known file
+  - Yes/no / classification questions with clear criteria
+bad_at:
+  - Multi-step reasoning across files
+  - Architectural judgement ("should we do A or B?")
+  - Debugging non-trivial failures
+  - Security-sensitive code review
+when_to_use: Task fits trigger 4 (mechanical) OR trigger 2 (large output → distilled answer) with a clear output shape
+
+[TIER.sonnet]
+id_hint: claude-sonnet-4-6-* (or latest sonnet)
+relative_cost: ~5× haiku
+good_at:
+  - Standard development work (implement feature, fix bug, add tests)
+  - Code review and refactoring of moderate scope
+  - Multi-file exploration with synthesis (triggers 1, 3, 6)
+  - Writing documentation from verified facts
+bad_at:
+  - Highly ambiguous architectural design with many stakeholders
+  - Tasks requiring deep background reasoning before any output
+when_to_use: Default for Explore / Plan / general-purpose subagents when haiku tier is clearly insufficient
+
+[TIER.opus]
+id_hint: claude-opus-4-7-* (or latest opus)
+relative_cost: ~5× sonnet
+good_at:
+  - Architectural design and synthesis across many inputs
+  - Research questions requiring deep reasoning
+  - Hard debugging where cause is non-obvious
+  - Coordinating multiple subagents (this is the main agent's job)
+when_to_use: Rarely for subagents — usually opus IS the main agent. Delegate to opus only for a subtask that itself requires synthesis AND must not pollute main context.
+
+[ROUTING_DECISION]
+# Read top-to-bottom; first match wins.
+1. Is the task mechanical with a well-defined output shape?              → haiku
+2. Is the task a large tool-output distillation with a clear question?   → haiku
+3. Is the task "run this command and tell me if it passed"?              → haiku
+4. Is the task classification / yes-no with criteria?                    → haiku
+5. Is the task Explore (wide reading + synthesis)?                       → sonnet (default Explore tier)
+6. Is the task Plan (multi-file architecture)?                           → sonnet (default Plan tier)
+7. Is the task a standard dev subtask (implement, fix, refactor)?        → sonnet
+8. Does the subtask itself require deep synthesis of many inputs?        → opus
+9. Default if unsure:                                                    → sonnet with tight response budget
+
+[HOW_TO_SPECIFY]
+When spawning a subagent via the Agent tool, pass the `model` parameter explicitly:
+
+  Agent({
+    description: "<short>",
+    subagent_type: "general-purpose",
+    model: "haiku",               ← or "sonnet" / "opus"
+    prompt: "<self-contained brief with response budget>"
+  })
+
+If `model` is omitted, the subagent inherits from its definition or parent. Omit ONLY when the default matches your routing choice.
+
+[ANTI_OPTIMISM_RULE]
+Don't route UP "just to be safe". Haiku with a well-scoped prompt beats sonnet with a vague one.
+Specify the output shape → haiku handles it. Leave the output shape open → no model handles it.
+
+[OBSERVABILITY]
+If a haiku delegation returns a bad result:
+  - First pass: improve the prompt (be more specific about output shape)
+  - Second pass: re-route to sonnet
+  - Do NOT assume the model was the problem until the prompt is airtight

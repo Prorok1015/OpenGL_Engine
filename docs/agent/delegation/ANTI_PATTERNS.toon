@@ -1,0 +1,82 @@
+[META]
+framework: claude-framework
+file_id: delegation.ANTI_PATTERNS
+class: universal
+version: 1.0.0
+
+[ANTI_PATTERNS]
+overview: When delegation is WRONG — the overhead of spawning a subagent exceeds the context it would save
+principle: Delegation has a fixed cost (spawn latency, round-trip, briefing effort). For tiny tasks this cost exceeds the context savings. Do the work inline.
+
+[ANTI_1_KNOWN_PATH_TINY_EDIT]
+pattern: Editing 1-2 files whose paths you already know, with a clear diff
+examples:
+  - "Fix the typo in README.md line 42"
+  - "Add a null check to function X in file Y"
+  - "Bump version in package.json"
+why_not_delegate: The Edit tool is faster than briefing a subagent. Main agent already has the context loaded.
+do_instead: Use Read + Edit directly
+
+[ANTI_2_DIRECT_QUESTION_ON_LOADED_CONTEXT]
+pattern: Answering a question about code already in your context window
+examples:
+  - User asks about a file you just read this turn
+  - User asks about a function the previous tool call returned
+  - User asks a follow-up on the thing you just explained
+why_not_delegate: Subagent would re-read what you already know. Pure overhead.
+do_instead: Answer directly from your context
+
+[ANTI_3_TRIVIAL_BASH]
+pattern: One-shot shell commands whose output is small and immediately actionable
+examples:
+  - `git status`, `git log -5`, `ls`
+  - `cat package.json` (small file)
+  - Checking if a file exists
+  - Running a formatter on one file
+why_not_delegate: Output is small; no context pollution. Briefing overhead > savings.
+do_instead: Run via Bash tool directly
+
+[ANTI_4_SEQUENTIAL_WITH_DEPENDENCIES]
+pattern: Two subtasks where the second needs the first's output
+example: "Find function X, then refactor it"
+why_not_delegate: You cannot parallelize; the second subagent must wait for the first. Two spawn round-trips beats one inline flow.
+do_instead: Combine into a single subagent prompt ("Find function X and refactor it to <spec>")
+
+[ANTI_5_EXPLORATORY_CONVERSATION]
+pattern: Interactive back-and-forth where the next step depends on the user's reaction
+examples:
+  - Designing an API signature with the user
+  - Deciding between two approaches mid-discussion
+  - Any "what do you think?" exchange
+why_not_delegate: Subagents can't participate in the conversation; they return once. Delegation breaks the interaction.
+do_instead: Stay in the main thread
+
+[ANTI_6_SPECULATIVE_PARALLELISM]
+pattern: Spawning multiple subagents "just in case one works"
+example: Three subagents each trying a different approach to find the same file
+why_not_delegate: 3× the cost for information you'd get from one properly-briefed subagent
+do_instead: Write one thorough prompt. If it fails, refine. Don't blast.
+
+[ANTI_7_OVER_DECOMPOSITION]
+pattern: Splitting a small coherent task into many tiny subagents
+example: One subagent per file when the files all relate to the same change
+why_not_delegate: Each spawn has briefing cost. Batching into one subagent preserves context across the related files.
+do_instead: One subagent with a list of files and a shared instruction
+
+[ANTI_8_DELEGATING_SYNTHESIS]
+pattern: Asking a subagent to make the final call ("based on your findings, fix the bug")
+why_not_delegate: Synthesis IS the main agent's job. Delegating it produces shallow work and loses accountability.
+do_instead: Subagent returns findings → main agent decides → main agent (or a second targeted subagent) executes
+
+[ANTI_9_HOPING_HAIKU_FIGURES_IT_OUT]
+pattern: Sending a vague prompt to haiku expecting it to reason its way through
+example: "Haiku, clean up the code" with no spec
+why_not_delegate: Haiku excels at precise transformations, not at inferring intent. Vague prompt → bad output → re-run → net loss.
+do_instead: Specify exactly what "clean up" means, or route to sonnet
+
+[QUICK_FILTER]
+Before calling Agent(), ask:
+  ├─ Is the task under 2 minutes of inline work?              → DO INLINE
+  ├─ Is the file path / target known and the change small?    → DO INLINE
+  ├─ Is this an interactive design discussion?                → DO INLINE
+  └─ None of the above AND a trigger fired?                   → DELEGATE

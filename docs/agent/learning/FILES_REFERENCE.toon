@@ -1,0 +1,124 @@
+[META]
+framework: claude-framework
+file_id: learning.FILES_REFERENCE
+class: universal
+version: 1.0.0
+
+[FILES_REFERENCE]
+overview: Where to put different types of information
+purpose: Route discovered knowledge to the correct documentation file
+principle: Each file has specific scope — don't mix concerns
+
+[STANDARD_FILES]
+# These 4 files exist in every project initialized from this framework.
+# Domain-specific files (e.g. CRYPTO.toon, API.toon, DATABASE.toon) are added
+# per project and documented in QUICK_LINKS.toon.
+
+[FILE_CLAUDE_MD]
+location: /CLAUDE.md (project root)
+scope: Critical universal rules (apply to ALL work on project)
+examples_update:
+  - "Never modify migrations without explicit approval"
+  - "All public APIs must have OpenAPI schema"
+  - "Core module MUST NOT write to filesystem"
+examples_not:
+  - Module-specific rules (→ CONSTRAINTS.toon)
+  - Algorithm details (→ domain-specific .toon)
+  - Implementation patterns (→ ARCHITECTURE.toon)
+when_update: Rare. Only if affects ALL code in project.
+format: Markdown section under "Critical Rules"
+size: Keep small (< 500 words total)
+
+[FILE_CONSTRAINTS_TOON]
+location: docs/agent/CONSTRAINTS.toon
+scope: Architectural constraints and "never do this" rules
+examples_update:
+  - rule: "Module A never depends on Module B"
+  - rule: "No allocations > 64 MB in single block"
+  - rule: "Thread safety required for shared cache"
+examples_not:
+  - Implementation details (→ ARCHITECTURE.toon)
+  - What modules do (→ ARCHITECTURE.toon)
+when_update: When discovering a "you must not" or "only between X and Y" rule
+format: [CONSTRAINT_N] section + rule + why + how_to_apply
+size: One constraint = 5-10 lines max
+
+[FILE_ARCHITECTURE_TOON]
+location: docs/agent/ARCHITECTURE.toon
+scope: Component/layer structure, dataflow, interactions
+examples_update:
+  - How data flows through modules/layers
+  - What each layer owns vs observes
+  - Caching patterns, ownership model
+  - Concurrency model, state transitions
+examples_not:
+  - Constraints (→ CONSTRAINTS.toon)
+  - Specific algorithms (→ domain file)
+when_update: When understanding component interactions or data movement
+format: Structured sections per component/layer
+size: Medium (should fit in one document)
+
+[FILE_PROJECT_TOON]
+location: docs/agent/PROJECT.toon
+scope: Project overview, modules, current status
+examples_update:
+  - New module added
+  - Status milestone changed
+  - Tech stack updated
+when_update: When project scope or status changes
+format: [PROJECT], [MODULES], [STATUS] sections
+size: Small (overview, not detail)
+
+[FILE_QUICK_LINKS_TOON]
+location: docs/agent/QUICK_LINKS.toon
+scope: Navigation — which file for which info, code location pointers
+examples_update:
+  - New domain-specific .toon file added
+  - Component moved to new path
+when_update: When a new .toon file is created or structure changes
+format: [CODE], [DOCUMENTATION] sections with path mappings
+size: Small (index only)
+
+[FILE_PROJECT_STRUCTURE_MD]
+location: /PROJECT_STRUCTURE.md (project root)
+scope: File and directory tree with descriptions
+examples_update:
+  - New module directory created
+  - File moved or renamed
+  - Directory refactored
+when_update: When project structure physically changes
+format: Markdown with file tree and descriptions
+size: Keep organized and up-to-date
+
+[DOMAIN_SPECIFIC_FILES]
+# Projects add domain files as needed. Common examples:
+#   docs/agent/API.toon         — endpoint documentation
+#   docs/agent/DATABASE.toon    — schema, models
+#   docs/agent/CRYPTO.toon      — cryptographic details
+#   docs/agent/MODULES.toon     — deep module details if project is complex
+#   docs/agent/ACTIVE_EPICS.toon — current work tracking
+# Register new files in QUICK_LINKS.toon so future sessions can find them.
+
+[DECISION_MATRIX]
+Information type → File
+
+Critical universal rule (all code)
+  → CLAUDE.md
+
+"Never do X" / architectural limit
+  → CONSTRAINTS.toon
+
+How components interact / dataflow
+  → ARCHITECTURE.toon
+
+Project overview / module list / status
+  → PROJECT.toon
+
+File/directory structure changed
+  → PROJECT_STRUCTURE.md
+
+Navigation entry / new domain file
+  → QUICK_LINKS.toon
+
+Domain-specific knowledge (API, DB, crypto, etc.)
+  → Domain .toon file (create if missing, register in QUICK_LINKS.toon)

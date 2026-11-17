@@ -1,0 +1,325 @@
+#include <boost/test/unit_test.hpp>
+#include <snk/application/app_module_loader.hpp>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+
+// The C entry point of a game module, exercised without dlopen: the exported functions are
+// declared in this binary and their addresses are put into a module_entry (EPIC-52 #21 will
+// resolve the same four names from a real shared library).
+
+namespace {
+
+struct entry_service { int v = 7; };
+
+int g_alive = 0;
+int g_destroyed_through_entry = 0;
+
+struct sample_module final : app::modules::module_interface
+{
+	sample_module() { ++g_alive; }
+	~sample_module() override { --g_alive; }
+
+	void register_services(ds::app_data_storage& data) override { data.construct<entry_service>(); }
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage& data) override { data.destruct<entry_service>(); }
+	std::string_view name() const override { return "sample"; }
+};
+
+
+// The generated function snk_module_build_info() hides the struct of the same name below.
+using build_info_t = snk_module_build_info;
+
+}
+
+// Generates snk_module_api_version / snk_module_build_info / snk_create_module / snk_destroy_module
+// with their real names. These are unprefixed C symbols, so it may appear only once in this
+// binary: every other test builds its module_entry from hand-written functions below.
+SNK_DECLARE_MODULE(sample_module)
+
+namespace {
+
+using app::modules::module_entry;
+
+module_entry generated_entry()
+{
+	return SNK_MODULE_ENTRY(snk_);
+}
+
+std::uint32_t wrong_major_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
+// What a module built before the resource control block layout of #595 reports.
+std::uint32_t api_1_0() { return 0x0001'0000u; }
+std::uint32_t newer_minor_version() { return SNK_MODULE_API_VERSION + 1u; }
+// The last module API before 4.0 (#758).
+std::uint32_t api_3_19() { return 0x0003'0013u; }
+
+const build_info_t* info_with(std::uint32_t api, std::uint32_t compiler, std::uint32_t flags)
+{
+	static build_info_t info;
+	info = { api, compiler, flags };
+	return &info;
+}
+const build_info_t* wrong_major_info() { return info_with(wrong_major_version(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); }
+const build_info_t* wrong_debug_flag_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler, host.flags ^ app::modules::build_flag::debug);
+}
+const build_info_t* wrong_crt_flag_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler, host.flags ^ app::modules::build_flag::static_crt);
+}
+const build_info_t* wrong_compiler_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, ((host.compiler >> 16) % 3 + 1) << 16, host.flags);
+}
+// The host's compiler family, one version (MSVC: _MSC_VER, GCC/Clang: major) older or newer.
+const build_info_t* older_compiler_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler - 1, host.flags);
+}
+const build_info_t* newer_compiler_info()
+{
+	const auto host = app::modules::make_build_info();
+	return info_with(host.api, host.compiler + 1, host.flags);
+}
+
+constexpr std::uint32_t compiler_of(std::uint32_t family, std::uint32_t version) { return (family << 16) | version; }
+
+void counting_destroy(app::modules::module_interface* m)
+{
+	++g_destroyed_through_entry;
+	delete m;
+}
+
+struct entry_fixture
+{
+	entry_fixture() { g_alive = 0; g_destroyed_through_entry = 0; }
+	app::modules::module_loader loader;
+	ds::app_data_storage storage;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(AppModuleEntryTests, entry_fixture)
+
+BOOST_AUTO_TEST_CASE(GeneratedFunctionsReportApiVersionAndBuildInfoOfThisBinary)
+{
+	BOOST_TEST(snk_module_api_version() == SNK_MODULE_API_VERSION);
+	const build_info_t* info = snk_module_build_info();
+	BOOST_REQUIRE(info != nullptr);
+	const auto host = app::modules::make_build_info();
+	BOOST_TEST(info->api == host.api);
+	BOOST_TEST(info->compiler == host.compiler);
+	BOOST_TEST(info->flags == host.flags);
+	BOOST_TEST(host.compiler != 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstApi1IsRefused)
+{
+	BOOST_TEST(app::modules::api_major(SNK_MODULE_API_VERSION) == 4u);
+	auto entry = generated_entry();
+	entry.api_version = &api_1_0;
+	BOOST_TEST(app::modules::check_module_entry(entry).find("api major version 1") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOf3_xIsRefusedAndToldToRebuild)
+{
+	auto entry = generated_entry();
+	entry.api_version = &api_3_19;
+	entry.build_info = +[]() { return info_with(api_3_19(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	const std::string problem = app::modules::check_module_entry(entry);
+	BOOST_TEST(problem.find("api major version 3") != std::string::npos);
+	BOOST_TEST(problem.find("rebuild the project") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOfANewerMajorIsNotToldToRebuild)
+{
+	auto entry = generated_entry();
+	entry.api_version = &wrong_major_version;
+	entry.build_info = &wrong_major_info;
+	BOOST_TEST(app::modules::check_module_entry(entry).find("rebuild") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(LoadThroughEntryCreatesRunsAndUnloads)
+{
+	loader.load(generated_entry(), storage);
+	BOOST_TEST(g_alive == 1);
+	BOOST_TEST((loader.state("sample") == app::modules::module_state::initialized));
+	BOOST_TEST(storage.has_value<entry_service>());
+
+	loader.unload("sample", storage);
+	BOOST_TEST(g_alive == 0); // destroyed through snk_destroy_module
+	BOOST_TEST(storage.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ModuleIsDestroyedByTheEntrysOwnDestroyFunction)
+{
+	auto entry = generated_entry();
+	entry.destroy = &counting_destroy;
+	loader.load(entry, storage);
+	loader.unload("sample", storage);
+	BOOST_TEST(g_destroyed_through_entry == 1);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(LoaderDestructionAlsoDestroysThroughTheEntry)
+{
+	{
+		app::modules::module_loader local;
+		auto entry = generated_entry();
+		entry.destroy = &counting_destroy;
+		local.load(entry, storage);
+		local.shutdown_all_services(storage);
+	}
+	BOOST_TEST(g_destroyed_through_entry == 1);
+}
+
+BOOST_AUTO_TEST_CASE(WrongApiMajorIsRefusedBeforeAnythingIsCreated)
+{
+	auto entry = generated_entry();
+	entry.api_version = &wrong_major_version;
+	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+	BOOST_TEST(storage.size() == 0u);
+	BOOST_TEST(!loader.state("sample").has_value());
+}
+
+// Without snk/game/gs_module_layout.h the generated export reports 0, which check_module_layout lets through (a module in a
+// library is refused earlier, by check_library_module). This TU does not include it,
+// and neither does the shared PCH (cmake/pch/snk_pch.h: standard and third-party headers only); if either did, the
+// export would report the engine's key and this test would fail.
+BOOST_AUTO_TEST_CASE(AModuleThatDoesNotKnowTheLayoutsReportsZeroAndIsNotChecked)
+{
+	const module_entry entry = generated_entry();
+	BOOST_REQUIRE(entry.layout_key != nullptr);
+	BOOST_TEST(entry.layout_key() == 0u);
+	BOOST_TEST(app::modules::check_module_layout(entry, 0x1234u).empty());
+}
+
+// #922: what native_library_source::open refuses of a module in a library before the loader sees it.
+BOOST_AUTO_TEST_CASE(AModuleInALibraryWithoutALayoutKeyIsRefused)
+{
+	using app::modules::build_flag::static_crt;
+	BOOST_TEST(app::modules::library_module_problem(0u, 0u).find("no layout key") != std::string::npos);
+	BOOST_TEST(app::modules::library_module_problem(0u, 0x1234u).empty());
+
+	// This TU's export reports 0 (see above), as a module built without the key header does.
+	auto entry = generated_entry();
+	if ((app::modules::make_build_info().flags & static_crt) == 0) {
+		BOOST_TEST(app::modules::check_library_module(entry).find("no layout key") != std::string::npos);
+		entry.layout_key = nullptr;
+		BOOST_TEST(app::modules::check_library_module(entry).find("no layout key") != std::string::npos);
+		entry.layout_key = +[]() -> std::uint64_t { return 0x1234u; };
+		BOOST_TEST(app::modules::check_library_module(entry).empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AModuleInALibraryBuiltWithTheStaticCrtIsRefused)
+{
+	using app::modules::build_flag::static_crt;
+	const std::string problem = app::modules::library_module_problem(static_crt, 0x1234u);
+	BOOST_TEST(problem.find("static C runtime") != std::string::npos);
+	BOOST_TEST(problem.find("/MD") != std::string::npos);
+	BOOST_TEST(app::modules::library_module_problem(app::modules::build_flag::debug, 0x1234u).empty());
+}
+
+// The loader's own message (another major here) says what to change; the library check stays out of its way.
+BOOST_AUTO_TEST_CASE(AnEntryTheLoaderRefusesIsLeftToTheLoader)
+{
+	auto entry = generated_entry();
+	entry.api_version = &wrong_major_version;
+	entry.build_info = &wrong_major_info;
+	BOOST_TEST(app::modules::check_library_module(entry).empty());
+	BOOST_TEST(!app::modules::check_module_entry(entry).empty());
+}
+
+BOOST_AUTO_TEST_CASE(ModuleNeedingNewerMinorIsRefused)
+{
+	auto entry = generated_entry();
+	entry.api_version = &newer_minor_version;
+	entry.build_info = +[]() { return info_with(newer_minor_version(), app::modules::make_build_info().compiler, app::modules::make_build_info().flags); };
+	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(BuildInfoApiDisagreeingWithApiVersionIsRefused)
+{
+	auto entry = generated_entry();
+	entry.build_info = &wrong_major_info;
+	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(MismatchedBuildFlagsAreRefused)
+{
+	for (auto* info_fn : { &wrong_debug_flag_info, &wrong_crt_flag_info }) {
+		auto entry = generated_entry();
+		entry.build_info = info_fn;
+		BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	}
+	BOOST_TEST(g_alive == 0);
+	BOOST_TEST(storage.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(MismatchedCompilerIsRefused)
+{
+	auto entry = generated_entry();
+	entry.build_info = &wrong_compiler_info;
+	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnMsvcModuleNeedsTheEnginesMsvcOrANewerOne)
+{
+	using namespace app::modules;
+	const std::uint32_t engine = compiler_of(compiler_id::msvc, 1944);
+	const std::string older = compiler_problem(compiler_of(compiler_id::msvc, 1943), engine);
+	BOOST_TEST(older.find("MSVC 1943") != std::string::npos);
+	BOOST_TEST(older.find("MSVC 1944") != std::string::npos);
+	BOOST_TEST(compiler_problem(engine, engine).empty());
+	BOOST_TEST(compiler_problem(compiler_of(compiler_id::msvc, 1951), engine).empty());
+}
+
+BOOST_AUTO_TEST_CASE(GccAndClangModulesNeedTheEnginesMajor_AndAnotherFamilyIsRefused)
+{
+	using namespace app::modules;
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::gcc, 13), compiler_of(compiler_id::gcc, 14)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::gcc, 15), compiler_of(compiler_id::gcc, 14)).empty());
+	BOOST_TEST(compiler_problem(compiler_of(compiler_id::clang, 18), compiler_of(compiler_id::clang, 18)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::msvc, 1951), compiler_of(compiler_id::clang, 18)).empty());
+	BOOST_TEST(!compiler_problem(compiler_of(compiler_id::clang, 18), compiler_of(compiler_id::msvc, 1944)).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AModuleOfAnOlderCompilerIsRefused_ANewerOneLoadsOnlyWithMsvc)
+{
+	auto older = generated_entry();
+	older.build_info = &older_compiler_info;
+	BOOST_CHECK_THROW(loader.load(older, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+
+	auto newer = generated_entry();
+	newer.build_info = &newer_compiler_info;
+	if ((app::modules::make_build_info().compiler >> 16) == app::modules::compiler_id::msvc) {
+		loader.load(newer, storage);
+		BOOST_TEST(g_alive == 1);
+		loader.unload("sample", storage);
+	} else {
+		BOOST_CHECK_THROW(loader.load(newer, storage), std::logic_error);
+	}
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_CASE(IncompleteEntryIsRefused)
+{
+	auto entry = generated_entry();
+	entry.destroy = nullptr;
+	BOOST_CHECK_THROW(loader.load(entry, storage), std::logic_error);
+	BOOST_CHECK_THROW(loader.load(module_entry{}, storage), std::logic_error);
+	BOOST_TEST(g_alive == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

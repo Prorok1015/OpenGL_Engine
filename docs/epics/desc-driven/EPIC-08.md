@@ -83,7 +83,7 @@ res::get_system().watch(m_editor_tag, this, [this](const res::tag& tag) {
 
 ## US-20: `scn::level::reload_world()`
 
-**Файлы:** `core/engine/scene/level/scn_level.h/.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/level/scn_level.h/.cpp`
 
 ### Проблема
 

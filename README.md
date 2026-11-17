@@ -1,6 +1,8 @@
 # Snake Engine
 
-Snake Engine is a modular C++20 game engine built on OpenGL with an integrated scene editor, data-driven resource pipeline, and an ECS architecture powered by EnTT.
+Snake Engine (`snk::`) is a modular C++20 game engine built on OpenGL with an integrated scene editor, data-driven resource pipeline, and an ECS architecture powered by EnTT.
+
+> The project started as a simple OpenGL snake game and evolved into a general-purpose engine with a full editor.
 
 ```
  ┌────────────────────────────────────────────────────────────┐
@@ -27,15 +29,29 @@ Snake Engine is a modular C++20 game engine built on OpenGL with an integrated s
 The project supports two development environments:
 
 - **Project IDX** (Nix) — all dependencies pre-configured in `.idx/dev.nix`
-- **Local build** — requires CMake 3.16+, a C++20 compiler, Boost, and platform windowing libraries
+- **Local build** — requires CMake 3.27+, a C++20 compiler, Boost, and platform windowing libraries
+
+### Getting the sources
+
+```bash
+git clone --recursive https://github.com/Prorok1015/OpenGL_Engine.git
+# Optional: test 3D models for the editor (~650 MB, separate repo, not fetched by default)
+git submodule update --init --checkout projects/sandbox/res/samples
+```
+
+`projects/sandbox/res/objects/robot` (small skinned + animated glb) stays in the repo for a quick check; larger test
+models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
 
 ### Building
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+cmake --preset dev-debug        # Ninja, build/dev-debug (see CMakePresets.json for all presets)
+cmake --build build/dev-debug
+# or without presets: mkdir build && cd build && cmake .. && make -j$(nproc)
 ```
+
+A compiler cache (ccache; sccache for MSVC) and a shared precompiled header are used automatically
+when available: `-DSNK_COMPILER_CACHE=OFF` / `-DSNK_PCH=OFF` turn them off.
 
 Produces two executables:
 | Target | Description |
@@ -49,8 +65,8 @@ Produces two executables:
 # With config file
 ./Editor/editor --config ../Editor/config/editor.cfg
 
-# Or override resource path directly
-./Editor/editor --set resource/path ../Editor/res
+# Open the test project (projects/sandbox: game content and test levels, EPIC-42)
+./Editor/editor --config ../Editor/config/editor.cfg --project ../projects/sandbox
 ```
 
 ---
@@ -69,7 +85,7 @@ OpenGL_Engine/
 │   │   ├── resource/               # VFS, async loading, caching, adapters
 │   │   ├── desc/                   # Descriptor system (.desc JSON files)
 │   │   ├── input/                  # Low-level input events
-│   │   ├── config/                 # Macro-based configuration (CFG_VAR_*)
+│   │   ├── config/                 # Configuration: CFG_VAR_* (base-only cfg_variables.h), read-only cfg_api.h
 │   │   ├── application/            # App base class, module lifecycle
 │   │   ├── windows/                # GLFW window management
 │   │   └── video/drivers/          # Graphics API abstraction (RHI)
@@ -77,7 +93,7 @@ OpenGL_Engine/
 │   │       └── impls/opengl/       # OpenGL implementation (glad)
 │   │
 │   └── engine/                     # High-level systems
-│       ├── render_system/          # Render pipeline, shaders, geometry, textures
+│       ├── render/render_system/   # Render pipeline, shaders, geometry, textures
 │       ├── scene/                  # Scene graph, cameras, lights, animation
 │       ├── gui/                    # ImGui integration (backends + layer system)
 │       ├── game_system/            # Game loop, frame timing
@@ -88,20 +104,22 @@ OpenGL_Engine/
 │   ├── main.cpp                    # Entry point
 │   ├── config/editor.cfg           # Editor configuration
 │   ├── code/editor_system/         # Editor systems (UI, spawn, input, gizmos)
-│   └── res/                        # Assets
-│       ├── shaders/                # GLSL 420/460 shaders + library includes
-│       ├── objects/                # 3D models (glb, gltf, fbx, obj)
-│       ├── levels/                 # Level descriptors (.desc)
-│       ├── skybox/                 # Cubemap face textures
-│       └── icons/                  # Editor branding
+│   ├── res/                        # Assets (res://)
+│   │   ├── shaders/                # GLSL 420/460 shaders + library includes
+│   │   ├── objects/                # 3D models (glb, gltf, fbx, obj)
+│   │   ├── levels/                 # Level descriptors (.desc)
+│   │   └── skybox/                 # Cubemap face textures
+│   └── data/                       # Editor-only resources (edt://)
+│       ├── icons/                  # Editor branding
+│       └── templates/              # Level / world / prefab preview templates
 │
 ├── lib3dparty/                     # Third-party dependencies (git submodules)
 │   ├── entt, glfw, glm, imgui, assimp, spdlog, yaml
 │   ├── glad/, stb_image/           # Internal libraries
-│   └── natvis/                     # Visual Studio debugger visualizers
+│   └── natvis/                     # Visual Studio debugger visualizers (lib3dparty/natvis)
 │
-├── unittests/                      # Boost.Test suite (30+ test cases)
-├── guidelines.md                   # Coding standards
+├── tests/                      # Boost.Test suite (180+ test cases)
+├── docs/epics/                     # Task tracker (epics & user stories)
 └── CMakeLists.txt                  # Root build configuration
 ```
 
@@ -111,7 +129,7 @@ OpenGL_Engine/
 
 ### Module System
 
-The engine is built from modules implementing `app::modules::module_interface`, each with a priority that determines initialization order:
+The engine is built from modules implementing `app::modules::module_interface`, initialized in topological order of `depends_on()` (priority only breaks ties):
 
 ```
 CORE  →  ENGINE  →  EDITOR  →  GAME
@@ -147,8 +165,8 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
 | Systems | Classes inheriting `ecs::system_interface`, auto-registered via `system_factory` |
 | Command Buffer | `sandbox_registry` for deferred spawn/despawn operations |
 | Invoker | Automatic dependency resolution from registry context |
-| Multi-World | Up to 5 independent registries via `world_salt` + `bind_res<WorldID, T>` |
-| Serialization | `sandbox_loader_archive` with entity remapping |
+| Multi-World | Contexts (one registry each) grouped into sets; cross-context data goes through the set channel, see [WORLD_MESSAGING.md](docs/roadmap/design/WORLD_MESSAGING.md) |
+| Serialization | Sandbox commands moved into the world by the engine, entity fields remapped by the component's meta |
 
 ### Resource System
 
@@ -188,7 +206,7 @@ Hierarchy: `level_desc` → `world_desc` → `prefab_desc` → `prefab_node` →
 
 ### Configuration System
 
-Macro-based tunable parameters:
+Macro-based tunable parameters, defined by the engine and the editor (`<snk/config/cfg_variables.h>`, base-only, not in the SDK; a game module reads them through `gs::module_context::config()`, a read-only `cfg::config_view` from `<snk/config/cfg_api.h>`):
 
 ```cpp
 CFG_VAR_DEF_INT(my_var, "path.to.var", 42);
@@ -198,7 +216,14 @@ CFG_VAR_DEF_FLOAT(speed, "player.speed", 5.0f);
 int value = *my_var;
 ```
 
-Override via `.cfg` files or CLI: `--set path.to.var=100`
+Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are two arguments). A path value in a `.cfg` file is relative to that file's directory, an empty one (`""`) is an empty path.
+
+**Lists.** `CFG_VAR_DEF_STRING_LIST(var, "a/b", "default1", "default2")` defines a list of strings; the variable is `cfg::variable<std::vector<std::string>>`, a module reads it with `cfg::config_view::list("a/b")` (`value("a/b")` gives the JSON array). In yaml a list is a sequence, block (`- x`) or flow (`[x, y]`); on the CLI `--set a/b "[x, y]"` is a flow sequence, `"[]"` an empty list and a value without `[` a list of that one element.
+
+- A list is **replaced as a whole**: a later file (`extends`), a later `--set` or a second `load` never merges with it.
+- A scalar where a list is expected (and the other way round) is refused with a warning in the log, the value stays as it was.
+- Elements are text (`12` is `"12"`). A null element (`~`, `null`), a nested list or a map are refused, the list stays as it was. Quote what yaml would read otherwise: an element holding `,` (`"[\"a,b\", c]"`; there is no backslash escape, `[a\, b]` is the two elements `a\` and `b`) or starting with `*` (`"*.ini"`).
+- A key with no value (`key:` or `key: ~`) is ignored for every kind of variable.
 
 ---
 
@@ -221,7 +246,7 @@ Pre-allocated buffers: 8M vertices, 800K indices.
 - `skinning_lib.glsl` — skeletal animation via SSBO (bone matrices)
 - `pipline_struct_lib.glsl` — shared vertex output struct (UV, TBN, normals)
 
-Render modes: `TRIANGLE`, `LINE_LOOP`, `POINT`, `WIREFRAME`.
+Render modes (topology of a draw, `rnd::driver::RENDER_MODE`): `TRIANGLE`, `TRIANGLE_STRIP`, `LINE`, `LINE_STRIP`, `POINT`. Wireframe is not a mode: it is the `polygon` field of the pipeline description (`polygon_mode::LINE`), off by default.
 
 ---
 
@@ -236,7 +261,9 @@ Snake Editor provides a full scene editing environment:
 - **Import** — model import dialog (glb, gltf, fbx, obj)
 - **Animation** — playback controls with keyframe support
 - **Skybox** — cubemap-based background
-- **Debug tools** — JSON debugger, ECS inspector, R-tree visualizer, texture browser
+- **Asset Browser, Prefab Editor, Console** panels
+- **Profiler overlay** — real-time performance stats with smoothing, multi-select rows, copy to clipboard
+- **Profiler hotkey** — `F3` dumps frame stats to engine log
 
 ---
 
@@ -285,10 +312,25 @@ Snake Editor provides a full scene editing environment:
 
 ## Testing
 
-**Framework:** Boost.Test | **30+ test cases across 10 files**
+**Framework:** Boost.Test | **180+ test cases across 15+ files**
 
 ```bash
 cd build && ./unit_tests
+```
+
+**Sanitizers (Linux, GCC/Clang):** configure with `-DSNK_SANITIZE=address` (ASan + UBSan) or
+`-DSNK_SANITIZE=thread` (TSan) in a separate build dir. Only project targets are instrumented
+(third-party code is not); the suppression files live in `.github/sanitizers/`.
+
+```bash
+cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DSNK_SANITIZE=address
+cmake --build build/asan --target unit_tests
+cd build/asan
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+LSAN_OPTIONS=suppressions=../../.github/sanitizers/lsan.supp ./unit_tests
+
+# TSan: -DSNK_SANITIZE=thread, then
+TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 suppressions=../../.github/sanitizers/tsan.supp" ./unit_tests
 ```
 
 | Test File | Coverage |
@@ -305,14 +347,58 @@ cd build && ./unit_tests
 
 ---
 
+## Profiling
+
+Built-in profiler with macro API. Enable via CMake:
+
+```bash
+cmake --preset x64-Debug -DENGINE_PROFILE_MODE=INTERNAL
+```
+
+Usage in code:
+
+```cpp
+#include <snk/common/eng_profiler.h>
+
+void update() {
+    PROFILE_FUNCTION();              // auto-named zone
+    {
+        PROFILE_SCOPE("Physics");    // named zone
+    }
+}
+```
+
+- **ImGui overlay**: View > Profiler — real-time stats with smoothing
+- **Log dump**: press `F3` or call `ds::profiler_dump_to_log()`
+- **Modes**: `INTERNAL` (ring buffer + overlay), `NONE` (zero overhead, macros compile to nothing)
+
+---
+
+## CMake Targets
+
+All engine libraries use `snk::` namespace aliases (EPIC-41, partially done):
+
+```
+snk::common          STATIC      Math, logging, data structures
+snk::application     STATIC      App lifecycle, module system
+snk::ecs             STATIC      ECS framework
+snk::scene           STATIC      Scene graph, cameras, lights
+snk::render          STATIC      Render pipeline, shaders
+snk::gui             STATIC      ImGui integration
+snk::input_system    STATIC      Input mapping
+snk::engine          STATIC      Aggregates all engine systems
+```
+
+---
+
 ## Code Conventions
 
-See [guidelines.md](guidelines.md) for full details.
+See `CLAUDE.md` and `docs/agent/CODE_CONVENTIONS.toon` for full details.
 
 - **C++ Standard:** C++20, no extensions
 - **Namespaces:** 3-4 letter abbreviations (`ds`, `ecs`, `scn`, `gui`, `rnd`, `res`, `inp`, `edt`, `gs`, `cfg`, `wnd`)
-- **Naming:** `snake_case` everywhere; private members end with `_`
-- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_renderer.cpp`)
+- **Naming:** `snake_case` everywhere; private members use `m_` prefix
+- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_level.cpp`)
 - **Headers:** `#pragma once`
 - **Indentation:** tabs (size 4)
 - **Braces:** new line for functions, same line for control flow

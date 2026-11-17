@@ -1,0 +1,101 @@
+#include "snk_common.glsl"
+
+// Set 2: the material. The block is rnd::material_params (rnd_material_params.h), the maps are the three
+// texture slots of rnd_bindings.h; a map the material lacks is a placeholder, only the defines say it is used.
+SNK_UBO(2, 0) uniform MaterialParams
+{
+    vec4 diffuseColor;
+    vec4 emissiveColor;
+    float shininess;
+};
+
+#ifdef USE_TXM_AS_DIFFUSE
+SNK_TEX(2, 0) uniform sampler2D diffuseTxm;
+#endif
+#ifdef USE_SPECULAR_MAP
+SNK_TEX(2, 1) uniform sampler2D specularTxm;
+#endif
+
+vec4 getMaterialColor(vec2 uv)
+{
+#ifdef USE_TXM_AS_DIFFUSE
+    return texture(diffuseTxm, uv);
+#else
+    return diffuseColor;
+#endif
+}
+
+vec4 getMaterialSpecular(vec2 uv)
+{
+#ifdef USE_SPECULAR_MAP
+    return texture(specularTxm, uv);
+#else
+    return vec4(0);
+#endif
+}
+
+vec4 calcDirectionalLight(DirectionalLight light, vec3 norm, vec4 materialColor, vec4 materialSpecular, vec3 viewDir)
+{
+    vec3 lightDir = normalize(-vec3(light.direction));
+    vec3 reflectDir = reflect(-lightDir, norm);  
+    float diff = max(dot(norm, lightDir), 0.0);
+
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+
+    vec4 ambientColor  = light.ambient  * materialColor;
+    vec4 diffuseColor  = light.diffuse  * diff * materialColor;  
+    vec4 specularColor = light.specular * spec * materialSpecular;
+    
+    return ambientColor + diffuseColor + specularColor;
+}
+
+vec4 calcPointLight(PointLight light, vec3 normal, vec4 materialColor, vec4 materialSpecular, vec3 viewDir, vec3 fragPos)
+{
+    vec3 lightDir = normalize(light.position.xyz - fragPos);
+    // diffuse shading
+    float diff = max(dot(normal, lightDir), 0.0);
+
+    // specular shading
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+
+    // attenuation
+    float dist = length(light.position.xyz - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * dist + light.quadratic * (dist * dist));   
+    
+    // combine results
+    vec4 ambient  = light.ambient  * materialColor;
+    vec4 diffuse  = light.diffuse  * diff * materialColor;
+    vec4 specular = light.specular * spec * materialSpecular;
+    ambient  *= attenuation;
+    diffuse  *= attenuation;
+    specular *= attenuation;
+    return (ambient + diffuse + specular);
+}
+
+vec4 calculatePhongModel(vec3 norm, vec4 materialColor, vec4 materialSpecular, vec3 fragPos)
+{
+    vec4 result = vec4(0);
+#ifdef LIGHTS_ENABLED
+    vec3 viewDir = normalize(cameraPosition - fragPos);
+
+    // phase 1: Directional lighting
+    for(int i = 0; i < min(dirLightCount, MAX_LIGHT_COUNT); i++)
+        result += calcDirectionalLight(dirlights[i], norm, materialColor, materialSpecular, viewDir);
+
+    // phase 2: Point lights
+    for(int i = 0; i < min(pointLightCount, MAX_LIGHT_COUNT); i++)
+        result += calcPointLight(pointLights[i], norm, materialColor, materialSpecular, viewDir, fragPos);
+
+    // phase 3: Spot light
+    //result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
+#else
+    result = materialColor;
+#endif
+    
+    vec4 emissive = emissiveColor;
+
+    //vec4 gamma = vec4(1/2.2);
+    vec4 gamma = vec4(1);
+    return pow(result + vec4(emissive.rgb, 0), gamma);
+}

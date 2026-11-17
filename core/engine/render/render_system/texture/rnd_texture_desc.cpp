@@ -1,29 +1,73 @@
-#include "rnd_texture_desc.h"
+#include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/common/text_escape.h>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <format>
+#include <string>
+#include <string_view>
+#include <boost/json.hpp>
 
 namespace rnd::driver
 {
 	namespace {
-		std::string_view txm_usage_to_string(TEXTURE_USAGE usage)
+		struct usage_name
 		{
-			switch (usage)
-			{
-			case TEXTURE_USAGE::COLOR_TARGET: return "color_target";
-			case TEXTURE_USAGE::DEPTH_TARGET: return "depth_target";
-			case TEXTURE_USAGE::SAMPLED: return "sampled";
-			case TEXTURE_USAGE::STENCIL_TARGET: return "stencil_target";
-			case TEXTURE_USAGE::STORAGE: return "storage";
+			texture_usage flag;
+			std::string_view name;
+		};
+
+		constexpr usage_name k_usage_names[] = {
+			{texture_usage::sampled, "sampled"},
+			{texture_usage::storage, "storage"},
+			{texture_usage::color_target, "color_target"},
+			{texture_usage::depth_target, "depth_target"},
+			{texture_usage::stencil_target, "stencil_target"},
+		};
+
+		// A single flag is written as a string (the original format), several as an array of strings.
+		json::value txm_usage_to_json(texture_usage usage)
+		{
+			json::array names;
+			for (const auto& entry : k_usage_names) {
+				if (has_usage(usage, entry.flag)) {
+					names.emplace_back(json::string{entry.name});
+				}
 			}
-			return "unknown";
+			if (names.empty()) {
+				return json::string{"unknown"};
+			}
+			if (names.size() == 1) {
+				return names.front();
+			}
+			return names;
 		}
 
-		TEXTURE_USAGE txm_usage_from_string(const std::string_view& usage)
+		texture_usage txm_usage_from_string(const std::string_view& usage)
 		{
-			if (usage == "color_target") return TEXTURE_USAGE::COLOR_TARGET;
-			if (usage == "depth_target") return TEXTURE_USAGE::DEPTH_TARGET;
-			if (usage == "sampled") return TEXTURE_USAGE::SAMPLED;
-			if (usage == "stencil_target") return TEXTURE_USAGE::STENCIL_TARGET;
-			if (usage == "storage") return TEXTURE_USAGE::STORAGE;
-			return TEXTURE_USAGE::NONE;
+			for (const auto& entry : k_usage_names) {
+				if (usage == entry.name) {
+					return entry.flag;
+				}
+			}
+			return texture_usage::none;
+		}
+
+		texture_usage txm_usage_from_json(const json::value& usage)
+		{
+			if (usage.is_string()) {
+				return txm_usage_from_string(usage.as_string());
+			}
+			texture_usage result = texture_usage::none;
+			if (usage.is_array()) {
+				for (const auto& item : usage.as_array()) {
+					if (item.is_string()) {
+						result |= txm_usage_from_string(item.as_string());
+					}
+				}
+			}
+			return result;
 		}
 
 		std::string txm_wrap_to_string(texture_header::WRAPPING wrap)
@@ -92,6 +136,14 @@ namespace rnd::driver
 			return "unknown";
 		}
 
+		// The value comes from a file: a name this build does not know fails the load of that file. It never asserts (an
+		// abort in Debug) and never goes on with a format nobody asked for (#930).
+		[[noreturn]] void unknown_value(std::string_view json_path, std::string_view what, std::string_view value)
+		{
+			const std::string shown = text_escape::escaped_text(value, 64);
+			throw res::load_error(res::diagnostic_kind::load, json_path, std::format("unknown texture {} '{}'", what, shown));
+		}
+
 		texture_header::TYPE txm_data_type_from_string(const std::string_view& type)
 		{
 			if (type == "R8") return texture_header::TYPE::R8;
@@ -112,8 +164,7 @@ namespace rnd::driver
 			if (type == "S1") return texture_header::TYPE::S1;
 			if (type == "S4") return texture_header::TYPE::S4;
 			if (type == "S8") return texture_header::TYPE::S8;
-			ASSERT_FAIL("Unknown texture type");
-			return texture_header::TYPE::RGB8;
+			unknown_value("/header/data/format", "format", type);
 		}
 
 		std::string txm_type_to_string(TEXTURE_TYPE type)
@@ -126,6 +177,8 @@ namespace rnd::driver
 			case TEXTURE_TYPE::TEXTURE_CUBE_MAP: return "texture_cube_map";
 			case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return "texture_cube_array";
 			case TEXTURE_TYPE::RENDERBUFFER: return "renderbuffer";
+			case TEXTURE_TYPE::TEXTURE_1D_ARRAY: return "texture_1d_array";
+			case TEXTURE_TYPE::TEXTURE_2D_ARRAY: return "texture_2d_array";
 			}
 			return "unknown";
 		}
@@ -136,10 +189,11 @@ namespace rnd::driver
 			if (type == "texture_2d") return TEXTURE_TYPE::TEXTURE_2D;
 			if (type == "texture_3d") return TEXTURE_TYPE::TEXTURE_3D;
 			if (type == "texture_cube_map") return TEXTURE_TYPE::TEXTURE_CUBE_MAP;
+			if (type == "texture_1d_array") return TEXTURE_TYPE::TEXTURE_1D_ARRAY;
+			if (type == "texture_2d_array") return TEXTURE_TYPE::TEXTURE_2D_ARRAY;
 			if (type == "texture_cube_array") return TEXTURE_TYPE::TEXTURE_CUBE_ARRAY;
 			if (type == "renderbuffer") return TEXTURE_TYPE::RENDERBUFFER;
-			ASSERT_FAIL("Unknown texture type");
-			return TEXTURE_TYPE::TEXTURE_2D;
+			unknown_value("/header/type", "type", type);
 		}
 	}
 
@@ -147,7 +201,7 @@ namespace rnd::driver
 	{
 		out = {
 			{"type", txm_type_to_string(c.type)},
-			{"usage", txm_usage_to_string(c.usage)},
+			{"usage", txm_usage_to_json(c.usage)},
 			{"wrap", txm_wrap_to_string(c.wrap)},
 			{"mag", txm_filtering_to_string(c.mag)},
 			{"min", txm_filtering_to_string(c.min)},
@@ -179,7 +233,7 @@ namespace rnd::driver
 		if (obj.contains("type"))
 			c.type = txm_type_from_string(obj.at("type").as_string());
 		if (obj.contains("usage"))
-			c.usage = txm_usage_from_string(obj.at("usage").as_string());
+			c.usage = txm_usage_from_json(obj.at("usage"));
 		if (obj.contains("wrap"))
 			c.wrap = txm_wrap_from_string(obj.at("wrap").as_string());
 		if (obj.contains("mag"))
@@ -196,15 +250,15 @@ namespace rnd::driver
 		if (data.contains("extent")) {
 			auto& extent = data.at("extent").as_object();
 			if (extent.contains("width"))
-				c.data.extent.width = extent.at("width").as_int64();
+				c.data.extent.width = static_cast<uint32_t>(extent.at("width").as_int64());
 			if (extent.contains("height"))
-				c.data.extent.height = extent.at("height").as_int64();
+				c.data.extent.height = static_cast<uint32_t>(extent.at("height").as_int64());
 			if (extent.contains("depth"))
-				c.data.extent.depth = extent.at("depth").as_int64();
+				c.data.extent.depth = static_cast<uint32_t>(extent.at("depth").as_int64());
 		}
 
 		if (data.contains("mip_levels"))
-			c.data.mip_levels = data.at("mip_levels").as_int64();
+			c.data.mip_levels = static_cast<uint32_t>(data.at("mip_levels").as_int64());
 		if (data.contains("format"))
 			c.data.format = txm_data_type_from_string(data.at("format").as_string());
 
@@ -226,7 +280,7 @@ void rnd::texture_desc::serialize(json::object& resource) const
 		{
 			name: "texture",
 			header: {
-				usage: "texture_usage",
+				usage: "texture_usage" | ["texture_usage", ...],
 				wrap: "wrapping",
 				mag: "filtering",
 				min: "filtering",

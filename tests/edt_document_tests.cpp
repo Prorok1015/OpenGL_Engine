@@ -1,0 +1,639 @@
+#include "edt_prefab_preview_kinds.hpp"
+#include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_events.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/editor/edt_editor_services.h>
+#include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include "edt_edit_menu.h"
+#include "edt_level_controller.h"
+#include "edt_prefab_document.h"
+#include "edt_scene_editor.h"
+#include "edt_scene_document.h"
+#include "edt_document_cast.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+// document_manager (#137): the one scene document, the at most one prefab preview, the active document,
+// and scene_document::commit as the single place an edit marks the document changed.
+
+namespace {
+
+constexpr const char* PREVIEW_TEMPLATE = R"({
+	"__type": "world_desc", "__version": 4, "name": "__prefab_preview", "systems": [],
+	"components": { "anchor": { "__type": "anchor_desc", "__version": 1 } },
+	"children": [
+		{ "__id": "09705f78a49797f0", "name": "PrefabLight",
+		  "components": { "directional_light_desc": { "__type": "directional_light_desc", "__version": 1 } } }
+	]
+})";
+
+constexpr const char* PREFAB = R"({
+	"__type": "prefab_desc", "__version": 2,
+	"components": { "stat": { "__type": "stat_desc", "hp": 10 } },
+	"children": [
+		{ "__id": "00000000000000a1", "name": "arm", "components": { "stat": { "__type": "stat_desc", "hp": 3 } } }
+	]
+})";
+
+struct document_fixture : test_util::scene_env
+{
+	document_fixture()
+	{
+		rs->unregistrate_resolver(res::tag::default_protocol());
+		auto& res_ram = rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+		res_ram.store(prefab_a, test_util::to_bytes(PREFAB));
+		res_ram.store(prefab_b, test_util::to_bytes(PREFAB));
+		auto& edt_ram = rs->registrate_resolver<test_util::ram_resolver>("edt");
+		edt_ram.store(res::tag("edt://templates/prefab_preview.desc"), test_util::to_bytes(PREVIEW_TEMPLATE));
+
+		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
+		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
+		services.ctx_manager = mgr;
+		services.base_descs = descs.get();
+		services.base_resources = rs.get();
+		services.base_assembler = assembler.get();
+		services.base_sfactory = &sf;
+
+		connections.push_back(events.document_opened.subscribe([this](edt::document_id id) { log.push_back("opened:" + std::to_string(id)); }));
+		connections.push_back(events.document_closed.subscribe([this](edt::document_id id) { log.push_back("closed:" + std::to_string(id)); }));
+		connections.push_back(events.document_activated.subscribe([this](edt::document_id id) { log.push_back("activated:" + std::to_string(id)); }));
+		connections.push_back(events.document_changed.subscribe([this](edt::document_id id, std::uint64_t generation) {
+			changed.push_back({ id, generation });
+		}));
+	}
+
+	std::size_t count_documents()
+	{
+		std::size_t count = 0;
+		documents.for_each([&count](edt::document&) { ++count; });
+		return count;
+	}
+
+	const res::tag prefab_a = res::tag::make("prefabs/a.prefab.desc");
+	const res::tag prefab_b = res::tag::make("prefabs/b.prefab.desc");
+	std::shared_ptr<scn::hot_reload_manager> hot;
+	ecs::system_factory sf;
+	std::shared_ptr<scn::context_manager> mgr;
+	edt::editor_services services;
+	edt::scene_document scene;
+	edt::editor_events events;
+	edt::document_manager documents{ scene, events };
+	test_util::prefab_preview_kinds prefab_kinds{ documents, services };
+	std::vector<edt::connection> connections;
+	std::vector<std::string> log;
+	std::vector<std::pair<edt::document_id, std::uint64_t>> changed;
+};
+
+}
+
+namespace {
+
+// A document of the editor's own, as the manager's adopt() takes them (a data document).
+class adopted_document final : public edt::document
+{
+public:
+	explicit adopted_document(std::string name, std::vector<std::string>* destroyed = nullptr)
+		: m_title(std::move(name)), m_source(res::tag::make(m_title + ".desc")), m_destroyed(destroyed) {}
+	~adopted_document() override { if (m_destroyed) m_destroyed->push_back(m_title); }
+
+	std::string_view kind() const override { return "adopted"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+	void bind_events(edt::editor_events* events) override { m_events = events; }
+	edt::editor_events* events() const { return m_events; }
+
+private:
+	std::string m_title;
+	res::tag m_source;
+	std::vector<std::string>* m_destroyed;
+	edt::editor_events* m_events = nullptr;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtDocumentTests, document_fixture)
+
+BOOST_AUTO_TEST_CASE(Scene_IsTheOnlyDocumentAndTheActiveOne)
+{
+	BOOST_TEST(&documents.scene() == &scene);
+	BOOST_TEST(scene.id() != 0u);
+	BOOST_TEST(scene.kind() == "scene");
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST(documents.find(scene.id()) == &scene);
+	BOOST_TEST(documents.preview() == nullptr);
+	BOOST_TEST(count_documents() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_AddsAPreviewAndMakesItActive)
+{
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+
+	BOOST_REQUIRE(prefab.is_open());
+	BOOST_TEST(prefab.id() != 0u);
+	BOOST_TEST(prefab.id() != scene.id());
+	BOOST_TEST(prefab.kind() == "prefab");
+	BOOST_TEST(prefab.can_save());
+	BOOST_TEST(!prefab.is_dirty());
+	BOOST_TEST((prefab.source() == prefab_a));
+	BOOST_TEST(documents.preview() == &prefab);
+	BOOST_TEST(documents.active() == &prefab);
+	BOOST_TEST(count_documents() == 2u);
+	BOOST_TEST((log == std::vector<std::string>{
+		"opened:" + std::to_string(prefab.id()), "activated:" + std::to_string(prefab.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(DirtyPrefabOf_FindsAnEditedPrefab_ThatQuitAndNewMustNotLose)
+{
+	BOOST_TEST(edt::dirty_prefab_of(documents) == nullptr);
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+	BOOST_REQUIRE(prefab.is_open());
+	BOOST_TEST(edt::dirty_prefab_of(documents) == nullptr);
+
+	BOOST_REQUIRE(prefab.edit([](scn::prefab_desc& desc) {
+		desc.get_root().position = { 1.f, 2.f, 3.f };
+		return true;
+	}));
+
+	BOOST_TEST(edt::dirty_prefab_of(documents) == &prefab);
+	documents.close(prefab.id());
+	BOOST_TEST(edt::dirty_prefab_of(documents) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(PrefabDocument_CleanApplyWritesNothing_AndSaveAsIsRefused)
+{
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+	BOOST_REQUIRE(prefab.is_open());
+
+	BOOST_TEST(prefab.save().saved);
+	BOOST_TEST(!prefab.save_as(prefab_b).saved);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_OwnsThePreviewSetAndCloseDestroysIt)
+{
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+	BOOST_REQUIRE(prefab.is_open());
+	const std::string set_name = prefab.set_name();
+	BOOST_TEST(set_name == "preview:" + std::string{ prefab_a.view() });
+	BOOST_TEST(mgr->find_set(set_name) != nullptr);
+
+	documents.close(prefab.id());
+
+	BOOST_TEST(mgr->find_set(set_name) == nullptr);
+	BOOST_TEST(documents.preview() == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneReplacesTheFirst)
+{
+	const auto first = edt::open_prefab(documents, prefab_a).id();
+	log.clear();
+
+	auto& second = edt::open_prefab(documents, prefab_b);
+
+	BOOST_REQUIRE(second.is_open());
+	BOOST_TEST(second.id() != first);
+	BOOST_TEST(documents.find(first) == nullptr);
+	BOOST_TEST(count_documents() == 2u);
+	BOOST_TEST((log == std::vector<std::string>{
+		"activated:" + std::to_string(scene.id()), "closed:" + std::to_string(first),
+		"opened:" + std::to_string(second.id()), "activated:" + std::to_string(second.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(Close_Preview_ReturnsTheActiveDocumentToTheScene)
+{
+	const auto id = edt::open_prefab(documents, prefab_a).id();
+	log.clear();
+
+	documents.close(id);
+
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST(count_documents() == 1u);
+	BOOST_TEST((log == std::vector<std::string>{
+		"activated:" + std::to_string(scene.id()), "closed:" + std::to_string(id) }));
+}
+
+BOOST_AUTO_TEST_CASE(Close_TheSceneOrAnUnknownIdChangesNothing)
+{
+	const auto id = edt::open_prefab(documents, prefab_a).id();
+	log.clear();
+
+	documents.close(scene.id());
+	documents.close(id + 100);
+
+	BOOST_TEST(log.empty());
+	BOOST_TEST(count_documents() == 2u);
+	BOOST_TEST(documents.active() != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(SetActive_SwitchesBetweenOpenDocumentsAndIgnoresOthers)
+{
+	const auto id = edt::open_prefab(documents, prefab_a).id();
+	log.clear();
+
+	documents.set_active(scene.id());
+	BOOST_TEST(documents.active() == &scene);
+	documents.set_active(scene.id()); // already active: no event
+	documents.set_active(id + 100);
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST((log == std::vector<std::string>{ "activated:" + std::to_string(scene.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_OfAMissingPrefabOpensNothing)
+{
+	auto& prefab = edt::open_prefab(documents, res::tag::make("prefabs/missing.prefab.desc"));
+
+	BOOST_TEST(!prefab.is_open());
+	BOOST_TEST(documents.preview() == nullptr);
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST(count_documents() == 1u);
+	BOOST_TEST(log.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ForEach_VisitsTheSceneFirst)
+{
+	edt::open_prefab(documents, prefab_a);
+
+	std::vector<std::string> kinds;
+	documents.for_each([&kinds](edt::document& doc) { kinds.emplace_back(doc.kind()); });
+
+	BOOST_TEST((kinds == std::vector<std::string>{ "scene", "prefab" }));
+}
+
+BOOST_AUTO_TEST_CASE(Commit_MarksTheSceneDirtyBumpsTheGenerationAndTellsDocumentChanged)
+{
+	int pushes = 0;
+	scene.set_pusher([&pushes] { ++pushes; return true; });
+	BOOST_TEST(!scene.is_dirty());
+	const auto before = scene.generation();
+
+	scene.commit("Create entity");
+
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(scene.generation() > before);
+	BOOST_TEST(pushes == 1);
+	BOOST_REQUIRE(changed.size() == 1u);
+	BOOST_TEST(changed[0].first == scene.id());
+	BOOST_TEST(changed[0].second == scene.generation());
+}
+
+BOOST_AUTO_TEST_CASE(Commit_WithNothingToPushIsDirtyButSilent)
+{
+	scene.set_pusher([] { return false; }); // no level loaded: the push bails out
+
+	scene.commit("Create entity");
+
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(changed.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Commit_StateOnlyNeitherPushesNorAnnounces)
+{
+	int pushes = 0;
+	scene.set_pusher([&pushes] { ++pushes; return true; });
+
+	scene.commit("Create world", edt::commit_mode::state_only);
+
+	BOOST_TEST(pushes == 0);
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(changed.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Commit_AddsExactlyOneToTheGeneration)
+{
+	scene.set_pusher([] { return true; });
+	const auto before = scene.generation();
+
+	scene.commit("Create entity");
+	BOOST_TEST(scene.generation() == before + 1);
+
+	scene.commit("Create world", edt::commit_mode::state_only);
+	BOOST_TEST(scene.generation() == before + 2);
+}
+
+BOOST_AUTO_TEST_CASE(SceneEditorEdit_ReachesDocumentChangedThroughTheInstalledPusher)
+{
+	const auto tag = put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[]}]})");
+	BOOST_REQUIRE(mgr->load_level(tag));
+	auto level_res = require_loaded<scn::level_desc>(tag);
+	BOOST_REQUIRE(level_res.is_ready());
+	for (const auto& wh : level_res->get_worlds()) scene.world_descs.push_back(*wh.get_sync());
+	edt::derive_world_arrays(scene.world_descs, scene.world_names, scene.worlds_systems_list);
+	scene.active_world_idx = 0;
+	scene.editor_tag = tag;
+	edt::scene_editor editor(scene, services);
+	const auto before = scene.generation();
+	BOOST_REQUIRE(scene.active_world_desc());
+
+	editor.create_entity("Empty");
+
+	BOOST_TEST(scene.active_world_desc()->get_root().children.size() == 1u);
+	BOOST_TEST(scene.is_dirty());
+	BOOST_REQUIRE(changed.size() == 1u);
+	BOOST_TEST(changed[0].first == scene.id());
+	BOOST_TEST(changed[0].second == scene.generation());
+	// One edit, one step: the edit method does not bump the generation besides commit().
+	BOOST_TEST(scene.generation() == before + 1);
+}
+
+BOOST_AUTO_TEST_CASE(SceneEditorEdit_ThatDoesNothing_LeavesTheGenerationAndTheDocumentAlone)
+{
+	edt::scene_editor editor(scene, services);
+	const auto before = scene.generation();
+	BOOST_REQUIRE(!scene.active_world_desc());
+
+	editor.create_entity("Empty");
+	editor.delete_entity(1);
+	editor.duplicate_entity(1);
+	editor.reparent_entity(1, 2, -1);
+
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(!scene.is_dirty());
+	BOOST_TEST(changed.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Shutdown_ClosesThePreviewAndLetsGoOfTheScene)
+{
+	const auto id = edt::open_prefab(documents, prefab_a).id();
+	const std::string set_name = "preview:" + std::string{ prefab_a.view() };
+	BOOST_REQUIRE(mgr->find_set(set_name));
+
+	documents.shutdown();
+
+	BOOST_TEST(mgr->find_set(set_name) == nullptr);
+	BOOST_TEST(documents.find(id) == nullptr);
+	BOOST_TEST(documents.preview() == nullptr);
+	BOOST_TEST(documents.active() == nullptr);
+	scene.set_pusher([] { return true; });
+	scene.commit("Create entity");
+	BOOST_TEST(changed.empty()); // the scene no longer reports to the manager's events
+	documents.shutdown(); // a second call is harmless
+}
+
+BOOST_AUTO_TEST_CASE(MarkClean_ClearsTheDirtyFlag)
+{
+	scene.commit("Create world", edt::commit_mode::state_only);
+	BOOST_REQUIRE(scene.is_dirty());
+
+	scene.mark_clean();
+
+	BOOST_TEST(!scene.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(PreviewDocument_IsNotDirtiedByTheScenesCommits)
+{
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+	scene.commit("Create world", edt::commit_mode::state_only);
+
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(!prefab.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(EditUndo_FollowsTheActiveDocument)
+{
+	scn::world_desc world;
+	scn::prefab_desc::prefab_node node;
+	node.node_id = 10;
+	node.name = "a";
+	world.get_root().children.push_back(node);
+	scene.world_descs.push_back(std::move(world));
+	scene.reset_history();
+	scene.world_descs[0].get_root().children[0].name = "b";
+	scene.commit("Rename node");
+
+	edt::action_registry actions;
+	edt::dialog_service dialogs;
+	auto registered = edt::register_edit_actions(actions, documents, dialogs, {});
+	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
+
+	// The preview has no history: while it is the active document there is nothing to undo.
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+	BOOST_REQUIRE(prefab.is_open());
+	BOOST_REQUIRE(documents.active() == &prefab);
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+
+	// Closing it (the prefab editor does on any close of its window) gives the scene back.
+	documents.close(prefab.id());
+	BOOST_REQUIRE(documents.active() == &scene);
+	BOOST_TEST(actions.is_enabled("edit.undo"));
+	BOOST_REQUIRE(actions.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
+}
+
+BOOST_AUTO_TEST_CASE(EditUndo_AWindowWithoutHistoryHasNothingToUndo_TheSceneIsNotUndoneBehindIt)
+{
+	scn::world_desc world;
+	scn::prefab_desc::prefab_node node;
+	node.node_id = 10;
+	node.name = "a";
+	world.get_root().children.push_back(node);
+	scene.world_descs.push_back(std::move(world));
+	scene.reset_history();
+	scene.world_descs[0].get_root().children[0].name = "b";
+	scene.commit("Rename node");
+
+	edt::action_registry actions;
+	edt::dialog_service dialogs;
+	auto registered = edt::register_edit_actions(actions, documents, dialogs, {});
+
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
+	documents.set_active(data.id());
+	BOOST_REQUIRE(documents.active() == &data);
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+	BOOST_TEST(!actions.is_enabled("edit.redo"));
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "b");
+
+	// The window gives the focus back (the editor makes the scene active): Undo is the scene's again.
+	documents.set_active(scene.id());
+	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
+	BOOST_REQUIRE(actions.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
+	BOOST_REQUIRE(actions.is_enabled("edit.redo"));
+	BOOST_REQUIRE(actions.invoke("edit.redo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "b");
+}
+
+BOOST_AUTO_TEST_CASE(SceneSave_GoesThroughTheHandlersOfTheEditor)
+{
+	BOOST_TEST(!scene.can_save());
+	BOOST_TEST(!scene.save().saved);
+
+	int saves = 0;
+	res::tag saved_as;
+	scene.set_save_handlers(
+		[&saves] { ++saves; return true; },
+		[&saved_as](const res::tag& target) { saved_as = target; return true; });
+	BOOST_TEST(!scene.can_save()); // no level yet
+
+	scene.editor_tag = res::tag{ "memory://editor/lv.desc" };
+	BOOST_REQUIRE(scene.can_save());
+	BOOST_TEST(scene.save().saved);
+	BOOST_TEST(saves == 1);
+	BOOST_TEST(scene.save_as(prefab_b).saved);
+	BOOST_TEST((saved_as == prefab_b));
+}
+
+BOOST_AUTO_TEST_CASE(SceneSave_ReportsAFailedWrite)
+{
+	scene.editor_tag = res::tag{ "memory://editor/lv.desc" };
+	scene.set_save_handlers([] { return false; }, [](const res::tag&) { return false; });
+
+	const auto result = scene.save();
+
+	BOOST_TEST(!result.saved);
+	BOOST_TEST(!result.error.empty());
+}
+
+BOOST_AUTO_TEST_CASE(SceneDocument_ExposesItsIdentity)
+{
+	scene.level_name = "lv";
+	scene.level_tag = res::tag::make("levels/lv.desc");
+	BOOST_TEST(scene.title() == "lv");
+	BOOST_TEST((scene.source() == scene.level_tag));
+}
+
+BOOST_AUTO_TEST_CASE(EditorServices_LevelSetIsTheContextManagersAndNullOnceItIsGone)
+{
+	BOOST_TEST(services.level_set() == &mgr->level_set());
+
+	services.ctx_manager.reset();
+	BOOST_TEST(services.level_set() == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_ChoosesTheBuiltInPreview_EvenWhenAModulePreviewHasALongerSuffix)
+{
+	struct other_document final : edt::previewable_document
+	{
+		std::string_view kind() const override { return "other"; }
+		const std::string& title() const override { return m_title; }
+		const res::tag& source() const override { return m_source; }
+		bool is_dirty() const override { return false; }
+		std::uint64_t generation() const override { return 0; }
+		void open(const res::tag& source) override { m_source = source; m_open = true; }
+		void close() override { m_open = false; }
+		bool is_open() const override { return m_open; }
+
+		std::string m_title = "other";
+		res::tag m_source;
+		bool m_open = false;
+	};
+	edt::asset_preview_desc longer;
+	longer.id = "module.preview";
+	longer.suffix = ".ui.prefab.desc";
+	longer.make_preview = [](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> { return std::make_unique<other_document>(); };
+	auto registered = prefab_kinds.kinds.add_preview(std::move(longer));
+	BOOST_REQUIRE(registered.active());
+
+	const res::tag ui_prefab = res::tag::make("prefabs/a.ui.prefab.desc");
+	BOOST_REQUIRE(documents.open_preview(ui_prefab) != nullptr);
+	BOOST_CHECK_EQUAL(documents.preview()->kind(), "other");
+
+	// The prefab editor asks for the prefab document by its id: a document of another type is never cast to it.
+	BOOST_CHECK_NO_THROW(edt::open_prefab(documents, ui_prefab));
+}
+
+BOOST_AUTO_TEST_CASE(Adopt_GivesTheDocumentAnIdAnnouncesItAndLeavesTheActiveDocumentAlone)
+{
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config"));
+
+	BOOST_TEST(data.id() != 0u);
+	BOOST_TEST(data.id() != scene.id());
+	BOOST_TEST(documents.find(data.id()) == &data);
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST(static_cast<adopted_document&>(data).events() == &events);
+	BOOST_TEST(count_documents() == 2u);
+	BOOST_TEST((log == std::vector<std::string>{ "opened:" + std::to_string(data.id()) }));
+}
+
+BOOST_AUTO_TEST_CASE(FindBySource_ComparesThePathNotItsSpelling)
+{
+	auto& data = documents.adopt(std::make_unique<adopted_document>("config/game"));
+	for (const char* spelling : { "res://config/game.desc", "res://config/./game.desc", "res://config//game.desc",
+		"res://config/sub/../game.desc", "res://config\\game.desc" }) {
+		BOOST_TEST_CONTEXT(spelling) {
+			BOOST_TEST(documents.find_by_source(res::tag{ spelling }) == &data);
+		}
+	}
+	BOOST_TEST(documents.find_by_source(res::tag{ "res://config/other.desc" }) == nullptr);
+	BOOST_TEST(documents.find_by_source(res::tag{ "memory://config/game.desc" }) == nullptr);
+	BOOST_TEST(documents.find_by_source(res::tag{}) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ForEach_VisitsEveryDocumentEvenWhenTheVisitorClosesTheOneItIsGiven)
+{
+	documents.adopt(std::make_unique<adopted_document>("a"));
+	documents.adopt(std::make_unique<adopted_document>("b"));
+	documents.adopt(std::make_unique<adopted_document>("c"));
+
+	std::vector<std::string> visited;
+	documents.for_each([&](edt::document& visiting) {
+		visited.emplace_back(visiting.title());
+		if (visiting.kind() == "adopted") documents.close(visiting.id());
+	});
+	BOOST_TEST((visited == std::vector<std::string>{ scene.title(), "a", "b", "c" }), boost::test_tools::per_element());
+	BOOST_TEST(count_documents() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TwoAdoptedDocuments_AreOpenAtOnceAndCloseIndependently)
+{
+	std::vector<std::string> destroyed;
+	auto& first = documents.adopt(std::make_unique<adopted_document>("first", &destroyed));
+	auto& second = documents.adopt(std::make_unique<adopted_document>("second", &destroyed));
+	const edt::document_id first_id = first.id();
+	const edt::document_id second_id = second.id();
+	documents.set_active(second_id);
+	BOOST_TEST(first_id != second_id);
+	BOOST_TEST(count_documents() == 3u);
+
+	log.clear();
+	documents.close(first_id);
+	BOOST_TEST(documents.find(first_id) == nullptr);
+	BOOST_TEST(documents.find(second_id) == &second);
+	BOOST_TEST(documents.active() == &second);
+	BOOST_TEST((destroyed == std::vector<std::string>{ "first" }));
+	BOOST_TEST((log == std::vector<std::string>{ "closed:" + std::to_string(first_id) }));
+
+	log.clear();
+	documents.close(second_id);
+	BOOST_TEST(documents.active() == &scene);
+	BOOST_TEST((destroyed == std::vector<std::string>{ "first", "second" }));
+	BOOST_TEST((log == std::vector<std::string>{ "activated:" + std::to_string(scene.id()), "closed:" + std::to_string(second_id) }));
+	BOOST_TEST(count_documents() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(FindBySource_FindsTheSceneThePreviewAndTheAdoptedDocuments)
+{
+	documents.adopt(std::make_unique<adopted_document>("config"));
+	auto& prefab = edt::open_prefab(documents, prefab_a);
+
+	BOOST_TEST(documents.find_by_source(res::tag::make("config.desc")) != nullptr);
+	BOOST_TEST(documents.find_by_source(prefab_a) == &prefab);
+	BOOST_TEST(documents.find_by_source(res::tag::make("nothing.desc")) == nullptr);
+	scene.level_tag = res::tag::make("levels/a.desc");
+	BOOST_TEST(documents.find_by_source(res::tag::make("levels/a.desc")) == &scene);
+}
+
+BOOST_AUTO_TEST_CASE(Shutdown_ClosesTheAdoptedDocuments_AndNeitherTheSceneNorALaterCloseLeaksThem)
+{
+	std::vector<std::string> destroyed;
+	documents.adopt(std::make_unique<adopted_document>("one", &destroyed));
+	documents.adopt(std::make_unique<adopted_document>("two", &destroyed));
+	documents.close(scene.id());
+	BOOST_TEST(count_documents() == 3u);
+
+	documents.shutdown();
+	BOOST_TEST((destroyed.size() == 2u));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

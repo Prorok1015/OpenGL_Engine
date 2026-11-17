@@ -1,18 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(resource_system)
 add_library(resource_system STATIC)
+add_library(snk::resource_system ALIAS resource_system)
 
 file(GLOB_RECURSE SE_RESOURCE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RESOURCE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE assimp PRIVATE engine_logger PRIVATE image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE config_system)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system PRIVATE snk::project)
+# PUBLIC: res_vfs_resolver.h names the no-follow file primitives of platform::beneath (#414, #484, #523).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::platform)
+# res::tag, its JSON and the pure part of res_desc_binary.h live in snk_model_codec (#1077).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::model_codec)
 
-target_compile_definitions(${PROJECT_NAME} PUBLIC RESOURCE_PATH="${SE_RESOURCE_ABSOLUTE_PATH}") 
-#assimp
-set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
-set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-add_subdirectory(${THIRD_PARTY_PATH}/assimp assimp)

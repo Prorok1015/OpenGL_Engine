@@ -1,7 +1,9 @@
-#include "gui_menu_layout.h"
+#include <snk/gui/gui_menu_layout.h>
 #include <imgui.h>
+#include <algorithm>
 #include <ranges>
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 
 void gui::menu_layout_manager::process()
 {
@@ -15,7 +17,7 @@ void gui::menu_layout_manager::process()
 	}
 
 	std::vector<menu_tree_item*> del;
-	for (int i = 0; i < checked_menu_item_list.size(); ++i) {
+	for (std::size_t i = 0; i < checked_menu_item_list.size(); ++i) {
 		menu_tree_item* item = checked_menu_item_list[i];
 		item->checked = item->uiCallback();
 		if (!item->checked) {
@@ -25,9 +27,14 @@ void gui::menu_layout_manager::process()
 	}
 
 	for (auto& it : del) {
-		checked_menu_item_list.erase(std::remove(checked_menu_item_list.begin(), checked_menu_item_list.end(), it));
+		std::erase(checked_menu_item_list, it);
 	}
 
+	process_implicit();
+}
+
+void gui::menu_layout_manager::process_implicit()
+{
 	// Copy the list before iterating — callbacks may register/unregister implicits,
 	// which would invalidate iterators and references into the original vector.
 	auto implicits_snapshot = implicit_callback_list;
@@ -39,8 +46,7 @@ void gui::menu_layout_manager::process()
 	}
 
 	for (auto& imp : del_imp) {
-		auto it = std::remove_if(implicit_callback_list.begin(), implicit_callback_list.end(), [imp](auto& i) {return imp == i.first; });
-		implicit_callback_list.erase(it);
+		std::erase_if(implicit_callback_list, [&imp](auto& i) { return imp == i.first; });
 	}
 }
 
@@ -79,12 +85,19 @@ void gui::menu_layout_manager::register_implicit(const std::string_view id, UI_C
 	auto idx = std::ranges::find_if(implicit_callback_list, [id](auto& i) { return i.first == id; });
 	if (idx == implicit_callback_list.end()) {
 		implicit_callback_list.push_back(std::pair<std::string, UI_CALLBACK>(id, std::move(callback)));
+	} else {
+		egLOG_WARN("gui", "register_implicit: id '{}' already registered, ignoring duplicate", id);
 	}
 }
 
 void gui::menu_layout_manager::unregister_implicit(const std::string_view id)
 {
-	implicit_callback_list.erase(std::remove_if(implicit_callback_list.begin(), implicit_callback_list.end(), [id](auto& i) { return i.first == id; }));
+	std::erase_if(implicit_callback_list, [id](auto& i) { return i.first == id; });
+}
+
+bool gui::menu_layout_manager::has_implicit_prefix(std::string_view prefix) const
+{
+	return std::ranges::any_of(implicit_callback_list, [prefix](const auto& i) { return std::string_view(i.first).starts_with(prefix); });
 }
 
 std::vector<std::string> gui::menu_layout_manager::split(std::string_view path, std::string_view delim)

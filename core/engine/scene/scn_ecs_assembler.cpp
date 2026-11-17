@@ -1,6 +1,8 @@
-#include "scn_ecs_assembler.h"
-#include "res_system.h"
-#include "logger/engine_log.h"
+#include <snk/scene/scn_ecs_assembler.h>
+#include <entt/entt.hpp>
+#include <snk/resource/res_system.h>
+#include <snk/desc/desc_json_ops.h>
+#include <snk/common/logger/engine_log.h>
 
 namespace scn {
 
@@ -13,34 +15,43 @@ namespace scn {
 		const std::string_view name,
 		bool is_hot_reload) const
 	{
+		if (!ENGINE_VERIFY(!parent_desc.has_error(), "component '{}': parent desc '{}' failed to load, skipping", name, res::refused_tag(parent_desc).view())) {
+			return;
+		}
+
 		if (actual_type.empty() && parent_desc.is_valid()) {
 			actual_type = parent_desc->get_type();
 		}
 
 		if (actual_type.empty()) return;
 
-		auto it = m_spawners.find(actual_type);
-		if (it == m_spawners.end()) {
+		const spawner_pair* found = find_spawner(actual_type);
+		if (!found) {
 			egLOG_WARN("assembler/warning", "No ECS spawner for desc type: {0}", actual_type);
 			return;
 		}
 
-		bool is_structural = (it->second.category == spawner_category::structural);
+		bool is_structural = (found->category == spawner_category::structural);
 
 		if (parent_desc.is_valid() && !is_hot_reload && !is_structural) {
-			auto& tracker = reg.get_or_emplace<scn::component_tracker>(e);
-			tracker.tracked_components[std::string(name)] = scn::tracked_component_info{
-				actual_type,
-				parent_desc.get_tag(),
-				overrides
-			};
+			scn::tracked_component_info info{ actual_type, parent_desc.get_tag(), boost::json::object(overrides, boost::json::storage_ptr{}) }; // kept past the caller (#827)
+			// Fill before the registry signals, so hot_reload_manager sees the source desc.
+			if (reg.all_of<scn::component_tracker>(e)) {
+				reg.patch<scn::component_tracker>(e, [&] (scn::component_tracker& tracker) {
+					tracker.tracked_components[std::string(name)] = std::move(info);
+				});
+			} else {
+				scn::component_tracker tracker;
+				tracker.tracked_components[std::string(name)] = std::move(info);
+				reg.emplace<scn::component_tracker>(e, std::move(tracker));
+			}
 		}
 
 		if (overrides.empty() && parent_desc.is_valid()) {
-			if (is_hot_reload && it->second.patch) {
-				it->second.patch(reg, e, *parent_desc);
-			} else if (it->second.spawn) {
-				it->second.spawn(reg, e, *parent_desc, name);
+			if (is_hot_reload && found->patch) {
+				found->patch(reg, e, *parent_desc);
+			} else {
+				run_spawner(*found, reg, e, *parent_desc, name);
 			}
 			return;
 		}
@@ -55,14 +66,21 @@ namespace scn {
 			parent_desc->copy_to(*temp_desc);
 		}
 
-		if (!overrides.empty()) {
+		if (!overrides.empty() && parent_desc.is_valid()) {
+			// Effective data is serialize(parent) with the overrides merged in recursively; a plain deserialize of
+			// the overrides would replace a nested object whole and lose the sibling fields the parent set.
+			boost::json::object effective;
+			parent_desc->serialize(effective);
+			desc::json_deep_merge(effective, overrides);
+			temp_desc->deserialize(m_desc_sys, effective);
+		} else if (!overrides.empty()) {
 			temp_desc->deserialize(m_desc_sys, overrides);
 		}
 
-		if (is_hot_reload && it->second.patch) {
-			it->second.patch(reg, e, *temp_desc);
-		} else if (it->second.spawn) {
-			it->second.spawn(reg, e, *temp_desc, name);
+		if (is_hot_reload && found->patch) {
+			found->patch(reg, e, *temp_desc);
+		} else {
+			run_spawner(*found, reg, e, *temp_desc, name);
 		}
 	}
 

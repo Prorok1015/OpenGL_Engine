@@ -1,0 +1,213 @@
+[META]
+framework: claude-framework
+file_id: CODE_CONVENTIONS
+class: custom
+version: 1.0.0
+
+[CODE_CONVENTIONS]
+overview: Naming, style, and architectural patterns in OpenGL Engine
+
+[NAMESPACE_ABBREVIATIONS]
+Two to four letter abbreviations for all namespaces:
+  - ds: data structures (containers, allocators, storage)
+  - ecs: entity-component-system framework
+  - scn: scene management (hierarchy, transforms, objects)
+  - gui: GUI and UI (menus, dialogs, etc.)
+  - rnd: rendering and graphics pipeline
+  - res: resource system (loading, caching, tags)
+  - inp: input handling (keyboard, mouse, gamepad)
+  - edt: editor application (panels, gizmos, tools)
+  - gs: game systems (gameplay-specific)
+  - cfg: configuration system
+  - wnd: window and platform layer
+  - app: application lifecycle and modules
+
+[FILE_NAMING]
+format: prefix_name.hpp / prefix_name.cpp
+where_prefix_is: namespace abbreviation (2-4 chars)
+examples:
+  ✅ ds_store.hpp, ds_fixed_vector.hpp
+  ✅ scn_context_set.cpp, scn_world.h
+  ✅ ecs_world.hpp, ecs_system.cpp
+  ❌ Store.hpp, renderer.cpp (no prefix)
+  ❌ datastructures.hpp (too long prefix)
+
+[NAMING_CONVENTIONS]
+variables: snake_case (my_variable, frame_count)
+functions: snake_case (get_position(), update_transform())
+classes: snake_case (rare, prefer structs for data)
+constants: UPPER_CASE or snake_case (depends on scope)
+private_members: snake_case with m_ prefix (m_position, m_worlds)
+enums: ENUM_VALUE (UPPER_CASE for options)
+template_params: T, U, or CamelCase (Allocator, Traits)
+
+[COMPONENT_NAMING]
+pattern: name_component or just name (if self-descriptive)
+examples:
+  struct transform_component { ... } ✅
+  struct position { ... } ✅ (if name is obvious)
+  struct RenderData { ... } ❌ (wrong case)
+
+[SYSTEM_NAMING]
+pattern: system class inherits ecs::system_interface
+files: verb_noun_system.cpp
+examples:
+  struct render_system : ecs::system_interface { ... }
+  struct animation_system : ecs::system_interface { ... }
+
+[INCLUDE_ORDER]
+1. Module header (e.g., <snk/scene/level/scn_context_set.h>)
+2. Standard library headers (cmath, vector, etc.)
+3. Third-party headers (glm, boost, entt)
+4. Other project headers (from other modules)
+
+Example:
+  #include <snk/scene/level/scn_context_set.h>
+  #include <cmath>
+  #include <glm/glm.hpp>
+  #include <snk/resource/res_system.h>
+
+[HEADER_LAYOUT]
+public: <component>/include/snk/<component>/*.h, included as <snk/<component>/x.h> (angle brackets)
+internal: next to the .cpp in <component>/, never installed with the SDK, included with quotes
+rule: a public header must not include an internal one (glad, GLFW, assimp, impl_*, rnd_gl_*, passes/)
+check: python3 tools/header_split/split.py check; CI job "SDK package" compiles every installed header
+
+[HEADER_GUARDS]
+use: #pragma once (no macro guards)
+reason: Cleaner, more reliable with modern C++
+
+[BRACES]
+functions: new line
+  void my_function()
+  {
+    // body
+  }
+
+control_flow: same line
+  if (condition) {
+    // body
+  }
+  for (int i = 0; i < n; i++) {
+    // body
+  }
+
+[COMMENTS]
+language: English
+style: // for single line, /* */ for blocks
+when: Explain WHY, not WHAT (code shows what)
+examples:
+  ✅ // Cache weak_ptr because we don't own the object
+  ❌ // Set flag to true
+
+[MACROS]
+naming: UPPER_CASE
+scope: Minimize. Prefer constexpr functions.
+namespace: Prefix with MODULE_ (e.g., ECS_ASSERT, RND_MAX_LIGHTS)
+examples:
+  #define ECS_MAX_WORLDS 8
+  #define ASSERT_MSG(cond, msg) ...
+
+[LOGGING_PATTERN]
+never: std::cout, std::cerr, std::cin, printf
+always: #include <snk/common/logger/engine_log.h> and use egLOG_* macros (spdlog backend)
+note: first arg is a category string (becomes the spdlog logger name), then format args
+examples:
+  egLOG("resource", "Loading model: {}", path);   // egLOG == egLOG_INFO
+  egLOG_WARN("resource", "Resource not found: {}", tag);
+  egLOG_ERROR("render", "Failed to compile shader");
+levels: egLOG_TRACE, egLOG_DEBUG, egLOG_INFO, egLOG_WARN, egLOG_ERROR
+
+[ALLOCATOR_PATTERNS]
+frame_temporaries:
+  std::pmr::vector<T> vec(ds::frame_allocator());
+  vec.reserve(count); // avoid realloc
+
+persistent_data:
+  std::make_shared<T>() // or use pool_resource
+
+custom_scoped:
+  ds::linear_resource scratch(size);
+  std::pmr::vector<T> vec(&scratch);
+
+[CONTAINER_PATTERNS]
+performance_critical: ds::fixed_vector<T, MaxSize>
+  - O(1) alloc/dealloc
+  - No heap allocation
+  - Use when max size is known
+
+general_use: std::vector<T>, std::pmr::vector<T>
+  - Standard vector
+  - PMR vector for custom allocators (frame alloc, pool, etc.)
+
+[SMART_POINTER_PATTERNS]
+ownership: std::shared_ptr<T> or std::make_shared<T>()
+non_ownership: std::weak_ptr<T> (for cycles, caches)
+never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
+
+[AGGREGATE_INIT]
+member_defaults: Every member of a struct that tests or callers brace-init partially gets a default ({} or = value); otherwise GCC -Wmissing-field-initializers / Clang -Wmissing-designated-field-initializers fail CI under -Werror (hit in #644, #645, #648)
+
+[RAW_STRING_PATTERNS]
+json_in_raw_strings: Always R"json(...)json", never R"(...)" (a `)"` inside the text, e.g. "(4 to 64 hex digits)", ends R"(...)" early: hit in #475, #501, #607, #642, #649)
+
+[DESCRIPTOR_PATTERNS]
+files: snake_case.desc (e.g., backpack.desc, level.desc)
+format: JSON with inheritance (extends: "parent.desc")
+loading: resources.require<descriptor_type>(res::tag{"res://path"})  // res::resource_system& injected; there is no global get_system()
+hot_reload: Editor changes desc → binding updates entities
+
+[RESOURCE_PATTERNS]
+identification: res::tag{"res://path/to/resource"} (single-arg parses protocol)
+loading: res_handle<T> h = resources.require<T>(tag); // resources: injected res::resource_system&; require_sync<T> blocks; get_system() legacy, no new uses
+async: h.then([](auto& res) { /* callback; check res.has_error() */ })
+cache: automatic (weak refs for auto-unload, pinned for persistent)
+
+[ERROR_HANDLING]
+assertions: ASSERT_MSG(cond, "message") from <snk/common/engine_assert.h> (active in _DEBUG only)
+logging: Use egLOG_ERROR / egLOG_WARN (category-first) from engine_log.h
+exceptions: Avoid in hot paths, use for init errors only
+return_codes: Prefer for resource loading failures
+
+[ECS_PATTERNS]
+system_registration: ecs::system_factory::register_system<&fn>(name, { .phase, .after, .before, .run_in_edit }) — stateful: <&T::fn, T>(name, desc, ctor args...) or <&T::fn>(name, desc, shared_ptr<T>)
+system_interface: empty base (virtual dtor only) — NO update()/initialize() methods
+system_logic: free/member fn; args (entt::view, ctx resources) auto-injected by ecs::invoker
+system_order: explicit — phase (input, pre_update, fixed_update, update, post_update, transform, late_update) + after/before by system name; ties broken by order in world_desc.systems. Argument types never decide order, they only feed Debug access-conflict warnings
+world_creation: one execution plan per world (ecs::build_system_plan), built when the world loads or its system list changes; contexts run in id order; data between contexts of a set goes through scn::set_channel (WORLD_MESSAGING.md)
+modes: scn::context_set::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems; step(n) = n frames of one fixed step, then pause; set_time_scale(s) scales dt in edit/play
+
+[IMGUI_PATTERNS]
+begin_end_pairing:  # End() ALWAYS called; Begin() result only gates drawing
+  if (ImGui::Begin("Panel")) {
+    // render content
+  }
+  ImGui::End();
+  # BeginChild/EndChild same; BeginPopup*/BeginMenu/BeginTable: End* only if Begin* returned true
+
+layout:
+  ImGui::Columns(N);
+  ImGui::Separator();
+  ImGui::Text("Label");
+  ImGui::InputFloat("##id", &value);
+  ImGui::NextColumn();
+
+flags: Use ImGuiWindowFlags_*, ImGuiInputTextFlags_*, etc.
+
+[GLM_PATTERNS]
+precision: Default float (vec3, vec4, mat4)
+includes: Only what you need (#include <glm/vec3.hpp>)
+serialization: Use scn_glm_json_convert.h for descriptors
+transformations: Apply matrices left-to-right (pos = M * pos)
+
+[PERFORMANCE_PATTERNS]
+no_statics_in_loops: Temporary data via frame_allocator
+cache_locality: Structure of Arrays for systems processing components
+early_exit: Return early to reduce branching
+batch_operations: Group by resource type, render pass, etc.
+
+[TESTING_PATTERNS]
+framework: Boost.Test (BOOST_AUTO_TEST_SUITE, BOOST_AUTO_TEST_CASE)
+location: tests/ directory
+naming: SuffixTests or SuffixTest for suite, TestCaseName for cases
+discovery: Auto via file(GLOB) in CMakeLists.txt

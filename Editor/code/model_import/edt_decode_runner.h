@@ -1,0 +1,118 @@
+#pragma once
+#include "edt_decode_bundle.h"
+#include "edt_decode_codec.h"
+#include "edt_decoder_sandbox.h"
+#include <snk/platform/plt_process.h>
+#include <chrono>
+#include <cstddef>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace edt {
+
+	struct decode_runner_config
+	{
+		// snk_model_decoder; empty: the one next to the running program.
+		std::filesystem::path decoder;
+		// The child is killed when it runs longer. Also the deadline the child gets for its parse.
+		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
+		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
+		bundle_limits answer_limits;
+		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
+		// import's.
+		sandbox_mode sandbox = sandbox_mode::best_effort;
+		// Appended to the child's command line; the process tests use snk_model_decoder's --self-test-* flags.
+		std::vector<std::string> extra_arguments;
+		// Windows (#1054): start the child in its AppContainer, policies and job (platform::process_confinement), with
+		// read and execute for the container on `confine_read_execute` (the folder of a copy of the decoder) besides
+		// read and write on its run folder. process_decoder sets it; ignored elsewhere.
+		bool confine = false;
+		std::vector<std::filesystem::path> confine_read_execute;
+		// The AppContainer process_decoder makes (or finds) once from this name, and the one it runs the child in.
+		std::wstring container_name = L"snk.model_decoder";
+		std::shared_ptr<const platform::app_container> container;
+	};
+
+	// Reads the child's stderr lines in their order: only the first may be the status.
+	class sandbox_status_reader
+	{
+	public:
+		// true: the line was the status line (it is not the model's text and needs no log line).
+		bool line(std::string_view text);
+		const decoder_sandbox_status& status() const { return m_status; }
+
+	private:
+		bool m_first = true;
+		decoder_sandbox_status m_status;
+	};
+
+	struct decode_outcome
+	{
+		// Set when the child ended normally and wrote a readable bundle (its manifest may still say "error").
+		std::optional<decode_bundle> bundle;
+		// Set when `bundle` is empty: why (child failed, was killed, or wrote what could not be read).
+		std::string error;
+		bool timed_out = false;
+		bool cancelled = false;
+		// The child refused to run without its sandbox (k_decoder_sandbox_exit_code); `error` says why.
+		bool sandbox_refused = false;
+		// The child process was started (it may still have failed, been killed or answered nothing usable).
+		bool started = false;
+		// The confinement could not be set up (`error` says why): nothing was started.
+		bool confinement_failed = false;
+		// The child's exit code; -1 when it did not end on its own.
+		int exit_code = -1;
+		decoder_sandbox_status sandbox;
+
+		bool ok() const { return bundle.has_value(); }
+	};
+
+	// What the child printed is the model's doing: a line made safe for the log. Control characters, C1 controls, the
+	// line and paragraph separators and the bidi marks are written as \xNN (each byte of their UTF-8), so a line cannot
+	// forge log lines, move a terminal's cursor or reorder the text a person reads.
+	std::string decode_log_text(std::string_view line);
+
+	// What a run may put in the editor's log: past 200 lines or 64 KiB one line says so and the rest is dropped (Assimp
+	// warns about every odd thing in a model; a hostile one can flood the log for the whole deadline).
+	class decode_log_budget
+	{
+	public:
+		// Counts one line; true while it may be logged.
+		bool take(std::size_t bytes);
+
+	private:
+		static constexpr std::size_t k_max_lines = 200;
+		static constexpr std::size_t k_max_bytes = 64 * 1024;
+		std::mutex m_mutex;
+		std::size_t m_lines = 0;
+		std::size_t m_bytes = 0;
+		bool m_done = false;
+	};
+
+	// Runs the decoder process (#647) for one request. The model's bytes and `files` (the side files the editor read for
+	// it, #1043) go in the request bundle; the child gets a clean environment and a scratch folder as its working
+	// directory, which is deleted on every path, a kill included. Blocks: call it from a worker thread.
+	class decode_runner
+	{
+	public:
+		explicit decode_runner(decode_runner_config config);
+
+		decode_outcome run(const decode_request& request, const std::vector<std::byte>& source, const std::vector<bundle_blob>& files,
+			std::stop_token stop) const;
+
+		// Deletes the run folders of decoders whose editor process no longer runs (an editor that crashed mid-import):
+		// core::res::remove_stale_scratch_dirs, with its rules (only a private directory of this user, never a link).
+		// Call it once at startup. Returns how many it removed.
+		static std::size_t remove_stale_folders();
+
+	private:
+		decode_runner_config m_config;
+	};
+
+} // namespace edt

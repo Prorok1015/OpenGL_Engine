@@ -1,7 +1,7 @@
 # EPIC-22: Asset Import Pipeline — Импорт 3D-моделей в проект
 
 **Theme:** editor
-**Status:** in_progress
+**Status:** done
 **Depends on:** EPIC-12 (Model Importer → Prefab Output), EPIC-03 (Asset Browser)
 
 ---

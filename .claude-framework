@@ -1,0 +1,136 @@
+[META]
+framework: claude-framework
+file_id: manifest
+class: universal
+target: .claude-framework
+version: 1.3.0
+
+[MANIFEST]
+purpose: Track framework state in an initialized project
+location: .claude-framework (project root)
+read_by: PATCH_PROMPT.md
+written_by: SETUP_PROMPT.md (init), PATCH_PROMPT.md (update)
+
+[PROJECT]
+framework_version: 1.3.0
+initialized_at: 2026-04-16
+last_patched_at: 2026-04-17
+project_name: OpenGL Engine & Editor
+docs_language: en
+
+[CLASS_DEFINITIONS]
+universal: Safe to overwrite during patch. Framework owns content.
+parameterized: Generated from template with project-specific values. Patch shows diff, asks user.
+custom: Fully project-specific. Patch never touches.
+
+[UNIVERSAL_FILES]
+[UNIVERSAL.1]
+path: docs/agent/learning/SELF-LEARNING.toon
+version: 1.0.0
+[UNIVERSAL.2]
+path: docs/agent/learning/WHEN_TO_UPDATE.toon
+version: 1.0.0
+[UNIVERSAL.3]
+path: docs/agent/learning/WHEN_NOT_TO_UPDATE.toon
+version: 1.0.0
+[UNIVERSAL.4]
+path: docs/agent/learning/HOW_TO_UPDATE.toon
+version: 1.0.0
+[UNIVERSAL.5]
+path: docs/agent/learning/FILES_REFERENCE.toon
+version: 1.0.0
+[UNIVERSAL.6]
+path: docs/agent/learning/EXAMPLES.toon
+version: 1.0.0
+[UNIVERSAL.7]
+path: docs/agent/learning/GUARDRAILS.toon
+version: 1.0.0
+[UNIVERSAL.8]
+path: docs/agent/delegation/DELEGATION.toon
+version: 1.0.0
+[UNIVERSAL.9]
+path: docs/agent/delegation/TRIGGERS.toon
+version: 1.0.0
+[UNIVERSAL.10]
+path: docs/agent/delegation/ROUTING.toon
+version: 1.0.0
+[UNIVERSAL.11]
+path: docs/agent/delegation/PATTERNS.toon
+version: 1.0.0
+[UNIVERSAL.12]
+path: docs/agent/delegation/ANTI_PATTERNS.toon
+version: 1.0.0
+[UNIVERSAL.13]
+path: docs/agent/delegation/BUDGETS.toon
+version: 1.0.0
+[UNIVERSAL.14]
+path: docs/agent/workflow/WORKFLOW.toon
+version: 1.0.0
+[UNIVERSAL.15]
+path: docs/agent/workflow/PHASES.toon
+version: 1.0.0
+[UNIVERSAL.16]
+path: docs/agent/workflow/FEATURE.toon
+version: 1.0.0
+[UNIVERSAL.17]
+path: docs/agent/workflow/REFACTOR.toon
+version: 1.0.0
+[UNIVERSAL.18]
+path: docs/agent/workflow/BUGFIX.toon
+version: 1.0.0
+[UNIVERSAL.19]
+path: docs/agent/workflow/GATES.toon
+version: 1.0.0
+[UNIVERSAL.20]
+path: docs/agent/workflow/STATE_TRACKING.toon
+version: 1.0.0
+[UNIVERSAL.21]
+path: docs/agent/workflow/ESCAPE_HATCH.toon
+version: 1.0.0
+[UNIVERSAL.22]
+path: docs/agent/backlog/BACKLOG-RULES.toon
+version: 1.0.0
+[UNIVERSAL.23]
+path: docs/agent/backlog/SCHEMA.toon
+version: 1.0.0
+[UNIVERSAL.24]
+path: docs/agent/backlog/LIFECYCLE.toon
+version: 1.0.0
+[UNIVERSAL.25]
+path: docs/agent/backlog/OPERATIONS.toon
+version: 1.0.0
+[UNIVERSAL.26]
+path: docs/agent/backlog/SYNC.toon
+version: 1.0.0
+
+[PARAMETERIZED_FILES]
+[PARAMETERIZED.1]
+path: CLAUDE.md
+template: templates/CLAUDE_TEMPLATE.md
+version: 1.3.0
+[PARAMETERIZED.2]
+path: MEMORY_RULES.md
+template: templates/MEMORY_RULES_TEMPLATE.md
+version: 1.0.0
+[PARAMETERIZED.3]
+path: docs/agent/backlog/INDEX.toon
+template: templates/BACKLOG_INDEX_TEMPLATE.toon
+version: 1.0.0
+
+[CUSTOM_FILES]
+[CUSTOM.1]
+path: docs/agent/README.toon
+[CUSTOM.2]
+path: docs/agent/PROJECT.toon
+[CUSTOM.3]
+path: docs/agent/ARCHITECTURE.toon
+[CUSTOM.4]
+path: docs/agent/CONSTRAINTS.toon
+[CUSTOM.5]
+path: docs/agent/QUICK_LINKS.toon
+[CUSTOM.6]
+path: docs/agent/CODE_CONVENTIONS.toon
+[CUSTOM.7]
+path: PROJECT_STRUCTURE.md
+[CUSTOM.8]
+path: .claudesignore

@@ -163,7 +163,7 @@ std::string capture_stacktrace(int skip_frames = 2);
 ### US-31-1 — assert_handler + форматированные сообщения
 
 **Файлы:**
-- `core/core/common/engine_assert.h` — новые макросы
+- `core/core/common/include/snk/common/engine_assert.h` — новые макросы
 - `core/core/common/engine_assert.cpp` — `assert_handler()` реализация
 
 **Что делает `assert_handler()`:**
@@ -284,7 +284,7 @@ Actions: [I]gnore  [A]bort  [D]ebug break
 ### US-31-5 — VERIFY_MSG для Release builds
 
 **Файлы:**
-- `core/core/common/engine_assert.h`
+- `core/core/common/include/snk/common/engine_assert.h`
 
 `VERIFY_MSG(cond, fmt, ...)` — аналог `ASSERT_MSG`, но **не отключается в Release**. Используется для критических инвариантов (null resource, invalid state).
 
@@ -330,7 +330,7 @@ engine::set_assert_callback([console_weak](const char* expr, const char* file, i
 
 ```
 core/core/common/
-├── engine_assert.h                 ← переписать макросы (US-31-1)
+├── engine_assert.h                 ← переписать макросы (US-31-1); лежит в include/snk/common/
 ├── engine_assert.cpp               ← assert_handler() + fallback (US-31-1, US-31-4)
 ├── engine_assert_dialog.h/.cpp     ← ImGui диалог (US-31-3)
 └── engine_stacktrace.h/.cpp        ← capture_stacktrace() (US-31-2)

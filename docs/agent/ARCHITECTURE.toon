@@ -1,0 +1,210 @@
+[META]
+framework: claude-framework
+file_id: ARCHITECTURE
+class: custom
+version: 1.0.0
+
+[ARCHITECTURE_OVERVIEW]
+pyramid:
+  Layer 1: editor (executable)
+            └── engine (static lib)
+                  └── core (static lib)
+                        └── common (INTERFACE)
+                              └── third-party
+
+[LAYER_HIERARCHY]
+description: Dependency order (lower depends on higher)
+
+[LAYER_COMMON]
+role: Interfaces and third-party headers
+provides:
+  - GLM math library
+  - Boost headers (json, hana, program_options, asio, test)
+  - Custom data structures (fixed_vector, smart pointers)
+  - Engine-wide macros and assertions
+scope: Editor + Engine + Core
+
+[LAYER_CORE]
+role: Engine foundation and services
+modules:
+  - ecs: EnTT-based ECS with multi-world support (auto-dispatch world IDs 0-4, max 5)
+  - window: Platform window management
+  - resource: VFS resolver, Adapter pipeline (Assimp/stb/text), cache
+  - desc: JSON descriptor system with inheritance (level→world→prefab)
+  - config: Macro-based config system (CFG_VAR_DEF_*)
+  - app: Application lifecycle and module system
+  - video: Window abstraction layer
+key_patterns:
+  - Service Locator: ds::app_data_storage (type-safe DI)
+  - Module System: lifecycle ordered by topological sort over module_interface::depends_on() (priority = tiebreaker only; core/core/application/include/snk/application/app_module_loader.hpp)
+  - Resource System: res::tag identification, VFS protocols (res://,memory://)
+  - Descriptor System: Inheritance chain, JSON serialization
+
+[LAYER_ENGINE]
+role: Gameplay and rendering systems
+modules:
+  - scene: Entity/prefab management, hierarchy, object transforms
+  - render: Data-driven pipeline (extractors→passes), material system
+  - gui: ImGui integration, editor panels
+  - input: Keyboard/mouse/gamepad handling
+  - game: Game-specific systems and logic hooks
+render_pipeline:
+  1. Extractors: Camera→render_packet (geometry, instances, lights);
+     extractors live in core/engine/scene/level/ (scn_render_data_extractor.cpp
+     extracts geometry and lights), NOT in a render/extractors/ dir
+  2. Passes (render_pass_interface): z_prepass, opaque, skybox, transparent (OIT),
+     composition, debug
+  3. Output: ImGui overlay, per-camera render targets
+  shader time (#544): `time` of block Matrices = scn::world_time of the camera's world
+     (sum of delta_time: stands in Pause, one fixed step in Step, follows time_scale; only a level
+     load resets it to 0; a context joining a set takes the set's time, a reloaded world
+     (context_set::reload_context) keeps its own; a new set (Play) starts at 0), wrapped by rnd::shader_time
+     to [0, 1024*pi s) (~53.6 min; sin/cos of an integer frequency stay smooth across the wrap);
+     the extractor puts it in camera_render_data_t::time, every scene pass writes it
+
+[LAYER_EDITOR]
+role: Real-time scene editing
+modules:
+  - editor: Main editor application
+  - panels: Inspector, hierarchy, asset browser, prefab editor
+  - gizmo: Transform, rotate, scale handles in viewport
+  - viewport: Scene preview, camera controls
+key_features:
+  - Async operations (loading, cooking resources)
+  - Per-camera render targets (__editor_depth_rt, etc.)
+  - Live prefab preview in separate world
+  - Descriptor hot-reload and validation
+
+[MEMORY_SYSTEM]
+allocators:
+  - frame_allocator: Per-frame bump (resets every frame start)
+  - linear_resource: Custom-scoped bump allocator
+  - pool_resource: Fixed-size O(1) alloc/free
+  - stack_resource: LIFO with markers
+  - debug_resource: Guard bytes, leak tracking (Debug only)
+hot_path_pattern:
+  std::pmr::vector<T> vec(ds::frame_allocator());
+  vec.reserve(estimated_size); // avoid grow-copy
+  // use vec during frame
+  // automatically freed at frame reset
+
+[ECS_SYSTEM]
+context: scn::world_context = one world (own registry, time, mode, rng, input, command buffer). A system sees
+        only its own context; there is no cross-context argument type and no limit on their number.
+context_set: scn::context_set groups contexts that step together (one mode, one seed, one phase order);
+        scn::context_manager owns the sets. The level is the set "level" (context_manager::level_set()),
+        a prefab/scene preview is "preview:<tag>", sets run in creation order. Play (EPIC-63) is the set "play":
+        create_set("play", layer, {.hot_reload = false}) + load_from_desc(desc, sf, assembler, context_kind::play);
+        Stop = destroy_set("play"). A set has its own time_scale and step(n).
+set_channel: contexts of one set exchange data only through scn::set_channel (ecs::blackboard_reader/writer,
+        outbox/inbox), exchanged at the start of the set's update with a one-frame lag. Design and
+        rules: docs/roadmap/design/WORLD_MESSAGING.md. Sets do not see each other's channels.
+world_bus: events inside one world (ecs_bus.hpp, docs/roadmap/design/WORLD_BUS.md): systems take
+        ecs::event_writer<T>& / const ecs::event_reader<T>&; types via context_manager::add_event<T>() (engine, before the first layer) or
+        scene_layer::events() (module). Delivered right after the builtin update phase in Play/Step (Pause queues,
+        Edit drops); systems before that point see the events a frame later. Outside code: context_manager::emit.
+        Subscriptions: gs::module_context::subscribe<T>({set?, world?}, fn(bus_context&, envelope)) (kept by the
+        layer: survive level reload, go on unload/code reload); engine/editor: context_manager::subscribe (base sets).
+        Component observers (#600, module API 3.4): gs::module_context::observe<T>(filter, scn::observed::construct|
+        update|destroy, fn(bus_context&, entity)), connected from a world's creation, silent under
+        event_subscriptions::mute_observers() (restore in Play); never registry.on_construct<T>() directly in a module.
+        A subscriber's emit goes to the next delivery, its changer()/spawner() edits land right after the delivery.
+game_actions: res/input/actions.desc (manifest input_actions) -> gs::input_actions (watch, rebuild) -> gs::route_input
+        writes inp::input_bound, inp::action_map_ref and inp::action_input into each world (#624: a layer declares actions and takes their keys, the world
+        gets an action when a binding reached a layer that declares it; the map goes to worlds that list inp::update_actions and declare
+        actions in the level's input_stack, else to the first world of the set by desc_index that lists it, whose base layer declares all, bound or not). System "inp::update_actions" (listed in the world's systems after inp::update_input_state)
+        keeps inp::action_state (held/pressed/released, armed rule) and emits inp::action_event on the world's bus.
+        inp::input_router::inject({set, world}, action, edge) (#624 PR c) queues an edge that is not a key: route_input hands it over as inp::action_injection
+        (ids of the world's map), update_actions applies it as a real press/release (a pressed holds until a released, layers play no part); unknown action,
+        world without actions: warned once per session, dropped; Pause / a world frozen in a Step keep the edges queued until update_actions runs; a set that is not there loses its queue every frame.
+        fixed_update systems read inp::fixed_action_state: edges queue (<=8, pairs dropped) and each fixed step
+        (world_context::write_fixed_time -> begin_step) takes one; held = the frame's level.
+input_stack_commands (#625 a): systems take inp::input_stack_control (ctx; push/replace/remove/set_active/set_order for their own world's layers,
+        set_world_active(world,bool) for any), outside code gs::module_context::input_stack(set) -> gs::input_stack_handle (router.queue_command).
+        gs::route_input applies them at the start of the next frame (systems by desc_index, then outside; Pause keeps them waiting) with
+        inp::apply_commands; owner rule: a layer is changed only by its own layer_owner (module for commands from code); world off = input_stack::world_active.
+world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
+        context_set::for_each does NOT preserve desc order — see CONSTRAINTS [13C].
+        Editor derives parallel world arrays from the ordered world_descs vector
+        (edt::derive_world_arrays), making desc order the single source of truth.
+systems: All inherit ecs::system_interface (empty base), registered via
+        ecs::system_factory::register_system<&fn>(name, {phase, after, before, run_in_edit}).
+        The interface has no update() — per-frame logic is the registered fn; order = phase,
+        then after/before, ties by the world desc system list (no type-inferred ordering).
+components: POD structs, optional _component suffix
+dependency_resolution: Auto via invoker<Candidate>; system fn arg types
+        (entt::view, ctx resources, set-channel handles) resolved through the registry context
+boot_sequence:
+  module_loader.add_module(core, engine, editor)
+  → register_all_services()
+  → initialize_all_services() // topo-sorted by depends_on(), priority breaks ties
+  → app.run() // loop.init → loop.on_step … → loop.term (term also when a step throws)
+  → shutdown_all_services() // reverse order
+
+[FRAME_LOOP]
+design: docs/roadmap/design/FRAME_LOOP.md
+loop: one app::loop_service (core/core/application) for every host; core_module registers it with app::frame_stage_registry
+stages: begin, input, update, post_update, extract, render, ui, present (fixed, ordered; mirror of ECS phases)
+  - begin: frame allocator reset (core). Nothing may run before it.
+  - bodies: engine sets update/post_update (scene, input deltas) and input/extract/render/present (window, renderer) in gs_engine_frame_stages; editor sets ui (ImGui)
+  - a module adds its own named stage with registry.add_stage(name, anchor, before|after, fn); same anchor = registration order; duplicate names rejected; remove_stage/clear_body on module shutdown
+  - stage context: {storage, dt}; the render frame_context is a service in the storage, reset after present
+camera_target: camera color_targets empty = backbuffer (draws into the default framebuffer, no present pass); a tag = texture. rnd::select_camera_target. The editor redirects backbuffer cameras to textures (edt::redirect_backbuffer_cameras)
+without_editor: engine runs without editor_module; editor-only behaviour exists only as editor stages
+
+[RESOURCE_SYSTEM]
+identification: res::tag (unique resource identifier)
+protocols:
+  - res:// filesystem (VFS resolver)
+  - memory:// runtime data
+pipeline:
+  VFS Resolver → Adapter (Assimp/stb/text) → Cache (weak/pinned)
+async_loading: res_handle<T> with .then() callbacks
+caching: Weak refs (auto-unload), pinned (persistent)
+
+[DESCRIPTOR_SYSTEM]
+format: JSON files (.desc extension)
+inheritance_chain:
+  level_desc
+    └── world_desc (entities, systems config)
+          └── prefab_desc (reusable template)
+                └── prefab_node (hierarchy)
+                      └── prefab_comp_node (component data)
+hot_reload: Editors change descs → scene updates via binding
+validation: Type checking, circular dep detection
+
+[RENDER_PIPELINE_DETAIL]
+per_camera:
+  - color_targets: fixed_vector<4> MRT support
+  - depth_target, tp_accum_target, tp_reveal_target
+  - RT tags resolve from camera packet, fallback to legacy static tags
+
+passes: (core/engine/render/render_system/passes/, all : render_pass_interface)
+  - z_prepass: depth pre-pass
+  - opaque_pass: opaque geometry
+  - skybox_pass: skybox
+  - transparent_pass: OIT (Order-Independent Transparency)
+  - composition_pass: combine targets into final image
+  - debug_pass: debug draw overlay
+  ImGui editor UI is drawn by the gui system, not a render pass here.
+
+[MODULE_LIFECYCLE]
+Each module implements app::modules::module_interface:
+
+1. register_services(): Add types to app_data_storage
+   - Constructor injection, no dependencies yet
+
+2. initialize_services(): Resolve from storage, setup
+   - Topo-sorted by depends_on() (priority only breaks ties)
+   - Dependencies already registered
+
+3. shutdown_services(): Cleanup in reverse order
+   - Guaranteed to run even on error
+
+[NAMING_PATTERNS]
+namespaces: 2-4 letter abbrev (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
+files: prefix_name.hpp/.cpp (scn_context_set.cpp, res_system.h)
+components: _component suffix if name not self-descriptive
+systems: Inherit system_interface (files like scn_context_set.cpp / edt_scene_editor.cpp)
+variables: snake_case always; private members m_ prefix
+macros: UPPER_CASE

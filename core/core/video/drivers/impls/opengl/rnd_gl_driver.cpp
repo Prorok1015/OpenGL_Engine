@@ -1,28 +1,22 @@
 #include "rnd_gl_driver.h"
 #include "open_gl_specific.h"
-#include "ds/ds_fixed_vector.hpp"
+#include "rnd_gl_framebuffers.h"
+#include <snk/common/ds/ds_fixed_vector.hpp>
+#include <algorithm>
 #include <glad/glad.h>
 #include <rnd_gl_shader.h>
 #include <rnd_gl_texture.h>
 #include <rnd_gl_vertex_array.h>
 #include <rnd_gl_buffer.h>
-#include <rnd_gl_uniform_buffer.h>
-#include <rnd_gl_ssbo_buffer.h>
-#include <engine_log.h>
-#include <engine_assert.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 
 const GLenum gRenderModeToGLRenderMode[] =
 {
 	GL_TRIANGLES,
 	GL_TRIANGLE_STRIP,
-	GL_TRIANGLE_FAN,
-	GL_TRIANGLES_ADJACENCY,
-	GL_TRIANGLE_STRIP_ADJACENCY,
 	GL_LINES,
 	GL_LINE_STRIP,
-	GL_LINE_LOOP,
-	GL_LINES_ADJACENCY,
-	GL_LINE_STRIP_ADJACENCY,
 	GL_POINTS,
 };
 
@@ -31,21 +25,6 @@ const GLenum gShaderTypeToGLShaderType[] =
 	GL_VERTEX_SHADER,
 	GL_FRAGMENT_SHADER,
 	GL_GEOMETRY_SHADER,
-};
-
-const GLint gTextureFilteringToGlFiltering[] =
-{
-	GL_NEAREST,
-	GL_LINEAR,
-	GL_LINEAR_MIPMAP_LINEAR,
-};
-
-const GLint gTextureWrappingToGlWrapping[] =
-{
-	GL_REPEAT,
-	GL_MIRRORED_REPEAT,
-	GL_CLAMP_TO_EDGE,
-	GL_CLAMP_TO_BORDER,
 };
 
 // Conversion tables for OpenGL constants
@@ -71,6 +50,11 @@ const GLenum gBlendFactorToGL[] = {
 	GL_ONE_MINUS_SRC_ALPHA,
 	GL_DST_ALPHA,
 	GL_ONE_MINUS_DST_ALPHA
+};
+
+const GLenum gPolygonModeToGL[] = {
+	GL_FILL,
+	GL_LINE
 };
 
 const GLenum gCullModeToGL[] = {
@@ -208,222 +192,242 @@ gl_type to_gl_type(rnd::driver::texture_header::TYPE type)
 }
 
 rnd::driver::gl::driver::driver()
+	: m_framebuffers(std::make_shared<framebuffer_registry>())
 {
-	framebuffers.push({ 0, 0 });
 }
 
 rnd::driver::gl::driver::~driver()
 {
+	m_framebuffers->release_all();
+	m_buffers.for_each([](buffer_handle, gl_buffer& buffer) {
+		glDeleteBuffers(static_cast<GLsizei>(buffer.copies), buffer.ids.data());
+	});
 }
 
-void rnd::driver::gl::driver::attach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-}
+namespace {
+	using namespace rnd::driver;
 
-void rnd::driver::gl::driver::detach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void rnd::driver::gl::driver::check_frame_buffer()
-{
-	attach_frame_buffer();
-	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if (status != GL_FRAMEBUFFER_COMPLETE) {
-		std::string errorString;
-		switch (status) {
-		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+	void attach(GLuint fbo, GLenum point, const attachment_desc& desc, const gl::texture* gl_texture)
+	{
+		switch (gl_texture->get_type()) {
+		case TEXTURE_TYPE::RENDERBUFFER:
+			glNamedFramebufferRenderbuffer(fbo, point, GL_RENDERBUFFER, gl_texture->get_id());
 			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
-			break;
-		case GL_FRAMEBUFFER_UNSUPPORTED:
-			errorString = "GL_FRAMEBUFFER_UNSUPPORTED";
-			break;
-
-		default:
-			errorString = "Unknown Framebuffer Error";
-			break;
-		}
-
-		egLOG("opengl", "Framebuffer is not complete: {0}", errorString);
-		ASSERT_FAIL("ERROR");
-	}
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::push_frame_buffer()
-{
-	GLuint framebuffer = 0;
-	glCreateFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-	framebuffers.push({ framebuffer, 0 });
-}
-
-void rnd::driver::gl::driver::pop_frame_buffer()
-{
-	if (framebuffers.size() == 1) {
-		ASSERT_FAIL("Trying to pop backbuffer");
-		return;
-	}
-
-	auto [framebuffer, depth_stencil] = framebuffers.top();
-	framebuffers.pop();
-	glDeleteRenderbuffers(1, &depth_stencil);
-	CHECK_GL_ERROR();
-	glDeleteFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::set_render_target(texture_interface* color, texture_interface* depth_stencil /* = nullptr*/)
-{
-	set_render_targets({ color }, depth_stencil);
-}
-
-void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil /* = nullptr*/)
-{
-	auto& [fb, ds_b] = framebuffers.top();
-	constexpr std::size_t MAX_COLOR_ATTACHMENTS = (GL_COLOR_ATTACHMENT31 - GL_COLOR_ATTACHMENT0 + 1);
-	ASSERT_MSG(colors.size() <= MAX_COLOR_ATTACHMENTS, "Max color attachment is reached!");
-
-	glm::ivec2 rt_size{ 0 };
-	std::size_t color_count = std::min(colors.size(), MAX_COLOR_ATTACHMENTS);
-	ds::fixed_vector<GLenum, MAX_COLOR_ATTACHMENTS> drawBuffers;
-
-	for (std::size_t i = 0; i < color_count; ++i) {
-		if (auto* color = colors[i]) {
-			ASSERT_MSG(color->has_usage(TEXTURE_USAGE::COLOR_TARGET), "Texture must have COLOR_TARGET usage flag");
-			auto* gl_color = static_cast<texture*>(color);
-			
-			if (color->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-				glNamedFramebufferRenderbuffer(fb, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, gl_color->get_id());
+		case TEXTURE_TYPE::TEXTURE_3D:
+		case TEXTURE_TYPE::TEXTURE_CUBE_MAP:
+		case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_2D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY:
+			if (desc.layer == attachment_desc::all_layers) {
+				glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));
 			} else {
-				glNamedFramebufferTexture(fb, GL_COLOR_ATTACHMENT0 + i, gl_color->get_id(), 0);
+				glNamedFramebufferTextureLayer(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip), static_cast<GLint>(desc.layer));
 			}
-			CHECK_GL_ERROR();
-			rt_size = { gl_color->width(), gl_color->height() };
-			drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
-		}
-		else {
-			drawBuffers.push_back(GL_NONE);
-		}
-	}
-
-	if (!drawBuffers.empty()) {
-		glNamedFramebufferDrawBuffers(fb, drawBuffers.size(), drawBuffers.data());
-	} else {
-		glNamedFramebufferDrawBuffers(fb, 0, nullptr);
-	}
-	CHECK_GL_ERROR();
-
-	if (depth_stencil) {
-		ASSERT_MSG(depth_stencil->has_usage(TEXTURE_USAGE::DEPTH_TARGET) || 
-			   depth_stencil->has_usage(TEXTURE_USAGE::STENCIL_TARGET), "Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
-		auto* gl_depth_stencil = static_cast<texture*>(depth_stencil);
-		
-		if (depth_stencil->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-			glNamedFramebufferRenderbuffer(fb, gl_depth_stencil->get_attachment_type(), GL_RENDERBUFFER, gl_depth_stencil->get_id());
-		} else {
-			glNamedFramebufferTexture(fb, gl_depth_stencil->get_attachment_type(), gl_depth_stencil->get_id(), 0);
+			break;
+		default:
+			glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));
+			break;
 		}
 		CHECK_GL_ERROR();
 	}
 
-	check_frame_buffer();
+	void check_framebuffer_status(GLuint fbo)
+	{
+		const GLenum status = glCheckNamedFramebufferStatus(fbo, GL_DRAW_FRAMEBUFFER);
+		if (status == GL_FRAMEBUFFER_COMPLETE) {
+			return;
+		}
+		const char* reason = "Unknown Framebuffer Error";
+		switch (status) {
+		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT: reason = "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: reason = "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS: reason = "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER: reason = "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE: reason = "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE"; break;
+		case GL_FRAMEBUFFER_UNSUPPORTED: reason = "GL_FRAMEBUFFER_UNSUPPORTED"; break;
+		default: break;
+		}
+		egLOG("opengl", "Framebuffer is not complete: {0}", reason);
+		ASSERT_FAIL("ERROR");
+	}
+}
+
+GLuint rnd::driver::gl::driver::create_framebuffer(const render_pass_desc& desc)
+{
+	GLuint fbo = 0;
+	glCreateFramebuffers(1, &fbo);
+	CHECK_GL_ERROR();
+
+	ds::fixed_vector<GLenum, render_pass_desc::max_colors> draw_buffers;
+	GLenum read_buffer = GL_NONE;
+	for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+		const attachment_desc& color = desc.colors[i];
+		const texture* color_texture = texture_of(color.texture);
+		ASSERT_MSG(!color.texture || color_texture, "Color attachment {} names a destroyed texture", i);
+		if (!color_texture) {
+			draw_buffers.push_back(GL_NONE);
+			continue;
+		}
+		ASSERT_MSG(color_texture->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
+		const GLenum point = GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i);
+		attach(fbo, point, color, color_texture);
+		draw_buffers.push_back(point);
+		if (read_buffer == GL_NONE) {
+			read_buffer = point;
+		}
+	}
+	if (draw_buffers.empty()) {
+		glNamedFramebufferDrawBuffer(fbo, GL_NONE);
+	} else {
+		glNamedFramebufferDrawBuffers(fbo, static_cast<GLsizei>(draw_buffers.size()), draw_buffers.data());
+	}
+	glNamedFramebufferReadBuffer(fbo, read_buffer);
+	CHECK_GL_ERROR();
+
+	const texture* depth_texture = desc.depth_stencil ? texture_of(desc.depth_stencil->texture) : nullptr;
+	ASSERT_MSG(!desc.depth_stencil || !desc.depth_stencil->texture || depth_texture, "The depth attachment names a destroyed texture");
+	if (depth_texture) {
+		const attachment_desc& depth = *desc.depth_stencil;
+		ASSERT_MSG(depth_texture->has_usage(texture_usage::depth_target) || depth_texture->has_usage(texture_usage::stencil_target),
+			"Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
+		attach(fbo, depth_texture->get_attachment_type(), depth, depth_texture);
+	}
+
+	check_framebuffer_status(fbo);
+	return fbo;
+}
+
+GLuint rnd::driver::gl::driver::framebuffer_for(const render_pass_desc& desc)
+{
+	const auto key = make_framebuffer_key(desc, [this](texture_handle handle) -> std::uint64_t {
+		const texture* found = texture_of(handle);
+		return found ? found->framebuffer_object() : 0;
+	});
+	return m_framebuffers->cache.acquire(key, [&] { return create_framebuffer(desc); });
+}
+
+void rnd::driver::gl::driver::begin_render_pass(const render_pass_desc& desc)
+{
+	ASSERT_MSG(!m_in_pass, "begin_render_pass inside a render pass");
+	m_in_pass = true;
+	// A pass starts without a pipeline; the cached GL state stays, only the binding goes.
+	m_bound = nullptr;
+	if (desc.debug_name && glad_glPushDebugGroup) {
+		glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, desc.debug_name);
+		m_pass_debug_group = true;
+	}
+
+	const bool window = desc.backbuffer;
+	m_pass_fbo = window ? 0 : framebuffer_for(desc);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_pass_fbo);
+	CHECK_GL_ERROR();
+
+	// The window's buffers are addressed by GL_COLOR / GL_DEPTH, a framebuffer's by its attachment points.
+	const auto takes_part = [window](const attachment_desc& a) { return window || static_cast<bool>(a.texture); };
+	const auto color_point = [window](std::size_t i) { return window ? GL_COLOR : GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i); };
+	const auto depth_point = [this, window](const attachment_desc& a) -> GLenum {
+		if (window) {
+			return GL_DEPTH;
+		}
+		const texture* found = texture_of(a.texture);
+		return found ? found->get_attachment_type() : GL_DEPTH_ATTACHMENT;
+	};
+
+	std::array<GLenum, render_pass_desc::max_colors + 1> discard{};
+	std::size_t discard_count = 0;
+	m_pass_invalidate_count = 0;
+	bool any_clear = false;
+	const auto note_ops = [&](const attachment_desc& a, GLenum point) {
+		any_clear = any_clear || a.load == load_op::clear;
+		if (a.load == load_op::dont_care) {
+			discard[discard_count++] = point;
+		}
+		if (a.store == store_op::dont_care) {
+			m_pass_invalidate[m_pass_invalidate_count++] = point;
+		}
+	};
+	for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+		if (takes_part(desc.colors[i])) {
+			note_ops(desc.colors[i], color_point(i));
+		}
+	}
+	const bool depth_takes_part = desc.depth_stencil && takes_part(*desc.depth_stencil);
+	if (depth_takes_part) {
+		note_ops(*desc.depth_stencil, depth_point(*desc.depth_stencil));
+	}
+
+	if (discard_count > 0) {
+		glInvalidateNamedFramebufferData(m_pass_fbo, static_cast<GLsizei>(discard_count), discard.data());
+		CHECK_GL_ERROR();
+	}
+
+	const bool has_area = desc.render_area.z > 0 && desc.render_area.w > 0;
+	if (any_clear) {
+		if (has_area) {
+			glEnable(GL_SCISSOR_TEST);
+			glScissor(desc.render_area.x, desc.render_area.y, desc.render_area.z, desc.render_area.w);
+		} else {
+			glDisable(GL_SCISSOR_TEST);
+		}
+
+		for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+			const attachment_desc& color = desc.colors[i];
+			if (takes_part(color) && color.load == load_op::clear) {
+				glClearNamedFramebufferfv(m_pass_fbo, GL_COLOR, static_cast<GLint>(i), glm::value_ptr(color.clear_color));
+				CHECK_GL_ERROR();
+			}
+		}
+
+		if (depth_takes_part && desc.depth_stencil->load == load_op::clear) {
+			const attachment_desc& depth = *desc.depth_stencil;
+			const bool with_stencil = !window && depth_point(depth) == GL_DEPTH_STENCIL_ATTACHMENT;
+			if (!m_depth_write) {
+				glDepthMask(GL_TRUE);
+			}
+			if (with_stencil) {
+				glClearNamedFramebufferfi(m_pass_fbo, GL_DEPTH_STENCIL, 0, depth.clear_depth, static_cast<GLint>(depth.clear_stencil));
+			} else {
+				glClearNamedFramebufferfv(m_pass_fbo, GL_DEPTH, 0, &depth.clear_depth);
+			}
+			if (!m_depth_write) {
+				glDepthMask(GL_FALSE);
+			}
+			CHECK_GL_ERROR();
+		}
+
+		if (has_area) {
+			glDisable(GL_SCISSOR_TEST);
+		}
+	}
+
+	if (has_area) {
+		set_viewport(desc.render_area);
+	}
+}
+
+void rnd::driver::gl::driver::end_render_pass()
+{
+	ASSERT_MSG(m_in_pass, "end_render_pass outside a render pass");
+	if (m_pass_invalidate_count > 0) {
+		glInvalidateNamedFramebufferData(m_pass_fbo, static_cast<GLsizei>(m_pass_invalidate_count), m_pass_invalidate.data());
+		CHECK_GL_ERROR();
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	if (m_pass_debug_group) {
+		glPopDebugGroup();
+		m_pass_debug_group = false;
+	}
+	m_pass_fbo = 0;
+	m_in_pass = false;
 }
 
 void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 {
 	if (viewport != rect) {
-		egLOG("renderer/set_viewport", "viewport: '{},{}'", rect[2], rect[3]);
 		viewport = rect;
 		glViewport(rect[0], rect[1], rect[2], rect[3]);
 		CHECK_GL_ERROR();
 	}
-}
-
-void rnd::driver::gl::driver::set_clear_color(glm::vec4 color)
-{
-	glClearColor(color.r, color.g, color.b, color.a);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags)
-{
-	attach_frame_buffer();
-	glClearDepth(1.0);
-	GLbitfield gl_flags = 0;
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) gl_flags |= GL_COLOR_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) gl_flags |= GL_DEPTH_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) gl_flags |= GL_STENCIL_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) gl_flags |= (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-	glClear(gl_flags);
-	CHECK_GL_ERROR();
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, glm::vec4 color)
-{
-	clear(flags, std::vector<glm::vec4>{color});
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, const std::vector<glm::vec4>& colors)
-{
-	if (colors.empty()) {
-		return;
-	}
-
-	attach_frame_buffer();
-
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) {
-		int i = 0;
-		for (auto& color : colors) {
-			glClearBufferfv(GL_COLOR, i, glm::value_ptr(color));
-			CHECK_GL_ERROR();
-			i++;
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfv(GL_DEPTH, 0, glm::value_ptr(colors[0]));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferiv(GL_STENCIL, 0, reinterpret_cast<const GLint*>(glm::value_ptr(colors[0])));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfi(GL_DEPTH_STENCIL, 0, colors[0].r, static_cast<GLint>(colors[0].g));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::set_activate_texture(int idx)
-{
-	// active proper texture unit before binding
-	glActiveTexture(GL_TEXTURE0 + idx);
-	CHECK_GL_ERROR();
 }
 
 void rnd::driver::gl::driver::set_line_size(float size)
@@ -432,23 +436,13 @@ void rnd::driver::gl::driver::set_line_size(float size)
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::driver::set_point_size(float size)
+void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset)
 {
-	glPointSize(size);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
-{
-	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	if (offset > 0) {
@@ -461,94 +455,138 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 
 
 	vertices->unbind();
-
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void rnd::driver::gl::driver::draw_instanced_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int instance_count, unsigned int offset)
+void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
-	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
-	vertices->bind();
-	glDrawElementsInstanced(rm, count, GL_UNSIGNED_INT, 0, instance_count);
-	CHECK_GL_ERROR();
-	vertices->unbind();
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
-{
-	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
 	vertices->unbind();
-
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void rnd::driver::gl::driver::set_render_state(const render_state& state) {
-    // Depth state
-    if (state.depth.enabled) {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(gDepthFuncToGL[static_cast<int>(state.depth.test_func)]);
-        glDepthMask(state.depth.write_mask ? GL_TRUE : GL_FALSE);
-    } else {
-        glDisable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-    }
-    CHECK_GL_ERROR();
+rnd::driver::pipeline_handle rnd::driver::gl::driver::create_pipeline(const pipeline_desc& desc)
+{
+	ASSERT_MSG(desc.shader, "create_pipeline without a shader");
+	return m_pipelines.acquire(desc, [](const pipeline_desc& d) {
+		return gl_pipeline{ gRenderModeToGLRenderMode[static_cast<int>(d.topology)] };
+	});
+}
 
-    // Blend states for each render target
-    if (!state.blend_states.empty()) {
-        if (state.blend_states[0].enabled) {
-            glEnable(GL_BLEND);
-        } else {
-            glDisable(GL_BLEND);
-        }
+void rnd::driver::gl::driver::destroy_pipelines_of(const shader_ref& shader)
+{
+	if (m_bound && m_bound->desc.shader == shader) {
+		m_bound = nullptr;
+	}
+	// GL may hand the name of the program that is deleted next to a new one, which would then pass for the cached current program.
+	if (const auto* program = static_cast<const gl::shader*>(shader.object); program && m_state.program == program->program()) {
+		m_state.program.reset();
+	}
+	m_pipelines.erase_if([&](const pipeline_desc& desc) { return desc.shader == shader; });
+}
 
-        for (size_t i = 0; i < state.blend_states.size(); ++i) {
-            const auto& blend = state.blend_states[i];
-            if (blend.enabled) {
-                glBlendFunci(i, 
-                    gBlendFactorToGL[static_cast<int>(blend.src_factor)],
-                    gBlendFactorToGL[static_cast<int>(blend.dst_factor)]
-                );
-                glBlendEquationi(i, gBlendEquationToGL[static_cast<int>(blend.blend_eq)]);
-            }
-			else {
-				glBlendFunci(i, GL_ONE, GL_ZERO);
-				glBlendEquationi(i, GL_FUNC_ADD);
-			}
-        }
-    } else {
-        glDisable(GL_BLEND);
-    }
-    CHECK_GL_ERROR();
+const rnd::driver::pipeline_desc& rnd::driver::gl::driver::pipeline_info(pipeline_handle pipeline) const
+{
+	const auto* found = m_pipelines.find(pipeline);
+	return found ? found->desc : empty_pipeline_desc();
+}
 
-    // Face culling state
-    if (state.face_culling.enabled) {
-        glEnable(GL_CULL_FACE);
-        glCullFace(gCullModeToGL[static_cast<int>(state.face_culling.cull_mode)]);
-    } else {
-        glDisable(GL_CULL_FACE);
-    }
-    CHECK_GL_ERROR();
+void rnd::driver::gl::driver::invalidate_state_cache()
+{
+	m_state = {};
+}
+
+void rnd::driver::gl::driver::bind_pipeline(pipeline_handle pipeline)
+{
+	const auto* found = m_pipelines.find(pipeline);
+	ASSERT_MSG(found, "bind_pipeline with a handle of no pipeline");
+	apply_pipeline(found->desc);
+	m_bound = found;
+	m_depth_write = found->desc.depth.enabled && found->desc.depth.write_mask;
+}
+
+namespace {
+	// Runs `apply` unless the cache already holds `wanted`.
+	template <class T, class Apply>
+	void change(std::optional<T>& cached, const T& wanted, Apply&& apply)
+	{
+		if (cached && *cached == wanted) {
+			return;
+		}
+		apply();
+		cached = wanted;
+	}
+}
+
+void rnd::driver::gl::driver::apply_pipeline(const pipeline_desc& desc)
+{
+	const auto* program = static_cast<const gl::shader*>(desc.shader.object);
+	change(m_state.program, program->program(), [&] { program->use(); });
+
+	// Without depth test the mask is off too, a pass that does not test does not write.
+	const bool depth_test = desc.depth.enabled;
+	change(m_state.depth_test, depth_test, [&] {
+		if (depth_test) {
+			glEnable(GL_DEPTH_TEST);
+		} else {
+			glDisable(GL_DEPTH_TEST);
+		}
+	});
+	if (depth_test) {
+		change(m_state.depth_func, gDepthFuncToGL[static_cast<int>(desc.depth.test_func)], [&] {
+			glDepthFunc(gDepthFuncToGL[static_cast<int>(desc.depth.test_func)]);
+		});
+	}
+	const bool depth_mask = depth_test && desc.depth.write_mask;
+	change(m_state.depth_mask, depth_mask, [&] { glDepthMask(depth_mask ? GL_TRUE : GL_FALSE); });
+	CHECK_GL_ERROR();
+
+	// GL_BLEND is global and follows the first target; a target that does not blend gets the pass-through function.
+	const bool blend = !desc.blend.empty() && desc.blend[0].enabled;
+	change(m_state.blend, blend, [&] {
+		if (blend) {
+			glEnable(GL_BLEND);
+		} else {
+			glDisable(GL_BLEND);
+		}
+	});
+	for (std::size_t i = 0; i < desc.blend.size(); ++i) {
+		const blend_state& b = desc.blend[i];
+		const state_cache::blend_funcs wanted = b.enabled
+			? state_cache::blend_funcs{ gBlendFactorToGL[static_cast<int>(b.src_factor)], gBlendFactorToGL[static_cast<int>(b.dst_factor)],
+				gBlendEquationToGL[static_cast<int>(b.blend_eq)] }
+			: state_cache::blend_funcs{ GL_ONE, GL_ZERO, GL_FUNC_ADD };
+		change(m_state.target_blend[i], wanted, [&] {
+			glBlendFunci(static_cast<GLuint>(i), wanted.src, wanted.dst);
+			glBlendEquationi(static_cast<GLuint>(i), wanted.equation);
+		});
+	}
+	CHECK_GL_ERROR();
+
+	change(m_state.polygon, gPolygonModeToGL[static_cast<int>(desc.polygon)], [&] {
+		glPolygonMode(GL_FRONT_AND_BACK, gPolygonModeToGL[static_cast<int>(desc.polygon)]);
+	});
+	CHECK_GL_ERROR();
+
+	const bool cull = desc.cull.enabled;
+	change(m_state.cull, cull, [&] {
+		if (cull) {
+			glEnable(GL_CULL_FACE);
+		} else {
+			glDisable(GL_CULL_FACE);
+		}
+	});
+	if (cull) {
+		change(m_state.cull_face, gCullModeToGL[static_cast<int>(desc.cull.cull_mode)], [&] {
+			glCullFace(gCullModeToGL[static_cast<int>(desc.cull.cull_mode)]);
+		});
+	}
+	CHECK_GL_ERROR();
 }
 
 std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_shader(const std::vector<shader_header>& headers)
@@ -609,9 +647,40 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 	return std::make_unique<rnd::driver::gl::shader>(id);
 }
 
-std::unique_ptr<rnd::driver::texture_interface> rnd::driver::gl::driver::create_texture(const texture_header& header)
+rnd::driver::texture_handle rnd::driver::gl::driver::create_texture(const texture_header& header)
 {
-	return std::make_unique<rnd::driver::gl::texture>(header);
+	return m_textures.adopt(std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers));
+}
+
+void rnd::driver::gl::driver::destroy(texture_handle handle)
+{
+	if (!handle) {
+		return;
+	}
+	if (!m_textures.release(handle)) {
+		egLOG_WARN("render", "destroy: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
+	}
+}
+
+rnd::driver::gl::texture* rnd::driver::gl::driver::texture_of(texture_handle handle) const
+{
+	return static_cast<texture*>(m_textures.find(handle));
+}
+
+void rnd::driver::gl::driver::update_texture(texture_handle handle, const void* data, const texture_region& region)
+{
+	texture* found = texture_of(handle);
+	if (!found) {
+		egLOG_ERROR("render", "update_texture: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
+		return;
+	}
+	found->update_data(data, region.x, region.y, region.z, region.width, region.height, region.depth, region.level, region.layer, region.face);
+}
+
+std::uint64_t rnd::driver::gl::driver::native_texture_name(texture_handle handle) const
+{
+	const texture* found = texture_of(handle);
+	return found ? found->get_id() : 0;
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::gl::driver::create_vertex_array()
@@ -624,21 +693,195 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 	return std::make_unique<gl::buffer>();
 }
 
-std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::gl::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
+std::vector<std::byte> rnd::driver::gl::driver::read_texture(texture_handle handle, glm::ivec4 rect)
 {
-	return std::make_unique<gl::uniform_buffer>(size, binding);
+	const texture* found = texture_of(handle);
+	if (!found) {
+		egLOG_ERROR("render", "read_texture: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
+		return {};
+	}
+	if (!can_read_back(*found) || !read_rect_inside(*found, rect)) {
+		egLOG_ERROR("render", "read_texture: a {}x{} texture cannot be read at {}, {}, {}x{}", found->width(), found->height(), rect.x, rect.y, rect.z, rect.w);
+		return {};
+	}
+	const auto& source = *found;
+	std::vector<std::byte> bytes(static_cast<std::size_t>(rect.z) * static_cast<std::size_t>(rect.w) * 4);
+	glGetTextureSubImage(source.get_id(), 0, rect.x, rect.y, 0, rect.z, rect.w, 1, GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(bytes.size()), bytes.data());
+	CHECK_GL_ERROR();
+	return bytes;
 }
 
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::gl::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+void rnd::driver::gl::driver::begin_frame()
 {
-	static_assert(sizeof(GLuint) == sizeof(uint32_t));
-	static_assert(sizeof(GLint) == sizeof(uint32_t));
-	ASSERT_MSG((size / sizeof(GLuint)) == (size / sizeof(uint32_t)), "Missmatch size with OpenGL size");
-	return std::make_unique<gl::gl_ssbo_buffer>(size, binding);
+	++m_frame;
+	for (const bind_group_handle group : m_transient_groups) {
+		m_groups.erase(group);
+	}
+	m_transient_groups.clear();
 }
 
-void rnd::driver::gl::driver::register_render_state(const render_state& state) {
-    // OpenGL doesn't require state preregistration,
-    // but we can cache them for optimization
-    state_cache.register_state(state);
+std::size_t rnd::driver::gl::driver::uniform_offset_alignment() const
+{
+	if (!m_uniform_offset_alignment) {
+		GLint alignment = 0;
+		glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+		CHECK_GL_ERROR();
+		m_uniform_offset_alignment = static_cast<std::size_t>(alignment > 0 ? alignment : 256);
+	}
+	return *m_uniform_offset_alignment;
+}
+
+std::size_t rnd::driver::gl::driver::storage_offset_alignment() const
+{
+	if (!m_storage_offset_alignment) {
+		GLint alignment = 0;
+		glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
+		CHECK_GL_ERROR();
+		m_storage_offset_alignment = static_cast<std::size_t>(alignment > 0 ? alignment : 256);
+	}
+	return *m_storage_offset_alignment;
+}
+
+rnd::driver::buffer_handle rnd::driver::gl::driver::create_buffer(const buffer_desc& desc)
+{
+	ASSERT_MSG(desc.size > 0, "create_buffer of size 0");
+	gl_buffer buffer{ desc, {}, desc.update == buffer_update::per_frame ? frames_in_flight : 1u };
+	const GLenum usage = desc.update == buffer_update::static_data ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+	for (std::uint32_t i = 0; i < buffer.copies; ++i) {
+		glCreateBuffers(1, &buffer.ids[i]);
+		glNamedBufferData(buffer.ids[i], static_cast<GLsizeiptr>(desc.size), nullptr, usage);
+		if (desc.debug_name && glad_glObjectLabel) {
+			glObjectLabel(GL_BUFFER, buffer.ids[i], -1, desc.debug_name);
+		}
+		CHECK_GL_ERROR();
+	}
+	return m_buffers.insert(std::move(buffer));
+}
+
+void rnd::driver::gl::driver::destroy_buffer(buffer_handle handle)
+{
+	gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "destroy_buffer with a handle of no buffer");
+	if (!buffer) {
+		return;
+	}
+	glDeleteBuffers(static_cast<GLsizei>(buffer->copies), buffer->ids.data());
+	CHECK_GL_ERROR();
+	m_buffers.erase(handle);
+}
+
+void rnd::driver::gl::driver::update_buffer(buffer_handle handle, std::size_t offset, std::span<const std::byte> data)
+{
+	const gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "update_buffer with a handle of no buffer");
+	if (!buffer || data.empty()) {
+		return;
+	}
+	ASSERT_MSG(offset <= buffer->desc.size && data.size() <= buffer->desc.size - offset, "update_buffer past the end of the buffer");
+	glNamedBufferSubData(buffer->current(frame_slot()), static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(data.size()), data.data());
+	CHECK_GL_ERROR();
+}
+
+rnd::driver::bind_group_layout_handle rnd::driver::gl::driver::create_bind_group_layout(const bind_group_layout_desc& desc)
+{
+	return m_layouts.acquire(desc);
+}
+
+rnd::driver::bind_group_handle rnd::driver::gl::driver::create_bind_group(const bind_group_desc& desc, lifetime life)
+{
+	ASSERT_MSG(m_layouts.find(desc.layout), "create_bind_group with a handle of no layout");
+	const bind_group_handle group = m_groups.insert(gl_group{ desc });
+	if (life == lifetime::transient) {
+		m_transient_groups.push_back(group);
+	}
+	return group;
+}
+
+void rnd::driver::gl::driver::destroy_bind_group(bind_group_handle group)
+{
+	const bool erased = m_groups.erase(group);
+	ASSERT_MSG(erased, "destroy_bind_group with a handle of no group");
+}
+
+void rnd::driver::gl::driver::set_bind_group(std::uint32_t set, bind_group_handle handle, std::span<const std::uint32_t> dynamic_offsets)
+{
+	const gl_group* group = m_groups.find(handle);
+	ASSERT_MSG(group, "set_bind_group with a handle of no group");
+	if (!group) {
+		return;
+	}
+	const bind_group_layout_desc* layout = m_layouts.find(group->desc.layout);
+	ASSERT_MSG(layout, "set_bind_group: the layout of the group is gone");
+	if (!layout) {
+		return;
+	}
+
+	std::size_t next_dynamic = 0;
+	for (const binding_decl& decl : layout->entries) {
+		const auto entry = std::find_if(group->desc.entries.begin(), group->desc.entries.end(),
+			[&](const binding_res& e) { return e.type == decl.type && e.slot == decl.slot; });
+		ASSERT_MSG(entry != group->desc.entries.end(), "set_bind_group: the group has no entry for slot {}", decl.slot);
+		const auto binding = per_type_binding_table.resolve(set, decl.slot, decl.type);
+		ASSERT_MSG(binding, "set_bind_group: set {} slot {} is outside the binding table", set, decl.slot);
+		const std::size_t extra = decl.dynamic && next_dynamic < dynamic_offsets.size() ? dynamic_offsets[next_dynamic++] : 0;
+		if (entry == group->desc.entries.end() || !binding) {
+			continue;
+		}
+
+		if (decl.type == binding_type::texture) {
+			texture* bound_texture = texture_of(entry->texture);
+			ASSERT_MSG(bound_texture, "set_bind_group: the texture at slot {} is null or destroyed", decl.slot);
+			if (bound_texture) {
+				bound_texture->bind(*binding);
+			}
+			continue;
+		}
+		const gl_buffer* buffer = m_buffers.find(entry->buffer);
+		ASSERT_MSG(buffer, "set_bind_group: the buffer at slot {} is gone", decl.slot);
+		if (!buffer) {
+			continue;
+		}
+		glBindBufferRange(decl.type == binding_type::ubo ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER, *binding,
+			buffer->current(frame_slot()), static_cast<GLintptr>(entry->offset + extra), static_cast<GLsizeiptr>(entry->size));
+		CHECK_GL_ERROR();
+	}
+}
+
+// GPU timer queries
+
+bool rnd::driver::gl::driver::supports_timer_queries() const
+{
+	return glad_glQueryCounter != NULL && glad_glGetQueryObjectui64v != NULL;
+}
+
+uint32_t rnd::driver::gl::driver::create_timer_query()
+{
+	GLuint id = 0;
+	glGenQueries(1, &id);
+	return static_cast<uint32_t>(id);
+}
+
+void rnd::driver::gl::driver::destroy_timer_query(uint32_t id)
+{
+	GLuint gl_id = static_cast<GLuint>(id);
+	glDeleteQueries(1, &gl_id);
+}
+
+void rnd::driver::gl::driver::timestamp_query(uint32_t id)
+{
+	glQueryCounter(static_cast<GLuint>(id), GL_TIMESTAMP);
+}
+
+bool rnd::driver::gl::driver::is_query_ready(uint32_t id) const
+{
+	GLint available = 0;
+	glGetQueryObjectiv(static_cast<GLuint>(id), GL_QUERY_RESULT_AVAILABLE, &available);
+	return available != 0;
+}
+
+uint64_t rnd::driver::gl::driver::get_query_result_ns(uint32_t id) const
+{
+	GLuint64 result = 0;
+	glGetQueryObjectui64v(static_cast<GLuint>(id), GL_QUERY_RESULT, &result);
+	return static_cast<uint64_t>(result);
 }

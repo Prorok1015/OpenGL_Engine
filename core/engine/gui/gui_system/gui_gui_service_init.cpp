@@ -1,19 +1,138 @@
-#include "gui_gui_service_init.h"
-#include "gui_system.h"
-#include "wnd_window_system.h"
-#include "gui_debug_layer.h"
+#include <snk/gui/gui_gui_service_init.h>
+#include <snk/gui/gui_system.h>
+#include <snk/window/wnd_window_system.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/gui/gui_debug_layer.h>
+#include <snk/gui_gl/gui_gl_backend.h>
+#include <snk/gui/gui_null_backend.h>
+#include <snk/gui/gui_theme_desc.h>
+#include <snk/gui/gui_theme_service.h>
+#include <snk/gui/gui_platform_backend.h>
+#include <snk/application/app_deterministic_time.h>
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_binary.h>
+#include <snk/common/fs_paths.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_system.h>
+#include <filesystem>
+#include <string_view>
+#include <utility>
+#include <vector>
 
-extern gui::gui_system* p_gui_system;
+namespace {
+// Where the window layout (ImGui's ini) is loaded from and saved to; empty: it is not kept on disk, so a process writes no
+// file into the folder it was started from (#713). The editor sets a default in the user's folder (editor::apply_default_settings).
+CFG_VAR_DEF_PATH(cfg_gui_layout_file, "gui/layout_file", "");
+// The theme preset of the UI (#1109): a gui.theme desc. Empty: dark_neutral, or the theme the editor's user picked.
+CFG_VAR_DEF_STRING(cfg_gui_theme, "gui/theme", "");
+
+constexpr std::string_view theme_type = "gui.theme";
+}
+
+bool engine::gui::theme_set_by_config()
+{
+	return !cfg_gui_theme->empty();
+}
+
+void engine::gui::register_gui_descs(desc::desc_system& descs)
+{
+	descs.register_document<::gui::theme_desc>(theme_type);
+}
+
+void engine::gui::unregister_gui_descs(desc::desc_system& descs)
+{
+	descs.unregister_desc(theme_type);
+}
+
+std::vector<std::byte> engine::gui::load_ui_font_bytes(res::resource_system& resources)
+{
+	const res::tag font_tag = resources.engine_file("fonts/NotoSans-Regular.ttf");
+	if (!resources.exists(font_tag)) {
+		egLOG_WARN("gui", "UI font '{}' not found, using the built-in ImGui font (no Cyrillic)", font_tag.view());
+		return {};
+	}
+	auto font = resources.require_sync<res::binary_resource>(font_tag).get_sync();
+	if (!font) {
+		egLOG_WARN("gui", "UI font '{}' failed to load, using the built-in ImGui font (no Cyrillic)", font_tag.view());
+		return {};
+	}
+	return font->bytes();
+}
 
 void engine::gui::gui_init(ds::app_data_storage& data)
 {
-	auto& wnd_system = data.require<wnd::window_system>();// TODO: get backend directly from data storage
-	p_gui_system = &data.construct<::gui::gui_system>(wnd_system.get_gui_backend());
-	p_gui_system->push_layer(std::make_shared<::gui::debug_layer>());
+	auto& wnd_system = data.require<wnd::window_system>();
+	register_gui_descs(data.require<desc::desc_system>());
+	// The GUI layer owns both ImGui halves; only this function names the concrete backends.
+	// The GL context already exists (created by window_system in core_module init, which runs
+	// before this engine init).
+	// The panels show render targets: the backend turns their texture handles into ImGui ids through the driver.
+	auto* driver = data.require<rnd::render_system>().get_driver();
+	ASSERT_MSG(driver, "gui_init: the render system has no driver");
+	auto window = wnd_system.get_active_window();
+	ASSERT_MSG(window, "gui_init: no active window");
+	// Without a GL surface (null window, --headless) the render backend is null too: nothing to draw ImGui with.
+	::gui::imgui_backend_interface* backend_ptr = nullptr;
+	::gui::gl::gl_imgui_backend* gl_backend_ptr = nullptr;
+	if (window && window->gl_surface_ptr()) {
+		auto& gl_backend = static_cast<::gui::gl::gl_imgui_backend&>(
+			data.construct<::gui::imgui_backend_interface, ::gui::gl::gl_imgui_backend>(*driver));
+		gl_backend.set_ui_font_bytes(load_ui_font_bytes(data.require<res::resource_system>()));
+		backend_ptr = &gl_backend;
+		gl_backend_ptr = &gl_backend;
+	} else {
+		backend_ptr = &data.construct<::gui::imgui_backend_interface, ::gui::null_imgui_backend>(*driver);
+	}
+	auto& backend = *backend_ptr;
+	backend.set_dpi_scale(wnd_system.get_active_content_scale());
+	// Before init(), which loads the layout from it.
+	backend.set_settings_filename(fs_paths::utf8_of(*cfg_gui_layout_file));
+	backend.init();
+	std::error_code layout_ec;
+	const auto is_exist = !cfg_gui_layout_file->empty() && std::filesystem::exists(*cfg_gui_layout_file, layout_ec);
+	backend.set_initial_layout_by_default(!is_exist);
+
+	auto& platform = data.construct<::gui::platform_backend>(*window);
+	platform.init();
+	if (data.has_value<app::deterministic_time>()) {
+		platform.set_fixed_delta(data.require<app::deterministic_time>().fixed_dt);
+	}
+	// Added at init time, before the input system listener, so ImGui sees every event first; it
+	// never consumes, routing stays with WantCapture*.
+	wnd_system.add_event_listener(data.require_shared<::gui::platform_backend>());
+
+	auto& gui_sys = data.construct<::gui::gui_system>(&backend, &platform);
+	gui_sys.push_layer(std::make_shared<::gui::debug_layer>());
+
+	// Without a renderer there is no look to change.
+	if (gl_backend_ptr) {
+		auto& resources = data.require<res::resource_system>();
+		const res::tag default_theme = resources.engine_file("themes/dark_neutral.desc");
+		auto& themes = data.construct<::gui::theme_service>(resources, default_theme,
+			[gl_backend_ptr](::gui::theme_service::theme theme) {
+				gl_backend_ptr->set_theme(theme.style, std::move(theme.text_font), std::move(theme.fallback_font),
+					std::move(theme.icon_font), theme.fonts_changed);
+			});
+		themes.select(theme_set_by_config() ? res::tag{ *cfg_gui_theme } : default_theme);
+		gui_sys.push_layer(std::make_shared<::gui::theme_service::layer>(themes));
+	}
 }
 
 void engine::gui::gui_term(ds::app_data_storage& data)
 {
 	data.destruct<::gui::gui_system>();
-	p_gui_system = nullptr;
+	if (data.has_value<::gui::theme_service>()) {
+		data.destruct<::gui::theme_service>();
+	}
+	data.require<wnd::window_system>().remove_event_listener(data.require_shared<::gui::platform_backend>());
+	// Platform before renderer: its shutdown touches the ImGui context the renderer destroys.
+	// Shut down while the GL context is still alive (engine terminates before core).
+	data.require<::gui::platform_backend>().shutdown();
+	data.destruct<::gui::platform_backend>();
+	data.require<::gui::imgui_backend_interface>().shutdown();
+	data.destruct<::gui::imgui_backend_interface>();
+	unregister_gui_descs(data.require<desc::desc_system>());
 }

@@ -1,16 +1,24 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include "edt_model_importer.h"
 #include "edt_asset_exporter.h"
 #include "edt_file_dialog.h"
-#include <future>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <cstdint>
 #include <memory>
+#include <string>
+
+namespace res {
+	class resource_system;
+}
 
 namespace edt {
 
+	class job_service;
+
 	class asset_export_dialog {
 	public:
-		asset_export_dialog(asset_exporter& exporter);
+		asset_export_dialog(asset_exporter& exporter, job_service& jobs, res::resource_system& resources);
 		~asset_export_dialog();
 
 		// Set the import result to export
@@ -40,9 +48,17 @@ namespace edt {
 		res::tag m_exported_tag;
 
 		// Async export state
-		std::future<bool> m_export_future;
+		job_service& m_jobs;
+		res::resource_system& m_resources;
+		std::uint64_t m_export_job = 0;
 		std::shared_ptr<export_progress> m_export_progress;
 		bool m_exporting = false;
+		// Set by the job's on_done (main thread); render_export_progress closes the popup on it.
+		bool m_export_done = false;
+		// Why the last export failed: the form stays open and shows it.
+		std::string m_export_error;
+		// Last: destroyed first, so a job callback cannot run on a half-destroyed dialog.
+		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};
 
 } // namespace edt

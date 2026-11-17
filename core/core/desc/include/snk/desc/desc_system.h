@@ -1,0 +1,397 @@
+#pragma once
+#include <format>
+#include <snk/common/common.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_tag.h>
+#include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_reference.h>
+#include <snk/resource/res_tag_json.h>
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_dynamic.h>
+#include <snk/desc/desc_fnv1a.h>
+#include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_pretty_json.h>
+#include <algorithm>
+#include <charconv>
+#include <cstddef>
+#include <cmath>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <shared_mutex>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+#include <snk/common/snk_api.h>
+
+namespace desc
+{
+	// Where get_field_desc keeps the memory copy of an inline sub-desc: memory://overrides/, or, for a game module's
+	// layer, under the layer's own write prefix (memory://modules/<name>/overrides/, MODULE_LAYER.md).
+	inline std::string override_root(const res::resource_system& resources)
+	{
+		const std::string& prefix = resources.write_prefix();
+		return (prefix.empty() ? std::string{ "memory://" } : prefix) + "overrides/";
+	}
+
+	inline bool is_override_tag(std::string_view tag)
+	{
+		return tag.starts_with("memory://overrides/")
+			|| (tag.starts_with("memory://modules/") && tag.find("/overrides/") != std::string_view::npos);
+	}
+
+	// What a migration step reported besides upgrading the object: a loss of data or an assumption (EPIC-58).
+	struct migration_warning
+	{
+		std::string type;
+		int from_version = 0;
+		std::string file;
+		std::string message;
+	};
+
+	// Handed to a step registered with a summary. A step sees only the JSON of its object, never the project: it does not
+	// rewrite references or create files (EPIC-58 3.2).
+	class SNK_API migration_context
+	{
+	public:
+		// `sink` null: warn() only logs.
+		migration_context(std::string_view type, int from_version, std::string_view file, std::vector<migration_warning>* sink);
+
+		std::string_view type() const { return m_type; }
+		int from_version() const { return m_from_version; }
+		// Empty when the object is migrated from memory.
+		std::string_view file() const { return m_file; }
+
+		// Logged as a warning, and kept for the report when the migration collects them.
+		void warn(std::string message);
+
+	private:
+		std::string_view m_type;
+		int m_from_version = 0;
+		std::string_view m_file;
+		std::vector<migration_warning>* m_sink = nullptr;
+	};
+
+	// The asset index a writer of references asks (write_references_with): the ID of the file a res:// path names (none
+	// for a file without one or a duplicate), and the file that holds an ID now. An empty function answers none.
+	struct reference_ids
+	{
+		std::function<std::optional<res::asset_id>(const res::tag&)> id_of;
+		std::function<std::optional<res::tag>(const res::asset_id&)> path_of;
+	};
+
+	// What a write of references changed.
+	struct reference_counts
+	{
+		// A path (a string, or an object without a guid) that became {"guid", "path"}.
+		std::size_t ids_written = 0;
+		// A {guid, path} whose path became the one its guid's file has now.
+		std::size_t paths_repaired = 0;
+
+		std::size_t total() const { return ids_written + paths_repaired; }
+	};
+
+	// The schema of a type by its name; nullptr for a type without one.
+	using schema_lookup = std::function<const type_schema*(std::string_view type_name)>;
+
+	// The rule of desc_system::write_references (EPIC-57 section 4.4) with the index `ids` and the schemas of `schema_of`:
+	// what the editor's save writes and what the migration step assets.refs writes into a project's files (#776). There
+	// is no replaced file here: a path whose file `ids` gives no ID stays as it is. Returns what changed in `root`.
+	SNK_API reference_counts write_references_with(json::value& root, const schema_lookup& schema_of, const reference_ids& ids);
+
+	// `resources`' asset index as reference_ids (asset_id_of, asset_path_of): what write_references asks.
+	SNK_API reference_ids asset_index_ids(const res::resource_system& resources);
+
+	class SNK_API desc_system
+	{
+	public:
+		using desc_name = res::tag;
+		using desc_namespace = std::string;
+
+		// std::hash is not stable across platforms/STLs; these names end up in saved data.
+		static constexpr uint64_t fnv1a_64(std::string_view s) noexcept
+		{
+			return desc::fnv1a_64(s);
+		}
+
+		desc_system(res::resource_system& res_system);
+		// A layer over `parent` (MODULE_LAYER.md): factories, migrations, schemas and component names fall
+		// through to it; a type the parent knows cannot be registered or migrated here (logged, not asserted).
+		desc_system(res::resource_system& res_system, const desc_system* parent);
+		~desc_system();
+		desc_system(const desc_system&) = delete;
+		desc_system& operator=(const desc_system&) = delete;
+		desc_system(desc_system&&) = delete;
+		desc_system& operator=(desc_system&&) = delete;
+
+		// A T described with BOOST_DESCRIBE_CLASS also gets its type_schema (and enum schemas) registered; that
+		// needs <snk/desc/desc_describe.h> in the registering translation unit.
+		template<typename T>
+		void register_desc(const std::string_view type_name)
+		{
+			add_desc<T>(type_name, schema_kind::desc);
+		}
+
+		// register_component_desc marks the type as user-addable in the editor.
+		// Use this for component descs that users can add to prefab nodes.
+		// Use register_desc for nested/container descs not shown in "Add Component".
+		template<typename T>
+		void register_component_desc(const std::string_view type_name)
+		{
+			add_desc<T>(type_name, schema_kind::component);
+		}
+
+		// register_desc plus mark_document, for a type the editor opens as a data document (EPIC-56). A custom field that has a
+		// json_codec counts as being on the schema. The type stays a registered desc when it cannot be a document (logged);
+		// false then, and false when the registration itself is refused.
+		template<typename T>
+		bool register_document(const std::string_view type_name)
+		{
+			if (!add_desc<T>(type_name, schema_kind::desc)) {
+				return false;
+			}
+			if constexpr (desc::is_described<T>) {
+				const std::vector<std::string_view> codec_fields = desc::schema_generator<T>::codec_fields();
+				return mark_document(type_name, codec_fields);
+			} else {
+				return mark_document(type_name);
+			}
+		}
+
+		// Marks the schema of `type_name` as a data document (type_schema::is_document). Only a plain desc whose every field
+		// the schema describes can be one: the file's `__parent` chain is merged as JSON by the schema alone, and that matches
+		// what the runtime reads only when no field hides behind a custom value. `codec_fields` names the top-level custom
+		// fields that have a json_codec (register_document<T> finds them); a custom field elsewhere, or without a codec,
+		// refuses the type. False (logged, nothing changed) when refused, or when the type belongs to the parent desc system.
+		bool mark_document(std::string_view type_name, std::span<const std::string_view> codec_fields = {});
+
+		// Every document type, this layer's and the parent's, sorted by name.
+		std::vector<std::string> document_types() const;
+
+		void unregister_desc(std::string_view type_name);
+
+		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
+		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
+		// current_version(name). Migrations registered later move the stored schema's version along, so the order
+		// does not matter.
+		// A schema whose type has no factory yet gets one that creates dynamic_desc objects; a component schema is
+		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
+		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
+		const type_schema* register_schema(type_schema schema);
+
+		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
+		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
+		const type_schema* find_schema(std::string_view type_name) const;
+
+		const schema_registry& schemas() const;
+		schema_registry& schemas();
+
+		bool is_registered(std::string_view type_name) const;
+
+		// Every type this layer and the parent know of (a factory, a schema or migration steps), sorted, each once: what a
+		// snapshot of the types needs to answer is_registered, find_schema and current_version off the main thread.
+		std::vector<std::string> type_names() const;
+
+		// The parent's names first, then this layer's.
+		std::vector<std::string> get_component_type_names() const;
+
+		const desc_system* parent() const { return m_parent; }
+
+		// Migration step: upgrades an object of `type` from `from_version` to `from_version + 1`.
+		// Objects without __version are version 1. A duplicate (type, from_version) keeps the first one.
+		void register_migration(std::string_view type, int from_version, std::function<void(json::object&)> fn);
+
+		// The same step with a one-line summary (for the migration plan and report) and a context for warnings. Kept in
+		// the one registry above, so current_version and the duplicate check see it as any other step; migrate_tree
+		// without a warning list runs it with warnings going to the log only.
+		void register_migration(std::string_view type, int from_version, std::string_view summary,
+			std::function<void(json::object&, migration_context&)> fn);
+
+		// The summary of the step from `from_version`; empty for a step without one or none.
+		std::string migration_summary(std::string_view type, int from_version) const;
+
+		void unregister_migrations(std::string_view type);
+
+		int current_version(std::string_view type) const;
+
+		// Brings every typed object under `root` up to current_version. Throws std::runtime_error on
+		// a malformed or newer-than-supported __version, or when a migration step is missing.
+		void migrate_tree(json::object& root, std::string_view context) const;
+
+		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
+		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
+
+		// Writes the current __version into an object that has a string __type, and moves the header keys
+		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
+		void stamp_header(json::object& obj) const;
+
+		// stamp_header for every typed object under `value` (the files embed typed descs, and a memory://
+		// copy of them goes through the adapter - and its migrations - again).
+		void stamp_tree(json::value& value) const;
+
+		void stamp_tree(json::object& obj) const;
+
+		std::shared_ptr<desc::desc_base> create_instance(std::string_view type_id, const res::tag& tag) const;
+
+		// The file form of a desc read on top of a parent (desc_base::get_parent): `body` (its serialize) becomes "__parent"
+		// and only what differs from the parent, so reading the file on top of the parent gives `desc` back (#812). When no
+		// such form reads back the same, `body` stays whole without "__parent"; when the parent does not load, `body` stays
+		// whole and keeps "__parent" (the file needs it to load). Both are logged. The parent is the one loaded now, also if it
+		// changed after `desc` was read: what `desc` shows is saved. A parent whose serialize throws: `body` whole, with
+		// "__parent" if that reads back the same, else without it; logged, not thrown. Main thread: the parent is required
+		// synchronously.
+		void reduce_to_parent(const desc::desc_base& desc, json::object& body);
+
+		// resource_system::resolve_reference of the system this one loads through.
+		res::tag resolve_reference(const res::reference& ref) const;
+
+		// Writes the references of `root` the way a file keeps them (EPIC-57 section 4.4): in the res_tag and desc_ref fields
+		// of every typed object (in their lists, maps and structures too), a res:// path whose file has an ID becomes
+		// {"guid", "path"}, and a {guid, path} whose guid the asset index knows gets the path the file has now (one that is
+		// there already stays as written). An unknown guid stays as it is. "__parent", the values of custom fields, types
+		// without a schema and other protocols are not touched.
+		// `replaced`: the file `root` is written over, as it is now. A path it wrote with a guid gets that guid back where
+		// the index gives none (no index, an unknown guid, a duplicate): a writer never drops a guid the file had, unless
+		// the index puts that guid on another file.
+		void write_references(json::value& root, const json::value* replaced = nullptr) const;
+		// The same with the replaced file's bytes; ones that do not parse keep nothing.
+		void write_references(json::value& root, std::span<const std::byte> replaced_file) const;
+		// The same with the file at `file` read as it is now; none there, nothing to keep.
+		void write_references_over(json::value& root, const res::tag& file) const;
+		// The references of `value`, what an object of `schema` holds at `pointer` (empty: the object itself): an override
+		// record has no "__type", the component it applies to gives the schema. `merged_into` (the base value at `pointer`,
+		// may be null): where it holds an object, a path stays a string, since the record's value is merged into it.
+		void write_references(const type_schema& schema, std::string_view pointer, json::value& value, const json::value* merged_into = nullptr) const;
+		// desc::write_references_with with the schemas of this system and the index `ids` (another one than the resource
+		// system's: a migration's index of the project on the disk).
+		reference_counts write_references_with(json::value& root, const reference_ids& ids) const;
+
+		// `json_path` (a JSON pointer in the owner's file, may be empty) is where a problem of an inline desc is reported:
+		// its memory:// copy's diagnostics go to the owner's file at that path (#595).
+		template<typename T>
+		auto get_field_desc(const desc::desc_base& owner, const json::value& data, std::string_view json_path = {}) const
+		{
+			const json::value* inline_type = data.is_object() ? data.as_object().if_contains("__type") : nullptr;
+			const bool inline_desc = inline_type && inline_type->is_string();
+			if (!inline_desc) {
+				const auto read = res::reference_from_json(data);
+				if (!read) {
+					std::string why = "a desc field is a path, a {guid, path} reference or an inline desc with \"__type\"";
+					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(res::tag{}, std::move(why));
+				}
+				const res::tag reference = resolve_reference(*read);
+				// The owner's protocol is unknown for the assembler's untagged copy: the stricter rule applies (#697).
+				if (std::string why = res::reference_problem(reference, owner.get_tag().protocol()); !why.empty()) {
+					res::report_load_warning(res::diagnostic_kind::reference, json_path, why);
+					return m_res_system.refused<T>(reference, std::move(why));
+				}
+				// A desc that held a handle to its own file would keep itself alive for good: the block owns the desc, the
+				// desc the block (#952). The reference is refused like one it may not make; an alias of the file is the file.
+				if (reference.is_valid() && (reference == owner.get_tag() || m_res_system.resolve_alias(reference) == owner.get_tag())) {
+					std::string why = std::format("'{}' refers to itself", reference.view());
+					res::report_load_warning(res::diagnostic_kind::cycle, json_path, why);
+					return m_res_system.refused<T>(reference, std::move(why));
+				}
+				auto handle = m_res_system.require<T>(reference);
+				res::note_field_load(handle.get_control_block(), json_path, false, &core::res::holds<T>, core::res::handle_type_name<T>());
+				return handle;
+			}
+
+			res::tag mem_tag = make_mem_tag_deterministic(owner, std::string{ inline_type->get_string() }, data);
+
+			// Only store if not already in cache - avoids re-creating the same resource on every assembly.
+			if (!m_res_system.exists(mem_tag)) {
+				m_res_system.store(mem_tag, serialize_to_bytes(data));
+			}
+			auto handle = m_res_system.require<T>(mem_tag);
+			res::note_field_load(handle.get_control_block(), json_path, true, &core::res::holds<T>, core::res::handle_type_name<T>());
+			return handle;
+		}
+
+        void write_pretty_json(std::ostream& os, json::value const& jv, std::string* indent = nullptr) const
+        {
+            desc::write_pretty_json(os, jv, indent);
+        }
+
+
+		std::vector<std::byte> serialize_to_bytes(const json::value& data) const
+		{
+			return desc::pretty_json_bytes(data);
+		}
+
+		res::tag make_mem_tag_deterministic(const desc::desc_base& owner, const std::string& field, const json::value& data) const
+		{
+			std::string_view owner_name = owner.get_tag().pure_name();
+			std::string serialized = json::serialize(data);
+			uint64_t content_hash = fnv1a_64(serialized);
+
+			std::string path = std::format("{}{}/{}_{:x}.desc",
+				override_root(m_res_system), owner_name, field, content_hash);
+
+			return res::tag{ path };
+		}
+
+	private:
+		using factory_fn = std::function<std::shared_ptr<desc::desc_base>()>;
+		using migration_step_fn = std::function<void(json::object&)>;
+		using migration_steps = std::map<int, migration_step_fn>;
+
+		// Shared with the registry: a factory or a step that is running outlives the unregistration of its type (#988).
+		std::shared_ptr<const factory_fn> find_factory(std::string_view type_name) const;
+
+		// Why `schema` cannot be a document (empty: it can); see mark_document.
+		std::string document_problem(const type_schema& schema, std::span<const std::string_view> codec_fields) const;
+
+		std::shared_ptr<const migration_steps> find_migrations(std::string_view type) const;
+
+		bool owned_by_parent(std::string_view type_name) const;
+
+		// False (nothing registered) when the parent owns the type. Only builds what needs T; the registry is written by
+		// the engine (add_desc_entry), so a module never compiles code that touches its members (#786).
+		template<typename T>
+		bool add_desc(const std::string_view type_name, const schema_kind kind)
+		{
+			factory_fn factory = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
+			if constexpr (desc::is_described<T>) {
+				static_assert(desc::has_schema_generator<T>, "T is described with BOOST_DESCRIBE_CLASS: include <snk/desc/desc_describe.h> where it is registered");
+				return add_desc_entry(type_name, kind, std::move(factory), desc::schema_generator<T>::enums(),
+					desc::schema_generator<T>::make(type_name, current_version(type_name), kind));
+			} else {
+				return add_desc_entry(type_name, kind, std::move(factory), {}, std::nullopt);
+			}
+		}
+
+		// A schema_kind::component type is listed in get_component_type_names().
+		bool add_desc_entry(std::string_view type_name, schema_kind kind, factory_fn factory, std::vector<enum_schema> enums,
+			std::optional<type_schema> schema);
+
+		// Migrates the object itself first, then its members, so children a migration creates are visited too.
+		// `run(step, obj, type, from)` applies one step. Defined and instantiated in the engine only.
+		template<class RunStep>
+		void migrate_object(json::object& obj, std::string_view context, const RunStep& run) const;
+		template<class RunStep>
+		void migrate_value(json::value& value, std::string_view context, const RunStep& run) const;
+		template<class RunStep>
+		void migrate_typed(json::object& obj, const std::string& type, std::string_view context, const RunStep& run) const;
+
+		res::resource_system& m_res_system;
+		const desc_system* m_parent = nullptr;
+		std::unordered_map<std::string, std::shared_ptr<const factory_fn>> factory_map;
+		// Copy on write: a change publishes a new map of the type, a load keeps the one it took.
+		std::unordered_map<std::string, std::shared_ptr<const migration_steps>> m_migrations;
+		std::vector<std::string> m_component_type_names;
+		schema_registry m_schemas;
+		// Guards the four registries above against loads that read them on other threads (#988). A leaf of the lock order:
+		// only lookups and copies under it; a factory or a step runs after it is released, and so does a call to m_parent.
+		mutable std::shared_mutex m_registry_mutex;
+	};
+}

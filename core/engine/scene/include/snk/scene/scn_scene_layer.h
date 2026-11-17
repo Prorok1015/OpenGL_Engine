@@ -1,0 +1,116 @@
+#pragma once
+#include <snk/desc/desc_system.h>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_channel.hpp>
+#include <snk/ecs/ecs_component.h>
+#include <snk/ecs/ecs_component_registry.hpp>
+#include <snk/ecs/ecs_system.h>
+#include <snk/resource/res_system.h>
+#include <snk/scene/scn_blackboard_catalog.h>
+#include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_event_subscriptions.h>
+#include <snk/common/snk_api.h>
+#include <entt/meta/context.hpp>
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace scn
+{
+	class hot_reload_manager;
+
+	// The services of a layer over the base (MODULE_LAYER.md): a resource layer with a desc adapter on the layer's
+	// desc system, desc system, assembler, system factory, channel and event types over the base ones, component names, a
+	// meta context and the hot reload of the layer's worlds. What a game module registers goes here; the worlds of the
+	// layer are the sets the context_manager created for it. Main thread, between frames; the base services outlive it.
+	//
+	// What a module registers in a base registry outside the layer (a command, a log sink, ...) is kept here by its
+	// RAII handle (keep), and its tasks are bound to tasks(): the layer drops both before its services go, and its
+	// worlds go before that (context_manager::destroy_layer), so none of the module's code runs once the layer is gone.
+	class SNK_API scene_layer
+	{
+	public:
+		// `tasks`: the task system the layer's tasks run on; null when nothing is bound to tasks().
+		scene_layer(res::resource_system& base_resources, ecs_assembler& base_assembler, ecs::system_factory& base_systems,
+			const ecs::channel_registry& base_channels, const ecs::bus_registry& base_events, const component_catalog& base_catalog,
+			ds::task_system* tasks);
+		// Stops the layer's tasks, drops what it keeps, then stops the layer's loads before the desc system their
+		// adapters use goes away.
+		~scene_layer();
+		scene_layer(const scene_layer&) = delete;
+		scene_layer& operator=(const scene_layer&) = delete;
+		scene_layer(scene_layer&&) = delete;
+		scene_layer& operator=(scene_layer&&) = delete;
+
+		res::resource_system& resources();
+		desc::desc_system& descs();
+		ecs_assembler& assembler();
+		ecs::system_factory& systems();
+		ecs::component_registry& components();
+		// The runtime types a snapshot of the layer's worlds knows: the engine's, then the module's (with their schemas).
+		component_catalog& catalog();
+		const component_catalog& catalog() const;
+		// Never attached to a binary's entt::locator: module code passes it explicitly (ecs::register_component(meta()),
+		// entt::resolve(meta(), id)), and the engine finds it through ecs::find_meta.
+		entt::meta_ctx& meta();
+		const entt::meta_ctx& meta() const;
+		const std::shared_ptr<hot_reload_manager>& hot_reload() const;
+		// The message types of the layer's sets: the base's, then the module's (`channels().add<my_message>()`).
+		ecs::channel_registry& channels();
+		const std::shared_ptr<ecs::channel_registry>& channel_types() const;
+		// The event types of the worlds of the layer's sets (WORLD_BUS.md 3): the base's, then the module's
+		// (`events().add<my_event>()`).
+		ecs::bus_registry& events();
+		const std::shared_ptr<ecs::bus_registry>& event_types() const;
+		// Bus subscriptions heard in the worlds of the layer's sets (a module subscribes through
+		// gs::module_context::subscribe, which keeps them here until the layer goes).
+		event_subscriptions& subscriptions();
+		// The blackboard value types a snapshot of the layer's sets can save (optional: `blackboard_types().add<T>(name,
+		// schema)`); a value of any other type is reported as lost.
+		blackboard_catalog& blackboard_types();
+		const blackboard_catalog& blackboard_types() const;
+
+		// Owner of the module's tasks: run them with task_system::run(lane, desc, layer.tasks(), fn).
+		const ds::lifetime& tasks() const;
+		// Cancels the layer's tasks and waits for them; a task started after that (from one of their continuations) is
+		// cancelled at once. Idempotent and final: the layer does it before its worlds and services go.
+		void stop_tasks();
+		// What the layer's tasks run on; null when nothing is bound to tasks().
+		ds::task_system* task_runner() const;
+
+		// Holds a registration made in a base registry (cmd::registration, engine::log_sink_handle, ...) until the
+		// layer goes; what is kept is dropped in reverse order. Returns the kept object.
+		template<class T>
+		T& keep(T handle)
+		{
+			auto held = std::make_shared<T>(std::move(handle));
+			T& ref = *held;
+			keep_erased(std::move(held));
+			return ref;
+		}
+		std::size_t kept_count() const;
+
+	private:
+		// The exported half of keep<T>: module code never touches the kept list.
+		void keep_erased(std::shared_ptr<void> object);
+
+		entt::meta_ctx m_meta;
+		std::unique_ptr<res::resource_system> m_resources;
+		// By pointer (#758): the size of desc_system does not move the members after it.
+		std::unique_ptr<desc::desc_system> m_descs;
+		ecs_assembler m_assembler;
+		ecs::system_factory m_systems;
+		ecs::component_registry m_components;
+		component_catalog m_catalog;
+		std::shared_ptr<hot_reload_manager> m_hot_reload;
+		std::shared_ptr<ecs::channel_registry> m_channels;
+		std::vector<std::shared_ptr<void>> m_kept;
+		ds::task_system* m_task_system = nullptr;
+		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
+		std::shared_ptr<ecs::bus_registry> m_events;
+		event_subscriptions m_subscriptions;
+		blackboard_catalog m_blackboard_types;
+	};
+}

@@ -1,0 +1,124 @@
+[META]
+framework: claude-framework
+file_id: backlog.SCHEMA
+class: universal
+version: 1.0.0
+
+[SCHEMA]
+overview: Exact field layout for backlog INDEX.toon entries and items/<id>.toon detail files
+principle: INDEX is scanned every time the agent engages backlog. Detail files are lazy-loaded. Schema is enforced to keep INDEX predictable and tiny.
+
+[ID_FORMAT]
+format: BL-<seq>
+seq: zero-padded 3-digit integer, monotonically increasing across the whole backlog
+examples: BL-001, BL-042, BL-128
+never: Do not reuse IDs even after deletion. An ID always refers to the same item for the life of the repo.
+next_id_rule: Read INDEX.toon, find max seq across all [ITEM.*] entries (including archived), add 1.
+
+[INDEX_ENTRY_SHAPE]
+# Exactly 7 lines per item in INDEX.toon [ITEMS] section. No extra fields here.
+# Longer content belongs in items/<id>.toon.
+
+[ITEM.BL-042]
+title: <short imperative phrase, under 60 chars>
+type: feature | refactor | bugfix | chore | docs
+status: proposed | accepted | in-progress | done | deferred | rejected
+priority: P0 | P1 | P2 | P3
+created: <ISO date YYYY-MM-DD>
+theme: <optional short tag for grouping; empty string if none>
+
+# Notes on fields:
+# - title: verb-phrase, not a sentence. "Add webhook retries", not "We should add retries to webhooks"
+# - type: see LIFECYCLE.toon for how type affects activation (feature/refactor/bugfix route to workflow)
+# - status: see LIFECYCLE.toon
+# - priority: P0=urgent, P1=high, P2=normal, P3=nice-to-have. Default P2 if unspecified.
+# - created: agent fills at capture time
+# - theme: free-form tag, e.g. "rendering", "auth", "tech-debt". Used only for filtering; no hierarchy enforced.
+
+[DETAIL_FILE_SHAPE]
+# docs/agent/backlog/items/BL-042.toon
+# Loaded ONLY when the item is being inspected, updated, or activated.
+
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-042
+class: runtime-managed   # agent writes these; not tracked in manifest
+version: 1.0.0
+
+[ITEM]
+id: BL-042
+title: <same as index>
+type: <same as index>
+status: <same as index>
+priority: <same as index>
+created: <same as index>
+theme: <same as index>
+
+[DESCRIPTION]
+# 2-6 lines: what needs to happen and why. Context enough for a future-self agent to act cold.
+<prose>
+
+[MOTIVATION]
+# Why this is worth doing. What breaks or stays suboptimal if we don't.
+<prose>
+
+[ACCEPTANCE]
+# Bulleted list of observable outcomes. Used as verification checklist when workflow activates this item.
+- <criterion 1>
+- <criterion 2>
+
+[OUT_OF_SCOPE]
+# What this item deliberately does NOT cover. Prevents scope drift on activation.
+- <thing we will not do>
+
+[LINKS]
+# Optional. Any of these may be empty.
+workplan: <slug if currently active, e.g. add-webhook-retries>
+external_id: <e.g. AB#1234 for Azure DevOps, LIN-456 for Linear, #789 for GitHub — or empty>
+epic: <path or id, e.g. docs/epics/manufacturing/EPIC-07.md#US-07-3 — or empty>
+related_items: <list of BL-ids, e.g. BL-015, BL-031 — or empty>
+
+[HISTORY]
+# Append-only. One line per transition. Agent writes, never edits past entries.
+<ISO datetime> — captured (proposed) — source: <user | spawn_task | workflow.REFACTOR.out_of_scope | workflow.BUGFIX.followup>
+<ISO datetime> — <old status> → <new status> — <optional reason>
+
+[INDEX_TOON_SKELETON]
+# What INDEX.toon looks like when populated. Agent appends [ITEM.BL-XXX] blocks to [ITEMS].
+
+[META]
+framework: claude-framework
+file_id: backlog.INDEX
+class: parameterized
+version: 1.0.0
+
+[BACKLOG_META]
+project_name: <filled at setup>
+next_id_seq: <last-used + 1, kept current by agent>
+last_updated: <ISO datetime>
+sync_target: <none | azure-devops | linear | github>  # see SYNC.toon
+
+[ITEMS]
+# Ordered by status (in-progress → accepted → proposed → deferred → rejected → done) then by priority then by id.
+# Agent re-sorts on every write.
+
+[ITEM.BL-001]
+title: ...
+type: ...
+status: ...
+priority: ...
+created: ...
+theme: ...
+
+[ITEM.BL-002]
+...
+
+[ARCHIVE]
+# Optional. Once [ITEMS] exceeds ~80 entries, agent moves done/rejected items older than 30 days
+# to docs/agent/backlog/archive/INDEX.toon (same schema).
+
+[INTEGRITY_RULES]
+- INDEX and detail MUST stay in sync on the six shared fields (title, type, status, priority, created, theme)
+- If agent detects drift (INDEX says X, detail says Y) → detail file wins, repair INDEX, log in item HISTORY
+- Never delete a detail file without also removing the INDEX entry (and vice-versa)
+- Never rewrite HISTORY entries; append only

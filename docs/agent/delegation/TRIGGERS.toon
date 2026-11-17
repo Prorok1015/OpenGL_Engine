@@ -1,0 +1,88 @@
+[META]
+framework: claude-framework
+file_id: delegation.TRIGGERS
+class: universal
+version: 1.0.0
+
+[TRIGGERS]
+overview: Criteria that force the main agent to delegate a subtask instead of doing it itself
+decision: If ANY trigger fires → delegate. Do not combine triggers; a single match is sufficient.
+
+[TRIGGER_1_WIDE_EXPLORATION]
+name: Wide codebase exploration
+fires_when: Answering the task requires reading or grepping MORE THAN 3 files for orientation (not for a known-path edit)
+examples:
+  - "How does authentication work in this repo?"
+  - "Find every place that writes to the cache"
+  - "Is feature X implemented anywhere?"
+action: Delegate to Explore subagent with thoroughness level ("quick" / "medium" / "very thorough")
+rationale: Each file Read pollutes main context with code the main agent will never need after synthesis
+budget: Require report under 300 words unless user asked for detail
+
+[TRIGGER_2_LARGE_TOOL_OUTPUT]
+name: Large tool output expected
+fires_when: A single tool call is expected to return MORE THAN 5000 tokens AND the final answer only needs a summary
+examples:
+  - Running a full test suite (logs are huge, outcome is pass/fail + failing names)
+  - Reading a 2000-line generated file to answer one question about it
+  - Grepping for a common keyword across a large repo
+  - Fetching a long API response / HTML page
+action: Delegate to general-purpose subagent; instruct it to return only the answer, not the raw output
+rationale: Raw output stays inside the subagent's context and is discarded; main thread gets the distilled answer
+budget: Specify exact shape of the response ("report: failing test names + one-line cause each")
+
+[TRIGGER_3_INDEPENDENT_BRANCHES]
+name: Independent parallel work
+fires_when: The task has 2+ subtasks that do NOT share state or depend on each other's output
+examples:
+  - "Audit Website and RenderEngine for unused deps" → two parallel subagents
+  - "Summarize changes in three files" → one subagent per file, in parallel
+  - Running tests + linter + type check simultaneously
+action: Spawn multiple subagents IN THE SAME MESSAGE (parallel tool use)
+rationale: Wall-clock speedup is roughly N× for N independent subtasks
+budget: Each subagent gets its own word budget
+
+[TRIGGER_4_MECHANICAL_TRANSFORMATION]
+name: Mechanical / prescribed transformation
+fires_when: Task is well-defined, follows a clear recipe, and does not require deep reasoning about project architecture
+examples:
+  - "Rename variable X to Y across these 5 files"
+  - "Add TODO comments above every call to deprecated function"
+  - "Convert these three JSON files to YAML with the same structure"
+  - "Generate boilerplate for a new CRUD endpoint following the pattern in file Z"
+action: Delegate to general-purpose subagent with model="haiku"
+rationale: Haiku handles deterministic transformations well at ~5× lower cost than Sonnet
+budget: Task specifies exact expected output; no freedom to redesign
+
+[TRIGGER_5_PLANNING_MULTIFILE_CHANGE]
+name: Multi-file planning / architecture sketch
+fires_when: Implementing the task requires a cross-file plan BEFORE any edit, and the plan itself is the deliverable
+examples:
+  - "How should I refactor the data-access layer?"
+  - "Plan the migration from REST to gRPC for these services"
+  - "Design the integration between module A and new module B"
+action: Delegate to Plan subagent
+rationale: Planning produces concise step-by-step output; exploration needed to produce it is noise to main thread
+
+[TRIGGER_6_OPEN_SEARCH_LOW_CONFIDENCE]
+name: Open-ended search with unclear target
+fires_when: Searching for a keyword/file where first-few-tries confidence is LOW (naming conventions unclear, dialect-specific terms, multiple plausible locations)
+examples:
+  - "Where's the retry policy configured?" (could be in middleware, config, decorator, etc.)
+  - "Find the class that handles websocket heartbeats"
+action: Delegate to general-purpose subagent; let it search iteratively
+rationale: Main thread avoids consuming tokens on 5+ dead-end Glob/Grep calls
+
+[COMBINED_DECISION_TREE]
+├─ Task needs >3 files to orient?                    → DELEGATE (Explore)
+├─ Single tool call output >5k tokens expected?      → DELEGATE (general, summary only)
+├─ 2+ independent subtasks?                          → DELEGATE (parallel, one each)
+├─ Task is mechanical / prescribed?                  → DELEGATE (general, haiku)
+├─ Task is multi-file planning?                      → DELEGATE (Plan)
+├─ Open search with unclear naming?                  → DELEGATE (general)
+└─ None of the above?                                → DO IT INLINE (see ANTI_PATTERNS.toon)
+
+[NEVER_USE_AS_EXCUSE_NOT_TO_DELEGATE]
+- "It's faster to just do it" — measure tokens, not keystrokes
+- "The subagent might miss nuance" — specify the nuance in the prompt
+- "I already started reading the files" — stop and delegate if trigger 1 fires

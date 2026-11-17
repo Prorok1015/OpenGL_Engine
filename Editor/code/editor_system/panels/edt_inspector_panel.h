@@ -1,35 +1,106 @@
 #pragma once
-#include "edt_panel_base.h"
-#include "level/scn_prefab_desc.h"
+#include "edt_instance_overrides_view.h"
+#include "edt_schema_inspector.h"
+#include <snk/editor/edt_panel_base.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <functional>
 #include <memory>
+#include <cstdint>
 #include <string>
+#include <vector>
+#include <unordered_map>
+#include <boost/json/object.hpp>
 
-namespace desc { class desc_system; }
-namespace edt  { class component_ui_registry; }
+namespace desc { class desc_system; struct type_schema; }
+namespace edt  { class inspector_registry; }
+namespace edt::override_edit { class view_cache; }
+namespace edt::picker { class catalog; }
 
 namespace edt
 {
+	// A custom renderer of a component without its own data draws on a copy of its parent's; only what it changed
+	// against the parent becomes the component's own data (`apply` false: drawn, nothing kept). True when it changed.
+	bool edit_against_parent(scn::prefab_desc::prefab_comp_node& comp, const boost::json::object* parent,
+		const std::function<bool(scn::prefab_desc::prefab_comp_node&)>& renderer, bool apply = true);
+
 	class inspector_panel : public panel_base
 	{
 	public:
+		// What drew a component in the last frame: the fallback order is custom renderer, schema, generic JSON.
+		enum class component_ui : std::uint8_t { none, custom, schema, generic };
+
 		inspector_panel();
 
-		void set_selected_node(scn::prefab_desc::prefab_node* node);
+		void set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly = false);
+		scn::prefab_desc::prefab_node* selected_node() const { return m_selected_node; }
+		// The selected node is a node of the prefab that `owner` instantiates, `target` the ids from the instance to it.
+		// Edits then become override records on `owner`; null owner = the selected node is edited itself.
+		void set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target);
 		void set_on_node_changed(std::function<void()> cb);
-		void set_component_ui_registry(component_ui_registry* registry);
+		void set_inspector_registry(inspector_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
+		// The desc system asked for at each use: the game layer's, which changes when a game module loads or unloads.
+		void set_desc_source(std::function<desc::desc_system*()> source);
+		// The files a reference field may point at, asked for at each use (null: no picker; the asset database exists only with a project).
+		void set_asset_source(std::function<const picker::catalog*()> source) { m_asset_source = std::move(source); }
+		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
+		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
+		// The desc under the cache changed: the next frame composes again.
+		void invalidate_view();
+		// Nodes (by id) an agent changed since the last save or accept: the header says so.
+		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
+		// True while the document must not change (Play): the panel is drawn disabled with a hint.
+		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
+		// What the "Prefab instance" section of an instance node can do: open the prefab in the prefab editor, apply records to its file.
+		void set_instance_hooks(instance_overrides_hooks hooks) { m_instance_hooks = std::move(hooks); }
+		// An edit made in the panel waits for its widget to let go before it is committed.
+		bool has_pending_commit() const { return m_pending_commit; }
+		void note_edit() { m_pending_commit = true; }
+		// Hands an edit that waits for its widget to go idle to the owner now (before the selection it belongs to goes away).
+		void flush_pending_commit();
+		component_ui ui_of(const std::string& component_key) const;
 
 	protected:
 		void on_render() override;
 
 	private:
-		void render_generic_json(boost::json::object& obj);
+		void render_selected();
+		void rebuild_parent_cache();
+		bool render_generic_json(boost::json::object& obj);
+		bool render_generic_json_value(const std::string& key, boost::json::value& val);
+		void commit_if_idle();
+		void render_generic_json_readonly(const boost::json::object& obj);
+		void render_generic_json_value_readonly(const std::string& key, const boost::json::value& val);
 		void draw_add_component_popup();
+		void render_override_target();
+		// The data the component's parent desc defines (serialized once per selection); null without a ready parent.
+		const boost::json::object* parent_json(const std::string& key, const scn::prefab_desc::prefab_comp_node& comp);
+		// Schema UI over the component's own overrides: draws parent data + overrides, writes only the changed pointers back.
+		bool render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema);
+		// Schema UI over a full effective component of an instance node; the edit lands in `scratch.overrides`.
+		bool render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema);
 
+		// The text of the map rows (new keys, refused renames) of the node shown; cleared with the selection.
+		schema_ui::map_edit_state      m_map_state;
 		scn::prefab_desc::prefab_node* m_selected_node  = nullptr;
-		component_ui_registry*         m_ui_registry    = nullptr;
-		desc::desc_system*             m_desc_system    = nullptr;
+		bool                           m_readonly       = false;
+		scn::prefab_desc::prefab_node* m_owner          = nullptr;
+		std::vector<uint64_t>          m_target;
+		inspector_registry*            m_inspectors     = nullptr;
+		std::function<desc::desc_system*()> m_desc_source;
+		std::function<const picker::catalog*()> m_asset_source;
+		desc::desc_system* descs() const { return m_desc_source ? m_desc_source() : nullptr; }
+		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;
+		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
+		bool                           m_pending_commit = false;
+		std::function<bool(uint64_t)>  m_agent_marked;
+		std::function<bool()>          m_edits_locked;
+		instance_overrides_hooks m_instance_hooks;
+		instance_overrides_state m_instance_ui;
+
+		// Cached serialized parent_desc data — built once on selection change for read-only display
+		std::unordered_map<std::string, boost::json::object> m_parent_cache;
+		std::unordered_map<std::string, component_ui> m_ui_sources;
 	};
 }

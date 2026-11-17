@@ -1,0 +1,39 @@
+# res::is_ignored_asset_name (core/core/resource/include/snk/resource/res_asset_meta.h): one name per line,
+# "<name><TAB><1 ignored | 0 an asset>". Read by tools/ci/asset_ids.py --self-test and tests/res_repo_layout_tests.cpp,
+# so the editor and the script that makes the .resource of the repository trees skip the same names.
+	1
+.	1
+.gitkeep	1
+.DS_Store	1
+.x.swp	1
+.tmp	1
+.resource	1
+~$report.docx	1
+~$	1
+~x	0
+x~	1
+~	1
+a~b	0
+Thumbs.db	1
+THUMBS.DB	1
+thumbs.db	1
+Thumbs.db.png	0
+athumbs.db	0
+ТHUMBS.DB	0
+desktop.ini	1
+Desktop.INI	1
+desktop.ini.bak	0
+a.tmp	1
+A.TMP	1
+a.Tmp	1
+файл.TMP	1
+tmp	0
+xtmp	0
+a.tmp.png	0
+x.tmpl	0
+normal.png	0
+scene.frag	0
+level.desc	0
+a.png.resource	0
+x$	0
+$x	0

@@ -1,0 +1,136 @@
+[META]
+framework: claude-framework
+file_id: workflow.PHASES
+class: universal
+version: 1.0.0
+
+[PHASES]
+overview: The six mandatory phases of development work, in order, with exit criteria for each
+principle: A phase is COMPLETE only when its exit criteria are met. Skipping ahead is a workflow violation, not efficiency.
+
+[PHASE_ORDER]
+1. DISCOVER       — understand the task and the current state
+2. PLAN           — design the change as a concrete artifact
+3. CONFIRM        — present plan; wait for explicit user approval (HARD GATE)
+4. IMPLEMENT      — execute the approved plan, nothing else
+5. VERIFY         — prove the change works and didn't break anything
+6. REPORT         — summarize what changed, what's next, what's unresolved
+
+[PHASE_1_DISCOVER]
+goal: Understand what the user wants and what the code currently does
+inputs: User's request (often vague), existing codebase
+activities:
+  - Restate the task in your own words — confirm understanding with user if any ambiguity
+  - Identify existing patterns that solve similar problems in THIS project (not general best practice)
+  - Locate relevant files and constraints
+  - Delegate wide exploration to Explore subagent if >3 files need reading (see delegation/TRIGGERS.toon)
+  - Read CLAUDE.md and relevant docs/agent/*.toon for project-specific rules
+exit_criteria:
+  - [ ] Task restated, user confirmed (or no ambiguity existed)
+  - [ ] Existing similar patterns identified (or verified absent)
+  - [ ] Known constraints from CLAUDE.md / CONSTRAINTS.toon listed
+  - [ ] Scope boundaries clear (what's IN, what's OUT)
+forbidden_in_this_phase:
+  - Writing any production code
+  - Making non-trivial edits (even "just scaffolding")
+  - Promising the user anything about timeline or approach
+
+[PHASE_2_PLAN]
+goal: Produce a concrete plan the user can accept, reject, or amend
+inputs: Discovery findings
+activities:
+  - Write the plan as structured text (see plan_shape below)
+  - Consider 2-3 alternative approaches; state why chosen one wins
+  - Identify risks and unknowns explicitly
+  - For multi-file planning, delegate to Plan subagent (see delegation/PATTERNS.toon)
+plan_shape:
+  - Goal (one sentence)
+  - Approach (2-5 sentences: what you will do and why this approach)
+  - Files to change (list: path — what changes)
+  - Files to add (list: path — purpose)
+  - Files to delete (list: path — reason)
+  - Tests/verification (how you'll prove it works)
+  - Risks / unknowns (what could go wrong, what you're not sure about)
+  - Out of scope (what you deliberately did NOT include)
+exit_criteria:
+  - [ ] Plan fits the shape above
+  - [ ] User hasn't seen it yet (next phase)
+forbidden_in_this_phase:
+  - Starting implementation in parallel "to save time"
+  - Writing files other than the plan itself
+
+[PHASE_3_CONFIRM]
+goal: Get EXPLICIT approval from the user before any implementation
+inputs: The plan from Phase 2
+activities:
+  - Present the plan to the user (full, not abridged)
+  - Ask a direct question: "Proceed with this plan? [yes / amend / reject]"
+  - If user asks questions — answer without starting work
+  - If user requests changes — update plan, re-present, re-ask
+this_is_a_hard_gate: see GATES.toon — this gate is non-negotiable except under ESCAPE_HATCH
+exit_criteria:
+  - [ ] User has said a clear "yes / approved / proceed / go ahead" or equivalent
+  - [ ] User did NOT say "maybe", "I think so", "looks ok I guess" — those are NOT approval; ask again
+  - [ ] If scope changed during confirmation → loop back to PLAN
+forbidden_in_this_phase:
+  - Interpreting silence as approval
+  - Interpreting "sounds good" with a follow-up concern as approval
+  - Starting implementation while waiting for user's response
+  - Skipping ahead because "it's obvious they'll approve"
+
+[PHASE_4_IMPLEMENT]
+goal: Execute the approved plan, nothing more, nothing less
+inputs: Approved plan
+activities:
+  - Implement file-by-file following the plan's order
+  - If a deviation is needed mid-implementation (discovered constraint, error) → STOP, return to PLAN
+  - Delegate mechanical transformations to haiku subagents (see delegation/PATTERNS.toon)
+  - Write tests alongside code when the plan requires them (see FEATURE.toon / BUGFIX.toon)
+exit_criteria:
+  - [ ] Every item in plan's "Files to change/add/delete" is handled
+  - [ ] No scope drift (extra changes not in plan)
+  - [ ] No half-finished state left behind
+forbidden_in_this_phase:
+  - "While I'm here, let me also fix..." → NO. Note it for later, don't do it.
+  - Redesigning the approach mid-way without returning to PLAN
+  - Skipping test writing if the plan required tests
+  - Adding error handling / validation / fallbacks beyond what the plan specified
+
+[PHASE_5_VERIFY]
+goal: Prove the change works and didn't regress anything
+inputs: Implementation
+activities:
+  - Run the tests/verification step from the plan
+  - For UI/frontend: start the dev server, use the feature in a browser (see CLAUDE.md)
+  - For logic: run affected test suites
+  - For API changes: exercise the endpoint end-to-end
+  - For bugfix: confirm the original reproducer is now green
+  - If verification not possible (env missing, etc.) → say so explicitly, do not claim success
+exit_criteria:
+  - [ ] All verification from plan passed, OR explicit list of what couldn't be verified and why
+  - [ ] No new regressions found in touched areas
+forbidden_in_this_phase:
+  - Declaring success because "it compiles" (compilation ≠ correctness)
+  - Declaring success because "tests I happen to have run pass" — run the tests the plan named
+
+[PHASE_6_REPORT]
+goal: Give the user a precise summary so they can review and continue
+inputs: Everything above
+activities:
+  - One or two sentences: what changed, what's verified
+  - Unresolved items: what was out of scope, what couldn't be verified, what was deferred
+  - Suggested next step (if any)
+  - NO re-explanation of WHAT the code does — the diff speaks for itself
+exit_criteria:
+  - [ ] Summary is under 100 words unless task requires more
+  - [ ] Explicitly names verification status (passed / partial / not-run)
+  - [ ] No claims of success without evidence
+
+[PHASE_SKIPPING_RULES]
+The only legal reasons to skip a phase:
+  - ESCAPE_HATCH criteria met (see ESCAPE_HATCH.toon) → skip 1-3, go to 4
+  - Discovery already done in an earlier turn this session AND scope unchanged → skip 1
+  - Nothing to verify (e.g. pure documentation edit) → reduce phase 5 to a sanity check, say so
+
+Any other skipping is a workflow violation. If tempted, write down the reason first —
+if it doesn't fit an ESCAPE_HATCH criterion, you're rationalizing.

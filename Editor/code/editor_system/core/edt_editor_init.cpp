@@ -1,27 +1,102 @@
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
-#include "desc_system.h"
-#include "edt_frame_loop_service.h"
-#include "rnd_render_system.h"
-#include "gui_system.h"
-#include "res_system.h"
+#include <snk/editor/edt_editor_context.h>
+#include <snk/desc/desc_system.h>
+#include <snk/application/app_frame_stage.h>
+#include "edt_camera_redirect.h"
+#include "edt_project_trust_service.h"
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
+#include <snk/gui/gui_system.h>
+#include <snk/resource/res_system.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
+
+// --headless: no window (window/system = null), so no panels are drawn; see the `ui` stage below.
+// Also read by dialog_service.
+CFG_VAR_DEF_BOOL(cfg_edt_headless, "editor/headless", false);
 
 namespace components {
 
 	void editor_init(ds::app_data_storage& data)
 	{
+		// The base services, for the editor's own tools and assets; the game data goes through the game layer at the
+		// moment of use (editor_services), since a game module replaces that layer.
 		auto& desc_system = data.require<desc::desc_system>();
 		auto& res_sys     = data.require<res::resource_system>();
 		auto& rnd_sys     = data.require<rnd::render_system>();
 		auto& gui_sys     = data.require<gui::gui_system>();
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);
-		data.construct<app::app_loop_service_interface, edt::edt_loop_service>();
+		// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
+		auto& stages = data.require<app::frame_stage_registry>();
+		if (cfg_edt_headless) {
+			egLOG_INFO("editor", "headless: no display; agent actions run without a human");
+			// No panels; the implicit callbacks still run, since level loads and next-frame work are queued there.
+			stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+				auto& editor = c.storage.require<edt::editor_system>();
+				c.storage.require<gui::gui_system>().run_without_drawing([&editor] { editor.run_implicit_callbacks(); });
+			});
+		} else {
+			stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+				c.storage.require<gui::gui_system>().render();
+			});
+		}
+		// The 3D view is shown inside an ImGui panel: game cameras draw into textures, not the backbuffer.
+		// The redirector also releases the textures of cameras that no longer exist.
+		// Job progress is polled once per frame, after the `tasks` stage delivered the jobs that finished.
+		stages.add_stage("editor_jobs", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_context>()) c.storage.require<edt::editor_context>().jobs().pump();
+		});
+		// Live mode (#445) after the pump, which delivers its build outcomes; it reloads the module here, never inside the pump.
+		stages.add_stage("editor_live", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_live_mode();
+		});
+		stages.add_stage("editor_level_settle", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_level_settle();
+		});
+		// #485: stats of the repository's files (at most every 500 ms), never git.
+		stages.add_stage("editor_vcs", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_repository_watcher();
+		});
+		stages.add_stage("editor_assets", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (!c.storage.has_value<edt::editor_system>()) return;
+			auto& editor = c.storage.require<edt::editor_system>();
+			editor.tick_asset_problems();
+			editor.tick_desc_binary_cache();
+		});
+		auto redirector = std::make_shared<edt::camera_redirector>();
+		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
+			[redirector](app::stage_context& c) {
+				auto& textures = c.storage.require<rnd::render_system>().get_texture_manager();
+				redirector->update(c.storage.require<scn::context_manager>(),
+					[&textures](const res::tag& tag) { textures.remove(tag); });
+			});
 	}
 
 	void editor_term(ds::app_data_storage& data)
 	{
-		data.destruct<app::app_loop_service_interface>();
+		auto& stages = data.require<app::frame_stage_registry>();
+		stages.remove_stage("editor_redirect_cameras");
+		stages.remove_stage("editor_assets");
+		stages.remove_stage("editor_vcs");
+		stages.remove_stage("editor_live");
+		stages.remove_stage("editor_jobs");
+		stages.clear_body(app::builtin_stage::ui);
+		// Jobs run code owned by editor_system; stop them while it, the context and the task system are all alive.
+		if (data.has_value<edt::editor_context>()) {
+			data.require<edt::editor_context>().jobs().cancel_all_and_wait();
+		}
+		// Order matters: ~editor_system releases the scene document (and closes the preview) in the context's document_manager.
 		data.destruct<edt::editor_system>();
+		// Constructed by editor_system::init (#921); main's trust_library falls back to --trust-project without it.
+		if (data.has_value<edt::project_trust_service>()) {
+			data.destruct<edt::project_trust_service>();
+		}
+		// Registered by editor_system::init, after the system itself.
+		if (data.has_value<edt::editor_context>()) {
+			data.destruct<edt::editor_context>();
+		}
 	}
 
-}
+}

@@ -1,0 +1,149 @@
+#pragma once
+#include <snk/mcp/mcp_host.h>
+#include <snk/mcp/mcp_http.h>
+#include <snk/mcp/mcp_rpc.h>
+
+#include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace mcp
+{
+	struct endpoint_config
+	{
+		// Bearer token. Empty: every request is refused (fail closed).
+		std::string token;
+		// Path of the MCP endpoint.
+		std::string path = "/mcp";
+		// Origin header values that are accepted (exact match). A request with any other Origin is refused; one
+		// without Origin (not a browser) is fine.
+		std::vector<std::string> allowed_origins;
+		std::size_t max_sessions = 8;
+		// A session with no request for this long is closed (host::session_closed), so what is kept per session, such as
+		// a person's "allow until the session ends", does not outlive a client that went away. 0: never.
+		std::chrono::milliseconds session_idle_timeout{ std::chrono::minutes(30) };
+		// Tests only: the clock of the idle timeout. Empty: std::chrono::steady_clock.
+		std::function<std::chrono::steady_clock::time_point()> clock;
+		std::size_t max_subscriptions_per_session = 64;
+		server_info info;
+	};
+
+	// MCP over Streamable HTTP without the sockets: one HTTP request in, one response out. It checks the Host and
+	// Origin headers (DNS rebinding) and the token, keeps the sessions (Mcp-Session-Id), speaks JSON-RPC and calls the
+	// host. Thread-safe: the server calls it from its I/O thread, tests from anywhere. `respond` is called exactly
+	// once, possibly later and from another thread (when the host answers later).
+	//
+	// Supported: initialize, ping, tools/list, tools/call (with notifications/progress on the event stream),
+	// resources/list, resources/templates/list, resources/read, resources/subscribe, resources/unsubscribe,
+	// notifications/resources/updated and notifications/tools/list_changed on the event stream (GET), and
+	// notifications/cancelled from the client (host::cancel_request).
+	// Batches are refused (removed from the protocol in 2025-06-18). The methods themselves are rpc_dispatcher's.
+	// One MCP session as a person sees it (the agents window). `client_name` is what the client called itself in initialize
+	// (clientInfo.name): untrusted text, cut to 64 bytes without control characters.
+	struct session_info
+	{
+		std::string id;
+		std::string client_name;
+		std::chrono::seconds age{};
+		// Since the last request on the session.
+		std::chrono::seconds idle{};
+		// An event stream is open: the client is listening.
+		bool listening = false;
+	};
+
+	class endpoint
+	{
+	public:
+		using responder = std::function<void(http_response)>;
+
+		endpoint(host& application, endpoint_config config);
+		~endpoint();
+		endpoint(const endpoint&) = delete;
+		endpoint& operator=(const endpoint&) = delete;
+
+		// The port the server listens on; a Host header must name it. 0: any port.
+		void set_port(std::uint16_t port);
+
+		void handle(const http_request& request, responder respond);
+
+		// The Host, Origin and token checks alone: nullopt when the request may go on, otherwise the refusal (403 or
+		// 401, closing the connection). The server asks before it sends "100 Continue" for a body it would refuse.
+		std::optional<http_response> check_access(const http_request& request) const;
+
+		// To the sessions that subscribed to `uri` and have an event stream open.
+		void notify_resource_updated(const std::string& uri);
+		// To every session that has an event stream open.
+		void notify_tools_changed();
+		// Drops the sessions and closes their streams.
+		void close_all();
+		// Closes the sessions that were idle for session_idle_timeout. Done on its own at every session lookup, and by
+		// the server once in a while, for a client that never comes back.
+		void expire_idle_sessions() const;
+
+		std::size_t session_count() const;
+		// The open sessions, oldest first.
+		std::vector<session_info> sessions() const;
+		// Ends one session as DELETE does (host::session_closed is called). False: there is none by that id.
+		bool close_session(const std::string& id);
+
+	private:
+		struct session
+		{
+			std::uint64_t serial = 0; // creation order, for eviction
+			std::chrono::steady_clock::time_point started{};
+			std::chrono::steady_clock::time_point last_used{};
+			std::string client_name;
+			std::set<std::string> subscriptions;
+			std::shared_ptr<event_channel> channel;
+		};
+
+		// What the sessions are, behind a shared_ptr: an answer of the host that comes after the endpoint is gone
+		// (a subscribe waiting for the resource list) still finds valid state.
+		struct shared_state
+		{
+			std::mutex mutex;
+			std::map<std::string, session> sessions;
+			std::uint64_t next_serial = 1;
+		};
+
+		void route(const http_request& request, const responder& respond);
+		void handle_post(const http_request& request, const responder& respond);
+		void handle_get(const http_request& request, const responder& respond);
+		void handle_delete(const http_request& request, const responder& respond);
+		void dispatch_rpc(const boost::json::object& message, const http_request& request, const responder& respond);
+		void on_initialize(const boost::json::value& id, const boost::json::object& params, const responder& respond);
+
+		// The session named by the Mcp-Session-Id header. False, with the HTTP error in `error`, when the header is
+		// missing or names no session.
+		bool lookup_session(const http_request& request, std::string& session_id, std::shared_ptr<event_channel>& channel,
+			http_response& error) const;
+		std::string create_session(std::string client_name);
+		std::chrono::steady_clock::time_point now() const;
+
+		bool host_header_ok(const http_request& request) const;
+		bool origin_ok(const http_request& request) const;
+		bool token_ok(const http_request& request) const;
+
+		// uri == nullptr: every session with a stream.
+		void notify_sessions(const std::string* uri, const std::string& frame);
+
+		host& m_host;
+		endpoint_config m_config;
+		rpc_dispatcher m_rpc;
+		std::atomic<std::uint16_t> m_port{ 0 };
+
+		std::shared_ptr<shared_state> m_state;
+	};
+}

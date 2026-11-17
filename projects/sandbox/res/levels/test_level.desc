@@ -1,0 +1,56 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "name" : "test_level",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 4,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "inp::update_actions",
+                "scn::update_camera_matrix_system",
+                "scn::depth_system",
+                "scn::transform_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "39d3e30167f16e0d",
+                    "name" : "Camera",
+                    "transform" : {
+                        "position" : [-0.07950657606124878, 0.9551191926002502, -1.354621171951294],
+                        "rotation" : [-28.52613639831543, -15.373703956604004, 0.0]
+                    },
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 2
+                        }
+                    }
+                },
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "directional_light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1,
+                            "direction" : [0.3860273063182831, -0.8251869082450867, -0.41237056255340576, 0.0],
+                            "diffuse" : [1.0, 1.0, 1.0, 1.0],
+                            "ambient" : [0.0, 0.0, 0.0, 1.0],
+                            "specular" : [0.0, 0.0, 0.0, 1.0]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

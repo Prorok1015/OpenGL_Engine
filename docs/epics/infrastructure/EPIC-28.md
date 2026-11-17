@@ -2,6 +2,7 @@
 
 **Theme:** infrastructure
 **Status:** planned
+**Issue:** [#25](https://github.com/Prorok1015/OpenGL_Engine/issues/25)
 **Depends on:** —
 
 ---
@@ -114,7 +115,7 @@ void signal_changed(const res::tag& tag) {
 ### US-28-1 — Составной ключ кеша
 
 **Файлы:**
-- `core/core/resource/res_system.h` — `cache_key`, все методы кеша
+- `core/core/resource/include/snk/resource/res_system.h` — `cache_key`, все методы кеша
 - `core/core/resource/res_system.cpp` — `signal_changed`, `register_alias`
 
 **Изменения:** заменить `res::tag` на `cache_key` в `m_cache` и `m_pinned_resources`.
@@ -122,7 +123,7 @@ void signal_changed(const res::tag& tag) {
 ### US-28-2 — Обновить signal_changed и watchers
 
 **Файлы:**
-- `core/core/resource/res_system.h` — `signal_changed`
+- `core/core/resource/include/snk/resource/res_system.h` — `signal_changed`
 
 **Изменения:** evict все типы при `signal_changed(tag)`. Watchers остаются по `res::tag` (они не зависят от типа).
 
@@ -139,7 +140,7 @@ void signal_changed(const res::tag& tag) {
 
 | Файл | Изменение |
 |---|---|
-| `core/core/resource/res_system.h` | `cache_key`, все cache методы, `m_cache`, `m_pinned_resources` |
+| `core/core/resource/include/snk/resource/res_system.h` | `cache_key`, все cache методы, `m_cache`, `m_pinned_resources` |
 | `core/core/resource/res_system.cpp` | `signal_changed`, `register_alias` |
 
 ---

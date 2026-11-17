@@ -1,58 +1,35 @@
-#include "inp_ecs_input_manager.h"
-#include "inp_keyboard_event.hpp"
-#include "inp_events.hpp"
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_action_state.h>
+#include <snk/core_input/inp_keyboard_event.hpp>
+#include <snk/input/inp_events.hpp>
+#include <snk/ecs/ecs_system.h>
+
+void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager)
+{
+	factory.register_system<&ecs_input_manager::update_input_state_system>("inp::update_input_state",
+		{ .phase = ecs::phase::input, .run_in_edit = true }, std::move(manager));
+	factory.register_system<&inp::update_and_trace_actions_system>("inp::update_actions",
+		{ .phase = ecs::phase::input, .after = { "inp::update_input_state" } });
+}
+
+void inp::ecs_input_manager::on_focus_lost(wnd::handle)
+{
+	m_raw.keyboard.fill(false);
+	m_raw.mouse.fill(false);
+}
 
 bool inp::ecs_input_manager::on_handle_event(wnd::handle win, const inp::input_event& evt)
 {
-	if (input_area != glm::zero<glm::ivec4>()) {
-		bool is_handling = true;
-
-		if (invert) {
-			is_handling = (input_state.mouse_pos.x < input_area.x || input_state.mouse_pos.x > input_area.z ||
-						   input_state.mouse_pos.y < input_area.y || input_state.mouse_pos.y > input_area.w);
-		} else {
-			is_handling = (input_state.mouse_pos.x >= input_area.x && input_state.mouse_pos.x <= input_area.z &&
-						   input_state.mouse_pos.y >= input_area.y && input_state.mouse_pos.y <= input_area.w);
-		}
-
-		if (!is_handling) {
-			if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
-				input_state.mouse_pos = c_evt->pos;
-			}
-			if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-				input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
-			}
-			return false;
-		}
-	} else if (invert) {
-		if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
-			input_state.mouse_pos = c_evt->pos;
-		}
-		if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-			input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
-		}
-		return false;
-	}
-
 	if (const auto* payload = evt.get_payload<core::inp::keyboard_event>()) {
-		input_state.keyboard[(std::underlying_type_t<inp::KEYBOARD_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
+		m_raw.keyboard[(std::underlying_type_t<inp::KEYBOARD_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 	} else if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-		input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
+		m_raw.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 	} else if (const auto* payload = evt.get_payload<core::inp::cursor_move_event>()) {
-		if (input_area != glm::zero<glm::ivec4>()) {
-			if (payload->pos.x < input_area.x || payload->pos.x > input_area.z ||
-				payload->pos.y < input_area.y || payload->pos.y > input_area.w) {
-				return false;
-			}
-		}
-
-		glm::vec2 window_size = glm::vec2{input_area.z - input_area.x, input_area.w - input_area.y};
-
-		input_state.mouse_prev = input_state.mouse_pos;
-		input_state.mouse_pos = payload->pos;
-		input_state.mouse_dir = (input_state.mouse_prev - input_state.mouse_pos) / (window_size * 0.5f);
+		m_raw.mouse_prev = m_raw.mouse_pos;
+		m_raw.mouse_pos = payload->pos;
+		m_raw.mouse_dir = m_raw.mouse_prev - m_raw.mouse_pos;
 	} else if (const auto* payload = evt.get_payload<core::inp::scroll_move_event>()) {
-		input_state.scroll = payload->direction;
+		m_raw.scroll = payload->direction;
 	}
 	return false;
 }

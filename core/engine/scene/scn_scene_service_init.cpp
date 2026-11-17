@@ -1,48 +1,76 @@
-#include "scn_scene_service_init.h"
-#include "adapters/scn_worldwrap_adapter.h"
-#include "ecs_system.h"
-#include "level/scn_hot_reload_manager.h"
-#include "level/scn_level_manager.h"
-#include "res_system.h"
-#include "scn_animation_job.h"
-#include "scn_camera_controller_system.h"
-#include "scn_ecs_assembler.h"
-#include "scn_transform_system.h"
+#include <snk/scene/scn_scene_service_init.h>
+#include <snk/project/prj_project.h>
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
+#include <snk/ecs/ecs_system.h>
+#include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/input/inp_action_state.h>
+#include <snk/resource/res_system.h>
+#include <snk/scene/scn_animation.h>
+#include <snk/scene/scn_animation_job.h>
+#include <snk/scene/scn_camera_controller_system.h>
+#include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_transform_system.h>
 
 
-#include "level/scn_light_extractor.h"
-#include "level/scn_render_data_extractor.h"
-#include "rnd_frame_assembler.h"
-#include "skinning/rnd_skinning_manager.h"
-#include "rnd_render_system.h"
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/render/rnd_frame_assembler.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
+#include <snk/render/rnd_render_system.h>
+
+void scn::register_engine_event_types(scn::context_manager &contexts) {
+  contexts.add_event<inp::action_event>({}, &inp::action_event_json);
+  contexts.add_event<scn::animation_finished>({}, &scn::animation_finished_json);
+}
+
+scn::spawn_limits scn::project_spawn_limits(const ds::app_data_storage &store) {
+  if (!store.has_value<prj::project_context>()) {
+    return {};
+  }
+  const prj::prefab_spawn_limits &limits = store.require<prj::project_context>().prefab_limits;
+  return {limits.nesting_depth, limits.nodes_per_spawn};
+}
 
 void scn::scene_init(ds::app_data_storage &store) {
+  scn::set_spawn_limits(project_spawn_limits(store));
   auto &desc_sys = store.require<desc::desc_system>();
   auto &sfactory = store.require<ecs::system_factory>();
   auto &resource = store.require<res::resource_system>();
 
-  auto &assembler = store.construct<scn::ecs_assembler>(desc_sys);
+  auto &assembler = store.construct<scn::ecs_assembler>(desc_sys, resource);
   init_animation_system(sfactory);
   init_transform_system(sfactory);
   init_mouse_controller_system(sfactory);
   store.construct<scn::hot_reload_manager>(store.require<scn::ecs_assembler>(),
                                            resource);
 
-  store.construct<scn::level_manager>(
+  auto &contexts = store.construct<scn::context_manager>(
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
+  scn::register_engine_components(contexts.catalog());
+  scn::register_engine_event_types(contexts);
+  // Engine event types go into register_engine_event_types, above this line: a layer takes the base's types as they
+  // are when it is created, and add_event refuses once a layer exists.
+  // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).
+  contexts.set_game_layer(&contexts.create_layer());
   store.construct<rnd::skinning_manager>();
   resource.registrate_adapter<scn::worldwrap_adapter>(
       scn::worldwrap_adapter::INFO, resource, desc_sys);
 
   auto &frame_assembler = store.construct<rnd::frame_assembler>();
-  frame_assembler.add_extractor(std::make_shared<scn::light_extractor>(
-      store.require<scn::level_manager>()));
+  // render_data_extractor builds per-camera packet.lights consumed by the passes;
+  // the former standalone light_extractor wrote a global scene_lights_t that nothing read.
   frame_assembler.add_extractor(std::make_shared<scn::render_data_extractor>(
-      store.require<scn::level_manager>()));
+      store.require<scn::context_manager>()));
 
   auto& render_system = store.require<rnd::render_system>();
   render_system.set_skinning_manager(&store.require<rnd::skinning_manager>());
+}
+
+void scn::stop_scene_loads(ds::app_data_storage &store) {
+  store.require<scn::context_manager>().stop_layer_loads();
+  store.require<res::resource_system>().stop_loading();
 }
 
 void scn::scene_term(ds::app_data_storage &store) {
@@ -51,7 +79,7 @@ void scn::scene_term(ds::app_data_storage &store) {
   store.destruct<rnd::skinning_manager>();
   auto &resource = store.require<res::resource_system>();
   resource.unregistrate_adapter(scn::worldwrap_adapter::INFO);
-  store.destruct<scn::level_manager>();
-  auto &sfactory = store.require<ecs::system_factory>();
+  store.destruct<scn::context_manager>();
+  [[maybe_unused]] auto &sfactory = store.require<ecs::system_factory>();
   store.destruct<scn::ecs_assembler>();
 }

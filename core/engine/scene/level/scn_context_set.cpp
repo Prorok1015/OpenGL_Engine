@@ -1,0 +1,404 @@
+#include <snk/scene/level/scn_context_set.h>
+#include "scn_level_switch_slot.h"
+#include <snk/scene/scn_scene_layer.h>
+#include <snk/scene/scn_geometry_holds.h>
+#include <algorithm>
+#include <utility>
+#include <snk/common/eng_profiler.h>
+#include <snk/common/logger/engine_log.h>
+
+namespace {
+	thread_local scn::context_set* g_current_set = nullptr;
+}
+
+scn::context_set::current_scope::current_scope(context_set& set)
+	: m_previous(std::exchange(g_current_set, &set))
+{
+}
+
+scn::context_set::current_scope::~current_scope()
+{
+	g_current_set = m_previous;
+}
+
+scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
+							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options,
+							  std::shared_ptr<ecs::bus_registry> event_types)
+	: m_name(std::move(name))
+	, m_options(options)
+	, m_hot_reload_manager(options.hot_reload ? std::move(hot_manager) : std::shared_ptr<scn::hot_reload_manager>{})
+	, m_channel(m_name, std::move(channel_types))
+	, m_event_types(event_types ? std::move(event_types) : std::make_shared<ecs::bus_registry>())
+	, m_level_switch(std::make_unique<detail::level_switch_slot>())
+{
+}
+
+scn::context_set::~context_set()
+{
+	stop_tasks();
+	clear();
+}
+
+void scn::context_set::stop_tasks()
+{
+	ds::task_system* runner = m_layer ? m_layer->task_runner() : nullptr;
+	ASSERT_MSG(!ds::task_system::on_worker(), "context_set::stop_tasks: main thread only, never from a task");
+	ASSERT_MSG(!runner || runner->on_main(), "context_set::stop_tasks: main thread only");
+	m_tasks.cancel_tasks();
+	if (runner) {
+		runner->wait_idle(m_tasks);
+	}
+}
+
+scn::context_set* scn::context_set::current()
+{
+	return g_current_set;
+}
+
+void scn::context_set::set_seed(uint64_t seed)
+{
+	m_seed = seed;
+	for (const auto& [id, context] : m_contexts) {
+		context->seed(m_seed);
+	}
+}
+
+void scn::context_set::update(std::chrono::duration<float> dt)
+{
+	PROFILE_SCOPE("LevelUpdate");
+	const current_scope as_current(*this);
+	ASSERT_MSG(!m_updating, "set '{}': update re-entered", m_name);
+	m_updating = true;
+	struct updating_reset
+	{
+		bool& flag;
+		~updating_reset() { flag = false; }
+	} reset{ m_updating };
+
+	const ecs::run_mode mode = m_mode;
+	begin_frame_channel(mode);
+
+	for (const auto& [id, context] : m_contexts) {
+		// Every frame: a restore or a rebuild may have replaced what the world's ctx held.
+		context->state().ctx().insert_or_assign(detail::level_switch_port{ this });
+		context->begin_frame(dt);
+	}
+
+	// A context runs all its phases back to back, contexts in id order. The set channel
+	// exchanges only above, so this order cannot change what a system reads.
+	for (const auto& [id, context] : m_contexts) {
+		update_context(id, *context, mode);
+	}
+
+	if (mode == ecs::run_mode::play || mode == ecs::run_mode::step) ++m_frames_run;
+	if (mode == ecs::run_mode::step) {
+		if (m_pending_steps > 0) --m_pending_steps;
+		if (m_pending_steps == 0) m_mode = ecs::run_mode::pause;
+	}
+	sync_context_mode();
+}
+
+size_t scn::context_set::pending_mail() const
+{
+	std::vector<ecs::channel_participant> participants;
+	participants.reserve(m_contexts.size());
+	for (const auto& [id, context] : m_contexts) {
+		participants.push_back(ecs::channel_participant{ id, context->get_name(), &context->state() });
+	}
+	return m_channel.pending_messages(participants);
+}
+
+void scn::context_set::begin_frame_channel(ecs::run_mode mode)
+{
+	m_participants.clear();
+	m_participants.reserve(m_contexts.size());
+	for (const auto& [id, context] : m_contexts) {
+		m_participants.push_back(ecs::channel_participant{ id, context->get_name(), &context->state() });
+	}
+
+	if (mode == ecs::run_mode::play || mode == ecs::run_mode::step) {
+		m_channel.begin_frame(m_participants);
+	} else {
+		m_channel.skip_frame(m_participants);
+	}
+}
+
+void scn::context_set::set_mode(ecs::run_mode mode)
+{
+	m_mode = mode;
+	m_pending_steps = mode == ecs::run_mode::step ? 1 : 0;
+	sync_context_mode();
+}
+
+void scn::context_set::restore_run_state(uint64_t frames_run, uint32_t pending_steps)
+{
+	m_frames_run = frames_run;
+	m_pending_steps = m_mode == ecs::run_mode::step ? pending_steps : 0;
+}
+
+void scn::context_set::step(uint32_t frames)
+{
+	if (!ENGINE_VERIFY(frames >= 1, "set '{}': step of 0 frames, running one", m_name)) {
+		frames = 1;
+	}
+	set_mode(ecs::run_mode::step);
+	m_pending_steps = frames;
+}
+
+void scn::context_set::set_time_scale(float scale)
+{
+	if (!ENGINE_VERIFY(scale >= 0.0f, "set '{}': time scale {} is negative or NaN, using 0", m_name, scale)) {
+		scale = 0.0f;
+	} else if (!ENGINE_VERIFY(scale <= max_time_scale, "set '{}': time scale {} is above {}, using {}", m_name, scale,
+								max_time_scale, max_time_scale)) {
+		scale = max_time_scale;
+	}
+	m_time_scale = scale;
+	for (const auto& [id, context] : m_contexts) {
+		context->set_time_scale(m_time_scale);
+	}
+}
+
+void scn::context_set::sync_context_mode()
+{
+	const auto bus_mode = m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue;
+	for (const auto& [id, context] : m_contexts) {
+		context->set_mode(m_mode);
+		if (auto* bus = context->state().ctx().find<ecs::world_bus>()) bus->set_mode(bus_mode);
+	}
+}
+
+ecs::world_bus& scn::context_set::bind_events(world_context& context)
+{
+	auto& bus = context.state().ctx().emplace<ecs::world_bus>();
+	if (bus.bound_types() < m_event_types->size()) {
+		ASSERT_MSG(!ds::task_system::on_worker(), "set '{}': world buses are bound on the main thread only", m_name);
+		bus.bind(*m_event_types, context.state(), context.get_name());
+	}
+	if (m_subscriptions) m_subscriptions->attach(m_name, context.get_name(), context.state(), bus);
+	return bus;
+}
+
+ecs::runtime_context scn::context_set::create_runtime_context(size_t own_id)
+{
+	return ecs::runtime_context{ .current_registry = get(static_cast<uint32_t>(own_id)).state(), .current_world_id = own_id };
+}
+
+void scn::context_set::update_context(uint32_t id, world_context& context, ecs::run_mode mode)
+{
+	auto& bus = bind_events(context);
+	const bool delivers = mode == ecs::run_mode::play || mode == ecs::run_mode::step;
+	for (size_t p = 0; p < m_phase_order.size(); ++p) {
+		if (m_phase_order[p].builtin() == ecs::phase::fixed_update) {
+			PROFILE_SCOPE("ECS.fixed_update");
+			for (int i = 0; i < context.fixed_steps(); ++i) {
+				context.write_fixed_time();
+				run_context_phase(id, context, p, mode);
+			}
+		} else {
+			run_context_phase(id, context, p, mode);
+		}
+		// The delivery point (WORLD_BUS 3.2): after the builtin update and its commands, before every later phase.
+		if (delivers && m_phase_order[p].builtin() == ecs::phase::update) {
+			PROFILE_SCOPE("ECS.bus_delivery");
+			bus.deliver();
+			// What subscribers queued (entity_changer/spawner) lands in one go, before any later phase.
+			context.apply_commands();
+			bus.set_after_delivery(true);
+		}
+	}
+	bus.set_after_delivery(false);
+}
+
+void scn::context_set::run_context_phase(uint32_t id, world_context& context, size_t order_index, ecs::run_mode mode)
+{
+	// Also a context without systems: commands queued into it from outside (other contexts'
+	// systems, the editor) are applied on the same schedule, after each phase.
+	if (context.has_phase_work(order_index)) {
+		const ecs::runtime_context ctx = create_runtime_context(id);
+		context.run_phase(order_index, mode, ctx);
+	}
+	context.apply_commands();
+}
+
+scn::world_context& scn::context_set::create_context(std::string_view name, uint32_t id, context_kind kind)
+{
+	const current_scope as_current(*this);
+	if (auto it = m_context_ids.find(std::string{ name }); it != m_context_ids.end()) {
+		// replacing would free a context that the id map still points at
+		egLOG_ERROR("scene", "create_world: world '{}' already exists, keeping the existing one", name);
+		return *m_contexts.at(it->second);
+	}
+	ASSERT_MSG(!m_contexts.contains(id), "create_world: world id is already in use");
+
+	const scn::world_context* lockstep_ref = m_contexts.empty() ? nullptr : m_contexts.begin()->second.get();
+	auto& w = *(m_contexts[id] = std::make_unique<scn::world_context>(id, name));
+	m_context_ids[std::string{ name }] = id;
+	w.set_kind(kind);
+	w.set_desc_index(m_next_desc_index++);
+	if (m_layer) {
+		w.set_meta(&m_layer->meta());
+		w.set_catalog(&m_layer->catalog());
+	}
+	// The layer's resources, else the base ones the set's hot reload watches (a set without either: none).
+	res::resource_system* resources = m_layer ? &m_layer->resources()
+		: m_hot_reload_manager ? &m_hot_reload_manager->resources() : nullptr;
+	scn::geometry_holds::attach(w.state(), resources);
+	m_channel.attach(id, w.get_name(), w.state());
+	w.state().ctx().insert_or_assign(detail::level_switch_port{ this });
+	bind_events(w).set_mode(m_mode == ecs::run_mode::edit ? ecs::bus_mode::discard : ecs::bus_mode::queue);
+	w.seed(m_seed);
+	w.set_mode(m_mode);
+	w.set_time_scale(m_time_scale);
+	// lockstep: a context created later joins at the same point of the step and of the time as the others
+	if (lockstep_ref) {
+		w.set_stepper(lockstep_ref->stepper());
+		w.state().ctx().get<scn::world_time>() = lockstep_ref->state().ctx().get<scn::world_time>();
+	}
+
+	if (m_hot_reload_manager) {
+		m_hot_reload_manager->attach_registry(w.state());
+	}
+
+	return w;
+}
+
+void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler,
+										 context_kind kind)
+{
+	const current_scope as_current(*this);
+	m_tag = desc.get_tag();
+	// no leftover fraction of a step from the previous level
+	for (const auto& [id, context] : m_contexts) {
+		context->reset_time();
+	}
+	m_desc_world_names.clear();
+	for (const auto& world_desc : desc.get_worlds()) {
+		m_desc_world_names.emplace_back(world_desc->get_name());
+		auto& world = create_context(world_desc->get_name(), acquire_free_id(), kind);
+		world.set_input_layer(world_desc->get_input_layer());
+		world.set_input_stack(world_desc->get_input_stack());
+		add_systems(world, world_desc->get_systems(), sfactory);
+
+		entt::entity e = world.state().create();
+		assambler.spawn_from_desc(world.state(), e, *world_desc, world_desc->get_name());
+	}
+
+	// A world that outlived a reload was made while running: it stays after every world of the file, in its old order.
+	std::vector<scn::world_context*> survivors;
+	for (const auto& [id, context] : m_contexts) {
+		if (std::ranges::find(m_desc_world_names, std::string{ context->get_name() }) == m_desc_world_names.end()) survivors.push_back(context.get());
+	}
+	std::ranges::sort(survivors, [](const scn::world_context* a, const scn::world_context* b) { return a->desc_index() < b->desc_index(); });
+	for (scn::world_context* context : survivors) context->set_desc_index(m_next_desc_index++);
+}
+
+void scn::context_set::reload_context(
+	std::string_view name,
+	const world_desc& desc,
+	ecs::system_factory& sf,
+	scn::ecs_assembler& assambler)
+{
+	reload_context(name, desc, sf, assambler, res::tag{});
+}
+
+void scn::context_set::reload_context(
+	std::string_view name,
+	const world_desc& desc,
+	ecs::system_factory& sf,
+	scn::ecs_assembler& assambler,
+	const res::tag& file)
+{
+	const current_scope as_current(*this);
+	ASSERT_MSG(m_context_ids.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
+
+	const uint32_t old_id = m_context_ids[std::string{name}];
+	const context_kind kind = m_contexts.at(old_id)->kind();
+	// a structural edit of one world does not restart its shader animations (#544)
+	const scn::world_time time = m_contexts.at(old_id)->state().ctx().get<scn::world_time>();
+	const uint32_t desc_index = m_contexts.at(old_id)->desc_index();
+	destroy_by_id(old_id);
+
+	auto& w = create_context(name, old_id, kind);
+	w.state().ctx().get<scn::world_time>() = time;
+	w.set_input_layer(desc.get_input_layer());
+	w.set_input_stack(desc.get_input_stack());
+	w.set_desc_index(desc_index);
+	add_systems(w, desc.get_systems(), sf);
+
+	entt::entity e = w.state().create();
+	scn::spawn_world(assambler, w.state(), e, desc, name, file);
+}
+
+void scn::context_set::destroy_context(std::string_view name)
+{
+	ASSERT_MSG(m_context_ids.contains(std::string{name}), "remove_world: level doesn't contain world with this name");
+	destroy_by_id(m_context_ids[std::string{name}]);
+}
+
+void scn::context_set::destroy_by_id(uint32_t id)
+{
+	auto it = m_contexts.find(id);
+	if (m_hot_reload_manager) {
+		m_hot_reload_manager->detach_registry(it->second->state());
+	}
+	m_context_ids.erase(std::string{ it->second->get_name() });
+	m_contexts.erase(it);
+}
+
+void scn::context_set::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
+{
+	for (const auto& world_desc : desc.get_worlds()) {
+		if (auto* context = find(world_desc->get_name())) {
+			context->set_systems(world_desc->get_systems());
+			context->set_input_layer(world_desc->get_input_layer());
+			context->set_input_stack(world_desc->get_input_stack());
+		}
+	}
+	rebuild_all_plans(system_factory);
+}
+
+void scn::context_set::add_systems(
+	scn::world_context& context,
+	const std::vector<std::string>& systems,
+	ecs::system_factory& sf)
+{
+	const current_scope as_current(*this);
+	context.set_systems(systems);
+	rebuild_context_plan(context.get_id(), sf);
+}
+
+void scn::context_set::rebuild_context_plan(uint32_t id, ecs::system_factory& sf)
+{
+	get(id).rebuild_plan(sf.registry());
+	refresh_plan_slots(sf);
+}
+
+void scn::context_set::rebuild_all_plans(ecs::system_factory& sf)
+{
+	for (const auto& [id, context] : m_contexts) {
+		context->rebuild_plan(sf.registry());
+	}
+	refresh_plan_slots(sf); // also when there are no contexts: the phase order still follows the table
+}
+
+void scn::context_set::refresh_plan_slots(const ecs::system_factory& sf)
+{
+	m_phase_order = sf.registry().phases().ordered();
+	for (const auto& [id, context] : m_contexts) {
+		context->resolve_slots(m_phase_order);
+	}
+}
+
+void scn::context_set::clear()
+{
+	for (const auto& [id, context] : m_contexts) {
+		if (m_hot_reload_manager) {
+			m_hot_reload_manager->detach_registry(context->state());
+		}
+	}
+
+	m_contexts.clear();
+	m_context_ids.clear();
+	m_channel.clear();
+}

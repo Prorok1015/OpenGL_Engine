@@ -1,0 +1,69 @@
+[META]
+framework: claude-framework
+file_id: workflow.ESCAPE_HATCH
+class: universal
+version: 1.0.0
+
+[ESCAPE_HATCH]
+overview: The narrow set of cases where the full workflow may be skipped
+principle: Escape hatches prevent the workflow from becoming ritual. But the criteria are strict — if you're unsure, the workflow applies.
+
+[WHEN_ESCAPE_HATCH_APPLIES]
+ALL of the following must be true to skip PHASES 1-3 (DISCOVER, PLAN, CONFIRM) and go straight to IMPLEMENT:
+
+criterion_1: User gave a surgical, unambiguous instruction
+  good_examples:
+    - "Fix the typo 'recieve' → 'receive' in README.md"
+    - "Add `export` keyword to function fooBar in src/utils/foo.ts"
+    - "Bump version to 1.2.3 in package.json"
+    - "Delete the unused import on line 12 of app.ts"
+  bad_examples (NOT surgical, workflow applies):
+    - "Fix the typos in the docs" (which typos? which docs?)
+    - "Make this function cleaner" (subjective, ambiguous)
+    - "Add proper error handling" (scope unclear)
+
+criterion_2: Target is known without search
+  good: The file path AND the specific location within it is given or trivially findable (one Grep call)
+  bad: You need to read ≥2 files to figure out where to change
+
+criterion_3: Change is small and contained
+  good: ≤2 files, ≤20 lines total, no new symbols introduced
+  bad: >2 files OR introduces a function / class / export / schema change
+
+criterion_4: No design component
+  good: The WHAT and HOW are both determined by the instruction
+  bad: You'd need to choose between approaches, naming, placement, error strategy
+
+criterion_5: No gate triggers fire (see GATES.toon)
+  good: Not destructive, not a public API change, not a rename, no new dependency
+  bad: Any hard-gate trigger applies
+
+IF all 5 criteria are true → skip DISCOVER/PLAN/CONFIRM → implement → verify → report
+IF any criterion fails → full workflow applies
+
+[EXPLICIT_USER_OVERRIDE]
+Separate from the criteria above: the user can explicitly override the workflow.
+
+triggers:
+  - "Just do it" / "skip the plan" / "don't ask, just implement" / "trust me, go"
+  - "I don't need a plan for this"
+
+rules:
+  - Only honor the override if the user says it AFTER you've asked OR if they volunteer it clearly
+  - Even with override, HARD GATES 3 (destructive) and 5 (irreversible action) still apply — the user waived planning, not safety
+  - Log the override in your final REPORT: "Plan phase skipped at user's explicit request"
+
+[COMMON_RATIONALIZATIONS_THAT_DONT_QUALIFY]
+These are NOT escape-hatch criteria. Do not use them as excuses:
+  - "The change is obvious to me" — your confidence is not the test
+  - "The user seems to be in a hurry" — speed is their call, not your assumption
+  - "It's faster to just do it" — measure tokens, not keystrokes
+  - "The plan would be trivial anyway" — then writing it takes 5 seconds; do it
+  - "I've done this pattern before" — in other codebases or other sessions; this project may differ
+  - "The user will correct me if wrong" — they hired the workflow to NOT have to correct you
+
+[IN_DOUBT_RULE]
+When uncertain whether escape hatch applies:
+  - Default to running the full workflow
+  - The cost of an unnecessary plan is a paragraph of text
+  - The cost of an unnecessary implementation is wasted tokens, wasted user review time, and possibly wrong code

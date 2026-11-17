@@ -1,33 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-set(CMAKE_CXX_STANDARD 20)
 
-if(NOT ENGINE_BOOST_NO_LIB)
-    include(FetchContent)
-    FetchContent_Declare(
-    Boost
-    URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
-    URL_MD5 893b5203b862eb9bbd08553e24ff146a
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-    )
-    #set(BOOST_INCLUDE_LIBRARIES json hana program_options asio test)
-    FetchContent_MakeAvailable(Boost)
-    file(GLOB_RECURSE BOOST_NATVIS_FILES "${boost_SOURCE_DIR}/libs/*.natvis")
-    message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")
-    foreach(natvis_file ${BOOST_NATVIS_FILES})
-        get_filename_component(filename "${natvis_file}" NAME)
-        configure_file("${natvis_file}" "${CMAKE_SOURCE_DIR}/lib3dparty/natvis/${filename}" COPYONLY)
-    endforeach()
-endif()
+# Boost (FetchContent + slim component set) is configured in cmake/ThirdParty.cmake,
+# included once at the root before this directory is added (EPIC-41 US-41-1).
 
 #components
 add_subdirectory("core")
 add_subdirectory("engine")
+# The model import library (#1108), the only owner of assimp; the engine does not link it.
+if(SNK_WITH_ASSIMP)
+	add_subdirectory("model_import")
+endif()
 
-
-#TEST_PROJECT
-project(core_exe)
-set(CMAKE_CXX_STANDARD 20)
-
-add_executable(core_exe main_unified_graph_test.cpp)
-target_link_libraries(core_exe engine)
-set_target_properties(core_exe PROPERTIES EXCLUDE_FROM_ALL TRUE)

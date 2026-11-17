@@ -32,7 +32,7 @@ grep -r "prototype_desc" core/ Editor/
 - `scn_scene_service_init.cpp` — регистрация фабрик в `desc_system`
 - `gs_game_init.cpp` — регистрация spawner'ов в `ecs_assembler`
 - `scn_animatable_prototype_desc.h` — объявление базового класса
-- Потенциально: тесты в `unittests/`
+- Потенциально: тесты в `tests/`
 
 **AC:**
 - Полный список файлов с зависимостями задокументирован (добавить в этот файл)

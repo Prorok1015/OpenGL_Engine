@@ -1,0 +1,41 @@
+#pragma once
+#include <filesystem>
+#include <string_view>
+#include <vector>
+#include <snk/resource/res_file_change.h>
+#include <snk/resource/resolvers/res_write_policy.h>
+
+namespace res
+{
+	enum class mount_access
+	{
+		read_write,
+		read_only,
+	};
+
+	// The file on the disk a tag's bytes are read from, and the mount folder (layer) it lies in (#996).
+	struct disk_file
+	{
+		std::filesystem::path root;
+		std::filesystem::path file;
+	};
+
+	// One protocol served from directories by a vfs_resolver.
+	struct mount
+	{
+		// Must outlive the resource system (a constant such as res::tag::memory): its resolver map is keyed by the view.
+		std::string_view protocol;
+		// Lowest priority first: the last root wins a lookup and receives writes.
+		std::vector<std::filesystem::path> roots;
+		mount_access access = mount_access::read_write;
+		// Which paths store() may write (checked against the tag and the file it resolves to); every path by default.
+		write_policy writable = write_policy::allow_all();
+		// What the mount's watcher reports and skips.
+		watch_options watch = watch_options{};
+		// Whether resource_system::remove and rename work on this mount's files. Off by default: storing is allowed on a
+		// writable mount, deleting and moving are for the mounts that say so (code://).
+		bool file_operations = false;
+	};
+
+	using mount_table = std::vector<mount>;
+}

@@ -1,37 +1,12 @@
-#include "rnd_skinning_manager.h"
+#include <snk/render/skinning/rnd_skinning_manager.h>
 #include <vector>
 
-rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver)
+std::vector<uint32_t> rnd::skinning_manager::build_indices(const res::tag& skin) const
 {
-    if (bone_indices_buffer.find(tag) == bone_indices_buffer.end()) {
-        bone_indices_buffer[tag] = create_ssbo_weights_indeces_buffer(tag, driver);
-    }
-    return bone_indices_buffer[tag].get();
-}
-
-rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_bones_matrices_buffer(rnd::driver::driver_interface* driver)
-{
-    if (!bones_matrices_buffer) {
-        bones_matrices_buffer = driver->create_ssbo_buffer(sizeof(glm::mat4) * 128, 0);
-	}
-
-	return bones_matrices_buffer.get();
-}
-
-rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_tmp_triangles_hightlight_buffer(rnd::driver::driver_interface* driver)
-{
-    if (!tmp_treangles_hightlight_buffer) {
-        tmp_treangles_hightlight_buffer = driver->create_ssbo_buffer(sizeof(uint32_t) * 1024 * 1024, 0);
-	}
-
-	return tmp_treangles_hightlight_buffer.get();
-}
-
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::skinning_manager::create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver)
-{
+     ++m_index_builds;
      auto it = m_weights_registry.find(skin);
-     if (it == m_weights_registry.end()) return nullptr;
-     auto columns = it->second;
+     if (it == m_weights_registry.end()) return {};
+     const auto& columns = it->second.columns;
 
      uint32_t numColumns = static_cast<uint32_t>(columns.size());
 
@@ -54,23 +29,5 @@ std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::skinning_manager::creat
          bufferData.insert(bufferData.end(), col.begin(), col.end());
      }
 
-     auto ssbo = driver->create_ssbo_buffer(bufferData.size() * sizeof(uint32_t), 0);
-     ssbo->set_data(bufferData.data(), bufferData.size() * sizeof(uint32_t), 0);
-     return ssbo;
-}
-
-void rnd::skinning_manager::bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, const std::vector<glm::mat4>& matrices)
-{
-    if (!matrices.empty()) {
-        if (auto* bones_buffer = get_bones_matrices_buffer(drv)) {
-            bones_buffer->bind(2);
-            bones_buffer->set_data(matrices);
-        }
-    }
-
-    if (skin_tag.is_valid()) {
-        if (auto* ssbo = get_weights_indeces_buffer(skin_tag, drv)) {
-            ssbo->bind(1);
-        }
-    }
+     return bufferData;
 }

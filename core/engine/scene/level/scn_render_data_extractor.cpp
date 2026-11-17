@@ -1,33 +1,69 @@
-#include "scn_render_data_extractor.h"
-#include "eng_transform_3d.hpp"
-#include "rnd_light_data.hpp"
-#include "rnd_render_packet.hpp"
-#include "rnd_render_system.h"
-#include "scn_camera_component.hpp"
-#include "scn_material_desc.h"
-#include "scn_model.h"
-#include "eng_profiler.h"
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/scene/level/scn_screen_anchor.h>
+#include <snk/scene/level/scn_world.h>
+#include <limits>
+#include <memory_resource>
+#include <unordered_map>
+#include <snk/common/eng_transform_3d.hpp>
+#include <snk/render/rnd_gpu_blocks.h>
+#include <snk/render/rnd_light_data.hpp>
+#include <snk/render/rnd_material_instance_cache.h>
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_material_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_time.h>
+#include <snk/common/eng_profiler.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/mem_allocator.h>
+
+namespace {
+    rnd::clear_mode clear_mode_of(scn::camera_clear clear)
+    {
+        switch (clear) {
+        case scn::camera_clear::depth: return rnd::clear_mode::depth;
+        case scn::camera_clear::none: return rnd::clear_mode::none;
+        default: return rnd::clear_mode::all;
+        }
+    }
+}
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
-    auto& level = m_level_manager.get_level();
+    // The services are injected into frame_context by render_system::begin_frame, which the `extract`
+    // stage runs before this extractor. Catch a missing/mis-ordered injection early.
+    ASSERT_MSG(context.materials, "frame_context material instance cache not injected (RHI R6b)");
 
-    std::vector<rnd::render_packet_t> packets;
-    int dir_light_count = 0;
+    std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 
-    if (context.data.has_value<rnd::scene_lights_t>()) {
-        dir_light_count = static_cast<int>(context.data.require<rnd::scene_lights_t>().directional.size());
-    }
+    // Markers over objects (WORLD_MESSAGING 3): resolved here, after every update of the frame, from the
+    // current transforms and cameras, so a marker never lags behind its target.
+    scn::resolve_screen_anchors(m_contexts, context.backbuffer_size);
 
-    for (uint32_t i = 0; i < level.get_world_count(); ++i) {
-        auto& reg = level.get_world(i).state();
+    m_contexts.for_each([&](scn::world_context& w) {
+        if (!w.extract()) return;
+        auto& reg = w.state();
+
+        // Collect per-world lights
+        rnd::scene_lights_t world_lights;
+        for (auto [l_ent, light] : reg.view<scn::directional_light>().each()) {
+            rnd::scene_lights_t::directional_light_t dl;
+            dl.direction = light.direction;
+            dl.diffuse   = light.diffuse;
+            dl.ambient   = light.ambient;
+            dl.specular  = light.specular;
+            world_lights.directional.push_back(dl);
+        }
 
         for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
-            if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1) {
+            const auto camera_viewport = rnd::effective_camera_viewport(
+                cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), context.backbuffer_size);
+            if (!camera_viewport) {
                 continue;
             }
 
             rnd::render_packet_t packet;
+            packet.lights = world_lights;
 
             packet.camera.view_matrix = glm::mat4{ 1.0f };
             packet.camera.view_position = glm::vec3{ 0.0f };
@@ -37,79 +73,183 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 packet.camera.view_position = glm::vec3(trans->world[3]);
             }
 
-            auto& vp = cam.m_viewport;
-            packet.camera.viewport = vp;
-            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
-                cam.near_distance, cam.far_distance);
-            packet.camera.target_texture_tag = cam.texture;
-            packet.camera.render_priority = 0;
+            const glm::ivec4 vp_rect = *camera_viewport;
+            packet.camera.viewport = vp_rect;
+            packet.camera.projection_matrix = scn::camera_projection_matrix(cam, vp_rect);
+            packet.camera.color_targets = cam.color_targets;
+            packet.camera.depth_target = cam.depth_target;
+            packet.camera.tp_accum_target = cam.tp_accum_target;
+            packet.camera.tp_reveal_target = cam.tp_reveal_target;
+            packet.camera.render_priority = cam.layer;
+            packet.camera.clear = clear_mode_of(cam.clear);
+            packet.camera.wireframe = cam.wireframe;
+            packet.camera.time = rnd::shader_time(reg.ctx().get<scn::world_time>().seconds);
 
-            auto& tex_mgr = rnd::get_system().get_texture_manager();
+            auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform, scn::renderable>();
+            auto mesh_count = meshes_view.size_hint();
+            packet.opaque_draws.reserve(mesh_count);
+            packet.transparent_draws.reserve(mesh_count);
+            // Every skeleton is copied at most once per packet, so the palettes together bound the copy.
+            std::size_t bone_estimate = 0;
+            std::size_t skeleton_estimate = 0;
+            for (auto [skel_ent, bones] : reg.view<scn::bone_matrices_component>().each()) {
+                bone_estimate += bones.matrices.size();
+                ++skeleton_estimate;
+            }
+            packet.bones.reserve(bone_estimate, skeleton_estimate);
+            const std::size_t skinned_mesh_estimate = reg.view<scn::skinning_component>().size();
 
-            auto meshes_view = reg.view<scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
-            for (auto&& [m_ent, mesh, geom, mat, m_trans] : meshes_view.each()) {
+            // Draws name their geometry and skin by index into the packet's tables; each distinct one is added
+            // once. Their material is an id of the material instance cache.
+            packet.geometries.reserve(mesh_count);
+            packet.skins.reserve(skinned_mesh_estimate);
+            std::pmr::unordered_map<res::tag, uint32_t> geometry_ids(ds::frame_allocator());
+            std::pmr::unordered_map<res::tag, uint32_t> skin_ids(ds::frame_allocator());
+            geometry_ids.reserve(mesh_count);
+            const auto intern = [](auto& ids, auto& table, const auto& value) {
+                const auto [it, added] = ids.try_emplace(value, static_cast<uint32_t>(table.size()));
+                if (added) {
+                    table.push_back(value);
+                }
+                return it->second;
+            };
+            for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
-                if (!mat.mlt_desc.is_ready()) {
+                const auto mlt_ptr = mat.mlt_desc.get();
+                if (!mlt_ptr) {
                     continue;
                 }
 
-                auto& mlt = *mat.mlt_desc;
+                auto& mlt = *mlt_ptr;
 
-                rnd::draw_call_t dc;
-                dc.geometry_tag = geom.geom_tag;
-                dc.indices_count = static_cast<uint32_t>(mesh.mesh.get_indices_count());
-                dc.vx_begin = static_cast<uint32_t>(mesh.mesh.vx_begin);
-                dc.ind_begin = static_cast<uint32_t>(mesh.mesh.ind_begin);
-                dc.transform = m_trans.world;
-
-                const auto queue = mlt.queue;
-                auto shader_cfg = mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
-
-                if (dir_light_count > 0) {
-                    shader_cfg.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(dir_light_count);
+                // The range is whatever a file or an agent wrote: one that runs backwards, or does not fit the 32 bits
+                // of a draw call, would wrap into a range nobody meant (#927).
+                constexpr std::size_t k_draw_limit = std::numeric_limits<uint32_t>::max();
+                if (mesh.mesh.ind_end < mesh.mesh.ind_begin || mesh.mesh.ind_end > k_draw_limit || mesh.mesh.vx_begin > k_draw_limit) {
+                    // Bounded: past the cap a bad range is still left out, without a line.
+                    constexpr std::size_t k_warned_cap = 1024;
+                    if (m_warned_ranges.size() < k_warned_cap && m_warned_ranges.insert(geom.geom_tag).second) {
+                        egLOG_WARN("scene", "a mesh of '{}' is not drawn: its range of indices {}..{} from vertex {} runs backwards or does not fit 32 bits",
+                            geom.geom_tag.view(), mesh.mesh.ind_begin, mesh.mesh.ind_end, mesh.mesh.vx_begin);
+                    }
+                    continue;
                 }
 
-                if (auto* owner = reg.try_get<scn::obj_owner_component>(m_ent)) {
-                    auto owner_ent = owner->owner;
-                    if (reg.all_of<scn::bone_matrices_component>(owner_ent) &&
-                        reg.all_of<scn::skinning_component>(owner_ent)) {
+                rnd::draw_call_t dc;
+                {
+                    PROFILE_SCOPE("Extract.BuildDC");
+                    dc.geometry.index = intern(geometry_ids, packet.geometries, geom.geom_tag);
+                    dc.indices_count = static_cast<uint32_t>(mesh.mesh.get_indices_count());
+                    dc.vx_begin = static_cast<uint32_t>(mesh.mesh.vx_begin);
+                    dc.ind_begin = static_cast<uint32_t>(mesh.mesh.ind_begin);
+                    dc.transform = m_trans.world;
+                }
 
-                        auto& skm = reg.get<scn::skinning_component>(owner_ent);
-                        auto& matrices = reg.get<scn::bone_matrices_component>(owner_ent);
+                const auto queue = mlt.queue;
 
-                        dc.bone_matrices = matrices.matrices;
-                        dc.skinning_tag = skm.skinning_tag;
+                // Resolve skinning before asking for the instance: the compiler bakes USE_ANIMATION from
+                // ctx.has_skinning, which is part of the instance's key.
+                bool has_skinning = false;
+                {
+                    PROFILE_SCOPE("Extract.Skinning");
+                    if (auto* skin = reg.try_get<scn::skinning_component>(m_ent)) {
+                        auto skel_ent = skin->skeleton_entity;
+                        if (skel_ent != entt::null &&
+                            reg.valid(skel_ent) &&
+                            reg.all_of<scn::bone_matrices_component>(skel_ent)) {
 
-                        shader_cfg.cdata.defines.push_back("USE_ANIMATION");
+                            auto& matrices = reg.get<scn::bone_matrices_component>(skel_ent);
+
+                            dc.bone_offset = packet.bones.add(&matrices.matrices, matrices.matrices);
+                            dc.bone_count = static_cast<uint32_t>(matrices.matrices.size());
+                            if (skin->skinning_tag.is_valid()) {
+                                dc.skin.index = intern(skin_ids, packet.skins, skin->skinning_tag);
+                            }
+
+                            has_skinning = true;
+                        }
                     }
                 }
 
-                if (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX) {
-                    rnd::draw_call_t opaque_dc = dc;
-                    opaque_dc.material = shader_cfg;
-                    opaque_dc.material.cdata.defines.push_back("OPAQUE");
-                    opaque_dc.sort_key = opaque_dc.material.get_hash();
-                    packet.opaque_draws.push_back(std::move(opaque_dc));
+                const rnd::compiled_material* material = nullptr;
+                {
+                    PROFILE_SCOPE("Extract.ShaderDesc");
+                    // Compiled (and its textures asked for) by the cache, and only when the desc, skinning or a texture changed.
+                    dc.material = context.materials->acquire(mlt_ptr, has_skinning, mat.dirty);
+                    mat.dirty = false;
+                    material = &context.materials->get(dc.material);
                 }
+                // Distance along the view axis: the transparent order, and the tie-break among equal opaque draws.
+                const glm::vec4 view_pos = packet.camera.view_matrix * glm::vec4(glm::vec3(m_trans.world[3]), 1.0f);
+                const float view_depth = -view_pos.z;
 
-                if (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX) {
-                    rnd::draw_call_t trans_dc = dc;
-                    trans_dc.material = std::move(shader_cfg);
-                    trans_dc.sort_key = trans_dc.material.get_hash();
-                    packet.transparent_draws.push_back(std::move(trans_dc));
+                {
+                    PROFILE_SCOPE("Extract.PushDraws");
+                    bool needs_opaque = (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX);
+                    bool needs_transparent = (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX);
+
+                    if (needs_opaque) {
+                        rnd::draw_call_t opaque_dc = dc;
+                        opaque_dc.variant = material->opaque;
+                        opaque_dc.sort_key = rnd::make_sort_key(
+                            rnd::draw_pass::opaque, opaque_dc.variant.value, opaque_dc.material.index, view_depth);
+                        packet.opaque_draws.push_back(std::move(opaque_dc));
+                    }
+                    if (needs_transparent) {
+                        dc.variant = material->base;
+                        dc.sort_key = rnd::make_sort_key(
+                            rnd::draw_pass::transparent, dc.variant.value, dc.material.index, view_depth);
+                        packet.transparent_draws.push_back(std::move(dc));
+                    }
                 }
+            }
+
+            {
+                PROFILE_SCOPE("Extract.SortDraws");
+                rnd::sort_draws(packet.opaque_draws);
+                rnd::sort_draws(packet.transparent_draws);
             }
 
             auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
-                if (mat.mlt_desc.is_ready()) {
-                    packet.skybox_material = mat.mlt_desc->get_shader_desc(entt::handle{ reg, sky_ent }, tex_mgr);
+                if (const auto sky_desc = mat.mlt_desc.get()) {
+                    // Skybox: no skinning; a world transform only if the sky entity has one.
+                    rnd::skybox_draw_t sky_draw;
+                    if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
+                        sky_draw.world = sky_trans->world;
+                    }
+                    sky_draw.material = context.materials->acquire(sky_desc, false, mat.dirty);
+                    mat.dirty = false;
+                    sky_draw.variant = context.materials->get(sky_draw.material).base;
+                    packet.skybox_material = std::move(sky_draw);
+                }
+            }
+
+            // Bone visualization: generate debug lines for skeletons with show_skeleton enabled
+            auto skeleton_view = reg.view<scn::skeleton_component>();
+            for (auto [skel_ent, skel] : skeleton_view.each()) {
+                if (!skel.show_skeleton) continue;
+
+                auto bones_view = reg.view<scn::bone_component, scn::world_transform, scn::parent_component>();
+                for (auto [bone_ent, bone, bone_trans, parent_comp] : bones_view.each()) {
+                    // Only draw bones belonging to this skeleton
+                    auto* parent_trans = reg.try_get<scn::world_transform>(parent_comp.parent);
+                    if (!parent_trans) continue;
+
+                    glm::vec3 bone_pos = glm::vec3(bone_trans.world[3]);
+                    glm::vec3 parent_pos = glm::vec3(parent_trans->world[3]);
+
+                    rnd::debug_line_t line;
+                    line.start = parent_pos;
+                    line.end = bone_pos;
+                    line.color = glm::vec4{0.0f, 1.0f, 0.0f, 1.0f};
+                    packet.debug_draws.lines.push_back(line);
                 }
             }
 
             packets.push_back(std::move(packet));
         }
-    }
+    });
 
-    context.data.construct<std::vector<rnd::render_packet_t>>(std::move(packets));
+    context.data.construct<std::pmr::vector<rnd::render_packet_t>>(std::move(packets));
 }

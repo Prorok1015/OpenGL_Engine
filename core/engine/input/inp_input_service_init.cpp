@@ -1,12 +1,17 @@
-#include "inp_input_service_init.h"
-#include "inp_input_system.h"
-#include "inp_ecs_input_manager.h"
-#include "ecs_system.h"
+#include <snk/input/inp_input_service_init.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
+#include <snk/ecs/ecs_system.h>
 
 void engine::input::input_reg(ds::app_data_storage& data)
 {
 	data.construct<inp::input_system>();
 	data.construct<inp::ecs_input_manager>();
+
+	// Without the editor the whole backbuffer feeds the level; the editor replaces this by panel bindings.
+	auto& router = data.construct<inp::input_router>(data.require_shared<inp::ecs_input_manager>());
+	router.set_default_target(inp::input_target{ .set = "level" });
 }
 
 void engine::input::input_init(ds::app_data_storage& data)
@@ -17,10 +22,11 @@ void engine::input::input_init(ds::app_data_storage& data)
 	input_service.push_input_layer(input_service.get_focused_window(), inp::input_layer{ ecs_input });
 
 	auto& sfactory = data.require<ecs::system_factory>();
-	sfactory.register_automatic_system<&inp::ecs_input_manager::update_input_state_system>("inp::update_input_state", ecs_input);
+	inp::register_ecs_input_system(sfactory, ecs_input);
 }
 
 void engine::input::input_term(ds::app_data_storage& data)
 {
+	data.destruct<inp::input_router>();
 	data.destruct<inp::input_system>();
 }

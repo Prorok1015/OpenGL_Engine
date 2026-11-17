@@ -1,17 +1,22 @@
 #pragma once
-#include "edt_panel_base.h"
-#include "ecs_entity.h"
+#include <snk/editor/edt_panel_base.h>
+#include <snk/ecs/ecs_entity.h>
+#include <snk/resource/res_tag.h>
 
-#include "edt_input_manager.h"
+#include "edt_input_binding.h"
 #include "edt_transform_gizmo.hpp"
-#include "inp_ecs_input_manager.h"
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <span>
+#include <cstdint>
+#include <vector>
 #include <string>
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
+namespace scn { struct skeleton_component; }
 
 namespace edt
 {
@@ -22,48 +27,76 @@ namespace edt
 
 
 		void set_registry_getter(std::function<entt::registry*()> getter);
-		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
+		void set_selected_entity(ecs::entity ent) { m_selection.set(ent); }
+		// What names the selected entity again when the registry on show is another one (a world rebuilt without a
+		// selection event: a hot reload, a module swap): editor_system gives it selection_service::entity.
+		void set_selected_resolver(std::function<ecs::entity()> find) { m_selection.set_resolver(std::move(find)); }
+		// The worlds were rebuilt (play_session_options::forget_runtime_entities): the ring held an id of the old one.
+		void forget_runtime_entities() { m_rotate.reset(); }
 
-		void set_input_manager(std::shared_ptr<edt::input_manager> input) { m_input = std::move(input); }
-		void set_ecs_input_manager(std::shared_ptr<inp::ecs_input_manager> ecs_input) { m_ecs_input = std::move(ecs_input); }
+		// The viewport feeds the context `target` names (the active world of the level) while hovered.
+		void set_input_router(inp::input_router* router, input_target_getter target) {
+			m_router = router;
+			m_input_target = std::move(target);
+		}
 
 		// Called when a file is dropped onto the viewport from the Asset Browser.
 		// Argument: absolute filesystem path of the dropped asset.
 		void set_on_asset_dropped(std::function<void(const std::string&)> cb) { m_on_asset_dropped = std::move(cb); }
 
-		void set_on_transform_committed(std::function<void(const std::string&, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
+		void set_on_transform_committed(std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
+		// True while the document must not change (Play): no gizmo, no asset drop, a hint instead.
+		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
+
+		// The texture the editor camera renders to; the "scene" view of viewport.capture.
+		static const res::tag& render_target_tag();
+
+		// Game mode (#294): every frame the panel is not drawn, the editor camera gets a zero viewport, which the render
+		// data extractor skips, so it renders nothing. resume_camera() gives it back the size it had.
+		void suspend_camera();
+		void resume_camera();
 
 		glm::vec2 get_viewport_pos() const { return m_image_pos; }
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
 		bool is_focused() const { return m_focused; }
+		// A rotate ring of the gizmo is being dragged (translate and scale handles are active ImGui items).
+		bool is_dragging_gizmo() const { return m_rotate.ring >= 0; }
+
+		// Wireframe view of the editor camera. A state of this viewport, not of the level: it is not saved.
+		bool wireframe() const { return m_wireframe; }
+		void set_wireframe(bool on) { m_wireframe = on; }
 
 	protected:
 		void on_render() override;
+		void on_hidden() override;
 
 	private:
 		void render_toolbar();
 		void render_fps_overlay();
 		void render_orientation_gizmo(entt::registry& reg);
 		void render_transform_gizmo(entt::registry& reg, const glm::mat4& view, const glm::mat4& proj);
+		scn::skeleton_component* find_skeleton_for_selected(entt::registry& reg);
 
 
 		rnd::render_system& m_rnd;
 		gui::gui_system&    m_gui;
 
 		std::function<entt::registry*()> m_get_registry;
-		std::shared_ptr<edt::input_manager> m_input;
-		std::shared_ptr<inp::ecs_input_manager> m_ecs_input;
-		ecs::entity m_selected = entt::null;
+		std::function<bool()> m_edits_locked;
+		inp::input_router* m_router = nullptr;
+		input_target_getter m_input_target;
+		viewport_selection m_selection;
 		glm::vec2 m_image_pos = {};      // screen pos of the scene image (after toolbar)
 		glm::vec2 m_viewport_size = {800.f, 600.f};
 		bool m_focused = false;
+		bool m_wireframe = false;
+		std::optional<glm::ivec2> m_suspended_size;
 		int            m_gizmo_op     = 0;            // 0=translate, 1=rotate, 2=scale
-		entt::entity   m_rotate_ent   = entt::null;   // gizmo rotate ring state
-		int            m_active_ring  = -1;
+		rotate_gizmo_state m_rotate;                  // gizmo rotate ring state
 		float m_fps = 0.f;
 		float m_fps_timer = 0.f;
 		int m_frame_count = 0;
 		std::function<void(const std::string&)> m_on_asset_dropped;
-		std::function<void(const std::string&, glm::vec3, glm::vec3, glm::vec3)> m_on_transform_committed;
+		std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> m_on_transform_committed;
 	};
 }

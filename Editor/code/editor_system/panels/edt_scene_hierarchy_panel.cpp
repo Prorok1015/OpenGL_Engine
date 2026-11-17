@@ -1,14 +1,16 @@
 #include "edt_scene_hierarchy_panel.h"
-#include "scn_camera_desc.h"
-#include "scn_directional_light_desc.h"
-#include "scn_mesh_node_desc.h"
-#include "scn_skybox_desc.h"
-#include "scn_bone_desc.h"
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
+#include <snk/scene/scn_bone_desc.h>
+#include "edt_override_edit.h"
 #include <imgui.h>
 #include <string>
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <cstring>
 
 namespace edt
 {
@@ -17,11 +19,75 @@ namespace edt
 	{
 	}
 
+	void scene_hierarchy_panel::set_view_cache(std::shared_ptr<override_edit::view_cache> cache)
+	{
+		m_view_cache = std::move(cache);
+	}
+
 	void scene_hierarchy_panel::set_world_desc(scn::world_desc* desc)
 	{
 		m_world_desc    = desc;
 		m_selected_node = nullptr;
-		m_rename_node   = nullptr;
+		m_selected_owner = nullptr;
+		m_selected_path.clear();
+		m_selected_target.clear();
+		m_rename_id     = 0;
+		m_multi_selected.clear();
+		m_last_clicked_flat_idx = -1;
+	}
+
+	void scene_hierarchy_panel::begin_rename(const scn::prefab_desc::prefab_node& node)
+	{
+		if (locked()) return;
+		m_rename_id = node.node_id;
+		auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
+		*cp.out = '\0';
+	}
+
+	void scene_hierarchy_panel::set_selected_node(scn::prefab_desc::prefab_node* node)
+	{
+		m_selected_node = node;
+		m_selected_readonly = false;
+		m_selected_owner = nullptr;
+		m_selected_target.clear();
+		m_selected_path.clear();
+		if (node && m_world_desc) find_path(m_world_desc->get_root().children, node, m_selected_path);
+		m_multi_selected.clear();
+		m_last_clicked_flat_idx = -1;
+	}
+
+	bool scene_hierarchy_panel::select_path(const std::vector<uint64_t>& path, const std::vector<uint64_t>& target)
+	{
+		if (!m_world_desc || path.size() <= target.size()) return false;
+		// The desc's own part of the path, then the ids inside the instance.
+		const std::size_t own = path.size() - target.size();
+		scn::prefab_desc::prefab_node* node = nullptr;
+		auto* children = &m_world_desc->get_root().children;
+		for (std::size_t i = 0; i < own; ++i) {
+			const auto it = std::ranges::find(*children, path[i], &scn::prefab_desc::prefab_node::node_id);
+			if (it == children->end()) return false;
+			node = &*it;
+			children = &node->children;
+		}
+		m_multi_selected.clear();
+		m_last_clicked_flat_idx = -1;
+		if (target.empty()) {
+			m_selected_node = node;
+			m_selected_readonly = false;
+			notify_selected();
+			return true;
+		}
+		if (!m_view_cache) return false;
+		const auto base = m_view_cache->base(*node, target);
+		if (!base || !base->has_value()) return false;
+		m_instance_selection = **base;
+		m_selected_node = &m_instance_selection;
+		m_selected_readonly = true;
+		m_selected_owner = node;
+		m_selected_target = target;
+		m_selected_path = path;
+		if (m_on_node_selected) m_on_node_selected(m_selected_node);
+		return true;
 	}
 
 	void scene_hierarchy_panel::set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb)
@@ -29,9 +95,14 @@ namespace edt
 		m_on_node_selected = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_delete_node(std::function<void(const std::string&)> cb)
+	void scene_hierarchy_panel::set_on_delete_node(std::function<void(uint64_t)> cb)
 	{
 		m_on_delete_node = std::move(cb);
+	}
+
+	void scene_hierarchy_panel::set_on_delete_nodes(std::function<void(const std::vector<uint64_t>&)> cb)
+	{
+		m_on_delete_nodes = std::move(cb);
 	}
 
 	void scene_hierarchy_panel::set_on_create_node(std::function<void(const std::string&)> cb)
@@ -44,12 +115,17 @@ namespace edt
 		m_on_rename_node = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_duplicate_node(std::function<void(const std::string&)> cb)
+	void scene_hierarchy_panel::set_on_duplicate_node(std::function<void(uint64_t)> cb)
 	{
 		m_on_duplicate_node = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_reparent_node(std::function<void(const std::string&, const std::string&, int)> cb)
+	void scene_hierarchy_panel::set_on_duplicate_nodes(std::function<void(const std::vector<uint64_t>&)> cb)
+	{
+		m_on_duplicate_nodes = std::move(cb);
+	}
+
+	void scene_hierarchy_panel::set_on_reparent_node(std::function<void(uint64_t, uint64_t, int)> cb)
 	{
 		m_on_reparent_node = std::move(cb);
 	}
@@ -98,12 +174,52 @@ namespace edt
 		return nullptr;
 	}
 
-	void scene_hierarchy_panel::draw_prefab_children_readonly(const scn::prefab_desc::prefab_node& node)
+	bool scene_hierarchy_panel::find_path(
+		const std::vector<scn::prefab_desc::prefab_node>& nodes, const scn::prefab_desc::prefab_node* wanted, std::vector<uint64_t>& path) const
 	{
-		for (const auto& child : node.children) {
-			const bool has_sub = !child.children.empty();
+		for (const auto& node : nodes) {
+			path.push_back(node.node_id);
+			if (&node == wanted || find_path(node.children, wanted, path))
+				return true;
+			path.pop_back();
+		}
+		return false;
+	}
+
+	void scene_hierarchy_panel::notify_selected()
+	{
+		if (!m_selected_readonly) {
+			m_selected_owner = nullptr;
+			m_selected_target.clear();
+			m_selected_path.clear();
+			if (m_selected_node && m_world_desc)
+				find_path(m_world_desc->get_root().children, m_selected_node, m_selected_path);
+		}
+		if (m_on_node_selected) m_on_node_selected(m_selected_node);
+	}
+
+	void scene_hierarchy_panel::draw_instance_children(scn::prefab_desc::prefab_node& owner, std::vector<uint64_t>& target)
+	{
+		constexpr std::size_t max_listed_depth = 16; // a prefab that instantiates itself must not unfold forever
+		if (!m_view_cache || target.size() >= max_listed_depth) return;
+
+		// The same composed expansion the inspector edits against: intermediate removes / add_nodes are in it.
+		// Held for the loop: a click below invalidates the cache, the listing being drawn must outlive that.
+		const auto kids = m_view_cache->children(owner, target);
+		for (const auto& kid : *kids) {
+			const auto& child = kid.node;
+			// The owner's own children are drawn by draw_node already.
+			if (target.empty() && std::ranges::any_of(owner.children, [&] (const auto& own) { return own.node_id == child.node_id; }))
+				continue;
+
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
-			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
+			if (!kid.has_children) flags |= ImGuiTreeNodeFlags_Leaf;
+
+			target.push_back(child.node_id);
+
+			// Highlight if this node of the instantiated prefab is selected
+			if (m_selected_readonly && m_selected_owner == &owner && m_selected_target == target)
+				flags |= ImGuiTreeNodeFlags_Selected;
 
 			std::string prefix;
 			if (child.components.count(std::string(scn::mesh_node_desc::__type)))   prefix = "[M] ";
@@ -111,14 +227,77 @@ namespace edt
 			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
 
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-			std::string id = prefix + child.name + "##prefab_" + child.name;
+			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
 
+			// A click selects the node; its edits become override records on the instance
+			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
+				m_multi_selected.clear();
+				// A copy: the cached listing is dropped on the next edit, the selection outlives it.
+				m_instance_selection = child;
+				m_selected_node = &m_instance_selection;
+				m_selected_readonly = true;
+				m_selected_owner = &owner;
+				m_selected_target = target;
+				m_selected_path.clear();
+				find_path(m_world_desc->get_root().children, &owner, m_selected_path);
+				m_selected_path.insert(m_selected_path.end(), target.begin(), target.end());
+				if (m_on_node_selected) m_on_node_selected(m_selected_node);
+			}
+
 			if (opened) {
-				draw_prefab_children_readonly(child);
+				draw_instance_children(owner, target);
 				ImGui::TreePop();
 			}
+			target.pop_back();
+		}
+	}
+
+	void scene_hierarchy_panel::collect_flat_order(const std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& lower_filter)
+	{
+		for (const auto& node : nodes) {
+			const bool filter_active = !lower_filter.empty();
+			if (filter_active && !node_matches_filter(node, lower_filter))
+				continue;
+			m_flat_visible_nodes.push_back(const_cast<scn::prefab_desc::prefab_node*>(&node));
+			collect_flat_order(node.children, lower_filter);
+		}
+	}
+
+	void scene_hierarchy_panel::delete_selected()
+	{
+		if (m_multi_selected.size() > 1) {
+			std::vector<uint64_t> ids;
+			ids.reserve(m_multi_selected.size());
+			for (auto* n : m_multi_selected)
+				ids.push_back(n->node_id);
+			m_multi_selected.clear();
+			m_selected_node = nullptr;
+			if (m_on_delete_nodes) m_on_delete_nodes(ids);
+		} else if (m_selected_node) {
+			const uint64_t id = m_selected_node->node_id;
+			m_selected_node = nullptr;
+			m_multi_selected.clear();
+			if (m_on_delete_node) m_on_delete_node(id);
+		}
+	}
+
+	void scene_hierarchy_panel::duplicate_selected()
+	{
+		if (m_multi_selected.size() > 1) {
+			std::vector<uint64_t> ids;
+			ids.reserve(m_multi_selected.size());
+			for (auto* n : m_multi_selected)
+				ids.push_back(n->node_id);
+			m_multi_selected.clear();
+			m_selected_node = nullptr;
+			if (m_on_duplicate_nodes) m_on_duplicate_nodes(ids);
+		} else if (m_selected_node) {
+			const uint64_t id = m_selected_node->node_id;
+			m_selected_node = nullptr;
+			m_multi_selected.clear();
+			if (m_on_duplicate_node) m_on_duplicate_node(id);
 		}
 	}
 
@@ -140,35 +319,26 @@ namespace edt
 					if (i != m_world_idx) {
 						m_world_idx     = i;
 						m_selected_node = nullptr;
-						m_rename_node   = nullptr;
+						m_selected_owner = nullptr;
+						m_selected_path.clear();
+						m_selected_target.clear();
+						m_rename_id     = 0;
+						m_multi_selected.clear();
+						m_last_clicked_flat_idx = -1;
 						if (m_on_world_changed) m_on_world_changed(i);
 					}
 					ImGui::EndTabItem();
 				}
 			}
 
+			ImGui::BeginDisabled(locked());
 			if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
 				m_new_world_buf[0] = '\0';
 				ImGui::OpenPopup("##new_world_popup");
 			}
+			ImGui::EndDisabled();
 
-			ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Always);
-			if (ImGui::BeginPopup("##new_world_popup")) {
-				ImGui::TextUnformatted("New world name:");
-				ImGui::SetNextItemWidth(-1.f);
-				if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-				bool confirm = ImGui::InputText("##new_world_name", m_new_world_buf, sizeof(m_new_world_buf),
-					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-
-				const bool valid = m_new_world_buf[0] != '\0';
-				if (!valid) ImGui::BeginDisabled();
-				if (ImGui::Button("Create", ImVec2(-1, 0)) || (confirm && valid)) {
-					if (m_on_create_world) m_on_create_world(m_new_world_buf);
-					ImGui::CloseCurrentPopup();
-				}
-				if (!valid) ImGui::EndDisabled();
-				ImGui::EndPopup();
-			}
+			draw_new_world_popup();
 
 			ImGui::EndTabBar();
 		}
@@ -176,10 +346,47 @@ namespace edt
 		m_force_tab_switch = false;
 	}
 
+	void scene_hierarchy_panel::draw_new_world_popup()
+	{
+		ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Always);
+		if (ImGui::BeginPopup("##new_world_popup")) {
+			ImGui::TextUnformatted("New world name:");
+			ImGui::SetNextItemWidth(-1.f);
+			if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+			bool confirm = ImGui::InputText("##new_world_name", m_new_world_buf, sizeof(m_new_world_buf),
+				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+			const bool valid = m_new_world_buf[0] != '\0';
+			if (!valid) ImGui::BeginDisabled();
+			if (ImGui::Button("Create", ImVec2(-1, 0)) || (confirm && valid)) {
+				if (m_on_create_world) m_on_create_world(m_new_world_buf);
+				ImGui::CloseCurrentPopup();
+			}
+			if (!valid) ImGui::EndDisabled();
+			ImGui::EndPopup();
+		}
+	}
+
 	void scene_hierarchy_panel::on_render()
 	{
+		const bool edits_locked = locked();
+		if (edits_locked) {
+			ImGui::TextDisabled("Stop Play to edit");
+			m_rename_id = 0;
+		}
 		if (!m_world_names.empty()) {
 			draw_world_tabs();
+			ImGui::Separator();
+		} else {
+			// Without worlds there are no tabs, so this is the only way to get one.
+			ImGui::TextDisabled("This level has no worlds");
+			ImGui::BeginDisabled(edits_locked);
+			if (ImGui::Button("+ New World")) {
+				m_new_world_buf[0] = '\0';
+				ImGui::OpenPopup("##new_world_popup");
+			}
+			ImGui::EndDisabled();
+			draw_new_world_popup();
 			ImGui::Separator();
 		}
 
@@ -188,8 +395,10 @@ namespace edt
 		ImGui::InputTextWithHint("##filter", "Filter by name...", m_filter, sizeof(m_filter));
 
 		// New root node button
+		ImGui::BeginDisabled(!m_world_desc || edits_locked);
 		if (ImGui::Button("+ New Entity"))
 			ImGui::OpenPopup("##new_entity_type");
+		ImGui::EndDisabled();
 
 		if (ImGui::BeginPopup("##new_entity_type")) {
 			struct { const char* label; std::string_view type; } types[] = {
@@ -215,43 +424,66 @@ namespace edt
 		std::string lower_filter = m_filter;
 		std::transform(lower_filter.begin(), lower_filter.end(), lower_filter.begin(), ::tolower);
 
+		// Rebuild flat visible order for shift-select
+		m_flat_visible_nodes.clear();
+		collect_flat_order(m_world_desc->get_root().children, lower_filter);
+
+		// Delete key shortcut
+		if (!edits_locked && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+			ImGui::IsKeyPressed(ImGuiKey_Delete) &&
+			((m_selected_node && !m_selected_readonly) || m_multi_selected.size() > 1))
+		{
+			delete_selected();
+			return;
+		}
+
 		auto& children = m_world_desc->get_root().children;
-		for (int i = 0; i < children.size(); ++i)
-			draw_node(children[i], lower_filter);
+		int flat_index = 0;
+		m_rename_seen = false;
+		for (int i = 0; i < (int)children.size(); ++i)
+			draw_node(children[i], lower_filter, flat_index);
+		// The node went away (an agent's edit, an undo) or out of sight: no rename may land on another one.
+		if (!m_rename_seen) m_rename_id = 0;
 
 		// ── drop on empty area → move to root ────────────────────────────
 		ImVec2 avail = ImGui::GetContentRegionAvail();
-		if (avail.y > 0.f) {
+		if (!edits_locked && avail.y > 0.f) {
 			ImGui::InvisibleButton("##root_drop_area", ImVec2(-1.f, avail.y));
 			if (ImGui::BeginDragDropTarget()) {
 				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
-					std::string dragged_name(static_cast<const char*>(payload->Data));
-					// empty parent name = root
-					if (m_on_reparent_node) m_on_reparent_node(dragged_name, "", -1);
+					uint64_t dragged_id = 0;
+					std::memcpy(&dragged_id, payload->Data, sizeof(dragged_id));
+					// parent id 0 = root
+					if (m_on_reparent_node) m_on_reparent_node(dragged_id, 0, -1);
 				}
 				ImGui::EndDragDropTarget();
 			}
 		}
 	}
 
-	void scene_hierarchy_panel::draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter)
+	void scene_hierarchy_panel::draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter, int& flat_index)
 	{
 		// ── filter ──────────────────────────────────────────────────────────
 		const bool filter_active = !lower_filter.empty();
 		if (filter_active && !node_matches_filter(node, lower_filter))
 			return;
 
+		const int my_flat_index = flat_index++;
+
 		const char* prefix = get_type_prefix(node);
 
 		// Build ImGui IDs using format_to_n into stack buffer (no heap allocation)
+		const bool by_agent = m_agent_marked && m_agent_marked(node.node_id);
 		char id_buf[512];
-		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{}{}##{}", prefix, node.name, node.name);
+		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{0}{1}{2}##{3:x}", prefix, node.name,
+			by_agent ? " (agent)" : "", node.node_id);
 		*id_result.out = '\0';
 
 		// ── inline rename ────────────────────────────────────────────────────
-		if (m_rename_node == &node) {
+		if (m_rename_id != 0 && node.node_id == m_rename_id) {
+			m_rename_seen = true;
 			char rename_id[512];
-			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{}", node.name);
+			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{:x}", node.node_id);
 			*rn_result.out = '\0';
 			ImGui::SetKeyboardFocusHere();
 			if (ImGui::InputText(rename_id, m_rename_buf, sizeof(m_rename_buf),
@@ -262,40 +494,84 @@ namespace edt
 					node.name = m_rename_buf;
 					if (m_on_rename_node) m_on_rename_node(old_name, node.name);
 				}
-				m_rename_node = nullptr;
+				m_rename_id = 0;
 			}
 			if (ImGui::IsItemDeactivated())
-				m_rename_node = nullptr;
+				m_rename_id = 0;
 			return;
 		}
 
 		// ── tree node ────────────────────────────────────────────────────────
 		const scn::prefab_desc* ref_prefab = get_referenced_prefab(node);
-		const bool has_children = !node.children.empty() || (ref_prefab && !ref_prefab->get_root().children.empty());
+		const bool has_children = !node.children.empty() || ref_prefab;
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 		if (!has_children) flags |= ImGuiTreeNodeFlags_Leaf;
-		if (&node == m_selected_node) flags |= ImGuiTreeNodeFlags_Selected;
+
+		const bool is_primary   = (&node == m_selected_node);
+		const bool is_in_multi  = m_multi_selected.count(&node) > 0;
+		if (is_primary || is_in_multi) flags |= ImGuiTreeNodeFlags_Selected;
+
 		// Auto-expand parents when filter is active so matching children are visible
 		if (filter_active && has_children)
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
 		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
+		if (by_agent && ImGui::IsItemHovered()) ImGui::SetTooltip("Changed by an agent (not saved or accepted yet)");
 
 		// ── selection ───────────────────────────────────────────────────────
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
-			m_selected_node = &node;
-			if (m_on_node_selected) m_on_node_selected(&node);
+			const bool ctrl_held  = ImGui::GetIO().KeyCtrl;
+			const bool shift_held = ImGui::GetIO().KeyShift;
+
+			if (ctrl_held) {
+				// Ctrl+Click: toggle node in multi-selection
+				if (m_multi_selected.count(&node)) {
+					m_multi_selected.erase(&node);
+					// If we removed the primary, pick another or clear
+					if (&node == m_selected_node) {
+						m_selected_node = m_multi_selected.empty() ? nullptr : *m_multi_selected.begin();
+						notify_selected();
+					}
+				} else {
+					// Add current primary to multi_selected first
+					if (m_selected_node && m_multi_selected.empty())
+						m_multi_selected.insert(m_selected_node);
+					m_multi_selected.insert(&node);
+					m_selected_node = &node;
+					m_selected_readonly = false;
+					notify_selected();
+				}
+				m_last_clicked_flat_idx = my_flat_index;
+			} else if (shift_held && m_last_clicked_flat_idx >= 0) {
+				// Shift+Click: select range in flat visible order
+				m_multi_selected.clear();
+				const int from = std::min(m_last_clicked_flat_idx, my_flat_index);
+				const int to   = std::max(m_last_clicked_flat_idx, my_flat_index);
+				for (int i = from; i <= to && i < (int)m_flat_visible_nodes.size(); ++i)
+					m_multi_selected.insert(m_flat_visible_nodes[i]);
+				m_selected_node = &node;
+				m_selected_readonly = false;
+				notify_selected();
+			} else {
+				// Plain click: single selection
+				m_multi_selected.clear();
+				m_selected_node = &node;
+				m_selected_readonly = false;
+				m_last_clicked_flat_idx = my_flat_index;
+				notify_selected();
+			}
 		}
 
 		// ── drag source ─────────────────────────────────────────────────────
-		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-			ImGui::SetDragDropPayload("HIERARCHY_NODE", node.name.c_str(), node.name.size() + 1);
+		const bool edits_locked = locked();
+		if (!edits_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+			ImGui::SetDragDropPayload("HIERARCHY_NODE", &node.node_id, sizeof(node.node_id));
 			ImGui::TextUnformatted(node.name.c_str());
 			ImGui::EndDragDropSource();
 		}
 
 		// ── drop target: position-based (top edge = insert before, middle = make child, bottom edge = insert after)
-		if (ImGui::BeginDragDropTarget()) {
+		if (!edits_locked && ImGui::BeginDragDropTarget()) {
 			// Draw visual hint based on mouse position
 			ImVec2 item_min = ImGui::GetItemRectMin();
 			ImVec2 item_max = ImGui::GetItemRectMax();
@@ -319,14 +595,15 @@ namespace edt
 			}
 
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
-				std::string dragged_name(static_cast<const char*>(payload->Data));
-				if (dragged_name != node.name) {
+				uint64_t dragged_id = 0;
+				std::memcpy(&dragged_id, payload->Data, sizeof(dragged_id));
+				if (dragged_id != node.node_id) {
 					if (fraction < 0.25f) {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 0);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, 0);
 					} else if (fraction > 0.75f) {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 1);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, 1);
 					} else {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, -1);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, -1);
 					}
 				}
 			}
@@ -334,44 +611,62 @@ namespace edt
 		}
 
 		// ── double-click to rename ───────────────────────────────────────────
-		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-			m_rename_node = &node;
-			auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
-			*cp.out = '\0';
+		if (!edits_locked && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+			begin_rename(node);
 		}
 
 		// ── context menu ─────────────────────────────────────────────────────
-		if (ImGui::BeginPopupContextItem()) {
-			if (ImGui::MenuItem("Rename")) {
-				m_rename_node = &node;
-				strncpy(m_rename_buf, node.name.c_str(), sizeof(m_rename_buf) - 1);
-				m_rename_buf[sizeof(m_rename_buf) - 1] = '\0';
+		if (!edits_locked && ImGui::BeginPopupContextItem()) {
+			const bool multi_mode = m_multi_selected.size() > 1;
+
+			if (!multi_mode) {
+				if (ImGui::MenuItem("Rename")) {
+					begin_rename(node);
+				}
 			}
-			if (ImGui::MenuItem("Duplicate")) {
-				std::string name = node.name;
+
+			if (ImGui::MenuItem(multi_mode ? "Duplicate Selection" : "Duplicate")) {
 				ImGui::EndPopup();
 				if (opened) ImGui::TreePop();
-				if (m_on_duplicate_node) m_on_duplicate_node(name);
+				if (multi_mode) {
+					duplicate_selected();
+				} else {
+					const uint64_t id = node.node_id;
+					m_multi_selected.clear();
+					m_selected_node = nullptr;
+					if (m_on_duplicate_node) m_on_duplicate_node(id);
+				}
 				return;
 			}
+
 			ImGui::Separator();
-			if (ImGui::MenuItem("Delete")) {
-				std::string name = node.name;
+
+			if (ImGui::MenuItem(multi_mode ? "Delete Selection" : "Delete")) {
 				ImGui::EndPopup();
 				if (opened) ImGui::TreePop();
-				if (m_on_delete_node) m_on_delete_node(name);
+				if (multi_mode) {
+					delete_selected();
+				} else {
+					const uint64_t id = node.node_id;
+					m_selected_node = nullptr;
+					m_multi_selected.clear();
+					if (m_on_delete_node) m_on_delete_node(id);
+				}
 				return;
 			}
+
 			ImGui::EndPopup();
 		}
 
 		// ── children ─────────────────────────────────────────────────────────
 		if (opened) {
 			for (auto& child : node.children)
-				draw_node(child, lower_filter);
-			// Show referenced prefab's children as read-only
-			if (ref_prefab)
-				draw_prefab_children_readonly(ref_prefab->get_root());
+				draw_node(child, lower_filter, flat_index);
+			// Show the instantiated nodes as read-only (their edits become override records)
+			if (ref_prefab) {
+				std::vector<uint64_t> target;
+				draw_instance_children(node, target);
+			}
 			ImGui::TreePop();
 		}
 	}

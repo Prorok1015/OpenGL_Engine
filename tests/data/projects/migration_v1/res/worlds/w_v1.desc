@@ -1,0 +1,16 @@
+{
+	"__type": "world_desc",
+	"name": "w_v1",
+	"systems": [],
+	"children": {
+		"root": {
+			"children": {
+				"cam": {
+					"components": {
+						"camera": { "__type": "camera_desc", "fov": 60, "transform": { "position": [0, 1, 5], "rotation": [0, 0, 0] } }
+					}
+				}
+			}
+		}
+	}
+}

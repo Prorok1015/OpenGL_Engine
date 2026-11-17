@@ -1,0 +1,220 @@
+// desc_resave: loads every .desc file under a resources directory through the engine (older formats are
+// migrated on load) and writes it back in the current format, indented. Run it after a format change.
+//
+//   desc_resave <path to a resources directory named "res"> [--base <res dir>] [--edt <data dir>] [--check]
+//
+// --check writes nothing and exits with 1 when any file would change.
+// --base mounts a lower layer under the directory (projects/sandbox/res needs core/res for its base descs);
+// only the descs of the first directory (and of --edt) are touched.
+// --edt mounts a directory as the edt:// protocol (Editor/data) and resaves its descs as well.
+// A geometry whose data is in its binary file (EPIC-79) is not written back as arrays: it is skipped and reported.
+#include <snk/resource/res_system.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_template_files.h>
+#include <snk/common/ds/ds_task_system.hpp>
+#if SNK_HAS_ASSIMP
+#include <snk/model_import/mdl_model_adapter.h>
+#endif
+#include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/gui/gui_gui_service_init.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_registration_scope.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
+#include <algorithm>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+	std::string_view as_text(const std::vector<std::byte>& bytes)
+	{
+		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
+	}
+
+	std::vector<std::byte> read_file(const fs::path& path)
+	{
+		std::ifstream in(path, std::ios::binary);
+		std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		std::vector<std::byte> bytes(text.size());
+		std::transform(text.begin(), text.end(), bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+		return bytes;
+	}
+
+	// "vertices" or "indices" is a range of the binary file next to the desc (EPIC-79), not an array.
+	bool has_binary_geometry(std::string_view text)
+	{
+		boost::system::error_code error;
+		const json::value root = json::parse(text, error);
+		const json::object* object = !error ? root.if_object() : nullptr;
+		if (object == nullptr) {
+			return false;
+		}
+		const json::value* type = object->if_contains("__type");
+		if (type == nullptr || !type->is_string() || type->as_string() != "geometry_desc") {
+			return false;
+		}
+		const json::value* vertices = object->if_contains("vertices");
+		const json::value* indices = object->if_contains("indices");
+		return (vertices != nullptr && vertices->is_object()) || (indices != nullptr && indices->is_object());
+	}
+
+}
+
+int main(int argc, char** argv)
+{
+	if (argc < 2) {
+		egLOG_ERROR("desc_resave", "usage: desc_resave <resources directory named 'res'> [--check]");
+		return 2;
+	}
+	const fs::path res_dir = fs::absolute(argv[1]).lexically_normal();
+	bool check_only = false;
+	fs::path base_dir;
+	fs::path edt_dir;
+	for (int i = 2; i < argc; ++i) {
+		const std::string arg{ argv[i] };
+		if (arg == "--check") {
+			check_only = true;
+		} else if (arg == "--base" && i + 1 < argc) {
+			base_dir = fs::absolute(argv[++i]).lexically_normal();
+		} else if (arg == "--edt" && i + 1 < argc) {
+			edt_dir = fs::absolute(argv[++i]).lexically_normal();
+		} else {
+			egLOG_ERROR("desc_resave", "unknown argument '{}'", arg);
+			return 2;
+		}
+	}
+	if (!fs::is_directory(res_dir) || res_dir.filename() != "res") {
+		egLOG_ERROR("desc_resave", "'{}' is not a directory named 'res'", res_dir.string());
+		return 2;
+	}
+
+	// The resource system reads its root from the configured "./res"; run next to it, with the sandbox it expects.
+	fs::current_path(res_dir.parent_path());
+	if (!base_dir.empty()) {
+		if (!fs::is_directory(base_dir)) {
+			egLOG_ERROR("desc_resave", "base '{}' is not a directory", base_dir.string());
+			return 2;
+		}
+		// By name, like `--set`: the variable lives in the engine, which a shared build does not export it from (#223).
+		cfg::set_variable("resource/base_path", base_dir.string());
+	}
+	if (!edt_dir.empty() && !fs::is_directory(edt_dir)) {
+		egLOG_ERROR("desc_resave", "edt directory '{}' does not exist", edt_dir.string());
+		return 2;
+	}
+	std::error_code ec;
+	fs::create_directories("./sandbox", ec);
+
+	// No threads: get_sync() on a manual task_system runs the queued loads itself.
+	ds::task_system_config tasks_config;
+	tasks_config.mode = ds::policy::manual;
+	ds::task_system tasks(tasks_config);
+	res::resource_system res_sys(tasks);
+	desc::desc_system desc_sys(res_sys);
+	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
+	scn::ecs_assembler assembler(desc_sys, res_sys);
+	rnd::skinning_manager skinning;
+	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
+	engine::render::register_render_descs(desc_sys);
+	engine::gui::register_gui_descs(desc_sys);
+#if SNK_HAS_ASSIMP
+	// Levels reference models (.glb) that are imported into prefabs while they load.
+	mdl::register_model_adapter(res_sys, desc_sys);
+#endif
+	core::desc::desc_adapter_t adapter(res_sys, desc_sys);
+
+	if (!edt_dir.empty()) {
+		res_sys.registrate_resolver<res::vfs_resolver>("edt", std::vector<fs::path>{ edt_dir });
+	}
+
+	struct desc_file {
+		fs::path path;
+		res::tag tag;
+	};
+	std::vector<desc_file> files;
+	const auto collect = [&files](const fs::path& dir, std::string_view protocol) {
+		std::vector<desc_file> found;
+		for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+			if (entry.is_regular_file() && entry.path().extension() == ".desc") {
+				found.push_back({ entry.path(), res::tag{ protocol, fs::relative(entry.path(), dir).generic_string() } });
+			}
+		}
+		std::ranges::sort(found, {}, &desc_file::path);
+		files.insert(files.end(), found.begin(), found.end());
+	};
+	collect(res_dir, res::tag::default_protocol());
+	if (!edt_dir.empty()) {
+		collect(edt_dir, "edt");
+	}
+
+	int failed = 0;
+	int changed = 0;
+	int skipped = 0;
+	for (const auto& [path, tag] : files) {
+		const std::string rel = tag.string();
+		const std::vector<std::byte> text = read_file(path);
+		if (desc::is_template_file_of_unknown_type(rel, as_text(text), desc_sys)) {
+			egLOG_INFO("desc_resave", "{}: a game type of a template, skipped", rel);
+			++skipped;
+			continue;
+		}
+		if (has_binary_geometry(as_text(text))) {
+			egLOG_INFO("desc_resave", "{}: a geometry with its data in a binary file, not written back as arrays, skipped", rel);
+			++skipped;
+			continue;
+		}
+		auto handle = res_sys.require_sync<desc::desc_base>(tag);
+		auto loaded = handle.get_sync();
+		if (!loaded) {
+			egLOG_ERROR("desc_resave", "{}: failed to load", rel);
+			++failed;
+			continue;
+		}
+
+		std::vector<std::byte> written;
+		try {
+			written = adapter.serialize(tag, loaded);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("desc_resave", "{}: cannot be written: {}", rel, e.what());
+			++failed;
+			continue;
+		}
+		const std::vector<std::byte> original = read_file(path);
+		// One form with a migration (#851): the root __guid stays as the file has it, none is made.
+		boost::system::error_code before_error;
+		boost::system::error_code after_error;
+		const json::value before = json::parse(as_text(original), before_error);
+		json::value after = json::parse(as_text(written), after_error);
+		if (!before_error && !after_error && before.is_object() && after.is_object()
+			&& desc::keep_root_guid(after.as_object(), before.as_object())) {
+			written = desc_sys.serialize_to_bytes(after);
+		}
+		if (written == original) {
+			continue;
+		}
+		++changed;
+		if (check_only) {
+			egLOG_INFO("desc_resave", "{}: would change", rel);
+			continue;
+		}
+		std::ofstream out(path, std::ios::binary | std::ios::trunc);
+		out.write(reinterpret_cast<const char*>(written.data()), static_cast<std::streamsize>(written.size()));
+		egLOG_INFO("desc_resave", "{}: rewritten", rel);
+	}
+
+	egLOG_INFO("desc_resave", "{} files, {} {}, {} skipped, {} failed", files.size(), changed,
+		check_only ? "would change" : "rewritten", skipped, failed);
+	return failed > 0 || (check_only && changed > 0) ? 1 : 0;
+}

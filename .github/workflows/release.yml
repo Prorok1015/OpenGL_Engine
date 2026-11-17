@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The editor on the shared engine and the SDK with both engines (#223), built and checked by the same workflow as
+  # the pull-request CI: Snake-<ver>-windows-x64.zip (Release with PDBs, the MSVC runtime) and
+  # Snake-<ver>-windows-x64-debug.zip (the Debug engine, unpacked over it). All Assimp formats, as the release preset.
+  package:
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      cmake-args: -DSNK_ASSIMP_FORMATS=ALL
+
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: snake-windows-x64-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l dist
+          test -f "dist/Snake-${GITHUB_REF_NAME}-windows-x64.zip"
+          test -f "dist/Snake-${GITHUB_REF_NAME}-windows-x64-debug.zip"
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag

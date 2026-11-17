@@ -1,0 +1,67 @@
+[META]
+framework: claude-framework
+file_id: backlog.BACKLOG-RULES
+class: universal
+version: 1.0.0
+
+[BACKLOG_RULES]
+overview: Agent-only backlog — a persistent queue of deferred tasks the agent owns, reads, and updates. Not user-facing; optimized for token efficiency, not human readability.
+purpose: Capture work that should not be done immediately. Without a backlog, deferred tasks either get dropped or pollute the active session context. With a backlog, the agent can park an item, resume it later, and route activated items straight into the workflow module.
+mechanism: Agent writes a one-line entry to INDEX.toon and a detail file items/<id>.toon when capturing. When the user says "do BL-042", the agent reads the detail, transitions status, and starts the workflow with pre-filled discovery.
+
+[CORE_PRINCIPLE]
+Backlog is the durable home for "we'll do this later". It is NOT:
+  - A general TODO list (use TodoWrite for in-progress work)
+  - A bug tracker (external tools own that; backlog mirrors items via SYNC.toon)
+  - A memory for user preferences (use the memory system for that)
+
+[TOKEN_ECONOMY]
+INDEX.toon is ALWAYS loaded when the agent engages with backlog. It must stay compact.
+  - Use the exact 7-line-per-item shape in SCHEMA.toon
+  - Detail, rationale, acceptance criteria go in items/<id>.toon — loaded ONLY when an item is activated or explicitly inspected
+  - Never inline long notes in INDEX
+
+If INDEX exceeds ~80 items or ~600 lines, split by theme: INDEX keeps only items with status `accepted` or `in-progress`; `archive/INDEX.toon` holds `done / rejected / deferred` older than 30 days.
+
+[FILE_LAYOUT]
+docs/agent/backlog/
+  BACKLOG-RULES.toon   # this file (universal)
+  SCHEMA.toon          # item format (universal)
+  LIFECYCLE.toon       # statuses + transitions (universal)
+  OPERATIONS.toon      # add/list/show/update/activate/archive (universal)
+  SYNC.toon            # external-tracker sync rules (universal)
+  INDEX.toon           # flat index, 7 lines per item (parameterized; owned by project)
+  items/               # one <id>.toon per item (runtime-managed by agent)
+    <id>.toon
+
+[WHEN_TO_USE]
+Create a backlog item when:
+  - User says "add to backlog" / "record this for later" / "we'll do this another time"
+  - Workflow phase notes out-of-scope follow-ups (REFACTOR and BUGFIX explicitly produce these)
+  - spawn_task captures a side-quest during a main task
+  - Agent discovers a real issue (not speculative) that is clearly out of the current task's scope
+
+Do NOT create a backlog item for:
+  - Anything the user is about to act on now
+  - Trivial fixes that can be done inline in <1 min
+  - Vague observations ("this could be cleaner")
+  - Low-confidence hunches
+
+[QUICK_START]
+To capture a deferred task:
+  1. Generate next id (see SCHEMA.toon id_format)
+  2. Append 7-line entry to INDEX.toon [ITEMS] section
+  3. Write items/<id>.toon with full detail
+  4. Default status: proposed
+  5. Inform the user: "Captured as BL-042"
+
+To resume a task:
+  1. Read INDEX.toon to list candidates
+  2. Read items/<id>.toon for the chosen item
+  3. Run OPERATIONS.toon `activate` — transitions status and hands off to workflow module
+
+[NEXT_STEPS]
+Start here: → SCHEMA.toon (learn the item format)
+Then: → LIFECYCLE.toon (statuses and legal transitions)
+Then: → OPERATIONS.toon (how to add/activate/update/archive)
+Optional: → SYNC.toon (if the project has an external tracker)

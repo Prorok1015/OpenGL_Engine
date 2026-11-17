@@ -1,0 +1,44 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-004
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-004
+title: Top-level exception periphery + atomic bootstrap/shutdown
+type: refactor
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: robustness
+
+[DESCRIPTION]
+Editor/main.cpp вызывает register_all_services / initialize_all_services / editor.run() без
+верхнеуровневого try/catch. Любое исключение (битый путь ресурсов, окно, assimp) → std::terminate
+без лога и без shutdown_all_services → io-потоки/GL не освобождаются. Инициализация не атомарна:
+исключение в init оставляет частично поднятые модули без отката.
+
+[MOTIVATION]
+Найдено 2 агентами (архитектура, надёжность). Превращает любую ошибку запуска в молчаливый terminate
+без следов и с утечкой потоков/ресурсов. Периметр исключений + fail-safe bootstrap — база надёжности.
+
+[ACCEPTANCE]
+- main() оборачивает init/run/shutdown в try/catch с egLOG_ERROR(e.what()) и гарантированным
+  shutdown_all_services (RAII-guard или catch).
+- module_loader::initialize_all_services: при сбое модуля корректный откат уже поднятых (shutdown
+  в обратном порядке) и возврат ошибки наверх; main отдаёт ненулевой код.
+- Проверки возвратов init на пути запуска (glfwInit, gladLoadGLLoader, создание окна) — лог + контролируемый выход.
+
+[OUT_OF_SCOPE]
+- Полный переход на коды ошибок во всём API (отдельная большая работа).
+- Граница ENGINE_VERIFY на конкретных runtime-путях — это BL-002 (связано).
+
+[LINKS]
+workplan:
+external_id:
+epic:
+related_items: BL-002
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow discovery (multi-agent audit; not covered by any epic)

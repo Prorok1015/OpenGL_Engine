@@ -1,34 +1,36 @@
-#include "rnd_scene_shader_desc.h"
-#include "res_system.h"
-#include "rnd_shader_interface.h"
-#include "resources/res_resource_text.h"
-#include "rnd_render_system.h"
+#include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
+#include <snk/render/rnd_gpu_blocks.h>
+#include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/render/shader/rnd_shader_includes.h>
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
+#include <format>
+#include <sstream>
 
-static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config& desc)
+// The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
+// on it, see lights_params) and the stage the source is compiled for.
+static std::string engine_defines(rnd::driver::shader_header::shader_type type)
+{
+    const char* stage = "SNK_VERTEX_SHADER";
+    if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = "SNK_FRAGMENT_SHADER";
+    if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = "SNK_GEOMETRY_SHADER";
+    return std::format("#define MAX_LIGHT_COUNT {}\n#define {}\n", rnd::lights_params::MAX_LIGHT_COUNT, stage);
+}
+
+// Returns what is wrong with the stages (empty when they are fit for the compiler).
+static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings, std::vector<res::tag>& files)
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
+    std::string problems;
     std::size_t index = 0;
     for (auto& header : headers)
     {
-        std::string_view body_view = header.body;
-        std::string& body = header.body;
-        std::size_t offset = body.find("#include");
-        while (offset != std::string_view::npos) {
-            std::size_t begin = body.find_first_of('"', offset);
-            std::size_t end = body.find_first_of('"', begin + 1);
-
-            if (begin != std::string_view::npos && end != std::string_view::npos) {
-                std::string_view include = body_view.substr(begin + 1, end - begin - 1);
-
-                auto include_code = res::get_system().require<res::text_resource>(tags[index] + res::tag::make(include)).get_sync();
-                if (include_code) {
-                    std::size_t line_end = body.find_first_of('\n', offset);
-                    body_view = header.body.replace(offset, line_end - offset, include_code->c_str());
-                }
-            }
-
-            offset = body.find("#include", offset);
+        const std::string errors = rnd::expand_includes(header.body, tags[index], res_sys, &files);
+        if (!errors.empty()) {
+            problems += std::format("'{}': {}", header.title, errors);
         }
         ++index;
     }
@@ -36,13 +38,13 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
     std::vector<std::string> dbg_addition_defines_names;
 
     std::ostringstream addition_defines;
-    for (const auto& [name, value] : desc.cdata.constants) {
+    for (const auto& [name, value] : cdata.constants) {
         auto define = std::vformat("#define {0} {1}\n", std::make_format_args(name, value));
 		addition_defines << define;
         dbg_addition_defines_names.push_back(name);
     }
 
-    for (const auto& def : desc.cdata.defines) {
+    for (const auto& def : cdata.defines) {
         auto define = std::vformat("#define {0}\n", std::make_format_args(def));
 		addition_defines << define;
         dbg_addition_defines_names.push_back(def);
@@ -50,7 +52,7 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
 
     if (!dbg_addition_defines_names.empty()) {
         std::string format = dbg_addition_defines_names.front();
-        for (int i = 1; i < dbg_addition_defines_names.size(); ++i) {
+        for (std::size_t i = 1; i < dbg_addition_defines_names.size(); ++i) {
             auto& name_ = dbg_addition_defines_names[i];
             format = std::vformat("{0} | {1}", std::make_format_args(format, name_));
         }
@@ -62,14 +64,27 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
     }
 
     for (auto& header : headers) {
-        header.body.insert(header.body.find_first_of('\n') + 1, addition_defines.view());
+        // Lines count from the top of the source after the #include lines were replaced by the files.
+        const std::string errors = rnd::expand_binding_macros(header.body, bindings);
+        if (!errors.empty()) {
+            problems += std::format("'{}': {}", header.title, errors);
+        }
+        if (!rnd::insert_after_version(header.body, engine_defines(header.type) + std::string{ addition_defines.view() })) {
+            problems += std::format("'{}': the source has to begin with a #version directive\n", header.title);
+        }
     }
-
+    return problems;
 }
 
-std::vector<rnd::driver::shader_header> rnd::shader_config::load() const
+rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& res_sys, const driver::binding_table& bindings) const
+{
+	return load(cdata, res_sys, bindings);
+}
+
+rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
     std::vector<res::tag> tags;
+    std::vector<res::tag> unreadable;	// stages that could not be read: still files of the source, one may appear later
     std::vector<driver::shader_header> headers;
 	headers.reserve(3);
     tags.reserve(3);
@@ -86,7 +101,7 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load() const
 	{
 		if (!tag.is_valid()) continue;
 
-		auto shaderCode = res::get_system().require<res::text_resource>(tag).get_sync();
+		auto shaderCode = res_sys.require_sync<res::text_resource>(tag).get_sync();
 		if (shaderCode) {
             headers.push_back(driver::shader_header{ 
                 .title = std::string{tag.name()}, 
@@ -94,25 +109,22 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load() const
                 .type = culc_shader_type(tag.extension())
                 });
 			tags.push_back(tag);
+		} else {
+			unreadable.push_back(tag);
 		}
 	}
 
-    preprocess_shader_code(tags, headers, *this);
-    return headers;
-}
-
-void rnd::configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader)
-{
-	for (int idx = 0; idx < desc.rdata.samplers.size(); ++idx)
-	{
-		if (desc.rdata.samplers[idx]) {
-			desc.rdata.samplers[idx]->bind(idx);
-		}
-	}
-
-	for (const auto& [name, data] : desc.rdata.uniforms)
-	{
-        shader->uniform(name, data);
-	}
-
+    load_result result;
+    result.files = tags;
+    result.files.insert(result.files.end(), unreadable.begin(), unreadable.end());
+    result.error = preprocess_shader_code(tags, headers, cdata, res_sys, bindings, result.files);
+    if (result.error.empty() && headers.empty()) {
+        result.error = "no stage of the program could be read\n";
+    }
+    if (!result.error.empty()) {
+        egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        return result;
+    }
+    result.headers = std::move(headers);
+    return result;
 }

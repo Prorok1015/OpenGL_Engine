@@ -1,0 +1,249 @@
+[META]
+framework: claude-framework
+file_id: CONSTRAINTS
+class: custom
+version: 1.0.0
+
+[CONSTRAINTS_MEMORY]
+[CONSTRAINT_1]
+rule: Never store pointers from frame_allocator across frames
+why: Frame allocator memory is invalidated at frame start (ds::frame_allocator_reset())
+how_to_apply:
+  - If you need data across frames, use other allocators (std::make_shared, pool_resource)
+  - For frame data: std::pmr::vector<T>(ds::frame_allocator()) is safe within frame
+  - Always read comment at alloc site: "frame temp" vs "persistent"
+
+[CONSTRAINT_2]
+rule: Always reserve() when count is known
+why: Avoids grow-and-copy within bump allocator (wastes memory + performance)
+how_to_apply:
+  std::pmr::vector<rnd::render_packet> packets(ds::frame_allocator());
+  packets.reserve(estimated_count); // BEFORE pushing
+
+[CONSTRAINT_3]
+rule: deallocate() is a no-op on linear allocator
+why: Memory only reclaimed on reset() (bump allocation design)
+how_to_apply:
+  - Individual deallocate() calls don't free memory
+  - Only bulk reset() at frame boundary reclaims
+  - Don't create tight alloc/free loops in frame (use pool_resource instead)
+
+[CONSTRAINTS_LOGGING]
+[CONSTRAINT_4]
+rule: Never use std::cout, std::cerr, or std::cin
+why: <snk/common/logger/engine_log.h> provides formatted, filterable per-category logging (spdlog backend)
+how_to_apply:
+  #include <snk/common/logger/engine_log.h>
+  Macros: egLOG/egLOG_INFO, egLOG_WARN, egLOG_ERROR, egLOG_TRACE, egLOG_DEBUG
+  First arg = category string, then std::format args:
+    egLOG_WARN("resource", "not found: {}", tag);
+  source: core/core/common/include/snk/common/logger/engine_log.h (macros defined L46-62)
+
+[CONSTRAINTS_CODE_STYLE]
+[CONSTRAINT_5]
+rule: C++20 only, no compiler extensions
+why: Cross-platform compatibility, maintainability
+how_to_apply:
+  - No __attribute__, __declspec, #pragma pack (use standard equivalents)
+  - No compiler-specific builtins
+  - Test on multiple platforms
+
+[CONSTRAINT_6]
+rule: Tabs (size 4) for indentation everywhere
+why: Project-wide consistency
+how_to_apply:
+  - Configure editor: spaces=off, tab_size=4
+  - All files .hpp, .cpp, CMakeLists.txt, .md use tabs
+
+[CONSTRAINT_7]
+rule: snake_case for all identifiers
+why: Consistency across codebase
+how_to_apply:
+  - Variables: my_variable
+  - Functions: my_function()
+  - Classes: my_class (rare, prefer structs for data)
+  - Enums: MY_ENUM_VALUE (exceptions: UPPER_CASE for macros)
+
+[CONSTRAINTS_ARCHITECTURE]
+[CONSTRAINT_8]
+rule: No global state in performance-critical code
+why: Prevents cache contention, simplifies testing
+how_to_apply:
+  - Render loop: zero statics, all data in structs
+  - ECS systems: dependencies via registry context
+  - Per-frame allocations: use frame_allocator, not statics
+
+# Owner-accepted architectural decisions (Windows+OpenGL now behind backend-agnostic RHI, GLFW behind platform::window,
+# own graphics backends only, GLSL portability rules, explicit ECS phases, m_ prefix): docs/roadmap/ARCHITECTURE_REVIEW.md §9
+
+[CONSTRAINT_9]
+rule: ImGui::End() must be called regardless of Begin() return value
+why: Begin/End must stay paired even when the window is collapsed/hidden; Begin() result only gates drawing
+how_to_apply:
+  if (ImGui::Begin("Name")) {
+    // panel content
+  }
+  ImGui::End();   // always
+  Same for BeginChild/EndChild. BeginPopup*/BeginMenu/BeginTable: End* only if Begin* returned true.
+  source: Editor/code/editor_system/panels/edt_panel_base.cpp render()
+
+[CONSTRAINT_10]
+rule: Use res::tag for all resource identification
+why: Prevents cache misses, enables hot-reload
+how_to_apply:
+  auto mesh = resources.require<mesh_resource>(res::tag{"res://models/backpack"});  // resources: res::resource_system& injected
+  no global get_system() accessors exist — inject res::resource_system&, never reintroduce a global
+  Never: hardcode filenames in component, always use descriptors
+  require_sync<T> is main-thread only (asserts on a pool worker). An adapter that needs another resource declares it: override collect_dependencies() returning res::make_dep<T>(tag), read it from the res_deps given to deserialize(); never wait inside an adapter. res::when_all(system, handles...) joins several requests.
+  source: core/core/resource/include/snk/resource/res_system.h require<T>/require_sync<T>/make_dep/when_all
+  Editor: a model file a desc refers to (.glb/.gltf/.obj/.fbx) is parsed only in the decoder process (edt::decoded_model_adapter, #925), never by assimp in the editor: do not register mdl::model_adapter (core/model_import, #1108) there. Its side files may come from its content root (no hidden ones); a model that is no file on the disk (memory, pack) is decoded from its bytes alone and may name no other file; 10 s per decoder step; a require_sync that has to wait for a model warns once per tag (resource_system::warn_on_sync_require).
+
+[CONSTRAINT_11]
+rule: Always use <snk/common/engine_assert.h> (ASSERT_MSG, ASSERT_FAIL)
+why: Provides stack traces, assert dialogs, debug info
+how_to_apply:
+  #include <snk/common/engine_assert.h>
+  ASSERT_MSG(condition, "message");
+  ASSERT_FAIL("error");
+  NOT: assert() macro or C std assert
+
+[CONSTRAINTS_ECS]
+[CONSTRAINT_12]
+rule: Components are POD structs, no virtual functions
+why: Cache efficiency, memcpy safety
+how_to_apply:
+  struct transform_component {
+    glm::mat4 matrix;
+    glm::vec3 position;
+    // no virtual ~, no callbacks
+  };
+
+[CONSTRAINT_13]
+rule: Systems inherit ecs::system_interface only when stateful; every system declares its phase in code
+why: Phase and ordering are properties of what the system does (ARCHITECTURE_REVIEW 9.5), the desc only says which systems a world runs
+how_to_apply:
+  struct my_system : ecs::system_interface { /* state only */ };
+  // system_interface has NO update()/initialize() — it is just a virtual dtor.
+  // The per-frame logic is a free or member function whose args (entt::view,
+  // ctx resources, ...) are injected by the invoker:
+  sfactory.register_system<&my_system::tick, my_system>("my_system",
+      { .phase = ecs::phase::update, .after = { "other_system" }, .run_in_edit = false }, ctor_args...);
+  // Do not rely on argument types for ordering; add .after/.before. Debug builds warn about
+  // two unordered systems of one phase that write the same data.
+  source: core/core/ecs/include/snk/ecs/ecs_system.h, ecs_system_registry.hpp, ecs_system_plan.hpp, ecs_phase.hpp
+
+[CONSTRAINT_13B]
+rule: Add game phases before worlds load; built-in phases cannot be changed
+why: Plans are built per world against the phase table at that moment
+how_to_apply:
+  - sfactory.add_game_phase("ai", ecs::phase::update, ecs::phase_side::before);
+  - fixed_update is the only phase stepped by the accumulator
+  source: core/core/ecs/include/snk/ecs/ecs_phase.hpp
+
+[CONSTRAINT_13C]
+rule: World order is desc order; derive parallel world arrays from one ordered source
+why: scn::level::for_each_world (now context_set::for_each, by id) iterated std::unordered_map<string,world> in HASH
+     order — it does NOT preserve desc/insertion order. With >=2 worlds, building
+     editor arrays (world_descs/world_names/worlds_systems_list) from for_each_world
+     desyncs the parallel arrays.
+how_to_apply:
+  - Treat the ordered world_descs vector as single source of truth for order
+  - Derive names + per-world systems via edt::derive_world_arrays (index-aligned)
+  - populate_worlds_from_level is the single build point on load
+  source: core/engine/scene/include/snk/scene/level/scn_context_set.h for_each;
+          Editor/code/editor_system/controller/edt_level_controller.h derive_world_arrays
+
+[CONSTRAINTS_RESOURCES]
+[CONSTRAINT_14]
+rule: Never bypass resource cache
+why: Prevents duplicate loads, enables hot-reload
+how_to_apply:
+  ✅ auto h = resources.require<T>(tag);   // res::resource_system& via DI; res_handle<T>
+  ❌ new T(); load from disk directly
+
+[CONSTRAINT_15]
+rule: Resources use VFS (res:// or memory://)
+why: Enables mods, asset packing, runtime replacement
+how_to_apply:
+  res:// = filesystem path (default protocol)
+  memory:// = runtime-created data
+  Never embed paths in code, always use tags
+  A file the engine itself loads by a fixed path (UI font, render-pass shaders):
+  resources.engine_file("shaders/x.frag") (engine:// when mounted), never res:// —
+  a project file at the same res:// path must not stand in for it (#929).
+  Material descs and their shaders stay res:// on purpose: content a project may replace.
+  Cost: a project can no longer give its own z_prepass.vert, so a material that moves vertices
+  draws apart from the depth prepass until materials name their depth shader (#1028).
+gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
+  the string must contain "protocol://" or protocol/path/name slices are wrong.
+  Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend
+  the default protocol; 2-arg form asserts the path has no "://" already.
+  source: core/core/resource/include/snk/resource/res_tag.h ctor (L20-40)
+
+[CONSTRAINTS_DESCRIPTORS]
+[CONSTRAINT_16]
+rule: Scene truth is in level_desc, not code
+why: Data-driven architecture, runtime flexibility
+how_to_apply:
+  - Don't spawn entities in code
+  - Use prefabs and level descs
+  - Editors change descs, code reads them
+
+[CONSTRAINT_17]
+rule: Descriptor inheritance: never circular deps
+why: Serialization and validation
+how_to_apply:
+  OK: level → world → prefab → prefab_node
+  VETO: world references level, prefab references world
+
+[CONSTRAINTS_RENDERING]
+[CONSTRAINT_18]
+rule: Render target tags are per-camera
+why: Multiple worlds need independent targets
+how_to_apply:
+  Editor injects: __editor_depth_rt, __editor_tp_accum_rt, etc.
+  Fallback to legacy tags for backward compat
+
+[CONSTRAINT_19]
+rule: Frame allocator must reset every frame
+why: Prevents memory bloat, GC-like semantics
+how_to_apply:
+  Frame start: ds::frame_allocator_reset()
+  → clears all frame-temp data
+  → next frame has clean slate
+
+[CONSTRAINTS_BUILD]
+[CONSTRAINT_20]
+rule: Warnings are errors (SNK_WARNINGS_AS_ERRORS=ON, -Werror / /WX): new code must be warning-free on MSVC, GCC and Clang
+why: CI builds every preset with the option ON; third-party code is exempt, project code is not (-DSNK_WARNINGS_AS_ERRORS=OFF is a local escape hatch only)
+
+[CONSTRAINT_21]
+rule: A component exposes only include/ PUBLIC; its source root and subdirs are PRIVATE (snk_component_headers + a PRIVATE subdir list); tests get white-box access to internal headers only through the explicit PRIVATE include list on unit_tests
+why: consumers (Editor/main.cpp, other targets) see only <snk/...> public headers; a loose internal header in a consumer fails the configure/build instead of silently widening the API (EPIC-49 US-49-1, editor_system done)
+
+[CONSTRAINTS_WEB_PORTABILITY]
+# Owner direction 2026-11-16: a far-future browser build (engine + editor as wasm, project served over net://). Not a goal now; new code must not make it more expensive.
+[CONSTRAINT_22]
+rule: OpenGL calls live only in core/core/video; everything else draws through rnd::
+why: the web build needs a second render backend (WebGL2/WebGPU: no DSA glNamed*/glCreate*, no geometry shaders); one module to replace instead of the whole tree
+how_to_apply:
+  - No gl* call, GL type or GL header in a new file outside core/core/video
+  - No new geometry/tessellation shader stage without the owner's decision
+
+[CONSTRAINT_23]
+rule: New resource loading is asynchronous (res::resource_system::require + ready callback/handle state); no new require_sync on the main thread
+why: a browser cannot block its main thread waiting for a file or a network answer
+how_to_apply:
+  - require_sync only in tools, tests and paths that already use it; never add one to a per-frame or UI path
+
+[CONSTRAINT_24]
+rule: New code reads and writes project data through the resource system (res://, user://, memory://...), not std::filesystem / fstream directly
+why: in the browser there is no local disk; a protocol (net://) serves the files, std::filesystem would hit an empty virtual FS
+how_to_apply:
+  - Direct filesystem access only where it already lives (resolvers, project open/create, build, VCS, tests)
+
+[CONSTRAINT_25]
+rule: Binary data on disk has a fixed byte order (little-endian) and fixed-width types; never write raw structs with size_t/pointers/padding
+why: the same file must load in a 32-bit wasm build and a 64-bit native one
+how_to_apply:
+  - Explicit uint32_t/uint64_t/float fields, explicit endianness on read/write (EPIC-79 SNKB format does this)

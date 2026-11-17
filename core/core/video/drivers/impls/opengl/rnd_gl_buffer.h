@@ -1,8 +1,8 @@
 #pragma once
 #include <vector>
 #include <glad/glad.h>
-#include <rnd_buffer_interface.h>
-#include <rnd_buffer_layout.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_buffer_layout.h>
 
 namespace rnd::driver::gl
 {
@@ -21,7 +21,6 @@ namespace rnd::driver::gl
 		bool isAllocatedMemory = false;
 		std::size_t allocated_size = 0;
 		GLuint buffer_id = 0;
-		GLint buffer_type = 0;
 		BufferLayout layout;
 	};
 }

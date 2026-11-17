@@ -1,0 +1,126 @@
+[FILES_REFERENCE]
+overview: Where to put different types of information
+purpose: Route discovered knowledge to correct documentation file
+principle: Each file has specific scope - don't mix concerns
+
+[FILE_CLAUDE_MD]
+location: /CLAUDE.md (root of project)
+scope: Critical universal rules (apply to ALL work on project)
+examples_update:
+  - "Never use FFI without validating all pointers"
+  - "No raw delete/new outside RAII constructors"
+  - "All C++ code must be snake_case"
+  - "Core MUST NOT write to filesystem"
+examples_not:
+  - Layer-specific rules (→ CONSTRAINTS.toon)
+  - Algorithm details (→ CRYPTO.toon)
+  - Implementation patterns (→ ARCHITECTURE.toon)
+  - Module responsibilities (→ MODULES.toon)
+when_update: Rare. Only if affects ALL code in project.
+format: Markdown section under "⚠️ СТРОГИЕ ПРАВИЛА"
+size: Keep small (root file should be quick to read)
+
+[FILE_CONSTRAINTS_TOON]
+location: docs/agent/CONSTRAINTS.toon
+scope: Architectural constraints and "never do this" rules
+examples_update:
+  - [CONSTRAINT_N]: "weak_ptr only between Layer 2 and Layer 4"
+  - [CONSTRAINT_N]: "Layer N cannot call Layer N-1"
+  - [CONSTRAINT_N]: "No allocations > 64MB in single block"
+  - [CONSTRAINT_N]: "Thread safety required for Layer 2+ shared state"
+examples_not:
+  - Implementation details (→ ARCHITECTURE.toon)
+  - What layers do (→ ARCHITECTURE.toon)
+  - How modules interact (→ MODULES.toon)
+  - Key sizes or algorithms (→ CRYPTO.toon)
+when_update: When discovering "you must not" or "only between X and Y"
+format: [CONSTRAINT_N] section + rule + why + how_to_apply
+size: Comprehensive but focused (one constraint = 5-10 lines max)
+
+[FILE_ARCHITECTURE_TOON]
+location: docs/agent/ARCHITECTURE.toon
+scope: Layer structure, dataflow, component interactions
+examples_update:
+  - How data flows through layers
+  - What each layer owns vs observes
+  - Caching patterns (Layer 4 LRU for Layer 2 objects)
+  - Concurrency model per layer
+  - State machine transitions
+examples_not:
+  - Constraints (→ CONSTRAINTS.toon)
+  - Specific algorithms (→ CRYPTO.toon)
+  - Module purposes (→ MODULES.toon)
+  - Crypto details (→ CRYPTO.toon)
+when_update: When understanding layer interactions or data movement
+format: Structured text with [LAYER_N] sections
+size: Medium (should fit in one document)
+
+[FILE_CRYPTO_TOON]
+location: docs/agent/CRYPTO.toon
+scope: Cryptographic components, algorithms, key management
+examples_update:
+  - "ChaCha20 nonce is now counter-based, not random"
+  - "Key rotation happens every 30 days (found in code)"
+  - "Ed25519 conversion to X25519 uses clamping"
+  - "Shared secret uses HKDF-SHA256 for KDF"
+examples_not:
+  - Layer constraints (→ CONSTRAINTS.toon)
+  - Architecture details (→ ARCHITECTURE.toon)
+  - Module responsibilities (→ MODULES.toon)
+when_update: When learning about cryptographic implementation
+format: [ALGO.X] or [COMPONENT_Y] sections with details
+size: Reference document (comprehensive)
+
+[FILE_MODULES_TOON]
+location: docs/agent/MODULES.toon
+scope: Module responsibilities, what they own, how they work
+examples_update:
+  - "Client now caches pubkeys in SQLite, doesn't fetch each time"
+  - "Core_engine owns all 5 layer managers via shared_ptr"
+  - "Relay statelessness: no session storage except in-memory transient"
+  - "Module X exports these 5 functions via FFI"
+examples_not:
+  - Algorithms (→ CRYPTO.toon)
+  - Layer structure (→ ARCHITECTURE.toon)
+  - Constraints (→ CONSTRAINTS.toon)
+when_update: When understanding module structure or responsibilities
+format: [MODULE.X] sections with subsections for structure/responsibility
+size: Reference document
+
+[FILE_ACTIVE_EPICS_TOON]
+location: docs/agent/ACTIVE_EPICS.toon
+scope: Current work status, epic progress, blockers
+examples_update:
+  - "EPIC-10 status changed from IN_PROGRESS to BLOCKED (waiting EPIC-15)"
+  - "EPIC-11 now partially complete (rooms work, members in progress)"
+  - "New blocker: EPIC-4 depends on EPIC-3 (ECDH)"
+examples_not:
+  - Code details (→ MODULES.toon)
+  - Constraints (→ CONSTRAINTS.toon)
+  - Architecture (→ ARCHITECTURE.toon)
+when_update: When discovering epic status from code or user
+format: [EPIC_N] sections with status, dependencies, deliverables
+size: Status board (changes frequently)
+
+[DECISION_MATRIX]
+Information Type → File
+
+Critical rule (all code)
+  → CLAUDE.md
+
+"Never do X" / Architecture limit
+  → CONSTRAINTS.toon
+
+How layers interact / dataflow
+  → ARCHITECTURE.toon
+
+Cryptographic algorithm / key management
+  → CRYPTO.toon
+
+Module owns what / FFI exports / inter-module
+  → MODULES.toon
+
+Epic status / blockers / progress
+  → ACTIVE_EPICS.toon
+
+Unknown file → QUICK_LINKS.toon (says which file)

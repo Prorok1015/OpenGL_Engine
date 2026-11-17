@@ -33,7 +33,7 @@ spdlog уже подключён как git-submodule (`lib3dparty/spdlog/`), н
 
 ```
 core/core/common/logger/
-├── engine_log.h      # spdlog macros: egLOG, egLOG_TRACE/DEBUG/INFO/WARN/ERROR
+├── engine_log.h      # публичный заголовок: core/core/common/include/snk/common/logger/engine_log.h; spdlog macros: egLOG, egLOG_TRACE/DEBUG/INFO/WARN/ERROR
 ├── engine_log.cpp    # spdlog backend: multi-sink (console + rotating file)
 └── CMakeLists.txt    # engine_logger target (links spdlog::spdlog_header_only)
 ```
@@ -85,7 +85,7 @@ core/core/common/logger/
 
 | File | Role |
 |------|------|
-| `core/core/common/logger/engine_log.h` | Макросы и API |
+| `core/core/common/include/snk/common/logger/engine_log.h` | Макросы и API |
 | `core/core/common/logger/engine_log.cpp` | Реализация (сейчас std::cout) |
 | `core/core/common/logger/CMakeLists.txt` | CMake target |
 | `lib3dparty/spdlog/` | spdlog submodule |

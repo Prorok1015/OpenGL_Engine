@@ -1,6 +1,6 @@
 # EPIC-39: Performance Profiling Infrastructure — замеры производительности
 
-**Status:** in_progress
+**Status:** done
 **Theme:** infrastructure
 **Dependencies:** EPIC-23 (Logger — spdlog), EPIC-37 (Unit Tests — для бенчмарков)
 
@@ -45,7 +45,7 @@
 ### Новые файлы
 
 ```
-core/core/common/eng_profiler.h       ← макросы PROFILE_SCOPE, PROFILE_FUNCTION, PROFILE_FRAME
+core/core/common/include/snk/common/eng_profiler.h       ← макросы PROFILE_SCOPE, PROFILE_FUNCTION, PROFILE_FRAME
 core/core/common/eng_profiler.cpp     ← fallback реализация (без Tracy)
 ```
 
@@ -97,7 +97,7 @@ struct profile_entry {
 ## User Stories
 
 ### US-39-1: Макро-обёртки и fallback profiler
-**Файлы:** `core/core/common/eng_profiler.h`, `core/core/common/eng_profiler.cpp`, `core/CMakeLists.txt`
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`, `core/core/common/eng_profiler.cpp`, `core/CMakeLists.txt`
 
 Создать `eng_profiler.h` с макросами `PROFILE_SCOPE(name)`, `PROFILE_FUNCTION()`, `PROFILE_FRAME(name)`. Реализовать fallback: `scoped_profiler_zone` с ring buffer. Добавить CMake option `ENGINE_PROFILE_MODE` (NONE / INTERNAL / TRACY).
 
@@ -107,7 +107,7 @@ struct profile_entry {
 - [x] При `PROFILE_NONE` макросы раскрываются в пустоту (проверить в Compiler Explorer или asm)
 - [x] При `PROFILE_INTERNAL` данные попадают в ring buffer
 - [x] Ring buffer thread-safe для single-producer (один поток пишет)
-- [ ] Существующий `eng_performance_timer.hpp` используется внутри (не дублировать)
+- [x] Существующий `eng_performance_timer.hpp` удалён — заменён на `eng_profiler.h`
 - [x] Unit-тесты: замер зоны возвращает >0, вложенные зоны корректно считают depth
 
 ### US-39-2: Инструментирование main loop и ключевых систем
@@ -124,12 +124,12 @@ struct profile_entry {
 **AC:**
 - [x] `PROFILE_FRAME("MainThread")` вызывается каждый кадр
 - [x] Каждый render pass имеет `PROFILE_SCOPE`
-- [ ] ECS system_factory вызывает `PROFILE_SCOPE` при update каждой системы
+- [x] ECS system_factory вызывает `PROFILE_SCOPE` при update каждой системы
 - [x] Ресурсные адаптеры (assimp, stb) имеют `PROFILE_SCOPE` на load
 - [x] Не менее 15 точек инструментирования в движке
 
 ### US-39-3: ImGui Profiler Overlay
-**Файлы:** `core/engine/gui/gui_system/gui_debug_layer.h`, `core/engine/gui/gui_system/gui_debug_layer.cpp`
+**Файлы:** `core/engine/gui/gui_system/include/snk/gui/gui_debug_layer.h`, `core/engine/gui/gui_system/gui_debug_layer.cpp`
 **Зависимости:** US-39-1
 
 Расширить debug layer: окно "Profiler" с таблицей последних замеров и простой timeline-полоской текущего кадра.
@@ -142,30 +142,20 @@ struct profile_entry {
 - [x] Работает при `PROFILE_INTERNAL` без Tracy
 
 ### US-39-4: Tracy Integration
-**Файлы:** `lib3dparty/tracy/` (submodule), `core/CMakeLists.txt`, `core/core/common/eng_profiler.h`
-**Зависимости:** US-39-1
+**Выделено в отдельный эпик:** [EPIC-46](EPIC-46.md)
 
-Добавить Tracy как git submodule. При `PROFILE_TRACY` макросы пробрасывают в `ZoneScoped`, `FrameMark` и т.д.
-
-**AC:**
-- [ ] Tracy добавлен как submodule в `lib3dparty/tracy`
-- [ ] `PROFILE_TRACY` линкует `TracyClient`
-- [ ] `PROFILE_SCOPE` → `ZoneScoped` / `ZoneScopedN`
-- [ ] `PROFILE_FRAME` → `FrameMark`
-- [ ] Данные видны в Tracy GUI при подключении к запущенному Editor
-- [ ] `PROFILE_INTERNAL` и `PROFILE_TRACY` не конфликтуют (взаимоисключающие)
+Tracy интеграция отложена — внутреннего профайлера достаточно для текущих задач.
 
 ### US-39-5: GPU Profiling (OpenGL Timer Queries)
-**Файлы:** `core/core/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
-**Зависимости:** US-39-2, US-39-4
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
+**Зависимости:** US-39-2
 
-Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`). При Tracy — пробрасывать в `TracyGpuZone`.
+Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`).
 
 **AC:**
-- [ ] `PROFILE_GPU_SCOPE("OpaquePass")` замеряет время на GPU
-- [ ] Результаты доступны через ring buffer (с задержкой 1-2 кадра — особенность GPU queries)
-- [ ] При Tracy — GPU-зоны видны на GPU timeline
-- [ ] При отсутствии поддержки timer queries — graceful fallback (не крашится)
+- [x] `PROFILE_GPU_SCOPE("OpaquePass")` замеряет время на GPU
+- [x] Результаты доступны через ring buffer (с задержкой 1-2 кадра — особенность GPU queries)
+- [x] При отсутствии поддержки timer queries — graceful fallback (не крашится)
 
 ### US-39-6: Миграция scoped_timer → PROFILE_SCOPE
 **Файлы:** все файлы, использующие `eng_performance_timer.hpp`
@@ -174,9 +164,9 @@ struct profile_entry {
 Заменить прямое использование `ds::scoped_timer` (stdout) на `PROFILE_SCOPE`. Удалить `std::cout` из `scoped_timer` или пометить deprecated.
 
 **AC:**
-- [ ] Нет прямых вызовов `ds::scoped_timer` в production-коде
-- [ ] `scoped_timer` помечен `[[deprecated]]` или удалён
-- [ ] Все замеры идут через единый `PROFILE_*` API
+- [x] Нет прямых вызовов `ds::scoped_timer` в production-коде
+- [x] `scoped_timer` помечен `[[deprecated]]` или удалён
+- [x] Все замеры идут через единый `PROFILE_*` API
 
 ---
 
@@ -201,9 +191,8 @@ US-39-4 (Tracy) — параллельно с US-39-2/39-3, после US-39-1
 
 ## Критерии завершения эпика
 
-- [ ] `PROFILE_SCOPE` / `PROFILE_FUNCTION` / `PROFILE_FRAME` работают во всех трёх режимах (NONE, INTERNAL, TRACY)
-- [ ] Не менее 15 точек инструментирования в движке (loop, render, ECS, resources)
-- [ ] ImGui overlay показывает breakdown текущего кадра
-- [ ] Tracy подключается и показывает timeline при `PROFILE_TRACY`
-- [ ] GPU-замеры работают для render passes
-- [ ] Старый `scoped_timer` заменён на `PROFILE_*`
+- [x] `PROFILE_SCOPE` / `PROFILE_FUNCTION` / `PROFILE_FRAME` работают в режимах NONE и INTERNAL (Tracy — см. EPIC-46)
+- [x] Не менее 15 точек инструментирования в движке (loop, render, ECS, resources)
+- [x] ImGui overlay показывает breakdown текущего кадра
+- [x] GPU-замеры работают для render passes
+- [x] Старый `scoped_timer` заменён на `PROFILE_*`

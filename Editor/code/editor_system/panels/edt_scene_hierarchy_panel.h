@@ -1,10 +1,14 @@
 #pragma once
-#include "edt_panel_base.h"
-#include "level/scn_world_desc.h"
+#include <snk/editor/edt_panel_base.h>
+#include <snk/scene/level/scn_world_desc.h>
 #include <functional>
 #include <memory>
 #include <vector>
 #include <string>
+#include <unordered_set>
+#include <cstdint>
+
+namespace edt::override_edit { class view_cache; }
 
 namespace edt
 {
@@ -14,19 +18,43 @@ namespace edt
 		scene_hierarchy_panel();
 
 		void set_world_desc(scn::world_desc* desc);
+		// Composed expansions of instances (shared with the inspector); null lists no instantiated nodes.
+		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		void set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb);
-		void set_on_delete_node(std::function<void(const std::string& name)> cb);
+		void set_on_delete_node(std::function<void(uint64_t node_id)> cb);
+		void set_on_delete_nodes(std::function<void(const std::vector<uint64_t>&)> cb);
 		void set_on_create_node(std::function<void(const std::string& type_name)> cb);
 		void set_on_rename_node(std::function<void(const std::string& old_name, const std::string& new_name)> cb);
-		void set_on_duplicate_node(std::function<void(const std::string& name)> cb);
-		void set_on_reparent_node(std::function<void(const std::string& node_name, const std::string& new_parent_name, int insert_index)> cb);
+		void set_on_duplicate_node(std::function<void(uint64_t node_id)> cb);
+		void set_on_duplicate_nodes(std::function<void(const std::vector<uint64_t>&)> cb);
+		void set_on_reparent_node(std::function<void(uint64_t node_id, uint64_t new_parent_id, int insert_index)> cb);
 
 		scn::prefab_desc::prefab_node* get_selected_node() const { return m_selected_node; }
-		void set_selected_node(scn::prefab_desc::prefab_node* node) { m_selected_node = node; }
+		bool is_selected_readonly() const { return m_selected_readonly; }
+		// Node-id path of the selection from the world root (a node inside an instance: the instance's path, then its ids).
+		const std::vector<uint64_t>& get_selected_path() const { return m_selected_path; }
+		// For a node of an instantiated prefab: the instance node that holds its override records, and the ids below it.
+		scn::prefab_desc::prefab_node* get_selected_owner() const { return m_selected_owner; }
+		const std::vector<uint64_t>& get_selected_target() const { return m_selected_target; }
+		void set_selected_node(scn::prefab_desc::prefab_node* node);
+		// Opens the inline rename of `node`. It follows the node by id: an edit that moves the node keeps it, one that
+		// removes the node cancels it at the next frame.
+		void begin_rename(const scn::prefab_desc::prefab_node& node);
+		// The id of the node being renamed, 0 when none.
+		uint64_t renaming() const { return m_rename_id; }
+		// Nodes (by id, in the shown world) an agent changed since the last save or accept: shown "(agent)".
+		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
 
 		// Multi-world support
 		void set_world_names(std::vector<std::string> names, int active_idx = 0);
 		void set_on_world_changed(std::function<void(int)> cb) { m_on_world_changed = std::move(cb); }
+		// True while the document must not change (Play): nodes and worlds can be selected, not created, renamed,
+		// duplicated, deleted or moved; a hint says why.
+		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
+		// Selects the node at `path` (node ids from the world root; for a node inside an instance the instance's path,
+		// then `target`, its ids below the instance) as a click would, the node-selected callback included. False when
+		// the shown world has no such node.
+		bool select_path(const std::vector<uint64_t>& path, const std::vector<uint64_t>& target);
 		void set_on_create_world(std::function<void(const std::string&)> cb) { m_on_create_world = std::move(cb); }
 
 	protected:
@@ -35,26 +63,49 @@ namespace edt
 	private:
 		const char* get_type_prefix(const scn::prefab_desc::prefab_node& node) const;
 		bool node_matches_filter(const scn::prefab_desc::prefab_node& node, const std::string& lower_filter) const;
-		void draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter);
-		void draw_prefab_children_readonly(const scn::prefab_desc::prefab_node& node);
+		void draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter, int& flat_index);
+		void draw_instance_children(scn::prefab_desc::prefab_node& owner, std::vector<uint64_t>& target);
+		bool find_path(const std::vector<scn::prefab_desc::prefab_node>& nodes, const scn::prefab_desc::prefab_node* wanted, std::vector<uint64_t>& path) const;
+		void notify_selected();
 		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
+		void draw_new_world_popup();
+		bool locked() const { return m_edits_locked && m_edits_locked(); }
+		void collect_flat_order(const std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& lower_filter);
+		void delete_selected();
+		void duplicate_selected();
 
 		scn::world_desc* m_world_desc = nullptr;
 		scn::prefab_desc::prefab_node* m_selected_node = nullptr;
+		scn::prefab_desc::prefab_node  m_instance_selection; // m_selected_node points here for a node inside an instance
+		std::shared_ptr<override_edit::view_cache> m_view_cache;
+		bool m_selected_readonly = false;
+		std::vector<uint64_t> m_selected_path;
+		scn::prefab_desc::prefab_node* m_selected_owner = nullptr;
+		std::vector<uint64_t> m_selected_target;
+
+		// Multi-selection
+		std::unordered_set<scn::prefab_desc::prefab_node*> m_multi_selected;
+		std::vector<scn::prefab_desc::prefab_node*>        m_flat_visible_nodes;
+		int                                                 m_last_clicked_flat_idx = -1;
 
 		std::function<void(scn::prefab_desc::prefab_node*)>          m_on_node_selected;
-		std::function<void(const std::string&)>                      m_on_delete_node;
+		std::function<void(uint64_t)>                                m_on_delete_node;
+		std::function<void(const std::vector<uint64_t>&)>            m_on_delete_nodes;
 		std::function<void(const std::string&)>                      m_on_create_node;
 		std::function<void(const std::string&, const std::string&)>  m_on_rename_node;
-		std::function<void(const std::string&)>                      m_on_duplicate_node;
-		std::function<void(const std::string&, const std::string&, int)> m_on_reparent_node;
+		std::function<void(uint64_t)>                                m_on_duplicate_node;
+		std::function<void(const std::vector<uint64_t>&)>            m_on_duplicate_nodes;
+		std::function<bool()>                                        m_edits_locked;
+		std::function<void(uint64_t, uint64_t, int)>                 m_on_reparent_node;
 		std::function<void(int)>                                      m_on_world_changed;
 		std::function<void(const std::string&)>                      m_on_create_world;
 
 		char m_filter[128]           = {};
 		char m_rename_buf[256]       = {};
-		scn::prefab_desc::prefab_node* m_rename_node = nullptr;
+		uint64_t m_rename_id = 0;
+		std::function<bool(uint64_t)> m_agent_marked;
+		bool m_rename_seen = false; // drawn this frame
 
 		// World tabs
 		std::vector<std::string> m_world_names;

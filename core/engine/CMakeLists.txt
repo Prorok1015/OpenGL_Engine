@@ -1,13 +1,54 @@
 cmake_minimum_required(VERSION 3.16)
 project(engine)
-add_library(${PROJECT_NAME} STATIC)
+if(SNK_ENGINE_SHARED)
+	# The umbrella is the shared library itself; see the WHOLE_ARCHIVE block at the end.
+	set(SNK_ENGINE_TARGET snk_engine)
+	add_library(snk_engine SHARED)
+	# Consumers (incl. the installed SDK, whose package cannot see the root directory's
+	# add_compile_definitions) need it for the SNK_API import side.
+	target_compile_definitions(snk_engine INTERFACE SNK_ENGINE_SHARED)
+	if(MSVC)
+		# imgui is exported by snk_engine. In-tree targets under core/ never link snk_engine (but the model import
+		# library, which is not built as part of it), so this cannot clash with their PRIVATE dllexport (see
+		# snk_apply_target_defaults).
+		target_compile_definitions(snk_engine INTERFACE "IMGUI_API=__declspec(dllimport)")
+		# STL members in exported classes: consumers share the engine's /MD CRT (see snk_target_defaults).
+		target_compile_options(snk_engine INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/wd4251> $<$<COMPILE_LANGUAGE:CXX>:/wd4275>)
+	endif()
+else()
+	set(SNK_ENGINE_TARGET ${PROJECT_NAME})
+	add_library(${PROJECT_NAME} STATIC)
+endif()
+add_library(snk::engine ALIAS ${SNK_ENGINE_TARGET})
 
 file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-file(GLOB SE_SOURCES_H CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_sources(${SNK_ENGINE_TARGET} PRIVATE ${SE_SOURCES})
+# PRIVATE: the umbrella provides aggregated object code but no longer re-exports component
+# headers. Cross-layer consumers compile against snk::engine_api (EPIC-49 US-49-1/US-49-3).
+target_include_directories(${SNK_ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_link_libraries(${PROJECT_NAME} PUBLIC core PUBLIC render PUBLIC input_system PUBLIC scene PUBLIC game PUBLIC gui)
+target_link_libraries(${SNK_ENGINE_TARGET} PRIVATE snk::core PRIVATE snk::render PRIVATE snk::input_system PRIVATE snk::scene PRIVATE snk::game PRIVATE snk::gui)
+# core_api gives this aggregator's OWN sources (engine_module.cpp etc.) the core headers they
+# include, now that snk::core no longer propagates them.
+target_link_libraries(${SNK_ENGINE_TARGET} PRIVATE snk::core_api)
+
+# Public contract of the ENGINE layer (EPIC-49 US-49-3). INTERFACE-only: editor_system and a
+# future game_module compile against this, NOT the engine umbrella. Excludes gui_gl_backend
+# (concrete backend). Includes snk::core_api so consumers also get the core contract.
+# Consumers link snk::engine (object code) AND snk::engine_api (headers).
+add_library(engine_api INTERFACE)
+add_library(snk::engine_api ALIAS engine_api)
+snk_usage_only(_engine_api_libs
+	snk::core_api
+	snk::scene
+	snk::render
+	snk::gui
+	snk::input_system
+	snk::game
+)
+target_link_libraries(engine_api INTERFACE ${_engine_api_libs})
+# engine_module.h (snk/engine/) belongs to the layer contract.
+snk_component_headers(engine_api)
 
 add_subdirectory("input")
 add_subdirectory("gui/backends/interface")
@@ -17,3 +58,33 @@ add_subdirectory("render/render_system")
 add_subdirectory("game_system")
 add_subdirectory("scene")
 add_subdirectory("image")
+
+# Shared variant: snk_engine carries ALL engine and core component code. Archives are linked
+# whole so nothing is dropped just because the library itself references no symbol from it (the
+# editor and the tests do). imgui is included because the editor calls it directly and must not link a second copy
+# of its globals. assimp is not in the engine: snk_model_import_assimp owns it (#1108).
+# $<LINK_LIBRARY:WHOLE_ARCHIVE,x> cannot be used: the components also reach each other (and
+# snk_engine) through their PRIVATE links as plain items, and CMake rejects an item that is both
+# whole-archive and default. The linker options below act on the archive files directly; the
+# plain occurrences on the link line are then redundant but harmless.
+if(SNK_ENGINE_SHARED)
+	set(_snk_whole_archive
+		snk::core snk::common snk::engine_logger snk::config_system snk::application snk::window
+		snk::resource_system snk::model_codec snk::desc_system snk::command snk::project snk::platform snk::ecs snk::drv_opengl snk::drv_null snk::drv_validation snk::input_system snk::render
+		snk::game snk::scene snk::gui snk::gui_gl_backend snk::image imgui)
+	if(MSVC)
+		# An archive that carries a .res (assimp.rc did, LNK1241) must not be whole-archived: the plain link-line
+		# occurrence adds the same resource again. None of these does.
+		foreach(_lib IN LISTS _snk_whole_archive)
+			target_link_options(snk_engine PRIVATE "LINKER:/WHOLEARCHIVE:$<TARGET_FILE:${_lib}>")
+		endforeach()
+	else()
+		set(_snk_wa_files "")
+		foreach(_lib IN LISTS _snk_whole_archive)
+			list(APPEND _snk_wa_files "$<TARGET_FILE:${_lib}>")
+		endforeach()
+		target_link_options(snk_engine PRIVATE "LINKER:--whole-archive" ${_snk_wa_files} "LINKER:--no-whole-archive")
+	endif()
+	# What a binary that links snk_engine must not link again (snk_check_engine_copies, #874).
+	set_property(GLOBAL PROPERTY SNK_ENGINE_CARRIED ${_snk_whole_archive})
+endif()

@@ -1,6 +1,7 @@
 # EPIC-36: Editor VFS Protocol — `edt://` для ресурсов редактора
 
 **Status:** planned
+**Issue:** [#20](https://github.com/Prorok1015/OpenGL_Engine/issues/20)
 **Theme:** editor
 **Dependencies:** none
 
@@ -108,16 +109,21 @@ editor:
 - [ ] Убедиться что ни один `.cpp` файл не ссылается на удалённые ресурсы
 - [ ] `Editor/res/` содержит только игровые ресурсы
 
+**Состояние:** перечисленные файлы удалены раньше (решение владельца 2026-10-18, #176; см. LEGACY_TEMPLATES.md). Тест `res_repo_layout_tests` держит это: в `core/res` и `Editor/res` нет файлов с тестовыми именами (`test*`, `bench*`, `smoke*`, `*_test*`, папки `tests/`), кроме явного списка уровней-фикстур (`levels/smoke_*`, `levels/bench_100_meshes.desc` + `bench/`, `levels/test_level.desc`; новый нужно вписать в список и обосновать), а каждый путь `res://` / `engine://` / `edt://` в поставляемых `.desc` и в литералах `res://…`, `engine://…`, `edt://…`, `res::tag::make("…")` исходников `core/` и `Editor/code/` указывает на существующий файл. Сами проверки покрыты негативными тестами на временном каталоге. Куда девать уровни-фикстуры — вопрос владельцу (комментарий в #163).
+
 ### US-36-4: Инфраструктура для settings — `edt://settings/`
 **Файлы:** `Editor/data/settings/` (новая директория), `.gitignore`
 
 Подготовить директорию для пользовательских настроек. Сами настройки (layout, recent files) будут реализованы в будущих эпиках — здесь только инфраструктура.
 
 **AC:**
-- [ ] `Editor/data/settings/` создана (может быть пустой с `.gitkeep`)
-- [ ] `Editor/data/settings/` добавлена в `.gitignore` (кроме `.gitkeep`)
+- [x] ~~`Editor/data/settings/` с `.gitkeep`~~ и ~~запись в `.gitignore`~~ заменены пользовательским корнем `edt://` (см. решение ниже)
 - [ ] `edt://settings/` доступен для чтения/записи через resource system
 - [ ] Хелпер-функция или документация: как сохранить/прочитать файл в `edt://settings/`
+
+**Решение владельца (2026-10-27, вопрос 9 плана EPIC-42):** настройки не пишутся в каталог установки. У `edt://` два корня: `Editor/data` (из `editor.data_path`, считается от `editor.cfg`) только читается, поверх него пользовательский каталог на запись: `%APPDATA%/Snake/Editor/` (Windows) или `$XDG_DATA_HOME/snake/editor/`, по умолчанию `~/.local/share/snake/editor/` (Linux); переопределение — `editor/user_data_path`. `Editor/data/settings/` в репозитории не создаётся, `.gitignore` не нужен. `vfs_resolver` читает сверху вниз и пишет только в верхний корень, поэтому запись уходит в пользовательский каталог. Что именно можно писать, задаёт общий список шаблонов `res::write_policy` (`protocol://glob`, `*` внутри сегмента, `**` — любое число сегментов, но завершающий `**` требует хотя бы один, как в gitignore: `settings/**` не совпадает с `settings`): для `edt://` по умолчанию `edt://settings/**`, настройка `editor/edt_write_patterns` — список строк в конфиге (`cfg::variable<std::vector<std::string>>`, см. #411), по умолчанию `[edt://settings/**]`, `--set editor/edt_write_patterns "[edt://settings/**, edt://cache/*]"` заменяет его целиком. Запись вне шаблонов отклоняется (`store` → `false` + предупреждение), чтение не ограничено; пустой список — только чтение (для `engine://` в EPIC-42), резолверы без политики пишут куда угодно (`res://`, `memory://`).
+
+**Хелпер:** `Editor/code/editor_system/core/edt_settings.h` — `edt::write_setting(res, "recent_files.json", text)` и `edt::read_setting(res, "recent_files.json")` (возвращает `std::optional<std::string>`, `nullopt` при первом запуске, когда файла ещё нет); `edt::settings_tag(name)` даёт тег `edt://settings/<name>`. Запись идёт через `resource_system::store` (асинхронно на io-потоке резолвера) и сбрасывает кэш, чтение — только с главного потока.
 
 ### US-36-5: Asset Browser — скрыть `edt://` ресурсы
 **Файлы:** `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp`
@@ -139,6 +145,17 @@ US-36-1 (регистрация edt://)
   ├── US-36-3 (убрать тестовые файлы)
   └── US-36-4 (settings инфраструктура)
 ```
+
+## Связь с EPIC-42 (Workspace System)
+
+Этот эпик закладывает фундамент для EPIC-42: разделение движка и игровых данных. EPIC-42 не добавляет новый протокол — вместо этого `res://` становится layered: game folder (overlay) поверх engine folder (defaults). Итоговая схема:
+
+| Протокол | Что | Откуда |
+|----------|-----|--------|
+| `edt://` | Ресурсы редактора | `Editor/data/` (этот эпик) |
+| `res://` | Layered: game + engine | `games/<name>/res/` → `Engine/res/` (EPIC-42) |
+
+`vfs_resolver` уже поддерживает стек mount points — EPIC-42 просто добавит второй.
 
 ## Риски
 

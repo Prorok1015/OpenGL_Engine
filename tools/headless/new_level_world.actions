@@ -1,0 +1,19 @@
+# #419: File -> New Level, then "+" (a new world) in the new level. Layout of the 1920x1080 checklist run
+# (tools/headless/reference/checklist.png) with startup_level levels/smoke_level.desc: menu bar File at (19,30),
+# the "+" next to the world tab at (86,75). The scene is clean at the start, so New Level asks nothing.
+# The editor logs "Created a new level" and "Created world 'world2'" (tools/headless/check_log.sh reads them).
+sleep 1
+shot headless_out/new_level_world/00_start.png
+click 19 30
+sleep 1
+shot headless_out/new_level_world/01_file_menu.png
+click 40 52
+sleep 4
+shot headless_out/new_level_world/02_new_level.png
+click 86 75
+sleep 1
+shot headless_out/new_level_world/03_plus_popup.png
+type world2
+key Return
+sleep 4
+shot headless_out/new_level_world/04_world2.png

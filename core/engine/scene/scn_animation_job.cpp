@@ -1,91 +1,109 @@
-#include "scn_animation_job.h"
-#include "scn_mesh_nodes.hpp"
-#include "scn_model.h"
-#include "ecs_event.hpp"
+#include <snk/scene/scn_animation_job.h>
+#include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/ecs/ecs_bus.hpp>
+#include <snk/ecs/ecs_event.hpp>
+#include <snk/scene/scn_animation.h>
+#include <snk/common/logger/engine_log.h>
+#include <algorithm>
+#include <utility>
 
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim);
+static entt::entity find_skeleton_root(entt::registry& reg, entt::entity ent)
+{
+    entt::entity current = ent;
+    while (auto* pc = reg.try_get<scn::parent_component>(current)) {
+        if (reg.all_of<scn::scene_anchor_component>(pc->parent)) break;
+        current = pc->parent;
+    }
+    return current;
+}
 
 void update_bone_offsets_system(
-    entt::view<entt::get_t<const scn::bone_component, const scn::world_transform, const scn::obj_owner_component>> bones_view,
-    entt::view<entt::get_t<scn::bone_matrices_component>> skeletons_view
+    entt::registry& reg,
+    entt::view<entt::get_t<const scn::bone_component, const scn::world_transform>> bones_view
 )
 {
-    for (auto&& [ent, bone, transform, owner] : bones_view.each()) {
-        if (skeletons_view.contains(owner.owner)) {
-            auto& matrices_comp = skeletons_view.get<scn::bone_matrices_component>(owner.owner);
-
-            if (bone.index >= 0 && bone.index < (int)matrices_comp.matrices.size()) {
-                matrices_comp.matrices[bone.index] = transform.world * bone.offset;
+    for (auto&& [ent, bone, transform] : bones_view.each()) {
+        entt::entity skeleton_root = find_skeleton_root(reg, ent);
+        if (auto* matrices_comp = reg.try_get<scn::bone_matrices_component>(skeleton_root)) {
+            if (bone.index >= 0 && bone.index < (int)matrices_comp->matrices.size()) {
+                matrices_comp->matrices[bone.index] = transform.world * bone.offset;
             }
         }
     }
 }
 
-void update_nodes_animation_system(scn::level_res<const scn::delta_time> dt,
-                                   entt::view<entt::get_t<const scn::keyframes_component, scn::playable_animation_component>> view,
-                                   entt::view<entt::get_t<scn::local_transform>> locals,
-                                   ecs::event<scn::transform_updated>& event
-    )
+void update_animation_controllers_system(
+    const scn::delta_time& dt,
+    entt::view<entt::get_t<scn::animation_controller_component>> controllers,
+    ecs::event_writer<scn::animation_finished>& finished)
 {
-    for (auto [ent, keyframes, animation] : view.each())
-    {
-        animation.current_tick += dt->dt;
-        const float ticks_per_second = animation.ticks_per_second > 0 ? animation.ticks_per_second : 25.0f;
-        const float time_in_ticks = animation.current_tick * ticks_per_second;
-        float ticks = fmod(time_in_ticks, animation.duration);
-        if (time_in_ticks > animation.duration) {
-            if (animation.is_repeat_animation) {
-                animation.current_tick = 0.f;
+    for (auto [ent, ctrl] : controllers.each()) {
+        if (!ctrl.playing) continue;
+        ctrl.current_time += dt.dt * ctrl.speed;
+        const float tps = ctrl.ticks_per_second > 0 ? ctrl.ticks_per_second : 25.0f;
+        const float time_in_ticks = ctrl.current_time * tps;
+        if (time_in_ticks > ctrl.duration) {
+            if (ctrl.loop) {
+                ctrl.current_time = 0.f;
             } else {
-                ticks = animation.duration;
-                continue;
+                ctrl.current_time = ctrl.duration / tps;
+                ctrl.playing = false;
+                // A set whose bus does not carry the type (a standalone test set) has nobody to tell.
+                if (finished.bound()) finished.emit({ ent, ctrl.current_animation });
             }
         }
-
-        auto& keys = keyframes.keyframes;
-        if (auto it = keys.find(animation.name); it != keys.end()) {
-            // Interpolate scaling and generate scaling transformation matrix
-            glm::vec3 scaling;
-            calc_interpolated_scaling(scaling, ticks, it->second);
-            glm::mat4 scaling_m = glm::scale(scaling);
-
-            // Interpolate rotation and generate rotation transformation matrix
-            glm::quat rotation_q;
-            calc_interpolated_rotation(rotation_q, ticks, it->second);
-            glm::mat4 rotation_m = glm::toMat4(rotation_q);
-
-            // Interpolate translation and generate translation transformation matrix
-            glm::vec3 translation;
-            calc_interpolated_position(translation, ticks, it->second);
-            glm::mat4 translation_m = glm::translate(translation);
-
-            // Combine the above transformations
-            auto local = translation_m * rotation_m * scaling_m;
-            
-            locals.get<scn::local_transform>(ent).local = local;
-            event.emit(ent);
-        }
     }
 }
 
-template<class T>
-std::size_t find_keyframe_index(const std::vector<T>& arr, float time)
+void update_nodes_animation_system(
+    entt::registry& reg,
+    entt::view<entt::get_t<const scn::animated_node_component>> anim_nodes_view,
+    ecs::event<scn::transform_updated>& event)
 {
-    for (std::size_t i = 0; i < arr.size() - 1; i++) {
-        float t = (float)arr[i + 1].time;
-        if (time < t) {
-            return i;
-        }
+    const auto* controllers = std::as_const(reg).storage<scn::animation_controller_component>();
+    scn::clip_per_root<scn::animation_clip_desc> clips(controllers ? controllers->size() : 0);
+    for (auto [ent, anim_node_comp] : anim_nodes_view.each()) {
+        entt::entity root = find_skeleton_root(reg, ent);
+        auto* ctrl = reg.try_get<scn::animation_controller_component>(root);
+        if (!ctrl) continue;
+        if (!ctrl->playing) continue;
+
+        auto* clips_comp = reg.try_get<scn::animation_collection_component>(root);
+        if (!clips_comp) continue;
+
+        const auto* clip = clips.get(root, [&] { return clips_comp->find(ctrl->current_animation); });
+        if (!clip) continue;
+
+        auto ch_it = clip->channels.find(anim_node_comp.node_name);
+        if (ch_it == clip->channels.end()) continue;
+
+        const float tps = ctrl->ticks_per_second > 0 ? ctrl->ticks_per_second : 25.0f;
+        float ticks = std::fmod(ctrl->current_time * tps, ctrl->duration);
+
+        const auto& anim_node = ch_it->second;
+
+        glm::vec3 scaling;
+        scn::calc_interpolated_scaling(scaling, ticks, anim_node);
+        glm::mat4 scaling_m = glm::scale(scaling);
+
+        glm::quat rotation_q;
+        scn::calc_interpolated_rotation(rotation_q, ticks, anim_node);
+        glm::mat4 rotation_m = glm::toMat4(rotation_q);
+
+        glm::vec3 translation;
+        scn::calc_interpolated_position(translation, ticks, anim_node);
+        glm::mat4 translation_m = glm::translate(translation);
+
+        auto local = translation_m * rotation_m * scaling_m;
+        reg.get_or_emplace<scn::local_transform>(ent).local = local;
+        event.emit(ent);
     }
-
-    return 0;
 }
-
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
-    // we need at least two values to interpolate...
+    if (anim.scale_keys.empty()) { Out = glm::vec3{1.0f}; return; }
     if (anim.scale_keys.size() == 1) {
         Out = anim.scale_keys[0].value;
         return;
@@ -105,9 +123,9 @@ void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const s
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
-    // we need at least two values to interpolate...
+    if (anim.pos_keys.empty()) { Out = glm::vec3{0.0f}; return; }
     if (anim.pos_keys.size() == 1) {
         Out = anim.pos_keys[0].value;
         return;
@@ -127,9 +145,9 @@ void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const 
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
-    // we need at least two values to interpolate...
+    if (anim.rotate_keys.empty()) { Out = glm::quat{1.0f, 0.0f, 0.0f, 0.0f}; return; }
     if (anim.rotate_keys.size() == 1) {
         Out = anim.rotate_keys[0].value;
         return;
@@ -150,6 +168,12 @@ void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const 
 
 void scn::init_animation_system(ecs::system_factory& factory)
 {
-    factory.register_automatic_system<update_bone_offsets_system>("scn::animation_system_matrix");
-    factory.register_automatic_system<update_nodes_animation_system>("scn::animation_system_node");
+    // Animation keeps ticking in the editor viewport, hence run_in_edit.
+    factory.register_system<update_animation_controllers_system>("scn::animation_controller_update",
+        { .phase = ecs::phase::update, .run_in_edit = true });
+    factory.register_system<update_nodes_animation_system>("scn::animation_system_node",
+        { .phase = ecs::phase::update, .after = { "scn::animation_controller_update" }, .run_in_edit = true });
+    // Bone matrices need the world transforms the transform phase just produced.
+    factory.register_system<update_bone_offsets_system>("scn::animation_system_matrix",
+        { .phase = ecs::phase::late_update, .after = { "scn::transform_system" }, .run_in_edit = true });
 }

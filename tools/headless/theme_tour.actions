@@ -1,0 +1,19 @@
+# #1109: one editor look for the owner to choose from, at --size 1920x1080 with startup_level levels/smoke_level.desc.
+# @OUT@ is the run's folder, put in by build.yml (shot takes a literal path). Nothing here is compared to a reference:
+# the themes move every panel, so a click may land beside its target, which only shows in the picture.
+sleep 18
+shot @OUT@/1_overview.png
+# Directional light in the Hierarchy: selection highlight and the Inspector
+click 88 149
+sleep 1
+shot @OUT@/2_selection.png
+# File menu
+click 19 10
+sleep 1
+shot @OUT@/3_file_menu.png
+key Escape
+sleep 1
+# Save Level As: the file dialog
+key ctrl+shift+s
+sleep 2
+shot @OUT@/4_save_dialog.png

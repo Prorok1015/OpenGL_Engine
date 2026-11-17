@@ -1,0 +1,945 @@
+#pragma once
+#include <snk/common/common.h>
+#include <snk/resource/res_tag.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/resource/adapters/res_adapter_info.hpp>
+#include <snk/resource/res_tag_keyed_map.hpp>
+#include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_mount_table.h>
+#include <snk/platform/plt_beneath.h>
+#include <snk/resource/res_reference.h>
+#include <snk/resource/adapters/res_adapter_interface.hpp>
+#include <snk/resource/adapters/res_dependencies.hpp>
+#include <snk/resource/resources/res_resource_base.h>
+#include <snk/resource/resolvers/res_resolver_interface.hpp>
+#include <snk/resource/resources/res_resource_handle.hpp>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <mutex>
+#include <memory>
+#include <optional>
+#include <set>
+#include <shared_mutex>
+#include <span>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/snk_api.h>
+#include <utility>
+#include <vector>
+
+namespace std {
+	template<> struct hash<std::pair<ds::type_id, std::string>> {
+		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
+			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
+		}
+	};
+}
+
+namespace res
+{
+	template<class T>
+	using res_handle = core::res::res_handle<T>;
+
+	// The value of a res::when_all handle: carries nothing, the handles that were joined hold the resources.
+	struct SNK_API when_all_result : resource_entry {};
+
+	class resource_system;
+	class desc_binary_hash_cache;
+
+	namespace detail {
+		// res_desc_binary.cpp: reads a desc's binary file from the desc's own layer through the root's resolver.
+		struct desc_binary_access;
+	}
+
+	// One hold of resource_system::hold_changes. Move-only; the destructor releases it, also when an exception unwinds.
+	class SNK_API change_hold
+	{
+	public:
+		change_hold() = default;
+		change_hold(change_hold&& other) noexcept
+			: m_system(std::exchange(other.m_system, nullptr))
+		{
+		}
+		change_hold& operator=(change_hold&& other) noexcept
+		{
+			if (this != &other) {
+				release();
+				m_system = std::exchange(other.m_system, nullptr);
+			}
+			return *this;
+		}
+		change_hold(const change_hold&) = delete;
+		change_hold& operator=(const change_hold&) = delete;
+		~change_hold();
+
+		// Lets go now; a second call does nothing.
+		void release() noexcept;
+		explicit operator bool() const noexcept { return m_system != nullptr; }
+
+	private:
+		friend class resource_system;
+		explicit change_hold(resource_system& system) noexcept
+			: m_system(&system)
+		{
+		}
+
+		resource_system* m_system = nullptr;
+	};
+
+	class SNK_API resource_system
+	{
+	public:
+		using resource_handle = core::res::res_resource_block;
+		using cache_entry = std::weak_ptr<resource_handle>;
+
+		using protocol = std::string_view;
+		using extension = adapter_info;
+
+		using data = core::res::res_resolver_interface::async_raw_data;
+		using resolver = std::shared_ptr<core::res::res_resolver_interface>;
+
+		using adapter = std::shared_ptr<core::res::adapter_interface>;
+
+		using reload_callback = std::function<void(const res::tag&)>;
+
+		using adapter_key = std::pair<ds::type_id, std::string>;
+	public:
+		// Adapter work runs on `tasks` (lane::compute); watcher callbacks and res_handle::then are delivered through
+		// its main-thread queue. `tasks` must outlive this system, and so must the thread that drains it.
+		// Mounts config_mount_table().
+		explicit resource_system(ds::task_system& tasks);
+		resource_system(ds::task_system& tasks, mount_table mounts);
+		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
+		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
+		// False (logged) when a resolver already serves the protocol: remount changes the roots of a mount. After
+		// unregistrate_resolver the new mount replaces the protocol's old one.
+		bool add_mount(mount added);
+		// Serves a table mount of `protocol` from other `roots` (Play swaps user:// for its own profile). Main thread, while
+		// nothing loads from the protocol. Every resource cached from the protocol (here and in the layers) is signalled
+		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
+		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
+		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
+		// Whether a resolver serves `protocol` (mounted or registered). Any thread.
+		bool serves(std::string_view protocol) const;
+		// The file on the disk the resolver of `tag` opens for it now (vfs_resolver::disk_file_of): nullopt when it
+		// reads no files (a RAM or pack one), a store of it is queued, or every layer refuses the tag. Any thread.
+		std::optional<disk_file> disk_file_of(const tag& tag) const;
+		// The bytes of `tag` as its resolver serves them now, past the cache: the file of the layer that has it (or a
+		// queued store of it); `too_large` past `max_bytes`. Not on the main thread outside a task (it waits, #1086).
+		::platform::beneath::read_result read_now(const tag& tag, std::uint64_t max_bytes,
+			std::vector<std::byte>& out) const;
+		// The files below `folder` of `protocol` as its resolver sees them (vfs_resolver::files_under); nullopt when it
+		// cannot list them (not mounted, or it reads no files). Any thread.
+		std::optional<std::vector<tag>> files_under(std::string_view protocol, std::string_view folder) const;
+		// The file on the disk `tag` is read from now, when it holds exactly `bytes` (what a load of it got): nullopt
+		// when its resolver reads no files (a RAM or pack one), a store of it is queued, or there is no file. `differs`
+		// says why a file that is there is not taken (vfs_resolver::disk_file_holding). Any thread.
+		std::optional<disk_file> disk_file_holding(const tag& tag, const std::vector<std::byte>& bytes,
+			std::string& differs) const;
+		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
+		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
+		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a
+		// desc adapter on the layer's desc_system) and what is pinned in it lives and dies with the layer. Changes are
+		// signalled from the root to every layer. The parent outlives the layer.
+		explicit resource_system(resource_system& parent);
+		// Cancels the load tasks that have not started and waits for the running ones: main thread only. A layer then
+		// reports the resources it loaded that are still referenced (their code may belong to a module being unloaded).
+		~resource_system();
+		// What the destructor does to the loads, without destroying: the queued load tasks are cancelled, the running
+		// ones waited for, the parked steps failed ("Load cancelled"), and every later load is cancelled too. Main
+		// thread, idempotent. Shutdown calls it before the types the loads deserialize into are unregistered (#653).
+		// File changes are still delivered to the watchers; whatever they request is cancelled.
+		void stop_loading();
+		resource_system(const resource_system&) = delete;
+		resource_system& operator= (const resource_system&) = delete;
+		resource_system(resource_system&&) = delete;
+		resource_system& operator= (resource_system&&) = delete;
+
+		// The top (writable) root of res://; empty when res:// is not mounted from directories.
+		std::filesystem::path get_resources_path() const;
+		// Physical roots behind res://, lowest layer first, top (writable) layer last; the same list the vfs resolver mounts.
+		std::vector<std::filesystem::path> get_resource_layers() const;
+		// The folders a table mount of `protocol` serves, lowest priority first; empty when it is not mounted (code://
+		// is mounted only when the project has a code/ folder).
+		std::vector<std::filesystem::path> mount_roots(std::string_view protocol) const;
+		// A file the engine loads by a fixed path (its UI font, the shaders of its passes): engine://`relative` when
+		// engine:// is mounted, so a project file at the same res:// path never stands in for it (#929); res://`relative`
+		// without engine://, where res:// has no engine layer for a project to override.
+		tag engine_file(std::string_view relative) const;
+
+		// No project open: res:// over resource/base_path (if set) and resource/path, memory:// next to resource/path,
+		// engine:// on resource/base_path (if set).
+		static mount_table config_mount_table();
+		// A project open: res:// over `engine_base` (empty: none) and `content_roots` (highest priority first, as in the
+		// manifest; the first one receives writes), cache:// in `cache_dir` with memory:// in its "memory" folder,
+		// user:// in `user_dir`, engine:// on `engine_base`. Only builds the table: the caller checks and creates the
+		// directories (core::res::resource_init). `code_dir` non-empty: code:// over it, writing only the files
+		// prj::code_write_patterns() allow (sources, headers, CMake files; none inside build/, hidden or fetched folders).
+		static mount_table project_mount_table(const std::filesystem::path& engine_base,
+			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& cache_dir,
+			const std::filesystem::path& user_dir, const std::filesystem::path& code_dir = {});
+		// A shipped game (#593): res:// over `engine_base` (empty: none) and `content_roots` (highest priority first) and
+		// engine:// on `engine_base`, both read-only and unwatched; user:// in `user_dir` and memory:// in `scratch_dir`,
+		// the only writable mounts. No cache://, code:// or the editor's protocols. Only builds the table.
+		static mount_table shipping_mount_table(const std::filesystem::path& engine_base,
+			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& user_dir,
+			const std::filesystem::path& scratch_dir);
+		// res/read_only_project: a project is mounted with shipping_mount_table (the game host sets it).
+		static bool read_only_project();
+		// resource/base_path as configured, empty when not set; not checked.
+		static std::filesystem::path configured_engine_base();
+		// res/watch_files: whether the mounts watch their files for changes (hot reload, the asset browser).
+		static bool watches_files();
+
+		// Why a request to `protocol` fails when this run has no resolver for it: the protocols it has instead.
+		std::string not_mounted_error(std::string_view protocol) const;
+		// Why a request for `tag` finds no resolver: it has no protocol (#631), or its protocol is not mounted.
+		std::string not_mounted_error(const tag& tag) const;
+
+		bool exists(const tag& tag) const;
+
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		bool store(const tag& tag, const std::vector<std::byte>& data);
+
+		// store() that returns once the data is written, and whether it was (resolver::store_sync). Blocks the caller.
+		bool store_sync(const tag& tag, const std::vector<std::byte>& data);
+
+		// store_sync() for a new file: refused when the tag already has one, also when one appears while the data is
+		// written (the resolver moves the temp file in without replacing). Says why it did not happen.
+		file_operation create_sync(const tag& tag, const std::vector<std::byte>& data);
+
+
+		// keep_dependencies retains graph edges until unwatch, without retaining resource data.
+		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false);
+
+		void unwatch(const res::tag& tag, void* owner);
+
+		// Tags with at least one watcher. For tests and diagnostics.
+		std::size_t watched_tag_count() const;
+
+		// Read-only: cached resources that were requested but have neither finished nor failed yet.
+		// Used to tell that the scene has settled (deterministic headless runs).
+		std::size_t pending_loads() const;
+		// Read-only: live blocks a rebind found under a key another live block already held (#858). For tests and
+		// diagnostics.
+		std::size_t displaced_count() const;
+
+		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
+		// dependency graph, transitively) right away. The watchers are called later on the main thread
+		// (task_system::drain_main), one task per signal: those registered before the signal and still registered by
+		// then, each tag of the batch once, parents before the resources that depend on them.
+		// With an asset index, a file with an ID is signalled under its ID; one that is gone from disk (deleted, renamed
+		// away) waits for the index owner's batch (apply_asset_batch), so a rename keeps what was loaded.
+		void signal_changed(const res::tag& tag);
+		// Any thread. Drops the cache entries of the tag and of what is built from it (as signal_changed, here and in the
+		// layers) without telling any watcher: the next request reads the file again; the caller signals it later.
+		void evict_cached(const res::tag& tag);
+
+		// Any thread (the root's holds; a layer takes them there). While a hold is alive (holds nest) what the mounts'
+		// resolvers report, the watcher's finds and the operations done through them, waits and is not lost: a tag
+		// signalled several times is signalled once, the batches of a protocol become one in the order found. When the
+		// last hold goes, it goes the usual way (signal_changed, then a numbered batch to subscribe_changes), on the main
+		// thread: posted there when released on another one. signal_changed called by code is never held, and it drops a
+		// held signal of that tag (it was just told what is on disk now).
+		// The system outlives its holds.
+		[[nodiscard]] change_hold hold_changes();
+		// Read-only: whether a hold is alive. For tests and diagnostics.
+		bool changes_held() const;
+
+		// The asset index (EPIC-57 section 5), root only, main thread. The first entry of a tag (a cached block, a pin, an
+		// alias, a dependency edge, a watcher) binds the tag to its key: {ID, type} when the index gives the file an ID, so
+		// the tag's spellings share one block and a rename keeps it, {tag, type} otherwise. Without an index (Shipping until
+		// #46, tests) everything is keyed by tag, as before. Setting another index (nullptr detaches it) evicts what waits
+		// for a batch and binds every tag anew: entries move to their new key, none is lost.
+		void set_asset_index(std::shared_ptr<const asset_index> index);
+		// The number of the batch subscribe_changes listeners are being given now (main thread, inside a listener): the
+		// index owner passes the last one it has taken in to apply_asset_batch. Batches are numbered as the watcher makes
+		// them, so a number names the changes that batch holds, whenever it is delivered.
+		std::uint64_t delivering_batch() const;
+		// Main thread, root only: the index owner has taken in the batches up to `through` and updated the index. A file
+		// gone in one of them keeps its resource when `moved` names it (from, to) with the same ID, and its watchers and
+		// alias mappings follow it to `to`; anything else gone in them is evicted now, as signal_changed would have done
+		// (and forgotten, like erase(), when it went through remove() or rename()). Tags are then bound anew.
+		void apply_asset_batch(std::uint64_t through, std::span<const std::pair<res::tag, res::tag>> moved);
+		// Read-only: files gone from disk whose eviction waits for apply_asset_batch. For tests and diagnostics.
+		std::size_t waiting_for_index_count() const;
+
+		// Read-only: cached resources of this system (a layer: of the layer only) that someone still references, pinned
+		// ones included. For tests and diagnostics.
+		std::size_t live_resources() const;
+
+		// Up to `limit` of the cached resources live_resources counts, sorted by tag, each "<tag> (refs <n>)": <n> is how
+		// many hold its block besides this call, read under the cache lock. For the warning of a destroyed layer (#657).
+		std::vector<std::string> live_resource_tags(std::size_t limit) const;
+
+		// Read-only: dependency targets this system keeps for its layers. For tests and diagnostics.
+		std::size_t layer_needs_count() const;
+
+		// Read-only: resources pinned in this system (warmup, pin_resource; a layer: the layer's only). For tests and
+		// diagnostics.
+		std::size_t pinned_count() const;
+
+		// The system this one is a layer of; null for the root.
+		// Const: a layer's user (a game module) must not write past the layer into the base.
+		const resource_system* parent() const;
+
+		// A layer only: store, erase and pin_resource of a tag not stored yet accept only tags that start with `prefix`
+		// (a game module's memory://modules/<name>/, MODULE_LAYER.md); any other tag throws std::logic_error, like a
+		// service the module's storage does not expose. The layer's desc_system keeps its inline sub-descs under
+		// <prefix>overrides/ (desc::override_root). Empty: no limit. Main thread, before the layer is handed out.
+		void limit_writes_to(std::string prefix);
+		const std::string& write_prefix() const;
+
+		// Read-only: how many (tag, dependency) edges the hot reload graph holds. For tests and diagnostics.
+		std::size_t dependency_edge_count() const;
+
+		// Read-only: how many blocks the wait graph holds (waiting or waited for). For tests and diagnostics.
+		std::size_t wait_graph_nodes() const;
+
+		// Read-only: how many alias edges register_alias() holds. For tests and diagnostics.
+		std::size_t alias_edge_count() const;
+
+		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
+		std::size_t edge_sweep_count() const;
+
+		// Read-only: the signals queued for the main thread and not delivered yet, over all keys. For tests.
+		std::size_t undelivered_signal_count() const;
+
+		template<class T, class... ARGS>
+		T& registrate_resolver(protocol prt, ARGS... args) {
+			std::shared_ptr<T> made = std::make_unique<T>(prt, std::forward<ARGS>(args)...);
+			T& registered = *made;
+			add_resolver(prt, std::move(made));
+			return registered;
+		}
+		// Main thread. Returns once the calls into the resolver that are running elsewhere have ended, and destroys it here:
+		// its io thread is joined on this thread, never on its own (#938). A mount keeps its record: mount_roots still
+		// gives its roots until add_mount of the protocol replaces it.
+		void unregistrate_resolver(protocol prt);
+
+		template<class T, class... ARGS>
+		T& registrate_adapter(extension extension, ARGS&&... args) {
+			auto adapter_new = std::make_shared<T>(std::forward<ARGS>(args)...);
+			T& registered = *adapter_new;
+			add_adapter(std::move(extension), std::move(adapter_new));
+			return registered;
+		}
+		void add_adapter(extension extension, adapter added);
+
+		// The extensions of `extension` that its adapter serves now, here or in a parent: empty when it is not registered
+		// (a build without the importer).
+		std::vector<std::string> registered_extensions(const extension& extension) const;
+
+		void unregistrate_adapter(extension extension);
+
+		// A require_sync of a tag with one of these extensions (lower case) logs a warning, once per tag: its adapter may
+		// block the main thread for seconds (the editor's models, parsed in the decoder process, #925). Kept by the root.
+		void warn_on_sync_require(std::vector<std::string> extensions);
+
+		// Pairs of a desc and its binary file whose hashes were checked unchanged (EPIC-79 section 7, #1126): a read of an
+		// unchanged pair skips SHA-256. Kept by the root, any thread; nullptr (the default) remembers nothing.
+		void set_desc_binary_hash_cache(std::shared_ptr<desc_binary_hash_cache> cache);
+		std::shared_ptr<desc_binary_hash_cache> desc_binary_hash_cache_ptr() const;
+		// false (an editor debug setting): a read of one root without a staged file skips SHA-256. Kept by the root.
+		void set_verify_desc_binary_hash(bool verify);
+		bool verify_desc_binary_hash() const;
+
+		data fetch_data(const tag& tag) const;
+
+		// The tag a reference read from a file loads: the file that holds its guid now, by the asset index; otherwise its
+		// path. The layers resolve the tag as for any request, so a project file over an engine asset's path wins for a
+		// reference with an ID too (R28). A guid the index does not know and no path give the empty tag, with a warning.
+		tag resolve_reference(const reference& ref) const;
+		// The file that holds `guid` by the asset index now; nullopt without an index or when no file holds it. What tells a
+		// reference's stale path or unknown ID apart from a good one (EPIC-57 section 4.4, #773).
+		std::optional<tag> asset_path_of(const asset_id& guid) const;
+		// An asset index is set (set_asset_index): asset_path_of can tell an unknown guid.
+		bool has_asset_index() const;
+		// The ID of the file `tag` names by the asset index now; nullopt without an index and for a file without an ID. Of
+		// files that carry one ID, only the holder res::holds_id_before puts first answers it (the editor's index); the
+		// copies answer nullopt. What a writer puts into a {guid, path} reference (EPIC-57 section 4.4, #773).
+		std::optional<asset_id> asset_id_of(const tag& tag) const;
+
+		template<class RESOURCE>
+		auto require(const res::tag& tag) {
+			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
+		}
+
+		// A failed handle that loaded nothing: what a reference refused before any load gets (#697), so its holder sees a
+		// resource that did not load. Its tag is empty, so nothing that takes the tag from the handle (a component, a
+		// later require) can load the refused one; `tag` and `reason` stay in the block's error and diagnostics. Not cached.
+		template<class RESOURCE>
+		res_handle<RESOURCE> refused(const res::tag& tag, std::string reason) {
+			return res_handle<RESOURCE>(refused_block(tag, std::move(reason)), res::tag{}, handle_tasks());
+		}
+
+		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool
+		// (asserts on one, except under policy::manual, where the tests pump the lanes themselves). The adapter of a
+		// resource that needs others declares them instead (adapter_interface::collect_dependencies).
+		template<class RESOURCE>
+		auto require_sync(const res::tag& tag) {
+			check_sync_require(tag);
+			return require_resource_internal<RESOURCE, true>(tag, resolve_alias(tag));
+		}
+
+		// A handle that is ready once every block is ready, and failed once all of them have finished and any failed:
+		// the ones that loaded are still delivered and cached. Prefer res::when_all(...) below.
+		res_handle<when_all_result> when_all_blocks(std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks);
+
+		template<class T>
+		void warmup(const res::tag& tag)
+		{
+			res::res_handle<T> res = require<T>(tag);
+			keep_warm(res.get_control_block(), key_for<T>(tag));
+		}
+
+		template<class RESOURCE>
+		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
+			using stored_type = std::remove_cvref_t<RESOURCE>;
+			const auto chain = type_chain<stored_type>();
+			pin_block(tag, std::make_shared<stored_type>(std::forward<RESOURCE>(resource)), chain);
+		}
+
+		// Any thread. Removes what store() put under the tag (the resolvers are the root's, so a layer removes it for
+		// everyone), for the memory protocol only (false for the others, whose files stay, and for a protocol without a
+		// resolver or a tag the resolver does not hold). Then drops the pin and the alias mappings that point at the tag
+		// (resolve_alias of their original is the original again; the original's own data stays) in this system and
+		// its layers, never in a parent (a layer does not change the base), and signals the tag as changed: its cache
+		// entries and those of everything built from it go, watchers are called. An erased original loses its alias
+		// mapping the same way (the alias' resolver data stays).
+		bool erase(const res::tag& tag);
+
+		// Deletes the file of `tag` for real (code://, #450): a regular file, through the resolver's safe write and its
+		// write policy, and returns once it is gone. Then the cache entries of the tag go like after erase().
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		file_operation remove(const res::tag& tag);
+
+		// Moves the file `from` to `to` (one protocol; never over an existing file), by the same rules as remove(); the
+		// cache entries of both tags go.
+		file_operation rename(const res::tag& from, const res::tag& to);
+
+		// What happened below a mount that reports changes (code://): files and folders created, modified, deleted or
+		// renamed, found by the watcher (about 0.5 s after they happened) or done through this resource_system (self).
+		// A batch per poll or per operation, in the order found, called on the main thread, never twice for one change.
+		// Coalescing and debouncing are the subscriber's. Subscribe and unsubscribe on the main thread; a listener may
+		// unsubscribe (itself or another). A layer subscribes on its root.
+		using changes_listener = std::function<void(std::span<const file_change>)>;
+		void subscribe_changes(std::string_view protocol, void* owner, changes_listener listener);
+		void unsubscribe_changes(void* owner);
+
+		void unpin_resource(const res::tag& tag);
+
+		// Besides copying the cache entries of `original` (the ones the alias lacks), makes `alias` depend on it: a
+		// signal_changed(original) evicts the alias too, and reaches what depends on the alias. One alias per
+		// original; a new one replaces the edge; a change signalled on the original drops the alias until the next
+		// load re-registers it. register_alias(x, x) does nothing.
+		void register_alias(const res::tag& original, const res::tag& alias);
+		// A layer's own aliases first, then its parent's.
+		res::tag resolve_alias(const res::tag& tag) const;
+
+	private:
+		void register_mount(const mount& mounted);
+		// Callbacks that run on other systems' blocks or on resolver threads (on_settled) reach this system only through
+		// the gate. The destructor closes it before the members go away; a late callback then fails its block instead.
+		struct gate {
+			std::recursive_mutex mutex;
+			resource_system* self = nullptr;
+
+			// False when the gate is closed (fn not called).
+			template<class Fn>
+			bool with(Fn&& fn) {
+				std::lock_guard lock(mutex);
+				if (!self) {
+					return false;
+				}
+				fn(*self);
+				return true;
+			}
+		};
+
+		void check_writable(const res::tag& tag) const;
+		std::shared_ptr<const asset_index> current_index() const;
+		// What `index` keys `tag` by: its ID as the tag asset-id://<uuid>, or the tag itself.
+		static res::tag index_node(const res::tag& tag, const asset_index* index);
+		// The key the entries of `tag` are under in this system: its binding, or what the index says now (nothing bound).
+		res::tag node_of(const res::tag& tag) const;
+		// The same with m_cache_mutex held.
+		res::tag node_locked(const res::tag& tag) const;
+		// m_cache_mutex held: entries sit under the tag itself (made before the index knew its file, or without an index),
+		// so it stays keyed by tag until rebind_all moves them.
+		bool keyed_by_tag_locked(const res::tag& tag) const;
+		// Read before m_cache_mutex is taken, so the index is not asked under it: the binding or the index's answer, and
+		// the rebind epoch it was read at.
+		struct node_candidate {
+			res::tag node;
+			std::uint64_t epoch = 0;
+		};
+		node_candidate candidate_node(const res::tag& tag) const;
+		// m_cache_mutex held (unique): the binding of `tag`, made from `candidate` (asked anew when a rebind came between).
+		res::tag bind_locked(const res::tag& tag, const node_candidate& candidate);
+		// A gone file with an ID (`node`): kept for apply_asset_batch unless the index changed since `generation` was read.
+		bool wait_for_index(const res::tag& tag, const res::tag& node, std::uint64_t generation, bool forget);
+		// remove() / rename(): one more operation waits on the entry of `tag` (an entry is made, unconfirmed, when there is
+		// none), before the operation, so the batch the operation makes takes it in. False when the index changed since
+		// `generation`.
+		bool expect_gone(const res::tag& tag, const res::tag& node, std::uint64_t generation);
+		// The operation is over. Done: the entry is confirmed and will be forgotten. Failed: the entry goes only when no
+		// other operation waits on it and nothing confirmed it (a change on disk, an operation that was done).
+		void finish_expected(const res::tag& tag, bool done);
+		// On the watcher's thread, as a batch is made (under m_batch_order_mutex, with its post to the main queue): its
+		// number, given to the waiting files it names, and to the waiting files of mounts that report nothing. On a mount
+		// that reports changes, a file no batch names (gone and back within one poll, a name the watcher skips) waits until
+		// set_asset_index.
+		std::uint64_t number_batch(const std::vector<file_change>& batch);
+		// alias -> its key, read before m_cache_mutex is taken (the index is not asked under it).
+		std::unordered_map<res::tag, res::tag> alias_value_nodes() const;
+		struct waiting_entry {
+			res::tag node;
+			// The batch made with its change (number_batch); on a mount that reports nothing, the first batch made after it
+			// went. 0 until then.
+			std::uint64_t batch = 0;
+			// A remove() or rename() of it was done: forgotten (forget_erased) unless it moved or is on disk again.
+			bool forget = false;
+			// remove() / rename() calls still running on it.
+			std::size_t operations = 0;
+			// Gone for sure: signalled from disk, or an operation was done. An entry no one confirmed is only an expectation.
+			bool confirmed = false;
+		};
+		// After rebind_all (`remap`: its old key -> new key), so the watchers are told under the key they are under now.
+		void evict_waiting(std::vector<std::pair<res::tag, waiting_entry>> entries,
+			const std::unordered_map<res::tag, res::tag>& remap);
+		// apply_asset_batch: the watchers and alias mappings of `node` that name `from` name `to`, here and in the layers.
+		void follow_move(const res::tag& node, const res::tag& from, const res::tag& to);
+		// Root, main thread: every binding here and in the layers asked anew; entries whose key changed move to the new one.
+		// Returns the keys that moved (old -> new).
+		std::unordered_map<res::tag, res::tag> rebind_all();
+		// (tag, key) of every entry here and in the layers: the bindings, and each key that is a tag (bound to itself).
+		void collect_bindings(std::vector<std::pair<res::tag, res::tag>>& out);
+		void apply_rebind(const std::unordered_map<res::tag, res::tag>& fresh, const std::unordered_map<res::tag, res::tag>& remap);
+		// m_cache_mutex, m_alias_mutex and m_pinning_mutex held (unique): entries under an old key go under its new one.
+		void rekey_locked(const std::unordered_map<res::tag, res::tag>& remap);
+		// warmup / pin_resource: the block pinned (and cached: always, or in a layer when nothing live is) under the key the
+		// tag of `key` is bound to.
+		void pin_bound(const cache_key& key, std::shared_ptr<resource_handle> block, bool always_cache);
+		// The node's pins and their owners, whoever pinned: a file that is gone (forget_erased).
+		void unpin_node(const res::tag& node);
+		// A pin a rebind took away from owners it split over nodes: their file, loaded and pinned again once the rebind's
+		// locks are gone (refresh_pins).
+		struct pin_reload
+		{
+			res::tag file;   // an owner's tag: what is loaded, and signalled as changed
+			cache_key pinned; // the key the owners' pin goes under
+			std::uint64_t generation = 0;
+		};
+		// The owners of `reload.pinned` get their file loaded and pinned again, asynchronously; a file that is not there, or
+		// fails to load, takes their pin away. No lock held.
+		void reload_pin(const pin_reload& reload);
+		// The end of reload_pin: pins `block` for the owners there now, unless the pin moved meanwhile.
+		void apply_pin_reload(const pin_reload& reload, const std::shared_ptr<resource_handle>& block);
+		// m_pinning_mutex held: the next generation of `key`'s pin.
+		std::uint64_t bump_pin_generation_locked(const cache_key& key);
+		// The root, no lock held: the reloads a rebind queued, here and in the layers, after one change signal per node.
+		void refresh_pins();
+		// The reloads queued here and in the layers, taken away.
+		void take_pin_reloads(std::vector<std::pair<resource_system*, pin_reload>>& out);
+		// apply_rebind, after rekey_locked (its locks held): each owner goes to its own tag's node, the pin with it.
+		void rehome_pin_owners_locked(const std::unordered_map<res::tag, res::tag>& fresh,
+			const std::unordered_map<res::tag, res::tag>& remap);
+		const resource_system& root() const;
+		resource_system& root();
+		// signal_changed() on this system and, through m_layers, on its layers.
+		void signal_changed_local(const res::tag& tag);
+		void evict_cached_local(const res::tag& tag);
+		// Under m_cache_mutex: drops the batch's cache entries and the alias mappings and edges of the originals in it
+		// (`alias_nodes` read before the lock, alias_value_nodes()). signal_changed and evict_cached share it.
+		void evict_batch_locked(const std::vector<res::tag>& batch, const std::unordered_map<res::tag, res::tag>& alias_nodes);
+		// signal_changed from code: the held signal of `tag` is not delivered again at the release.
+		void drop_held_signal(const res::tag& tag);
+		// erase(): drops the pin and the alias mappings of the tag here and in every layer.
+		void forget_erased(const res::tag& tag);
+
+		std::shared_ptr<resource_handle> find_cached(const cache_key& key);
+
+		// warmup / pin_resource: not templates, so the callbacks they leave on blocks (the parent's, the main queue) are
+		// the engine's code and hold nothing of the caller's binary.
+		void keep_warm(const std::shared_ptr<resource_handle>& block, cache_key key);
+		// pin_resource: the block is made here, in the engine, whoever pins (#758).
+		void pin_block(const res::tag& tag, std::shared_ptr<resource_entry> resource, std::span<const ds::type_id> chain);
+		// The task_system the handles of this system deliver through.
+		ds::task_system* handle_tasks();
+		// require_sync's check, in the engine.
+		void check_sync_require(const res::tag& tag) const;
+		// warn_on_sync_require's warning, for a require_sync that has to wait for `tag`.
+		void warn_sync_wait(const res::tag& tag) const;
+		void serialize_pinned(const res::tag& tag, std::shared_ptr<resource_handle> block, adapter ad);
+
+		struct await_state;
+
+		// The part of a load of this system that waits for the root's side (a resolver's data, a parent's block, the
+		// main queue): what runs next and the block it fills. The root side holds only the id, so nothing it keeps
+		// refers to this system's adapters, blocks or resources (which a module's code may have made) once the system
+		// is gone; the destructor fails the blocks still parked and drops the rest (MODULE_LAYER.md sec. 5).
+		struct parked {
+			std::shared_ptr<resource_handle> block;
+			std::function<void()> run;
+		};
+		std::uint64_t park(std::shared_ptr<resource_handle> block, std::function<void()> run);
+		std::optional<parked> unpark(std::uint64_t id);
+		// Runs the parked step `id` through the gate; nothing when the system is gone or the step was already taken.
+		static void run_parked(const std::shared_ptr<gate>& gate, std::uint64_t id);
+		// The waits of await_blocks, by id: their dependencies (a parent's blocks too) see only the id.
+		std::uint64_t register_await(std::shared_ptr<await_state> state);
+		std::shared_ptr<await_state> find_await(std::uint64_t id);
+		void drop_await(std::uint64_t id);
+		// Destructor: fails what is still parked or awaited and drops it.
+		void cancel_parked();
+
+		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
+		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
+		// `only`: these owners' watchers of `node` (by watch key), not all of them.
+		void deliver_to_watchers(const res::tag& node, std::uint64_t signal_epoch,
+			const std::vector<std::pair<void*, std::string>>* only = nullptr);
+		// A queued signal of `node` was delivered: it no longer counts in m_undelivered.
+		void signal_delivered(const res::tag& node);
+		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
+		// lands in between still reaches `dependent`. A load that was evicted meanwhile (`block` is no longer cached
+		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
+		void record_dependencies(const res::tag& dependent, const std::shared_ptr<resource_handle>& block,
+			const std::vector<res_dep>& declared);
+		// Drops the outgoing edges of released tags (all cache entries expired, or none left after a signal evicted the
+		// tag and nothing watches it), except the ones a tag still in use is built through: a change at the bottom of
+		// such a chain must pass through them to reach it. m_cache_mutex held (unique).
+		void prune_released_edges();
+		// prune_released_edges() plus the bookkeeping that throttles the next sweeps. m_cache_mutex held (unique).
+		void sweep_edges();
+		// A layer's live resources built on `target` (a dependency the layer recorded): the parents keep the edges of
+		// `target` while any layer needs it, though nothing of their own uses it any more, so a change below `target`
+		// still reaches the layer through their batch. Counted; the layer holds its m_cache_mutex, the parents' count
+		// has its own leaf lock.
+		void retain_in_parents(const res::tag& target);
+		void release_in_parents(const res::tag& target);
+		bool needed_by_layers(const res::tag& tag) const;
+		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
+		std::vector<res::tag> changed_batch(const res::tag& root) const;
+		// The tags of `protocol` cached here or in a layer, appended to `out` (may repeat).
+		void collect_cached_tags(std::string_view protocol, std::vector<res::tag>& out);
+		// Atomic find-or-insert under the key `tag` is bound to: concurrent requests for one asset share a single block,
+		// only the creator starts the load. In the .cpp: the block (its control block and vtable) is made by the engine,
+		// never by the code of a game module that requested it (#416).
+		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const res::tag& tag, ds::type_id type);
+
+		struct wait_graph;
+
+		// The pipeline: resolve -> collect_dependencies (compute) -> require each dependency, no waiting ->
+		// deserialize (compute) once all are ready. A block with no dependencies is one compute task.
+		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
+		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
+		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
+		// What a failed dependency means to its dependent (res_dep::failure_kind / json_path), for its diagnostic.
+		struct dependency_role {
+			std::string_view kind;
+			std::string json_path;
+		};
+		// Calls `on_done` (any thread) once every block has settled without error, and fails `owner` if any failed.
+		// The waits go through the wait graph, which fails the blocks of a cycle instead of letting them wait forever.
+		// `roles` (empty, or one per block) describe the failure on the owner's diagnostics.
+		void await_blocks(const std::shared_ptr<resource_handle>& owner, const res::tag& owner_tag,
+			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done,
+			std::vector<dependency_role> roles = {});
+		void wait_for_block(const std::shared_ptr<resource_handle>& block) const;
+
+		// T, then its base_type, and so on: the type levels an adapter is looked up for, on the stack.
+		template<class T>
+		static constexpr std::size_t type_chain_length()
+		{
+			if constexpr (requires { typename T::base_type; }) {
+				return 1 + type_chain_length<typename T::base_type>();
+			} else {
+				return 1;
+			}
+		}
+
+		template<class T, std::size_t N>
+		static void fill_type_chain(std::array<ds::type_id, N>& chain, std::size_t at)
+		{
+			chain[at] = ds::type_id::make<T>();
+			if constexpr (requires { typename T::base_type; }) {
+				fill_type_chain<typename T::base_type>(chain, at + 1);
+			}
+		}
+
+		template<class T>
+		static std::array<ds::type_id, type_chain_length<T>()> type_chain()
+		{
+			std::array<ds::type_id, type_chain_length<T>()> chain{};
+			fill_type_chain<T>(chain, 0);
+			return chain;
+		}
+
+		// Only the handle is made here, in whatever binary asks: the block comes from require_block (#416).
+		template<class RESOURCE, bool is_sync>
+		res_handle<RESOURCE> require_resource_internal(const res::tag& requested, const res::tag& tag) {
+			const auto chain = type_chain<RESOURCE>();
+			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
+			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
+			return res_handle<RESOURCE>(require_block(tag, chain, is_sync), requested, handle_tasks());
+		}
+
+		// The block of `tag` for the type levels `chain` (type_chain): found in the cache or made and loaded, in this
+		// system or, when the most specific adapter is a parent's, in that parent. Not a template, so the engine makes
+		// the block whoever asks: a game module's request for a base resource must not leave a block made by the
+		// module's code in the base's cache (#416).
+		std::shared_ptr<resource_handle> require_block(const res::tag& tag, std::span<const ds::type_id> chain, bool sync);
+		// The block of refused(): made here, not in the binary that asks (#416).
+		std::shared_ptr<resource_handle> refused_block(const res::tag& tag, std::string reason);
+
+		// The most specific adapter for the type levels `chain` in this system and its parents: each type level (T, then
+		// its base_type ...) is looked up in this system first and then in the parents, so a parent's adapter for the
+		// derived type wins over a layer's adapter for its base (world_desc's own adapter over the desc adapter of a
+		// layer). `loaded_as` is set to the type the adapter was registered for: a resource whose adapter is its base
+		// type's (desc_base's, for every desc) is one cache block shared with that base, not one block per requested
+		// type. `owner`: the system the adapter belongs to, which loads and caches the resource.
+		adapter find_adapter_in_chain(const res::tag& tag, std::span<const ds::type_id> chain, ds::type_id* loaded_as = nullptr,
+			const resource_system** owner = nullptr) const;
+
+		template<class T>
+		adapter find_adapter_in_chain(const res::tag& tag, ds::type_id* loaded_as = nullptr, const resource_system** owner = nullptr) const {
+			const auto chain = type_chain<T>();
+			return find_adapter_in_chain(tag, chain, loaded_as, owner);
+		}
+
+		template<class T>
+		cache_key key_for(const res::tag& tag) const {
+			const auto chain = type_chain<T>();
+			return key_for(tag, chain);
+		}
+		// The type a resource of the levels `chain` is cached as: the one its adapter was registered for.
+		cache_key key_for(const res::tag& tag, std::span<const ds::type_id> chain) const;
+
+		adapter find_adapter(ds::type_id type, std::string_view ext) const;
+
+		template<class T>
+		adapter find_adapter(const std::string_view ext) const {
+			return find_adapter(ds::type_id::make<T>(), ext);
+		}
+
+
+	private:
+		// A resolver held for one call into it: what keeps a resolver unmounted meanwhile alive, and what
+		// unregistrate_resolver waits for. Marks the thread as calling it, so that unmounting it from inside that call
+		// asserts instead of waiting for itself.
+		class resolver_lease
+		{
+		public:
+			explicit resolver_lease(resolver held);
+			~resolver_lease();
+			resolver_lease(const resolver_lease&) = delete;
+			resolver_lease& operator=(const resolver_lease&) = delete;
+
+			explicit operator bool() const { return static_cast<bool>(m_held); }
+			core::res::res_resolver_interface* operator->() const { return m_held.get(); }
+
+		private:
+			resolver m_held;
+		};
+		// The root's resolver of `protocol`, or an empty lease: not mounted.
+		resolver_lease resolver_for(std::string_view protocol) const;
+		// Waits until `removed` is held by nobody else, then destroys it on this thread (#938).
+		static void release_resolver(resolver removed, std::string_view protocol);
+		// Not root, not a protocol that has one already (asserts). Private: a copy kept outside a resolver_lease would make
+		// unregistrate_resolver wait for it forever.
+		void add_resolver(protocol prt, resolver added);
+		// The vfs resolver of a mount, its change callbacks wired, not registered yet.
+		resolver make_mount_resolver(const mount& mounted);
+
+		// Guards the registry: m_resolvers, m_adapters, m_adapter_infos and m_extensions_with_magic. A leaf of the lock
+		// order: nothing is called while it is held, a resolver or an adapter is copied out and called after (#938).
+		mutable std::shared_mutex m_registry_mutex;
+		mutable std::shared_mutex m_cache_mutex;
+		mutable std::shared_mutex m_pinning_mutex;
+		mutable std::shared_mutex m_alias_mutex;
+
+		std::set<adapter_key> m_extensions_with_magic;
+		std::unordered_map<adapter_key, adapter> m_adapters;
+		std::unordered_map<adapter, extension> m_adapter_infos;
+
+		std::unordered_map<res::tag, res::tag> m_aliases;
+
+		std::unordered_map<protocol, resolver> m_resolvers;
+		tag_keyed_map<cache_entry> m_cache;
+		// A rebind that moves a key onto one whose live block is another (two spellings of one file, one loaded before the
+		// index knew its ID) keeps the moved block here, by the new key (#858). Requests get m_cache's block; these still
+		// count as loading, record their edges, hold the key's edges and go with the key when it is evicted, until their
+		// holders let go. Under m_cache_mutex.
+		std::unordered_map<res::tag, std::vector<cache_entry>> m_displaced;
+		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
+		// The tags (spellings, as pinned) that hold each pin, by the pin's key (#869): unpin_resource takes one away and the
+		// pin goes with the last. An owner follows its tag: to the tag's node after a rebind, to the new name after a move.
+		// A pin without an entry is unpinned at once. Under m_pinning_mutex.
+		tag_keyed_map<std::unordered_set<res::tag>> m_pin_owners;
+		// Moves with every pin_bound, register_alias copy and eviction of the pin, and goes with the owners in a rebind, by
+		// the pin's key: a reload applies only if it has not moved since it began (#869). Under m_pinning_mutex.
+		tag_keyed_map<std::uint64_t> m_pin_generations;
+		std::uint64_t m_pin_generation = 0;
+		// Under m_pinning_mutex.
+		std::vector<pin_reload> m_pins_to_refresh;
+
+		struct watcher {
+			reload_callback callback;
+			std::uint64_t epoch = 0; // m_watch_epoch value at registration
+			bool keep_dependencies = false;
+			// The file now: what the callback gets. Follows a rename (apply_asset_batch); unwatch finds the watcher by
+			// the tag it was registered with (its key), which the owner still holds.
+			res::tag current;
+		};
+		// (owner, the tag watched): two spellings of one asset are two watchers.
+		using watch_key = std::pair<void*, std::string>;
+		std::unordered_map<res::tag, std::map<watch_key, watcher>> m_watchers;
+		// tag -> the key its entries are under (node_of), guarded by m_cache_mutex. Set by the first entry, changed only by
+		// rebind_all on the main thread; a binding whose key has no entry left is dropped there.
+		std::unordered_map<res::tag, res::tag> m_bindings;
+
+		struct change_subscription {
+			std::uint64_t id = 0;
+			std::string protocol;
+			void* owner = nullptr;
+			changes_listener listener;
+		};
+		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch, std::uint64_t number);
+		// Numbers a batch and queues it for deliver_changes on the main thread.
+		void post_batch(const std::string& protocol, std::vector<file_change> batch);
+
+		// hold_changes (root only): what a resolver reports goes through these first; true when a hold took it in.
+		friend class change_hold;
+		friend struct detail::desc_binary_access;
+		struct held_changes;
+		bool hold_signal(const res::tag& tag);
+		bool hold_batch(const std::string& protocol, const std::vector<file_change>& batch);
+		void release_hold() noexcept;
+		// Delivers what was held, on the main thread, until nothing is held or a new hold is taken.
+		void deliver_held();
+		std::mutex m_changes_mutex;
+		std::vector<change_subscription> m_change_subscriptions;
+		std::uint64_t m_next_subscription = 0;
+		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
+		// How many signals of each key are queued for the main thread and not delivered yet, guarded by m_cache_mutex. A
+		// rebind that moves the watchers of such a key delivers to them again under the new key: the queued delivery
+		// looks under the old one and finds nobody (#940).
+		std::unordered_map<res::tag, std::uint32_t> m_undelivered;
+
+		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it
+		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).
+		// Keyed by tag only: a tag has one dependency set whichever adapter type loads it (key_for already maps the
+		// desc types of a tag onto one block).
+		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
+		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
+		// original -> alias, set by register_alias(): a change of the original evicts the alias as well, and removes the
+		// edge together with the m_aliases mapping. Never pruned, and not part of m_depends_on. Guarded by m_cache_mutex;
+		// signal_changed() also holds m_alias_mutex (inside it) when it erases.
+		std::unordered_map<res::tag, res::tag> m_alias_edges;
+		// Released tags are swept out of the graph whenever m_depends_on reaches m_edge_sweep_at (then doubled over what
+		// is left) and on a signal: every signal while the graph is below the floor, every k_signal_sweep_every-th
+		// above it. The graph stays proportional to what is loaded. All guarded by m_cache_mutex.
+		static constexpr std::size_t k_edge_sweep_floor = 256;
+		static constexpr std::size_t k_signal_sweep_every = 16;
+		std::size_t m_edge_sweep_at = k_edge_sweep_floor;
+		std::size_t m_signals_since_sweep = 0;
+		std::size_t m_edge_sweeps = 0;
+		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
+		std::unique_ptr<wait_graph> m_graph;
+
+		ds::task_system& m_tasks;
+		mount_table m_mounts;
+		resource_system* m_parent = nullptr;
+		std::string m_write_prefix;
+		// The layers over this system, for signal_changed() and erase(); a layer adds and removes itself.
+		std::mutex m_layers_mutex;
+		std::vector<resource_system*> m_layers;
+		std::shared_ptr<gate> m_gate = std::make_shared<gate>();
+		mutable std::mutex m_layer_needs_mutex;
+		std::unordered_map<res::tag, std::size_t> m_layer_needs;
+		std::mutex m_parked_mutex;
+		std::unordered_map<std::uint64_t, parked> m_parked;
+		std::unordered_map<std::uint64_t, std::shared_ptr<await_state>> m_awaits;
+		std::uint64_t m_next_parked = 1;
+		std::mutex m_stop_mutex;
+		bool m_stopping = false;
+		// Root only. The index; its generation (set_asset_index) and the rebind epoch (set_asset_index, apply_asset_batch).
+		mutable std::shared_mutex m_index_mutex;
+		std::shared_ptr<const asset_index> m_index;
+		std::atomic<std::uint64_t> m_index_generation{ 0 };
+		std::atomic<std::uint64_t> m_rebind_epoch{ 0 };
+		// Root only: gone files with an ID, by tag, until apply_asset_batch decides; the batches delivered (main thread).
+		mutable std::mutex m_waiting_mutex;
+		std::unordered_map<res::tag, waiting_entry> m_waiting_for_index;
+		// Guarded by m_waiting_mutex: the batches made, and the protocols whose mount reports changes.
+		std::uint64_t m_created_batches = 0;
+		// A batch is numbered and queued for the main thread under it: the queue holds batches in the order of their
+		// numbers, so apply_asset_batch(n) never decides a file whose batch, numbered below n, is not delivered yet.
+		std::mutex m_batch_order_mutex;
+		std::unordered_set<std::string> m_reporting_protocols;
+		// Main thread: the number of the batch being (or last) delivered.
+		std::uint64_t m_delivering_batch = 0;
+		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
+		ds::lifetime m_lifetime;
+		// Root only (warn_on_sync_require). The flag spares every other require_sync the lock.
+		std::atomic<bool> m_sync_warnings_on{ false };
+		mutable std::mutex m_sync_warning_mutex;
+		std::unordered_set<std::string> m_slow_sync_extensions;
+		mutable std::unordered_set<std::string> m_sync_warned;
+		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
+		std::unique_ptr<held_changes> m_held;
+		// Root only (set_desc_binary_hash_cache, set_verify_desc_binary_hash). After m_held for the same reason.
+		mutable std::mutex m_desc_binary_cache_mutex;
+		std::shared_ptr<desc_binary_hash_cache> m_desc_binary_cache;
+		std::atomic<bool> m_verify_desc_binary_hash{ true };
+	};
+
+	// The tag a handle with the tag `own` and `block` was asked for: for a handle of resource_system::refused, whose own
+	// tag is empty, the refused tag its block recorded (#952). For messages and writers only: requiring it loads the
+	// refused one after all.
+	SNK_API tag refused_tag(const tag& own, const core::res::res_control_block_base* block);
+
+	template<class T>
+	tag refused_tag(const res_handle<T>& handle)
+	{
+		return refused_tag(handle.get_tag(), handle.get_control_block().get());
+	}
+
+	// A dependency of `target` as T, for adapter_interface::collect_dependencies.
+	template<class T>
+	res_dep make_dep(const res::tag& target)
+	{
+		return res_dep{ target, ds::type_id::make<T>(), [](resource_system& system, const res::tag& tag) {
+			return system.require<T>(tag).get_control_block();
+		} };
+	}
+
+	// Joins resources that are requested separately (for example, what a level needs): ready when all are,
+	// failed when all have finished and any failed. Delivers on any thread; use .then(lifetime, cb) for the main one.
+	template<class... T>
+	res_handle<when_all_result> when_all(resource_system& system, const res_handle<T>&... handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(sizeof...(T));
+		(blocks.emplace_back(handles.get_control_block(), handles.get_tag()), ...);
+		return system.when_all_blocks(std::move(blocks));
+	}
+
+	template<class T>
+	res_handle<when_all_result> when_all(resource_system& system, const std::vector<res_handle<T>>& handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(handles.size());
+		for (const auto& handle : handles) {
+			blocks.emplace_back(handle.get_control_block(), handle.get_tag());
+		}
+		return system.when_all_blocks(std::move(blocks));
+	}
+}

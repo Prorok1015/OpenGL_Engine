@@ -31,7 +31,7 @@ Renderer пишет в эту текстуру.
 
 ```cpp
 #pragma once
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <glm/glm.hpp>
 
 namespace edt {

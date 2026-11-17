@@ -1,33 +1,60 @@
-#include "scn_mesh_node_desc.h"
-#include "scn_model.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_geometry_holds.h>
+#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_reference.h>
+#include <string>
+#include <string_view>
+
+namespace {
+
+template<typename T>
+void read_reference(desc::desc_system& desc_system, const desc::desc_base& owner, const json::object& data, std::string_view key, res::res_handle<T>& field)
+{
+	const json::value* value = data.if_contains(key);
+	if (!value) {
+		return;
+	}
+	const json::object* inline_desc = value->if_object();
+	const bool is_inline = inline_desc && inline_desc->contains("__type") && inline_desc->at("__type").is_string();
+	// {guid, path} is what a save and the migration write (#773, #776).
+	if (!value->is_string() && !is_inline && !res::reference_from_json(*value)) {
+		egLOG_WARN("desc", "mesh_node_desc: '{}' is neither a reference nor an inline desc, keeping the current one", key);
+		return;
+	}
+	field = desc_system.get_field_desc<T>(owner, *value, std::string("/").append(key));
+}
+
+}
 
 void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	if (auto const* p = data.if_contains("geometry"))
-		geometry = desc_system.get_field_desc<rnd::geometry_desc>(*this, *p);
-	if (auto const* p = data.if_contains("vx_begin"))
-		vx_begin = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("vx_end"))
-		vx_end = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("ind_begin"))
-		ind_begin = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("ind_end"))
-		ind_end = p->to_number<std::size_t>();
-	if (auto const* p = data.if_contains("material"))
-		material = desc_system.get_field_desc<scn::material_desc>(*this, *p);
+	// The assembler reads a component into an untagged copy, and the generic desc_ref reader refuses an inline desc
+	// there; the importer writes the material inline, so the references are read as the hand-written reader did.
+	json::object scalars = data;
+	scalars.erase("geometry");
+	scalars.erase("material");
+	schema_desc::deserialize(desc_system, scalars);
+	read_reference(desc_system, *this, data, "geometry", geometry);
+	read_reference(desc_system, *this, data, "material", material);
 }
 
+// Written by hand too: the generic writer would write a memory:// reference as an inline copy (get_sync on the main thread),
+// and the assembler's serialize(parent) + deserialize of an override would then make a second material instead of sharing
+// the parent's.
 void scn::mesh_node_desc::serialize(json::object& data) const
 {
-	if (geometry.is_valid())
-		data["geometry"] = json::value_from(geometry->get_tag());
+	if (geometry.get_tag().is_valid())
+		data["geometry"] = json::value_from(geometry.get_tag());
 	data["vx_begin"] = vx_begin;
 	data["vx_end"] = vx_end;
 	data["ind_begin"] = ind_begin;
 	data["ind_end"] = ind_end;
-	if (material.is_valid())
-		data["material"] = json::value_from(material->get_tag());
+	if (material.get_tag().is_valid())
+		data["material"] = json::value_from(material.get_tag());
+	if (!visible)
+		data["visible"] = false;
 }
 
 void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name)
@@ -40,11 +67,13 @@ void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_nod
 
 	reg.emplace_or_replace<scn::mesh_component>(e, scn::mesh_component{ .mesh = mesh_data });
 
-	if (desc.geometry.is_valid())
+	if (desc.geometry.is_valid() && !desc.geometry.has_error() && desc.geometry.get_tag().is_valid()) {
 		reg.emplace_or_replace<scn::geometry_component>(e, scn::geometry_component{ .geom_tag = desc.geometry.get_tag() });
+		scn::geometry_holds::of(reg).hold(e, desc.geometry);
+	}
 
 	if (desc.material.is_valid())
 		reg.emplace_or_replace<scn::material_desc_component>(e, scn::material_desc_component{ .mlt_desc = desc.material });
 
-	reg.emplace_or_replace<scn::renderable>(e);
+	scn::set_visible(reg, e, desc.visible);
 }

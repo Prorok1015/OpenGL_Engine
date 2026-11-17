@@ -1,19 +1,26 @@
 #include "rnd_texture_2d_desc.h"
-#include "desc_system.h"
+#include <snk/resource/res_reference.h>
+#include <snk/desc/desc_system.h>
 
 void rnd::texture_2d_desc::deserialize(desc::desc_system& system, const json::object& resource)
 {
 	texture_desc::deserialize(system, resource);
 
-	if (resource.contains("data") && resource.at("data").is_string())
+	// A reference in either form a file writes it: a path, or {guid, path} (#920).
+	if (resource.contains("data") && res::reference_from_json(resource.at("data"))) {
 		picture_handle = system.get_field_desc<res::picture_resource>(*this, resource.at("data"));
+	} else if (picture_handle.is_valid() && !picture_handle.has_error() && picture_handle.get_tag().is_valid()) {
+		// A cached parent may still hold the picture from before a file change. A failed or refused one (#697: no tag) stays.
+		picture_handle = system.get_field_desc<res::picture_resource>(*this, json::value_from(picture_handle.get_tag()));
+	}
 }
 
 void rnd::texture_2d_desc::serialize(json::object& resource) const
 {
 	texture_desc::serialize(resource);
 
+	picture_handle.wait();
 	if (picture_handle.is_ready()) {
-		resource["data"] = json::value_from(picture_handle->get_tag());
+		resource["data"] = json::value_from(picture_handle.get_tag());
 	}
 }

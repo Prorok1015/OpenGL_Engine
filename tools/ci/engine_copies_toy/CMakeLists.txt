@@ -1,0 +1,35 @@
+# A toy of the shared engine for tools/ci/test_link_graph.cmake: snk_check_engine_copies() on one link layout (CASE).
+cmake_minimum_required(VERSION 3.27)
+project(engine_copies_toy LANGUAGES C)
+
+set(SNK_ENGINE_SHARED ON)
+include("${SNK_ROOT}/cmake/SnkEngineCopies.cmake")
+
+add_library(snk_engine SHARED IMPORTED GLOBAL)
+set_target_properties(snk_engine PROPERTIES IMPORTED_LOCATION "${CMAKE_BINARY_DIR}/libsnk_engine.so" IMPORTED_NO_SONAME TRUE)
+add_library(config_system STATIC IMPORTED GLOBAL)
+set_target_properties(config_system PROPERTIES IMPORTED_LOCATION "${CMAKE_BINARY_DIR}/libconfig_system.a")
+add_library(snk::config_system ALIAS config_system)
+set_property(GLOBAL PROPERTY SNK_ENGINE_CARRIED snk::config_system)
+
+file(WRITE "${CMAKE_BINARY_DIR}/main.c" "int main(void) { return 0; }\n")
+add_library(helper STATIC "${CMAKE_BINARY_DIR}/main.c")
+add_executable(tool "${CMAKE_BINARY_DIR}/main.c")
+
+if(CASE STREQUAL "compile_only_in_static")
+	target_link_libraries(helper PRIVATE $<COMPILE_ONLY:snk::config_system>)
+	target_link_libraries(tool PRIVATE helper snk_engine)
+elseif(CASE STREQUAL "direct")
+	target_link_libraries(tool PRIVATE snk_engine snk::config_system)
+elseif(CASE STREQUAL "conditional")
+	target_link_libraries(tool PRIVATE snk_engine $<$<CONFIG:Debug>:snk::config_system>)
+elseif(CASE STREQUAL "through_static")
+	target_link_libraries(helper PRIVATE snk::config_system)
+	target_link_libraries(tool PRIVATE helper snk_engine)
+elseif(CASE STREQUAL "no_engine")
+	target_link_libraries(tool PRIVATE snk::config_system)
+else()
+	message(FATAL_ERROR "unknown CASE '${CASE}'")
+endif()
+
+snk_check_engine_copies()

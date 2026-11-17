@@ -1,27 +1,32 @@
 #include "edt_level_controller.h"
-#include "edt_shared_state.h"
+#include "edt_desc_file_commands.h"
+#include "edt_override_edit.h"
+#include "edt_scene_document.h"
+#include "edt_version_notice.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include "level/scn_level.h"
-#include "level/scn_level_manager.h"
-#include "level/scn_level_desc.h"
-#include "level/scn_prefab_desc.h"
-#include "desc_system.h"
-#include "res_system.h"
-#include "resources/res_resource_text.h"
-#include <imgui.h>
+#include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_path_sanitize.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <boost/json.hpp>
-#include <fstream>
+#include <cstdint>
 #include <filesystem>
 #include <format>
-#include "engine_log.h"
+#include <optional>
+#include <system_error>
+#include <vector>
+#include <snk/common/logger/engine_log.h>
 
 edt::level_controller::level_controller(
-	shared_state& state, res::resource_system& res, desc::desc_system& desc,
-	scene_editor& scene_ed, world_controller& world_ctrl)
+	scene_document& state, editor_services& services, scene_editor& scene_ed, world_controller& world_ctrl)
 	: m_state(state)
-	, m_res(res)
-	, m_desc(desc)
+	, m_services(services)
 	, m_scene_editor(scene_ed)
 	, m_world_ctrl(world_ctrl)
 {
@@ -29,16 +34,103 @@ edt::level_controller::level_controller(
 
 edt::level_controller::~level_controller()
 {
-	if (m_state.editor_tag.is_valid())
-		m_res.unwatch(m_state.editor_tag, this);
+	unwatch_level();
+	if (auto ctx_mgr = m_services.ctx_manager.lock())
+		ctx_mgr->set_on_reload(nullptr);
+}
+
+void edt::level_controller::watch_level()
+{
+	unwatch_level();
+	m_watched_resources = m_services.resources();
+	m_watched_tag = m_state.editor_tag;
+	m_watched_resources->watch(m_watched_tag, this, [this](const res::tag&) {
+		if (on_editor_world_reloaded) on_editor_world_reloaded();
+	});
+}
+
+void edt::level_controller::resume_watch()
+{
+	if (m_state.editor_tag.is_valid()) watch_level();
+}
+
+void edt::level_controller::unwatch_level()
+{
+	if (m_watched_resources) {
+		m_watched_resources->unwatch(m_watched_tag, this);
+		m_watched_resources = nullptr;
+		m_watched_tag = res::tag{};
+	}
 }
 
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────
 
+namespace {
+	// A level read on top of a parent is saved as its __parent and what differs from the parent (#812), as the desc
+	// adapter saves any other desc. The worlds the editor holds are the level as it is shown.
+	void keep_level_parent(desc::desc_system& descs, const res::tag& parent, const res::tag& tag, boost::json::object& level_json)
+	{
+		const auto level = descs.create_instance(scn::level_desc::__type, tag);
+		if (!level) return;
+		level->set_parent(parent);
+		boost::json::object file;
+		boost::json::object body;
+		for (auto& member : level_json) {
+			(member.key().starts_with("__") ? file : body).emplace(member.key(), std::move(member.value()));
+		}
+		descs.reduce_to_parent(*level, body);
+		for (auto& member : body) {
+			file.insert_or_assign(member.key(), std::move(member.value()));
+		}
+		descs.stamp_tree(file);
+		level_json = std::move(file);
+	}
+
+	// A level file this big is no level a save replaces: Save As over it is refused rather than read.
+	constexpr std::uintmax_t k_replaced_level_limit = std::uintmax_t{ 64 } << 20;
+
+	struct replaced_guid
+	{
+		std::string guid;
+		// Its root __version (0: no file there).
+		int version = 0;
+		// Why the save must not go on: the file is there, but its __guid cannot be read and would be lost.
+		std::string error;
+	};
+
+	// The root __guid of the file a save replaces: the one res:// reads, from the highest layer that has it (a lower
+	// layer's file is replaced by a copy in the top one, which keeps its .resource). Empty when there is none.
+	replaced_guid root_guid_of_replaced(const res::resource_system& resources, const std::string& rel_path)
+	{
+		const std::vector<std::filesystem::path> layers = resources.get_resource_layers();
+		for (auto layer = layers.rbegin(); layer != layers.rend(); ++layer) {
+			const std::optional<std::filesystem::path> path = res::path_within_dir(*layer, rel_path);
+			std::error_code ec;
+			if (!path || !std::filesystem::is_regular_file(*path, ec)) continue;
+			const std::uintmax_t size = std::filesystem::file_size(*path, ec);
+			if (!ec && size > k_replaced_level_limit) {
+				return { {}, 0, std::format("it is bigger than {} MiB", k_replaced_level_limit >> 20) };
+			}
+			const auto bytes = res::read_regular_file_capped(*path, k_replaced_level_limit);
+			if (!bytes) return { {}, 0, "it could not be read" };
+			return { edt::desc_root_guid(*bytes), edt::desc_root_version(*bytes), {} };
+		}
+		return {};
+	}
+
+	// Tells the coordinator that the worlds were replaced, on every way out of the function.
+	struct notify_worlds_replaced
+	{
+		const std::function<void()>& hook;
+		~notify_worlds_replaced() { if (hook) hook(); }
+	};
+}
+
 void edt::level_controller::new_level()
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr) return;
+	const notify_worlds_replaced notify{ on_worlds_replaced };
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return;
 
 	namespace json = boost::json;
 
@@ -50,184 +142,172 @@ void edt::level_controller::new_level()
 
 	res::tag mem_tag{ "memory://editor/new_level.desc" };
 
-	if (m_state.editor_tag.is_valid())
-		m_res.unwatch(m_state.editor_tag, this);
+	unwatch_level();
 	m_state.editor_tag = mem_tag;
 
-	m_res.store(mem_tag, m_desc.serialize_to_bytes(json::value{ level_json }));
-	m_res.signal_changed(mem_tag);
+	m_services.writable_resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ level_json }));
+	m_services.resources()->signal_changed(mem_tag);
 
-	if (!lvl_mgr->load(mem_tag)) {
+	if (!ctx_mgr->load_level(mem_tag)) {
 		egLOG("Editor/NewLevel", "Failed to create new level via desc pipeline");
 		return;
 	}
 
-	m_res.watch(m_state.editor_tag, this, [this](const res::tag&) {
-		if (on_editor_world_reloaded) on_editor_world_reloaded();
-	});
+	// The new level replaces one a detach kept (a stopped migration's): attach_to_game_layer must not bring that back.
+	m_detached_level.reset();
+	watch_level();
 
-	auto level_res = m_res.require_sync<scn::level_desc>(m_state.editor_tag);
+	auto level_res = m_services.resources()->require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/NewLevel", "Level desc '{}' failed to load after creation", m_state.editor_tag.view());
+		return;
+	}
 	populate_worlds_from_level(level_res);
 	m_state.level_name = "new_level";
 
 	m_state.level_tag = res::tag{};
-	scn::level& lvl = lvl_mgr->get_level();
-	m_state.world_names.clear();
-	for (uint32_t i = 0; i < (uint32_t)lvl.get_world_count(); ++i)
-		m_state.world_names.push_back(std::string(lvl.get_world(i).get_name()));
+	m_state.level_guid.clear();
+	m_state.level_parent = res::tag{};
+	m_state.level_file_version = 0;
+	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
-	m_state.active_world_idx = 0;
-	m_state.is_dirty = true;
-	m_world_ctrl.switch_to_world(0);
+	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
+	m_state.commit("New level", commit_mode::state_only);
+	m_world_ctrl.select_world(m_state.active_world_idx);
+	egLOG("Editor/NewLevel", "Created a new level with {} world(s)", m_state.world_names.size());
 }
 
-bool edt::level_controller::save_level()
+bool edt::level_controller::save_level_as(const std::string& rel_path)
 {
 	if (!m_state.editor_tag.is_valid()) {
-		egLOG("Editor/Save", "No scene loaded — nothing to save.");
+		egLOG("Editor/Save", "No scene loaded - nothing to save.");
 		return false;
 	}
-
-	if (!m_save_dialog_open) {
-		m_save_dialog_open = true;
-		std::string current = m_state.level_tag.is_valid()
-			? std::string(m_state.level_tag.relative())
-			: "levels/my_level.desc";
-		auto cp = std::format_to_n(m_save_path_buf, sizeof(m_save_path_buf) - 1, "{}", current);
-		*cp.out = '\0';
-		ImGui::OpenPopup("Save Level##edt_save");
-	}
-
-	bool is_open = true;
-	if (ImGui::BeginPopupModal("Save Level##edt_save", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::Text("Path (relative to res://):");
-		ImGui::SetNextItemWidth(480.f);
-		ImGui::InputText("##sp", m_save_path_buf, sizeof(m_save_path_buf));
-
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		const float bw = 110.f;
-		const float avail = ImGui::GetContentRegionAvail().x;
-		ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-
-		if (ImGui::Button("Save", {bw, 0.f})) {
-			const std::string rel_path_str(m_save_path_buf);
-			if (write_level_to_disk(rel_path_str)) {
-				m_state.level_tag = res::tag::make(rel_path_str);
-			}
-			m_save_dialog_open = false;
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Cancel", {bw, 0.f})) {
-			m_save_dialog_open = false;
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::EndPopup();
-	} else if (m_save_dialog_open) {
-		m_save_dialog_open = false;
-		is_open = false;
-	}
-
-	return is_open;
+	if (!write_level_to_disk(rel_path))
+		return false;
+	m_state.level_tag = res::tag::make(rel_path);
+	return true;
 }
 
-void edt::level_controller::quick_save_level()
+bool edt::level_controller::quick_save_level()
 {
 	if (!m_state.level_tag.is_valid())
-		return;
+		return false;
 
-	write_level_to_disk(std::string(m_state.level_tag.relative()));
-}
-
-bool edt::level_controller::show_exit_confirm()
-{
-	ImGui::OpenPopup("Unsaved Changes##edt_exit");
-
-	bool is_open = true;
-	if (ImGui::BeginPopupModal("Unsaved Changes##edt_exit", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::Text("You have unsaved changes. What would you like to do?");
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		const float bw = 120.f;
-		const float total = bw * 3.f + ImGui::GetStyle().ItemSpacing.x * 2.f;
-		ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - total) * 0.5f);
-
-		if (ImGui::Button("Save & Continue", {bw, 0.f})) {
-			if (m_state.level_tag.is_valid()) {
-				quick_save_level();
-				if (m_confirm_action) m_confirm_action();
-			} else {
-				if (on_need_save_dialog) on_need_save_dialog();
-			}
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Discard", {bw, 0.f})) {
-			m_state.is_dirty = false;
-			if (m_confirm_action) m_confirm_action();
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Cancel", {bw, 0.f})) {
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::EndPopup();
-	} else {
-		is_open = false;
-	}
-
-	return is_open;
+	return write_level_to_disk(std::string(m_state.level_tag.relative()));
 }
 
 // ─── Level load finish ──────────────────────────────────────────────────────
 
-void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle)
+bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version)
 {
-	auto level_manager = m_state.lvl_manager.lock();
-	if (!level_manager) return;
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return false;
 
-	if (level_manager->load(m_state.editor_tag)) {
-		m_res.watch(m_state.editor_tag, this, [this](const res::tag&) {
-			if (on_editor_world_reloaded) on_editor_world_reloaded();
-		});
-
-		auto level_res = m_res.require_sync<scn::level_desc>(m_state.editor_tag);
+	// Everything that can refuse the level first (#613): a refusal leaves the worlds, the document and the watched file as
+	// they were, so the caller puts the old tags back on a level that is still the old one.
+	auto level_res = m_services.resources()->require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/LoadLevel", "Level desc '{}' failed to load", m_state.editor_tag.view());
+		return false;
+	}
+	if (ctx_mgr->load_level(m_state.editor_tag)) {
+		// A loaded level replaces one a detach kept (a stopped migration's), so it can be saved again.
+		m_detached_level.reset();
+		watch_level();
+		m_state.level_guid = level_res->get_guid();
+		m_state.level_parent = level_res->get_parent();
+		m_state.level_file_version = file_version;
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
 		if (auto p = m_state.level_name.rfind('/');  p != std::string::npos) m_state.level_name = m_state.level_name.substr(p + 1);
 
-		scn::level& lvl = level_manager->get_level();
-		m_state.world_names.clear();
-		for (uint32_t i = 0; i < (uint32_t)lvl.get_world_count(); ++i)
-			m_state.world_names.push_back(std::string(lvl.get_world(i).get_name()));
-
-		m_state.active_world_idx = 0;
-		m_state.is_dirty = false;
-		m_world_ctrl.switch_to_world(0);
+		// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
+		m_state.mark_clean();
+		if (m_state.world_names.empty()) {
+			egLOG_WARN("Editor/LoadLevel", "Level '{}' has no worlds", m_state.level_name);
+			m_world_ctrl.clear_active_world();
+		} else {
+			m_state.active_world_idx = 0;
+			m_world_ctrl.select_world(0);
+		}
+		return true;
 	}
+	return false;
+}
+
+bool edt::level_controller::take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag,
+	const res::tag& editor_tag, int file_version)
+{
+	const res::tag level_tag_before = m_state.level_tag;
+	const res::tag editor_tag_before = m_state.editor_tag;
+	m_state.level_tag = level_tag;
+	m_state.editor_tag = editor_tag;
+	if (finish_level_load(handle, file_version)) return true;
+	m_state.level_tag = level_tag_before;
+	m_state.editor_tag = editor_tag_before;
+	resume_watch();
+	return false;
+}
+
+// ─── Game layer change ──────────────────────────────────────────────────────
+
+void edt::level_controller::detach_from_game_layer()
+{
+	const notify_worlds_replaced notify{ on_worlds_replaced };
+	unwatch_level();
+	m_detached_level.reset();
+	m_detached_world = m_state.active_world_idx;
+	if (!m_state.editor_tag.is_valid()) {
+		// No level: the new layer has no worlds for the editor either.
+		m_world_ctrl.clear_active_world();
+		return;
+	}
+
+	if (auto ctx_mgr = m_services.ctx_manager.lock(); ctx_mgr && m_world_ctrl.on_save_camera) {
+		const std::string* name = m_state.active_world_name();
+		if (auto* world = name ? ctx_mgr->level_set().find(*name) : nullptr) {
+			m_world_ctrl.on_save_camera(world->state());
+		}
+	}
+	m_detached_level = build_level_json();
+	// The world descs hold handles into the old layer's cache, whose desc types may belong to the module going away.
+	m_state.world_descs.clear();
+	m_state.world_names.clear();
+	m_state.worlds_systems_list.clear();
+	m_state.world_tags.clear();
+	m_state.reset_history();
+	m_world_ctrl.clear_active_world();
+}
+
+void edt::level_controller::attach_to_game_layer()
+{
+	const notify_worlds_replaced notify{ on_worlds_replaced };
+	if (!m_detached_level) return;
+	// Kept until the level is rebuilt: a failed rebuild stays detached, so no save writes its empty worlds (#761).
+	const boost::json::object level_json = *m_detached_level;
+
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return;
+	auto& resources = *m_services.resources();
+	m_services.writable_resources()->store(m_state.editor_tag, m_services.descs()->serialize_to_bytes(boost::json::value{ level_json }));
+	resources.signal_changed(m_state.editor_tag);
+	if (!ctx_mgr->load_level(m_state.editor_tag)) {
+		egLOG_ERROR("Editor/GameLayer", "Level '{}' could not be rebuilt in the new game layer", m_state.editor_tag.view());
+		return;
+	}
+	watch_level();
+	auto level_res = resources.require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/GameLayer", "Level desc '{}' failed to load in the new game layer", m_state.editor_tag.view());
+		return;
+	}
+	m_detached_level.reset();
+	populate_worlds_from_level(level_res);
+	const int world_count = static_cast<int>(m_state.world_names.size());
+	const int world = m_detached_world >= 0 && m_detached_world < world_count ? m_detached_world : 0;
+	m_world_ctrl.select_world(world_count == 0 ? -1 : world);
 }
 
 // ─── Desc-to-scene (asset drop / export auto-add) ──────────────────────────
@@ -252,8 +332,8 @@ void edt::level_controller::add_desc_to_scene(const res::res_handle<desc::desc_b
 boost::json::object edt::level_controller::load_desc_template(const std::string& filename)
 {
 	namespace json = boost::json;
-	auto tag = res::tag::make("templates/" + filename);
-	auto text = m_res.require_sync<res::text_resource>(tag);
+	auto tag = res::tag("edt://templates/" + filename);
+	auto text = m_services.resources()->require_sync<res::text_resource>(tag);
 	if (text.is_ready()) {
 		try {
 			json::parse_options opts;
@@ -270,42 +350,181 @@ boost::json::object edt::level_controller::load_desc_template(const std::string&
 boost::json::object edt::level_controller::build_level_json() const
 {
 	const std::string name = m_state.level_name.empty() ? "level" : m_state.level_name;
-	return scn::level_desc::build_json(name, m_state.world_descs);
+	return scn::level_desc::build_json(name, m_state.world_descs, *m_services.descs(), m_state.level_guid);
 }
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 {
+	// Detached, the worlds are gone (detach_from_game_layer): a save would write an empty level over the file (#761).
+	if (is_detached()) {
+		egLOG_ERROR("Editor/Save", "Level not saved to '{}': the level is detached (a game layer change or a project migration)", rel_path);
+		return false;
+	}
+	// A path typed into Save As (or sent by an agent) becomes a res:// tag; one that already names a protocol cannot.
+	if (rel_path.find("://") != std::string::npos) {
+		egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
+		return false;
+	}
 	m_scene_editor.sync_ecs_transforms_to_desc();
+	// Live transforms written back are the level as it is, not an edit to undo.
+	m_state.rebase_history();
 
 	std::filesystem::path frel(rel_path);
 	const std::string stem = frel.stem().string();
 	const std::string level_name = stem.empty() ? m_state.level_name : stem;
 
-	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs);
-
-	std::filesystem::path abs_path = res::resource_system::get_resources_path() / frel;
-	std::error_code ec;
-	std::filesystem::create_directories(abs_path.parent_path(), ec);
-	std::ofstream out(abs_path);
-	if (!out) {
-		egLOG("Editor/Save", "Failed to open file for writing: {}", abs_path.string());
-		return false;
+	// The level's ID is its .resource (EPIC-57): a save keeps the __guid the file had until the project's migration takes
+	// it out, and makes none up (#772). Save As to a new file writes none, the asset database gives the file a new ID;
+	// Save As over another file keeps that file's.
+	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
+	std::string guid = m_state.level_guid;
+	int replaced_version = same_file ? m_state.level_file_version : 0;
+	if (!same_file) {
+		replaced_guid replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
+		if (!replaced.error.empty()) {
+			egLOG_ERROR("Editor/Save", "Level not saved over '{}': {}, so its __guid would be lost", res::tag::make(rel_path).view(), replaced.error);
+			return false;
+		}
+		guid = std::move(replaced.guid);
+		replaced_version = replaced.version;
 	}
 
-	out << boost::json::serialize(level_json);
+	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
+	if (m_state.level_parent.is_valid()) {
+		keep_level_parent(*m_services.descs(), m_state.level_parent, res::tag::make(rel_path), level_json);
+	}
+
+	// Same writer as every other desc save, so level files are indented and diff well.
+	boost::json::value level_file{ std::move(level_json) };
+	if (scn::ecs_assembler* assembler = m_services.assembler()) {
+		override_edit::write_record_references(*m_services.descs(), *assembler, m_state.world_descs, m_state.world_tags, level_file);
+	}
+	m_services.descs()->write_references(level_file);
+	const auto bytes = m_services.descs()->serialize_to_bytes(level_file);
+	// Through the resolver, which keeps the file (and its temp file) inside the resource root: a Save As path with
+	// "..", an absolute path or a symlinked leaf is refused there. Waits for the write: the document is marked clean
+	// only once the level is on disk, or exit would no longer ask about the changes.
+	const auto tag = res::tag::make(rel_path);
+	if (!m_services.writable_resources()->store_sync(tag, bytes)) {
+		egLOG_ERROR("Editor/Save", "Level not saved: '{}' could not be written; the changes are kept", tag.view());
+		return false;
+	}
+	m_state.level_guid = guid;
 	m_state.level_name = level_name;
-	m_state.is_dirty   = false;
-	egLOG("Editor/Save", "Level saved to {}", abs_path.string());
+	m_state.mark_clean();
+	egLOG("Editor/Save", "Level saved to {}", tag.view());
+	const int current = m_services.descs()->current_version(scn::level_desc::__type);
+	if (replaced_version > 0 && replaced_version < current) {
+		const std::string upgraded = version_upgrade_text(tag.view(), replaced_version, current);
+		egLOG_WARN("Editor/Save", "{}", upgraded);
+		if (on_file_upgraded) on_file_upgraded(upgraded);
+	}
+	m_state.level_file_version = current;
 	return true;
+}
+
+void edt::level_controller::resync_worlds_after_reload()
+{
+	const notify_worlds_replaced notify{ on_worlds_replaced };
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return;
+	scn::context_set& lvl = ctx_mgr->level_set();
+
+	auto level_res = m_services.resources()->require_sync<scn::level_desc>(lvl.tag());
+	if (!level_res.is_ready()) {
+		egLOG_WARN("Editor/Reload", "Level desc '{}' not ready after reload, world arrays not resynced", lvl.tag().view());
+		return;
+	}
+
+	std::vector<scn::world_desc> desc_worlds;
+	std::vector<res::tag> desc_tags;
+	for (const auto& wh : level_res->get_worlds()) {
+		const auto world = wh.get_sync();
+		if (!ENGINE_VERIFY(world, "level '{}': world desc failed to load, skipping", level_res.get_tag().view())) {
+			continue;
+		}
+		desc_worlds.push_back(*world);
+		desc_tags.push_back(world->get_tag());
+	}
+
+	apply_world_resync(m_state, m_world_ctrl, desc_worlds, desc_tags, !level_res->get_worlds().empty(),
+		[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
+}
+
+void edt::apply_world_resync(
+	scene_document& state,
+	world_controller& worlds,
+	const std::vector<scn::world_desc>& desc_worlds,
+	const std::vector<res::tag>& desc_tags,
+	bool desc_lists_worlds,
+	const std::function<bool(const scn::world_desc&)>& is_alive)
+{
+	// Worlds the desc lists but that failed to load are skipped by the caller; those must not wipe the editor's worlds.
+	if (desc_worlds.empty() && desc_lists_worlds) {
+		egLOG_WARN("Editor/Reload", "No world of the level loaded after reload, world arrays not resynced");
+		return;
+	}
+	state.touch_descs();
+
+	std::string active_name;
+	if (const std::string* active = state.active_world_name()) active_name = *active;
+
+	const std::vector<std::string> names_before = state.world_names;
+	const std::vector<res::tag> tags_before = state.world_tags;
+	// An empty list is a valid state (idx -1): the arrays are cleared so nothing can index a world that is gone.
+	const int idx = resync_world_arrays(desc_worlds, state.world_descs, state.world_names, state.worlds_systems_list, active_name, is_alive);
+	// A world the reload lists has the file it came from now; one kept from before keeps its own (#993).
+	// The listed ones come first, in desc order: by index, so two worlds of one name keep their own files (#1039).
+	state.world_tags.clear();
+	for (std::size_t i = 0; i < state.world_names.size(); ++i) {
+		const std::string& name = state.world_names[i];
+		res::tag tag;
+		if (i < desc_worlds.size()) {
+			if (i < desc_tags.size()) tag = desc_tags[i];
+		} else if (const auto kept = std::ranges::find(names_before, name); kept != names_before.end()) {
+			const auto at = static_cast<std::size_t>(kept - names_before.begin());
+			if (at < tags_before.size()) tag = tags_before[at];
+		}
+		state.world_tags.push_back(std::move(tag));
+	}
+	// The worlds were reloaded from the files: what the edits changed is gone from them.
+	state.reset_history();
+	if (idx < 0) {
+		if (!active_name.empty()) {
+			egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, the level has no worlds", active_name);
+		}
+		worlds.clear_active_world();
+		return;
+	}
+	if (!active_name.empty() && state.world_names[idx] != active_name) {
+		egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, switching to '{}'", active_name, state.world_names[idx]);
+	}
+	state.active_world_idx = idx;
+	// The world list was replaced, so every pointer into it is stale: the panels are told even if the switch is refused.
+	worlds.select_world(idx); // the active world may have been rebuilt without the editor camera
 }
 
 void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res)
 {
+	m_state.touch_descs();
 	m_state.world_descs.clear();
+	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
-	if (!level_res.is_ready()) return;
-	for (const auto& wh : level_res->get_worlds()) {
-		m_state.world_descs.push_back(*wh);
-		m_state.worlds_systems_list.push_back(wh->get_systems());
+	m_state.world_tags.clear();
+	if (!level_res.is_ready()) {
+		m_state.reset_history();
+		return;
 	}
+	// world_descs is the single ordered source of truth (desc order); names and systems
+	// are derived from it so all three parallel arrays stay index-aligned.
+	for (const auto& wh : level_res->get_worlds()) {
+		const auto world = wh.get_sync();
+		if (!ENGINE_VERIFY(world, "level '{}': world desc failed to load, skipping", level_res.get_tag().view())) {
+			continue;
+		}
+		m_state.world_descs.push_back(*world);
+		m_state.world_tags.push_back(world->get_tag());
+	}
+	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
+	m_state.reset_history();
 }

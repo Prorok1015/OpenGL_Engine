@@ -1,0 +1,198 @@
+[META]
+framework: claude-framework
+file_id: learning.EXAMPLES
+class: universal
+version: 1.0.0
+
+[EXAMPLES]
+overview: Concrete examples of documentation updates
+purpose: Show how to apply the self-learning process end-to-end
+
+[EXAMPLE_1_USER_EXPLICIT_RULE]
+scenario: User says "Never use ORM raw queries in service layer — they bypass our audit log"
+
+step_1_identify:
+  - From user (meets CRITERIA_1)
+  - It's a constraint
+  - Target: CONSTRAINTS.toon
+
+step_2_locate:
+  - Open docs/agent/CONSTRAINTS.toon
+  - Add as new [CONSTRAINT_N]
+
+step_3_check_duplicate:
+  - Search CONSTRAINTS.toon for "raw query" / "ORM"
+  - Not found, proceed
+
+step_4_write:
+  [CONSTRAINT_N]
+  rule: Never use raw ORM queries in the service layer
+  why: Raw queries bypass the audit log, breaking compliance
+  alternatives: Use the repository abstraction; if raw SQL is required, it must live in repository/
+  enforcement: Code review veto if found outside repository/
+  source: User explicit statement
+
+step_5_edit: Use Edit tool to add to CONSTRAINTS.toon
+
+step_6_verify:
+  - File structure intact
+  - TOON syntax valid
+  - Constraint is clear
+
+step_7_commit:
+  git commit -m "docs: [constraint] prohibit raw ORM queries in service layer
+
+  Source: User explicit statement
+  File: docs/agent/CONSTRAINTS.toon
+
+  Co-Authored-By: Claude <noreply@anthropic.com>"
+
+[EXAMPLE_2_FOUND_IN_CODE]
+scenario: Reading src/auth/session.py, found comment: "# MUST rotate keys every 30 days"
+
+step_1_identify:
+  - Found in code with MUST comment (meets CRITERIA_2)
+  - It's an operational constraint
+  - Target: CONSTRAINTS.toon (or domain-specific file like AUTH.toon if project has one)
+
+step_2_locate:
+  - Open docs/agent/CONSTRAINTS.toon
+  - Add as new [CONSTRAINT_N]
+
+step_3_check_duplicate:
+  - Search for "rotation" / "30 days"
+  - Not found, proceed
+
+step_4_write:
+  [CONSTRAINT_N]
+  rule: Session keys must rotate every 30 days
+  why: Limits blast radius of key compromise (compliance)
+  implementation: Timer in src/auth/session.py (look for ROTATION_INTERVAL)
+  source: Code inspection, src/auth/session.py comment
+
+step_5_edit: Update CONSTRAINTS.toon
+
+step_6_verify:
+  - Integrates with existing constraints
+  - References actual code location
+  - Clear and concise
+
+step_7_commit:
+  git commit -m "docs: [constraint] document session key rotation interval
+
+  Source: Code inspection of src/auth/session.py
+  File: docs/agent/CONSTRAINTS.toon
+
+  Co-Authored-By: Claude <noreply@anthropic.com>"
+
+[EXAMPLE_3_DISCOVERED_ARCHITECTURE]
+scenario: While debugging, discovered that the API gateway pools HTTP connections per upstream and reuses them
+
+step_1_identify:
+  - Discovered from code analysis (meets CRITERIA_3)
+  - Architectural pattern
+  - Target: ARCHITECTURE.toon
+
+step_2_locate:
+  - Open docs/agent/ARCHITECTURE.toon
+  - Find [API_GATEWAY] or create subsection under [COMPONENTS]
+
+step_3_check_duplicate:
+  - Search "connection pool" / "reuse"
+  - Not found, proceed
+
+step_4_write:
+  [API_GATEWAY.CONNECTION_POOLING]
+  mechanism: HTTP connections pooled per upstream host, reused across requests
+  benefit: Reduces handshake overhead, improves P99 latency
+  implementation: See gateway/client.go (pool size configurable per upstream)
+  source: Code discovery while debugging timeout issue
+
+step_5_edit: Update ARCHITECTURE.toon
+
+step_6_verify:
+  - Doesn't duplicate existing sections
+  - Adds gateway-specific detail
+  - References implementation file
+
+step_7_commit:
+  git commit -m "docs: [arch] document gateway connection pooling
+
+  Source: Code discovery while analyzing gateway/client.go
+  File: docs/agent/ARCHITECTURE.toon
+
+  Co-Authored-By: Claude <noreply@anthropic.com>"
+
+[EXAMPLE_4_FIXING_ERROR]
+scenario: PROJECT.toon says feature X is "IN_PROGRESS" but it's fully shipped and in production
+
+step_1_identify:
+  - Found error in docs (meets CRITERIA_4)
+  - Target: PROJECT.toon
+
+step_2_locate:
+  - Open docs/agent/PROJECT.toon
+  - Find [STATUS] section, feature X entry
+
+step_3_check_duplicate:
+  - This is the only entry for feature X, proceed
+
+step_4_write:
+  Change:
+    status: IN_PROGRESS
+  To:
+    status: DONE
+    completed: 2026-03-15
+    notes: Deployed to production, all acceptance criteria met
+
+step_5_edit: Update PROJECT.toon
+
+step_6_verify:
+  - Status matches reality
+  - Dependent work items can now be unblocked
+
+step_7_commit:
+  git commit -m "docs: [project] mark feature X as completed
+
+  Source: Verification that feature is live in production
+  File: docs/agent/PROJECT.toon
+
+  Co-Authored-By: Claude <noreply@anthropic.com>"
+
+[WHAT_TO_AVOID]
+example_bad_1:
+  content: "The system is complex"
+  problem: No actionable information
+
+example_bad_2:
+  content: "Probably the developers meant to implement it this way"
+  problem: Vague, unverified speculation
+
+example_bad_3:
+  content: "This would be better if implemented differently"
+  problem: Not a rule, just personal preference
+
+example_bad_4:
+  content: "The code iterates through elements"
+  problem: Anyone reading code sees this
+
+example_bad_5:
+  content: "Vector grows by 2x when capacity exceeded"
+  problem: Implementation detail, can change, not architectural
+
+[KEY_TAKEAWAYS]
+DO:
+  - Small targeted updates (5-10 lines)
+  - One file per update
+  - Always verify source
+  - Link to references (line numbers, existing docs)
+  - Clear commit message with source attribution
+  - Check for duplicates before adding
+
+DON'T:
+  - Large multi-concept updates
+  - Speculative or opinion-based info
+  - Obvious facts from code
+  - Updates without source attribution
+  - Break existing structure/format
+  - Forget [docs] prefix in commit

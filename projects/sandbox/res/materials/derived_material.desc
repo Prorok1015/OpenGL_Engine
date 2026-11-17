@@ -1,0 +1,6 @@
+{
+    "__type" : "material_desc",
+    "__version" : 1,
+    "__parent" : "res://base_material.desc",
+    "queue" : "transparent"
+}

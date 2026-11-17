@@ -1,7 +1,13 @@
 #include "rnd_composition_pass.h"
-#include "rnd_render_packet.hpp"
-#include "rnd_render_system.h"
-#include "eng_profiler.h"
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/render/rnd_render_context.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_buffer_layout.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
+#include "rnd_pass_pipelines.h"
+#include <snk/common/eng_profiler.h>
+#include "rnd_gpu_profiler.h"
+#include <utility>
 
 namespace rnd {
 struct screen_vertex {
@@ -10,12 +16,15 @@ struct screen_vertex {
   glm::vec2 uv;
 };
 
-composition_pass::composition_pass() {}
+composition_pass::composition_pass(res::tag vertex_shader, res::tag fragment_shader)
+    : m_vertex_shader(std::move(vertex_shader)), m_fragment_shader(std::move(fragment_shader)) {}
 
-void composition_pass::execute(frame_context &context,
+void composition_pass::execute(render_context &context,
                                driver::driver_interface &drv) {
   PROFILE_SCOPE("Pass.Composition");
-  if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
+  PROFILE_GPU_SCOPE("Pass.Composition");
+  const auto packets = context.packets();
+  if (packets.empty()) {
     return;
   }
 
@@ -35,35 +44,34 @@ void composition_pass::execute(frame_context &context,
     m_va->set_index_buffer(m_ibo);
   }
 
-  auto &packets = context.data.require<std::vector<rnd::render_packet_t>>();
-
-  static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
-  static res::tag color_rt_transparent_tag =
-      res::tag(res::tag::memory, "__color_rt_transparent_rt");
-  static res::tag waight_rt_transparent_tag =
-      res::tag(res::tag::memory, "__waight_rt_transparent_rt");
-
-  auto &txm_manager = rnd::get_system().get_texture_manager();
-
-  for (auto packet : packets) {
+  for (const auto& packet : packets) {
     int vp_width = packet.camera.viewport.z;
     int vp_height = packet.camera.viewport.w;
 
     if (vp_width < 1 || vp_height < 1)
       continue;
 
-    res::tag target_tag = packet.camera.target_texture_tag;
-    if (!target_tag.is_valid()) {
-      target_tag = color_rt_tag;
-    }
-    auto color_rt = txm_manager.find(target_tag);
-    auto color_tp_rt = txm_manager.find(color_rt_transparent_tag);
-    auto waight_tp_rt = txm_manager.find(waight_rt_transparent_tag);
+    const auto target = rnd::select_camera_target(packet.camera);
+    const bool offscreen = target.kind == rnd::render_target_kind::texture;
+    res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
+    res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
+    const rnd::driver::texture_handle color_rt = offscreen ? context.find_texture(target.texture) : rnd::driver::texture_handle{};
+    auto color_tp_rt = context.find_texture(tp_accum_tag);
+    auto waight_tp_rt = context.find_texture(tp_reveal_tag);
 
-    if (!color_rt || !color_tp_rt || !waight_tp_rt)
+    if ((offscreen && !color_rt) || !color_tp_rt || !waight_tp_rt)
       continue;
 
-    rnd::driver::render_state state;
+    rnd::driver::render_pass_desc pass;
+    pass.debug_name = "composition";
+    if (offscreen) {
+      pass.colors.push_back({.texture = color_rt});
+    } else {
+      pass.backbuffer = true;
+    }
+    drv.begin_render_pass(pass);
+
+    rnd::driver::pipeline_desc state;
     state.depth.enabled = true;
     state.depth.test_func = rnd::driver::depth_state::func::ALWAYS;
     state.depth.write_mask = false;
@@ -71,11 +79,11 @@ void composition_pass::execute(frame_context &context,
     blend.enabled = true;
     blend.src_factor = rnd::driver::blend_state::factor::SRC_ALPHA;
     blend.dst_factor = rnd::driver::blend_state::factor::ONE_MINUS_SRC_ALPHA;
-    state.blend_states = {blend};
-    drv.set_render_state(state);
+    state.blend = {blend};
+    rnd::driver::set_target_formats(drv, state, pass);
+    state.set_layouts = context.layouts().composite();
+    rnd::pass_pipelines pipelines(drv, context, state);
 
-    drv.push_frame_buffer();
-    drv.set_render_target(color_rt);
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -93,14 +101,20 @@ void composition_pass::execute(frame_context &context,
     rnd::shader_config desc;
     desc.cdata.program =
         rnd::shader_config::shader_program_data::build()
-            .set_vertex_shader(res::tag::make("shaders/composition.vert"))
-            .set_fragment_shader(res::tag::make("shaders/composition.frag"));
-    desc.rdata.samplers = {color_tp_rt, waight_tp_rt};
+            .set_vertex_shader(m_vertex_shader)
+            .set_fragment_shader(m_fragment_shader);
 
-    rnd::configure_pass(desc);
-    drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
+    const auto variant = context.variants().intern(desc.cdata);
+    if (pipelines.bind(variant)) {
+      rnd::driver::bind_group_desc inputs;
+      inputs.layout = context.layouts().composition;
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, color_tp_rt});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, waight_tp_rt});
+      drv.set_bind_group(rnd::driver::pass_set, drv.create_bind_group(inputs, rnd::driver::lifetime::transient));
+      drv.draw_indices(m_va, std::size(indeces));
+    }
 
-    drv.pop_frame_buffer();
+    drv.end_render_pass();
   }
 }
 } // namespace rnd

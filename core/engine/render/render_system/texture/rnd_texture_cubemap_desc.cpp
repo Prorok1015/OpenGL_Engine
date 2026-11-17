@@ -1,12 +1,15 @@
 #include "rnd_texture_cubemap_desc.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_reference.h>
 
 void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boost::json::object& resource)
 {
 	texture_desc::deserialize(system, resource);
 
 	if (auto const* p = resource.if_contains("data")) {
-		if (p->is_string()) {
+		// A reference in either form a file writes it: a path, or {guid, path}. An object with the faces' keys is no
+		// reference (reference_from_json takes "guid" and "path" only), so the two objects cannot be confused (#920).
+		if (res::reference_from_json(*p)) {
 			mode = SOURCE_TYPE::SINGLE_FILE;
 			single_image = system.get_field_desc<res::picture_resource>(*this, *p);
 		} else if (p->is_object()) {
@@ -26,6 +29,18 @@ void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boo
 				cube_faces.back = system.get_field_desc<res::picture_resource>(*this, *f);
 		}
 	}
+	// Refresh inherited handles too: the parent desc can remain cached across a picture reload. A failed or refused one
+	// (#697: no tag) is left as it is.
+	auto refresh = [&](res::res_handle<res::picture_resource>& image) {
+		if (image.is_valid() && !image.has_error() && image.get_tag().is_valid())
+			image = system.get_field_desc<res::picture_resource>(*this, json::value_from(image.get_tag()));
+	};
+	if (mode == SOURCE_TYPE::SINGLE_FILE) {
+		refresh(single_image);
+	} else {
+		for (auto* face : { &cube_faces.right, &cube_faces.left, &cube_faces.bottom,
+			&cube_faces.top, &cube_faces.front, &cube_faces.back }) refresh(*face);
+	}
 }
 
 void rnd::texture_cubemap_desc::serialize(json::object& resource) const
@@ -33,16 +48,17 @@ void rnd::texture_cubemap_desc::serialize(json::object& resource) const
 	texture_desc::serialize(resource);
 
 	if (mode == SOURCE_TYPE::SINGLE_FILE) {
+		single_image.wait();
 		if (single_image.is_ready())
-			resource["data"] = json::value_from(single_image->get_tag());
+			resource["data"] = json::value_from(single_image.get_tag());
 	} else {
 		json::object data_obj;
-		data_obj["right"] = json::value_from(cube_faces.right->get_tag());
-		data_obj["left"] = json::value_from(cube_faces.left->get_tag());
-		data_obj["top"] = json::value_from(cube_faces.top->get_tag());
-		data_obj["bottom"] = json::value_from(cube_faces.bottom->get_tag());
-		data_obj["front"] = json::value_from(cube_faces.front->get_tag());
-		data_obj["back"] = json::value_from(cube_faces.back->get_tag());
+		data_obj["right"] = json::value_from(cube_faces.right.get_tag());
+		data_obj["left"] = json::value_from(cube_faces.left.get_tag());
+		data_obj["top"] = json::value_from(cube_faces.top.get_tag());
+		data_obj["bottom"] = json::value_from(cube_faces.bottom.get_tag());
+		data_obj["front"] = json::value_from(cube_faces.front.get_tag());
+		data_obj["back"] = json::value_from(cube_faces.back.get_tag());
 		resource["data"] = std::move(data_obj);
 	}
 }

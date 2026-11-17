@@ -1,21 +1,132 @@
 #include "edt_inspector_panel.h"
-#include "edt_component_ui_registry.h"
-#include "desc_system.h"
+#include "edt_instance_overrides_view.h"
+#include <snk/editor/edt_inspector_registry.h>
+#include <snk/desc/desc_system.h>
+#include "edt_override_edit.h"
+#include "edt_schema_inspector.h"
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
+#include <format>
 
 namespace edt
 {
+	bool edit_against_parent(scn::prefab_desc::prefab_comp_node& comp, const boost::json::object* parent,
+		const std::function<bool(scn::prefab_desc::prefab_comp_node&)>& renderer, bool apply)
+	{
+		auto scratch = comp;
+		if (parent)
+			scratch.overrides = *parent;
+		if (!renderer(scratch) || !apply)
+			return false;
+		comp.overrides = override_edit::diff(parent ? *parent : boost::json::object{}, scratch.overrides);
+		return true;
+	}
+
 	inspector_panel::inspector_panel()
 		: panel_base("inspector", "Inspector")
 	{
 	}
 
-	void inspector_panel::set_selected_node(scn::prefab_desc::prefab_node* node)
+	void inspector_panel::set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly)
 	{
 		m_selected_node = node;
+		m_map_state.clear();
+		m_readonly = readonly;
+		m_owner = nullptr;
+		m_target.clear();
+		m_ui_sources.clear();
+		invalidate_view();
+		rebuild_parent_cache();
+	}
+
+	void inspector_panel::set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target)
+	{
+		m_owner = owner;
+		m_target = std::move(target);
+		invalidate_view();
+	}
+
+	void inspector_panel::set_view_cache(std::shared_ptr<override_edit::view_cache> cache)
+	{
+		m_view_cache = std::move(cache);
+	}
+
+	void inspector_panel::invalidate_view()
+	{
+		if (m_view_cache) m_view_cache->invalidate();
+	}
+
+	void inspector_panel::rebuild_parent_cache()
+	{
+		m_parent_cache.clear();
+		if (!m_selected_node) return;
+
+		for (auto& [key, comp] : m_selected_node->components) {
+			if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
+				boost::json::object data;
+				comp.parent_desc->serialize(data);
+				m_parent_cache[key] = std::move(data);
+			}
+		}
+	}
+
+	const boost::json::object* inspector_panel::parent_json(const std::string& key, const scn::prefab_desc::prefab_comp_node& comp)
+	{
+		if (auto it = m_parent_cache.find(key); it != m_parent_cache.end())
+			return &it->second;
+		if (!comp.parent_desc.is_valid() || !comp.parent_desc.is_ready())
+			return nullptr;
+		boost::json::object data;
+		comp.parent_desc->serialize(data);
+		return &(m_parent_cache[key] = std::move(data));
+	}
+
+	inspector_panel::component_ui inspector_panel::ui_of(const std::string& component_key) const
+	{
+		const auto it = m_ui_sources.find(component_key);
+		return it == m_ui_sources.end() ? component_ui::none : it->second;
+	}
+
+	namespace
+	{
+		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json,
+			schema_ui::map_edit_state& map_state, const picker::catalog* assets)
+		{
+			schema_ui::context out{ registry, std::move(draw_json), {}, &map_state };
+			out.assets = assets;
+			return out;
+		}
+	}
+
+	bool inspector_panel::render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema)
+	{
+		const desc::schema_registry& registry = descs()->schemas();
+		auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
+			return render_generic_json_value(label, value);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
+		const std::string parent_name = comp.parent_desc.is_valid() ? std::string{ comp.parent_desc.get_tag().view() } : std::string{};
+		return schema_ui::edit_component_marked(schema, registry, parent_json(key, comp), comp.overrides, parent_name, {},
+			[&](boost::json::value& shown, const schema_ui::field_origin& origin) {
+				ctx.origin = &origin;
+				return schema_ui::draw_fields(schema, shown, ctx);
+			});
+	}
+
+	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)
+	{
+		const desc::schema_registry& registry = descs()->schemas();
+		const boost::json::value base = schema_ui::compose(schema, registry, { &base_json }, false);
+		const boost::json::value before = schema_ui::compose(schema, registry, { &scratch.overrides });
+		boost::json::value after = before;
+		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
+			return render_generic_json_value(label, value);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
+		if (!schema_ui::draw_fields(schema, after, ctx))
+			return false;
+		return schema_ui::apply_edit(scratch.overrides, schema, registry, base, before, after) > 0;
 	}
 
 	void inspector_panel::set_on_node_changed(std::function<void()> cb)
@@ -23,20 +134,44 @@ namespace edt
 		m_on_node_changed = std::move(cb);
 	}
 
-	void inspector_panel::set_component_ui_registry(component_ui_registry* registry)
+	void inspector_panel::set_inspector_registry(inspector_registry* registry)
 	{
-		m_ui_registry = registry;
+		m_inspectors = registry;
 	}
 
 	void inspector_panel::set_desc_system(desc::desc_system* desc_system)
 	{
-		m_desc_system = desc_system;
+		m_desc_source = [desc_system] { return desc_system; };
+	}
+
+	void inspector_panel::set_desc_source(std::function<desc::desc_system*()> source)
+	{
+		m_desc_source = std::move(source);
 	}
 
 	void inspector_panel::on_render()
 	{
+		// Play: everything is shown, nothing can be changed (the widgets write into the desc as they are dragged).
+		const bool locked = m_edits_locked && m_edits_locked();
+		if (locked) {
+			ImGui::TextDisabled("Stop Play to edit");
+			ImGui::BeginDisabled();
+		}
+		render_selected();
+		if (locked) ImGui::EndDisabled();
+	}
+
+	void inspector_panel::render_selected()
+	{
 		if (!m_selected_node) {
+			// Selection may be cleared while an edit is still pending (e.g. text field lost focus on click).
+			commit_if_idle();
 			ImGui::TextDisabled("No node selected");
+			return;
+		}
+
+		if (m_owner) {
+			render_override_target();
 			return;
 		}
 
@@ -44,87 +179,374 @@ namespace edt
 		bool changed = false;
 
 		// Header
-		ImGui::TextUnformatted(node.name.c_str());
+		if (m_readonly) {
+			ImGui::TextDisabled("(read-only) %s", node.name.c_str());
+		} else {
+			ImGui::TextUnformatted(node.name.c_str());
+		}
+		if (m_agent_marked && m_agent_marked(node.node_id)) {
+			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "Changed by an agent (not saved or accepted yet)");
+		}
 		ImGui::Separator();
+
+		if (m_readonly) ImGui::BeginDisabled();
 
 		// Transform
 		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (ImGui::DragFloat3("Position", &node.position.x, 0.01f)) changed = true;
-			if (ImGui::DragFloat3("Rotation", &node.rotation.x, 0.5f))  changed = true;
-			if (ImGui::DragFloat3("Scale",    &node.scale.x,    0.01f, 0.001f, 100.f)) changed = true;
+			bool transform_changed = false;
+			if (ImGui::DragFloat3("Position", &node.position.x, 0.01f)) transform_changed = true;
+			if (ImGui::DragFloat3("Rotation", &node.rotation.x, 0.5f))  transform_changed = true;
+			if (ImGui::DragFloat3("Scale",    &node.scale.x,    0.01f, 0.001f, 100.f)) transform_changed = true;
+			if (transform_changed) {
+				node.has_transform = true; // typed values, even 0/0/0, are the user's placement
+				changed = true;
+			}
 		}
+
+		if (m_readonly) ImGui::EndDisabled();
 
 		ImGui::Separator();
 
-		// Components
+		// Components — show only overrides, not merged parent data
 		for (auto& [key, comp] : node.components) {
-			const std::string& header = comp.type_name.empty() ? key : comp.type_name;
+			// Resolve type name for header
+			std::string effective_type = comp.type_name;
+			if (effective_type.empty() && comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
+				effective_type = std::string(comp.parent_desc->get_type());
+			}
+
+			const std::string& header = effective_type.empty() ? key : effective_type;
 			std::string header_id = header + "##" + key;
 			if (ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-				if (m_ui_registry && !comp.type_name.empty()) {
-					auto result = m_ui_registry->invoke(comp.type_name, comp);
-					if (result.has_value()) {
-						changed |= *result;
-						continue;
+				if (m_readonly) ImGui::BeginDisabled();
+				// Field labels repeat across components, so scope their IDs per component.
+				ImGui::PushID(key.c_str());
+
+				// Show source tag if component references a parent desc
+				if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
+					ImGui::TextDisabled("Source: %s", std::string(comp.parent_desc->get_tag().view()).c_str());
+				}
+
+				// Custom renderer from the registry, then the schema, then generic JSON.
+				const bool custom = m_inspectors && !effective_type.empty() && m_inspectors->contains(effective_type);
+				const desc::type_schema* schema = nullptr;
+				if (!custom && descs() && !effective_type.empty()) {
+					schema = descs()->find_schema(effective_type);
+					if (schema && schema->fields.empty())
+						schema = nullptr;
+				}
+
+				if (custom && !comp.overrides.empty()) {
+					m_ui_sources[key] = component_ui::custom;
+					auto result = m_inspectors->invoke(effective_type, comp);
+					if (result.has_value() && *result && !m_readonly) {
+						changed = true;
+					}
+				} else if (custom) {
+					// No overrides yet: the first edit of one field must not make every other field of the parent an override.
+					m_ui_sources[key] = component_ui::custom;
+					const auto renderer = [&](scn::prefab_desc::prefab_comp_node& scratch) {
+						const auto result = m_inspectors->invoke(effective_type, scratch);
+						return result.has_value() && *result;
+					};
+					changed |= edit_against_parent(comp, parent_json(key, comp), renderer, !m_readonly);
+				} else if (schema) {
+					m_ui_sources[key] = component_ui::schema;
+					changed |= render_schema_component(key, comp, *schema);
+				} else {
+					m_ui_sources[key] = component_ui::generic;
+					if (!comp.overrides.empty()) {
+						changed |= render_generic_json(comp.overrides);
+					} else if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
+						// has parent_desc — show cached parent data read-only
+						render_generic_json_readonly(it->second);
 					}
 				}
 
-				// For reference-only components (e.g. prefab instances), show the parent tag
-				if (comp.parent_desc.is_valid() && comp.overrides.empty()) {
-					ImGui::TextDisabled("Source: %s", std::string(comp.parent_desc->get_tag().view()).c_str());
-				} else {
-					render_generic_json(comp.overrides);
-				}
+				ImGui::PopID();
+				if (m_readonly) ImGui::EndDisabled();
 			}
 		}
 
-		ImGui::Separator();
-		draw_add_component_popup();
+		// The records of an instance node, its prefab and the stale ones (#149).
+		if (!m_readonly) {
+			const auto stale = m_view_cache ? m_view_cache->stale(node) : nullptr;
+			changed |= draw_instance_overrides(node, stale.get(), m_instance_hooks, m_instance_ui);
+		}
 
-		if (changed && m_on_node_changed)
+		ImGui::Separator();
+		if (!m_readonly)
+			draw_add_component_popup();
+
+		// Widgets edit the desc live; the ECS push (full world reload) waits until
+		// no item is active, i.e. a drag was released. Checkboxes are never active after
+		// the frame that changed them, so they commit at once.
+		if (changed && !m_readonly)
+			note_edit();
+		commit_if_idle();
+	}
+
+	void inspector_panel::render_override_target()
+	{
+		namespace oe = override_edit;
+		if (!m_view_cache) {
+			ImGui::TextDisabled("Overrides need the ecs assembler");
+			return;
+		}
+		// Records of intermediate prefab levels are part of what the instance edits are based on. Composed once per
+		// selection or edit; the base leaves out the owner's own records of this node, so drags need no recompose.
+		const auto composed_holder = m_view_cache->base(*m_owner, m_target); // held for the whole frame of this panel
+		const std::optional<scn::prefab_desc::prefab_node>& composed = *composed_holder;
+		if (!composed) {
+			ImGui::TextDisabled("%s is not part of %s any more", m_selected_node->name.c_str(), m_owner->name.c_str());
+			return;
+		}
+		const scn::prefab_desc::prefab_node& base = *composed;
+		bool changed = false;
+
+		ImGui::Text("%s", base.name.c_str());
+		ImGui::TextDisabled("part of %s: edits are saved as overrides", m_owner->name.c_str());
+		ImGui::Separator();
+
+		const std::string transform_key{ scn::transform_pseudo_component };
+		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::PushID("transform");
+			glm::vec3 pos, rot, scl;
+			oe::effective_transform(*m_owner, m_target, base, pos, rot, scl);
+			bool edited = false;
+			if (ImGui::DragFloat3("Position", &pos.x, 0.01f)) edited = true;
+			if (ImGui::DragFloat3("Rotation", &rot.x, 0.5f))  edited = true;
+			if (ImGui::DragFloat3("Scale",    &scl.x, 0.01f, 0.001f, 100.f)) edited = true;
+			if (edited) {
+				oe::write_transform(*m_owner, m_target, base, pos, rot, scl);
+				changed = true;
+			}
+			if (oe::has_record(*m_owner, m_target, transform_key) && ImGui::SmallButton("Reset to base")) {
+				oe::reset(*m_owner, m_target, transform_key);
+				changed = true;
+			}
+			ImGui::PopID();
+		}
+
+		ImGui::Separator();
+
+		for (const auto& [key, comp] : base.components) {
+			std::string effective_type = comp.type_name;
+			if (effective_type.empty() && comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
+				effective_type = std::string(comp.parent_desc->get_type());
+			}
+			const std::string& header = effective_type.empty() ? key : effective_type;
+			const std::string header_id = header + "##" + key;
+			if (!ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+				continue;
+
+			ImGui::PushID(key.c_str());
+			const boost::json::object base_json = oe::component_json(comp);
+			// The widgets edit a scratch copy holding what the instance has now; the difference to the base becomes the record.
+			auto scratch = comp;
+			scratch.overrides = oe::effective_component(*m_owner, m_target, key, base_json);
+
+			bool edited = false;
+			bool handled = false;
+			if (m_inspectors && !effective_type.empty()) {
+				if (auto result = m_inspectors->invoke(effective_type, scratch); result.has_value()) {
+					edited = *result;
+					handled = true;
+					m_ui_sources[key] = component_ui::custom;
+				}
+			}
+			if (!handled && descs() && !effective_type.empty()) {
+				const desc::type_schema* schema = descs()->find_schema(effective_type);
+				if (schema && !schema->fields.empty()) {
+					edited = render_schema_override(scratch, base_json, *schema);
+					handled = true;
+					m_ui_sources[key] = component_ui::schema;
+				}
+			}
+			if (!handled) {
+				edited = render_generic_json(scratch.overrides);
+				m_ui_sources[key] = component_ui::generic;
+			}
+
+			if (edited) {
+				oe::write_component(*m_owner, m_target, key, base_json, scratch.overrides, descs(),
+					descs() && !effective_type.empty() ? descs()->find_schema(effective_type) : nullptr);
+				changed = true;
+			}
+			if (oe::has_record(*m_owner, m_target, key) && ImGui::SmallButton("Reset to base")) {
+				oe::reset(*m_owner, m_target, key);
+				changed = true;
+			}
+			ImGui::PopID();
+		}
+
+		if (changed)
+			note_edit();
+		commit_if_idle();
+	}
+
+	void inspector_panel::flush_pending_commit()
+	{
+		if (!m_pending_commit)
+			return;
+		m_pending_commit = false;
+		invalidate_view();
+		if (m_on_node_changed)
 			m_on_node_changed();
 	}
 
-	void inspector_panel::render_generic_json(boost::json::object& obj)
+	void inspector_panel::commit_if_idle()
 	{
+		if (!m_pending_commit || ImGui::IsAnyItemActive())
+			return;
+		m_pending_commit = false;
+		invalidate_view();
+		if (m_on_node_changed)
+			m_on_node_changed();
+	}
+
+	bool inspector_panel::render_generic_json(boost::json::object& obj)
+	{
+		bool changed = false;
 		for (auto& [key, val] : obj) {
 			std::string k(key);
 			if (k.starts_with("__")) continue; // skip meta fields
+			if (k == "children") continue; // shown in hierarchy panel
 
-			if (val.is_double()) {
-				float f = static_cast<float>(val.as_double());
-				if (ImGui::DragFloat(k.c_str(), &f, 0.01f))
-					val = static_cast<double>(f);
-			} else if (val.is_int64()) {
-				int i = static_cast<int>(val.as_int64());
-				if (ImGui::DragInt(k.c_str(), &i))
-					val = static_cast<int64_t>(i);
-			} else if (val.is_string()) {
-				char buf[512];
-				std::string s(val.as_string());
-				strncpy(buf, s.c_str(), sizeof(buf) - 1); // TODO: use std::format_to_n
-				buf[sizeof(buf) - 1] = '\0';
-				if (ImGui::InputText(k.c_str(), buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue))
-					val = std::string(buf);
-			} else if (val.is_array() && val.as_array().size() == 3) {
-				auto& arr = val.as_array();
+			changed |= render_generic_json_value(k, val);
+		}
+		return changed;
+	}
+
+	bool inspector_panel::render_generic_json_value(const std::string& key, boost::json::value& val)
+	{
+		bool changed = false;
+		if (val.is_double()) {
+			float f = static_cast<float>(val.as_double());
+			if (ImGui::DragFloat(key.c_str(), &f, 0.01f)) {
+				val = static_cast<double>(f);
+				changed = true;
+			}
+		} else if (val.is_int64()) {
+			int i = static_cast<int>(val.as_int64());
+			if (ImGui::DragInt(key.c_str(), &i)) {
+				val = static_cast<int64_t>(i);
+				changed = true;
+			}
+		} else if (val.is_uint64()) {
+			int i = static_cast<int>(val.as_uint64());
+			if (ImGui::DragInt(key.c_str(), &i, 1.f, 0)) {
+				val = static_cast<uint64_t>(std::max(0, i));
+				changed = true;
+			}
+		} else if (val.is_string()) {
+			ImGui::TextDisabled("%s: %s", key.c_str(), std::string(val.as_string()).c_str());
+		} else if (val.is_bool()) {
+			bool b = val.as_bool();
+			if (ImGui::Checkbox(key.c_str(), &b)) {
+				val = b;
+				changed = true;
+			}
+		} else if (val.is_array()) {
+			auto& arr = val.as_array();
+			// vec3-like array of 3 numbers
+			if (arr.size() == 3 && arr[0].is_number() && arr[1].is_number() && arr[2].is_number()) {
 				glm::vec3 v{
-					static_cast<float>(arr[0].is_double() ? arr[0].as_double() : 0.0),
-					static_cast<float>(arr[1].is_double() ? arr[1].as_double() : 0.0),
-					static_cast<float>(arr[2].is_double() ? arr[2].as_double() : 0.0)
+					static_cast<float>(arr[0].is_double() ? arr[0].as_double() : static_cast<double>(arr[0].to_number<int64_t>())),
+					static_cast<float>(arr[1].is_double() ? arr[1].as_double() : static_cast<double>(arr[1].to_number<int64_t>())),
+					static_cast<float>(arr[2].is_double() ? arr[2].as_double() : static_cast<double>(arr[2].to_number<int64_t>()))
 				};
-				if (ImGui::DragFloat3(k.c_str(), &v.x, 0.01f)) {
+				if (ImGui::DragFloat3(key.c_str(), &v.x, 0.01f)) {
 					arr[0] = static_cast<double>(v.x);
 					arr[1] = static_cast<double>(v.y);
 					arr[2] = static_cast<double>(v.z);
+					changed = true;
 				}
-			} else if (val.is_bool()) {
-				bool b = val.as_bool();
-				if (ImGui::Checkbox(k.c_str(), &b))
-					val = b;
 			} else {
-				ImGui::TextDisabled("%s: (complex)", k.c_str());
+				// Generic array — show as collapsible list with limit for large arrays
+				constexpr std::size_t max_display = 50;
+				std::string header = std::format("{} ({} items)", key, arr.size());
+				if (ImGui::TreeNode(header.c_str())) {
+					std::size_t count = std::min(arr.size(), max_display);
+					for (std::size_t i = 0; i < count; ++i) {
+						std::string item_key = std::format("[{}]", i);
+						changed |= render_generic_json_value(item_key, arr[i]);
+					}
+					if (arr.size() > max_display) {
+						ImGui::TextDisabled("... and %zu more items", arr.size() - max_display);
+					}
+					ImGui::TreePop();
+				}
 			}
+		} else if (val.is_object()) {
+			if (ImGui::TreeNode(key.c_str())) {
+				auto& obj = val.as_object();
+				for (auto& [k, v] : obj) {
+					std::string sk(k);
+					if (sk.starts_with("__")) continue;
+					changed |= render_generic_json_value(sk, v);
+				}
+				ImGui::TreePop();
+			}
+		} else if (val.is_null()) {
+			ImGui::TextDisabled("%s: null", key.c_str());
+		}
+		return changed;
+	}
+
+	void inspector_panel::render_generic_json_readonly(const boost::json::object& obj)
+	{
+		for (auto const& [key, val] : obj) {
+			std::string k(key);
+			if (k.starts_with("__")) continue;
+			if (k == "children") continue;
+			render_generic_json_value_readonly(k, val);
+		}
+	}
+
+	void inspector_panel::render_generic_json_value_readonly(const std::string& key, const boost::json::value& val)
+	{
+		if (val.is_number()) {
+			double d = val.is_double() ? val.as_double() : static_cast<double>(val.to_number<int64_t>());
+			ImGui::TextDisabled("%s: %.4g", key.c_str(), d);
+		} else if (val.is_string()) {
+			ImGui::TextDisabled("%s: %s", key.c_str(), std::string(val.as_string()).c_str());
+		} else if (val.is_bool()) {
+			ImGui::TextDisabled("%s: %s", key.c_str(), val.as_bool() ? "true" : "false");
+		} else if (val.is_array()) {
+			auto const& arr = val.as_array();
+			if (arr.size() == 3 && arr[0].is_number() && arr[1].is_number() && arr[2].is_number()) {
+				float x = static_cast<float>(arr[0].is_double() ? arr[0].as_double() : static_cast<double>(arr[0].to_number<int64_t>()));
+				float y = static_cast<float>(arr[1].is_double() ? arr[1].as_double() : static_cast<double>(arr[1].to_number<int64_t>()));
+				float z = static_cast<float>(arr[2].is_double() ? arr[2].as_double() : static_cast<double>(arr[2].to_number<int64_t>()));
+				ImGui::TextDisabled("%s: [%.3f, %.3f, %.3f]", key.c_str(), x, y, z);
+			} else {
+				constexpr std::size_t max_display = 50;
+				std::string header = std::format("{} ({} items)", key, arr.size());
+				if (ImGui::TreeNode(header.c_str())) {
+					std::size_t count = std::min(arr.size(), max_display);
+					for (std::size_t i = 0; i < count; ++i) {
+						std::string item_key = std::format("[{}]", i);
+						render_generic_json_value_readonly(item_key, arr[i]);
+					}
+					if (arr.size() > max_display) {
+						ImGui::TextDisabled("... and %zu more items", arr.size() - max_display);
+					}
+					ImGui::TreePop();
+				}
+			}
+		} else if (val.is_object()) {
+			if (ImGui::TreeNode(key.c_str())) {
+				auto const& obj = val.as_object();
+				for (auto const& [k, v] : obj) {
+					std::string sk(k);
+					if (sk.starts_with("__")) continue;
+					render_generic_json_value_readonly(sk, v);
+				}
+				ImGui::TreePop();
+			}
+		} else if (val.is_null()) {
+			ImGui::TextDisabled("%s: null", key.c_str());
 		}
 	}
 
@@ -137,8 +559,8 @@ namespace edt
 
 		if (ImGui::BeginPopup("add_comp_desc")) {
 			bool changed = false;
-			if (m_desc_system) {
-				for (const auto& type_name : m_desc_system->get_component_type_names()) {
+			if (descs()) {
+				for (const auto& type_name : descs()->get_component_type_names()) {
 					if (!m_selected_node->components.count(type_name)) {
 						if (ImGui::MenuItem(type_name.c_str())) {
 							scn::prefab_desc::prefab_comp_node comp;

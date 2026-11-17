@@ -1,0 +1,88 @@
+#pragma once
+#include <cstddef>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <snk/common/snk_api.h>
+#include <snk/project/prj_version.h>
+
+// project.snkproj: the manifest of a game project (ADR-02, docs/roadmap/design/EPIC-42-PLAN.md sec. 2.1).
+namespace prj
+{
+	// 2 (EPIC-58 S4, #754): migrated_with and applied_steps, written by a project migration; format 1 still reads.
+	inline constexpr int k_manifest_format_version = 2;
+	inline constexpr std::string_view k_manifest_file_name = "project.snkproj";
+
+	enum class module_kind
+	{
+		runtime,
+		editor,
+	};
+
+	struct module_ref
+	{
+		std::string name;
+		module_kind kind = module_kind::runtime;
+		bool optional = false;
+	};
+
+	// How far one spawn of prefabs goes (#924, #1031): "prefab_limits" of the manifest. Out of the bounds: the default.
+	struct prefab_spawn_limits
+	{
+		static constexpr std::size_t k_min_nesting_depth = 1;
+		static constexpr std::size_t k_max_nesting_depth = 64;
+		static constexpr std::size_t k_min_nodes_per_spawn = 1'000;
+		static constexpr std::size_t k_max_nodes_per_spawn = 100'000'000;
+
+		// Prefab instances open one inside another; plain children and the file a spawn starts from do not count.
+		std::size_t nesting_depth = 16;
+		// Nodes one spawn or hot reload builds: a few small files that fan out would otherwise build K^depth entities.
+		std::size_t nodes_per_spawn = 1'000'000;
+	};
+
+	struct manifest
+	{
+		int format_version = k_manifest_format_version;
+		std::string name;
+		engine_version engine;
+		// A res:// tag, or empty when the manifest names no start scene.
+		std::string start_scene;
+		// Relative to the project root, highest priority first; the first one receives writes.
+		std::vector<std::filesystem::path> content_roots;
+		std::vector<module_ref> modules;
+		std::vector<std::string> platforms;
+		// Last, so the offsets a game module built earlier inlines stay (SNK_MODULE_API_VERSION 3.1).
+		// A res:// tag of the game actions (input_actions_desc, WORLD_BUS.md 4.1), or empty: the project has none.
+		std::string input_actions;
+	};
+
+	struct manifest_error
+	{
+		// JSONPath-like location of the offending value ("$.modules[1].kind"); empty for file-level errors.
+		std::string json_path;
+		std::string reason;
+	};
+
+	struct manifest_result
+	{
+		std::optional<manifest> data;
+		// Set exactly when data is empty.
+		std::optional<manifest_error> error;
+		// Non-fatal findings, such as unknown fields kept for forward compatibility.
+		std::vector<std::string> warnings;
+		// "prefab_limits" of the manifest. Not in struct manifest: a module reads project_context, whose fields after
+		// the manifest would move (#1031).
+		prefab_spawn_limits prefab_limits;
+	};
+
+	// Strict JSON (no comments, no trailing commas).
+	SNK_API manifest_result parse_manifest(std::string_view json);
+
+	// `path` is the manifest file or the project directory holding project.snkproj. Runs before the resource system
+	// exists (the manifest decides its mount points), so this is a plain capped file read. Warnings are also logged.
+	SNK_API manifest_result load_manifest(const std::filesystem::path& path);
+
+	SNK_API std::string to_string(const manifest_error& error);
+}

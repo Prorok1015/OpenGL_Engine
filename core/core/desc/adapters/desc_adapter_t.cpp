@@ -1,44 +1,137 @@
-#include "desc_adapter_t.h"
-#include "desc_system.h"
-#include "desc_base.hpp"
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/desc_base.hpp>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_json_body.h>
+#include <algorithm>
+#include <format>
+#include <optional>
+#include <stdexcept>
+#include <vector>
 
-core::desc::desc_adapter_t::desc_adapter_t(::res::resource_system& res_system, ::desc::desc_system& desc_system)
-	: m_res_system(res_system)
-	, m_desc_system(desc_system)
+core::desc::desc_adapter_t::desc_adapter_t(::res::resource_system&, ::desc::desc_system& desc_system)
+	: m_desc_system(desc_system)
 {
+}
+
+namespace {
+// The "__parent" of a desc file, if it names one.
+std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object& json_body)
+{
+	const auto* field = json_body.if_contains("__parent");
+	if (!field) {
+		return std::nullopt;
+	}
+
+	::res::tag parent_tag;
+	try {
+		parent_tag = json::value_to<::res::tag>(*field);
+	} catch (const std::exception& e) {
+		throw ::res::load_error(::res::diagnostic_kind::missing_parent, "/__parent",
+			std::format("desc '{}': invalid '__parent': {}", tag.view(), e.what()));
+	}
+	if (parent_tag == tag) {
+		throw ::res::load_error(::res::diagnostic_kind::cycle, "/__parent",
+			std::format("desc '{}': '__parent' cycle through '{}'", tag.view(), parent_tag.view()));
+	}
+	// Refused before it is a dependency, so it is never loaded (#697); the desc fails as with a missing parent.
+	if (std::string why = ::res::reference_problem(parent_tag, tag.protocol()); !why.empty()) {
+		throw ::res::load_error(::res::diagnostic_kind::reference, "/__parent", std::format("desc '{}': {}", tag.view(), why));
+	}
+	return parent_tag;
+}
+
+}
+
+std::vector<::res::res_dep> core::desc::desc_adapter_t::collect_dependencies(const ::res::tag& tag, const std::vector<std::byte>& data) const
+{
+	// Most files have no parent: skip parsing them twice.
+	constexpr std::string_view marker = "\"__parent\"";
+	const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+	if (text.find(marker) == std::string_view::npos) {
+		return {};
+	}
+
+	if (const auto parent_tag = read_parent(tag, ::res::parse_json_body(tag.view(), data))) {
+		auto dep = ::res::make_dep<::desc::desc_base>(*parent_tag);
+		dep.failure_kind = ::res::diagnostic_kind::missing_parent;
+		dep.json_path = "/__parent";
+		return { std::move(dep) };
+	}
+	return {};
 }
 
 std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
 {
-    std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-	json::parse_options options;
-	options.max_depth = 128;
-    auto json_body = json::parse(json_data, {}, options).as_object();
+	return deserialize(tag, data, ::res::res_deps{});
+}
 
-	ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
+std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
+{
+	auto json_body = ::res::parse_json_body(tag.view(), data);
+
+	auto fail = [&tag](std::string_view kind, std::string_view json_path, const std::string& reason) {
+		throw ::res::load_error(kind, json_path, std::format("desc '{}': {}", tag.view(), reason));
+	};
+
+	try {
+		m_desc_system.migrate_tree(json_body, tag.view());
+	} catch (const std::exception& e) {
+		fail(::res::diagnostic_kind::load, "", e.what());
+	}
+
+	if (!json_body.contains("__type") || !json_body.at("__type").is_string()) {
+		fail(::res::diagnostic_kind::unknown_type, "/__type", "missing or non-string '__type' field");
+	}
 
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
     auto instance = m_desc_system.create_instance(type_id, tag);
+	if (!instance) {
+		fail(::res::diagnostic_kind::unknown_type, "/__type", std::format("unknown '__type' '{}'", type_id));
+	}
 
-    if (json_body.contains("__parent")) {
-        auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
-        auto parent = m_res_system.require_sync<::desc::desc_base>(parent_tag);
-        parent.get_sync()->copy_to(*instance);
-    }
+	if (const auto parent_tag = read_parent(tag, json_body)) {
+		const auto parent = deps.get<::desc::desc_base>(*parent_tag);
+		if (!parent) {
+			fail(::res::diagnostic_kind::missing_parent, "/__parent", std::format("failed to load '__parent' '{}'", parent_tag->view()));
+		}
+		parent->copy_to(*instance);
+		instance->set_parent(*parent_tag);
+	}
 
     instance->deserialize(m_desc_system, json_body);
+
+    // Read regardless of protocol: the editor loads level files through a memory:// copy, and that copy must keep the guid.
+    // Only serialize() decides where __guid is written.
+    if (auto guid_it = json_body.find("__guid"); guid_it != json_body.end() && guid_it->value().is_string()) {
+        instance->set_guid(json::value_to<std::string>(guid_it->value()));
+    }
 
     return instance;
 }
 
 std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const
 {
-    const auto& desc_res = ds::polymorphic_pointer_cast<const ::desc::desc_base>(resource);
+    auto desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
-    std::string data = json::serialize(body);
-    std::vector<std::byte> byte_data;
-    byte_data.resize(data.size());
-    std::memcpy(byte_data.data(), data.data(), data.size());
-    return byte_data;
+	m_desc_system.reduce_to_parent(*desc_res, body);
+	// deserialize() requires __type. The instance knows what it was created as; a serialize() inherited from a base
+	// class may name its own type (a texture_2d_desc would come back as texture_desc).
+	if (!desc_res->get_type().empty() || !body.contains("__type")) {
+		body["__type"] = std::string(desc_res->get_type());
+	}
+	// The ID of a file is its .resource (EPIC-57): a __guid the file had is kept until the project's migration takes it
+	// out (assets.ids_drop_desc_guid), and none is ever made up (#772). Only res:// files keep one.
+	if (tag.protocol() == ::res::tag::default_protocol() && !desc_res->get_guid().empty()) {
+		body["__guid"] = desc_res->get_guid();
+	}
+	m_desc_system.stamp_tree(body);
+	json::value file{ std::move(body) };
+	// Only a res:// file is in the asset index; a memory:// copy keeps what it was given. The desc holds a reference as a
+	// path: the guid the file had for it comes from the file itself.
+	if (tag.protocol() == ::res::tag::default_protocol()) {
+		m_desc_system.write_references_over(file, tag);
+	}
+	return m_desc_system.serialize_to_bytes(file);
 }

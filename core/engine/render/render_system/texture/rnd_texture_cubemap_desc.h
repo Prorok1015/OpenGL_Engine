@@ -1,6 +1,6 @@
 #pragma once
-#include "rnd_texture_desc.h"
-#include "resources/res_resource_picture.h"
+#include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/resource/resources/res_resource_picture.h>
 
 namespace rnd
 {
@@ -27,8 +27,7 @@ namespace rnd
 		texture_cubemap_desc() = default;
 		virtual void copy_to(desc::desc_base& other) const override
 		{
-			texture_cubemap_desc& other_desc = static_cast<texture_cubemap_desc&>(other);
-			other_desc = *this;
+			copy_to_same(*this, other);
 		}
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;

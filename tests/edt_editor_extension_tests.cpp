@@ -1,0 +1,996 @@
+#include <boost/test/unit_test.hpp>
+#include <snk/command/cmd_registry.h>
+#include "null_engine_fixture.hpp"
+#include "edt_document_cast.h"
+#include "edt_scene_document.h"
+#include "test_manual_tasks.hpp"
+#include <snk/desc/desc_system.h>
+#include <snk/ecs/ecs_system.h>
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_asset_kind_registry.h>
+#include <snk/application/app_module_loader.hpp>
+#include <snk/application/app_module_source.h>
+#include <snk/core/core_project_modules.h>
+#include <snk/project/prj_project.h>
+#include "test_temp_dir.hpp"
+#include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_editor_extension.h>
+#include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_inspector_registry.h>
+#include <snk/editor/edt_panel_registry.h>
+#include <snk/gui/gui_system.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <filesystem>
+#include <memory>
+#include <optional>
+
+// What a game_editor module (#588) leaves behind: nothing. A module registers only through its context; unloading it
+// puts the registries, the subscriptions and the tasks back as they were, and a module of another API major version
+// is refused by the host's check. The pattern is app_game_module_tests/unloading_leaves_the_root_and_the_base_as_they_were.
+
+namespace {
+
+class probe_panel final : public edt::panel_base
+{
+public:
+	probe_panel() : panel_base("ext.panel", "Ext") {}
+
+protected:
+	void on_render() override {}
+};
+
+struct probe_state
+{
+	int document_changes = 0;
+	int job_bodies_run = 0;
+	int job_results_delivered = 0;
+	int continuations_run = 0;
+	int shutdowns = 0;
+	bool shut_down = false;
+	// What editor_context::module_unload_refusal said from inside the module's own continuation.
+	bool throw_in_shutdown = false;
+	std::string refusal_inside_a_callback;
+	bool saw_refusal_inside_a_callback = false;
+	// A callback of the module that ran after its shutdown_editor: the module's members are gone by then. A callback counts
+	// when its own copy of the module (generation) was shut down already: a reload makes a second copy.
+	int callbacks_after_shutdown = 0;
+	int generations = 0;
+	int shut_down_generation = 0;
+	// The preview the module's asset kind makes (#589): when it is destroyed, and what the editor looked like then.
+	int previews_made = 0;
+	int previews_destroyed = 0;
+	bool preview_destroyed_after_shutdown = false;
+	bool kind_still_registered_when_preview_destroyed = false;
+	int preview_continuations = 0;
+	int preview_continuations_after_destroy = 0;
+};
+
+probe_state* g_probe_state = nullptr;
+edt::editor_context* g_probe_editor = nullptr;
+
+class probe_preview final : public edt::previewable_document
+{
+public:
+	probe_preview(probe_state& state, edt::editor_module_context& context)
+		: m_state(state), m_context(context)
+	{
+		++m_state.previews_made;
+	}
+
+	~probe_preview() override
+	{
+		++m_state.previews_destroyed;
+		m_state.preview_destroyed_after_shutdown = m_state.shut_down;
+		m_state.kind_still_registered_when_preview_destroyed = g_probe_editor && g_probe_editor->asset_kinds().find_preview("ext.preview") != nullptr;
+	}
+
+	std::string_view kind() const override { return "ext.preview"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+
+	void open(const res::tag& source) override
+	{
+		m_source = source;
+		m_open = true;
+		probe_state& state = m_state;
+		m_context.run(ds::lane::compute, ds::task_desc{ "preview task" }, [](ds::task_context&) {})
+			.then_main(m_context.tasks(), [&state](ds::task_result<void>&) {
+				if (state.previews_destroyed > 0) ++state.preview_continuations_after_destroy;
+				else ++state.preview_continuations;
+			});
+	}
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+
+private:
+	probe_state& m_state;
+	edt::editor_module_context& m_context;
+	std::string m_title = "probe preview";
+	res::tag m_source;
+	bool m_open = false;
+};
+
+class probe_extension final : public edt::editor_extension
+{
+public:
+	explicit probe_extension(probe_state& state) : m_state(state) {}
+	probe_extension() : m_state(*g_probe_state) {}
+
+	std::string_view name() const override { return "ext_editor"; }
+
+	void register_editor(edt::editor_module_context& context) override
+	{
+		m_generation = ++m_state.generations;
+		const int generation = m_generation;
+		edt::panel_desc panel;
+		panel.id = "ext.panel";
+		panel.title = "Ext";
+		panel.open_by_default = false;
+		panel.show_in_view_menu = false;
+		panel.panel = std::make_shared<probe_panel>();
+		context.add_panel(std::move(panel));
+
+		context.add_menu("Ext");
+		edt::action_desc action;
+		action.id = "ext.run";
+		action.label = "Run";
+		action.menu_path = "Ext";
+		action.execute = edt::no_args([] {});
+		context.add_action(std::move(action));
+
+		context.add_inspector("ext_component", [](scn::prefab_desc::prefab_comp_node&) { return false; });
+
+		edt::module_asset_kind_desc kind;
+		kind.id = "ext.kind";
+		kind.suffix = ".ext";
+		kind.open = [](edt::editor_module_context&, const res::tag&) {};
+		context.add_asset_kind(std::move(kind));
+
+		edt::module_asset_preview_desc preview;
+		preview.id = "ext.preview";
+		preview.suffix = ".ext";
+		preview.make_preview = [&state = m_state](edt::editor_module_context& module) -> std::unique_ptr<edt::previewable_document> {
+			return std::make_unique<probe_preview>(state, module);
+		};
+		context.add_asset_preview(std::move(preview));
+
+		edt::problem item;
+		item.message = "from the module";
+		context.set_problems("ext.problems", { item });
+		context.subscribe(&edt::editor_events::document_changed, [this](edt::document_id, std::uint64_t) { ++m_state.document_changes; });
+
+		probe_state& state = m_state;
+		context.start_job(ds::lane::compute, ds::task_desc{ "probe job" },
+			[&state](ds::task_context&) {
+				++state.job_bodies_run;
+				return 0;
+			},
+			[&state, generation](ds::task_result<int>&) {
+				++state.job_results_delivered;
+				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
+			});
+
+		context.run(ds::lane::compute, ds::task_desc{ "probe task" }, [](ds::task_context&) {})
+			.then_main(context.tasks(), [&state, generation](ds::task_result<void>&) {
+				++state.continuations_run;
+				if (state.shut_down_generation >= generation) ++state.callbacks_after_shutdown;
+				if (g_probe_editor) {
+					state.refusal_inside_a_callback = g_probe_editor->module_unload_refusal();
+					state.saw_refusal_inside_a_callback = true;
+				}
+			});
+	}
+
+	void shutdown_editor() override
+	{
+		++m_state.shutdowns;
+		m_state.shut_down = true;
+		m_state.shut_down_generation = m_generation;
+		if (m_state.throw_in_shutdown) throw std::runtime_error("shutdown_editor failed");
+	}
+
+private:
+	probe_state& m_state;
+	int m_generation = 0;
+};
+
+struct ext_game_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override {}
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override {}
+	std::string_view name() const override { return "ext_game"; }
+};
+
+// The host's own "editor" module, which a game_editor depends on.
+struct stub_editor_module final : app::modules::module_interface
+{
+	void register_services(ds::app_data_storage&) override {}
+	void initialize_services(ds::app_data_storage&) override {}
+	void shutdown_services(ds::app_data_storage&) override {}
+	std::string_view name() const override { return "editor"; }
+};
+
+}
+
+SNK_DECLARE_EDITOR_MODULE_PREFIXED(ext_probe_, probe_extension)
+SNK_DECLARE_MODULE_PREFIXED(ext_game_, ext_game_module)
+
+namespace {
+
+// What a module built with these headers exports as snk_editor_layout_key.
+std::uint64_t current_editor_key() { return edt::editor_layout_key(); }
+
+struct extension_fixture : test_util::null_engine_fixture
+{
+	extension_fixture()
+		: null_engine_fixture(false)
+		, gui(nullptr, nullptr)
+		, services{ .ctx_manager = storage.require_shared<scn::context_manager>(),
+			.base_descs = &storage.require<desc::desc_system>(), .base_resources = &storage.require<res::resource_system>(),
+			.base_assembler = &storage.require<scn::ecs_assembler>(), .base_sfactory = &storage.require<ecs::system_factory>() }
+		, context(std::make_unique<edt::editor_context>(
+			storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
+			gui, services, tasks, commands, scene))
+	{
+		host_data.attach(std::shared_ptr<edt::editor_context>(context.get(), [](edt::editor_context*) {}));
+		g_probe_state = &state;
+		g_probe_editor = context.get();
+		loader.load(std::make_unique<stub_editor_module>(), host_data);
+	}
+
+	~extension_fixture()
+	{
+		loader.shutdown_all_services(host_data);
+		g_probe_state = nullptr;
+		g_probe_editor = nullptr;
+		context.reset();
+	}
+
+	// A project whose manifest names a game module and a game_editor, and a host that loads them from compiled-in entries.
+	// `refusal_reason` (optional) gets what the host's check said about the module it refused.
+	std::unique_ptr<core::project_module_host> make_host(std::uint32_t (*reported_editor_api)() = nullptr, std::string* refusal_reason = nullptr,
+		std::uint64_t (*reported_editor_key)() = nullptr)
+	{
+		std::filesystem::create_directories(dir.path() / "game");
+		prj::project_context project;
+		project.root = std::filesystem::canonical(dir.path() / "game");
+		project.data.name = "Game";
+		prj::module_ref game;
+		game.name = "ext_game";
+		prj::module_ref editor;
+		editor.name = "ext_editor";
+		editor.kind = prj::module_kind::editor;
+		project.data.modules = { game, editor };
+		host_data.construct<prj::project_context>(std::move(project));
+		core::project_modules_options options;
+		options.with_editor_modules = true;
+		options.check_editor_module = [refusal_reason](const app::modules::module_entry& entry) {
+			std::string reason = edt::check_editor_api_version(entry.editor_api_version, entry.editor_layout_key);
+			if (refusal_reason && !reason.empty()) *refusal_reason = reason;
+			return reason;
+		};
+		options.editor_unload_refusal = [this] { return context->module_unload_refusal(); };
+		app::modules::module_entry editor_entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
+		if (reported_editor_api) editor_entry.editor_api_version = reported_editor_api;
+		if (reported_editor_key) editor_entry.editor_layout_key = reported_editor_key;
+		options.compiled_in.emplace("ext_editor", editor_entry);
+		options.compiled_in.emplace("ext_game", SNK_MODULE_ENTRY(ext_game_));
+		return std::make_unique<core::project_module_host>(loader, host_data, std::move(options));
+	}
+
+	struct counts
+	{
+		std::size_t panels = 0;
+		std::size_t actions = 0;
+		std::size_t menus = 0;
+		std::size_t inspectors = 0;
+		std::size_t asset_kinds = 0;
+		std::size_t document_subscribers = 0;
+
+		bool operator==(const counts&) const = default;
+	};
+
+	counts snapshot()
+	{
+		return { context->panels().size(), context->actions().size(), context->actions().menus().size(),
+			context->inspectors().size(), context->asset_kinds().size(), context->events().document_changed.subscriber_count() };
+	}
+
+	gui::gui_system gui;
+	cmd::command_registry commands;
+	edt::editor_services services;
+	edt::scene_document scene;
+	std::unique_ptr<edt::editor_context> context;
+	ds::app_data_storage host_data;
+	app::modules::module_loader loader;
+	test_util::temp_dir dir{ "edt_editor_extension" };
+	probe_state state;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtEditorExtensionTests, extension_fixture)
+
+BOOST_AUTO_TEST_CASE(LoadingAModule_RegistersThroughItsContext_AndUnloadingLeavesTheEditorAsItWas)
+{
+	const counts before = snapshot();
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		module.initialize_services(host_data);
+
+		BOOST_CHECK(context->panels().contains("ext.panel"));
+		BOOST_CHECK(context->actions().find("ext.run") != nullptr);
+		BOOST_CHECK(context->asset_kinds().find("ext.kind") != nullptr);
+		BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") != nullptr);
+		BOOST_CHECK_EQUAL(context->panels().size(), before.panels + 1);
+		BOOST_CHECK_EQUAL(context->actions().size(), before.actions + 1);
+		BOOST_CHECK_EQUAL(context->inspectors().size(), before.inspectors + 1);
+		BOOST_CHECK_EQUAL(context->asset_kinds().size(), before.asset_kinds + 1);
+		BOOST_CHECK_EQUAL(context->events().document_changed.subscriber_count(), before.document_subscribers + 1);
+
+		module.shutdown_services(host_data);
+		BOOST_CHECK_EQUAL(state.shutdowns, 1);
+	}
+	BOOST_CHECK(snapshot() == before);
+	BOOST_CHECK(context->actions().find("ext.run") == nullptr);
+	BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleLoadedAgain_RegistersWithoutClashingWithTheFirstLoad)
+{
+	const counts before = snapshot();
+	for (int round = 0; round < 2; ++round) {
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_CHECK(context->panels().contains("ext.panel"));
+		module.shutdown_services(host_data);
+	}
+	BOOST_CHECK(snapshot() == before);
+}
+
+BOOST_AUTO_TEST_CASE(TheJobsOfALoadedModule_Run_SoTheUnloadTestBelowCanFail)
+{
+	probe_extension module(state);
+	module.register_services(host_data);
+	test_util::pump(tasks);
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.job_bodies_run, 1);
+	BOOST_CHECK_EQUAL(state.job_results_delivered, 1);
+	BOOST_CHECK_EQUAL(state.continuations_run, 1);
+	module.shutdown_services(host_data);
+}
+
+BOOST_AUTO_TEST_CASE(TheTasksOfAModule_NeverStartAfterAnUnload_WhenItIsUnloadedBeforeTheyRan)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		module.shutdown_services(host_data);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
+	BOOST_CHECK_EQUAL(state.job_results_delivered, 0);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AResultQueuedBeforeTheUnload_IsNotDeliveredToTheModuleAfterItsShutdown)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		// The bodies ran on the pool; their results wait in the main queue when the module goes.
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.job_bodies_run, 1);
+		BOOST_REQUIRE_EQUAL(state.continuations_run, 0);
+		module.shutdown_services(host_data);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+	BOOST_CHECK_EQUAL(state.shutdowns, 1);
+}
+
+// #1061: job_service::launch's continuation is the module's code (a template it instantiates), held by the service's own
+// lifetime but queued with the module's task as its origin, so the unload runs it (run_pending_main) before the code goes.
+BOOST_AUTO_TEST_CASE(AJobOfAModule_IsRetiredInsideTheUnload_SoNoContinuationOfItsCodeIsLeftInTheMainQueue)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	int finished = 0;
+	edt::connection on_finished = context->events().job_finished.subscribe(
+		[&finished](std::uint64_t, edt::job_status, const std::string&, const std::optional<boost::json::value>&) { ++finished; });
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.job_bodies_run, 1);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		BOOST_REQUIRE_EQUAL(finished, 0);
+		module.shutdown_services(host_data);
+		// No drain_main in between: only the unload itself can have run the continuation.
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+		BOOST_CHECK_EQUAL(finished, 1);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(finished, 1);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AJobOfAModuleThatNeverRan_IsAlsoRetiredInsideTheUnload)
+{
+	const std::size_t running_before = context->jobs().running_count();
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_REQUIRE_EQUAL(context->jobs().running_count(), running_before + 1);
+		module.shutdown_services(host_data);
+		BOOST_CHECK_EQUAL(context->jobs().running_count(), running_before);
+	}
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.job_bodies_run, 0);
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+}
+
+BOOST_AUTO_TEST_CASE(APreviewOfAModule_IsDestroyedAtUnload_AfterItsTasksStoppedAndBeforeItsKindIsGone_AndNothingArrivesAfterwards)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		edt::previewable_document* preview = context->documents().open_preview(res::tag::make("things/a.ext"));
+		BOOST_REQUIRE(preview != nullptr);
+		BOOST_REQUIRE(preview->is_open());
+		BOOST_REQUIRE_EQUAL(state.previews_made, 1);
+		// The preview's task ran on the pool; its continuation waits in the main queue when the module goes.
+		while (tasks.run_one(ds::lane::compute)) {}
+		BOOST_REQUIRE_EQUAL(state.preview_continuations, 0);
+		module.shutdown_services(host_data);
+	}
+	BOOST_CHECK_EQUAL(state.previews_destroyed, 1);
+	BOOST_CHECK_MESSAGE(state.preview_destroyed_after_shutdown, "the preview went before the module's tasks were stopped");
+	BOOST_CHECK_MESSAGE(state.kind_still_registered_when_preview_destroyed, "the preview went after its registration was gone");
+	BOOST_CHECK(context->asset_kinds().find_preview("ext.preview") == nullptr);
+	BOOST_CHECK(context->documents().preview() == nullptr);
+
+	test_util::pump(tasks);
+	BOOST_CHECK_EQUAL(state.preview_continuations_after_destroy, 0);
+}
+
+BOOST_AUTO_TEST_CASE(ASubscriptionOfAModule_IsGoneAfterUnload_SoTheEventNoLongerReachesIt)
+{
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		context->events().document_changed.emit(edt::document_id{}, 1);
+		BOOST_CHECK_EQUAL(state.document_changes, 1);
+		module.shutdown_services(host_data);
+	}
+	context->events().document_changed.emit(edt::document_id{}, 2);
+	BOOST_CHECK_EQUAL(state.document_changes, 1);
+}
+
+BOOST_AUTO_TEST_CASE(AScope_CountsWhatItKeeps_AndClearsItAll)
+{
+	edt::registration_scope scope(tasks);
+	edt::panel_desc panel;
+	panel.id = "ext.panel";
+	panel.title = "Ext";
+	panel.open_by_default = false;
+	panel.show_in_view_menu = false;
+	panel.panel = std::make_shared<probe_panel>();
+	const std::size_t panels_before = context->panels().size();
+	scope.keep(context->panels().add(std::move(panel)));
+	scope.keep(context->events().document_changed.subscribe([](edt::document_id, std::uint64_t) {}));
+	BOOST_CHECK_EQUAL(scope.kept_count(), 2u);
+	BOOST_CHECK_EQUAL(context->panels().size(), panels_before + 1);
+	scope.clear();
+	BOOST_CHECK_EQUAL(scope.kept_count(), 0u);
+	BOOST_CHECK_EQUAL(context->panels().size(), panels_before);
+}
+
+BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItCanServe)
+{
+	const std::uint32_t host = SNK_EDITOR_API_VERSION;
+	static std::uint32_t reported = 0;
+	reported = host;
+	BOOST_CHECK(edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key).empty());
+
+	// 2.0 (#663) closed the paths past the scope: a module built against 1.x calls what is gone and is refused, whatever its minor.
+	for (const std::uint32_t old_version : { 0x0001'0000u, 0x0001'0001u, 0x0001'0002u }) {
+		reported = old_version;
+		const std::string older_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
+		BOOST_CHECK_MESSAGE(older_major.find("rebuild the project") != std::string::npos, older_major);
+		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("3.x") != std::string::npos, older_major);
+	}
+
+	reported = host + (1u << 16);
+	const std::string newer_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
+	BOOST_CHECK_MESSAGE(newer_major.find("update the editor") != std::string::npos, newer_major);
+
+	reported = host + 1u;
+	const std::string newer_minor = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
+	BOOST_CHECK_MESSAGE(newer_minor.find("minor") != std::string::npos, newer_minor);
+
+	BOOST_CHECK(!edt::check_editor_api_version(nullptr, &current_editor_key).empty());
+}
+
+// #969: a module of the right version is refused without the editor layout key, or with another one (another layout of
+// the editor's types, another revision of an editor interface, another ImGui).
+BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleWithoutTheEditorKeyOrWithAnotherOne)
+{
+	const auto version = []() -> std::uint32_t { return SNK_EDITOR_API_VERSION; };
+	BOOST_CHECK(edt::check_editor_api_version(version, &current_editor_key).empty());
+
+	const std::string missing = edt::check_editor_api_version(version, nullptr);
+	BOOST_CHECK_MESSAGE(missing.find("snk_editor_layout_key") != std::string::npos, missing);
+	BOOST_CHECK_MESSAGE(missing.find("rebuild the project") != std::string::npos, missing);
+
+	const std::string other = edt::check_editor_api_version(version, []() -> std::uint64_t { return edt::editor_layout_key() ^ 1u; });
+	BOOST_CHECK_MESSAGE(other.find("another layout") != std::string::npos, other);
+	BOOST_CHECK_MESSAGE(other.find("rebuild the project") != std::string::npos, other);
+
+	// A module of editor API 2.x has no key: the version tells it why.
+	const std::string old = edt::check_editor_api_version([]() -> std::uint32_t { return 0x0002'0000u; }, nullptr);
+	BOOST_CHECK_MESSAGE(old.find("2.0") != std::string::npos && old.find("3.x") != std::string::npos, old);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleWithAnotherEditorKey_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
+{
+	const counts before = snapshot();
+	std::string reason;
+	auto host = make_host(nullptr, &reason, []() -> std::uint64_t { return edt::editor_layout_key() ^ 1u; });
+	BOOST_REQUIRE(host->load_all().loaded == std::vector<std::string>{ "ext_game" });
+
+	const auto report = host->load_editor_modules();
+	BOOST_CHECK_MESSAGE(reason.find("rebuild the project") != std::string::npos, reason);
+	BOOST_CHECK(report.loaded.empty());
+	BOOST_CHECK(report.refused == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(!host->has_editor_modules());
+	BOOST_CHECK_EQUAL(state.generations, 0);
+	BOOST_CHECK(snapshot() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AModuleBuiltAgainstEditorApi1_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)
+{
+	const counts before = snapshot();
+	std::string reason;
+	auto host = make_host([]() -> std::uint32_t { return 0x0001'0002u; }, &reason);
+	BOOST_REQUIRE(host->load_all().loaded == std::vector<std::string>{ "ext_game" });
+
+	const auto report = host->load_editor_modules();
+	BOOST_CHECK_MESSAGE(reason.find("rebuild the project") != std::string::npos, reason);
+	BOOST_CHECK(report.loaded.empty());
+	BOOST_CHECK(report.refused == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(!host->has_editor_modules());
+	BOOST_CHECK_EQUAL(state.generations, 0);
+	BOOST_CHECK(snapshot() == before);
+}
+
+BOOST_AUTO_TEST_CASE(ARefusedModule_TouchesNothing_SoTheGameKeepsWorking)
+{
+	const counts before = snapshot();
+	static std::uint32_t reported = SNK_EDITOR_API_VERSION + (1u << 16);
+	const std::string reason = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
+	BOOST_CHECK(!reason.empty());
+	BOOST_CHECK(snapshot() == before);
+}
+
+BOOST_AUTO_TEST_CASE(AGameEditorLoadedThroughTheHost_RegistersAfterTheGame_AndUnloadsToTheSameEditor)
+{
+	const counts before = snapshot();
+	auto host = make_host();
+	const auto game_report = host->load_all();
+	BOOST_REQUIRE(game_report.loaded == std::vector<std::string>{ "ext_game" });
+	BOOST_CHECK(!context->panels().contains("ext.panel"));
+
+	const auto editor_report = host->load_editor_modules();
+	BOOST_REQUIRE(editor_report.loaded == std::vector<std::string>{ "ext_editor" });
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK_EQUAL(context->problems().sources().size(), 1u);
+
+	BOOST_CHECK(host->unload_editor_modules().empty());
+	BOOST_CHECK(snapshot() == before);
+	BOOST_CHECK(context->problems().sources().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AGameReload_RegistersTheGameEditorAgain_WithoutClashingWithTheOldEntries)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const counts loaded = snapshot();
+
+	const auto report = host->reload("ext_game",
+		std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)),
+		[] { return std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)); });
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "reloaded");
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
+}
+
+// #664: one game_editor module reloads without the game module; what the old copy registered goes, the new copy's replaces it.
+BOOST_AUTO_TEST_CASE(AnEditorModuleReloadedOnItsOwn_LeavesTheEditorAsItWas_WithoutDuplicatesOrCallbacksOfTheOldCopy)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	// The old copy's task bodies run, its main-thread continuation and job result wait in the queue through the reload.
+	while (tasks.run_one(ds::lane::compute) || tasks.run_one(ds::lane::io)) {}
+	BOOST_REQUIRE_EQUAL(state.continuations_run, 0);
+	const counts loaded = snapshot();
+	const int shutdowns_before = state.shutdowns;
+	const std::size_t problem_sources = context->problems().sources().size();
+
+	const auto source = [] { return std::make_unique<app::modules::static_module_source>("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_)); };
+	const auto report = host->reload("ext_editor", source(), source);
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "reloaded");
+	BOOST_CHECK_EQUAL(state.shutdowns, shutdowns_before + 1);
+	BOOST_CHECK(snapshot() == loaded);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK_EQUAL(context->problems().sources().size(), problem_sources);
+	BOOST_CHECK(loader.state("ext_game") == app::modules::module_state::initialized);
+	BOOST_CHECK_EQUAL(state.generations, 2);
+
+	test_util::pump(tasks);
+	// What the old copy had queued ran before its shutdown (or was dropped); nothing of it ran after, and the new copy's own work ran.
+	BOOST_CHECK_EQUAL(state.callbacks_after_shutdown, 0);
+	BOOST_CHECK_GE(state.job_results_delivered, 1);
+	BOOST_CHECK_GE(state.continuations_run, 1);
+	context->events().document_changed.emit(edt::document_id{}, 7);
+	BOOST_CHECK_EQUAL(state.document_changes, 1); // the new copy's handler only: the old one is gone with its scope
+}
+
+// #663: a rebuilt game_editor made against editor API 1.x is not taken either: the reload says why, and the running copy stays.
+BOOST_AUTO_TEST_CASE(AReloadToAnEditorModuleBuiltAgainstEditorApi1_IsRefusedWithTheRebuildMessage_AndTheRunningCopyStays)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const counts loaded = snapshot();
+	const int shutdowns_before = state.shutdowns;
+
+	const auto old_build = [] {
+		app::modules::module_entry entry = SNK_EDITOR_MODULE_ENTRY(ext_probe_);
+		entry.editor_api_version = []() -> std::uint32_t { return 0x0001'0002u; };
+		return std::make_unique<app::modules::static_module_source>("ext_editor", entry);
+	};
+	const auto current_build = [] { return std::make_unique<app::modules::static_module_source>("ext_editor", SNK_EDITOR_MODULE_ENTRY(ext_probe_)); };
+	const auto report = host->reload("ext_editor", old_build(), current_build);
+
+	BOOST_CHECK_EQUAL(core::to_string(report.status), "refused");
+	BOOST_CHECK_MESSAGE(report.message.find("rebuild the project") != std::string::npos, report.message);
+	BOOST_CHECK_EQUAL(state.shutdowns, shutdowns_before);
+	BOOST_CHECK(snapshot() == loaded);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+}
+
+BOOST_AUTO_TEST_CASE(UnloadingFromInsideAModuleCallback_IsRefusedNotAttempted)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	test_util::pump(tasks);
+	BOOST_REQUIRE(state.saw_refusal_inside_a_callback);
+	BOOST_CHECK(!state.refusal_inside_a_callback.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+	BOOST_CHECK(host->unload_editor_modules().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AShutdownEditorThatThrows_StillClearsTheScopeAndLeavesNothingTracked)
+{
+	const counts before = snapshot();
+	state.throw_in_shutdown = true;
+	{
+		probe_extension module(state);
+		module.register_services(host_data);
+		BOOST_CHECK_THROW(module.shutdown_services(host_data), std::runtime_error);
+	}
+	BOOST_CHECK(snapshot() == before);
+	BOOST_CHECK(context->problems().sources().empty());
+	// Reads a dangling scope pointer under ASan if the module were still tracked.
+	BOOST_CHECK(context->module_unload_refusal().empty());
+	BOOST_CHECK_EQUAL(state.shutdowns, 1);
+}
+
+namespace {
+
+class gated_panel final : public edt::panel_base
+{
+public:
+	gated_panel(edt::editor_context& editor, std::string& seen) : panel_base("ext.gated", "Gated"), m_editor(editor), m_seen(seen) {}
+
+protected:
+	void on_render() override {}
+	void on_hidden() override { m_seen = m_editor.module_unload_refusal(); }
+
+private:
+	edt::editor_context& m_editor;
+	std::string& m_seen;
+};
+
+}
+
+// #663: what the module registered through editor_module_context counts while it runs, so a reload asked from inside it is
+// refused (the unload would destroy the code that runs it), and the count is back to zero afterwards.
+struct callback_scope_fixture
+{
+	explicit callback_scope_fixture(extension_fixture& host)
+		: editor(*host.context), scope(host.tasks), module_context(editor, scope)
+	{
+		editor.track_module_scope(scope);
+	}
+
+	~callback_scope_fixture()
+	{
+		scope.clear();
+		editor.untrack_module_scope(scope);
+	}
+
+	edt::editor_context& editor;
+	edt::registration_scope scope;
+	edt::editor_module_context module_context;
+};
+
+BOOST_AUTO_TEST_CASE(APanelOfAModule_CountsWhileItIsDrawn)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::panel_desc panel;
+	panel.id = "ext.gated";
+	panel.title = "Gated";
+	panel.open_by_default = false;
+	panel.panel = std::make_shared<gated_panel>(*context, seen);
+	module.module_context.add_panel(std::move(panel));
+
+	context->panels().render_all();
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnEventHandlerOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	module.module_context.subscribe(&edt::editor_events::document_changed, [&](edt::document_id, std::uint64_t) {
+		seen = context->module_unload_refusal();
+	});
+
+	context->events().document_changed.emit(edt::document_id{}, 1);
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnActionOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::action_desc action;
+	action.id = "ext.gated_action";
+	action.label = "Gated";
+	action.expose_as_tool = false;
+	action.execute = [&](const boost::json::value&) {
+		seen = context->module_unload_refusal();
+		return edt::action_result::success();
+	};
+	module.module_context.add_action(std::move(action));
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.gated_action", boost::json::object{});
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnInspectorRendererOfAModule_CountsWhileItRuns)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	module.module_context.add_inspector("ext_gated_type", [&](scn::prefab_desc::prefab_comp_node&) {
+		seen = context->module_unload_refusal();
+		return false;
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	[[maybe_unused]] const auto drawn = context->inspectors().invoke("ext_gated_type", node);
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnAssetKindOfAModule_CountsWhileItOpens)
+{
+	callback_scope_fixture module(*this);
+	std::string seen;
+	edt::module_asset_kind_desc kind;
+	kind.id = "ext_gated_kind";
+	kind.suffix = ".ext_gated";
+	kind.open = [&](edt::editor_module_context&, const res::tag&) { seen = context->module_unload_refusal(); };
+	module.module_context.add_asset_kind(std::move(kind));
+
+	const edt::asset_kind_desc* registered = context->asset_kinds().kind_for_open("a.ext_gated");
+	BOOST_REQUIRE(registered != nullptr);
+	registered->open(*context, res::tag{ "res://a.ext_gated" });
+	BOOST_CHECK(!seen.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackThatThrows_ReleasesTheCountAndALaterUnloadIsNotRefused)
+{
+	callback_scope_fixture module(*this);
+	module.module_context.add_inspector("ext_throwing_type", [](scn::prefab_desc::prefab_comp_node&) -> bool {
+		throw std::runtime_error("callback failed");
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	BOOST_CHECK_THROW(static_cast<void>(context->inspectors().invoke("ext_throwing_type", node)), std::runtime_error);
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackOfTheEditor_IsNotCounted)
+{
+	callback_scope_fixture module(*this);
+	std::string seen = "unset";
+	auto own = context->inspectors().add("editor_own_type", [&](scn::prefab_desc::prefab_comp_node&) {
+		seen = context->module_unload_refusal();
+		return false;
+	});
+
+	scn::prefab_desc::prefab_comp_node node;
+	[[maybe_unused]] const auto drawn = context->inspectors().invoke("editor_own_type", node);
+	BOOST_CHECK(seen.empty());
+}
+
+namespace {
+
+class gated_preview final : public edt::previewable_document
+{
+public:
+	gated_preview(edt::editor_context& editor, std::vector<std::string>& seen) : m_editor(editor), m_seen(seen) {}
+
+	std::string_view kind() const override { return "gated_preview"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return note(); }
+	std::uint64_t generation() const override { return 0; }
+	bool can_save() const override { return true; }
+	edt::save_result save() override { note(); return edt::save_result::ok(); }
+	bool undo() override { return note(); }
+	void open(const res::tag& source) override { note(); m_source = source; m_open = true; }
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+
+private:
+	bool note() const
+	{
+		m_seen.push_back(m_editor.module_unload_refusal());
+		return false;
+	}
+
+	edt::editor_context& m_editor;
+	std::vector<std::string>& m_seen;
+	std::string m_title = "gated";
+	res::tag m_source{};
+	bool m_open = false;
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(APreviewOfAModule_CountsInItsFactoryAndInEveryCallTheEditorMakesIntoItsDocument)
+{
+	// Declared before the module: the editor asks the document (is_dirty, close) when the module's preview is removed at unload.
+	std::vector<std::string> seen;
+	std::string made_while;
+	callback_scope_fixture module(*this);
+	edt::module_asset_preview_desc preview;
+	preview.id = "ext.gated_preview";
+	preview.suffix = ".gprev";
+	preview.make_preview = [&](edt::editor_module_context&) -> std::unique_ptr<edt::previewable_document> {
+		made_while = context->module_unload_refusal();
+		return std::make_unique<gated_preview>(*context, seen);
+	};
+	module.module_context.add_asset_preview(std::move(preview));
+
+	edt::previewable_document* document = context->documents().open_preview(res::tag{ "res://a.gprev" });
+	BOOST_REQUIRE(document != nullptr);
+	BOOST_CHECK(!made_while.empty());
+	BOOST_CHECK(document->save().saved);
+	BOOST_CHECK(!document->undo());
+	BOOST_CHECK(!document->is_dirty());
+	BOOST_REQUIRE_GE(seen.size(), 4u); // open, save, undo, is_dirty
+	for (const std::string& refusal : seen) BOOST_CHECK(!refusal.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACommandOfAModule_CountsInItsInvokeAndItsMenuActivation)
+{
+	callback_scope_fixture module(*this);
+	std::string invoked_while;
+	std::string activated_while;
+	cmd::command_desc command;
+	command.id = "ext.gated_command";
+	command.args_schema = cmd::no_args_schema();
+	command.result_schema = cmd::no_args_schema();
+	command.expose_as_tool = false;
+	command.invoke = [&](const cmd::call&) {
+		invoked_while = context->module_unload_refusal();
+		return cmd::result::success();
+	};
+	edt::action_ui ui;
+	ui.label = "Gated";
+	ui.activate = [&] { activated_while = context->module_unload_refusal(); };
+	module.module_context.add_action(std::move(command), std::move(ui));
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.gated_command", boost::json::object{});
+	BOOST_CHECK(!invoked_while.empty());
+	context->actions().activate("ext.gated_command");
+	BOOST_CHECK(!activated_while.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACallbackOfAModuleThatCallsAnother_KeepsTheCountUntilTheOuterOneEnds)
+{
+	callback_scope_fixture module(*this);
+	std::string inner_while;
+	std::string outer_after_inner;
+	const auto add = [&](const char* id, edt::action_fn body) {
+		edt::action_desc action;
+		action.id = id;
+		action.label = id;
+		action.expose_as_tool = false;
+		action.execute = std::move(body);
+		module.module_context.add_action(std::move(action));
+	};
+	add("ext.inner", [&](const boost::json::value&) {
+		inner_while = context->module_unload_refusal();
+		return edt::action_result::success();
+	});
+	add("ext.outer", [&](const boost::json::value&) {
+		[[maybe_unused]] const auto result = context->actions().invoke("ext.inner", boost::json::object{});
+		outer_after_inner = context->module_unload_refusal();
+		return edt::action_result::success();
+	});
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.outer", boost::json::object{});
+	BOOST_CHECK(!inner_while.empty());
+	BOOST_CHECK(!outer_after_inner.empty());
+	BOOST_CHECK(context->module_unload_refusal().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AReloadAskedFromAModuleAction_IsRefusedAndTheEditorModulesStay_ALaterOneRuns)
+{
+	auto host = make_host();
+	host->load_all();
+	host->load_editor_modules();
+	const auto reload = [&] {
+		return host->reload("ext_game",
+			std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)),
+			[] { return std::make_unique<app::modules::static_module_source>("ext_game", SNK_MODULE_ENTRY(ext_game_)); });
+	};
+
+	callback_scope_fixture module(*this);
+	core::reload_report from_inside;
+	edt::action_desc action;
+	action.id = "ext.reload_myself";
+	action.label = "Reload myself";
+	action.expose_as_tool = false;
+	action.execute = [&](const boost::json::value&) {
+		from_inside = reload();
+		return edt::action_result::success();
+	};
+	module.module_context.add_action(std::move(action));
+	const counts loaded = snapshot();
+
+	[[maybe_unused]] const auto result = context->actions().invoke("ext.reload_myself", boost::json::object{});
+	BOOST_CHECK_EQUAL(core::to_string(from_inside.status), "refused");
+	BOOST_CHECK_MESSAGE(from_inside.message.find("callback") != std::string::npos, from_inside.message);
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
+
+	const auto later = reload();
+	BOOST_CHECK_EQUAL(core::to_string(later.status), "reloaded");
+	BOOST_CHECK(context->panels().contains("ext.panel"));
+	BOOST_CHECK(snapshot() == loaded);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,267 @@
+#include <boost/test/unit_test.hpp>
+#include <snk/project/prj_create.h>
+#include <snk/project/prj_project.h>
+#include <snk/project/prj_version.h>
+#include "test_temp_dir.hpp"
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
+#endif
+
+// File > New Project (EPIC-42 #158): a project made from a template folder.
+
+namespace {
+	namespace fs = std::filesystem;
+
+	// The one template the editor ships (Editor/data/templates/projects/empty).
+	const fs::path k_empty_template = fs::path{ SNK_EDITOR_DATA_DIR } / "templates" / "projects" / "empty";
+
+	std::string read_text(const fs::path& file)
+	{
+		std::ifstream in(file, std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	std::vector<std::string> lines_of(std::string_view text)
+	{
+		std::vector<std::string> lines;
+		while (!text.empty()) {
+			const std::size_t end = std::min(text.find('\n'), text.size());
+			std::string_view line = text.substr(0, end);
+			if (line.ends_with('\r')) line.remove_suffix(1);
+			lines.emplace_back(line);
+			text.remove_prefix(std::min(end + 1, text.size()));
+		}
+		return lines;
+	}
+
+	std::size_t entries_in(const fs::path& folder)
+	{
+		std::size_t count = 0;
+		for ([[maybe_unused]] const auto& entry : fs::directory_iterator(folder)) ++count;
+		return count;
+	}
+}
+
+BOOST_AUTO_TEST_SUITE(PrjCreateTests)
+
+BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_OpensWithItsNameAndThisEngine)
+{
+	test_util::temp_dir dir("prj_create");
+
+	const auto created = prj::create_project(k_empty_template, dir.path() / "games" / "my_game", "My Game");
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+
+	const auto opened = prj::open_project(created.manifest_file);
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	BOOST_TEST(opened.context->data.name == "My Game");
+	BOOST_TEST((opened.context->data.engine == prj::current_engine_version()));
+	BOOST_TEST(opened.context->data.start_scene == "res://levels/main.desc");
+	BOOST_TEST(fs::is_regular_file(dir.path() / "games" / "my_game" / "res" / "levels" / "main.desc"));
+	// Indented for people, not one long line.
+	BOOST_TEST(read_text(created.manifest_file).find("\n    \"name\": \"My Game\"") != std::string::npos);
+}
+
+// The game module's CMake project comes along (#434); the module is optional, so the project opens before it is built.
+BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
+{
+	test_util::temp_dir dir("prj_create_code");
+
+	const auto created = prj::create_project(k_empty_template, dir.path() / "game", "Game");
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+
+	for (const char* file : { "code/CMakeLists.txt", "code/CMakePresets.json", "code/src/game_module.cpp", "code/src/game_editor.cpp" }) {
+		BOOST_TEST_INFO("file: " << file);
+		BOOST_TEST(fs::is_regular_file(dir.path() / "game" / file));
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "game" / "build"));
+	// Dotfiles come along too: the build trees and the per-user files stay out of the game's repository, the team's
+	// agent policy (.snk/agent_policy.json, AI_INTEGRATION section 5) stays in. A checkout may turn the file into CRLF.
+	const std::vector<std::string> ignore = lines_of(read_text(dir.path() / "game" / ".gitignore"));
+	const auto has_line = [&ignore](std::string_view line) { return std::ranges::find(ignore, line) != ignore.end(); };
+	for (const char* line : { "build/", ".cache/", ".snk/*", "!.snk/agent_policy.json", "code/CMakeUserPresets.json", "logs/",
+			 "/layout_settings.ini" }) {
+		BOOST_TEST_INFO("line: " << line);
+		BOOST_TEST(has_line(line));
+	}
+	// A whole-directory pattern would stop git from looking inside .snk, so the negation could not take effect.
+	BOOST_TEST(!has_line(".snk/"));
+	BOOST_TEST(!has_line(".snk"));
+
+	const auto opened = prj::open_project(created.manifest_file);
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	const auto& modules = opened.context->data.modules;
+	BOOST_REQUIRE(modules.size() == 2u);
+	BOOST_TEST(modules[0].name == "game");
+	BOOST_TEST((modules[0].kind == prj::module_kind::runtime));
+	BOOST_TEST(modules[0].optional);
+	BOOST_TEST(modules[1].name == "game_editor");
+	BOOST_TEST((modules[1].kind == prj::module_kind::editor));
+	BOOST_TEST(modules[1].optional);
+	// The name the CMake project builds the module under is the manifest's.
+	const std::string cmake = read_text(dir.path() / "game" / "code" / "CMakeLists.txt");
+	BOOST_TEST(cmake.find("set(SNK_GAME_MODULE game)") != std::string::npos);
+	BOOST_TEST(cmake.find("set(SNK_GAME_EDITOR_MODULE game_editor)") != std::string::npos);
+}
+
+// #912: a new project ignores the MCP token, caches and build trees even when its template's .gitignore does not:
+// the missing lines are added after the template's own, which stay; one that ignores as much counts.
+BOOST_AUTO_TEST_CASE(Create_FromATemplateWithoutTheIgnoreLines_AddsThem)
+{
+	test_util::temp_dir dir("prj_create_ignore");
+	fs::copy(k_empty_template, dir.path() / "bare", fs::copy_options::recursive);
+	fs::remove(dir.path() / "bare" / ".gitignore");
+	fs::copy(k_empty_template, dir.path() / "partial", fs::copy_options::recursive);
+	dir.write("partial/.gitignore", "# ours\n*.log\n/.cache\n");
+
+	const auto bare = prj::create_project(dir.path() / "bare", dir.path() / "game_bare", "Bare");
+	BOOST_REQUIRE_MESSAGE(bare.error.empty(), bare.error);
+	BOOST_TEST((lines_of(read_text(dir.path() / "game_bare" / ".gitignore"))
+		== std::vector<std::string>{ ".snk/mcp.json", ".cache/", "build/" }));
+
+	const auto partial = prj::create_project(dir.path() / "partial", dir.path() / "game_partial", "Partial");
+	BOOST_REQUIRE_MESSAGE(partial.error.empty(), partial.error);
+	BOOST_TEST((lines_of(read_text(dir.path() / "game_partial" / ".gitignore"))
+		== std::vector<std::string>{ "# ours", "*.log", "/.cache", ".snk/mcp.json", "build/" }));
+
+	// A template written with CRLF gets its new lines with CRLF too.
+	fs::copy(k_empty_template, dir.path() / "crlf", fs::copy_options::recursive);
+	dir.write("crlf/.gitignore", "# ours\r\n.cache/\r\n");
+	const auto crlf = prj::create_project(dir.path() / "crlf", dir.path() / "game_crlf", "Crlf");
+	BOOST_REQUIRE_MESSAGE(crlf.error.empty(), crlf.error);
+	BOOST_TEST(read_text(dir.path() / "game_crlf" / ".gitignore") == "# ours\r\n.cache/\r\n.snk/mcp.json\r\nbuild/\r\n");
+}
+
+BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)
+{
+	test_util::temp_dir dir("prj_create_empty");
+	fs::create_directories(dir.path() / "picked");
+
+	const auto created = prj::create_project(k_empty_template, dir.path() / "picked", "Picked");
+
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+	BOOST_TEST(fs::is_regular_file(dir.path() / "picked" / "project.snkproj"));
+	BOOST_TEST(entries_in(dir.path()) == 1u); // no staging folder left next to it
+}
+
+BOOST_AUTO_TEST_CASE(Create_OverSomethingThatIsNotAnEmptyFolder_IsRefusedAndTouchesNothing)
+{
+	test_util::temp_dir dir("prj_create_taken");
+	dir.write("taken/keep.txt", "keep");
+	dir.write("file", "a file");
+
+	for (const char* target : { "taken", "file" }) {
+		BOOST_TEST_INFO("target: " << target);
+		const auto created = prj::create_project(k_empty_template, dir.path() / target, "Taken");
+		BOOST_TEST(!created.error.empty());
+		BOOST_TEST(created.manifest_file.empty());
+	}
+	BOOST_TEST(read_text(dir.path() / "taken" / "keep.txt") == "keep");
+	BOOST_TEST(!fs::exists(dir.path() / "taken" / "project.snkproj"));
+	BOOST_TEST(read_text(dir.path() / "file") == "a file");
+	BOOST_TEST(entries_in(dir.path()) == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(Create_WithABadName_IsRefused)
+{
+	test_util::temp_dir dir("prj_create_name");
+
+	for (const std::string_view name : { std::string_view{}, std::string_view{ "a\nb" } }) {
+		const auto created = prj::create_project(k_empty_template, dir.path() / "game", name);
+		BOOST_TEST(!created.error.empty());
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "game"));
+}
+
+BOOST_AUTO_TEST_CASE(Create_FromAFolderWithoutAManifest_IsRefusedAndLeavesNothing)
+{
+	test_util::temp_dir dir("prj_create_template");
+	dir.write("not_a_template/readme.txt", "x");
+
+	const auto created = prj::create_project(dir.path() / "not_a_template", dir.path() / "game", "Game");
+
+	BOOST_TEST(created.error.find("template") != std::string::npos);
+	BOOST_TEST(!fs::exists(dir.path() / "game"));
+	BOOST_TEST(entries_in(dir.path()) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Create_InsideTheTemplate_IsRefusedAndLeavesItAsItWas)
+{
+	test_util::temp_dir dir("prj_create_inside");
+	fs::copy(k_empty_template, dir.path() / "tpl", fs::copy_options::recursive);
+	const std::size_t before = entries_in(dir.path() / "tpl");
+
+	for (const char* target : { "tpl/game", "tpl/res/game" }) {
+		BOOST_TEST_INFO("target: " << target);
+		const auto created = prj::create_project(dir.path() / "tpl", dir.path() / target, "Game");
+		BOOST_TEST(created.error.find("template") != std::string::npos);
+	}
+	BOOST_TEST(entries_in(dir.path() / "tpl") == before);
+	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "game"));
+	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "res" / "game"));
+}
+
+// #765: the editor's hook runs on the copied, stamped project before it is moved into place.
+BOOST_AUTO_TEST_CASE(Create_WithAPrepareHook_RunsItOnTheStagingFolderBeforeTheMove)
+{
+	test_util::temp_dir dir("prj_create_prepare");
+	const fs::path target = dir.path() / "game";
+	fs::path seen;
+	bool target_existed = true;
+	std::string stamped;
+
+	const auto created = prj::create_project(k_empty_template, target, "Prepared", [&](const fs::path& staging) {
+		seen = staging;
+		target_existed = fs::exists(target);
+		stamped = read_text(staging / "project.snkproj");
+		std::ofstream marker(staging / "marker.txt", std::ios::binary);
+		marker << "prepared";
+		return std::string{};
+	});
+
+	BOOST_REQUIRE_MESSAGE(created.error.empty(), created.error);
+	BOOST_TEST(!seen.empty());
+	BOOST_TEST((seen != target));
+	BOOST_TEST((seen.parent_path() == target.parent_path()));
+	BOOST_TEST(!target_existed);
+	BOOST_TEST(stamped.find("\"Prepared\"") != std::string::npos);
+	BOOST_TEST(read_text(target / "marker.txt") == "prepared");
+	BOOST_TEST(!fs::exists(seen));
+	BOOST_TEST(entries_in(dir.path()) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Create_WhenThePrepareHookFails_ReportsItAndLeavesNothing)
+{
+	test_util::temp_dir dir("prj_create_prepare_fails");
+	fs::create_directories(dir.path() / "picked");
+
+	const auto failing = [](const fs::path& staging) {
+		std::ofstream half_done(staging / "half_done.txt", std::ios::binary);
+		half_done << "x";
+		return std::string{ "the hook refused" };
+	};
+	const auto throwing = [](const fs::path&) -> std::string { throw std::runtime_error("the hook threw"); };
+
+	for (const char* target : { "game", "picked" }) {
+		BOOST_TEST_INFO("target: " << target);
+		const auto created = prj::create_project(k_empty_template, dir.path() / target, "Game", failing);
+		BOOST_TEST(created.error == "the hook refused");
+		BOOST_TEST(created.manifest_file.empty());
+		const auto thrown = prj::create_project(k_empty_template, dir.path() / target, "Game", throwing);
+		BOOST_TEST(thrown.error.find("the hook threw") != std::string::npos);
+		BOOST_TEST(thrown.manifest_file.empty());
+	}
+	BOOST_TEST(!fs::exists(dir.path() / "game"));
+	BOOST_TEST(fs::is_empty(dir.path() / "picked")); // the folder the user picked stays as it was
+	BOOST_TEST(entries_in(dir.path()) == 1u); // no staging folder left
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,28 @@
+# Checklist items 1-5 at --size 1920x1080 with startup_level levels/smoke_level.desc
+# Zoom out one step (wheel down + tiny drag as a workaround for the wheel-down refresh bug), select Armature.
+sleep 18
+click 960 400 5
+sleep 0.3
+drag 960 400 961 400
+sleep 1
+click 18 183
+sleep 0.5
+click 39 217
+sleep 0.5
+click 90 217
+sleep 1
+shot headless_out/checklist/10_anim_t0.png
+sleep 2
+shot headless_out/checklist/10_anim_t1.png
+sleep 2
+shot headless_out/checklist/10_anim_t2.png
+# Bones toggle on
+click 498 75
+sleep 2
+shot headless_out/checklist/11_bones_on.png
+click 498 75
+sleep 1
+# Directional light: select and inspect
+click 88 149
+sleep 1
+shot headless_out/checklist/12_light_sel.png

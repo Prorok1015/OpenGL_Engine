@@ -1,4 +1,5 @@
-#include "edt_panel_base.h"
+#include <snk/editor/edt_panel_base.h>
+#include <imgui.h>
 
 namespace edt
 {
@@ -9,10 +10,15 @@ namespace edt
 
 	void panel_base::render()
 	{
-		if (!m_open)
+		if (!m_open) {
+			on_hidden();
 			return;
+		}
+		on_before_begin();
 		if (ImGui::Begin(m_title.c_str(), &m_open, m_flags))
 			on_render();
+		else
+			on_hidden();
 		ImGui::End();
 	}
 }

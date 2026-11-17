@@ -1,8 +1,16 @@
 # EPIC-25: Prefab Editor — автономное редактирование prefab-ассетов
 
 **Theme:** editor
-**Status:** planned
+**Status:** in_progress
+**Issue:** [#30](https://github.com/Prorok1015/OpenGL_Engine/issues/30)
 **Depends on:** EPIC-12, EPIC-13, EPIC-14, EPIC-22, EPIC-15 (рекомендуется)
+
+> **Состояние US-25-3…US-25-6 и решения владельца (2026-11-16, #148–#151).** Текст ниже про `base_prefab`, `node_path`/`component_type`/`fields`, `apply_overrides`, `scn_prefab_override_applier`, `edt_cr_prefab_instance`, `edt_prefab_variant_creator` описывает устаревший дизайн: этих имён в коде нет. Что есть на самом деле:
+> - **Записи overrides** — `prefab_node::overrides` (`scn_override_record.h`: `{target:[node id], component, path, value, op}`, формат v3), применяются к копии содержимого префаба при `reconcile` (`scn_prefab_desc.cpp`, `apply_records`); запись через вложенный инстанс передаётся ему. Устаревшая запись (узла или компонента больше нет) остаётся в файле и пропускается с предупреждением; `scn::find_stale_records` / `prune_stale_records` (#148) находят и убирают такие записи.
+> - **Вложенность** — рекурсивная сборка, предел глубины 16 (`prefab_limits`), бюджет узлов (#924), ссылка префаба на себя отвергается; циклы `__parent` — `diagnostic_kind::cycle`.
+> - **Вариант** = обычный `.prefab.desc` с файловым `__parent` на базовый префаб (слой: дети по `__id`, компоненты по ключу, записи корня после родительских); поля `base_prefab` и отдельного класса нет. Цепочки вариантов разрешены. «Create Variant» (UI) — #151.
+> - **Решения владельца:** в экземпляре переопределяются только значения полей существующих узлов (структурные записи `remove`/`add_node` на экземпляре редактор и команды агента не создают, существующие в файле — строка в Problems); запись экземпляра побеждает значение префаба; устаревшие записи не удаляются сами: в редакторе серым с причиной и кнопкой «Clear stale overrides», cook (Shipping) убирает их через `prune_stale_records` (cook ещё нет, #46); Apply — на один уровень выше контекста правки («Apply override to prefab» из сцены, Apply окна префаба пишет внешний префаб), с подтверждением «изменит префаб X для всех его экземпляров (N в этом уровне)»; «Add Override» не нужен, правка поля уже создаёт запись.
+> - **Статус:** US-25-3 — модель и применение есть, находка и очистка устаревших записей в этом PR (#148); US-25-4 — частично (баннер и «Reset to base» в Inspector), список записей, «Edit Prefab», серые записи, Apply override to prefab — #149; US-25-5 — в основном есть, диагностика цикла при сборке в Problems — #150; US-25-6 — загрузка/правка/сохранение варианта есть, «Create Variant» — #151.
 
 ---
 
@@ -21,7 +29,7 @@
 | Термин | Описание |
 |---|---|
 | **prefab source** | Файл `res://objects/robot/robot.prefab.desc` — источник правды |
-| **prefab instance** | `prefab_instance { source_prefab, local_overrides }` — размещение prefab в мире |
+| **prefab instance** | `prefab_instance { source_prefab, local_overrides, content_of }` — размещение prefab в мире; `content_of` — файл, содержимым которого является узел экземпляра (#993) |
 | **override** | Изменение поля компонента в конкретном инстансе, скрывающее значение из source |
 | **prefab variant** | Отдельный `.prefab.desc` файл, наследующий source через `base_prefab` с набором override'ов |
 | **prefab context** | Изолированный ECS world + `prefab_desc`, открытый в Prefab Editor |
@@ -42,22 +50,74 @@ struct prefab_instance {
     glm::vec3 rotation{0};
     glm::vec3 scale{1};
     std::vector<prefab_override_entry> overrides;
+    res::tag content_of;           // файл, содержимым которого является узел экземпляра (#993)
 };
 ```
 
-### Prefab Context — изолированный мир для редактирования
+### Prefab Context — transient world в level
+
+Вместо отдельного изолированного registry, prefab editor **инъектирует transient world** в текущий `scn::level`. Это позволяет render pipeline автоматически обрабатывать мир через стандартные extractors. Transient world не регистрируется в `shared_state` (world_descs, world_names), поэтому невидим для save и hierarchy tabs.
+
+```
+scn::level
+├── World0 (scene) — в shared_state, сохраняется
+└── __prefab_preview (transient) — НЕ в shared_state
+      ├── Camera (→ __prefab_camera_rt, per-camera depth/tp)
+      ├── Directional Light
+      ├── Skybox
+      └── [Loaded Prefab]
+```
 
 ```cpp
 edt::prefab_editor_context {
-    res::tag                           source_tag;     // res://... источник
-    std::shared_ptr<scn::prefab_desc>  working_copy;   // in-memory рабочая копия
-    entt::registry                     registry;       // изолированный ECS world
-    scn::ecs_assembler*                assembler;
-    bool                               is_dirty;
+    shared_state&  m_state;
+    res::tag       m_source_tag;     // res://... источник
+    uint32_t       m_world_id;       // ID мира в level
+    bool           m_dirty;
+    editor_camera_state m_camera_state;
+    std::shared_ptr<inp::ecs_input_manager> m_pp_input; // отдельный input layer
 }
 ```
 
-Открытие prefab создаёт отдельный `prefab_editor_context`, собирает из него ECS world через `assemble_prefab`. Редактирование мутирует `working_copy`, `serialize_and_push` применяется внутри контекста — не затрагивает level world.
+Открытие prefab создаёт world в level через `level.create_world()`, собирает preview scene из шаблона + загруженный prefab. Закрытие — `level.remove_world()`. Per-camera render targets обеспечивают независимый depth/transparent pipeline.
+
+### Проблема маршрутизации инпута (multi-viewport input)
+
+Архитектура инпута построена на стеке `input_layer` в `inp::input_system`. Слои обрабатываются сверху вниз (LIFO). Каждый слой может захватить событие и заблокировать нижние (`blocks_lower_layers`).
+
+> **Устарело (#113, PR #264):** `edt::input_manager` (блокирующий слой) и `input_area` удалены. `ecs_input_manager` хранит только сырое состояние, `inp::input_router` по привязкам панелей (`bind_item_input`, hovered-изображение) даёт полное состояние контексту под курсором, остальным — нейтральное; `input_focus` выводится из привязки. Ниже — исходное обоснование.
+
+**Текущий стек (до PP):**
+```
+[TOP]  edt::input_manager     blocks=true   ← блокирует mouse clicks вне main VP rect
+[BOT]  inp::ecs_input_manager blocks=false  ← shared, для всех ECS миров
+```
+
+**Проблема:** `edt::input_manager` возвращает `true` для mouse click/keyboard events вне main viewport rect (с `invert=true`). Это блокирует `ecs_input_manager` от получения событий, когда мышь над PP панелью (она вне main VP rect). PP камера не получает mouse button state → не может вращаться/перемещаться.
+
+Кроме того, shared `ecs_input_manager` копирует один и тот же `input_state` во ВСЕ миры через `update_input_state_system`. При двух viewport'ах обе камеры двигаются одновременно.
+
+**Решение: per-viewport input layer**
+
+Каждый viewport-panel, которому нужен отдельный ECS-инпут, создаёт собственный `ecs_input_manager`:
+- Пушит как input layer ВЫШЕ `edt::input_manager`
+- Управляет `input_area` через `ImGui::IsItemHovered()`
+- Регистрирует `update_*_input_state` под уникальным именем в `system_factory`
+- World template ссылается на своё имя системы
+
+```
+[TOP]  pp_ecs_input            blocks=false  ← PP viewport
+[MID]  edt::input_manager      blocks=true   ← блокирует клики вне main VP
+[BOT]  inp::ecs_input_manager  blocks=false  ← main world
+```
+
+**Почему работает:**
+- PP layer выше editor → получает события первым, `on_handle_event` всегда `return false`
+- Когда мышь над PP: pp_ecs_input захватывает → editor блокирует → shared не получает
+- Когда мышь над main VP: pp_ecs_input пропускает (мышь вне PP rect) → editor пропускает (invert, мышь внутри VP) → shared получает
+- Каждый мир имеет свой input_state от своего менеджера → камеры не влияют друг на друга
+
+**Масштабирование:** подход обобщается на N viewport'ов. Для двух камер ОДНОГО мира — решается на уровне camera controller (один active, остальные игнорируют).
 
 ### Архитектурный слой
 
@@ -77,21 +137,33 @@ edt::prefab_editor_context {
 ### US-25-1 — Открытие prefab в изолированном контексте
 
 **Файлы:**
-- Новый `Editor/code/editor_system/edt_prefab_editor_context.h/.cpp`
+- `core/engine/scene/include/snk/scene/level/scn_level.h/.cpp` — добавить `remove_world()`
+- Новый `Editor/code/editor_system/controller/edt_prefab_editor_context.h/.cpp`
 - Новый `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`
-- `Editor/code/editor_system/edt_editor_system.h/.cpp` — добавить `open_prefab_for_edit`
-- `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp` — двойной клик на `.prefab.desc`
+- Новый `Editor/data/templates/prefab_preview.desc` (изначально `Editor/res/templates/`, перенесён в EPIC-36)
+- `Editor/code/editor_system/prefab/edt_prefab_editor_component.h/.cpp` — `open`, `close` (после #1004; раньше `editor_system::open_prefab_for_edit`, `close_prefab_editor`)
+- `Editor/code/editor_system/panels/edt_asset_browser_panel.h/.cpp` — double-click callback
+- `Editor/code/editor_system/controller/edt_init_helpers.cpp` — wiring
 
 **Поведение:**
 
-Двойной клик на `.prefab.desc` в Asset Browser → `editor_system::open_prefab_for_edit(tag)`:
-- Загружает prefab через `res::resource_system`, делает глубокую копию `prefab_desc` → `working_copy`
-- Создаёт отдельный ECS world (аналогично `create_world`), собирает в нём `working_copy` через `assemble_prefab`
-- Открывает `prefab_editor_panel` — плавающий или docked ImGui window
+Двойной клик на `.prefab.desc` в Asset Browser → `prefab_editor_component::open(tag)`:
+- Загружает prefab через `res::resource_system`
+- Инъектирует transient world `__prefab_preview` в текущий level (НЕ в shared_state)
+- Собирает preview scene из `prefab_preview.desc` (свет) + программная камера с per-camera RT
+- Загружает prefab в мир через `assemble_prefab`
+- Открывает `prefab_editor_panel` — docked ImGui window с viewport
 - Заголовок: `"Prefab: robot [*]"` (звёздочка при `is_dirty`)
-- Viewport для Prefab Editor переиспользует `__color_prefab_rt` render target (отдельный от `__color_scene_rt`)
+- Viewport отображает `__prefab_camera_rt` (отдельный от `__editor_camera_rt`)
+- Закрытие panel → `level.remove_world("__prefab_preview")`
 
-**Критерии:** prefab открывается без закрытия текущего уровня; два мира существуют параллельно.
+**AC:**
+- [ ] Double-click на `.prefab.desc` открывает prefab editor panel
+- [ ] Префаб рендерится в отдельном viewport с освещением
+- [ ] Основной viewport (scene) продолжает работать параллельно
+- [ ] Закрытие panel удаляет transient world
+- [ ] Save level не включает prefab preview world
+- [ ] Hierarchy не показывает tab для prefab world
 
 ---
 
@@ -176,7 +248,7 @@ JSON формат инстанса с override'ами:
   [Add Override...]   [Revert All]
 ```
 
-- **[Edit Prefab]** → `editor_system::open_prefab_for_edit(source_tag)` (US-25-1)
+- **[Edit Prefab]** → `prefab_editor_component::open(source_tag)` (US-25-1)
 - **[Revert]** одного поля — удаляет `prefab_override_entry`, `serialize_and_push`
 - **[Add Override...]** — дерево узлов prefab'а для выбора компонента
 - Override поля, совпадающие с source значением, подсвечиваются серым

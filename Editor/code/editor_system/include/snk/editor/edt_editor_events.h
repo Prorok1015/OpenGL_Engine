@@ -1,0 +1,258 @@
+#pragma once
+#include "edt_document.h"
+#include <boost/json/value.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace edt
+{
+	// What is selected in the active document. Nodes are addressed by stable ids, never by pointers into
+	// the desc, so the value stays meaningful across edits (see selection_service).
+	struct selection
+	{
+		document_id document = 0;
+		std::string world;
+		// Node ids from the world root. A node inside a prefab instance: the instance's path, then its ids.
+		std::vector<std::uint64_t> path;
+		// For such a node: the ids below the instance (the tail of `path`); edits become override records.
+		std::vector<std::uint64_t> target;
+		bool readonly = false;
+
+		bool empty() const { return path.empty(); }
+	};
+
+	// Where a job (job_service) is. `running` also covers queued and finished-but-not-delivered.
+	enum class job_status : std::uint8_t { running, done, failed, cancelled };
+
+	inline const char* job_status_name(job_status status)
+	{
+		switch (status) {
+		case job_status::running: return "running";
+		case job_status::done: return "done";
+		case job_status::failed: return "failed";
+		case job_status::cancelled: return "cancelled";
+		}
+		return "running";
+	}
+
+	template<class... Args> class signal;
+
+	namespace detail
+	{
+		template<class... Args>
+		struct slot
+		{
+			std::uint64_t id = 0;
+			bool alive = true;
+			std::function<void(Args...)> fn;
+		};
+
+		template<class... Args>
+		struct signal_state
+		{
+			std::vector<std::shared_ptr<slot<Args...>>> slots;
+			std::uint64_t next_id = 1;
+		};
+	}
+
+	// Move-only RAII subscription. Unsubscribes in the destructor; stays harmless if the signal dies first.
+	class connection
+	{
+	public:
+		connection() = default;
+		connection(const connection&) = delete;
+		connection& operator=(const connection&) = delete;
+		connection(connection&& other) noexcept
+			: m_disconnect(std::exchange(other.m_disconnect, nullptr))
+		{
+		}
+		connection& operator=(connection&& other) noexcept
+		{
+			if (this != &other) {
+				disconnect();
+				m_disconnect = std::exchange(other.m_disconnect, nullptr);
+			}
+			return *this;
+		}
+		~connection() { disconnect(); }
+
+		bool connected() const { return m_disconnect != nullptr; }
+
+		void disconnect()
+		{
+			if (auto fn = std::exchange(m_disconnect, nullptr)) {
+				fn();
+			}
+		}
+
+		// Made by signal::subscribe; `disconnect` runs once, on disconnect() or destruction.
+		explicit connection(std::function<void()> disconnect)
+			: m_disconnect(std::move(disconnect))
+		{
+		}
+
+	private:
+		std::function<void()> m_disconnect;
+	};
+
+	// Main thread only: there is no locking, and slots run on the emitting thread.
+	// Slots run in subscription order. Subscribing or unsubscribing from inside a slot is safe: a slot
+	// removed during an emit is not called afterwards, one added during an emit first runs on the next emit.
+	template<class... Args>
+	class signal
+	{
+	public:
+		[[nodiscard]] connection subscribe(std::function<void(Args...)> fn)
+		{
+			auto entry = std::make_shared<detail::slot<Args...>>();
+			entry->id = m_state->next_id++;
+			entry->fn = std::move(fn);
+			m_state->slots.push_back(entry);
+			return connection([weak = std::weak_ptr<detail::signal_state<Args...>>(m_state), id = entry->id]() {
+				if (auto state = weak.lock()) {
+					auto& slots = state->slots;
+					auto it = std::find_if(slots.begin(), slots.end(), [id](const auto& s) { return s->id == id; });
+					if (it != slots.end()) {
+						(*it)->alive = false;
+						slots.erase(it);
+					}
+				}
+			});
+		}
+
+		void emit(Args... args) const
+		{
+			// A snapshot keeps iteration valid when a slot (un)subscribes.
+			const auto snapshot = m_state->slots;
+			for (const auto& s : snapshot) {
+				if (s->alive) {
+					s->fn(args...);
+				}
+			}
+		}
+
+		std::size_t subscriber_count() const { return m_state->slots.size(); }
+
+	private:
+		std::shared_ptr<detail::signal_state<Args...>> m_state = std::make_shared<detail::signal_state<Args...>>();
+	};
+
+	// A game module the editor built (game_builder, #434/#435/#444).
+	struct game_module_build_result
+	{
+		// The manifest's name of the module.
+		std::string module;
+		// <root>/build/bin/<module file>, absolute: what core::project_module_host loads from.
+		std::filesystem::path path;
+		// "debuggame" or "release".
+		std::string configuration;
+		// The build's job_service id.
+		std::uint64_t job = 0;
+		// Whether the module is reloaded after this build (#444: the build settings decide).
+		bool reload = true;
+		// Built by live mode's background build (build_request::preemptible), not by the person.
+		bool background = false;
+	};
+
+	// Where the editor's Play session is (play_session, #39).
+	enum class play_state : std::uint8_t { stopped, playing, paused };
+
+	// Why it changed: a person (menu, shortcut, the editor's own UI), an agent's command, the game module was reloaded
+	// (Play started again after the swap) or is about to be (Play stopped for the swap).
+	enum class play_reason : std::uint8_t { user, agent, module_reloaded, stopped_for_reload };
+
+	inline const char* play_state_name(play_state state)
+	{
+		switch (state) {
+		case play_state::stopped: return "stopped";
+		case play_state::playing: return "playing";
+		case play_state::paused: return "paused";
+		}
+		return "stopped";
+	}
+
+	inline const char* play_reason_name(play_reason reason)
+	{
+		switch (reason) {
+		case play_reason::user: return "user";
+		case play_reason::agent: return "agent";
+		case play_reason::module_reloaded: return "module_reloaded";
+		case play_reason::stopped_for_reload: return "stopped_for_reload";
+		}
+		return "user";
+	}
+
+	// What changed in the repository of the project (vcs::repository_watcher, #485): `index` = the index or a
+	// top-level file of the work tree (the status may differ), `refs` = HEAD, a branch, a tag, FETCH_HEAD... (the
+	// status and the history may differ).
+	enum class repository_change : std::uint8_t { index, refs };
+
+	// The editor's layout (#294): `editor` is the dockspace with its panels, `game` the Game view alone filling the window.
+	enum class editor_mode : std::uint8_t { editor, game };
+
+	inline const char* editor_mode_name(editor_mode mode)
+	{
+		return mode == editor_mode::game ? "game" : "editor";
+	}
+
+	// What an agent changed outside the scene (A7 #451: a code file written, created, deleted, renamed), for the agent's
+	// status bar (#449).
+	struct agent_action_info
+	{
+		std::string command;
+		// What it acted on: a code:// path ("src/game.cpp"); "from -> to" for a rename.
+		std::string target;
+		std::size_t bytes = 0;
+		// The MCP session of the agent.
+		std::string session;
+	};
+
+	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
+	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
+	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
+	// problem_list (problems_changed), game_builder (game_module_built), mcp_bridge_host via editor_system
+	// (agent_session_closed), editor_system's repository watcher (repository_changed).
+	class editor_events
+	{
+	public:
+		signal<document_id> document_opened;
+		signal<document_id> document_closed;
+		signal<document_id> document_activated;
+		signal<document_id, std::uint64_t> document_changed; // (document, generation)
+		signal<document_id> active_world_changed;
+		signal<const selection&> selection_changed;
+		signal<> level_reloaded;
+		// Per job, in this order: job_started once, job_progress whenever the fraction or the note changed (at most
+		// once per job_service::pump(), i.e. per frame), job_finished once. A job cancelled before it ran finishes
+		// with `cancelled` and no progress.
+		signal<std::uint64_t, const std::string&> job_started; // (id, label)
+		signal<std::uint64_t, float, const std::string&> job_progress; // (id, fraction in [0, 1], note)
+		// (id, done | failed | cancelled, error text, result: set only for a `done` job_service::start_with_result job)
+		signal<std::uint64_t, job_status, const std::string&, const std::optional<boost::json::value>&> job_finished;
+		// After a successful build, on the main thread, once per module file the build produced (game_builder).
+		signal<const game_module_build_result&> game_module_built;
+		// The problems of one source were replaced or cleared (problem_list).
+		signal<const std::string&> problems_changed; // (source)
+		// Every change of the Play session's state, after it took effect (play_session).
+		signal<play_state, play_reason> play_state_changed;
+		// The editor switched between its layouts (editor_mode_controller), after the switch and its Play change.
+		signal<editor_mode> editor_mode_changed;
+		// An agent's call changed something outside the scene (code.write/create/delete/rename), after it happened.
+		signal<const agent_action_info&> agent_action;
+		// An MCP session of an agent ended (disconnect, idle timeout, an explicit close; not the editor stopping the
+		// server): what is kept for it goes (its open agent session, its "allow until the end of the session",
+		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.
+		signal<const std::string&> agent_session_closed; // (MCP session id)
+		// The repository changed on disk (a commit or checkout in a terminal...), at most once per kind per poll
+		// (500 ms). The editor's own git writes do not raise `index`.
+		signal<repository_change> repository_changed;
+	};
+}

@@ -1,5 +1,5 @@
 #pragma once
-#include <rnd_vertex_array_interface.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
 #include <rnd_gl_buffer.h>
 #include <vector>
 #include <memory>
@@ -16,7 +16,6 @@ namespace rnd::driver::gl
 		virtual void unbind() const override;
 
 		virtual void add_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer) override;
-		virtual void remove_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer) override;
 		virtual void set_index_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& indexBuffer) override;
 
 		const std::vector<std::shared_ptr<buffer>>& get_vertex_buffers() const { return m_VertexBuffers; }

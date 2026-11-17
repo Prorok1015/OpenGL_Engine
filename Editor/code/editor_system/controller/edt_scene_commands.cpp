@@ -1,0 +1,1141 @@
+#include "edt_scene_commands.h"
+#include "edt_override_edit.h"
+#include "edt_reference.h"
+#include "edt_scene_document.h"
+#include "edt_scene_ref.h"
+#include "edt_document_cast.h"
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_selection_service.h>
+#include <snk/command/cmd_json_schema.h>
+#include <snk/common/engine_assert.h>
+#include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_node_id.h>
+#include <snk/desc/desc_schema_ops.h>
+#include <snk/desc/desc_system.h>
+#include <snk/ecs/ecs_system.h>
+#include <snk/resource/res_diagnostics.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
+#include <boost/json.hpp>
+#include <glm/vec3.hpp>
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <format>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace {
+	namespace json = boost::json;
+	using prefab_node = scn::prefab_desc::prefab_node;
+	using mutable_location = edt::scene_ref::location<prefab_node>;
+
+	constexpr std::string_view inside_instance = "inside a prefab instance only component.set and transform.set work: nodes and components are added or removed in the prefab itself";
+
+	json::value parse_schema(std::string_view text)
+	{
+		boost::system::error_code ec;
+		json::value parsed = json::parse(edt::scene_ref::with_ref(std::string(text)), ec);
+		ASSERT_MSG(!ec, "a scene command schema is not JSON: {}", ec.message());
+		return parsed;
+	}
+
+	cmd::result failure(const char* code, std::string message)
+	{
+		return cmd::result::failure(code, std::move(message));
+	}
+
+	// RFC 7386: objects merge key by key, null removes the key, anything else replaces. One departure: an object that the
+	// patch leaves empty (it had nothing, or only what the nulls took away) is not kept, so a patch that changes nothing
+	// ({"transform":{}}, {"transform":{"position":null}} without an override) leaves the object as it was.
+	json::value merge_patch(json::value target, const json::value& patch)
+	{
+		if (!patch.is_object()) return patch;
+		if (!target.is_object()) target = json::object{};
+		json::object& object = target.as_object();
+		for (const auto& [key, value] : patch.as_object()) {
+			if (value.is_null()) {
+				object.erase(key);
+				continue;
+			}
+			const json::value* current = object.if_contains(key);
+			json::value merged = merge_patch(current ? *current : json::value{}, value);
+			const bool had_content = current && current->is_object() && !current->as_object().empty();
+			if (value.is_object() && merged.is_object() && merged.as_object().empty() && (!current || had_content)) {
+				object.erase(key);
+				continue;
+			}
+			object[key] = std::move(merged);
+		}
+		return target;
+	}
+
+	// The fields of a new component: no null (a null only clears, and there is nothing to clear), and no object left empty
+	// by that.
+	void strip_nulls(json::object& object)
+	{
+		for (auto it = object.begin(); it != object.end();) {
+			if (it->value().is_null()) {
+				it = object.erase(it);
+				continue;
+			}
+			if (it->value().is_object()) {
+				const bool had_content = !it->value().as_object().empty();
+				strip_nulls(it->value().as_object());
+				if (had_content && it->value().as_object().empty()) {
+					it = object.erase(it);
+					continue;
+				}
+			}
+			++it;
+		}
+	}
+
+	bool is_tag_kind(desc::field_kind kind)
+	{
+		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
+	}
+
+	// Why a tag the patch puts into a tag field is a reference a desc may not hold (#697), or empty. An empty string clears.
+	std::string reference_refusal(const json::string& text, std::string_view owner_protocol)
+	{
+		if (text.empty()) return {};
+		const res::tag reference{ std::string(text.data(), text.size()) };
+		if (reference.protocol().empty()) return res::no_protocol_reason(reference);
+		return res::reference_problem(reference, owner_protocol);
+	}
+
+	struct reference_issue
+	{
+		std::string path; // below the field that holds it, '/'-separated; empty for the value itself
+		std::string why;
+	};
+
+	// What the walk over a patch's references looks a guid up in, and what it saw.
+	struct reference_scope
+	{
+		// Null: no guid is looked up, the path is what loads.
+		const res::resource_system* index = nullptr;
+		// Set for an agent's call while the asset index is not complete (#968): why a guid is not judged now.
+		std::optional<std::string> index_wait;
+		bool saw_guid = false;
+	};
+
+	// After every other check of the call passed: content with a guid waits for the asset index.
+	std::optional<cmd::result> held_back(const reference_scope& scope)
+	{
+		if (scope.index_wait && scope.saw_guid) return cmd::result::failure(cmd::codes::busy, *scope.index_wait);
+		return std::nullopt;
+	}
+
+	// A {guid, path} reference (EPIC-57 section 4.4) is held to the rule of #697 where it leads: the file that holds its
+	// guid, else its path, after the agent's rule of edt_reference.h (#954): its form, then its path, then its guid.
+	std::optional<reference_issue> reference_object_refusal(const json::value& value, reference_scope& scope,
+		std::string_view owner_protocol)
+	{
+		if (edt::is_guid_reference(value.as_object())) scope.saw_guid = true;
+		const res::resource_system* resources = scope.index;
+		if (std::string why = edt::agent_reference_form_problem(value.as_object()); !why.empty()) return reference_issue{ {}, std::move(why) };
+		const std::optional<edt::reference_target> target = edt::target_of(value, resources);
+		if (!target) return reference_issue{ {}, "not a reference" };
+		// The written path is what a game without an asset index loads: it follows the rule too, wherever the guid leads.
+		if (const std::string written = edt::reference_path_text(value.as_object()); !written.empty()) {
+			if (std::string why = reference_refusal(json::string(written), owner_protocol); !why.empty()) return reference_issue{ "path", std::move(why) };
+		}
+		if (std::string why = edt::agent_reference_guid_problem(value.as_object(), resources); !why.empty()) return reference_issue{ {}, std::move(why) };
+		if (std::string why = reference_refusal(json::string(target->tag.view()), owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+		return std::nullopt;
+	}
+
+	std::optional<reference_issue> under(std::optional<reference_issue> issue, std::string_view step)
+	{
+		if (issue) issue->path = issue->path.empty() ? std::string(step) : std::format("{}/{}", step, issue->path);
+		return issue;
+	}
+
+	// Inline descs inside inline descs: deeper than any shipped data, and a patch must not recurse without end.
+	constexpr int k_max_inline_depth = 8;
+
+	// The walk goes over the patch; `merged` is the same place in the component as it will be after the patch (null when
+	// it has none), which names the type of an inline desc a partial patch leaves out (#740).
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, reference_scope& scope, const desc::type_schema& schema, const json::value& data,
+		const json::value* merged, std::string_view owner_protocol, int depth);
+
+	const json::value* merged_at(const json::value* merged, std::string_view pointer)
+	{
+		return merged ? desc::json_pointer_get(*merged, pointer) : nullptr;
+	}
+
+	const json::value* merged_item(const json::value* merged, std::size_t index)
+	{
+		const json::array* items = merged ? merged->if_array() : nullptr;
+		return items && index < items->size() ? &(*items)[index] : nullptr;
+	}
+
+	const json::value* type_of_inline(const json::object& inline_desc, const json::value* merged)
+	{
+		if (const json::value* type = inline_desc.if_contains("__type"); type && type->is_string()) return type;
+		const json::object* whole = merged ? merged->if_object() : nullptr;
+		const json::value* type = whole ? whole->if_contains("__type") : nullptr;
+		return type && type->is_string() ? type : nullptr;
+	}
+
+	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
+	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
+	// checked, so it is refused.
+	std::optional<reference_issue> reference_of(const desc::desc_system& descs, reference_scope& scope, const json::value& value, const json::value* merged,
+		std::string_view owner_protocol, int depth)
+	{
+		if (const auto* text = value.if_string()) {
+			if (std::string why = reference_refusal(*text, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+			return std::nullopt;
+		}
+		const json::object* inline_desc = value.if_object();
+		if (!inline_desc) return std::nullopt;
+		// An object that names no type, nor does the component it patches (#740), is a {guid, path} reference.
+		const json::value* type = type_of_inline(*inline_desc, merged);
+		if (!type) return reference_object_refusal(value, scope, owner_protocol);
+		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
+		const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()));
+		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
+		if (const json::value* parent = inline_desc->if_contains("__parent")) {
+			if (auto issue = reference_of(descs, scope, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
+		}
+		return references_of(descs, scope, *schema, value, merged, owner_protocol, depth + 1);
+	}
+
+	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
+	// a tag the codec may load, and is held to the same rule. A string without one is not taken for a tag.
+	std::optional<reference_issue> tags_in(const json::value& value, std::string_view owner_protocol)
+	{
+		if (const auto* text = value.if_string()) {
+			// Judged as the codec would load it: res::tag normalizes the text first ("user:\\x" names user://).
+			const res::tag reference{ std::string(text->data(), text->size()) };
+			if (reference.protocol().empty()) return std::nullopt;
+			if (std::string why = res::reference_problem(reference, owner_protocol); !why.empty()) return reference_issue{ {}, std::move(why) };
+			return std::nullopt;
+		}
+		if (const auto* items = value.if_array()) {
+			for (std::size_t i = 0; i < items->size(); ++i) {
+				if (auto issue = tags_in((*items)[i], owner_protocol)) return under(std::move(issue), std::to_string(i));
+			}
+		}
+		if (const auto* object = value.if_object()) {
+			for (const auto& member : *object) {
+				if (auto issue = tags_in(member.value(), owner_protocol)) return under(std::move(issue), std::string_view(member.key()));
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::optional<reference_issue> structure_references(const desc::desc_system& descs, reference_scope& scope, const desc::field_schema& field, const json::value& value,
+		const json::value* merged, std::string_view owner_protocol, int depth)
+	{
+		const desc::type_schema* nested = value.is_object() ? descs.find_schema(field.ref_type) : nullptr;
+		if (!nested) return std::nullopt;
+		if (depth >= k_max_inline_depth) return reference_issue{ {}, "structures nested too deep" };
+		return references_of(descs, scope, *nested, value, merged, owner_protocol, depth + 1);
+	}
+
+	std::optional<reference_issue> field_references(const desc::desc_system& descs, reference_scope& scope, const desc::field_schema& field, const json::value& value,
+		const json::value* merged, std::string_view owner_protocol, int depth)
+	{
+		if (is_tag_kind(field.kind)) return reference_of(descs, scope, value, merged, owner_protocol, depth);
+		if (field.kind == desc::field_kind::structure) return structure_references(descs, scope, field, value, merged, owner_protocol, depth);
+		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
+		if (field.kind == desc::field_kind::map) {
+			const json::object* entries = value.if_object();
+			if (!entries) return std::nullopt;
+			for (const auto& entry : *entries) {
+				std::optional<reference_issue> issue;
+				if (is_tag_kind(field.element)) issue = reference_of(descs, scope, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, entry.value(), nullptr, owner_protocol, depth);
+				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
+				if (issue) return under(std::move(issue), res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+			}
+			return std::nullopt;
+		}
+		const json::array* items = value.if_array();
+		if (field.kind != desc::field_kind::array || !items) return std::nullopt;
+		for (std::size_t i = 0; i < items->size(); ++i) {
+			std::optional<reference_issue> issue;
+			if (is_tag_kind(field.element)) issue = reference_of(descs, scope, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
+			else if (field.element == desc::field_kind::custom) issue = tags_in((*items)[i], owner_protocol);
+			if (issue) return under(std::move(issue), std::to_string(i));
+		}
+		return std::nullopt;
+	}
+
+	std::string pointer_of(std::string_view key)
+	{
+		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
+	}
+
+	// Every reference `data` (a patch or a whole component of `schema`) holds, in its own fields and through structures,
+	// arrays and inline descs, read where the desc reads it: the field's key or one of its read aliases.
+	std::optional<reference_issue> references_of(const desc::desc_system& descs, reference_scope& scope, const desc::type_schema& schema, const json::value& data,
+		const json::value* merged, std::string_view owner_protocol, int depth)
+	{
+		for (const desc::field_schema& field : schema.fields) {
+			std::vector<std::string> pointers{ pointer_of(field.key) };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			for (const std::string& pointer : pointers) {
+				const json::value* value = desc::json_pointer_get(data, pointer);
+				if (!value || value->is_null()) continue;
+				if (auto issue = field_references(descs, scope, field, *value, merged_at(merged, pointer), owner_protocol, depth)) {
+					return under(std::move(issue), std::string_view(pointer).substr(1));
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
+	// A {guid, path} reference a patch puts into a reference field: no __type, and good as a reference.
+	bool is_patch_reference(const json::value& value)
+	{
+		return edt::is_reference_object(value) && edt::reference_object_problem(value.as_object()).empty();
+	}
+
+	// A value the patch gives a reference field replaces what is there whole when either is a {guid, path} reference
+	// (EPIC-57 section 4.4): a reference merged into an inline desc would keep its __type and the old desc would load, into
+	// another reference it would keep the old guid, and an inline desc merged into a reference would mix the two. The form
+	// of the patch, of the base and the kind of the field decide. `patch` is the part of the patch at `at`; `base` and
+	// `edited` are whole components.
+	void replace_references(const desc::desc_system& descs, const desc::type_schema& schema, const json::value& patch, const json::value& base,
+		json::value& edited, const std::string& at, int depth)
+	{
+		if (depth >= k_max_inline_depth) return;
+		const auto replaces = [&](const json::value& given, const std::string& where) {
+			if (is_patch_reference(given)) return true;
+			const json::value* was = desc::json_pointer_get(base, where);
+			return was && is_patch_reference(*was) && given.as_object().contains("__type");
+		};
+		for (const desc::field_schema& field : schema.fields) {
+			std::vector<std::string> pointers{ pointer_of(field.key) };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			for (const std::string& pointer : pointers) {
+				const json::value* value = desc::json_pointer_get(patch, pointer);
+				if (!value || !value->is_object()) continue;
+				const std::string where = at + pointer;
+				if (is_tag_kind(field.kind)) {
+					if (replaces(*value, where)) {
+						desc::json_pointer_set(edited, where, *value);
+					} else if (const json::value* type = type_of_inline(value->as_object(), desc::json_pointer_get(edited, where))) {
+						if (const desc::type_schema* nested = descs.find_schema(std::string_view(type->as_string()))) {
+							replace_references(descs, *nested, *value, base, edited, where, depth + 1);
+						}
+					}
+				} else if (field.kind == desc::field_kind::structure) {
+					if (const desc::type_schema* nested = descs.find_schema(field.ref_type)) replace_references(descs, *nested, *value, base, edited, where, depth + 1);
+				} else if (field.kind == desc::field_kind::map) {
+					const desc::type_schema* nested = field.element == desc::field_kind::structure ? descs.find_schema(field.ref_type) : nullptr;
+					for (const auto& entry : value->as_object()) {
+						if (!entry.value().is_object()) continue;
+						const std::string item = where + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size()));
+						if (is_tag_kind(field.element)) {
+							if (replaces(entry.value(), item)) desc::json_pointer_set(edited, item, entry.value());
+						} else if (nested) {
+							replace_references(descs, *nested, entry.value(), base, edited, item, depth + 1);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// `base` with `patch` applied (RFC 7386, merge_patch), a reference in it replacing what was there (replace_references).
+	json::object patched_fields(const desc::desc_system& descs, const std::string& type, const json::object& base, const json::object& patch)
+	{
+		json::value edited = merge_patch(base, patch);
+		if (const desc::type_schema* schema = descs.find_schema(type)) replace_references(descs, *schema, json::value(patch), json::value(base), edited, {}, 0);
+		return std::move(edited.as_object());
+	}
+
+	// Every field the patch sets (null clears it, which always fits) must be a field of the type and fit it. The schema
+	// publishes leaves ("/transform/position") and a patch nests them as objects; the check descends through those and
+	// through structure fields, quietly, and names the full path of the first field that does not fit. Every reference in
+	// it, nested ones and those of inline descs included, follows the rule of #697 for a desc of `owner_protocol` (the
+	// level's), as it would when loaded.
+	std::optional<cmd::result> check_fields(const desc::desc_system& descs, reference_scope& scope, const std::string& type, const json::object& patch,
+		const json::object& edited, std::string_view owner_protocol)
+	{
+		const desc::type_schema* schema = descs.find_schema(type);
+		if (!schema) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
+		}
+		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
+		if (bad.status != desc::override_status::valid) {
+			const std::string expected = desc::override_expectation(*schema, bad, &descs.schemas());
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({}){}{}", type, std::string_view(bad.pointer).substr(1),
+				bad.status == desc::override_status::stale ? "no such field" : "the value does not fit",
+				expected.empty() ? "" : ": expected ", expected));
+		}
+		const json::value whole(edited);
+		if (auto issue = references_of(descs, scope, *schema, json::value(patch), &whole, owner_protocol, 0)) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} ({})", type, issue->path, issue->why));
+		}
+		return std::nullopt;
+	}
+
+	// Three finite numbers a float holds.
+	std::optional<glm::vec3> vec3_of(const json::value* value)
+	{
+		if (!value || !value->is_array() || value->as_array().size() != 3) return std::nullopt;
+		glm::vec3 out{};
+		for (std::size_t i = 0; i < 3; ++i) {
+			const json::value& item = value->as_array()[i];
+			double number = 0.0;
+			if (item.is_double()) number = item.as_double();
+			else if (item.is_int64()) number = static_cast<double>(item.as_int64());
+			else if (item.is_uint64()) number = static_cast<double>(item.as_uint64());
+			else return std::nullopt;
+			if (!std::isfinite(number) || std::abs(number) > FLT_MAX) return std::nullopt;
+			out[static_cast<glm::length_t>(i)] = static_cast<float>(number);
+		}
+		return out;
+	}
+
+	// The desc type of a component: its own, else the type of the desc it references (`"key": "<tag>"`; in the object
+	// form the key is the type), as the assembler spawns it. Unlike
+	// the inspector, which draws every frame and takes the type once the desc is there, a command waits for it: its
+	// answer must not depend on whether a load has finished yet.
+	std::string type_of(const scn::prefab_desc::prefab_comp_node& component)
+	{
+		if (!component.type_name.empty()) return component.type_name;
+		if (!component.parent_desc.is_valid()) return {};
+		component.parent_desc.wait();
+		return component.parent_desc.is_ready() ? std::string(component.parent_desc->get_type()) : std::string{};
+	}
+
+	constexpr std::size_t max_name_bytes = 256;
+
+	std::optional<cmd::result> check_name(std::string_view name)
+	{
+		if (name.empty() || name.size() > max_name_bytes) {
+			return failure(cmd::codes::invalid_args, std::format("a name is 1 to {} bytes", max_name_bytes));
+		}
+		if (std::ranges::any_of(name, [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7f; })) {
+			return failure(cmd::codes::invalid_args, "a name has no control characters");
+		}
+		return std::nullopt;
+	}
+
+	// "__" keys belong to the desc format (__type, __parent).
+	std::optional<cmd::result> check_component_key(std::string_view key)
+	{
+		if (key.empty() || key.starts_with("__")) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' is not a component key: empty or starting with \"__\"", key));
+		}
+		return std::nullopt;
+	}
+
+	// At most `bytes` of `text`, cut before a UTF-8 continuation byte.
+	std::string_view utf8_prefix(std::string_view text, std::size_t bytes)
+	{
+		if (text.size() <= bytes) return text;
+		while (bytes > 0 && (static_cast<unsigned char>(text[bytes]) & 0xC0) == 0x80) --bytes;
+		return text.substr(0, bytes);
+	}
+
+	// name + suffix, then name + suffix + _1, _2, ... : the first that no sibling has (as scene_editor names a copy),
+	// `name` shortened so the result stays a valid name.
+	std::string unique_name(const std::vector<prefab_node>& siblings, std::string_view name, std::string_view suffix)
+	{
+		const auto taken = [&](const std::string& candidate) {
+			return std::ranges::any_of(siblings, [&](const prefab_node& n) { return n.name == candidate; });
+		};
+		for (int i = 0;; ++i) {
+			const std::string tail = i == 0 ? std::string(suffix) : std::format("{}_{}", suffix, i);
+			std::string candidate = std::string(utf8_prefix(name, max_name_bytes - tail.size())) + tail;
+			if (!taken(candidate)) return candidate;
+		}
+	}
+
+	json::object ref_json(const std::string& world, std::span<const std::uint64_t> path)
+	{
+		json::array ids;
+		ids.reserve(path.size());
+		for (const std::uint64_t id : path) ids.emplace_back(json::string(desc::format_node_id(id)));
+		return json::object{ { "context", json::string(world) }, { "path", std::move(ids) } };
+	}
+
+	// The node at `path` below the root of `world`, the root for an empty path.
+	prefab_node* node_at(prefab_node& root, std::span<const std::uint64_t> path)
+	{
+		prefab_node* node = &root;
+		for (const std::uint64_t id : path) {
+			const auto it = std::ranges::find(node->children, id, &prefab_node::node_id);
+			if (it == node->children.end()) return nullptr;
+			node = &*it;
+		}
+		return node;
+	}
+
+	std::size_t index_arg(const json::object& args, std::size_t size)
+	{
+		const json::value* index = args.if_contains("index");
+		const auto number = index ? cmd::json_schema::integer_of(*index) : std::nullopt;
+		if (!number || *number < 0) return size;
+		return std::min(static_cast<std::size_t>(*number), size);
+	}
+
+	struct context
+	{
+		edt::scene_command_sources sources;
+
+		// The edit runs only when the caller may edit now. `apply` checks everything first and calls `changing()` right
+		// before it changes the worlds: nothing undoes what it did when it fails after that, so after changing() it
+		// does not fail. A commit follows a change; an edit that leaves the scene as it is commits nothing and says
+		// `unchanged` (the generation stays).
+		using edit_fn = std::function<cmd::result(edt::scene_document&, const json::object& args, json::object& out,
+			const std::function<void()>& changing)>;
+
+		cmd::result run(const cmd::call& call, std::string_view label, const edit_fn& apply, bool keeps_selection = false)
+		{
+			const json::object& args = call.args.as_object();
+			edt::scene_document& scene = edt::scene_of(sources.documents);
+			if (const json::value* document = args.if_contains("document")) {
+				const auto id = cmd::json_schema::integer_of(*document);
+				if (!id || static_cast<std::uint64_t>(*id) != scene.id()) {
+					return failure(cmd::codes::not_found, "document is not the scene");
+				}
+			}
+			if (scene.edits_locked()) {
+				return failure(cmd::codes::busy, "the scene is playing: stop play first");
+			}
+			if (call.from.kind == cmd::origin_kind::agent && sources.gesture_active && sources.gesture_active()) {
+				return failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
+			}
+			std::uint64_t expected = call.expected_generation;
+			if (const json::value* given = args.if_contains("expected_generation")) {
+				const auto number = cmd::json_schema::integer_of(*given);
+				if (!number || *number < 0) return failure(cmd::codes::invalid_args, "expected_generation is a generation number");
+				// 0: not given.
+				if (*number != 0) expected = static_cast<std::uint64_t>(*number);
+			}
+			if (expected != 0 && expected != scene.generation()) {
+				cmd::result stale = failure(cmd::codes::stale,
+					std::format("the scene is at generation {}, not {}: read it again", scene.generation(), expected));
+				stale.value = json::object{ { "generation", scene.generation() } };
+				return stale;
+			}
+
+			edt::edit_origin_scope origin(scene, call.from);
+			bool changed = false;
+			json::object out;
+			cmd::result outcome = apply(scene, args, out, [&] {
+				if (!changed) {
+					// The panels point into the nodes that are about to move; an edit of a world's systems moves none.
+					if (!keeps_selection) sources.selection.clear();
+					changed = true;
+				}
+			});
+			if (!outcome.ok) return outcome;
+			if (changed) scene.commit(label);
+			else out["unchanged"] = true;
+			out["generation"] = scene.generation();
+			return cmd::result::success(std::move(out));
+		}
+
+		// A node of the edited desc, not of a prefab's content.
+		static std::optional<cmd::result> own_node(const mutable_location& at)
+		{
+			if (!at.target.empty()) return failure(cmd::codes::failed, std::string(inside_instance));
+			return std::nullopt;
+		}
+
+		bool locate(edt::scene_document& scene, const json::value& ref, mutable_location& at, cmd::result& error) const
+		{
+			if (!edt::scene_ref::locate(scene, ref, at, error)) return false;
+			// A path past a plain node leads nowhere: only an instance has content of its own below it.
+			if (!at.target.empty() && !edt::override_edit::referenced_prefab(*at.owner)) {
+				error = failure(cmd::codes::not_found, "no node at that path");
+				return false;
+			}
+			return true;
+		}
+
+		std::optional<cmd::result> check_type(const std::string& type) const
+		{
+			const desc::desc_system* descs = sources.services.descs();
+			if (!descs || !descs->is_registered(type)) {
+				return failure(cmd::codes::invalid_args, std::format("no desc type '{}'", type));
+			}
+			return std::nullopt;
+		}
+
+		// Where the call's references look a guid up. Only an agent's call waits for the asset index (as for a gesture): a
+		// person's or a test's guid is judged against what the index holds now.
+		reference_scope references_for(const cmd::call& call) const
+		{
+			std::optional<std::string> wait;
+			if (call.from.kind == cmd::origin_kind::agent && sources.asset_index_wait) wait = sources.asset_index_wait();
+			return reference_scope{ wait ? nullptr : sources.services.resources(), std::move(wait) };
+		}
+
+		// A component of `type` with `fields`, checked against the type.
+		std::optional<cmd::result> make_component(const std::string& type, const json::object& fields,
+			std::string_view owner_protocol, reference_scope& scope, scn::prefab_desc::prefab_comp_node& out) const
+		{
+			if (auto bad = check_type(type)) return bad;
+			json::object kept = fields;
+			strip_nulls(kept);
+			if (!kept.empty()) {
+				if (auto bad = check_fields(*sources.services.descs(), scope, type, kept, kept, owner_protocol)) return bad;
+			}
+			out.type_name = type;
+			out.overrides = std::move(kept);
+			return std::nullopt;
+		}
+	};
+
+	// ---- scene.node.* -----------------------------------------------------------------------------------------
+
+	cmd::result node_create(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Create node", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			mutable_location parent;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("parent"), parent, error)) return error;
+			if (auto bad = context::own_node(parent)) return *bad;
+
+			prefab_node node;
+			node.node_id = desc::new_node_id();
+			const json::value* name = args.if_contains("name");
+			node.name = name ? std::string(name->as_string()) : std::string("Entity");
+			if (auto bad = check_name(node.name)) return *bad;
+			reference_scope scope = ctx.references_for(call);
+			if (const json::value* components = args.if_contains("components")) {
+				for (const auto& [key, spec] : components->as_object()) {
+					if (auto bad = check_component_key(key)) return *bad;
+					const json::object* object = spec.if_object();
+					const json::value* type = object ? object->if_contains("type") : nullptr;
+					const json::value* fields = object ? object->if_contains("fields") : nullptr;
+					if (!type || !type->is_string() || (fields && !fields->is_object())) {
+						return failure(cmd::codes::invalid_args, std::format("component '{}' is {{type: string, fields?: object}}", std::string_view(key)));
+					}
+					scn::prefab_desc::prefab_comp_node component;
+					if (auto bad = ctx.make_component(std::string(type->as_string()),
+							fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope, component)) {
+						return *bad;
+					}
+					node.components[std::string(key)] = std::move(component);
+				}
+			}
+			if (auto busy = held_back(scope)) return *busy;
+
+			const std::uint64_t id = node.node_id;
+			changing();
+			auto& children = parent.owner->children;
+			children.insert(children.begin() + static_cast<std::ptrdiff_t>(index_arg(args, children.size())), std::move(node));
+			std::vector<std::uint64_t> path = parent.path;
+			path.push_back(id);
+			out["ref"] = ref_json(parent.world_name, path);
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result node_delete(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Delete node", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world cannot be deleted");
+
+			prefab_node* parent = node_at(scene.world_descs[at.world].get_root(), std::span(at.path).first(at.path.size() - 1));
+			ASSERT_MSG(parent, "the parent of a located node is gone");
+			changing();
+			std::erase_if(parent->children, [&](const prefab_node& n) { return n.node_id == at.path.back(); });
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result node_duplicate(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Duplicate node", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world cannot be duplicated");
+
+			prefab_node* parent = node_at(scene.world_descs[at.world].get_root(), std::span(at.path).first(at.path.size() - 1));
+			ASSERT_MSG(parent, "the parent of a located node is gone");
+			prefab_node copy = *at.owner;
+			scn::regenerate_node_ids(copy);
+			copy.name = unique_name(parent->children, copy.name, "_copy");
+			const std::uint64_t id = copy.node_id;
+			changing();
+			auto& children = parent->children;
+			const auto original = std::ranges::find(children, at.path.back(), &prefab_node::node_id);
+			children.insert(original + 1, std::move(copy));
+			// pop_back + push_back, not back() = id: GCC 15 -O2 cannot see the path is never empty here (-Warray-bounds).
+			std::vector<std::uint64_t> path = at.path;
+			path.pop_back();
+			path.push_back(id);
+			out["ref"] = ref_json(at.world_name, path);
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result node_reparent(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Reparent node", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			mutable_location at;
+			mutable_location parent;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error) || !ctx.locate(scene, args.at("parent"), parent, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+			if (auto bad = context::own_node(parent)) return *bad;
+			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world cannot be moved");
+			if (at.world != parent.world) return failure(cmd::codes::invalid_args, "a node moves within its world only");
+			if (parent.path.size() >= at.path.size() && std::equal(at.path.begin(), at.path.end(), parent.path.begin())) {
+				return failure(cmd::codes::invalid_args, "a node cannot move under itself");
+			}
+
+			prefab_node& root = scene.world_descs[at.world].get_root();
+			prefab_node* old_parent = node_at(root, std::span(at.path).first(at.path.size() - 1));
+			ASSERT_MSG(old_parent, "the parent of a located node is gone");
+			std::vector<std::uint64_t> path = parent.path;
+			path.push_back(at.path.back());
+			out["ref"] = ref_json(at.world_name, path);
+			const auto it = std::ranges::find(old_parent->children, at.path.back(), &prefab_node::node_id);
+			const auto current = static_cast<std::size_t>(it - old_parent->children.begin());
+			if (old_parent == parent.owner && index_arg(args, old_parent->children.size() - 1) == current) {
+				return cmd::result::success(); // already there
+			}
+			changing();
+			prefab_node moved = std::move(*it);
+			old_parent->children.erase(it);
+			// Found again: taking the node out may have moved the new parent in memory.
+			prefab_node* new_parent = node_at(root, parent.path);
+			ASSERT_MSG(new_parent, "the new parent is gone");
+			auto& children = new_parent->children;
+			children.insert(children.begin() + static_cast<std::ptrdiff_t>(index_arg(args, children.size())), std::move(moved));
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result node_rename(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Rename node", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world is named by the level");
+
+			std::string name(args.at("name").as_string());
+			if (auto bad = check_name(name)) return *bad;
+			if (name == at.owner->name) return cmd::result::success();
+			changing();
+			at.owner->name = std::move(name);
+			return cmd::result::success();
+		});
+	}
+
+	// ---- component.* --------------------------------------------------------------------------------------------
+
+	cmd::result component_add(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Add component", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+
+			const std::string key(args.at("key").as_string());
+			if (auto bad = check_component_key(key)) return *bad;
+			if (at.owner->components.contains(key)) {
+				return failure(cmd::codes::invalid_args, std::format("the node already has a component '{}'", key));
+			}
+			const json::value* fields = args.if_contains("fields");
+			scn::prefab_desc::prefab_comp_node component;
+			reference_scope scope = ctx.references_for(call);
+			if (auto bad = ctx.make_component(std::string(args.at("type").as_string()), fields ? fields->as_object() : json::object{}, scene.level_tag.protocol(), scope,
+					component)) {
+				return *bad;
+			}
+			if (auto busy = held_back(scope)) return *busy;
+			changing();
+			at.owner->components[key] = std::move(component);
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result component_remove(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Remove component", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			if (auto bad = context::own_node(at)) return *bad;
+
+			const std::string key(args.at("key").as_string());
+			if (!at.owner->components.contains(key)) {
+				return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
+			}
+			changing();
+			at.owner->components.erase(key);
+			return cmd::result::success();
+		});
+	}
+
+	cmd::result component_set(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Edit component", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			const std::string key(args.at("key").as_string());
+			const json::object& patch = args.at("patch").as_object();
+			const desc::desc_system* descs = ctx.sources.services.descs();
+			if (!descs) return failure(cmd::codes::failed, "no desc system");
+
+			if (at.target.empty()) {
+				const auto component = at.owner->components.find(key);
+				if (component == at.owner->components.end()) {
+					return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
+				}
+				json::object edited = patched_fields(*descs, type_of(component->second), component->second.overrides, patch);
+				reference_scope scope = ctx.references_for(call);
+				if (auto bad = check_fields(*descs, scope, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+				if (auto busy = held_back(scope)) return *busy;
+				if (edited == component->second.overrides) return cmd::result::success();
+				changing();
+				component->second.overrides = std::move(edited);
+				return cmd::result::success();
+			}
+
+			// A node of the prefab's content: the edit becomes override records on the instance.
+			scn::ecs_assembler* assembler = ctx.sources.services.assembler();
+			if (!assembler) return failure(cmd::codes::failed, "no assembler to expand the prefab instance");
+			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_tag(at.world));
+			if (!base) return failure(cmd::codes::not_found, "no node at that path inside the instance");
+			const auto component = base->components.find(key);
+			if (component == base->components.end()) {
+				return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
+			}
+			const json::object base_json = edt::override_edit::component_json(component->second);
+			const json::object effective = edt::override_edit::effective_component(*at.owner, at.target, key, base_json);
+			json::object edited = patched_fields(*descs, type_of(component->second), effective, patch);
+			reference_scope scope = ctx.references_for(call);
+			if (auto bad = check_fields(*descs, scope, type_of(component->second), patch, edited, scene.level_tag.protocol())) return *bad;
+			if (auto busy = held_back(scope)) return *busy;
+			if (edited == effective) return cmd::result::success();
+			changing();
+			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited, descs, descs->find_schema(type_of(component->second)));
+			return cmd::result::success();
+		});
+	}
+
+	// ---- transform.set ----------------------------------------------------------------------------------------
+
+	cmd::result transform_set(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Move node", [&ctx](edt::scene_document& scene, const json::object& args, json::object&, const auto& changing) {
+			mutable_location at;
+			cmd::result error;
+			if (!ctx.locate(scene, args.at("ref"), at, error)) return error;
+			const auto position = vec3_of(args.if_contains("position"));
+			const auto rotation = vec3_of(args.if_contains("rotation"));
+			const auto scale = vec3_of(args.if_contains("scale"));
+			for (const char* name : { "position", "rotation", "scale" }) {
+				if (args.contains(name) && !vec3_of(args.if_contains(name))) {
+					return failure(cmd::codes::invalid_args, std::format("{} is [x, y, z]", name));
+				}
+			}
+			if (!position && !rotation && !scale) return failure(cmd::codes::invalid_args, "nothing to set: give position, rotation or scale");
+
+			if (at.target.empty()) {
+				prefab_node& node = *at.owner;
+				const glm::vec3 to_position = position.value_or(node.position);
+				const glm::vec3 to_rotation = rotation.value_or(node.rotation);
+				const glm::vec3 to_scale = scale.value_or(node.scale);
+				if (node.has_transform && to_position == node.position && to_rotation == node.rotation && to_scale == node.scale) {
+					return cmd::result::success();
+				}
+				changing();
+				node.position = to_position;
+				node.rotation = to_rotation;
+				node.scale = to_scale;
+				node.has_transform = true;
+				return cmd::result::success();
+			}
+
+			scn::ecs_assembler* assembler = ctx.sources.services.assembler();
+			if (!assembler) return failure(cmd::codes::failed, "no assembler to expand the prefab instance");
+			const auto base = edt::override_edit::find_base_node(*assembler, *at.owner, at.target, scene.world_tag(at.world));
+			if (!base) return failure(cmd::codes::not_found, "no node at that path inside the instance");
+			glm::vec3 pos{};
+			glm::vec3 rot{};
+			glm::vec3 scl{ 1.0f };
+			edt::override_edit::effective_transform(*at.owner, at.target, *base, pos, rot, scl);
+			if (position.value_or(pos) == pos && rotation.value_or(rot) == rot && scale.value_or(scl) == scl) {
+				return cmd::result::success();
+			}
+			changing();
+			edt::override_edit::write_transform(*at.owner, at.target, *base,
+				position.value_or(pos), rotation.value_or(rot), scale.value_or(scl));
+			return cmd::result::success();
+		});
+	}
+
+	// ---- world.systems.* ----------------------------------------------------------------------------------------
+
+	// The world named by `world`, else the active one.
+	scn::world_desc* world_of(edt::scene_document& scene, const json::object& args, cmd::result& error)
+	{
+		std::string wanted;
+		if (const json::value* given = args.if_contains("world")) {
+			wanted = std::string(given->as_string());
+		} else if (const std::string* active = scene.active_world_name()) {
+			wanted = *active;
+		} else {
+			error = failure(cmd::codes::not_found, "the scene has no world");
+			return nullptr;
+		}
+		const std::size_t count = std::min(scene.world_names.size(), scene.world_descs.size());
+		for (std::size_t i = 0; i < count; ++i) {
+			if (scene.world_names[i] == wanted) return &scene.world_descs[i];
+		}
+		std::string names;
+		for (std::size_t i = 0; i < count; ++i) names += (i ? ", " : "") + scene.world_names[i];
+		error = failure(cmd::codes::not_found, std::format("no world '{}' (the worlds: {})", wanted, names));
+		return nullptr;
+	}
+
+	// The registered system names a message can hold (at most 60), as "a, b, c".
+	std::string registered_names(const ecs::system_factory* factory)
+	{
+		if (!factory) return "none";
+		const std::vector<std::string> names = factory->registry().names();
+		std::string text;
+		for (std::size_t i = 0; i < names.size() && i < 60; ++i) text += (i ? ", " : "") + names[i];
+		if (names.size() > 60) text += std::format(", ... ({} more)", names.size() - 60);
+		return text.empty() ? "none" : text;
+	}
+
+	json::array names_json(const std::vector<std::string>& names)
+	{
+		json::array out;
+		out.reserve(names.size());
+		for (const std::string& name : names) out.emplace_back(json::string(name));
+		return out;
+	}
+
+	std::string system_arg(const json::object& args)
+	{
+		return std::string(args.at("system").as_string());
+	}
+
+	cmd::result world_systems_list(context& ctx, const cmd::call& call)
+	{
+		const json::object& args = call.args.as_object();
+		edt::scene_document& scene = edt::scene_of(ctx.sources.documents);
+		cmd::result error;
+		scn::world_desc* world = world_of(scene, args, error);
+		if (!world) return error;
+		const ecs::system_factory* factory = ctx.sources.services.sfactory();
+		json::array listed;
+		for (const std::string& name : world->get_systems()) {
+			const ecs::system_entry* entry = factory ? factory->registry().find(name) : nullptr;
+			json::object item{ { "name", json::string(name) }, { "known", entry != nullptr } };
+			if (entry) {
+				item["phase"] = json::string(entry->desc.phase.name());
+				item["run_in_edit"] = entry->desc.run_in_edit;
+			}
+			listed.push_back(std::move(item));
+		}
+		json::array available;
+		if (factory) {
+			for (const std::string& name : factory->registry().names()) {
+				if (std::ranges::find(world->get_systems(), name) != world->get_systems().end()) continue;
+				const ecs::system_entry* entry = factory->registry().find(name);
+				available.push_back(json::object{ { "name", json::string(name) }, { "phase", json::string(entry->desc.phase.name()) },
+					{ "run_in_edit", entry->desc.run_in_edit } });
+			}
+		}
+		return cmd::result::success(json::object{ { "world", json::string(world->get_name()) }, { "generation", scene.generation() },
+			{ "systems", std::move(listed) }, { "available", std::move(available) } });
+	}
+
+	cmd::result world_systems_add(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Add world system", [&ctx](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			const ecs::system_factory* factory = ctx.sources.services.sfactory();
+			if (!factory || !factory->registry().find(name)) {
+				return failure(cmd::codes::invalid_args, std::format("no system '{}' is registered (the registered systems: {})", name, registered_names(factory)));
+			}
+			std::vector<std::string> systems = world->get_systems();
+			if (std::ranges::find(systems, name) != systems.end()) {
+				return failure(cmd::codes::invalid_args, std::format("'{}' is already in the systems of this world", name));
+			}
+			const std::size_t at = index_arg(args, systems.size());
+			systems.insert(systems.begin() + static_cast<std::ptrdiff_t>(at), name);
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
+	cmd::result world_systems_remove(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Remove world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			std::vector<std::string> systems = world->get_systems();
+			const auto found = std::ranges::find(systems, name);
+			if (found == systems.end()) {
+				std::string current;
+				for (std::size_t i = 0; i < systems.size() && i < 60; ++i) current += (i ? ", " : "") + systems[i];
+				return failure(cmd::codes::not_found, std::format("'{}' is not in the systems of this world (they are: {})", name, current.empty() ? "none" : current));
+			}
+			systems.erase(found);
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
+	cmd::result world_systems_move(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Move world system", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			cmd::result error;
+			scn::world_desc* world = world_of(scene, args, error);
+			if (!world) return error;
+			const std::string name = system_arg(args);
+			std::vector<std::string> systems = world->get_systems();
+			const auto found = std::ranges::find(systems, name);
+			if (found == systems.end()) {
+				return failure(cmd::codes::not_found, std::format("'{}' is not in the systems of this world", name));
+			}
+			const auto target = cmd::json_schema::integer_of(args.at("to"));
+			if (!target || *target < 0 || static_cast<std::size_t>(*target) >= systems.size()) {
+				return failure(cmd::codes::invalid_args, std::format("`to` is a place 0..{} in the list of this world", systems.size() - 1));
+			}
+			const std::size_t from = static_cast<std::size_t>(found - systems.begin());
+			const std::size_t to = static_cast<std::size_t>(*target);
+			out["systems"] = names_json(systems);
+			if (from == to) return cmd::result::success();
+			std::string moved = std::move(systems[from]);
+			systems.erase(systems.begin() + static_cast<std::ptrdiff_t>(from));
+			systems.insert(systems.begin() + static_cast<std::ptrdiff_t>(to), std::move(moved));
+			changing();
+			world->set_systems(systems);
+			out["systems"] = names_json(world->get_systems());
+			return cmd::result::success();
+		}, true);
+	}
+
+	// ---- registration -----------------------------------------------------------------------------------------
+
+	constexpr std::string_view common_args = R"("document":{"type":"integer","minimum":1,"description":"the scene document's id; default: the scene"},
+		"expected_generation":{"type":"integer","minimum":0,"description":"the generation the edit was built on (from scene.query or an earlier edit); another one gives stale"})";
+
+	std::string args_with(std::string_view properties, std::string_view required)
+	{
+		return std::format(R"({{"type":"object","properties":{{{},{}}},"required":[{}],"additionalProperties":false}})",
+			properties, common_args, required);
+	}
+
+	constexpr std::string_view generation_result = R"({"type":"object","properties":{"generation":{"type":"integer"},
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view ref_result = R"({"type":"object","properties":{"generation":{"type":"integer"},"ref":@REF@,
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view systems_result = R"({"type":"object","properties":{"generation":{"type":"integer"},
+		"systems":{"type":"array","items":{"type":"string"},"description":"the systems of the world now, in order"},
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view index_arg_schema = R"("index":{"type":"integer","minimum":0,"description":"place among the children; past the end (or none): last"})";
+}
+
+std::vector<edt::registration> edt::register_scene_commands(cmd::command_registry& commands, scene_command_sources sources)
+{
+	auto ctx = std::make_shared<context>(context{ std::move(sources) });
+	std::vector<registration> out;
+	const auto add = [&](std::string id, std::string summary, std::string args, std::string_view result,
+		cmd::result (*body)(context&, const cmd::call&)) {
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.summary = std::move(summary);
+		desc.args_schema = parse_schema(args);
+		desc.result_schema = parse_schema(result);
+		desc.mutates = true;
+		desc.category = cmd::agent_category::scene_edit;
+		desc.invoke = [ctx, body](const cmd::call& call) { return body(*ctx, call); };
+		registration added = commands.add(std::move(desc));
+		if (added.active()) out.push_back(std::move(added));
+	};
+
+	add("scene.node.create", "Create a node under `parent` (a ref; the world root: path []), with components {key: {type, fields?}}",
+		args_with(std::string(R"("parent":@REF@,"name":{"type":"string","minLength":1},)") + std::string(index_arg_schema) + R"(,
+			"components":{"type":"object","description":"{key: {type: desc type, fields?: object}}"})",
+			R"("parent")"),
+		ref_result, &node_create);
+	add("scene.node.delete", "Delete a node with everything under it", args_with(R"("ref":@REF@)", R"("ref")"), generation_result, &node_delete);
+	add("scene.node.duplicate", "Copy a node with everything under it right after it; the copy gets new ids",
+		args_with(R"("ref":@REF@)", R"("ref")"), ref_result, &node_duplicate);
+	add("scene.node.reparent", "Move a node under `parent` (same world) at `index` (default: last)",
+		args_with(std::string(R"("ref":@REF@,"parent":@REF@,)") + std::string(index_arg_schema), R"("ref","parent")"), ref_result, &node_reparent);
+	add("scene.node.rename", "Rename a node (names are for display: nodes are addressed by id)",
+		args_with(R"("ref":@REF@,"name":{"type":"string","minLength":1})", R"("ref","name")"), generation_result, &node_rename);
+	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
+		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"type":{"type":"string","minLength":1},"fields":{"type":"object"})",
+			R"("ref","key","type")"),
+		generation_result, &component_add);
+	add("component.remove", "Remove the component `key` of a node", args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1})", R"("ref","key")"),
+		generation_result, &component_remove);
+	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records. "
+		"A reference with a guid is answered `busy` while the editor's asset index is still being built",
+		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"patch":{"type":"object"})", R"("ref","key","patch")"),
+		generation_result, &component_set);
+	add("transform.set", "Set position, rotation (Euler degrees) and/or scale of a node; inside a prefab instance as override records",
+		args_with(R"("ref":@REF@,"position":{"type":"array","items":{"type":"number"}},"rotation":{"type":"array","items":{"type":"number"}},"scale":{"type":"array","items":{"type":"number"}})",
+			R"("ref")"),
+		generation_result, &transform_set);
+	add("world.systems.add", "Add a registered system (game module systems included) to a world's list at `index` (default: last); an unknown name is refused with the registered ones, a system already in the list too",
+		args_with(R"("world":{"type":"string","description":"world name; default the active world"},"system":{"type":"string","minLength":1},)" + std::string(index_arg_schema),
+			R"("system")"),
+		systems_result, &world_systems_add);
+	add("world.systems.remove", "Remove a system from a world's list (also one that is no longer registered)",
+		args_with(R"("world":{"type":"string"},"system":{"type":"string","minLength":1})", R"("system")"), systems_result, &world_systems_remove);
+	add("world.systems.move", "Move a system of a world's list to place `to` (0..n-1); the order is the order within a phase",
+		args_with(R"("world":{"type":"string"},"system":{"type":"string","minLength":1},"to":{"type":"integer","minimum":0})", R"("system","to")"),
+		systems_result, &world_systems_move);
+	{
+		cmd::command_desc list;
+		list.id = "world.systems.list";
+		list.summary = "The systems of a world in order, each with `known` (registered or not), its phase and run_in_edit, and the registered systems that are not in the list (`available`)";
+		list.args_schema = parse_schema(R"({"type":"object","properties":{"world":{"type":"string","description":"world name; default the active world"}},"additionalProperties":false})");
+		list.result_schema = parse_schema(R"({"type":"object","properties":{"world":{"type":"string"},"generation":{"type":"integer"},
+			"systems":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"known":{"type":"boolean"},"phase":{"type":"string"},"run_in_edit":{"type":"boolean"}},"required":["name","known"]}},
+			"available":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"phase":{"type":"string"},"run_in_edit":{"type":"boolean"}},"required":["name"]}}},
+			"required":["world","generation","systems","available"]})");
+		list.category = cmd::agent_category::read;
+		list.invoke = [ctx](const cmd::call& call) { return world_systems_list(*ctx, call); };
+		registration added = commands.add(std::move(list));
+		if (added.active()) out.push_back(std::move(added));
+	}
+	return out;
+}
