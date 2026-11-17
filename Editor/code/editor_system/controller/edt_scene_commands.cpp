@@ -604,9 +604,9 @@ namespace {
 
 	using changing_fn = std::function<void()>;
 
-	// The node scene.node.create and shape.add_base make: `scale` (when given) is the node's own transform.
+	// The node scene.node.create and shape.add_base make; `position`, `rotation` and `scale` (when given) are the node's own transform.
 	cmd::result create_node(context& ctx, const cmd::call& call, edt::scene_document& scene, const json::object& args, json::object& out,
-		const changing_fn& changing, const std::optional<glm::vec3>& scale)
+		const changing_fn& changing)
 	{
 		mutable_location parent;
 		cmd::result error;
@@ -618,10 +618,15 @@ namespace {
 		const json::value* name = args.if_contains("name");
 		node.name = name ? std::string(name->as_string()) : std::string("Entity");
 		if (auto bad = check_name(node.name)) return *bad;
-		if (scale) {
-			node.scale = *scale;
-			node.has_transform = true;
+		for (const char* transform_key : { "position", "rotation", "scale" }) {
+			if (args.contains(transform_key) && !vec3_of(args.if_contains(transform_key))) {
+				return failure(cmd::codes::invalid_args, std::format("{} is [x, y, z]", transform_key));
+			}
 		}
+		if (const auto position = vec3_of(args.if_contains("position"))) node.position = *position;
+		if (const auto rotation = vec3_of(args.if_contains("rotation"))) node.rotation = *rotation;
+		if (const auto scale = vec3_of(args.if_contains("scale"))) node.scale = *scale;
+		node.has_transform = args.contains("position") || args.contains("rotation") || args.contains("scale");
 		reference_scope scope = ctx.references_for(call);
 		if (const json::value* components = args.if_contains("components")) {
 			for (const auto& [key, spec] : components->as_object()) {
@@ -655,7 +660,7 @@ namespace {
 	cmd::result node_create(context& ctx, const cmd::call& call)
 	{
 		return ctx.run(call, "Create node", [&ctx, &call](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
-			return create_node(ctx, call, scene, args, out, changing, std::nullopt);
+			return create_node(ctx, call, scene, args, out, changing);
 		});
 	}
 
@@ -673,10 +678,10 @@ namespace {
 				}
 				return failure(cmd::codes::invalid_args, std::format("no base shape '{}': {}", shape_name.substr(0, 64), known));
 			}
-			std::optional<glm::vec3> scale;
 			if (const json::value* given = args.if_contains("scale")) {
-				scale = vec3_of(given);
+				const std::optional<glm::vec3> scale = vec3_of(given);
 				if (!scale) return failure(cmd::codes::invalid_args, "scale is [x, y, z]");
+				if (std::string problem = edt::mesh::shape_scale_problem(*scale); !problem.empty()) return failure(cmd::codes::invalid_args, std::move(problem));
 			}
 			const edt::mesh::material_range range = edt::mesh::base_shape_range(*shape);
 			json::object fields{ { "geometry", edt::mesh::base_shape_path(*shape) }, { "vx_begin", std::uint64_t{ range.vx_begin } }, { "vx_end", std::uint64_t{ range.vx_end } },
@@ -687,8 +692,84 @@ namespace {
 			made["parent"] = args.at("parent");
 			made["name"] = args.if_contains("name") ? args.at("name") : json::value(shape_name);
 			if (const json::value* index = args.if_contains("index")) made["index"] = *index;
+			if (const json::value* given = args.if_contains("scale")) made["scale"] = *given;
 			made["components"] = json::object{ { "mesh", json::object{ { "type", "mesh_node_desc" }, { "fields", std::move(fields) } } } };
-			return create_node(ctx, call, scene, made, out, changing, scale);
+			return create_node(ctx, call, scene, made, out, changing);
+		});
+	}
+
+	// The mesh nodes of a scene that draw `geometry`: a node's own components only, not what a prefab instance expands to.
+	std::string geometry_key(std::string_view tag)
+	{
+		return std::string(tag.starts_with("res://") ? tag.substr(6) : tag);
+	}
+
+	bool draws_geometry(const prefab_node& node, const std::string& wanted, const json::object* range, bool* needs_change)
+	{
+		bool found = false;
+		for (const auto& [key, component] : node.components) {
+			if (component.type_name != "mesh_node_desc") continue;
+			const json::value* geometry = component.overrides.if_contains("geometry");
+			if (!geometry || !geometry->is_string() || geometry_key(std::string_view(geometry->as_string())) != wanted) continue;
+			found = true;
+			if (!range) continue;
+			for (const auto& [field, value] : *range) {
+				const json::value* held = component.overrides.if_contains(field);
+				// A field a node leaves out reads as 0.
+				const std::int64_t held_number = held ? cmd::json_schema::integer_of(*held).value_or(-1) : 0;
+				if (held_number != static_cast<std::int64_t>(value.as_uint64())) *needs_change = true;
+			}
+		}
+		return found;
+	}
+
+	std::size_t retarget_nodes(prefab_node& node, const std::string& wanted, const json::object& range)
+	{
+		std::size_t updated = 0;
+		bool needs_change = false;
+		if (draws_geometry(node, wanted, &range, &needs_change) && needs_change) {
+			for (auto& [key, component] : node.components) {
+				if (component.type_name != "mesh_node_desc") continue;
+				const json::value* geometry = component.overrides.if_contains("geometry");
+				if (!geometry || !geometry->is_string() || geometry_key(std::string_view(geometry->as_string())) != wanted) continue;
+				for (const auto& [field, value] : range) component.overrides[field] = value;
+			}
+			++updated;
+		}
+		for (prefab_node& child : node.children) updated += retarget_nodes(child, wanted, range);
+		return updated;
+	}
+
+	std::size_t count_stale_nodes(const prefab_node& node, const std::string& wanted, const json::object& range)
+	{
+		std::size_t stale = 0;
+		bool needs_change = false;
+		if (draws_geometry(node, wanted, &range, &needs_change) && needs_change) ++stale;
+		for (const prefab_node& child : node.children) stale += count_stale_nodes(child, wanted, range);
+		return stale;
+	}
+
+	// shape.update_nodes (#746): after a shape was rebuilt, every mesh node of the scene that draws its geometry takes the new range.
+	cmd::result shape_update_nodes(context& ctx, const cmd::call& call)
+	{
+		return ctx.run(call, "Rebuild shape", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+			const json::value* geometry = args.if_contains("geometry");
+			if (!geometry || !geometry->is_string()) return failure(cmd::codes::invalid_args, "geometry is a res:// tag");
+			const std::string wanted = geometry_key(std::string_view(geometry->as_string()));
+			json::object range;
+			for (const char* field : { "vx_begin", "vx_end", "ind_begin", "ind_end" }) {
+				const json::value* given = args.if_contains(field);
+				const auto number = given ? cmd::json_schema::integer_of(*given) : std::nullopt;
+				if (!number || *number < 0) return failure(cmd::codes::invalid_args, std::format("{} is a whole number of at least 0", field));
+				range[field] = static_cast<std::uint64_t>(*number);
+			}
+			std::size_t stale = 0;
+			for (auto& world : scene.world_descs) stale += count_stale_nodes(world.get_root(), wanted, range);
+			out["updated"] = stale;
+			if (stale == 0) return cmd::result::success();
+			changing();
+			for (auto& world : scene.world_descs) retarget_nodes(world.get_root(), wanted, range);
+			return cmd::result::success();
 		});
 	}
 
@@ -1136,6 +1217,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 
 	add("scene.node.create", "Create a node under `parent` (a ref; the world root: path []), with components {key: {type, fields?}}",
 		args_with(std::string(R"("parent":@REF@,"name":{"type":"string","minLength":1},)") + std::string(index_arg_schema) + R"(,
+			"position":{"type":"array","items":{"type":"number"}},"rotation":{"type":"array","items":{"type":"number"}},"scale":{"type":"array","items":{"type":"number"}},
 			"components":{"type":"object","description":"{key: {type: desc type, fields?: object}}"})",
 			R"("parent")"),
 		ref_result, &node_create);
@@ -1144,6 +1226,12 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		args_with(std::string(R"("parent":@REF@,"shape":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"scale":{"type":"array","items":{"type":"number"}},)")
 			+ std::string(R"("material":{"type":"string","description":"a material desc tag, res://..."},)") + std::string(index_arg_schema), R"("parent","shape")"),
 		ref_result, &shape_add_base);
+	add("shape.update_nodes", "Give every mesh node of the scene that draws `geometry` (a res:// tag) the range vx_begin, vx_end, ind_begin, ind_end: what a rebuilt shape needs; "
+			"one edit, `updated` counts the nodes changed",
+		args_with(R"("geometry":{"type":"string","minLength":1},"vx_begin":{"type":"integer","minimum":0},"vx_end":{"type":"integer","minimum":0},"ind_begin":{"type":"integer","minimum":0},"ind_end":{"type":"integer","minimum":0})",
+			R"("geometry","vx_begin","vx_end","ind_begin","ind_end")"),
+		std::string_view(R"({"type":"object","properties":{"generation":{"type":"integer"},"updated":{"type":"integer"},"unchanged":{"type":"boolean"}},"required":["generation"]})"),
+		&shape_update_nodes);
 	add("scene.node.delete", "Delete a node with everything under it", args_with(R"("ref":@REF@)", R"("ref")"), generation_result, &node_delete);
 	add("scene.node.duplicate", "Copy a node with everything under it right after it; the copy gets new ids",
 		args_with(R"("ref":@REF@)", R"("ref")"), ref_result, &node_duplicate);

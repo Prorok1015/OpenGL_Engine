@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -68,7 +69,27 @@ struct shape_fixture : test_util::scene_env
 		layout.top_layer = [this] { return res_root; };
 		layout.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
 		layout.write_blocker = [this] { return blocked; };
-		registrations = register_shape_commands(commands, shape_command_deps{ *rs, *descs, std::move(layout), &events });
+		registrations = register_shape_commands(commands, shape_command_deps{ *rs, *descs, std::move(layout), commands, &events });
+		stub("scene.node.create", created);
+		stub("shape.update_nodes", updated_with, &updated_nodes);
+	}
+
+	// A scene command that only records its arguments: shape.add and shape.rebuild reach the scene through them.
+	void stub(const char* id, json::object& arguments, const std::size_t* updated = nullptr)
+	{
+		cmd::command_desc desc;
+		desc.id = id;
+		desc.summary = "stub";
+		desc.args_schema = json::parse(R"({"type":"object"})");
+		desc.result_schema = json::parse(R"({"type":"object"})");
+		desc.mutates = true;
+		desc.category = cmd::agent_category::scene_edit;
+		desc.invoke = [&arguments, updated](const cmd::call& call) {
+			arguments = call.args.as_object();
+			return cmd::result::success(json::object{ { "updated", updated ? *updated : 0u } });
+		};
+		edt::registration added = commands.add(std::move(desc));
+		registrations.push_back(std::move(added));
 	}
 
 	~shape_fixture()
@@ -102,6 +123,9 @@ struct shape_fixture : test_util::scene_env
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 	std::optional<std::string> blocked;
+	json::object created;
+	json::object updated_with;
+	std::size_t updated_nodes = 0;
 };
 
 }
@@ -120,6 +144,46 @@ BOOST_AUTO_TEST_CASE(TheFiles_AreTheSameForTheSameParameters_AndTheBoxIsTheBaseS
 	BOOST_TEST(first.poly.find("\"__version\"") != std::string::npos);
 	BOOST_TEST(first.poly.back() == '\n');
 	BOOST_TEST(poly_file_version == 1);
+}
+
+BOOST_AUTO_TEST_CASE(TheVertexEstimate_IsTheRealCountOfTheBase_AndNeverWrapsAround)
+{
+	for (const base_shape& shape : base_shapes()) {
+		BOOST_TEST_CONTEXT(shape.name) {
+			BOOST_TEST(estimate_shape_vertices(shape.params) == built(shape.params).vertices);
+		}
+	}
+	BOOST_TEST(estimate_shape_vertices(sphere_params{ 0.5f, 0, 0 }) == 0u);
+	BOOST_TEST(estimate_shape_vertices(capsule_params{ 0.5f, 1.f, 0, 0 }) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheSmallestShapes_AreWholeMeshes)
+{
+	for (const shape_params& params : { shape_params{ sphere_params{ 0.5f, 3, 2 } }, shape_params{ cylinder_params{ 0.5f, 1.f, 3 } },
+			shape_params{ capsule_params{ 0.5f, 1.f, 3, 1 } }, shape_params{ plane_params{ { 1.f, 1.f }, 1, 1 } } }) {
+		BOOST_TEST_CONTEXT(shape_kind_name(params)) {
+			const shape_asset_files files = built(params);
+			BOOST_TEST(files.vertices > 0u);
+			BOOST_TEST(files.indices > 0u);
+			BOOST_TEST(files.indices % 3 == 0u);
+			std::string error;
+			const std::optional<material_range> range = geometry_file_range(files.geometry, error);
+			BOOST_REQUIRE_MESSAGE(range.has_value(), error);
+			BOOST_TEST(range->vx_end == files.vertices);
+			BOOST_TEST(range->ind_end == files.indices);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AGeometryFileThatIsNotOurs_HasNoRange_AndAScaleNeedsPositiveComponents)
+{
+	std::string error;
+	BOOST_TEST(!geometry_file_range("[]", error).has_value());
+	BOOST_TEST(!geometry_file_range(R"({"vertices":[1,2,3],"indices":[0]})", error).has_value());
+	BOOST_TEST(shape_scale_problem({ 1.f, 2.f, 3.f }).empty());
+	BOOST_TEST(!shape_scale_problem({ 1.f, 0.f, 3.f }).empty());
+	BOOST_TEST(!shape_scale_problem({ -1.f, 1.f, 1.f }).empty());
+	BOOST_TEST(!shape_scale_problem({ 1.f, 1.f, std::numeric_limits<float>::infinity() }).empty());
 }
 
 BOOST_AUTO_TEST_CASE(AShapeThatTheGeneratorRefuses_HasNoFiles)
@@ -315,6 +379,142 @@ BOOST_AUTO_TEST_CASE(Rebuild_MakesAGeometryFileThatIsGone_AndTheQuestionNamesThe
 	const std::optional<std::string> refused = rebuild->describe(question);
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_TEST(refused->find("This request will be refused") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_KeepsTheStoredFieldsAMergingCallLeavesOut)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	std::string version = std::string(made.value.at("version").as_string());
+
+	json::object radius_only = rebuild_args("shapes/ball.poly.desc", version);
+	radius_only["params"] = json::object{ { "radius", 2.0 } };
+	const auto wider = call("shape.rebuild", radius_only);
+	BOOST_REQUIRE_MESSAGE(wider.ok, wider.error);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == built(sphere_params{ 2.0f, 8, 4 }).poly);
+
+	json::object same_kind = rebuild_args("shapes/ball.poly.desc", std::string(wider.value.at("version").as_string()));
+	same_kind["kind"] = "sphere";
+	const auto kept = call("shape.rebuild", same_kind);
+	BOOST_REQUIRE_MESSAGE(kept.ok, kept.error);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == built(sphere_params{ 2.0f, 8, 4 }).poly);
+
+	json::object other = rebuild_args("shapes/ball.poly.desc", std::string(kept.value.at("version").as_string()));
+	other["kind"] = "cylinder";
+	other["params"] = json::object{ { "height", 3.0 } };
+	BOOST_REQUIRE(call("shape.rebuild", other).ok);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == built(cylinder_params{ 0.5f, 3.f, 16 }).poly);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_ReportsTheRangeAndLetsTheSceneMoveItsNodes)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	updated_nodes = 3;
+	json::object args = rebuild_args("shapes/ball.poly.desc", std::string(made.value.at("version").as_string()));
+	args["params"] = json::object{ { "segments", 12 }, { "rings", 6 } };
+	const auto rebuilt = call("shape.rebuild", args);
+	BOOST_REQUIRE_MESSAGE(rebuilt.ok, rebuilt.error);
+	const shape_asset_files expected = built(sphere_params{ 0.5f, 12, 6 });
+	BOOST_TEST(rebuilt.value.at("vx_end").to_number<std::size_t>() == expected.vertices);
+	BOOST_TEST(rebuilt.value.at("ind_end").to_number<std::size_t>() == expected.indices);
+	BOOST_TEST(rebuilt.value.at("nodes_updated").to_number<std::size_t>() == 3u);
+	BOOST_TEST(!rebuilt.value.as_object().contains("scene_update"));
+	BOOST_TEST(std::string(updated_with.at("geometry").as_string()) == "res://shapes/ball.geom.desc");
+	BOOST_TEST(updated_with.at("vx_end").to_number<std::size_t>() == expected.vertices);
+	BOOST_TEST(updated_with.at("ind_begin").to_number<int>() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_SaysWhyTheSceneWasNotUpdated_AndStillRebuildsTheFiles)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	registrations.clear();
+	registrations = register_shape_commands(commands, shape_command_deps{ *rs, *descs, [this] {
+		edt::desc_file_layout layout;
+		layout.top_layer = [this] { return res_root; };
+		layout.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
+		return layout;
+	}(), commands, &events });
+	json::object args = rebuild_args("shapes/ball.poly.desc", std::string(made.value.at("version").as_string()));
+	args["params"] = json::object{ { "radius", 1.0 } };
+	const auto rebuilt = call("shape.rebuild", args);
+	BOOST_REQUIRE_MESSAGE(rebuilt.ok, rebuilt.error);
+	BOOST_TEST(rebuilt.value.at("nodes_updated").to_number<int>() == 0);
+	BOOST_TEST(!std::string(rebuilt.value.at("scene_update").as_string()).empty());
+}
+
+BOOST_AUTO_TEST_CASE(Add_MakesANodeWithTheRangeOfTheGeometryFile_AndItsSize)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	const shape_asset_files files = built(small_sphere);
+	const json::value parent = json::parse(R"({"context":"w0","path":[]})");
+	const auto added = call("shape.add", json::object{ { "poly", "res://shapes/ball.poly.desc" }, { "parent", parent },
+		{ "scale", json::array{ 2.0, 3.0, 4.0 } }, { "name", "Ball" } });
+	BOOST_REQUIRE_MESSAGE(added.ok, added.error);
+	BOOST_TEST(std::string(created.at("name").as_string()) == "Ball");
+	BOOST_TEST(created.at("scale").as_array().size() == 3u);
+	const json::object& fields = created.at("components").as_object().at("mesh").as_object().at("fields").as_object();
+	BOOST_TEST(std::string(fields.at("geometry").as_string()) == "res://shapes/ball.geom.desc");
+	BOOST_TEST(fields.at("vx_begin").to_number<int>() == 0);
+	BOOST_TEST(fields.at("vx_end").to_number<std::size_t>() == files.vertices);
+	BOOST_TEST(fields.at("ind_end").to_number<std::size_t>() == files.indices);
+
+	const auto unnamed = call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } });
+	BOOST_REQUIRE_MESSAGE(unnamed.ok, unnamed.error);
+	BOOST_TEST(std::string(created.at("name").as_string()) == "ball");
+	BOOST_TEST(!created.contains("scale"));
+}
+
+BOOST_AUTO_TEST_CASE(Add_RefusesAMissingShape_ABadPath_AFlippedScale_AndAFileThatIsNoGeometry)
+{
+	const json::value parent = json::parse(R"({"context":"w0","path":[]})");
+	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/none.poly.desc" }, { "parent", parent } }).code == cmd::codes::not_found);
+	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.geom.desc" }, { "parent", parent } }).code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(create_sphere().ok);
+	for (const json::value& scale : { json::value(json::array{ 1.0, -1.0, 1.0 }), json::value(json::array{ 0.0, 1.0, 1.0 }), json::value(json::array{ 1.0, 1.0 }) }) {
+		BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent }, { "scale", scale } }).code == cmd::codes::invalid_args);
+	}
+	write_file(res_root / "shapes" / "ball.geom.desc", "{}");
+	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } }).code == cmd::codes::failed);
+	BOOST_TEST(created.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Create_RefusesAShapeTooLargeBeforeItIsMade_AndTheSmallestOnesPass)
+{
+	const auto huge = call("shape.create", json::object{ { "name", "huge" }, { "kind", "capsule" },
+		{ "params", json::object{ { "segments", 256 }, { "hemisphere_rings", 256 } } } });
+	BOOST_TEST(huge.code == cmd::codes::invalid_args);
+	BOOST_TEST(huge.error.find("too large") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "shapes"));
+
+	for (const json::object& tiny : { json::object{ { "name", "t1" }, { "kind", "sphere" }, { "params", json::object{ { "segments", 3 }, { "rings", 2 } } } },
+			json::object{ { "name", "t2" }, { "kind", "cylinder" }, { "params", json::object{ { "segments", 3 } } } },
+			json::object{ { "name", "t3" }, { "kind", "capsule" }, { "params", json::object{ { "segments", 3 }, { "hemisphere_rings", 1 } } } } }) {
+		BOOST_TEST_CONTEXT(std::string(tiny.at("kind").as_string())) {
+			const auto made = call("shape.create", tiny);
+			BOOST_TEST(made.ok, made.error);
+		}
+	}
+	for (const json::object& broken : { json::object{ { "name", "b1" }, { "kind", "sphere" }, { "params", json::object{ { "segments", 2 } } } },
+			json::object{ { "name", "b2" }, { "kind", "sphere" }, { "params", json::object{ { "rings", 1 } } } },
+			json::object{ { "name", "b3" }, { "kind", "box" }, { "params", json::object{ { "size", json::array{ 1.0, 0.0, 1.0 } } } } },
+			json::object{ { "name", "b4" }, { "kind", "box" }, { "params", json::object{ { "size", json::array{ 1.0, -1.0, 1.0 } } } } },
+			json::object{ { "name", "b5" }, { "kind", "cylinder" }, { "params", json::object{ { "radius", 0.0 } } } } }) {
+		BOOST_TEST_CONTEXT(std::string(broken.at("name").as_string())) {
+			BOOST_TEST(call("shape.create", broken).code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_TEST(!fs::exists(res_root / "shapes" / "b1.poly.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(Create_SaysABuiltInNameIsTaken)
+{
+	write_file(lower / "shapes" / "box.poly.desc", "{}");
+	const auto clash = call("shape.create", json::object{ { "name", "box" }, { "kind", "box" } });
+	BOOST_TEST(clash.code == cmd::codes::needs_input);
+	BOOST_TEST(clash.error.find("choose another name") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

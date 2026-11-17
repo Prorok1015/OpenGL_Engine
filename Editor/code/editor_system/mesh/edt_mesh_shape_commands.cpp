@@ -10,6 +10,7 @@
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <format>
+#include <glm/vec3.hpp>
 #include <memory>
 
 namespace edt::mesh
@@ -17,6 +18,8 @@ namespace edt::mesh
 	namespace
 	{
 		constexpr std::string_view default_folder = "shapes";
+		// A vertex is 14 floats written as bytes: never less than this many characters in a geometry file.
+		constexpr std::size_t k_least_geometry_bytes_per_vertex = 150;
 
 		json::value parse_schema(std::string_view text)
 		{
@@ -99,6 +102,13 @@ namespace edt::mesh
 		prepared_shape prepare_shape(const shape_params& params)
 		{
 			prepared_shape out;
+			const std::size_t estimated = estimate_shape_vertices(params);
+			if (estimated > k_desc_file_limit / k_least_geometry_bytes_per_vertex) {
+				out.failed = true;
+				out.failure = refuse(cmd::codes::invalid_args,
+					std::format("the shape is too large: about {} vertices would not fit a file of {} bytes (desc.read and shape.rebuild move at most that); lower the segments or rings", estimated, k_desc_file_limit));
+				return out;
+			}
 			shape_asset_result built = build_shape_asset(params);
 			if (!built.files) {
 				out.failed = true;
@@ -116,27 +126,22 @@ namespace edt::mesh
 			return out;
 		}
 
-		// kind + params of a call: the kind's defaults with the given fields on top.
+		// kind + params of a call. Fields the call leaves out keep the stored values while the kind stays the same, else the kind's defaults.
 		std::optional<shape_params> params_of_call(const json::object& args, const std::optional<shape_params>& stored, std::string& error)
 		{
 			const json::value* kind = args.if_contains("kind");
 			const json::value* params = args.if_contains("params");
-			if (!kind && !params) {
-				if (stored) return stored;
+			if (!kind && !stored) {
 				error = "give a kind";
 				return std::nullopt;
 			}
-			std::string kind_name;
-			if (kind) {
-				kind_name = string_of(*kind);
-			} else if (stored) {
-				kind_name = std::string(shape_kind_name(*stored));
-			} else {
-				error = "give a kind";
-				return std::nullopt;
+			const std::string kind_name = kind ? string_of(*kind) : std::string(shape_kind_name(*stored));
+			json::object merged;
+			if (stored && kind_name == shape_kind_name(*stored)) merged = shape_params_to_json(*stored);
+			if (params) {
+				for (const auto& [field, value] : params->as_object()) merged[field] = value;
 			}
-			static const json::object no_params;
-			return shape_params_from_json(kind_name, params ? params->as_object() : no_params, error);
+			return shape_params_from_json(kind_name, merged, error);
 		}
 
 		class shape_commands
@@ -170,6 +175,10 @@ namespace edt::mesh
 				for (const std::string& path : { paths->poly, paths->geometry }) {
 					const desc_file_read there = look_at(path);
 					if (there.in_open_level) return refuse(cmd::codes::busy, std::format("'res://{}' is a name of the open level", path));
+					if (!there.missing && there.error.empty() && !there.top_layer) {
+						return refuse(cmd::codes::needs_input,
+							std::format("'res://{}' is a file of the engine or a package (a built-in shape such as shapes/box): choose another name", path));
+					}
 					if (!there.missing) {
 						return refuse(there.error.empty() ? cmd::codes::needs_input : cmd::codes::failed,
 							there.error.empty() ? std::format("'res://{}' exists: shape.create never replaces a file; use shape.rebuild (a person confirms that)", path) : there.error);
@@ -181,10 +190,12 @@ namespace edt::mesh
 				if (!geometry_made.ok) return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}", paths->geometry, geometry_made.error));
 				const res::file_operation poly_made = m_deps.res.create_sync(poly_tag, bytes_of(ready.files.poly));
 				if (!poly_made.ok) {
-					return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {} ('res://{}' was written and stays)", paths->poly, poly_made.error, paths->geometry));
+					const res::file_operation removed = m_deps.res.remove(geometry_tag);
+					return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}{}", paths->poly, poly_made.error,
+						removed.ok ? std::string{} : std::format(" ('res://{}' was written and could not be taken back: {})", paths->geometry, removed.error)));
 				}
 				changed(call, "shape.create", paths->poly, ready.files.poly.size() + ready.files.geometry.size());
-				return success_of(*paths, ready.files);
+				return success_of(*paths, ready.files, std::nullopt);
 			}
 
 			cmd::result rebuild(const cmd::call& call) const
@@ -201,11 +212,51 @@ namespace edt::mesh
 				const bool geometry_written = geometry_new ? m_deps.res.create_sync(geometry_tag, bytes_of(plan.ready.files.geometry)).ok
 					: m_deps.res.store_sync(geometry_tag, bytes_of(plan.ready.files.geometry));
 				if (!geometry_written) {
-					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written ('res://{}' was rebuilt and stays)", plan.paths.geometry, plan.paths.poly));
+					const bool restored = m_deps.res.store_sync(poly_tag, plan.old_poly);
+					m_deps.res.signal_changed(poly_tag);
+					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written{}", plan.paths.geometry,
+						restored ? std::string{} : std::format(" and 'res://{}' could not be put back: it holds the new parameters", plan.paths.poly)));
 				}
 				m_deps.res.signal_changed(geometry_tag);
 				changed(call, "shape.rebuild", plan.paths.poly, plan.ready.files.poly.size() + plan.ready.files.geometry.size());
-				return success_of(plan.paths, plan.ready.files);
+				return success_of(plan.paths, plan.ready.files, update_nodes(call, plan.paths, plan.ready.files));
+			}
+
+			cmd::result add(const cmd::call& call) const
+			{
+				const json::object& args = call.args.as_object();
+				std::string error;
+				const std::optional<shape_paths> paths = paths_of_poly(string_of(args.at("poly")), error);
+				if (!paths) return refuse(cmd::codes::invalid_args, error);
+				std::optional<glm::vec3> scale;
+				if (const json::value* given = args.if_contains("scale")) {
+					const json::array& items = given->as_array();
+					if (items.size() != 3) return refuse(cmd::codes::invalid_args, "scale is [x, y, z]");
+					glm::vec3 value{};
+					for (std::size_t axis = 0; axis < 3; ++axis) {
+						if (!items[axis].is_number()) return refuse(cmd::codes::invalid_args, "scale is [x, y, z]");
+						value[static_cast<int>(axis)] = items[axis].to_number<float>();
+					}
+					if (std::string problem = shape_scale_problem(value); !problem.empty()) return refuse(cmd::codes::invalid_args, std::move(problem));
+					scale = value;
+				}
+				const desc_file_read geometry = look_at(paths->geometry);
+				if (geometry.missing) return refuse(cmd::codes::not_found, std::format("no file 'res://{}': shape.create makes the shape", paths->geometry));
+				if (!geometry.error.empty()) return refuse(cmd::codes::failed, geometry.error);
+				const std::optional<material_range> range = geometry_file_range(text_of(geometry.bytes), error);
+				if (!range) return refuse(cmd::codes::failed, std::format("'res://{}': {}", paths->geometry, error));
+
+				json::object fields{ { "geometry", "res://" + paths->geometry }, { "vx_begin", 0 }, { "vx_end", range->vx_end },
+					{ "ind_begin", 0 }, { "ind_end", range->ind_end } };
+				if (const json::value* material = args.if_contains("material")) fields["material"] = *material;
+				const std::string stem = paths->poly.substr(paths->poly.rfind('/') == std::string::npos ? 0 : paths->poly.rfind('/') + 1);
+				json::object made;
+				made["parent"] = args.at("parent");
+				made["name"] = args.if_contains("name") ? args.at("name") : json::value(stem.substr(0, stem.size() - poly_file_suffix.size()));
+				if (const json::value* index = args.if_contains("index")) made["index"] = *index;
+				if (scale) made["scale"] = json::array{ scale->x, scale->y, scale->z };
+				made["components"] = json::object{ { "mesh", json::object{ { "type", "mesh_node_desc" }, { "fields", std::move(fields) } } } };
+				return m_deps.commands.invoke("scene.node.create", std::move(made), call.from);
 			}
 
 			std::optional<std::string> describe_rebuild(const cmd::call& call) const
@@ -228,6 +279,7 @@ namespace edt::mesh
 				shape_paths paths;
 				prepared_shape ready;
 				bool geometry_missing = false;
+				std::vector<std::byte> old_poly;
 			};
 
 			plan_result plan_rebuild(const cmd::call& call) const
@@ -264,6 +316,7 @@ namespace edt::mesh
 					out.failure = std::move(stale);
 					return out;
 				}
+				out.old_poly = poly.bytes;
 				const shape_source_check source = check_shape_source(text_of(poly.bytes));
 				if (source.state != shape_source::generated) {
 					out.failure = refuse(cmd::codes::failed, std::format("'res://{}' is not rebuilt: {}", paths->poly, source.error));
@@ -314,11 +367,40 @@ namespace edt::mesh
 				}
 			}
 
-			static cmd::result success_of(const shape_paths& paths, const shape_asset_files& files)
+			// The nodes of the open scene that draw this geometry keep a range of vertices and indices: after a rebuild it is the new one.
+			// `scene_update` says why they were not changed (no scene commands, a playing scene, a gesture); nodes of files that are not open
+			// are not seen and keep the old range: component.set changes them with the range this answer gives.
+			struct node_update
+			{
+				std::size_t updated = 0;
+				std::string refused;
+			};
+
+			node_update update_nodes(const cmd::call& call, const shape_paths& paths, const shape_asset_files& files) const
+			{
+				json::object range{ { "geometry", "res://" + paths.geometry }, { "vx_begin", 0 }, { "vx_end", files.vertices },
+					{ "ind_begin", 0 }, { "ind_end", files.indices } };
+				const cmd::result done = m_deps.commands.invoke("shape.update_nodes", std::move(range), call.from);
+				node_update out;
+				if (!done.ok) {
+					out.refused = done.error;
+					return out;
+				}
+				if (const json::value* updated = done.value.as_object().if_contains("updated")) out.updated = updated->to_number<std::size_t>();
+				return out;
+			}
+
+			static cmd::result success_of(const shape_paths& paths, const shape_asset_files& files, const std::optional<node_update>& nodes)
 			{
 				const std::vector<std::byte> poly = bytes_of(files.poly);
-				return cmd::result::success(json::object{ { "poly", "res://" + paths.poly }, { "geometry", "res://" + paths.geometry },
-					{ "version", edt::code_version_of(poly) }, { "vertices", files.vertices }, { "indices", files.indices } });
+				json::object out{ { "poly", "res://" + paths.poly }, { "geometry", "res://" + paths.geometry },
+					{ "version", edt::code_version_of(poly) }, { "vertices", files.vertices }, { "indices", files.indices },
+					{ "vx_begin", 0 }, { "vx_end", files.vertices }, { "ind_begin", 0 }, { "ind_end", files.indices } };
+				if (nodes) {
+					out["nodes_updated"] = nodes->updated;
+					if (!nodes->refused.empty()) out["scene_update"] = nodes->refused;
+				}
+				return cmd::result::success(std::move(out));
 			}
 
 			shape_command_deps m_deps;
@@ -333,8 +415,11 @@ namespace edt::mesh
 		constexpr std::string_view kinds = R"("kind":{"type":"string","enum":["box","plane","sphere","cylinder","capsule"]},
 			"params":{"type":"object","description":"the fields of the kind (box: size [x,y,z]; plane: size [x,z], segments_x, segments_z; sphere: radius, segments, rings; cylinder: radius, height, segments; capsule: radius, height (the straight part), segments, hemisphere_rings); a field left out takes the kind's default; segments are 3..256"})";
 		constexpr std::string_view result = R"({"type":"object","properties":{"poly":{"type":"string"},"geometry":{"type":"string"},
-			"version":{"type":"string","description":"of the poly file: what shape.rebuild takes back"},"vertices":{"type":"integer"},"indices":{"type":"integer"}},
-			"required":["poly","geometry","version","vertices","indices"]})";
+			"version":{"type":"string","description":"of the poly file: what shape.rebuild takes back"},"vertices":{"type":"integer"},"indices":{"type":"integer"},
+			"vx_begin":{"type":"integer"},"vx_end":{"type":"integer"},"ind_begin":{"type":"integer"},"ind_end":{"type":"integer"},
+			"nodes_updated":{"type":"integer","description":"nodes of the open scene that drew the geometry and now hold the new range"},
+			"scene_update":{"type":"string","description":"why those nodes were not changed"}},
+			"required":["poly","geometry","version","vertices","indices","vx_begin","vx_end","ind_begin","ind_end"]})";
 
 		cmd::command_desc create;
 		create.id = "shape.create";
@@ -348,6 +433,21 @@ namespace edt::mesh
 		create.invoke = [impl](const cmd::call& call) { return impl->create(call); };
 		registration added = commands.add(std::move(create));
 		if (added.active()) out.push_back(std::move(added));
+
+		cmd::command_desc add;
+		add.id = "shape.add";
+		add.summary = "Create a node under `parent` (a ref, as scene.node.create) with a mesh that draws the whole geometry file of a shape made by "
+			"shape.create (poly: its source file) and `scale` as its size; the same creation and undo as scene.node.create";
+		add.args_schema = parse_schema(R"({"type":"object","properties":{"poly":{"type":"string","minLength":1,"description":"shapes/a.poly.desc, with or without the res protocol"},
+			"parent":{"type":"object","description":"a node ref, as in scene.node.create"},"name":{"type":"string","minLength":1},
+			"scale":{"type":"array","items":{"type":"number"}},"material":{"type":"string","description":"a material desc tag"},
+			"index":{"type":"integer","minimum":0}},"required":["poly","parent"],"additionalProperties":false})");
+		add.result_schema = parse_schema(R"({"type":"object"})");
+		add.mutates = true;
+		add.category = cmd::agent_category::scene_edit;
+		add.invoke = [impl](const cmd::call& call) { return impl->add(call); };
+		registration added_node = commands.add(std::move(add));
+		if (added_node.active()) out.push_back(std::move(added_node));
 
 		cmd::command_desc rebuild;
 		rebuild.id = "shape.rebuild";

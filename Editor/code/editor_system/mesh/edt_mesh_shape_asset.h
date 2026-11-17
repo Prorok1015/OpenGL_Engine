@@ -29,8 +29,19 @@ namespace edt::mesh
 		std::string error;
 	};
 
+	// The number of vertices the bake of a shape has, from its parameters alone: what lets a request that cannot fit a file be
+	// refused before a mesh of millions of faces is made. A test keeps it equal to the real count.
+	std::size_t estimate_shape_vertices(const shape_params& params);
+
 	// Deterministic: the same parameters give the same bytes.
 	shape_asset_result build_shape_asset(const shape_params& params);
+
+	// The range of vertices and indices of a geometry file written by build_shape_asset (the layout of the bake, one mesh): what a mesh
+	// node that draws the whole file holds. `error` says why a file is not one.
+	std::optional<material_range> geometry_file_range(std::string_view text, std::string& error);
+
+	// Empty when `scale` is a size for a shape node: every component finite and greater than 0 (a negative one turns the mesh inside out).
+	std::string shape_scale_problem(const glm::vec3& scale);
 
 	// The whole geometry file of a baked mesh, as a repository desc.
 	std::string geometry_file_text(const rnd::geometry_desc& geometry);

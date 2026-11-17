@@ -2,6 +2,8 @@
 #include "edt_mesh_io.h"
 #include <snk/desc/desc_pretty_json.h>
 #include <boost/json.hpp>
+#include <cmath>
+#include <variant>
 #include <vector>
 
 namespace edt::mesh
@@ -22,6 +24,54 @@ namespace edt::mesh
 			const std::vector<std::byte> bytes = desc::pretty_json_bytes(json::value(std::move(file)));
 			return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 		}
+	}
+
+	std::size_t estimate_shape_vertices(const shape_params& params)
+	{
+		struct counter
+		{
+			// The two poles are one vertex each, not a ring; parameters the generator refuses must not wrap around.
+			static std::size_t minus_poles(std::size_t grid) { return grid > 2 ? grid - 2 : 0; }
+
+			std::size_t operator()(const box_params&) const { return 24; }
+			std::size_t operator()(const plane_params& p) const { return (std::size_t{ p.segments_x } + 1) * (std::size_t{ p.segments_z } + 1); }
+			std::size_t operator()(const sphere_params& p) const { return minus_poles((std::size_t{ p.segments } + 1) * (std::size_t{ p.rings } + 1)); }
+			std::size_t operator()(const cylinder_params& p) const { return 2 * (std::size_t{ p.segments } + 1) + 2 * std::size_t{ p.segments }; }
+			std::size_t operator()(const capsule_params& p) const { return minus_poles((std::size_t{ p.segments } + 1) * (2 * std::size_t{ p.hemisphere_rings } + 2)); }
+		};
+		return std::visit(counter{}, params);
+	}
+
+	std::optional<material_range> geometry_file_range(std::string_view text, std::string& error)
+	{
+		constexpr std::size_t vertex_bytes = 14 * sizeof(float);
+		boost::system::error_code parse_error;
+		const json::value parsed = json::parse(text, parse_error);
+		const json::object* object = parse_error ? nullptr : parsed.if_object();
+		const json::value* vertices = object ? object->if_contains("vertices") : nullptr;
+		const json::value* indices = object ? object->if_contains("indices") : nullptr;
+		if (!vertices || !vertices->is_array() || !indices || !indices->is_array()) {
+			error = "the file is not a geometry desc";
+			return std::nullopt;
+		}
+		if (vertices->get_array().size() % vertex_bytes != 0) {
+			error = "the vertices are not in the layout of the shapes (position, normal, uv, tangent, bitangent)";
+			return std::nullopt;
+		}
+		material_range range;
+		range.vx_end = static_cast<std::uint32_t>(vertices->get_array().size() / vertex_bytes);
+		range.ind_end = static_cast<std::uint32_t>(indices->get_array().size());
+		return range;
+	}
+
+	std::string shape_scale_problem(const glm::vec3& scale)
+	{
+		for (int axis = 0; axis < 3; ++axis) {
+			if (!std::isfinite(scale[axis]) || scale[axis] <= 0.f) {
+				return "scale components must be finite and greater than 0 (a negative scale turns the mesh inside out)";
+			}
+		}
+		return {};
 	}
 
 	std::string geometry_file_text(const rnd::geometry_desc& geometry)
