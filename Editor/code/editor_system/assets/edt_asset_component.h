@@ -4,6 +4,7 @@
 #include "edt_asset_picker.h"
 #include "edt_asset_problems.h"
 #include <snk/editor/edt_registration.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,8 @@ namespace res { class resource_system; }
 namespace edt
 {
 	class asset_browser_panel;
+	class asset_history;
+	class asset_ops;
 	class editor_context;
 	struct problem;
 
@@ -50,7 +53,7 @@ namespace edt
 		asset_component(const asset_component&) = delete;
 		asset_component& operator=(const asset_component&) = delete;
 
-		// asset.usages and the asset browser's usage list.
+		// asset.usages, asset.rename/move/delete and the asset browser's usage list.
 		void install(std::vector<registration>& out);
 		// The `editor_assets` frame stage: files waiting for an ID, the index, the Problems rows.
 		void tick();
@@ -64,10 +67,18 @@ namespace edt
 		// The fixes of a Problems row of the source "assets", for the person only.
 		std::vector<problem_action> problem_actions(const problem& row);
 		std::optional<std::string> problem_file(const problem& row) const { return m_problems->file_of(row); }
-		std::optional<std::string> next_undo_label() const { return m_database->next_undo_label(); }
-		asset_fix_result undo_last() { return m_database->undo_last(); }
+		// Rename, move and delete of one asset (#775) and the history of the operations done: they were rebuilt at construction
+		// from cache://asset_ops/ (the newest asset_history::max_entries).
+		asset_ops& operations() { return *m_ops; }
+		asset_history& history() { return *m_history; }
+		// One undo for the person: the newest of the database's fixes (Problems) and the file operations, by the order they were done in.
+		std::optional<std::string> next_undo_label() const;
+		asset_fix_result undo_last();
 
 	private:
+		// The newest undo is an operation's, not a fix's.
+		bool next_undo_is_operation() const;
+
 		ports m_ports;
 		std::unique_ptr<asset_database> m_database;
 		// Reads the database, so it goes first.
@@ -75,5 +86,7 @@ namespace edt
 		// After the database, so it detaches before the database goes.
 		std::unique_ptr<asset_index_link> m_index;
 		std::unique_ptr<asset_problem_publisher> m_problems;
+		std::unique_ptr<asset_ops> m_ops;
+		std::unique_ptr<asset_history> m_history;
 	};
 }
