@@ -339,22 +339,25 @@ namespace
 		return result;
 	}
 
-	// Adds the container to the access list of `path` (and, for a folder, of what it holds): read and write, or read and
-	// execute. No execute with write: nothing the child writes may be run.
-	// An entry of `acl` of its own (not inherited) that allows `sid` at least `access`.
-	bool holds_grant(PACL acl, PSID sid, DWORD access)
+	// An entry of `acl` of its own (not inherited) that allows `sid` at least `access` on the object and, with
+	// `inherited_by_all`, on everything below it too.
+	bool holds_grant(PACL acl, PSID sid, DWORD access, bool inherited_by_all)
 	{
+		constexpr BYTE k_all = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 		for (DWORD index = 0; acl != nullptr && index < acl->AceCount; ++index) {
 			void* entry = nullptr;
 			if (!GetAce(acl, index, &entry)) continue;
 			const auto* header = static_cast<const ACE_HEADER*>(entry);
-			if (header->AceType != ACCESS_ALLOWED_ACE_TYPE || (header->AceFlags & INHERITED_ACE) != 0) continue;
+			if (header->AceType != ACCESS_ALLOWED_ACE_TYPE || (header->AceFlags & (INHERITED_ACE | INHERIT_ONLY_ACE)) != 0) continue;
+			if (inherited_by_all && (header->AceFlags & k_all) != k_all) continue;
 			auto* allowed = static_cast<ACCESS_ALLOWED_ACE*>(entry);
 			if ((allowed->Mask & access) == access && EqualSid(&allowed->SidStart, sid)) return true;
 		}
 		return false;
 	}
 
+	// Adds the container to the access list of `path` (and, for a folder, of what it holds): read and write, or read and
+	// execute. No execute with write: nothing the child writes may be run.
 	std::string grant_container(const fs::path& path, PSID sid, bool write)
 	{
 		PACL current = nullptr;
@@ -367,7 +370,7 @@ namespace
 		const bool folder = fs::is_directory(path, ec);
 		constexpr DWORD k_read_execute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 		// The decoder's copy is granted on every start: an entry already there is not added again (#1099).
-		if (!write && holds_grant(current, sid, k_read_execute)) return {};
+		if (!write && holds_grant(current, sid, k_read_execute, folder)) return {};
 		std::array<EXPLICIT_ACCESS_W, 2> entries{};
 		for (EXPLICIT_ACCESS_W& entry : entries) {
 			entry.grfAccessMode = GRANT_ACCESS;

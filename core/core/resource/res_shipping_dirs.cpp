@@ -362,6 +362,7 @@ namespace {
 	// A path past MAX_PATH is reached only in its \\?\ form; that form takes the path as it is, so it is made whole first.
 	fs::path extended_form(const fs::path& path)
 	{
+		if (path.empty()) return path;
 		std::error_code ec;
 		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().wstring();
 		if (ec || whole.starts_with(L"\\\\?\\")) return path;

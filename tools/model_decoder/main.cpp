@@ -361,11 +361,15 @@ bool plant_junction(const fs::path& target)
 bool turn_run_folder_into_junction(const fs::path& target)
 {
 	std::error_code ec;
-	for (const fs::directory_entry& entry : fs::directory_iterator(fs::current_path(), ec)) {
+	for (fs::directory_iterator it{ fs::current_path(), ec }, end; !ec && it != end; it.increment(ec)) {
 		std::error_code ignored;
-		fs::remove_all(entry.path(), ignored);
+		fs::remove_all(it->path(), ignored);
 	}
-	return make_junction(L".", target);
+	if (!make_junction(L".", target)) return false;
+	// Written through the junction, so it lands in `target`: the test sees that the folder really became one.
+	const HANDLE marker = CreateFileW(L"link_made", GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (marker != INVALID_HANDLE_VALUE) CloseHandle(marker);
+	return true;
 }
 #endif
 
@@ -543,8 +547,10 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		if (!CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &started)) {
 			const DWORD error = GetLastError();
 			std::fprintf(stderr, "start refused: %lu\n", error);
-			// The child process policy refuses with access denied; the job's limit of one process with a quota error.
-			return error == ERROR_ACCESS_DENIED || error == ERROR_NOT_ENOUGH_QUOTA ? 0 : 6;
+			// The child process policy refuses with ERROR_CHILD_PROCESS_BLOCKED (367, missing from older SDKs) or access
+			// denied; the job's limit of one process with a quota error.
+			constexpr DWORD k_child_process_blocked = 367;
+			return error == k_child_process_blocked || error == ERROR_ACCESS_DENIED || error == ERROR_NOT_ENOUGH_QUOTA ? 0 : 6;
 		}
 		WaitForSingleObject(started.hProcess, INFINITE);
 		CloseHandle(started.hThread);

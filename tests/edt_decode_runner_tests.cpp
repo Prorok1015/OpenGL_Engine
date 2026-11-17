@@ -553,28 +553,33 @@ BOOST_AUTO_TEST_CASE(TheCopysFolder_HoldsOneEntryForTheContainer_AfterManyStarts
 
 // #1099: a child may empty its run folder and make the folder itself a junction (it may write and delete there). The
 // editor then reads no answer through it, and removing the run folder removes the junction, not what it points at.
+// Unconfined the junction is surely made (the child marks it by writing through it); confined, Windows may refuse it.
 BOOST_AUTO_TEST_CASE(ARunFolderTheChildTurnedIntoAJunction_IsNeitherReadThroughNorEmptiedThrough)
 {
-	const fs::path kept = dir.write("outside/keep.txt", "the user's");
-	dir.write("outside/out.bundle", "planted, not a bundle");
 	std::string copy_error;
 	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, dir.path() / "copies", copy_error);
 	BOOST_REQUIRE_MESSAGE(copy.has_value(), copy_error);
-	auto cfg = selftest_config();
-	cfg.decoder = copy->program;
-	cfg.sandbox = edt::sandbox_mode::required;
-	cfg.confine = true;
-	cfg.container = platform::app_container::ensure(L"snk.model_decoder");
-	cfg.confine_read_execute = { copy->folder };
-	cfg.extra_arguments = { "--self-test-link-self", (dir.path() / "outside").string() };
-	const edt::decode_runner runner(cfg);
-	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
-	BOOST_TEST_MESSAGE("the child: " << outcome.error);
-	BOOST_CHECK(!outcome.bundle.has_value());
-	BOOST_CHECK_MESSAGE(outcome.error.find("not a decoder bundle") == std::string::npos, outcome.error);
-	BOOST_CHECK(fs::exists(kept));
-	BOOST_CHECK(fs::exists(dir.path() / "outside" / "out.bundle"));
-	BOOST_CHECK(scratch_is_empty());
+	for (const bool confined : { false, true }) {
+		const fs::path outside = dir.path() / (confined ? "outside_confined" : "outside");
+		const fs::path kept = dir.write(outside.filename() / "keep.txt", "the user's");
+		dir.write(outside.filename() / "out.bundle", "planted, not a bundle");
+		auto cfg = selftest_config();
+		cfg.decoder = copy->program;
+		cfg.sandbox = confined ? edt::sandbox_mode::required : edt::sandbox_mode::off;
+		cfg.confine = confined;
+		cfg.container = platform::app_container::ensure(L"snk.model_decoder");
+		cfg.confine_read_execute = { copy->folder };
+		cfg.extra_arguments = { "--self-test-link-self", outside.string() };
+		const edt::decode_runner runner(cfg);
+		const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+		BOOST_TEST_MESSAGE((confined ? "confined: " : "unconfined: ") << outcome.error);
+		if (!confined) BOOST_CHECK_MESSAGE(fs::exists(outside / "link_made"), "the run folder did not become a junction");
+		BOOST_CHECK(!outcome.bundle.has_value());
+		BOOST_CHECK_MESSAGE(outcome.error.find("not a decoder bundle") == std::string::npos, outcome.error);
+		BOOST_CHECK(fs::exists(kept));
+		BOOST_CHECK(fs::exists(outside / "out.bundle"));
+		BOOST_CHECK(scratch_is_empty());
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AConfinementThatCannotBeSetUp_StartsNothing_AndSaysSo)
