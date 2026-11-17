@@ -27,6 +27,8 @@ namespace res
 		inline constexpr std::string_view cycle = "cycle";
 		inline constexpr std::string_view schema = "schema";
 		inline constexpr std::string_view unknown_component = "unknown_component";
+		// An edit of a variant layer (format v2) for something its base no longer has (#972): ignored, the rest is applied.
+		inline constexpr std::string_view stale_layer = "stale_layer";
 		// A desc of one type where another is expected (a material file as a level, #615). The load itself succeeded.
 		inline constexpr std::string_view type_mismatch = "type_mismatch";
 		// A reference a desc may not make (res::reference_problem, #697): the field is left empty, nothing is loaded.

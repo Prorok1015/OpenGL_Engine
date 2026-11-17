@@ -205,11 +205,167 @@ namespace scn {
 			}
 			return result;
 		}
+
+	constexpr std::int64_t k_layer_version = 2;
+
+	[[noreturn]] void layer_error(std::string_view json_path, const std::string& reason)
+	{
+		throw ::res::load_error(::res::diagnostic_kind::schema, json_path, reason);
+	}
+
+	void stale_edit(std::string_view json_path, std::string reason)
+	{
+		::res::report_load_warning(::res::diagnostic_kind::stale_layer, json_path, std::move(reason));
+	}
+
+	std::string pointer_to(std::string_view base, std::string_view token)
+	{
+		return std::string{ base } + "/" + ::res::json_pointer_token(token);
+	}
+
+	void read_layer_vec3(const json::object& transform, std::string_view key, glm::vec3& out, glm::vec3 fallback,
+		const std::string& node_name)
+	{
+		const auto* value = transform.if_contains(key);
+		if (!value) return;
+		if (value->is_null()) {
+			out = fallback;
+			return;
+		}
+		read_vec3(transform, key, out, node_name);
+	}
+
+	// One layer over a node of the base (format v2): what it names changes, the rest stays the base's.
+	void apply_layer_to_node(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node,
+		const json::object& layer, std::string_view json_path)
+	{
+		if (const auto* name = layer.if_contains("name")) {
+			if (!name->is_string()) layer_error(pointer_to(json_path, "name"), "'name' must be a string");
+			node.name = name->as_string();
+		}
+
+		if (const auto* transform = layer.if_contains("transform")) {
+			const prefab_node defaults;
+			if (transform->is_null()) {
+				node.has_transform = false;
+				node.position = defaults.position;
+				node.rotation = defaults.rotation;
+				node.scale = defaults.scale;
+			} else if (transform->is_object()) {
+				node.has_transform = true;
+				const auto& fields = transform->as_object();
+				read_layer_vec3(fields, "position", node.position, defaults.position, node.name);
+				read_layer_vec3(fields, "rotation", node.rotation, defaults.rotation, node.name);
+				read_layer_vec3(fields, "scale", node.scale, defaults.scale, node.name);
+			} else {
+				layer_error(pointer_to(json_path, "transform"), "'transform' must be an object or null");
+			}
+		}
+
+		if (const auto* components = layer.if_contains("components")) {
+			const auto components_path = pointer_to(json_path, "components");
+			if (!components->is_object()) layer_error(components_path, "'components' must be an object");
+			for (const auto& kv : components->as_object()) {
+				const std::string key{ kv.key() };
+				const auto path = pointer_to(components_path, key);
+				if (kv.value().is_null()) {
+					if (node.components.erase(key) == 0) {
+						stale_edit(path, std::format("the base has no component '{}' to remove", key));
+					}
+					continue;
+				}
+				node.components[key] = parse_component(desc_system, owner, kv.value(), key, path);
+			}
+		}
+
+		if (const auto* overrides = layer.if_contains("overrides")) {
+			if (!overrides->is_array()) layer_error(pointer_to(json_path, "overrides"), "'overrides' must be an array of records");
+			for (const auto& element : overrides->as_array()) {
+				if (auto record = scn::parse_override_record(element)) {
+					node.overrides.push_back(std::move(*record));
+				}
+			}
+		}
+
+		if (const auto* children = layer.if_contains("children")) {
+			const auto children_path = pointer_to(json_path, "children");
+			if (!children->is_array()) layer_error(children_path, "'children' must be an array");
+			std::size_t index = 0;
+			for (const auto& element : children->as_array()) {
+				const auto path = children_path + "/" + std::to_string(index++);
+				if (!element.is_object()) layer_error(path, "a child entry must be an object");
+				const auto& entry = element.as_object();
+				const auto* id_value = entry.if_contains("__id");
+				const auto id = id_value && id_value->is_string() ? desc::parse_node_id(id_value->as_string()) : std::nullopt;
+				if (!id) layer_error(path + "/__id", "a child entry of a layer needs a valid '__id'");
+				const auto found = std::ranges::find(node.children, *id, &prefab_node::node_id);
+
+				const auto flag = [&] (std::string_view key) {
+					const auto* value = entry.if_contains(key);
+					if (!value) return false;
+					if (!value->is_bool()) layer_error(pointer_to(path, key), std::format("'{}' must be true or false", key));
+					return value->as_bool();
+				};
+				if (flag("__remove")) {
+					if (found == node.children.end()) stale_edit(path, "the base has no such node to remove");
+					else node.children.erase(found);
+					continue;
+				}
+				if (flag("__new")) {
+					if (found != node.children.end()) {
+						stale_edit(path, "a node with this id is already there; the new node is ignored");
+						continue;
+					}
+					node.children.push_back(parse_node(desc_system, owner, entry, false, path));
+					node.children.back().node_id = *id;
+					continue;
+				}
+				if (found == node.children.end()) {
+					stale_edit(path, "the base has no such node; the edit is ignored");
+					continue;
+				}
+				apply_layer_to_node(desc_system, owner, *found, entry, path);
+			}
+		}
+
+		if (const auto* order = layer.if_contains("__order")) {
+			const auto order_path = pointer_to(json_path, "__order");
+			if (!order->is_array()) layer_error(order_path, "'__order' must be an array of node ids");
+			std::vector<prefab_node> ordered;
+			ordered.reserve(node.children.size());
+			for (const auto& element : order->as_array()) {
+				const auto id = element.is_string() ? desc::parse_node_id(element.as_string()) : std::nullopt;
+				if (!id) layer_error(order_path, "'__order' holds a malformed node id");
+				const auto found = std::ranges::find(node.children, *id, &prefab_node::node_id);
+				if (found == node.children.end()) {
+					stale_edit(order_path, "'__order' names a node that is no longer there");
+					continue;
+				}
+				ordered.push_back(std::move(*found));
+				node.children.erase(found);
+			}
+			for (auto& rest : node.children) ordered.push_back(std::move(rest));
+			node.children = std::move(ordered);
+		}
+	}
 	}
 }
 
 void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
+	const auto* layer_value = data.if_contains("__layer");
+	if (layer_value && !data.contains("__parent")) {
+		scn::layer_error("/__layer", "'__layer' marks a layer over a '__parent'; this file has none");
+	}
+	if (layer_value) {
+		if (!layer_value->is_int64() || layer_value->as_int64() != scn::k_layer_version) {
+			scn::layer_error("/__layer", std::format("the layer format must be {}", scn::k_layer_version));
+		}
+		scn::apply_layer_to_node(desc_system, *this, root, data, {});
+		finalize_node_ids(root);
+		return;
+	}
+
 	prefab_node parsed = parse_node(desc_system, *this, data, true);
 
 	// With a __parent the adapter already copied the parent into this instance: layer on top of it.

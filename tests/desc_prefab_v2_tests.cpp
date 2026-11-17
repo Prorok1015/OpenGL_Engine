@@ -221,6 +221,95 @@ BOOST_AUTO_TEST_CASE(ParentLayer_PairsNodesById)
 	BOOST_TEST(children[2].node_id == 0xc1ull);  // same name, other id: a different node
 }
 
+BOOST_AUTO_TEST_CASE(LayerV2_RemovesAddsOrdersAndEditsOnlyWhatItNames)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"transform":{"position":[1,2,3]},"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":1}}},
+		{"__id":"00000000000000b2","name":"b"},
+		{"__id":"00000000000000b3","name":"c"}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"transform":{"scale":[2,2,2]},
+		"__order":["00000000000000b3"],"children":[
+		{"__id":"00000000000000b2","__remove":true},
+		{"__id":"00000000000000b1","components":{"stat":null}},
+		{"__id":"00000000000000d1","__new":true,"name":"d"}]})"));
+	BOOST_REQUIRE(variant);
+	const auto& root = variant->get_root();
+	BOOST_TEST(root.position == glm::vec3(1, 2, 3));
+	BOOST_TEST(root.scale == glm::vec3(2, 2, 2));
+	BOOST_REQUIRE(root.children.size() == 3u);
+	BOOST_TEST(root.children[0].node_id == 0xb3ull);
+	BOOST_TEST(root.children[1].node_id == 0xb1ull);
+	BOOST_TEST(root.children[1].components.empty());
+	BOOST_TEST(root.children[2].node_id == 0xd1ull);
+	BOOST_TEST(root.children[2].name == "d");
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_NullTransformMeansNoTransform_NullFieldMeansDefault)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","transform":{"position":[4,5,6],"scale":[3,3,3]}},
+		{"__id":"00000000000000b2","name":"b","transform":{"position":[1,1,1]}}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[
+		{"__id":"00000000000000b1","transform":{"scale":null}},
+		{"__id":"00000000000000b2","transform":null}]})"));
+	BOOST_REQUIRE(variant);
+	const auto& children = variant->get_root().children;
+	BOOST_TEST(children[0].has_transform);
+	BOOST_TEST(children[0].position == glm::vec3(4, 5, 6));
+	BOOST_TEST(children[0].scale == glm::vec3(1, 1, 1));
+	BOOST_TEST(!children[1].has_transform);
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_EditsOfWhatTheBaseNoLongerHas_AreIgnored)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a"}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"__order":["00000000000000ff","00000000000000b1"],"children":[
+		{"__id":"00000000000000ee","__remove":true},
+		{"__id":"00000000000000ed","name":"edit of a node that is gone"},
+		{"__id":"00000000000000b1","components":{"ghost":null}}]})"));
+	BOOST_REQUIRE(variant);
+	BOOST_REQUIRE(variant->get_root().children.size() == 1u);
+	BOOST_TEST(variant->get_root().children[0].name == "a");
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ANodeMoved_IsARemoveAndANewNodeOfTheSameId)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","children":[{"__id":"00000000000000b2","name":"b"}]}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[
+		{"__id":"00000000000000b1","children":[{"__id":"00000000000000b2","__remove":true}]},
+		{"__id":"00000000000000b2","__new":true,"name":"b"}]})"));
+	BOOST_REQUIRE(variant);
+	const auto& root = variant->get_root();
+	BOOST_REQUIRE(root.children.size() == 2u);
+	BOOST_TEST(root.children[0].children.empty());
+	BOOST_TEST(root.children[1].node_id == 0xb2ull);
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ALayerWithoutAParentOrOfAnotherVersion_FailsTheLoad)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[]})");
+	BOOST_TEST(!load<scn::prefab_desc>(put("no_parent.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__layer":2})")));
+	BOOST_TEST(!load<scn::prefab_desc>(put("future.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":3})")));
+	BOOST_TEST(!load<scn::prefab_desc>(put("text.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":"2"})")));
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ANullWhereOnlyAComponentOrATransformFieldMayBe_FailsTheLoad)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"a"}]})");
+	BOOST_TEST(!load<scn::prefab_desc>(put("v1.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[{"__id":"00000000000000b1","name":null}]})")));
+	BOOST_TEST(!load<scn::prefab_desc>(put("v2.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[{"__id":"00000000000000b1","overrides":null}]})")));
+}
+
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
 {
 	json::value v = json::parse(R"({"a":{"position":[1,2,3],"list":[{"x":1},{"x":2}]},"empty":[]})");
