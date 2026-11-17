@@ -283,7 +283,7 @@ bool edt::import_component::poll_progress()
 
 	if (!m_result) {
 		if (!m_failure.empty()) {
-			egLOG("Editor/Import", "Async import failed: {}", m_failure);
+			egLOG("Editor/Import", "Async import failed: {}", text_escape::escaped_text(m_failure, 1024));
 			context.problems().set(k_import_problem_source, import_failure_problems(m_name, m_failure));
 		} else {
 			context.problems().clear(k_import_problem_source);
@@ -300,7 +300,7 @@ bool edt::import_component::poll_progress()
 
 	if (!intermediate.error.empty()) {
 		erase_import_folder(folder);
-		egLOG("Editor/Import", "Import of '{}' failed: {}", name, intermediate.error);
+		egLOG("Editor/Import", "Import of '{}' failed: {}", name, text_escape::escaped_text(intermediate.error, 1024));
 		context.problems().set(k_import_problem_source, import_failure_problems(name, intermediate.error));
 		context.dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", name, intermediate.error));
 		return false;
