@@ -4,13 +4,15 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/project/prj_json_text.h>
+#include <snk/project/prj_project.h>
 
 #include <boost/json/object.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
+#include <format>
 #include <memory>
 #include <string>
 
@@ -27,6 +29,41 @@ namespace {
 		bool done = false;
 		int attempts = 0;
 	};
+
+	bool is_inside(const std::filesystem::path& file, const std::filesystem::path& root)
+	{
+		auto at = file.begin();
+		for (const auto& part : root) {
+			if (part.empty()) continue;
+			if (at == file.end() || *at != part) return false;
+			++at;
+		}
+		return true;
+	}
+}
+
+std::string gs::write_capture(const std::filesystem::path& file, std::string_view png, const std::filesystem::path& project_root)
+{
+	std::error_code error;
+	const std::filesystem::path given = std::filesystem::absolute(file, error);
+	if (error || !given.has_filename() || given.filename() == "." || given.filename() == "..") {
+		return std::format("'{}' is no file name", file.string());
+	}
+	// The folder canonical, the name as given: a link at the file is refused by the writer, never followed here.
+	const std::filesystem::path target = std::filesystem::weakly_canonical(given.parent_path(), error) / given.filename();
+	if (error) {
+		return std::format("'{}': its folder cannot be resolved", file.string());
+	}
+	if (!project_root.empty()) {
+		const std::filesystem::path root = std::filesystem::weakly_canonical(project_root, error);
+		if (error || is_inside(target, root)) {
+			return std::format("'{}' is inside the project: capture/on_settled writes outside it", file.string());
+		}
+	}
+	if (const auto problem = prj::write_project_file(target.parent_path(), target.filename(), png)) {
+		return *problem;
+	}
+	return {};
 }
 
 void gs::register_capture_on_settled(app::frame_stage_registry& registry)
@@ -65,9 +102,15 @@ void gs::register_capture_on_settled(app::frame_stage_registry& registry)
 		state->done = true;
 		const boost::json::object& value = result.value.as_object();
 		const auto png = cmd::base64::decode(std::string(value.at("png_base64").as_string()));
-		std::ofstream file(path, std::ios::binary);
-		if (!png || !file.write(reinterpret_cast<const char*>(png->data()), static_cast<std::streamsize>(png->size()))) {
-			egLOG_ERROR("capture", "capture/on_settled: cannot write {}", path);
+		if (!png) {
+			egLOG_ERROR("capture", "capture/on_settled: the capture is no PNG");
+			return;
+		}
+		const std::filesystem::path root = c.storage.has_value<prj::project_context>() ? c.storage.require<prj::project_context>().root
+			: std::filesystem::path{};
+		const std::string_view bytes(reinterpret_cast<const char*>(png->data()), png->size());
+		if (std::string problem = gs::write_capture(path, bytes, root); !problem.empty()) {
+			egLOG_WARN("capture", "capture/on_settled: not written: {}", problem);
 			return;
 		}
 		// run_headless.sh --wait-for-log waits for this line.
