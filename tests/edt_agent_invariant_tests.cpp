@@ -1115,7 +1115,14 @@ struct desc_problems_fixture : agent_editor_fixture
 	void open_prefab(const res::tag& tag)
 	{
 		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
-		test_util::pump(tasks);
+		// The prefab opens in the background (#152): frames until the window is done loading, with a limit.
+		const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
+		for (int frame = 0; frame < 300; ++frame) {
+			test_util::pump(tasks);
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			if (!window || !window->loading()) break;
+		}
+		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 300 frames");
 	}
 
 	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
@@ -1483,6 +1490,55 @@ BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixt
 	BOOST_TEST(!desc_rows().empty());
 	open_prefab(plain);
 	BOOST_TEST(desc_rows().empty());
+}
+
+// #152: a prefab opens in the background; what was open before stays until the new one is there.
+BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen, desc_problems_fixture)
+{
+	const res::tag first = res::tag::make("prefabs/open_first.prefab.desc");
+	const res::tag second = res::tag::make("prefabs/open_second.prefab.desc");
+	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+	auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
+	BOOST_REQUIRE(window);
+	open_prefab(first);
+	edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), second)); });
+	BOOST_TEST(window->loading());
+	window->cancel_loading();
+
+	BOOST_TEST(!window->loading());
+	document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_TEST(document->source_tag() == first);
+	for (int frame = 0; frame < 20; ++frame) {
+		test_util::pump(tasks);
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+	}
+	document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_TEST(document->source_tag() == first);
+}
+
+BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_ReplacesTheWait, desc_problems_fixture)
+{
+	const res::tag first = res::tag::make("prefabs/replace_first.prefab.desc");
+	const res::tag second = res::tag::make("prefabs/replace_second.prefab.desc");
+	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), first)); });
+	open_prefab(second);
+
+	const edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_TEST(document->source_tag() == second);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

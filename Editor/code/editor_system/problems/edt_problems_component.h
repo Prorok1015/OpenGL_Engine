@@ -8,6 +8,7 @@
 #include <snk/resource/res_tag.h>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,8 @@ namespace edt
 		play_preflight_publisher m_play_preflight;
 		// gs::input_actions::revision() the Problems of the source "input" were last made for.
 		std::uint64_t m_input_revision = ~std::uint64_t{ 0 };
+		// A fix's question holds it weakly: answered after this component went, it runs nothing.
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		// Last, so the listeners go before what they call.
 		std::vector<connection> m_connections;
 	};

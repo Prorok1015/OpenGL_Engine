@@ -42,6 +42,11 @@ namespace edt
 
 	void prefab_editor_panel::on_render()
 	{
+		if (!m_loading.empty()) {
+			ImGui::TextUnformatted(m_loading.c_str());
+			if (m_on_cancel_loading && ImGui::Button("Cancel")) m_on_cancel_loading();
+			return;
+		}
 		if (!m_ctx || !m_ctx->is_open()) {
 			ImGui::TextDisabled("(no prefab open)");
 			// If context was closed externally, close the panel
