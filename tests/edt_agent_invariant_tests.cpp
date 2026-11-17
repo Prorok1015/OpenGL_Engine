@@ -1115,7 +1115,11 @@ struct desc_problems_fixture : agent_editor_fixture
 	void open_prefab(const res::tag& tag)
 	{
 		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
-		test_util::pump(tasks);
+		// The prefab opens in the background (#152): its load is polled once per frame, these files have nothing to wait for.
+		for (int frame = 0; frame < 5; ++frame) {
+			test_util::pump(tasks);
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		}
 	}
 
 	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
