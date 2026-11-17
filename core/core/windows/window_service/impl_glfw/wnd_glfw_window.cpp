@@ -22,7 +22,7 @@ wnd::glfw_window::~glfw_window()
     }
 }
 
-wnd::gl_surface* wnd::glfw_window::gl_surface_ptr() const
+rnd::driver::gl_surface* wnd::glfw_window::gl_surface_ptr() const
 {
     if (m_ctx.get_header().api != graphics_api::opengl) {
         return nullptr;

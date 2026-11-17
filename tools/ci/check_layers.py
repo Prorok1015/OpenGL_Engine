@@ -91,9 +91,7 @@ PUBLIC_INCLUDE = re.compile(r'^\s*#\s*include\s*<snk/([A-Za-z0-9_]+)/([^>]*)>', 
 # Targets whose headers come from an aggregate on purpose (their CMake links snk::engine_api / is the aggregate).
 AGGREGATE_USERS = {'snk::engine', 'snk::model_import_assimp'}
 # (target, component it includes) left hidden, with the reason.
-HIDDEN_EXCEPTIONS = {
-    ('snk::drv_opengl', 'snk::window'): '#1161 item 5: the window/GL loop goes through the header-only window_gl_surface',
-}
+HIDDEN_EXCEPTIONS = {}
 
 
 def links_of(text):
@@ -122,8 +120,9 @@ def public_closure(target, links_by_target):
     return reached
 
 
-def hidden_problems(targets, owners_of_names, headers_of):
+def hidden_problems(targets, owners_of_names, headers_of, exceptions=None):
     """`targets`: alias -> links; `owners_of_names`: snk/<name> -> alias; `headers_of`: alias -> [(path, text)]."""
+    exceptions = HIDDEN_EXCEPTIONS if exceptions is None else exceptions
     out = []
     for target in sorted(targets):
         if target in AGGREGATE_USERS:
@@ -134,7 +133,7 @@ def hidden_problems(targets, owners_of_names, headers_of):
                 if name == 'common' and rest == 'snk_api.h' and 'snk::api' in targets[target]:
                     continue
                 owner = owners_of_names.get(name)
-                if owner is None or owner in reach or (target, owner) in HIDDEN_EXCEPTIONS:
+                if owner is None or owner in reach or (target, owner) in exceptions:
                     continue
                 out.append(f'{path}: a public header of {target} includes <snk/{name}/...> of {owner}, '
                            f'which {target} does not link PUBLIC')
@@ -251,7 +250,8 @@ def self_test():
         ('through a public link', hidden_problems(links, owned, {'snk::d': [('d.h', '#include <snk/b/x.h>\n')]}), 0),
         ('snk_api.h through snk::api', hidden_problems(links, owned, {'snk::a': [('a.h', '#include <snk/common/snk_api.h>\n')]}), 0),
         ('another common header', hidden_problems(links, owned, {'snk::a': [('a.h', '#include <snk/common/x.h>\n')]}), 1),
-        ('a listed exception', hidden_problems(links, owned, {'snk::drv_opengl': [('g.h', '#include <snk/window/w.h>\n')]}), 0),
+        ('a listed exception', hidden_problems(links, owned, {'snk::drv_opengl': [('g.h', '#include <snk/window/w.h>\n')]},
+                                               {('snk::drv_opengl', 'snk::window'): 'a reason'}), 0),
         ('links are read with their visibility', [] if links_of(
             'target_link_libraries(x PRIVATE snk::b PUBLIC snk::c $<BUILD_LOCAL_INTERFACE:snk::d>)') ==
             {'snk::b': 'PRIVATE', 'snk::c': 'PUBLIC', 'snk::d': 'PUBLIC'} else ['wrong'], 0),

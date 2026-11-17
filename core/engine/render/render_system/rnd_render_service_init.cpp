@@ -132,7 +132,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
 	const auto window = window_system.get_active_window();
-	wnd::gl_surface* surface = window ? window->gl_surface_ptr() : nullptr;
+	rnd::driver::gl_surface* surface = window ? window->gl_surface_ptr() : nullptr;
 	const std::string& backend = *cfg_render_backend;
 	if (backend != "gl" && backend != "null") {
 		egLOG_WARN("render", "Unknown render/backend '{}', expected 'gl' or 'null'", backend);
