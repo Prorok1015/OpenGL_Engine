@@ -145,6 +145,13 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 - Категории: чтение `read`, правка `code_edit`, создание/удаление/переименование `code_files`; CMake-путь (без учёта регистра) → `cmake_presets` через `command_desc::category_of` (#478). По таблице владельца по умолчанию чтения `allow`, правки `ask` (человек подтверждает вызов или сессию агента для категории); `code.delete` и `code.rename` помечены `destructive` (MCP `destructiveHint`), `code.write` и `code.create` — нет: файл остаётся, запись охраняет `version`.
 - Каждая мутация пишется в лог `agent` и поднимает `editor_events::agent_action` для статус-бара (#449).
 
+### 3.4b Операции над ассетами (#775, EPIC-57 6.4)
+
+- `asset.rename {path, to}` / `asset.move {path, to}` / `asset.delete {path, force?}` (`assets/edt_asset_commands.h`): один ассет проекта под `res://`, файлы слоя движка и нижних слоёв не меняются. Вместе с файлом переезжают его `.resource` и (у desc `<имя>.<вид>.desc`) бинарный файл; ссылки с `guid` остаются, ссылки по пути переписываются в ссылающихся файлах. Удаление переносит файлы в `cache://asset_ops/<операция>/files/`.
+- Категория `scene_edit`, `risk` confirm: по умолчанию человек подтверждает каждый вызов агента (запись политики проекта для команды по имени может снять вопрос, как у `desc.write`), в вопросе: что переедет, какие файлы будут переписаны, что не удалось переписать. `asset.delete` с `force: true` оставляет ссылки сломанными: команда отклоняет такой вызов агента (`denied`), если человек не одобрил именно его, а вопрос перечисляет места (файл и JSON-указатель), которые сломаются. Без `force` удаление ссылающегося ассета — `needs_input` со списком ссылающихся.
+- `busy`: идёт миграция (#761), индекс ассетов ещё строится (#968) или база ещё читает файлы, либо файл, который ссылается на ассет, открыт с несохранёнными правками (или это открытый уровень). Машинный код отказа лежит в `value` (`has_referrers`, `referrer_open`, `target_exists`, `unportable_path`...).
+- Ответ: `{operation, action, moved, rewritten: [{file, pointers}], could_not_rewrite, warnings, broken_references}`. `operation` — идентификатор журнала; откатывает операцию человек (Edit → Undo Asset Action, команды для агента нет), в том числе после перезапуска редактора.
+
 ### 3.5 События и длинные операции
 
 - `editor_events` → MCP `notifications/resources/updated` по подписке: `snk://selection`, `snk://document/<id>` (generation), `snk://log` (новый seq), `snk://problems`.
