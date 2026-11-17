@@ -307,13 +307,29 @@ jobs:
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.
       # 20 min on Windows Debug until #898 makes the null-backend suites cheaper (#892): a slow runner took 600 s.
+      # Windows (#977): EdtVcsServiceTests (~90 s, a git process per step) runs in a second process beside the rest; the
+      # two share no folder, port or variable. Either failing fails the step; the logs are printed once both ended.
       - name: Run unit tests
         timeout-minutes: ${{ contains(matrix.preset, 'windows') && 20 || 10 }}
         working-directory: build/${{ matrix.preset }}
         shell: bash
+        env:
+          SPLIT_VCS_TESTS: ${{ contains(matrix.preset, 'windows') }}
         run: |
           set -o pipefail
-          ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
+          if [ "$SPLIT_VCS_TESTS" != true ]; then
+            ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
+            exit
+          fi
+          ./unit_tests --log_level=test_suite '--run_test=!EdtVcsServiceTests' > unit_tests_rest.log 2>&1 &
+          rest=$!
+          ./unit_tests --log_level=test_suite --run_test=EdtVcsServiceTests > unit_tests_vcs.log 2>&1 &
+          vcs=$!
+          failed=0
+          wait "$rest" || { echo "::error::unit tests (all but EdtVcsServiceTests) failed"; failed=1; }
+          wait "$vcs" || { echo "::error::unit tests (EdtVcsServiceTests) failed"; failed=1; }
+          cat unit_tests_rest.log unit_tests_vcs.log | tee unit_tests.log
+          exit "$failed"
 
       # #746: a base shape file of core/res/shapes that differs from the generator is written by the test to generated_shapes/;
       # these are the bytes to commit, as nobody builds locally.
@@ -340,7 +356,14 @@ jobs:
         working-directory: build/${{ matrix.preset }}
         shell: bash
         run: |
-          [ -f unit_tests.log ] || exit 0
+          # A split run stopped by the timeout left only its parts, not printed yet: their ends show where it hung.
+          if [ ! -f unit_tests.log ]; then
+            for part in unit_tests_rest.log unit_tests_vcs.log; do
+              [ -f "$part" ] && { echo "Last lines of $part:"; tail -n 40 "$part"; }
+            done
+            cat unit_tests_rest.log unit_tests_vcs.log > unit_tests.log 2>/dev/null || true
+          fi
+          [ -s unit_tests.log ] || exit 0
           for what in suite case; do
             echo "Slowest test ${what}s:"
             sed -nE "s/.*Leaving test ${what} \"([^\"]+)\"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p" unit_tests.log \
