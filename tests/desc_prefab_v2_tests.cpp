@@ -3,6 +3,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/desc_node_id.h>
+#include <functional>
 #include <sstream>
 
 // Format v2 of prefab_desc / world_desc / level_desc: children are an array of nodes with "__id" and
@@ -593,6 +594,59 @@ BOOST_AUTO_TEST_CASE(LayerV2_AWorldWithALayer_FailsTheLoad)
 	put("base.world.desc", R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[]})");
 	BOOST_TEST(!load<scn::world_desc>(put("child.world.desc", R"({"__type":"world_desc","__version":4,
 		"__parent":"memory://t/base.world.desc","__layer":2})")));
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ATypoOrAnUnknownKeyInAnEntry_FailsTheLoadWithThePath)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"a"}]})");
+	for (const char* entry : {
+		R"({"__id":"00000000000000b1","compnents":{}})",
+		R"({"__id":"00000000000000b1","__rmove":true})",
+		R"({"__id":"00000000000000b1","__remove":true,"name":"x"})",
+		R"({"__id":"00000000000000b1","__remove":true,"__new":true})",
+	}) {
+		const std::string text = std::string{ R"({"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[)" } + entry + "]}";
+		BOOST_TEST(!load<scn::prefab_desc>(put("bad" + std::to_string(std::hash<std::string>{}(entry)) + ".prefab.desc", text)), entry);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ANewNodeIsReadStrictly_NoNullAndNoUnknownKey)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[]})");
+	BOOST_TEST(!load<scn::prefab_desc>(put("n1.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[
+		{"__id":"00000000000000c1","__new":true,"name":"c","components":{"stat":null}}]})")));
+	BOOST_TEST(!load<scn::prefab_desc>(put("n2.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[
+		{"__id":"00000000000000c1","__new":true,"name":"c","children":[{"__id":"00000000000000c2","nmae":"d"}]}]})")));
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_ANodeNamedTwiceInOneList_FailsTheLoad_OnlyAMoveIsAllowed)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"a"}]})");
+	const auto text = [](const char* entries) {
+		return std::string{ R"({"__type":"prefab_desc","__version":4,"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[)" } + entries + "]}";
+	};
+	BOOST_TEST(!load<scn::prefab_desc>(put("t1.prefab.desc", text(R"({"__id":"00000000000000b1","__new":true},{"__id":"00000000000000b1","__remove":true})"))));
+	BOOST_TEST(!load<scn::prefab_desc>(put("t2.prefab.desc", text(R"({"__id":"00000000000000b1","name":"x"},{"__id":"00000000000000b1","name":"y"})"))));
+	BOOST_TEST(load<scn::prefab_desc>(put("t3.prefab.desc", text(R"({"__id":"00000000000000b1","__remove":true},{"__id":"00000000000000b1","__new":true,"name":"moved"})"))) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_AV1VariantThatHidAComponentOfTheBase_IsWrittenWithTheComponentRemoved)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":1}}}]})");
+	auto v1 = load<scn::prefab_desc>(put("v1.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","children":[{"__id":"00000000000000b1","name":"a"}]})"));
+	BOOST_REQUIRE(v1);
+	BOOST_TEST(v1->get_root().children[0].components.empty());
+	json::object body;
+	v1->serialize(body);
+	BOOST_REQUIRE(scn::write_prefab_layer(*descs, *rs, *v1, body).empty());
+	BOOST_TEST(json::serialize(body).find("\"stat\":null") != std::string::npos);
+	auto v2 = load<scn::prefab_desc>(put("v2.prefab.desc", json::serialize(body)));
+	BOOST_REQUIRE(v2);
+	BOOST_TEST(v2->get_root().children[0].components.empty());
 }
 
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)

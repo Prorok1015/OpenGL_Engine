@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <format>
 #include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <span>
 #include <string>
@@ -235,10 +236,59 @@ namespace scn {
 		read_vec3(transform, key, out, node_name);
 	}
 
+	void require_keys_in(const json::object& object, std::initializer_list<std::string_view> allowed, std::string_view json_path)
+	{
+		for (const auto& member : object) {
+			const std::string_view key{ member.key() };
+			if (std::ranges::find(allowed, key) == allowed.end()) {
+				layer_error(pointer_to(json_path, key), std::format("'{}' is not a key of a layer entry here", key));
+			}
+		}
+	}
+
+	// A node a layer adds is read whole, as in any prefab; a null has no meaning there, so it is an error rather than the
+	// empty component parse_component would make of it.
+	void validate_new_node(const json::object& node, std::string_view json_path, bool top)
+	{
+		require_keys_in(node, top ? std::initializer_list<std::string_view>{ "__id", "__new", "name", "transform", "components", "overrides", "children" }
+			: std::initializer_list<std::string_view>{ "__id", "name", "transform", "components", "overrides", "children" }, json_path);
+		if (const auto* transform = node.if_contains("transform")) {
+			if (!transform->is_object()) layer_error(pointer_to(json_path, "transform"), "'transform' of a new node must be an object");
+			for (const auto& field : transform->as_object()) {
+				if (field.value().is_null()) layer_error(pointer_to(pointer_to(json_path, "transform"), field.key()), "a new node has no null to say");
+			}
+		}
+		if (const auto* components = node.if_contains("components")) {
+			if (!components->is_object()) layer_error(pointer_to(json_path, "components"), "'components' must be an object");
+			for (const auto& component : components->as_object()) {
+				if (component.value().is_null()) {
+					layer_error(pointer_to(pointer_to(json_path, "components"), component.key()), "a new node has no component to remove");
+				}
+			}
+		}
+		if (const auto* overrides = node.if_contains("overrides"); overrides && !overrides->is_array()) {
+			layer_error(pointer_to(json_path, "overrides"), "'overrides' must be an array of records");
+		}
+		if (const auto* children = node.if_contains("children")) {
+			if (!children->is_array()) layer_error(pointer_to(json_path, "children"), "'children' must be an array");
+			std::size_t index = 0;
+			for (const auto& child : children->as_array()) {
+				const auto path = pointer_to(json_path, "children") + "/" + std::to_string(index++);
+				if (!child.is_object()) layer_error(path, "a child must be an object");
+				validate_new_node(child.as_object(), path, false);
+			}
+		}
+	}
+
 	// One layer over a node of the base (format v2): what it names changes, the rest stays the base's.
 	void apply_layer_to_node(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node,
 		const json::object& layer, std::string_view json_path)
 	{
+		if (json_path.empty()) {
+			require_keys_in(layer, { "__type", "__version", "__guid", "__parent", "__layer", "__id", "__order", "name", "transform", "components", "overrides", "children" }, json_path);
+		} else {
+			require_keys_in(layer, { "__id", "__remove", "__new", "__order", "name", "transform", "components", "overrides", "children" }, json_path);
+		}
 		if (const auto* name = layer.if_contains("name")) {
 			if (!name->is_string()) layer_error(pointer_to(json_path, "name"), "'name' must be a string");
 			node.name = name->as_string();
@@ -292,6 +342,7 @@ namespace scn {
 			if (!children->is_array()) layer_error(children_path, "'children' must be an array");
 			std::size_t index = 0;
 			std::vector<std::uint64_t> removed;
+			std::unordered_map<std::uint64_t, char> last_operation;
 			for (const auto& element : children->as_array()) {
 				const auto path = children_path + "/" + std::to_string(index++);
 				if (!element.is_object()) layer_error(path, "a child entry must be an object");
@@ -307,7 +358,17 @@ namespace scn {
 					if (!value->is_bool()) layer_error(pointer_to(path, key), std::format("'{}' must be true or false", key));
 					return value->as_bool();
 				};
-				if (flag("__remove")) {
+				const bool remove = flag("__remove");
+				const bool add = flag("__new");
+				if (remove && add) layer_error(path, "an entry either removes a node or adds one");
+				const char operation = remove ? 'r' : add ? 'n' : 'e';
+				if (const auto previous = last_operation.find(*id); previous != last_operation.end()
+					&& !(previous->second == 'r' && operation == 'n')) {
+					layer_error(path, "a node is named twice in one list; only a removal followed by the same node added again (a move) is allowed");
+				}
+				last_operation[*id] = operation;
+				if (remove) {
+					require_keys_in(entry, { "__id", "__remove" }, path);
 					if (found == node.children.end()) stale_edit(path, "the base has no such node to remove");
 					else {
 						removed.push_back(*id);
@@ -315,7 +376,8 @@ namespace scn {
 					}
 					continue;
 				}
-				if (flag("__new")) {
+				if (add) {
+					validate_new_node(entry, path, true);
 					if (found != node.children.end()) {
 						stale_edit(path, "a node with this id is already there; the new node is ignored");
 						continue;
