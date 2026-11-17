@@ -137,7 +137,8 @@ def literal_of(arg):
 	for m in NUMBER.finditer(code):
 		before = code[:m.start()].rstrip()
 		# A negative size (-40: to the end of the space) is a fill, not pixels; `a - 40` is a pixel size.
-		if before.endswith('-') and not before[:-1].rstrip().endswith(tuple(')]}') + tuple(string.ascii_letters + string.digits + '_.')):
+		operand_end = tuple(')]}') + tuple(string.ascii_letters + string.digits + '_.')
+		if before.endswith('-') and not before[:-1].rstrip().endswith(operand_end):
 			continue
 		if float(m.group(0).rstrip('fF')) > LIMIT:
 			return m.group(0)
@@ -202,7 +203,8 @@ def self_test():
 		('ImGui::SetNextWindowSize(ImVec2(520.f, 460.f));', ['SetNextWindowSize']),
 		('ImGui::SetNextWindowSize(em(ImVec2(520.f, 460.f)), ImGuiCond_FirstUseEver);', []),
 		('ImGui::SetNextWindowSize(ImVec2(em(520.f), em(460.f)));', []),
-		('ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));', ['SetNextWindowSizeConstraints']),
+		('ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));',
+		 ['SetNextWindowSizeConstraints']),
 		('ImGui::SetColumnWidth(0, 160);', ['SetColumnWidth']),
 		('ImGui::SetColumnWidth(0, dpi_px(160));', []),
 		('ImGui::TableSetupColumn("a", ImGuiTableColumnFlags_WidthFixed, 70.f);', ['TableSetupColumn']),

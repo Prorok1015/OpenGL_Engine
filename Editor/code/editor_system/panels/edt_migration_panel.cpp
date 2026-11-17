@@ -116,7 +116,8 @@ void edt::migration_panel::draw_rollback_question()
 		coloured(colors().error, "This rollback would be refused: " + question->refused);
 	} else {
 		// Every path of the journal, however many: a long list scrolls inside its own region.
-		if (ImGui::BeginChild("##rollback_files", ImVec2(em(640.0f), em(280.0f)), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+		if (ImGui::BeginChild("##rollback_files", ImVec2(em(640.0f), em(280.0f)), ImGuiChildFlags_Borders,
+				ImGuiWindowFlags_HorizontalScrollbar)) {
 			ImGui::TextUnformatted(question->text.c_str(), question->text.c_str() + question->text.size());
 		}
 		ImGui::EndChild();
