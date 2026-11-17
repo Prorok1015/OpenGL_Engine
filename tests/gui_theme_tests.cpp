@@ -323,6 +323,14 @@ BOOST_AUTO_TEST_CASE(TheSourcesOfPresetsAndFonts_AreSetApart)
 	BOOST_TEST(other.style.imgui_dark);
 }
 
+BOOST_AUTO_TEST_CASE(APresetPathWithADotDotSegment_IsNotRead)
+{
+	const auto& theme = select(editor_service, "engine://themes/../themes/light.desc");
+
+	BOOST_TEST(!theme.style.palette.light);
+	BOOST_TEST(editor_service.selected().view() == "engine://themes/classic.desc");
+}
+
 BOOST_AUTO_TEST_CASE(APreviewWhileAChosenPresetLoads_DoesNotReplaceIt)
 {
 	select("engine://themes/dark_neutral.desc");

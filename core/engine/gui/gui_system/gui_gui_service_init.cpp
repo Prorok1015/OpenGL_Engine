@@ -110,13 +110,13 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	// Without a renderer there is no look to change.
 	if (gl_backend_ptr) {
 		auto& resources = data.require<res::resource_system>();
-		auto& themes = data.construct<::gui::theme_service>(resources, resources.engine_file("themes/classic.desc"),
+		const res::tag default_theme = resources.engine_file("themes/dark_neutral.desc");
+		auto& themes = data.construct<::gui::theme_service>(resources, default_theme,
 			[gl_backend_ptr](::gui::theme_service::theme theme) {
 				gl_backend_ptr->set_theme(theme.style, std::move(theme.text_font), std::move(theme.fallback_font),
 					std::move(theme.icon_font), theme.fonts_changed);
 			});
-		themes.select(theme_set_by_config() ? res::tag{ *cfg_gui_theme }
-			: resources.engine_file("themes/dark_neutral.desc"));
+		themes.select(theme_set_by_config() ? res::tag{ *cfg_gui_theme } : default_theme);
 		gui_sys.push_layer(std::make_shared<::gui::theme_service::layer>(themes));
 	}
 }

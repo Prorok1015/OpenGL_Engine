@@ -139,6 +139,7 @@ BOOST_AUTO_TEST_CASE(ANameOfAPersonalPreset_IsAPlainFileName)
 	BOOST_TEST(edt::personal_theme_tag("mine").view() == "edt://themes/mine.desc");
 	BOOST_TEST(edt::is_personal_theme(edt::personal_theme_tag("mine")));
 	BOOST_TEST(!edt::is_personal_theme(res::tag{ "engine://themes/light.desc" }));
+	BOOST_TEST(!edt::is_personal_theme(res::tag{ "edt://themes/../settings/x.desc" }));
 	BOOST_TEST(edt::theme_name_of(res::tag{ "engine://themes/dark_neutral.desc" }) == "dark_neutral");
 }
 

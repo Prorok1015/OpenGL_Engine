@@ -1,6 +1,7 @@
 #include <snk/gui/gui_theme_service.h>
 #include <snk/gui/gui_ui_font.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 
 #include <algorithm>
@@ -189,7 +190,8 @@ bool gui::theme_service::readable(const res::tag& tag, const std::vector<std::st
 		return true;
 	}
 	const std::string_view text = tag.view();
-	return std::ranges::any_of(sources, [&](const std::string& prefix) { return text.starts_with(prefix); });
+	return res::portable_path_problem(tag.path()).empty()
+		&& std::ranges::any_of(sources, [&](const std::string& prefix) { return text.starts_with(prefix); });
 }
 
 void gui::theme_service::poll()

@@ -5,6 +5,7 @@
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/desc/desc_system.h>
 #include <snk/gui/gui_theme_service.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 
 #include <boost/json.hpp>
@@ -40,18 +41,6 @@ namespace
 		return std::equal(tail.begin(), tail.end(), suffix.begin(), [](char a, char b) {
 			return std::tolower(static_cast<unsigned char>(a)) == b;
 		});
-	}
-
-	// CON, NUL, COM1...: a file of that name cannot be made on Windows.
-	bool windows_device_name(std::string_view name)
-	{
-		std::string upper(name);
-		std::ranges::transform(upper, upper.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") {
-			return true;
-		}
-		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT"))
-			&& upper[3] >= '0' && upper[3] <= '9';
 	}
 
 	using list_function = std::function<std::vector<res::tag>(std::string_view, std::string_view)>;
@@ -97,9 +86,9 @@ bool edt::valid_theme_name(std::string_view name)
 	if (name.empty() || name.size() > 64) {
 		return false;
 	}
-	return !windows_device_name(name) && std::ranges::all_of(name, [](char c) {
+	return std::ranges::all_of(name, [](char c) {
 		return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
-	});
+	}) && res::portable_path_problem(std::format("{}.desc", name)).empty();
 }
 
 res::tag edt::personal_theme_tag(std::string_view name)
@@ -109,7 +98,7 @@ res::tag edt::personal_theme_tag(std::string_view name)
 
 bool edt::is_personal_theme(const res::tag& tag)
 {
-	return tag.view().starts_with(k_personal_themes);
+	return tag.view().starts_with(k_personal_themes) && res::portable_path_problem(tag.path()).empty();
 }
 
 std::string edt::theme_name_of(const res::tag& tag)
@@ -153,7 +142,9 @@ void edt::theme_settings_model::poll()
 		const std::shared_ptr<res::text_resource> text = m_choice.get();
 		m_choice = {};
 		const std::optional<res::tag> chosen = text ? chosen_theme_of(text->str()) : std::nullopt;
-		if (chosen && (chosen->view().starts_with("engine://") || is_personal_theme(*chosen))) {
+		const bool engine_preset = chosen && chosen->view().starts_with("engine://")
+			&& res::portable_path_problem(chosen->path()).empty();
+		if (chosen && (engine_preset || is_personal_theme(*chosen))) {
 			m_ports.themes->select(*chosen);
 			load_working(*chosen);
 		} else if (chosen) {
