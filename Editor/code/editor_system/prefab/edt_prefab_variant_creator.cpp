@@ -59,3 +59,31 @@ edt::document_creation edt::prefab_variant_creator::create(const res::tag& base,
 	if (const res::file_operation made = resources->create_sync(tag, desc::pretty_json_bytes(content)); !made.ok) return { {}, made.error };
 	return { tag, {} };
 }
+
+void edt::prefab_variant_form::open(res::tag base)
+{
+	m_base = std::move(base);
+	m_name = m_creator.suggested_name(m_base);
+	m_problem = m_name.empty() ? m_creator.check(m_base, m_name) : std::string{};
+	m_error.clear();
+}
+
+void edt::prefab_variant_form::set_name(std::string name)
+{
+	if (name == m_name) return;
+	m_name = std::move(name);
+	m_problem = m_name.empty() ? std::string{} : m_creator.check(m_base, m_name);
+	m_error.clear();
+}
+
+std::optional<res::tag> edt::prefab_variant_form::submit()
+{
+	if (!can_submit()) return std::nullopt;
+	const document_creation made = m_creator.create(m_base, m_name);
+	if (!made.ok()) {
+		m_error = made.error;
+		return std::nullopt;
+	}
+	m_error.clear();
+	return made.tag;
+}

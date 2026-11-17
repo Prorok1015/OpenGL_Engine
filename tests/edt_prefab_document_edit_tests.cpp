@@ -1084,4 +1084,34 @@ BOOST_AUTO_TEST_CASE(ApplyingAVariant_WritesOnlyItsOwnLayer_NotTheBasesContent)
 	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("renamed") == std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(TheVariantForm_StartsWithTheSuggestedName_AndSubmitCreatesIt)
+{
+	const auto creator = variant_creator();
+	edt::prefab_variant_form form(creator);
+
+	form.open(res::tag::make("prefabs/a.prefab.desc"));
+
+	BOOST_TEST(form.name() == "a_variant");
+	BOOST_TEST(form.can_submit());
+	const auto made = form.submit();
+	BOOST_REQUIRE(made.has_value());
+	BOOST_TEST(made->view() == "res://prefabs/a_variant.prefab.desc");
+	BOOST_TEST(fs::exists(res_root / "prefabs" / "a_variant.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheVariantForm_ATakenName_ShowsWhyAndWritesNothingOverTheFile)
+{
+	write(res_root, "prefabs/taken.prefab.desc", "kept");
+	const auto creator = variant_creator();
+	edt::prefab_variant_form form(creator);
+	form.open(res::tag::make("prefabs/a.prefab.desc"));
+
+	form.set_name("taken");
+
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(form.problem().find("already exists") != std::string::npos);
+	BOOST_TEST(!form.submit().has_value());
+	BOOST_TEST(text_of(res_root, "prefabs/taken.prefab.desc") == "kept");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

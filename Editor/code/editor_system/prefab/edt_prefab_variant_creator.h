@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_document_creator.h"
 #include <snk/resource/res_tag.h>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -33,5 +34,35 @@ namespace edt
 
 		document_creator::ports m_ports;
 		document_creator m_names;
+	};
+
+	// What the "Create Variant" window of the asset browser holds between frames, without ImGui: the base, the name (the suggested one
+	// at first) and what is wrong with it.
+	class prefab_variant_form
+	{
+	public:
+		explicit prefab_variant_form(const prefab_variant_creator& creator) : m_creator(creator) {}
+
+		void open(res::tag base);
+		const res::tag& base() const { return m_base; }
+
+		const std::string& name() const { return m_name; }
+		void set_name(std::string name);
+
+		// What is wrong with the name as of its last change (the folders are walked then, not at every frame).
+		const std::string& problem() const { return m_problem; }
+		bool can_submit() const { return !m_name.empty() && m_problem.empty(); }
+		// What the last submit said when it failed.
+		const std::string& error() const { return m_error; }
+
+		// Makes the variant (the name is checked again, fresh): the tag on success, else error() says why. Nothing is written over a file.
+		std::optional<res::tag> submit();
+
+	private:
+		const prefab_variant_creator& m_creator;
+		res::tag m_base;
+		std::string m_name;
+		std::string m_problem;
+		std::string m_error;
 	};
 }
