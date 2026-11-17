@@ -4,7 +4,7 @@
 sleep 18
 shot @OUT@/1_overview.png
 # Directional light in the Hierarchy: selection highlight and the Inspector
-click 88 149
+click_item hierarchy Directional Light
 sleep 1
 shot @OUT@/2_selection.png
 # The Console in front of the Problems tab it shares (#1136: its lines are in the mono face): View > Console closes it
