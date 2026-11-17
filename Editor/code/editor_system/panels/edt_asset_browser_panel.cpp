@@ -190,7 +190,7 @@ namespace edt
 		ImGui::TextDisabled(".prefab.desc is added; the file lands next to the base");
 		for (const std::string* text : { &form.problem(), &form.error() }) {
 			if (text->empty()) continue;
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::TextWrapped("%s", text->c_str());
 			ImGui::PopStyleColor();
 		}
