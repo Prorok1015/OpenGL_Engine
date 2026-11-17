@@ -8,4 +8,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_INPUT_SOURCES})
 
 snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::ecs PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::ecs PRIVATE snk::window PRIVATE snk::engine_logger)
