@@ -10,6 +10,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <algorithm>
 #include <format>
 #include <memory>
 #include <optional>
@@ -20,6 +21,7 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 {
 	m_panel = std::make_shared<prefab_editor_panel>(m_ports.rnd, m_ports.gui);
 	m_panel->set_on_close([this] { confirm_close([this] { close(); }); });
+	m_panel->set_on_cancel_loading([this] { cancel_open(); });
 	m_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_node(path); });
 	m_panel->set_on_apply([this] {
 		if (prefab_document* prefab = prefab_of(m_ports.context.documents())) apply(*prefab);
@@ -121,6 +123,8 @@ bool edt::prefab_editor_component::apply_dirty()
 
 void edt::prefab_editor_component::close()
 {
+	m_open_watch.cancel();
+	m_panel->set_loading({});
 	release_inspector(true);
 	auto& documents = m_ports.context.documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
@@ -157,15 +161,82 @@ void edt::prefab_editor_component::detach_document()
 
 void edt::prefab_editor_component::open_now(const res::tag& tag)
 {
+	res::resource_system* resources = m_ports.services.resources();
+	if (!m_ports.register_frame || !resources) {
+		finish_open(tag, {});
+		return;
+	}
+	m_depth_warned = false;
+	m_open_watch.begin(resources->require<scn::prefab_desc>(tag));
+	if (settle_open()) return;
+	m_panel->set_loading(std::format("Loading '{}'...", tag.pure_name()));
+	m_panel->set_open(true);
+	if (m_polling) return;
+	m_polling = true;
+	m_ports.register_frame("edt/prefab_open", [this, alive = std::weak_ptr<int>(m_alive)] {
+		if (!alive.lock()) return false;
+		if (m_open_watch.active() && !settle_open()) return true;
+		m_polling = false;
+		return false;
+	});
+}
+
+bool edt::prefab_editor_component::settle_open()
+{
+	const prefab_open_watch::state outcome = m_open_watch.poll();
+	if (m_open_watch.nesting_limit_hit() && !m_depth_warned) {
+		m_depth_warned = true;
+		egLOG_WARN("editor", "'{}' nests prefabs deeper than 32 levels: the deeper ones are not waited for", m_open_watch.tag().view());
+	}
+	if (outcome == prefab_open_watch::state::loading) return false;
+	if (outcome == prefab_open_watch::state::idle) return true;
+	const res::tag tag = m_open_watch.tag();
+	// The handle outlives finish_open: the cache holds the prefab weakly, and the document opens from what the wait kept loaded.
+	const res::res_handle<scn::prefab_desc> handle = m_open_watch.take();
+	m_panel->set_loading({});
+	if (outcome == prefab_open_watch::state::ready) {
+		finish_open(tag, handle);
+	} else {
+		report_failed_open(tag, handle, outcome == prefab_open_watch::state::timed_out);
+	}
+	return true;
+}
+
+void edt::prefab_editor_component::report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out)
+{
+	const std::vector<res::diagnostic> items = diagnostics_of(handle);
+	m_ports.desc_problems.report(m_ports.context.problems(), "prefab", items);
+	std::string reason = timed_out ? std::format("it was still loading after {} s", prefab_open_watch::k_deadline.count()) : std::string{ "the file could not be loaded" };
+	if (const auto error = std::ranges::find(items, res::diagnostic_severity::error, &res::diagnostic::severity); !timed_out && error != items.end()) {
+		reason = error->reason;
+	}
+	egLOG_WARN("editor", "'{}' was not opened: {}", tag.view(), reason);
+	m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not opened:\n{}", tag.pure_name(), reason));
+	const prefab_document* open = prefab_of(m_ports.context.documents());
+	if (!open || !open->is_open()) m_panel->set_open(false);
+}
+
+void edt::prefab_editor_component::cancel_open()
+{
+	m_open_watch.cancel();
+	m_panel->set_loading({});
+	const prefab_document* open = prefab_of(m_ports.context.documents());
+	if (!open || !open->is_open()) m_panel->set_open(false);
+}
+
+void edt::prefab_editor_component::finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded)
+{
 	release_inspector(true);
 	prefab_document& prefab = edt::open_prefab(m_ports.context.documents(), tag);
-	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
-	const auto loaded = m_ports.services.resources()->require_sync<scn::prefab_desc>(tag);
-	m_ports.desc_problems.report(m_ports.context.problems(), "prefab", diagnostics_of(loaded));
+	// The diagnostics of the load the preview made, or of a load again when nothing kept it (no wait: tests, no frame port).
+	const auto reread = loaded.is_valid() ? loaded : m_ports.services.resources()->require_sync<scn::prefab_desc>(tag);
+	m_ports.desc_problems.report(m_ports.context.problems(), "prefab", diagnostics_of(reread));
 	m_desc_document = prefab.is_open() ? prefab.id() : document_id{};
 	if (prefab.is_open()) {
 		m_panel->set_context(&prefab);
 		m_panel->set_open(true);
+	} else {
+		m_panel->set_open(false);
 	}
 }
 
