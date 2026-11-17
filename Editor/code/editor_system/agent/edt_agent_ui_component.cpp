@@ -79,7 +79,8 @@ void edt::agent_ui_component::draw_policy_notice()
 	if (m_notice_dismissed_key == pending_key) return;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(
-		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f), viewport->WorkPos.y + viewport->WorkSize.y - em(12.f)),
+		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f),
+			viewport->WorkPos.y + viewport->WorkSize.y - em(12.f)),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;

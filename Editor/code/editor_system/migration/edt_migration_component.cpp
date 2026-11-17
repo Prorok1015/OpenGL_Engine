@@ -288,7 +288,8 @@ bool edt::migration_component::draw_notice()
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	// Above the agent policy's notice, which takes the corner.
 	ImGui::SetNextWindowPos(
-		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f), viewport->WorkPos.y + viewport->WorkSize.y - em(110.f)),
+		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f),
+			viewport->WorkPos.y + viewport->WorkSize.y - em(110.f)),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
