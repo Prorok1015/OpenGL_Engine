@@ -46,6 +46,10 @@ namespace edt
 			// The game's descs and layer generation are looked up when used: a game module replaces both.
 			std::function<const desc::desc_system*()> descs{};
 			std::function<std::uint64_t()> game_layer_generation{};
+			// Why a write to the project must wait (a migration runs, #761); an agent's asset commands answer busy.
+			std::function<std::optional<std::string>()> write_blocker{};
+			// A file with unsaved edits in an open document, or the open level: an operation on it or on a file that refers to it is refused (#775).
+			std::function<bool(const res::tag&)> is_open_with_unsaved_changes{};
 		};
 
 		explicit asset_component(ports from);
