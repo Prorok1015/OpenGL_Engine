@@ -51,7 +51,7 @@ std::filesystem::path edt::default_user_data_dir()
 
 std::vector<std::string> edt::default_write_patterns()
 {
-	return { "edt://settings/**" };
+	return { "edt://settings/**", "edt://themes/**" };
 }
 
 bool edt::register_data_protocol(res::resource_system& res, const std::filesystem::path& data_path, const std::filesystem::path& user_path,

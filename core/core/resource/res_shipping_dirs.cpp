@@ -346,7 +346,7 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 			continue;
 		}
 		std::error_code remove_ec;
-		fs::remove_all(it->path(), remove_ec);
+		remove_tree_without_following(it->path(), remove_ec);
 		if (remove_ec) {
 			egLOG_WARN("resource", "cannot remove the scratch folder of an ended run '{}': {}", fs_paths::utf8_of(it->path()),
 				remove_ec.message());
@@ -355,4 +355,49 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 		}
 	}
 	return removed;
+}
+
+bool core::res::remove_tree_without_following(const fs::path& path, std::error_code& ec)
+{
+	ec.clear();
+#ifdef _WIN32
+	const DWORD attributes = GetFileAttributesW(path.c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES) {
+		const DWORD error = GetLastError();
+		if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) ec = std::error_code(static_cast<int>(error), std::system_category());
+		return !ec;
+	}
+	const bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+	// A junction, a symlink, a mount point: the link goes, what it points at stays.
+	if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 && directory) {
+		std::error_code list_ec;
+		for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
+			std::error_code child_ec;
+			if (!remove_tree_without_following(it->path(), child_ec) && !ec) ec = child_ec;
+		}
+		if (list_ec && !ec) ec = list_ec;
+	}
+	if ((attributes & FILE_ATTRIBUTE_READONLY) != 0) SetFileAttributesW(path.c_str(), attributes & ~static_cast<DWORD>(FILE_ATTRIBUTE_READONLY));
+	if (!(directory ? RemoveDirectoryW(path.c_str()) : DeleteFileW(path.c_str())) && !ec) {
+		ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+	}
+#else
+	const fs::file_status status = fs::symlink_status(path, ec);
+	if (ec) {
+		if (ec == std::errc::no_such_file_or_directory) ec.clear();
+		return !ec;
+	}
+	if (fs::is_directory(status)) {
+		std::error_code list_ec;
+		for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
+			std::error_code child_ec;
+			if (!remove_tree_without_following(it->path(), child_ec) && !ec) ec = child_ec;
+		}
+		if (list_ec && !ec) ec = list_ec;
+	}
+	std::error_code remove_ec;
+	fs::remove(path, remove_ec);
+	if (remove_ec && !ec) ec = remove_ec;
+#endif
+	return !ec;
 }
