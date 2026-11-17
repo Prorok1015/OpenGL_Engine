@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_asset_usages.h"
 #include <snk/model_codec/res_tag.h>
+#include <snk/resource/res_file_change.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -227,6 +228,9 @@ namespace edt
 		std::function<bool(const res::tag&)> is_open_with_unsaved_changes;
 		// Held for the length of an operation (resource_system::hold_changes), so the watcher reports it as one batch.
 		std::function<std::shared_ptr<void>()> hold_changes;
+		// What an operation or its undo did to files of the layers, once it is on the disk and still under the hold: the editor's
+		// own change (asset_database::report_self_change), not a delete and a create that somebody else made.
+		std::function<void(std::span<const res::file_change>)> report_self_change;
 		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"); a non-empty answer fails it.
 		std::function<std::string(std::string_view)> fail_step;
 	};
@@ -248,6 +252,8 @@ namespace edt
 
 	private:
 		std::optional<refusal> plan_one(plan_item& item) const;
+		// Tells report_self_change what `steps` did (`undoing`: what taking them back did).
+		void announce(const std::vector<journal_step>& steps, bool undoing) const;
 
 		asset_ops_ports m_ports;
 	};

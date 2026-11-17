@@ -555,6 +555,44 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 	return std::nullopt;
 }
 
+void edt::asset_ops::announce(const std::vector<journal_step>& steps, bool undoing) const
+{
+	const asset_database* db = m_ports.report_self_change && m_ports.assets ? m_ports.assets() : nullptr;
+	if (!db) return;
+	// Only the files res:// shows: a step in another root (the manifest's folder) is not one of the database's.
+	std::vector<std::string> roots;
+	roots.reserve(db->layers().size());
+	for (const fs::path& layer : db->layers()) roots.push_back(utf8(layer));
+	const auto in_layers = [&roots](const journal_step& step) { return std::ranges::find(roots, step.root) != roots.end(); };
+
+	std::vector<res::file_change> changes;
+	changes.reserve(steps.size());
+	const auto add = [&changes](std::string_view relative, std::string_view old_relative, res::change_kind kind) {
+		res::file_change change;
+		change.tag = res::tag::make(relative);
+		if (!old_relative.empty()) change.old_tag = res::tag::make(old_relative);
+		change.kind = kind;
+		change.self = true;
+		changes.push_back(std::move(change));
+	};
+	for (const journal_step& step : steps) {
+		if (!in_layers(step)) continue;
+		switch (step.kind) {
+		case journal_step_kind::move:
+			if (undoing) add(step.from, step.to, res::change_kind::renamed);
+			else add(step.to, step.from, res::change_kind::renamed);
+			break;
+		case journal_step_kind::rewrite:
+			add(step.from, {}, res::change_kind::modified);
+			break;
+		case journal_step_kind::stash:
+			add(step.from, {}, undoing ? res::change_kind::created : res::change_kind::deleted);
+			break;
+		}
+	}
+	if (!changes.empty()) m_ports.report_self_change(changes);
+}
+
 edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const execute_options& options) const
 {
 	operation_report report;
@@ -662,10 +700,13 @@ edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const 
 			}
 		}
 		report.error = std::move(error);
+		// A step that could not be taken back leaves the project half done: the database is told what is on the disk.
 		if (report.rollback_failures.empty()) journal.steps.clear();
+		else announce(journal.steps, false);
 		persist(journal);
 		return report;
 	}
+	announce(journal.steps, false);
 
 	for (const planned_move& move : item.moves) {
 		const std::string to = removing ? std::format("cache://asset_ops/{}/{}", journal.id, move.to) : std::string(res::tag::make(move.to).view());
@@ -710,6 +751,7 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		}
 		report.restored.push_back(step->from);
 	}
+	announce(journal.steps, true);
 	report.ok = report.failures.empty();
 	if (!report.ok) report.error = "some files could not be put back";
 	return report;

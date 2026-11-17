@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -135,6 +136,10 @@ struct ops_fixture
 			++holds;
 			return std::make_shared<int>(0);
 		};
+		ports.report_self_change = [this](std::span<const res::file_change> changes) {
+			self_changes.insert(self_changes.end(), changes.begin(), changes.end());
+			if (forward_self_changes && db) db->report_self_change(changes);
+		};
 		ports.fail_step = [this](std::string_view step) -> std::string {
 			if (step != fail_at) return {};
 			return "injected failure";
@@ -200,6 +205,15 @@ struct ops_fixture
 	std::set<std::string> open_files;
 	std::string fail_at;
 	int holds = 0;
+	std::vector<res::file_change> self_changes;
+	bool forward_self_changes = false;
+
+	bool announced(res::change_kind kind, std::string_view tag, std::string_view old_tag = {}) const
+	{
+		return std::ranges::any_of(self_changes, [&](const res::file_change& change) {
+			return change.self && change.kind == kind && change.tag.view() == tag && (old_tag.empty() || change.old_tag.view() == old_tag);
+		});
+	}
 };
 
 }
@@ -559,6 +573,97 @@ BOOST_AUTO_TEST_CASE(AnEngineLayerHelper_NamesTheLayerThatIsTheEngines)
 	BOOST_TEST(!edt::is_engine_layer(layers, 1, engine.path()));
 	BOOST_TEST(!edt::is_engine_layer(layers, 0, {}), "no engine layer configured");
 	BOOST_TEST(!edt::is_engine_layer(layers, 5, engine.path()));
+}
+
+BOOST_AUTO_TEST_CASE(ARename_AnnouncesItsFilesAsTheEditorsOwnChange)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(announced(res::change_kind::renamed, "res://clouds.desc", "res://sky.desc"));
+	BOOST_TEST(announced(res::change_kind::renamed, "res://clouds.desc.resource", "res://sky.desc.resource"));
+	BOOST_TEST(announced(res::change_kind::modified, "res://levels/main.desc"));
+	BOOST_TEST(announced(res::change_kind::modified, "res://materials/child.desc"));
+	BOOST_TEST(self_changes.size() == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteAndItsUndo_AreAnnouncedAsADeleteAndACreate)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(announced(res::change_kind::deleted, "res://lonely.desc"));
+	BOOST_TEST(announced(res::change_kind::deleted, "res://lonely.desc.resource"));
+	self_changes.clear();
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(announced(res::change_kind::created, "res://lonely.desc"));
+	BOOST_TEST(announced(res::change_kind::created, "res://lonely.desc.resource"));
+}
+
+BOOST_AUTO_TEST_CASE(AFailureThatWasTakenBackAnnouncesNothing)
+{
+	open();
+	fail_at = "rewrite:levels/main.desc";
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(!report.ok);
+	BOOST_TEST(self_changes.empty(), "the disk is as it was, so the database has nothing to hear");
+}
+
+BOOST_AUTO_TEST_CASE(TheDatabaseTakesAnAnnouncedMoveAsOne_AndTheWatchersLaterReportAddsNothing)
+{
+	edt::asset_database& database = open();
+	std::vector<edt::asset_batch> batches;
+	database.set_on_batch([&batches](const edt::asset_batch& batch) { batches.push_back(batch); });
+	forward_self_changes = true;
+
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(database.find(res::tag::make("clouds.desc")) != nullptr);
+	BOOST_TEST(database.find(res::tag::make("sky.desc")) == nullptr);
+	BOOST_REQUIRE(batches.size() == 1u);
+	BOOST_REQUIRE(batches[0].moved.size() == 1u);
+	BOOST_TEST(batches[0].moved[0].first.view() == "res://sky.desc");
+	BOOST_TEST(batches[0].moved[0].second.view() == "res://clouds.desc");
+	BOOST_TEST(batches[0].added.empty());
+	BOOST_TEST(batches[0].removed.empty());
+
+	// What the watcher reports a poll later, as somebody else's delete and create.
+	std::vector<res::file_change> watcher;
+	for (const std::string_view name : { "sky.desc", "sky.desc.resource" }) {
+		watcher.push_back(res::file_change{ res::tag::make(name), res::tag{}, res::change_kind::deleted, false, false });
+	}
+	for (const std::string_view name : { "clouds.desc", "clouds.desc.resource" }) {
+		watcher.push_back(res::file_change{ res::tag::make(name), res::tag{}, res::change_kind::created, false, false });
+	}
+	const edt::asset_batch later = database.apply_changes(watcher);
+	BOOST_TEST(later.moved.empty());
+	BOOST_TEST(later.added.empty());
+	BOOST_TEST(later.removed.empty());
+	BOOST_TEST(database.find(res::tag::make("clouds.desc")) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(TheDatabaseFollowsAnAnnouncedUndo)
+{
+	edt::asset_database& database = open();
+	forward_self_changes = true;
+	const edt::operation_report report = run(request(edt::asset_operation::move, "sky.desc", "env"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(database.find(res::tag::make("env/sky.desc")) != nullptr);
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(database.find(res::tag::make("sky.desc")) != nullptr);
+	BOOST_TEST(database.find(res::tag::make("env/sky.desc")) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(TheHistorySerialsOfTheDatabaseGrow)
+{
+	edt::asset_database& database = open();
+	const std::uint64_t first = database.next_history_serial();
+	const std::uint64_t second = database.next_history_serial();
+	BOOST_TEST(second > first);
+	BOOST_TEST(!database.next_undo_serial().has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
