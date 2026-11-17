@@ -21,6 +21,7 @@
 #include "edt_selection_wiring.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
+#include "edt_prefab_file_edit.h"
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document_manager.h>
 
@@ -80,6 +81,8 @@
 #include "edt_agent_server_settings.h"
 #include "edt_agent_component.h"
 #include "edt_agent_ui_component.h"
+#include "../settings/edt_theme_settings_component.h"
+#include <snk/gui/gui_theme_service.h>
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
@@ -362,7 +365,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc() });
 
-	m_panels->inspector()->set_open_prefab([this](const res::tag& tag) { m_prefab->open(tag); });
+	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
+		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
+		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
+			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty());
+			if (error.empty()) m_state.reset_history();
+			return error;
+		},
+		.instances_in_level = [this](const res::tag& tag) { return override_edit::count_instances(m_state.world_descs, tag); },
+		.can_apply = [this] { return !m_prefab->owns_inspector(); } });
 
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
 		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
@@ -596,6 +607,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			.commands = data.require<cmd::command_registry>(), .agent = *m_agent, .headless = headless });
 		m_agent_ui->install(m_registrations);
 	}
+	// After register_data_protocol: the person's choice and presets are in edt://.
+	m_theme_settings = std::make_unique<theme_settings_component>(theme_settings_component::ports{ .context = *m_context,
+		.layer = *editor_layer, .resources = m_res, .descs = desc_system,
+		.themes = data.has_value<::gui::theme_service>() ? &data.require<::gui::theme_service>() : nullptr });
+	m_theme_settings->install(m_registrations);
 }
 
 edt::agent_server* edt::editor_system::agent_server_object()

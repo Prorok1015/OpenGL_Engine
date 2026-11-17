@@ -1,4 +1,5 @@
 #include "decoder_sandbox.h"
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -20,6 +21,14 @@
 #include <cstddef>
 #include <ctime>
 #include <initializer_list>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
@@ -404,6 +413,60 @@ void close_inherited_descriptors()
 
 } // namespace
 
+#if defined(_WIN32)
+namespace {
+
+std::string windows_error(const char* what)
+{
+	return std::string(what) + ": " + std::system_category().message(static_cast<int>(GetLastError()));
+}
+
+// Empty: the process is either in no AppContainer (applied.fs stays false) or in the one the editor sets up, with no
+// capabilities, in a job, without dynamic code and child processes (applied.fs and applied.syscalls set).
+std::string confinement_problem(decoder_sandbox::status& applied)
+{
+	HANDLE token = nullptr;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return windows_error("the process token cannot be read");
+	struct token_closer
+	{
+		HANDLE token;
+		~token_closer() { CloseHandle(token); }
+	} closer{ token };
+	DWORD in_container = 0;
+	DWORD size = 0;
+	if (!GetTokenInformation(token, TokenIsAppContainer, &in_container, sizeof(in_container), &size)) {
+		return windows_error("the process token cannot be read");
+	}
+	if (in_container == 0) return {};
+
+	GetTokenInformation(token, TokenCapabilities, nullptr, 0, &size);
+	std::vector<std::byte> groups(size == 0 ? sizeof(TOKEN_GROUPS) : size);
+	if (!GetTokenInformation(token, TokenCapabilities, groups.data(), static_cast<DWORD>(groups.size()), &size)) {
+		return windows_error("the capabilities of the AppContainer cannot be read");
+	}
+	if (reinterpret_cast<const TOKEN_GROUPS*>(groups.data())->GroupCount != 0) return "the decoder's AppContainer has capabilities";
+
+	BOOL in_job = FALSE;
+	if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job)) return windows_error("the job of the decoder cannot be read");
+	if (!in_job) return "the decoder is in an AppContainer but in no job";
+
+	PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic_code{};
+	PROCESS_MITIGATION_CHILD_PROCESS_POLICY child_processes{};
+	if (!GetProcessMitigationPolicy(GetCurrentProcess(), ProcessDynamicCodePolicy, &dynamic_code, sizeof(dynamic_code))
+		|| !GetProcessMitigationPolicy(GetCurrentProcess(), ProcessChildProcessPolicy, &child_processes, sizeof(child_processes))) {
+		return windows_error("the mitigation policies of the decoder cannot be read");
+	}
+	if (!dynamic_code.ProhibitDynamicCode || !child_processes.NoChildProcessCreation) {
+		return "the decoder is in an AppContainer without its policies (dynamic code, child processes)";
+	}
+	applied.fs = true;
+	applied.syscalls = true;
+	return {};
+}
+
+} // namespace
+#endif
+
 decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 {
 	status result;
@@ -498,12 +561,27 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 	}
 #endif
 	if (!no_filter.empty()) result.why += (result.why.empty() ? "" : "; ") + no_filter;
+#elif defined(_WIN32)
+	if (wanted.mode == edt::sandbox_mode::off) {
+		result.why = turned_off;
+		return result;
+	}
+	// The editor starts the child in its AppContainer, policies and job (#1054): the child checks that it is so before it
+	// reads the request. Not in a container: what the mode allows. In one, but not as the editor sets it up: a defect.
+	if (std::string checked = confinement_problem(result); !checked.empty()) {
+		result.refusal = std::move(checked);
+		return result;
+	}
+	if (!result.fs) {
+		result.why = "the decoder was not started in an AppContainer";
+		if (required) result.refusal = result.why;
+	}
 #else
 	if (wanted.mode == edt::sandbox_mode::off) {
 		result.why = turned_off;
 		return result;
 	}
-	result.why = "this system has no sandbox for the decoder yet (Landlock and seccomp are Linux only)";
+	result.why = "this system has no sandbox for the decoder yet (Landlock and seccomp are Linux and Windows only)";
 	if (required) result.refusal = result.why;
 #endif
 	return result;
@@ -511,7 +589,8 @@ decoder_sandbox::status decoder_sandbox::apply(const settings& wanted)
 
 std::string decoder_sandbox::report_line(const status& applied)
 {
-	return std::string("fs=") + (applied.fs ? "landlock" : "none") + " syscalls=" + (applied.syscalls ? "seccomp" : "none");
+	return std::string("fs=") + (applied.fs ? std::string(edt::k_decoder_sandbox_fs_name) : "none") + " syscalls="
+		+ (applied.syscalls ? std::string(edt::k_decoder_sandbox_syscalls_name) : "none");
 }
 
 std::string decoder_sandbox::status_line(const status& applied)

@@ -18,10 +18,11 @@ namespace gui::gl
         void set_dpi_scale(float scale) override { m_dpi_scale = scale; }
         // TTF bytes for the UI font; before init(). Empty or not a font: the built-in ImGui font stays.
         void set_ui_font_bytes(std::vector<std::byte> bytes) { m_ui_font.set_bytes(std::move(bytes)); }
-        // Before init() it is the look the first frame has; after it, the next new_frame() rebuilds the font atlas
-        // and the style with it. Empty font bytes: the built-in ImGui font (and no icons).
+        // Before init() it is the look the first frame has; after it, the next new_frame() applies it. Empty text
+        // font bytes: the built-in ImGui font. `fallback_font` fills the glyphs the text font lacks. Without
+        // `fonts_changed` only the style changes and the atlas (and the bytes it points into) stays.
         void set_theme(const gui::theme_style& style, std::vector<std::byte> text_font,
-            std::vector<std::byte> icon_font);
+            std::vector<std::byte> fallback_font, std::vector<std::byte> icon_font, bool fonts_changed = true);
         void rebuild_fonts(float scale) override;
         virtual void new_frame() override;
         virtual void render() override;
@@ -32,7 +33,9 @@ namespace gui::gl
         struct pending_theme {
             gui::theme_style style;
             std::vector<std::byte> text_font;
+            std::vector<std::byte> fallback_font;
             std::vector<std::byte> icon_font;
+            bool fonts_changed = true;
         };
 
         float m_dpi_scale = 1.f;

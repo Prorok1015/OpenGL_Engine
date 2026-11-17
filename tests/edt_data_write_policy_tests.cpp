@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-// What edt:// may store into (#164): by default only edt://settings/**, loads are never restricted.
+// What edt:// may store into (#164): by default only edt://settings/** and edt://themes/**, loads are never restricted.
 
 namespace {
 
@@ -50,6 +50,9 @@ BOOST_AUTO_TEST_CASE(Store_InsideTheDefaultPatterns_IsAccepted)
 
 	BOOST_TEST(rs->store(res::tag{ "edt://settings/layout.ini" }, test_util::to_bytes("x")));
 	BOOST_TEST(rs->store(res::tag{ "edt://settings/profiles/a.json" }, test_util::to_bytes("x")));
+	BOOST_TEST(rs->store(res::tag{ "edt://themes/mine.desc" }, test_util::to_bytes("x")));
+	BOOST_TEST(!rs->store(res::tag{ "edt://themes_evil/x.desc" }, test_util::to_bytes("x")));
+	BOOST_TEST(!rs->store(res::tag{ "edt://fonts/x.ttf" }, test_util::to_bytes("x")));
 }
 
 BOOST_AUTO_TEST_CASE(Store_WithAnEmptyPatternList_RefusesEverything)
@@ -119,9 +122,9 @@ BOOST_AUTO_TEST_CASE(Register_DefaultOrEmptyList_WarnsNothing)
 	BOOST_TEST(warnings.count("write patterns") == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(DefaultWritePatterns_AreTheSettingsFolderOnly)
+BOOST_AUTO_TEST_CASE(DefaultWritePatterns_AreTheSettingsAndThemesFolders)
 {
-	BOOST_TEST((edt::default_write_patterns() == std::vector<std::string>{ "edt://settings/**" }));
+	BOOST_TEST((edt::default_write_patterns() == std::vector<std::string>{ "edt://settings/**", "edt://themes/**" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

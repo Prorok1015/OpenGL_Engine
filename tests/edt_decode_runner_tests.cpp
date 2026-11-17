@@ -2,7 +2,14 @@
 #include "test_decoder_sandbox.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_decode_runner.h"
+#include "edt_decoder_copy.h"
+#if defined(_WIN32)
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#endif
 #include <chrono>
+#include <cstdint>
+#include <ios>
 #include <filesystem>
 #include <snk/platform/plt_process.h>
 #include <snk/resource/res_shipping_dirs.h>
@@ -228,7 +235,12 @@ BOOST_AUTO_TEST_CASE(AChildThatCannotHaveTheRequiredSandbox_IsRefused_WithItsRea
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(outcome.sandbox_refused);
 	BOOST_CHECK_MESSAGE(outcome.error.starts_with("the model decoder cannot run in its sandbox: "), outcome.error);
+#if defined(_WIN32)
+	// The runner alone does not confine (process_decoder does, #1054): the child is in no AppContainer.
+	BOOST_CHECK_MESSAGE(outcome.error.find("AppContainer") != std::string::npos, outcome.error);
+#else
 	BOOST_CHECK_MESSAGE(outcome.error.find("Landlock") != std::string::npos, outcome.error);
+#endif
 	BOOST_CHECK(scratch_is_empty());
 }
 
@@ -417,6 +429,101 @@ BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotUseIoUring_PtraceOrStartAProcess)
 	}
 }
 #endif
+
+#if defined(_WIN32)
+namespace {
+
+struct confined_probe_result
+{
+	int exit_code = -1;
+	std::string out;
+	std::string err;
+	std::string error;
+};
+
+// The test build of the decoder, run from a copy (a build folder is not readable by containers) in its AppContainer,
+// policies and job, as process_decoder runs it (#1054).
+confined_probe_result run_confined_probe(const fs::path& base, const fs::path& scratch, std::vector<std::string> arguments,
+	bool confined = true)
+{
+	confined_probe_result result;
+	std::string copy_error;
+	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, base, copy_error);
+	if (!copy) {
+		result.error = copy_error;
+		return result;
+	}
+	fs::create_directories(scratch);
+	platform::process_options options;
+	options.working_dir = scratch;
+	if (confined) options.confinement = platform::process_confinement{ L"snk.model_decoder", { scratch }, { copy->folder } };
+	options.on_stderr_line = [&result](std::string_view line) { result.err += std::string(line) + "\n"; };
+	const auto run = platform::run_process(copy->program, arguments, options,
+		[&result](std::string_view line) { result.out += std::string(line) + "\n"; }, {});
+	result.exit_code = run.exit_code;
+	result.error = run.error;
+	return result;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AConfinedChild_IsInItsAppContainer_AndCannotOpenAFileOutsideItsFolder_ConnectOrStartAProgram)
+{
+	const fs::path base = dir.path() / "copies";
+	const fs::path scratch = dir.path() / "scratch";
+	const fs::path outside = dir.write("outside.txt", "a secret");
+
+	const auto report = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-sandbox-report" });
+	BOOST_REQUIRE_MESSAGE(report.error.empty(), report.error);
+	BOOST_CHECK_EQUAL(report.exit_code, 0);
+	BOOST_CHECK_EQUAL(report.out, "fs=appcontainer syscalls=policy\n");
+
+	const auto opened = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
+	BOOST_CHECK_MESSAGE(opened.exit_code == 0, "open outside: " << opened.exit_code << " " << opened.err << opened.error);
+	// A listener on the loopback: without the container the probe connects (5); in it, no capability, no connection.
+	boost::asio::io_context io;
+	boost::asio::ip::tcp::acceptor listener(io, boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::loopback(), 0));
+	const std::string port = std::to_string(listener.local_endpoint().port());
+	const auto connected = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-connect-port", port });
+	BOOST_CHECK_MESSAGE(connected.exit_code == 0, "connect: " << connected.exit_code << " " << connected.err << connected.error);
+	const auto executed = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-exec" });
+	BOOST_CHECK_MESSAGE(executed.exit_code == 0, "exec: " << executed.exit_code << " " << executed.err << executed.error);
+
+	// The control: the same probes outside the container succeed, or a 0 above proves nothing.
+	const auto connected_off = run_confined_probe(base, scratch, { "--sandbox", "off", "--self-test-connect-port", port }, false);
+	BOOST_CHECK_MESSAGE(connected_off.exit_code == 5, "connect off: " << connected_off.exit_code << " " << connected_off.err << connected_off.error);
+	const auto executed_off = run_confined_probe(base, scratch, { "--sandbox", "off", "--self-test-exec" }, false);
+	BOOST_CHECK_MESSAGE(executed_off.exit_code == 5, "exec off: " << executed_off.exit_code << " " << executed_off.err << executed_off.error);
+}
+
+BOOST_AUTO_TEST_CASE(AConfinementThatCannotBeSetUp_StartsNothing_AndSaysSo)
+{
+	platform::process_options options;
+	options.confinement = platform::process_confinement{ L"", {}, {} };
+	const auto run = platform::run_process(SNK_MODEL_DECODER_SELFTEST_PATH, { "--self-test-sandbox-report" }, options,
+		[](std::string_view) {}, {});
+	BOOST_CHECK(run.confinement_failed);
+	BOOST_CHECK_MESSAGE(run.error.find("AppContainer") != std::string::npos, run.error);
+	BOOST_CHECK_EQUAL(run.exit_code, -1);
+}
+#endif
+
+// #1054: a child may plant a link in its run folder that points at the user's files (a symlink; on Windows a junction).
+// Removing the run folder after it removes the link, never what it points at. With the sandbox off, so the link is made.
+BOOST_AUTO_TEST_CASE(ALinkTheChildPlantedInItsFolder_IsRemoved_NotFollowed)
+{
+	const fs::path kept = dir.write("outside/keep.txt", "the user's");
+	auto cfg = selftest_config();
+	cfg.sandbox = edt::sandbox_mode::off;
+	cfg.extra_arguments = { "--self-test-link-out", (dir.path() / "outside").string() };
+	const edt::decode_runner runner(cfg);
+	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+#if defined(__linux__) || defined(_WIN32)
+	BOOST_CHECK_MESSAGE(outcome.exit_code == 5, "the link was not planted: " << outcome.exit_code << " " << outcome.error);
+#endif
+	BOOST_CHECK(fs::exists(kept));
+	BOOST_CHECK(scratch_is_empty());
+}
 
 // The editor learns how the child is sandboxed from its first stderr line, written before it read the request.
 BOOST_AUTO_TEST_CASE(TheRunner_TakesTheSandboxStatus_FromTheChildsFirstLine)

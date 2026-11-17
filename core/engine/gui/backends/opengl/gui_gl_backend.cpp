@@ -48,16 +48,24 @@ void gui::gl::gl_imgui_backend::init()
 }
 
 void gui::gl::gl_imgui_backend::set_theme(const gui::theme_style& style, std::vector<std::byte> text_font,
-    std::vector<std::byte> icon_font)
+    std::vector<std::byte> fallback_font, std::vector<std::byte> icon_font, bool fonts_changed)
 {
     if (!m_initialized) {
         m_style = style;
-        m_ui_font.set_bytes(std::move(text_font));
-        m_ui_font.set_icon_bytes(std::move(icon_font));
+        if (fonts_changed) {
+            m_ui_font.set_bytes(std::move(text_font));
+            m_ui_font.set_fallback_bytes(std::move(fallback_font));
+            m_ui_font.set_icon_bytes(std::move(icon_font));
+        }
         return;
     }
-    m_pending_theme = std::make_unique<pending_theme>(
-        pending_theme{ style, std::move(text_font), std::move(icon_font) });
+    // A style change must not drop the fonts of a theme that has not reached a frame yet.
+    if (!fonts_changed && m_pending_theme && m_pending_theme->fonts_changed) {
+        m_pending_theme->style = style;
+        return;
+    }
+    m_pending_theme = std::make_unique<pending_theme>(pending_theme{ style, std::move(text_font),
+        std::move(fallback_font), std::move(icon_font), fonts_changed });
 }
 
 void gui::gl::gl_imgui_backend::apply_pending_theme()
@@ -66,14 +74,17 @@ void gui::gl::gl_imgui_backend::apply_pending_theme()
         return;
     }
     const std::unique_ptr<pending_theme> theme = std::move(m_pending_theme);
-    // The atlas points into the old bytes: it is cleared before they are replaced.
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui_ImplOpenGL3_DestroyFontsTexture();
-    io.Fonts->Clear();
     m_style = theme->style;
-    m_ui_font.set_bytes(std::move(theme->text_font));
-    m_ui_font.set_icon_bytes(std::move(theme->icon_font));
-    m_ui_font.add_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
+    if (theme->fonts_changed) {
+        // The atlas points into the old bytes: it is cleared before they are replaced.
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui_ImplOpenGL3_DestroyFontsTexture();
+        io.Fonts->Clear();
+        m_ui_font.set_bytes(std::move(theme->text_font));
+        m_ui_font.set_fallback_bytes(std::move(theme->fallback_font));
+        m_ui_font.set_icon_bytes(std::move(theme->icon_font));
+        m_ui_font.add_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
+    }
 
     gui::apply_theme(m_style, *m_base_style);
     ImGui::GetStyle() = *m_base_style;
