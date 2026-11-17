@@ -2,6 +2,7 @@
 #include "edt_asset_component.h"
 #include "edt_asset_problems.h"
 #include "edt_input_actions_view.h"
+#include "edt_instance_problems.h"
 #include "edt_problems_panel.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
@@ -11,7 +12,13 @@
 #include <snk/editor/edt_editor_services.h>
 #include <imgui.h>
 #include <algorithm>
+#include <format>
 #include <utility>
+
+namespace
+{
+	constexpr const char* k_instances_scope = "instances";
+}
 
 edt::problems_component::problems_component(ports from)
 	: m_ports(std::move(from))
@@ -67,6 +74,29 @@ void edt::problems_component::wire(problems_panel& panel)
 void edt::problems_component::refresh_world()
 {
 	m_world.refresh(m_ports.context.problems(), m_ports.state, m_ports.services.level_set());
+	refresh_instances();
+}
+
+void edt::problems_component::refresh_instances()
+{
+	const scene_document& state = m_ports.state;
+	std::vector<instance_world> worlds;
+	level_worlds located;
+	located.level = state.level_tag.string();
+	located.names = { located.level };
+	for (std::size_t i = 0; i < state.world_descs.size(); ++i) {
+		const res::tag file = state.world_tag(i);
+		const std::string file_name = file.is_valid() ? std::string(file.view()) : located.level;
+		worlds.push_back({ &state.world_descs[i], file_name, file.is_valid() ? std::string{} : std::format("/worlds/{}", i) });
+		located.worlds.push_back({ i < state.world_names.size() ? state.world_names[i] : std::string{}, &state.world_descs[i].get_root(), file_name });
+	}
+	const std::vector<res::diagnostic> items = instance_diagnostics(worlds);
+	if (items.empty()) {
+		m_desc.clear(m_ports.context.problems(), k_instances_scope);
+		return;
+	}
+	m_desc.report(m_ports.context.problems(), k_instances_scope, items, {}, {},
+		[&located](const res::diagnostic& item) { return locate_desc(located, item.resource, item.json_path); });
 }
 
 void edt::problems_component::follow_input_actions(const gs::input_actions& actions)
