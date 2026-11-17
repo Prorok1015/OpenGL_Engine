@@ -280,7 +280,7 @@ BOOST_AUTO_TEST_CASE(TheFaces_AreTextBoldMono_InThatOrder_EachWithCyrillicAndIco
 		{ gui::ui_face::text, &text }, { gui::ui_face::bold, &bold }, { gui::ui_face::mono, &mono } };
 	for (const auto& [face, bytes] : faces) {
 		BOOST_TEST_CONTEXT(int(face)) {
-			const ImFont* f = atlas.Fonts[int(face)];
+			ImFont* f = atlas.Fonts[int(face)];
 			BOOST_TEST(f->ConfigData->FontDataSize == static_cast<int>(bytes->size()));
 			BOOST_TEST(f->FindGlyphNoFallback(0x0416) != nullptr); // Ж
 			BOOST_TEST(f->FindGlyphNoFallback(gui::icon::first) != nullptr);
@@ -301,7 +301,7 @@ BOOST_AUTO_TEST_CASE(WithoutBoldOrMonoBytes_TheTextFontTakesTheirIndices)
 	BOOST_REQUIRE(atlas.Build());
 
 	BOOST_REQUIRE(atlas.Fonts.Size == gui::ui_face_count);
-	for (const ImFont* f : atlas.Fonts) {
+	for (ImFont* f : atlas.Fonts) {
 		BOOST_TEST(f->ConfigData->FontDataSize == static_cast<int>(text.size()));
 		BOOST_TEST(f->FindGlyphNoFallback(0x044F) != nullptr); // я
 	}
