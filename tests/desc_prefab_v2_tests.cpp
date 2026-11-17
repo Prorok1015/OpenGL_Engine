@@ -347,7 +347,7 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AnEditedVariant_IsWrittenAsALayerAndReadsBack)
 BOOST_AUTO_TEST_CASE(WriteLayer_AnInheritedOverrideRecordTakenOut_IsRefusedAndBodyStaysAsItWas)
 {
 	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
-		{"__id":"00000000000000b1","name":"a","overrides":[{"target":"00000000000000b1","component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+		{"__id":"00000000000000b1","name":"a","overrides":[{"target":["00000000000000b1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
 	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
 		"__parent":"memory://t/base.prefab.desc","__layer":2})"));
 	BOOST_REQUIRE(variant);
