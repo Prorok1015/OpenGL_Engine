@@ -97,11 +97,16 @@ namespace platform::beneath {
 
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 
-	// Size and last write time of a file as its open handle saw them.
+	// A file as its open handle saw it. The change time cannot be set back by a tool, unlike the write time.
 	struct file_stamp {
 		std::uint64_t size = 0;
 		// Nanoseconds since the Unix epoch.
 		std::int64_t write_time_ns = 0;
+		// Of the file's metadata (POSIX ctime, Windows ChangeTime), nanoseconds since the Unix epoch.
+		std::int64_t change_time_ns = 0;
+		// POSIX inode and device; Windows file index and volume serial number.
+		std::uint64_t file_id = 0;
+		std::uint64_t device = 0;
 
 		bool operator==(const file_stamp&) const = default;
 	};
@@ -124,6 +129,8 @@ namespace platform::beneath {
 		std::uint64_t max_bytes = 0;
 		// Tests only: called before the folders are opened and once they are held, just before the file is opened.
 		const std::function<void(read_stage)>* hook = nullptr;
+		// read_beneath only: the checks and the stamp, nothing read.
+		bool stamp_only = false;
 	};
 
 	// Reads a regular file below the root like the writes reach theirs (#484): every folder opened from the one above it

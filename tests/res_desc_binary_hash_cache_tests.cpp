@@ -58,6 +58,13 @@ std::string read_text(const fs::path& path)
 	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
+std::string replaced(std::string text, const std::string& from, const std::string& to)
+{
+	const auto at = text.find(from);
+	BOOST_REQUIRE(at != std::string::npos);
+	return text.replace(at, from.size(), to);
+}
+
 std::string desc_text(std::span<const res::binary_range> ranges)
 {
 	boost::json::object desc;
@@ -81,10 +88,12 @@ struct memory_cache final : res::desc_binary_hash_cache
 {
 	std::vector<res::desc_binary_pair_key> keys;
 	std::size_t remembered = 0;
+	// Answers every key as checked.
+	bool trust_all = false;
 
 	bool verified(const res::desc_binary_pair_key& key) const override
 	{
-		return std::find(keys.begin(), keys.end(), key) != keys.end();
+		return trust_all || std::find(keys.begin(), keys.end(), key) != keys.end();
 	}
 	void remember(const res::desc_binary_pair_key& key) override
 	{
@@ -93,9 +102,22 @@ struct memory_cache final : res::desc_binary_hash_cache
 	}
 };
 
+// Sets desc_binary_settle_ns for a test: a change time just written cannot be made older.
+struct settle_time
+{
+	std::int64_t before = res::detail::desc_binary_settle_ns().exchange(0);
+
+	settle_time() = default;
+	explicit settle_time(std::int64_t ns) { res::detail::desc_binary_settle_ns().store(ns); }
+	~settle_time() { res::detail::desc_binary_settle_ns().store(before); }
+	settle_time(const settle_time&) = delete;
+	settle_time& operator=(const settle_time&) = delete;
+};
+
 // res:// over `top`, or over `top` and `lower`; a pair written in `top`.
 struct pair_fixture
 {
+	settle_time settled;
 	test_util::temp_dir dir{ "res_desc_binary_hash_cache" };
 	fs::path top = dir.path() / "top";
 	fs::path lower = dir.path() / "lower";
@@ -146,8 +168,8 @@ struct pair_fixture
 
 res::desc_binary_pair_key some_key(std::string binary)
 {
-	return { std::move(binary), { 10, 1'700'000'000'000'000'000 }, { 20, 1'700'000'000'000'000'001 },
-		std::string(64, 'a') };
+	return { std::move(binary), { 10, 1'700'000'000'000'000'000, 1'700'000'000'000'000'002, 3, 1 },
+		{ 20, 1'700'000'000'000'000'001, 1'700'000'000'000'000'003, 4, 1 }, std::string(64, 'a') };
 }
 
 }
@@ -231,6 +253,7 @@ BOOST_FIXTURE_TEST_CASE(OtherRangesAskedForAreHashed, pair_fixture)
 
 BOOST_FIXTURE_TEST_CASE(APairWrittenWithinTwoSecondsIsNotRemembered, pair_fixture)
 {
+	const settle_time two_seconds(2'000'000'000);
 	res::resource_system sys(tasks, single_root());
 	sys.set_desc_binary_hash_cache(cache);
 	write_file(bin(), file);
@@ -289,7 +312,7 @@ BOOST_FIXTURE_TEST_CASE(TheCacheAndTheSwitchAreKeptByTheRoot, pair_fixture)
 	BOOST_TEST(!sys.verify_desc_binary_hash());
 }
 
-// The stamps match, so the hashes are skipped; the header is checked all the same.
+// A cache that trusts the pair skips the hashes; the header is checked all the same.
 BOOST_FIXTURE_TEST_CASE(AHitStillChecksTheStructureOfTheFile, pair_fixture)
 {
 	res::resource_system sys(tasks, single_root());
@@ -297,16 +320,58 @@ BOOST_FIXTURE_TEST_CASE(AHitStillChecksTheStructureOfTheFile, pair_fixture)
 	BOOST_TEST(read_hashes(sys));
 	BOOST_TEST(!read_hashes(sys));
 
-	const fs::file_time_type written = fs::last_write_time(bin());
 	auto broken = file;
 	broken[0] = std::byte{ 'X' };
 	write_file(bin(), broken);
-	fs::last_write_time(bin(), written);
+	cache->trust_all = true;
 	const std::uint64_t before = hashed();
 	const auto refused = read(sys);
 	BOOST_TEST((refused.error == res::desc_binary_error::header));
 	BOOST_TEST(hashed() == before);
 }
+
+#if !defined(_WIN32)
+// A tool can put the size and the write time back after a change of content; the change time it cannot.
+BOOST_FIXTURE_TEST_CASE(AContentChangeWithTheSameSizeAndWriteTimeHashesAgain, pair_fixture)
+{
+	res::resource_system sys(tasks, single_root());
+	sys.set_desc_binary_hash_cache(cache);
+	BOOST_TEST(read_hashes(sys));
+	BOOST_TEST(!read_hashes(sys));
+
+	const auto stamp = [&] {
+		platform::beneath::read_request request;
+		request.root = top;
+		request.folder = "a";
+		request.leaf = "robot.geom.bin";
+		request.max_bytes = res::desc_binary::max_file_bytes;
+		request.stamp_only = true;
+		std::vector<std::byte> unused;
+		const auto result = platform::beneath::read_beneath(request, unused);
+		BOOST_REQUIRE(result.stamp.has_value());
+		return *result.stamp;
+	};
+	const platform::beneath::file_stamp first = stamp();
+	const fs::file_time_type written = fs::last_write_time(bin());
+	auto changed = file;
+	changed[static_cast<std::size_t>(ranges[0].offset)] ^= std::byte{ 0x01 };
+	// The change time ticks coarsely: write until it moved.
+	for (int i = 0; i < 100000 && stamp().change_time_ns == first.change_time_ns; ++i) {
+		write_file(bin(), changed);
+		fs::last_write_time(bin(), written);
+	}
+	const platform::beneath::file_stamp after = stamp();
+	BOOST_REQUIRE(after.change_time_ns != first.change_time_ns);
+	BOOST_TEST(after.size == first.size);
+	BOOST_TEST(after.write_time_ns == first.write_time_ns);
+	BOOST_TEST(after.file_id == first.file_id);
+
+	const std::uint64_t before = hashed();
+	const auto refused = read(sys);
+	BOOST_TEST((refused.error == res::desc_binary_error::hash));
+	BOOST_TEST(hashed() > before);
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(TheFileCacheIsWrittenAndReadBack)
 {
@@ -350,18 +415,19 @@ BOOST_AUTO_TEST_CASE(TheFileCacheKeepsOneEntryPerBinaryFile)
 BOOST_AUTO_TEST_CASE(AFileCacheNotExactlyAsWrittenIsIgnoredAndRewritten)
 {
 	const std::string entry =
-		R"({"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"desc_size":20,"desc_mtime":6,"ranges":")" + std::string(64, 'a') + "\"";
+		R"({"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"bin_ctime":7,"bin_id":3,"bin_dev":1,"desc_size":20,"desc_mtime":6,)"
+		R"("desc_ctime":8,"desc_id":4,"desc_dev":1,"ranges":")" + std::string(64, 'a') + "\"";
 	const std::vector<std::string> broken{
 		"not json",
 		"[]",
 		R"({"version":2,"entries":[)" + entry + "}]}",
 		R"({"version":1,"entries":[)" + entry + "}],\"more\":1}",
 		R"({"version":1,"entries":[)" + entry + ",\"extra\":1}]}",
-		R"({"version":1,"entries":[{"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"desc_size":20,"desc_mtime":6}]})",
-		R"({"version":1,"entries":[{"bin":"res://a/b.geom.bin","bin_size":"10","bin_mtime":5,"desc_size":20,"desc_mtime":6,"ranges":")"
-			+ std::string(64, 'a') + "\"}]}",
-		R"({"version":1,"entries":[{"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"desc_size":20,"desc_mtime":6,"ranges":")"
-			+ std::string(64, 'A') + "\"}]}",
+		R"({"version":1,"entries":[)" + entry.substr(0, entry.find(",\"ranges\"")) + "}]}",
+		R"({"version":1,"entries":[)" + replaced(entry, "\"bin_id\":3", "\"bin_id\":\"3\"") + "}]}",
+		R"({"version":1,"entries":[)" + replaced(entry, "\"bin_ctime\":7,", "") + "}]}",
+		R"({"version":1,"entries":[)" + replaced(entry, "\"desc_ctime\":8", "\"desc_ctime\":8.5") + "}]}",
+		R"({"version":1,"entries":[)" + replaced(entry, std::string(64, 'a'), std::string(64, 'A')) + "}]}",
 	};
 	const std::string good = R"({"version":1,"entries":[)" + entry + "}]}";
 	for (const std::string& text : broken) {
@@ -397,8 +463,9 @@ BOOST_AUTO_TEST_CASE(ALinkAtTheFileCacheIsNotFollowed)
 {
 	test_util::temp_dir project{ "res_desc_binary_hash_cache_link" };
 	const fs::path outside = project.path() / "outside.json";
-	const std::string text = R"({"version":1,"entries":[{"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"desc_size":20,)"
-		R"("desc_mtime":6,"ranges":")" + std::string(64, 'a') + "\"}]}";
+	const std::string text = R"({"version":1,"entries":[)"
+		R"({"bin":"res://a/b.geom.bin","bin_size":10,"bin_mtime":5,"bin_ctime":7,"bin_id":3,"bin_dev":1,"desc_size":20,"desc_mtime":6,)"
+		R"("desc_ctime":8,"desc_id":4,"desc_dev":1,"ranges":")" + std::string(64, 'a') + "\"}]}";
 	write_text(outside, text);
 	fs::create_directories(project.path() / ".cache");
 	std::error_code ec;

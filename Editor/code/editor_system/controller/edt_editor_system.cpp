@@ -198,6 +198,7 @@ edt::editor_system::~editor_system()
 {
 	if (m_desc_binary_cache) {
 		m_res.set_desc_binary_hash_cache(nullptr);
+		if (!m_desc_binary_cache_write.done()) m_desc_binary_cache_write.wait();
 		m_desc_binary_cache->flush();
 		m_desc_binary_cache.reset();
 	}
@@ -631,11 +632,12 @@ void edt::editor_system::tick_asset_problems()
 
 void edt::editor_system::tick_desc_binary_cache()
 {
-	if (!m_desc_binary_cache || !m_desc_binary_cache->dirty()) return;
+	if (!m_desc_binary_cache || !m_tasks || !m_desc_binary_cache_write.done() || !m_desc_binary_cache->dirty()) return;
 	const auto now = std::chrono::steady_clock::now();
 	if (now - m_desc_binary_cache_written < k_desc_binary_cache_write_interval) return;
 	m_desc_binary_cache_written = now;
-	m_desc_binary_cache->flush();
+	m_desc_binary_cache_write = m_tasks->run(ds::lane::io, ds::task_desc{ "Write the checked binary files", "resource", false },
+		[cache = m_desc_binary_cache](ds::task_context&) { cache->flush(); });
 }
 
 void edt::editor_system::stop_live_build()

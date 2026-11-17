@@ -42,34 +42,51 @@ namespace
 		return std::nullopt;
 	}
 
+	// "<prefix>_size", "_mtime", "_ctime", "_id", "_dev" of `entry`, or nullopt when one is missing or of another type.
+	std::optional<platform::beneath::file_stamp> stamp_of(const json::object& entry, std::string_view prefix)
+	{
+		const auto field = [&](std::string_view name) { return entry.if_contains(std::string(prefix) + "_" + std::string(name)); };
+		const json::value* size = field("size");
+		const json::value* mtime = field("mtime");
+		const json::value* ctime = field("ctime");
+		const json::value* id = field("id");
+		const json::value* dev = field("dev");
+		if (!size || !mtime || !ctime || !id || !dev) {
+			return std::nullopt;
+		}
+		const auto bytes = unsigned_of(*size);
+		const auto written = signed_of(*mtime);
+		const auto changed = signed_of(*ctime);
+		const auto file_id = unsigned_of(*id);
+		const auto device = unsigned_of(*dev);
+		if (!bytes || !written || !changed || !file_id || !device) {
+			return std::nullopt;
+		}
+		return platform::beneath::file_stamp{ *bytes, *written, *changed, *file_id, *device };
+	}
+
 	// The entry, or nullopt when anything about it is off: a field missing, unknown or of another type.
 	std::optional<res::desc_binary_pair_key> entry_of(const json::value& value)
 	{
 		const json::object* entry = value.if_object();
-		if (entry == nullptr || entry->size() != 6) {
+		if (entry == nullptr || entry->size() != 12) {
 			return std::nullopt;
 		}
 		const json::value* bin = entry->if_contains("bin");
-		const json::value* bin_size = entry->if_contains("bin_size");
-		const json::value* bin_mtime = entry->if_contains("bin_mtime");
-		const json::value* desc_size = entry->if_contains("desc_size");
-		const json::value* desc_mtime = entry->if_contains("desc_mtime");
 		const json::value* ranges = entry->if_contains("ranges");
-		if (!bin || !bin_size || !bin_mtime || !desc_size || !desc_mtime || !ranges || !bin->is_string() || bin->get_string().empty()
-			|| !ranges->is_string() || !is_sha256_hex(ranges->get_string())) {
+		if (!bin || !ranges || !bin->is_string() || bin->get_string().empty() || !ranges->is_string()
+			|| !is_sha256_hex(ranges->get_string())) {
 			return std::nullopt;
 		}
-		const auto binary_size = unsigned_of(*bin_size);
-		const auto binary_time = signed_of(*bin_mtime);
-		const auto desc_bytes = unsigned_of(*desc_size);
-		const auto desc_time = signed_of(*desc_mtime);
-		if (!binary_size || !binary_time || !desc_bytes || !desc_time) {
+		const auto binary_stamp = stamp_of(*entry, "bin");
+		const auto desc_stamp = stamp_of(*entry, "desc");
+		if (!binary_stamp || !desc_stamp) {
 			return std::nullopt;
 		}
 		res::desc_binary_pair_key key;
 		key.binary = std::string(bin->get_string());
-		key.binary_stamp = { *binary_size, *binary_time };
-		key.desc_stamp = { *desc_bytes, *desc_time };
+		key.binary_stamp = *binary_stamp;
+		key.desc_stamp = *desc_stamp;
 		key.ranges_sha256 = std::string(ranges->get_string());
 		return key;
 	}
@@ -201,8 +218,14 @@ bool res::file_desc_binary_hash_cache::flush()
 				{ "bin", key.binary },
 				{ "bin_size", key.binary_stamp.size },
 				{ "bin_mtime", key.binary_stamp.write_time_ns },
+				{ "bin_ctime", key.binary_stamp.change_time_ns },
+				{ "bin_id", key.binary_stamp.file_id },
+				{ "bin_dev", key.binary_stamp.device },
 				{ "desc_size", key.desc_stamp.size },
 				{ "desc_mtime", key.desc_stamp.write_time_ns },
+				{ "desc_ctime", key.desc_stamp.change_time_ns },
+				{ "desc_id", key.desc_stamp.file_id },
+				{ "desc_dev", key.desc_stamp.device },
 				{ "ranges", key.ranges_sha256 },
 			});
 		}

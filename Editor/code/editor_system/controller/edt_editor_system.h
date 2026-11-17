@@ -256,5 +256,7 @@ namespace edt {
 		// Set on the base resource system with a project open (#1126); taken off it and written in the destructor.
 		std::shared_ptr<res::file_desc_binary_hash_cache> m_desc_binary_cache;
 		std::chrono::steady_clock::time_point m_desc_binary_cache_written{};
+		// The one write of it in flight on the io lane.
+		ds::task_handle<void> m_desc_binary_cache_write;
 	};
 }

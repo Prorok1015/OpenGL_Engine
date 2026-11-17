@@ -59,6 +59,14 @@ namespace res::detail
 			return out;
 		}
 
+		// Only a vfs resolver has stamps.
+		static std::optional<::platform::beneath::file_stamp> stamp_beside(resource_system& system, const tag& anchor, const tag& file)
+		{
+			const resource_system::resolver_lease lease = system.root().resolver_for(file.protocol());
+			const auto* vfs = lease ? dynamic_cast<const vfs_resolver*>(lease.operator->()) : nullptr;
+			return vfs != nullptr ? vfs->stamp_beside(anchor, file) : std::nullopt;
+		}
+
 		static bool exists_beside(resource_system& system, const tag& anchor, const tag& file)
 		{
 			const resource_system::resolver_lease lease = system.root().resolver_for(file.protocol());
@@ -236,15 +244,14 @@ namespace
 		}
 	}
 
-	// A write time this close to now may still change within the same tick of the file system's clock (git's "racy" files).
-	constexpr std::chrono::seconds k_settle_time{ 2 };
-
+	// A time this close to now may still change within the same tick of the file system's clock (git's "racy" files).
 	bool settled(const res::desc_binary_pair_key& key)
 	{
-		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		const std::int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
 			std::chrono::system_clock::now().time_since_epoch()).count();
-		const auto limit = now - std::chrono::duration_cast<std::chrono::nanoseconds>(k_settle_time).count();
-		return key.binary_stamp.write_time_ns <= limit && key.desc_stamp.write_time_ns <= limit;
+		const std::int64_t limit = now - res::detail::desc_binary_settle_ns().load(std::memory_order_relaxed);
+		return key.binary_stamp.write_time_ns <= limit && key.binary_stamp.change_time_ns <= limit
+			&& key.desc_stamp.write_time_ns <= limit && key.desc_stamp.change_time_ns <= limit;
 	}
 
 	res::desc_binary_data read_pair(res::resource_system& system, const res::tag& desc, const res::tag& binary, const res::tag& staged,
@@ -268,10 +275,8 @@ namespace
 				cache = system.desc_binary_hash_cache_ptr();
 			}
 			if (cache) {
-				// Read for its stamp only.
-				const auto desc_read = access::read_beside(system, desc, desc, res::max_geometry_json_bytes);
-				if (desc_read.status == read_status::ok && desc_read.stamp) {
-					key = res::desc_binary_pair_key{ binary_name, *primary.stamp, *desc_read.stamp, res::desc_binary_ranges_sha256(ranges) };
+				if (const auto desc_stamp = access::stamp_beside(system, desc, desc)) {
+					key = res::desc_binary_pair_key{ binary_name, *primary.stamp, *desc_stamp, res::desc_binary_ranges_sha256(ranges) };
 				}
 			}
 			const bool is_settled = key && settled(*key);
@@ -316,6 +321,12 @@ std::atomic<std::uint64_t>& res::detail::desc_binary_hashed_ranges()
 {
 	static std::atomic<std::uint64_t> hashed{ 0 };
 	return hashed;
+}
+
+std::atomic<std::int64_t>& res::detail::desc_binary_settle_ns()
+{
+	static std::atomic<std::int64_t> settle{ 2'000'000'000 };
+	return settle;
 }
 
 res::desc_binary_data res::desc_binary::parse(std::string_view file_name, std::span<const std::byte> file,

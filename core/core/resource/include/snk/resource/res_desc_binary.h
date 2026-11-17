@@ -237,5 +237,8 @@ namespace res
 	{
 		// For tests: how many ranges desc_binary::parse has hashed in this process.
 		SNK_API std::atomic<std::uint64_t>& desc_binary_hashed_ranges();
+		// How old (ns) the write and change times of a pair must be for a hash cache to remember or trust it; 2 s.
+		// Tests set it to 0: a change time cannot be backdated.
+		SNK_API std::atomic<std::int64_t>& desc_binary_settle_ns();
 	}
 }
