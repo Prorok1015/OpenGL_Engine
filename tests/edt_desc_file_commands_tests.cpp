@@ -8,7 +8,7 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>

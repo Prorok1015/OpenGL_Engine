@@ -2,7 +2,7 @@
 #include "edt_api.h"
 #include "edt_document.h"
 #include "edt_registration.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

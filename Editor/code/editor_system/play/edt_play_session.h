@@ -5,7 +5,7 @@
 #include <snk/core/core_project_modules.h>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/input/inp_input_stack.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_input_stack_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_world_snapshot.h>

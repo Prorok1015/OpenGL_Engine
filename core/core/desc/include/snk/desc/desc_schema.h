@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/desc/desc_fnv1a.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>

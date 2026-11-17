@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_decoder_sandbox.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <array>
 #include <filesystem>

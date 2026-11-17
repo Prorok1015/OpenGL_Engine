@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_template_ids.h"
 #include <snk/project/prj_create.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include "test_temp_dir.hpp"
 #include <cstddef>

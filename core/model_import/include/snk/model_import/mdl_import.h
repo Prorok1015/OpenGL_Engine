@@ -1,7 +1,7 @@
 #pragma once
 #include "mdl_api.h"
 #include <snk/common/ds/ds_task_system.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/object.hpp>
 #include <chrono>
 #include <cstddef>

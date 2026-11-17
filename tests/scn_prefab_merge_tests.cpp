@@ -1,9 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/level/scn_node_index.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/common/logger/engine_log_sinks.h>

@@ -20,7 +20,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/model_import/mdl_import.h>
 #include <snk/platform/plt_process.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/object.hpp>
 #include <charconv>
 #include <chrono>

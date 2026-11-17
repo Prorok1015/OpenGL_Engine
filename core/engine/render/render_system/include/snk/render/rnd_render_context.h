@@ -8,7 +8,7 @@
 #include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_id.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 #include <cstdint>
 #include <span>

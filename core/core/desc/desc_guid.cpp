@@ -1,5 +1,5 @@
 #include <snk/desc/desc_guid.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 
 std::string desc::generate_guid()
 {

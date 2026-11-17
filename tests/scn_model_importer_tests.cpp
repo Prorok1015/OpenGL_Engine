@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/model_import/mdl_model_adapter.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/logger/engine_log_sinks.h>

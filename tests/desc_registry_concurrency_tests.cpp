@@ -17,7 +17,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include "test_manual_tasks.hpp"
 
 namespace json = boost::json;
