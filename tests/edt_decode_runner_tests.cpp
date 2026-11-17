@@ -17,6 +17,7 @@
 #include <ios>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <snk/platform/plt_process.h>
 #include <snk/resource/res_shipping_dirs.h>
 #include <fstream>
@@ -458,18 +459,48 @@ struct confined_probe_result
 	std::string error;
 };
 
-// The test build of the decoder, run from a copy (a build folder is not readable by containers) in its AppContainer,
-// policies and job, as process_decoder runs it (#1054).
-confined_probe_result run_confined_probe(const fs::path& base, const fs::path& scratch, std::vector<std::string> arguments,
-	bool confined = true, std::shared_ptr<const platform::app_container> container = platform::app_container::ensure(L"snk.model_decoder"))
+// The copy of the decoder and its AppContainer, made once for every test here: hashing the decoder for its copy and
+// making the profile cost seconds, a confined start a fraction of one (#1144).
+struct confined_setup
+{
+	std::optional<edt::decoder_copy> copy;
+	std::string error;
+	std::shared_ptr<const platform::app_container> container;
+};
+
+const confined_setup& confined_once()
+{
+	static const test_util::temp_dir copies{ "decoder_copies_shared" };
+	static const confined_setup setup = [] {
+		confined_setup made;
+		made.copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, copies.path(), made.error);
+		made.container = platform::app_container::ensure(L"snk.model_decoder");
+		return made;
+	}();
+	return setup;
+}
+
+// The test build of the decoder, run from its copy (a build folder is not readable by containers) in its AppContainer,
+// policies and job, as process_decoder runs it (#1054); `confined` false: the same copy without them.
+confined_probe_result run_confined_probe(const fs::path& scratch, std::vector<std::string> arguments, bool confined = true)
 {
 	confined_probe_result result;
-	std::string copy_error;
-	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, base, copy_error);
-	if (!copy) {
-		result.error = copy_error;
+	const confined_setup& setup = confined_once();
+	if (!setup.copy) {
+		result.error = setup.error;
 		return result;
 	}
+	fs::create_directories(scratch);
+	platform::process_options options;
+	options.working_dir = scratch;
+	if (confined) options.confinement = platform::process_confinement{ setup.container, { scratch }, { setup.copy->folder } };
+	options.on_stderr_line = [&result](std::string_view line) { result.err += std::string(line) + "\n"; };
+	const auto run = platform::run_process(setup.copy->program, arguments, options,
+		[&result](std::string_view line) { result.out += std::string(line) + "\n"; }, {});
+	result.exit_code = run.exit_code;
+	result.error = run.error;
+	return result;
+}
 	fs::create_directories(scratch);
 	platform::process_options options;
 	options.working_dir = scratch;
@@ -486,36 +517,35 @@ confined_probe_result run_confined_probe(const fs::path& base, const fs::path& s
 
 BOOST_AUTO_TEST_CASE(AConfinedChild_IsInItsAppContainer_AndCannotOpenAFileOutsideItsFolder_ConnectOrStartAProgram)
 {
-	const fs::path base = dir.path() / "copies";
 	const fs::path scratch = dir.path() / "scratch";
 	const fs::path outside = dir.write("outside.txt", "a secret");
 
-	const auto report = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-sandbox-report" });
+	const auto report = run_confined_probe(scratch, { "--sandbox", "required", "--self-test-sandbox-report" });
 	BOOST_REQUIRE_MESSAGE(report.error.empty(), report.error);
 	BOOST_CHECK_EQUAL(report.exit_code, 0);
 	BOOST_CHECK_EQUAL(report.out, "fs=appcontainer syscalls=policy\n");
 
-	const auto opened = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
+	const auto opened = run_confined_probe(scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
 	BOOST_CHECK_MESSAGE(opened.exit_code == 0, "open outside: " << opened.exit_code << " " << opened.err << opened.error);
-	const auto linked = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-hardlink", outside.string() });
+	const auto linked = run_confined_probe(scratch, { "--sandbox", "required", "--self-test-hardlink", outside.string() });
 	BOOST_CHECK_MESSAGE(linked.exit_code == 0, "hard link: " << linked.exit_code << " " << linked.err << linked.error);
 	// A listener on the loopback: without the container the probe connects (5); in it, no capability, no connection.
 	boost::asio::io_context io;
 	boost::asio::ip::tcp::acceptor listener(io, boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::loopback(), 0));
 	const std::string port = std::to_string(listener.local_endpoint().port());
-	const auto connected = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-connect-port", port });
+	const auto connected = run_confined_probe(scratch, { "--sandbox", "required", "--self-test-connect-port", port });
 	BOOST_CHECK_MESSAGE(connected.exit_code == 0, "connect: " << connected.exit_code << " " << connected.err << connected.error);
-	const auto executed = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-exec" });
+	const auto executed = run_confined_probe(scratch, { "--sandbox", "required", "--self-test-exec" });
 	BOOST_CHECK_MESSAGE(executed.exit_code == 0, "exec: " << executed.exit_code << " " << executed.err << executed.error);
 
 	// The control: the same probes outside the container succeed, or a 0 above proves nothing.
-	const auto connected_off = run_confined_probe(base, scratch, { "--sandbox", "off", "--self-test-connect-port", port }, false);
+	const auto connected_off = run_confined_probe(scratch, { "--sandbox", "off", "--self-test-connect-port", port }, false);
 	BOOST_CHECK_MESSAGE(connected_off.exit_code == 5, "connect off: " << connected_off.exit_code << " " << connected_off.err << connected_off.error);
-	const auto executed_off = run_confined_probe(base, scratch, { "--sandbox", "off", "--self-test-exec" }, false);
+	const auto executed_off = run_confined_probe(scratch, { "--sandbox", "off", "--self-test-exec" }, false);
 	BOOST_CHECK_MESSAGE(executed_off.exit_code == 5, "exec off: " << executed_off.exit_code << " " << executed_off.err << executed_off.error);
-	const auto opened_off = run_confined_probe(base, scratch, { "--sandbox", "off", "--self-test-open", outside.string() }, false);
+	const auto opened_off = run_confined_probe(scratch, { "--sandbox", "off", "--self-test-open", outside.string() }, false);
 	BOOST_CHECK_MESSAGE(opened_off.exit_code == 5, "open off: " << opened_off.exit_code << " " << opened_off.err << opened_off.error);
-	const auto linked_off = run_confined_probe(base, dir.path() / "scratch_off", { "--sandbox", "off", "--self-test-hardlink",
+	const auto linked_off = run_confined_probe(dir.path() / "scratch_off", { "--sandbox", "off", "--self-test-hardlink",
 		outside.string() }, false);
 	BOOST_CHECK_MESSAGE(linked_off.exit_code == 5, "hard link off: " << linked_off.exit_code << " " << linked_off.err << linked_off.error);
 }
@@ -523,17 +553,16 @@ BOOST_AUTO_TEST_CASE(AConfinedChild_IsInItsAppContainer_AndCannotOpenAFileOutsid
 // #1099: the folder of the copy is granted to the container once, however often the container starts from it.
 BOOST_AUTO_TEST_CASE(TheCopysFolder_HoldsOneEntryForTheContainer_AfterManyStarts)
 {
-	const fs::path base = dir.path() / "copies";
-	const auto container = platform::app_container::ensure(L"snk.model_decoder");
-	BOOST_REQUIRE_MESSAGE(container->ok(), container->error());
+	const confined_setup& setup = confined_once();
+	BOOST_REQUIRE_MESSAGE(setup.copy.has_value(), setup.error);
+	BOOST_REQUIRE_MESSAGE(setup.container->ok(), setup.container->error());
 	for (int run = 0; run < 3; ++run) {
-		const auto report = run_confined_probe(base, dir.path() / ("scratch" + std::to_string(run)),
-			{ "--sandbox", "required", "--self-test-sandbox-report" }, true, container);
+		const auto report = run_confined_probe(dir.path() / ("scratch" + std::to_string(run)),
+			{ "--sandbox", "required", "--self-test-sandbox-report" });
 		BOOST_REQUIRE_MESSAGE(report.exit_code == 0, report.exit_code << " " << report.err << report.error);
 	}
-	std::string copy_error;
-	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, base, copy_error);
-	BOOST_REQUIRE_MESSAGE(copy.has_value(), copy_error);
+	const auto& copy = setup.copy;
+	const auto& container = setup.container;
 	PACL acl = nullptr;
 	PSECURITY_DESCRIPTOR descriptor = nullptr;
 	BOOST_REQUIRE_EQUAL(GetNamedSecurityInfoW(copy->folder.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &acl,
@@ -556,9 +585,9 @@ BOOST_AUTO_TEST_CASE(TheCopysFolder_HoldsOneEntryForTheContainer_AfterManyStarts
 // Unconfined the junction is surely made (the child marks it by writing through it); confined, Windows may refuse it.
 BOOST_AUTO_TEST_CASE(ARunFolderTheChildTurnedIntoAJunction_IsNeitherReadThroughNorEmptiedThrough)
 {
-	std::string copy_error;
-	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, dir.path() / "copies", copy_error);
-	BOOST_REQUIRE_MESSAGE(copy.has_value(), copy_error);
+	const confined_setup& setup = confined_once();
+	BOOST_REQUIRE_MESSAGE(setup.copy.has_value(), setup.error);
+	const auto& copy = setup.copy;
 	for (const bool confined : { false, true }) {
 		const fs::path outside = dir.path() / (confined ? "outside_confined" : "outside");
 		const fs::path kept = dir.write(outside.filename() / "keep.txt", "the user's");
@@ -567,7 +596,7 @@ BOOST_AUTO_TEST_CASE(ARunFolderTheChildTurnedIntoAJunction_IsNeitherReadThroughN
 		cfg.decoder = copy->program;
 		cfg.sandbox = confined ? edt::sandbox_mode::required : edt::sandbox_mode::off;
 		cfg.confine = confined;
-		cfg.container = platform::app_container::ensure(L"snk.model_decoder");
+		cfg.container = setup.container;
 		cfg.confine_read_execute = { copy->folder };
 		cfg.extra_arguments = { "--self-test-link-self", outside.string() };
 		const edt::decode_runner runner(cfg);
