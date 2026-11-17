@@ -252,6 +252,42 @@ void edt::override_edit::merge_layer(const desc::schema_registry& schemas, const
 	into = std::move(merged.as_object());
 }
 
+namespace
+{
+	// `prefix`: what the outer levels of `patch` spell of a key of `schema` (a patch nests "/transform/position" as objects);
+	// `at`: the pointer of `schema`'s object in the component.
+	std::string binary_ref_in(const desc::schema_registry& schemas, const desc::type_schema& schema, const json::object& patch,
+		const std::string& prefix, const std::string& at, int depth)
+	{
+		if (depth >= k_max_depth) return {};
+		for (const auto& member : patch) {
+			const std::string local = prefix + "/" + token_of(member.key());
+			if (const desc::field_schema* field = schema.find_field(local)) {
+				if (field->kind == desc::field_kind::binary_ref) return at + local;
+				if (field->kind != desc::field_kind::structure || !member.value().is_object()) continue;
+				if (const desc::type_schema* nested = schemas.find(field->ref_type)) {
+					if (std::string found = binary_ref_in(schemas, *nested, member.value().as_object(), {}, at + local, depth + 1); !found.empty()) {
+						return found;
+					}
+				}
+				continue;
+			}
+			if (member.value().is_object()) {
+				if (std::string found = binary_ref_in(schemas, schema, member.value().as_object(), local, at, depth + 1); !found.empty()) {
+					return found;
+				}
+			}
+		}
+		return {};
+	}
+}
+
+std::string edt::override_edit::binary_ref_in_patch(const desc::schema_registry& schemas, const desc::type_schema& schema,
+	const json::object& patch)
+{
+	return binary_ref_in(schemas, schema, patch, {}, {}, 0);
+}
+
 const scn::prefab_desc* edt::override_edit::referenced_prefab(const prefab_node& node)
 {
 	for (const auto& [key, comp] : node.components) {

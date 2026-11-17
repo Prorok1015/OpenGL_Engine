@@ -387,6 +387,21 @@ BOOST_AUTO_TEST_CASE(MeshFiles_AreRefusedByCreateAndWrite_ByPathAndByType)
 	BOOST_TEST(question->find("This request will be refused") != std::string::npos);
 }
 
+// A desc_ref field takes an inline desc: a geometry or editable mesh inline in another desc is refused the same way.
+BOOST_AUTO_TEST_CASE(AnInlineMesh_InAnotherDesc_IsRefused)
+{
+	const std::string geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})";
+	const auto in_field = call("desc.create", desc_args("meshes/node.desc",
+		(R"({"__type":"mesh_node_desc","geometry":)" + geometry + "}").c_str()));
+	BOOST_TEST(in_field.code == cmd::codes::invalid_args);
+	BOOST_TEST(in_field.error.find("/geometry") != std::string::npos, in_field.error);
+	const auto in_list = call("desc.create", desc_args("meshes/list.desc",
+		R"({"__type":"material_desc","parts":[{"x":1},{"__type":"poly_mesh_desc"}]})"));
+	BOOST_TEST(in_list.code == cmd::codes::invalid_args);
+	BOOST_TEST(in_list.error.find("/parts/1") != std::string::npos, in_list.error);
+	BOOST_TEST(!fs::exists(res_root / "meshes"));
+}
+
 BOOST_AUTO_TEST_CASE(Write_WithAnotherVersion_IsStale_AndTheFileStays)
 {
 	make_material("materials/s.mat.desc");
@@ -1045,6 +1060,31 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 	const auto created = call("desc.create", json::object{ { "path", "input/actions.desc" }, { "desc", json::parse(actions) } });
 	BOOST_TEST_MESSAGE(created.error);
 	BOOST_TEST(created.ok);
+}
+
+// EPIC-79 PR5 (#1068): a binary_ref field holds a range of the binary file (or the arrays of an older file); a range that
+// does not read is an error, and its hash and layout are no tags.
+BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.blob_mesh",
+		"fields": [ { "name": "vertices", "kind": "binary_ref" }, { "name": "indices", "kind": "binary_ref" } ] })").as_object())));
+	const auto errors_of = [&](const std::string& text) {
+		std::vector<std::string> out;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(text), "res://meshes/m.desc").problems) {
+			if (item.severity == res::diagnostic_severity::error) out.push_back(item.json_path + ": " + item.reason);
+		}
+		return out;
+	};
+	// A layout or hash is a plain string, never read as a (relative) tag.
+	const std::string range = R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
+	const auto fine = errors_of(R"({"__type":"test.blob_mesh","vertices":)" + range + R"(,"indices":[0,1,2]})");
+	BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
+
+	const auto broken = errors_of(R"({"__type":"test.blob_mesh","vertices":{"offset":16,"size":12,"layout":"f32x3","sha256":"zz"},"indices":"res://x"})");
+	BOOST_REQUIRE_EQUAL(broken.size(), 2u);
+	BOOST_TEST(broken[0].find("/vertices") == 0u, broken[0]);
+	BOOST_TEST(broken[0].find("not a range of the binary file") != std::string::npos, broken[0]);
+	BOOST_TEST(broken[1].find("/indices") == 0u, broken[1]);
 }
 
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)
