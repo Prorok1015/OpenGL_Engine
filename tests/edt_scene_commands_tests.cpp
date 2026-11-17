@@ -899,7 +899,7 @@ BOOST_AUTO_TEST_CASE(a_blob_field_is_never_changed_by_mcp)
 	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + R"(,"key":"blob","type":"probe.blob","fields":{"note":"a"}})").ok);
 	const auto before = scene.generation();
 
-	for (const std::string patch : { R"({"vertices":)" + range + "}", std::string(R"({"vertices":{"size":4}})"),
+	for (const std::string& patch : { R"({"vertices":)" + range + "}", std::string(R"({"vertices":{"size":4}})"),
 			std::string(R"({"vertices":null})"), std::string(R"({"part":{"data":[1,2,3]}})") }) {
 		BOOST_TEST_CONTEXT(patch) {
 			const auto refused = call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":)" + patch + "}");
