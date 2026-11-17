@@ -57,7 +57,6 @@ add_subdirectory("gui/gui_system")
 add_subdirectory("render/render_system")
 add_subdirectory("game")
 add_subdirectory("scene")
-add_subdirectory("image")
 
 # Shared variant: snk_engine carries ALL engine and core component code. Archives are linked
 # whole so nothing is dropped just because the library itself references no symbol from it (the
