@@ -1,5 +1,6 @@
 #include "edt_instance_overrides_view.h"
 #include "edt_override_edit.h"
+#include <snk/gui/gui_theme.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/level/scn_override_record.h>
 #include <boost/json.hpp>
@@ -148,7 +149,8 @@ namespace
 }
 
 bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<override_edit::stale_record>* stale,
-	const instance_overrides_hooks& hooks, instance_overrides_state& state)
+	const instance_overrides_hooks& hooks, instance_overrides_state& state,
+	const gui::theme_semantic_colors& colors)
 {
 	drop_stale_question(node, state);
 	const scn::prefab_desc* prefab = override_edit::referenced_prefab(node);
@@ -182,7 +184,7 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 
 	const bool can_apply = prefab && hooks.apply_to_prefab && (!hooks.can_apply || hooks.can_apply());
 	if (!state.error.empty()) {
-		ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.4f, 1.f), "Not applied: %s", state.error.c_str());
+		ImGui::TextColored(colors.error, "Not applied: %s", state.error.c_str());
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Dismiss")) state.error.clear();
 	}

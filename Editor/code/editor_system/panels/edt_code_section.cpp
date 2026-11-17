@@ -1,8 +1,10 @@
 #include "edt_code_section.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <utility>
 
 namespace edt
@@ -116,9 +118,9 @@ namespace edt
 		}
 	}
 
-	void code_section::render()
+	void code_section::render(const gui::theme_semantic_colors& colors)
 	{
-		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.f);
+		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, em(12.f));
 		const bool opened = ImGui::TreeNodeEx("code://##codetreeroot", ImGuiTreeNodeFlags_SpanFullWidth);
 		if (ImGui::BeginPopupContextItem("##codetreeroot_menu")) {
 			if (ImGui::MenuItem("New file...")) {
@@ -132,12 +134,12 @@ namespace edt
 		}
 		ImGui::PopStyleVar();
 		if (!m_error.empty() && m_dialog == dialog_kind::none) {
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_error.c_str());
+			ImGui::TextColored(colors.error, "%s", m_error.c_str());
 		}
-		draw_dialogs();
+		draw_dialogs(colors);
 	}
 
-	void code_section::draw_dialogs()
+	void code_section::draw_dialogs(const gui::theme_semantic_colors& colors)
 	{
 		if (m_open_requested) {
 			ImGui::OpenPopup(k_dialog_id);
@@ -151,12 +153,12 @@ namespace edt
 		switch (m_dialog) {
 		case dialog_kind::new_file:
 			ImGui::Text("New file in code://%s", m_target.c_str());
-			ImGui::SetNextItemWidth(320.f);
+			ImGui::SetNextItemWidth(em(320.f));
 			ImGui::InputText("##name", &m_text);
 			break;
 		case dialog_kind::rename_file:
 			ImGui::Text("Rename code://%s", m_target.c_str());
-			ImGui::SetNextItemWidth(320.f);
+			ImGui::SetNextItemWidth(em(320.f));
 			ImGui::InputText("##name", &m_text);
 			break;
 		case dialog_kind::delete_file:
@@ -168,7 +170,7 @@ namespace edt
 			break;
 		}
 		if (!m_error.empty()) {
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_error.c_str());
+			ImGui::TextColored(colors.error, "%s", m_error.c_str());
 		}
 
 		const char* confirm = m_dialog == dialog_kind::delete_file ? "Delete" : (m_dialog == dialog_kind::rename_file ? "Rename" : "Create");

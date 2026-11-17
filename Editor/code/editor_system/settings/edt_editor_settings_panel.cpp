@@ -1,5 +1,6 @@
 #include "edt_editor_settings_panel.h"
 #include "edt_theme_settings.h"
+#include "edt_ui_metrics.h"
 
 #include <imgui.h>
 
@@ -29,7 +30,7 @@ edt::editor_settings_panel::editor_settings_panel(theme_settings_model& model)
 
 void edt::editor_settings_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(520.f, 640.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(520.f), em(640.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -153,7 +154,7 @@ void edt::editor_settings_panel::draw_preset_editor()
 void edt::editor_settings_panel::draw_duplicate()
 {
 	ImGui::Spacing();
-	ImGui::SetNextItemWidth(220.f);
+	ImGui::SetNextItemWidth(em(220.f));
 	ImGui::InputTextWithHint("##new_name", "name of the copy", m_new_name.data(), m_new_name.size());
 	ImGui::SameLine();
 	if (ImGui::Button("Duplicate") && !m_model.duplicate(m_new_name.data())) {

@@ -14,6 +14,7 @@
 #include <vector>
 
 struct ImFont;
+namespace gui { struct theme_semantic_colors; }
 
 namespace edt
 {
@@ -243,5 +244,5 @@ namespace edt
 
 	// The window with the waiting requests: nothing is drawn (no ImGui call at all) while none waits. Returns true
 	// while it should be called again, so it fits an implicit-layout registrar.
-	bool draw_agent_confirmations(agent_confirmations& confirmations);
+	bool draw_agent_confirmations(agent_confirmations& confirmations, const gui::theme_semantic_colors& colors);
 }

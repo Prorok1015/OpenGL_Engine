@@ -24,7 +24,7 @@ edt::agent_access::~agent_access()
 	m_commands.set_policy_gate(nullptr);
 }
 
-bool edt::agent_access::frame(ImFont* font)
+bool edt::agent_access::frame(ImFont* font, const gui::theme_semantic_colors& colors)
 {
 	m_policy.refresh();
 
@@ -38,7 +38,7 @@ bool edt::agent_access::frame(ImFont* font)
 	set_person_present(readable);
 
 	m_confirmations->tick();
-	return draw_agent_confirmations(*m_confirmations);
+	return draw_agent_confirmations(*m_confirmations, colors);
 }
 
 bool edt::agent_access::frame_headless()

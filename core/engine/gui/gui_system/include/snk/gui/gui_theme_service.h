@@ -63,6 +63,8 @@ namespace gui
 		// The preset asked for last, after a fallback the fallback.
 		const res::tag& selected() const { return m_selected; }
 		bool loading() const { return m_stage != stage::idle; }
+		// The style handed to `apply` last (a fallback's too); default constructed before the first.
+		const theme_style& applied() const { return m_applied; }
 
 		// Calls poll() every frame from the GUI system's layers.
 		class layer final : public layer_interface
@@ -113,5 +115,6 @@ namespace gui
 		std::optional<font_key> m_applied_fonts;
 		// The fonts read besides the UI and icon fonts, for forget_fonts().
 		std::vector<res::tag> m_read_fonts;
+		theme_style m_applied;
 	};
 }

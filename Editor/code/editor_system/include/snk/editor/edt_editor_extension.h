@@ -31,7 +31,9 @@
 // 3.0 (#969): the module also exports snk_editor_layout_key (edt::editor_layout_key, edt_editor_layout_key.h), the key of
 // the editor types, editor interface revisions and ImGui it was built against. The host refuses a module without it or
 // with another key; a 2.x module has none and is refused: rebuild the project.
-#define SNK_EDITOR_API_VERSION 0x0003'0000u
+// 4.0 (#1136): panel_base gains a pointer to the theme's semantic colours at its end (set_colors / colors(), not
+// virtual); panel_registry, dialog_service and editor_context grow too. A 3.x module is refused: rebuild the project.
+#define SNK_EDITOR_API_VERSION 0x0004'0000u
 
 namespace edt
 {

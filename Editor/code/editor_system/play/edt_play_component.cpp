@@ -21,6 +21,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <format>
 #include <utility>
@@ -178,6 +179,6 @@ void edt::play_component::draw_status() const
 	// Stopped: nothing at all, so the menu bar is what it is without Play.
 	if (!m_play || !m_play->active()) return;
 	const bool paused = m_play->state() == play_state::paused;
-	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
-		paused ? "Play: paused" : "Play: playing");
+	const gui::theme_semantic_colors& colors = m_ports.context.colors();
+	ImGui::TextColored(paused ? colors.warning : colors.success, "%s", paused ? "Play: paused" : "Play: playing");
 }

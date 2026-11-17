@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt
 {
 	struct instance_overrides_hooks
@@ -50,5 +52,6 @@ namespace edt
 	// asks first, then moves the record into the prefab file through `hooks.apply_to_prefab` and drops it from the node.
 	// Returns true when `node.overrides` changed; the caller commits.
 	bool draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std::vector<override_edit::stale_record>* stale,
-		const instance_overrides_hooks& hooks, instance_overrides_state& state);
+		const instance_overrides_hooks& hooks, instance_overrides_state& state,
+		const gui::theme_semantic_colors& colors);
 }
