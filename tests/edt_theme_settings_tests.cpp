@@ -133,6 +133,9 @@ BOOST_AUTO_TEST_CASE(ANameOfAPersonalPreset_IsAPlainFileName)
 	BOOST_TEST(!edt::valid_theme_name("a b"));
 	BOOST_TEST(!edt::valid_theme_name("a.desc"));
 	BOOST_TEST(!edt::valid_theme_name(std::string(65, 'a')));
+	BOOST_TEST(!edt::valid_theme_name("con"));
+	BOOST_TEST(!edt::valid_theme_name("COM1"));
+	BOOST_TEST(edt::valid_theme_name("console"));
 	BOOST_TEST(edt::personal_theme_tag("mine").view() == "edt://themes/mine.desc");
 	BOOST_TEST(edt::is_personal_theme(edt::personal_theme_tag("mine")));
 	BOOST_TEST(!edt::is_personal_theme(res::tag{ "engine://themes/light.desc" }));
@@ -153,6 +156,37 @@ BOOST_AUTO_TEST_CASE(TheKeptChoice_IsAppliedAtStart)
 	BOOST_TEST(applied.back().style.palette.light);
 	BOOST_REQUIRE(model.working() != nullptr);
 	BOOST_TEST(!model.editable());
+}
+
+BOOST_AUTO_TEST_CASE(AKeptChoiceOutsideTheEngineAndThePersonsThemes_IsNotRead)
+{
+	edt_ram->files[res::tag{ "edt://settings/editor_theme.json" }] =
+		test_util::to_bytes(R"({"theme":"memory://t/project_theme.desc"})");
+	put("project_theme.desc", R"({ "__type" : "gui.theme", "__version" : 1 })");
+	auto model = make_model();
+
+	model.start();
+	settle(model);
+
+	BOOST_TEST(themes.selected().view() != "memory://t/project_theme.desc");
+	BOOST_TEST(model.working_tag().view() != "memory://t/project_theme.desc");
+	BOOST_TEST(model.working() == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AChoiceMadeWhileTheKeptOneIsRead_IsNotUndoneByIt)
+{
+	edt_ram->files[res::tag{ "edt://settings/editor_theme.json" }] =
+		test_util::to_bytes(R"({"theme":"engine://themes/dark_contrast.desc"})");
+	auto model = make_model();
+	model.start();
+	pump();
+
+	model.choose(res::tag{ "engine://themes/light.desc" });
+	settle(model);
+
+	BOOST_TEST(themes.selected().view() == "engine://themes/light.desc");
+	BOOST_REQUIRE(model.working() != nullptr);
+	BOOST_TEST(model.working_tag().view() == "engine://themes/light.desc");
 }
 
 BOOST_AUTO_TEST_CASE(AThemeNamedByTheConfig_WinsOverTheKeptChoice)

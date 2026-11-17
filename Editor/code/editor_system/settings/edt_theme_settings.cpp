@@ -42,6 +42,18 @@ namespace
 		});
 	}
 
+	// CON, NUL, COM1...: a file of that name cannot be made on Windows.
+	bool windows_device_name(std::string_view name)
+	{
+		std::string upper(name);
+		std::ranges::transform(upper, upper.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") {
+			return true;
+		}
+		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT"))
+			&& upper[3] >= '0' && upper[3] <= '9';
+	}
+
 	using list_function = std::function<std::vector<res::tag>(std::string_view, std::string_view)>;
 
 	std::vector<res::tag> sorted_files(const res::resource_system& resources, const list_function& list,
@@ -85,7 +97,7 @@ bool edt::valid_theme_name(std::string_view name)
 	if (name.empty() || name.size() > 64) {
 		return false;
 	}
-	return std::ranges::all_of(name, [](char c) {
+	return !windows_device_name(name) && std::ranges::all_of(name, [](char c) {
 		return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
 	});
 }
@@ -140,9 +152,13 @@ void edt::theme_settings_model::poll()
 	if (m_choice.is_valid() && (m_choice.is_ready() || m_choice.has_error())) {
 		const std::shared_ptr<res::text_resource> text = m_choice.get();
 		m_choice = {};
-		if (const std::optional<res::tag> chosen = text ? chosen_theme_of(text->str()) : std::nullopt) {
+		const std::optional<res::tag> chosen = text ? chosen_theme_of(text->str()) : std::nullopt;
+		if (chosen && (chosen->view().starts_with("engine://") || is_personal_theme(*chosen))) {
 			m_ports.themes->select(*chosen);
 			load_working(*chosen);
+		} else if (chosen) {
+			egLOG_WARN("editor/settings", "edt://settings/{} names {}, which is no preset of engine:// or {}: "
+				"keeping the default", k_theme_setting, chosen->view(), k_personal_themes);
 		} else {
 			egLOG_WARN("editor/settings", "edt://settings/{} names no theme, keeping the default", k_theme_setting);
 		}
@@ -188,6 +204,8 @@ void edt::theme_settings_model::choose(const res::tag& preset)
 	if (!available()) {
 		return;
 	}
+	// The kept choice still being read must not undo this one.
+	m_choice = {};
 	m_ports.themes->select(preset);
 	remember_choice(preset);
 	load_working(preset);
@@ -221,6 +239,7 @@ std::optional<std::string> edt::theme_settings_model::save()
 	}
 	m_dirty = false;
 	m_message = std::format("saved {}", m_working_tag.view());
+	m_choice = {};
 	m_ports.themes->select(m_working_tag);
 	remember_choice(m_working_tag);
 	return std::nullopt;

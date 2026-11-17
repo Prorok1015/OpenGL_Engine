@@ -47,12 +47,13 @@ namespace gui
 			std::vector<std::string> preset_sources = { "engine://" },
 			std::vector<std::string> font_sources = { "engine://" });
 
+		// Each source is a folder prefix ("edt://themes/"); a missing trailing '/' is added.
 		void set_sources(std::vector<std::string> preset_sources, std::vector<std::string> font_sources);
 
 		// The load of an earlier select() is dropped.
 		void select(res::tag preset);
 		// Shows `preset` without a file (an edit not saved yet); selected() stays. A preset that cannot be used is a
-		// WARN and the look stays.
+		// WARN and the look stays; nothing is shown while the preset of a select() still loads.
 		void preview(const theme_desc& preset);
 		// Advances the loads; called once a frame (theme_service::layer).
 		void poll();

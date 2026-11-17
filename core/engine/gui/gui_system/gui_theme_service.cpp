@@ -108,6 +108,20 @@ std::optional<gui::theme_style> gui::theme_style_of(const theme_desc& preset, st
 	return style;
 }
 
+namespace
+{
+	// A source is a folder: "edt://themes" must not let "edt://themes_other/x.desc" through.
+	std::vector<std::string> as_folders(std::vector<std::string> sources)
+	{
+		for (std::string& source : sources) {
+			if (!source.ends_with('/')) {
+				source.push_back('/');
+			}
+		}
+		return sources;
+	}
+}
+
 gui::theme_service::theme_service(res::resource_system& resources, res::tag fallback, apply_function apply,
 	std::vector<std::string> preset_sources, std::vector<std::string> font_sources)
 	: m_resources(resources)
@@ -115,15 +129,15 @@ gui::theme_service::theme_service(res::resource_system& resources, res::tag fall
 	, m_ui_font(resources.engine_file("fonts/NotoSans-Regular.ttf"))
 	, m_icon_font(resources.engine_file("fonts/lucide-icons.ttf"))
 	, m_apply(std::move(apply))
-	, m_preset_sources(std::move(preset_sources))
-	, m_font_sources(std::move(font_sources))
+	, m_preset_sources(as_folders(std::move(preset_sources)))
+	, m_font_sources(as_folders(std::move(font_sources)))
 {
 }
 
 void gui::theme_service::set_sources(std::vector<std::string> preset_sources, std::vector<std::string> font_sources)
 {
-	m_preset_sources = std::move(preset_sources);
-	m_font_sources = std::move(font_sources);
+	m_preset_sources = as_folders(std::move(preset_sources));
+	m_font_sources = as_folders(std::move(font_sources));
 }
 
 void gui::theme_service::select(res::tag preset)
@@ -140,6 +154,10 @@ void gui::theme_service::select(res::tag preset)
 
 void gui::theme_service::preview(const theme_desc& preset)
 {
+	if (m_stage == stage::preset) {
+		// The preset chosen last is still loading: it is what the person sees next, not an edit of the one before.
+		return;
+	}
 	drop_loads();
 	std::string problem;
 	if (!start(preset, problem)) {

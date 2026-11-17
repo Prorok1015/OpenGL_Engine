@@ -310,15 +310,33 @@ BOOST_AUTO_TEST_CASE(AFontOfThePersons_IsMergedWithTheUiFontForTheGlyphsItLacks)
 
 BOOST_AUTO_TEST_CASE(TheSourcesOfPresetsAndFonts_AreSetApart)
 {
-	put("theme_in_t.desc", R"({ "__type" : "gui.theme", "__version" : 1 })");
-	editor_service.set_sources({ "engine://", "memory://t/theme" }, { "engine://" });
+	put("mine/theme_in_t.desc", R"({ "__type" : "gui.theme", "__version" : 1 })");
+	put("mine_other.desc", R"({ "__type" : "gui.theme", "__version" : 1 })");
+	// A source is a folder, with or without its trailing '/'.
+	editor_service.set_sources({ "engine://", "memory://t/mine" }, { "engine://" });
 
-	const auto& theme = select(editor_service, "memory://t/theme_in_t.desc");
+	const auto& theme = select(editor_service, "memory://t/mine/theme_in_t.desc");
 
 	BOOST_TEST(!theme.style.imgui_dark);
-	BOOST_TEST(editor_service.selected().view() == "memory://t/theme_in_t.desc");
-	const auto& other = select(editor_service, "memory://t/huge.desc");
+	BOOST_TEST(editor_service.selected().view() == "memory://t/mine/theme_in_t.desc");
+	const auto& other = select(editor_service, "memory://t/mine_other.desc");
 	BOOST_TEST(other.style.imgui_dark);
+}
+
+BOOST_AUTO_TEST_CASE(APreviewWhileAChosenPresetLoads_DoesNotReplaceIt)
+{
+	select("engine://themes/dark_neutral.desc");
+	gui::theme_desc edited;
+	edited.accent = glm::vec3{ 1.f, 0.f, 0.f };
+	applied.clear();
+
+	service.select(res::tag{ "engine://themes/light.desc" });
+	service.preview(edited);
+	settle(service);
+
+	BOOST_REQUIRE_EQUAL(applied.size(), 1u);
+	BOOST_TEST(applied.front().style.palette.light);
+	BOOST_TEST(service.selected().view() == "engine://themes/light.desc");
 }
 
 BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)
