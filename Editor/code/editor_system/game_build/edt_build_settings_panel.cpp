@@ -1,7 +1,9 @@
 #include "edt_build_settings_panel.h"
+#include <snk/gui/gui_theme.h>
 #include "edt_path_text.h"
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <array>
 #include <cmath>
 #include <format>
@@ -10,9 +12,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-	const ImVec4 k_error_color{ 1.f, 0.3f, 0.3f, 1.f };
-	const ImVec4 k_warning_color{ 1.f, 0.8f, 0.f, 1.f };
-
 	// What build.json's `configuration` accepts (parse_build_settings).
 	bool is_build_configuration(std::string_view name)
 	{
@@ -56,7 +55,7 @@ void edt::build_settings_panel::on_before_begin()
 		// Closing the window keeps the edits it had not applied.
 		if (!m_model.dirty()) reload();
 	}
-	ImGui::SetNextWindowSize(ImVec2(620.f, 560.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(620.f), em(560.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -86,7 +85,7 @@ void edt::build_settings_panel::on_render()
 	ImGui::TextDisabled("%s", utf8_of(m_model.code_dir()).c_str());
 	for (const auto& error : m_model.load_errors()) {
 		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextColored(k_warning_color, "%s", error.c_str());
+		ImGui::TextColored(colors().warning, "%s", error.c_str());
 		ImGui::PopTextWrapPos();
 	}
 
@@ -122,12 +121,12 @@ void edt::build_settings_panel::draw_live()
 	}
 
 	int quiet_ms = settings.live_quiet_ms;
-	ImGui::SetNextItemWidth(140.f);
+	ImGui::SetNextItemWidth(em(140.f));
 	if (ImGui::InputInt("Quiet period (ms)", &quiet_ms, 100, 1000)) m_model.set_live_quiet_ms(quiet_ms);
 
 	int jobs = settings.live_jobs;
 	const std::string jobs_label = std::format("Jobs (0 = auto: {})###live_jobs", live_auto_jobs(m_model.estimate().jobs));
-	ImGui::SetNextItemWidth(140.f);
+	ImGui::SetNextItemWidth(em(140.f));
 	if (ImGui::InputInt(jobs_label.c_str(), &jobs)) m_model.set_live_jobs(jobs);
 }
 
@@ -140,7 +139,7 @@ void edt::build_settings_panel::draw_presets()
 	const std::string selected = m_model.selected_configuration();
 	const std::string preview = settings.configuration ? display_name_of(m_model, *settings.configuration)
 		: std::format("{} (editor default)", display_name_of(m_model, selected));
-	ImGui::SetNextItemWidth(240.f);
+	ImGui::SetNextItemWidth(em(240.f));
 	if (ImGui::BeginCombo("Default configuration", preview.c_str())) {
 		if (ImGui::Selectable("Editor default", !settings.configuration)) m_model.set_configuration(std::nullopt);
 		for (const auto& entry : m_model.configurations()) {
@@ -172,7 +171,7 @@ void edt::build_settings_panel::draw_presets()
 	ImGui::SameLine();
 	ImGui::BeginDisabled(settings.jobs_mode != jobs_mode::manual_jobs);
 	int jobs = m_model.manual_jobs();
-	ImGui::SetNextItemWidth(110.f);
+	ImGui::SetNextItemWidth(em(110.f));
 	if (ImGui::InputInt("##manual_jobs", &jobs)) m_model.set_manual_jobs(jobs);
 	ImGui::EndDisabled();
 
@@ -217,7 +216,7 @@ void edt::build_settings_panel::draw_defines()
 	if (ImGui::BeginTable("##defines", 3, flags)) {
 		ImGui::TableSetupColumn("Name");
 		ImGui::TableSetupColumn("Value");
-		ImGui::TableSetupColumn("##remove", ImGuiTableColumnFlags_WidthFixed, 24.f);
+		ImGui::TableSetupColumn("##remove", ImGuiTableColumnFlags_WidthFixed, em(24.f));
 		ImGui::TableHeadersRow();
 		for (const auto& [name, value] : team) {
 			ImGui::TableNextRow();
@@ -268,10 +267,10 @@ void edt::build_settings_panel::draw_defines()
 		}
 	}
 
-	ImGui::SetNextItemWidth(180.f);
+	ImGui::SetNextItemWidth(em(180.f));
 	ImGui::InputTextWithHint("##new_define_name", "NAME", &m_new_name);
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(180.f);
+	ImGui::SetNextItemWidth(em(180.f));
 	ImGui::InputTextWithHint("##new_define_value", "value", &m_new_value);
 	ImGui::SameLine();
 	ImGui::Checkbox("all configurations", &m_add_everywhere);
@@ -289,7 +288,7 @@ void edt::build_settings_panel::draw_defines()
 	}
 	if (!m_define_error.empty()) {
 		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextColored(k_error_color, "%s", m_define_error.c_str());
+		ImGui::TextColored(colors().error, "%s", m_define_error.c_str());
 		ImGui::PopTextWrapPos();
 	}
 }
@@ -307,7 +306,7 @@ void edt::build_settings_panel::draw_module()
 	for (const auto& [level, label] : levels) {
 		if (level == settings.log_verbosity) preview = label;
 	}
-	ImGui::SetNextItemWidth(160.f);
+	ImGui::SetNextItemWidth(em(160.f));
 	if (ImGui::BeginCombo("Build log", preview)) {
 		for (const auto& [level, label] : levels) {
 			if (ImGui::Selectable(label, level == settings.log_verbosity)) m_model.set_log_verbosity(level);
@@ -358,12 +357,12 @@ void edt::build_settings_panel::draw_footer()
 	}
 
 	ImGui::PushTextWrapPos(0.f);
-	if (blocked) ImGui::TextColored(k_warning_color, "%s", blocked->c_str());
+	if (blocked) ImGui::TextColored(colors().warning, "%s", blocked->c_str());
 	for (const auto& file : m_changed) {
-		ImGui::TextColored(k_warning_color, "%s changed outside the editor - Apply merges onto the current file",
+		ImGui::TextColored(colors().warning, "%s changed outside the editor - Apply merges onto the current file",
 			relative(file).c_str());
 	}
-	for (const auto& error : m_apply_errors) ImGui::TextColored(k_error_color, "%s", error.c_str());
+	for (const auto& error : m_apply_errors) ImGui::TextColored(colors().error, "%s", error.c_str());
 	for (const auto& configuration : m_model.settings().fresh_configure) {
 		ImGui::TextDisabled("Next build of %s reconfigures from scratch (--fresh)", display_name_of(m_model, configuration).c_str());
 	}

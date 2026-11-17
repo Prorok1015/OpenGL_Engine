@@ -13,6 +13,7 @@
 #include "edt_input_binding.h"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_panel_base.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <chrono>
@@ -270,7 +271,7 @@ BOOST_AUTO_TEST_CASE(TheLoadingScreen_ReplacesTheDockspaceAndTheShortcuts_AndThe
 	bool loading = true;
 	edt::editor_layouts layouts;
 	layouts.loading_active = [&loading] { return loading; };
-	layouts.draw_loading = [&text] { edt::draw_loading_screen(text); };
+	layouts.draw_loading = [&text] { edt::draw_loading_screen(text, gui::theme_semantic_colors{}); };
 	const auto draw = [&](edt::drawn_layout expected) {
 		BOOST_TEST((edt::draw_layouts(dock, panels, actions, layouts) == expected));
 	};
@@ -348,7 +349,7 @@ BOOST_AUTO_TEST_CASE(Shortcuts_KeepWorkingUnderTheAgentQuestion_ButNotUnderAModa
 {
 	shortcut_rig rig;
 	agent_question agent;
-	rig.extra = [&agent] { edt::draw_agent_confirmations(*agent.confirmations); };
+	rig.extra = [&agent] { edt::draw_agent_confirmations(*agent.confirmations, gui::theme_semantic_colors{}); };
 	agent.ask();
 	BOOST_REQUIRE(agent.confirmations->pending().size() == 1u);
 	rig.frame();

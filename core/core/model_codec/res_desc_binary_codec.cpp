@@ -1,4 +1,4 @@
-#include <snk/resource/res_desc_binary.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
 #include <algorithm>
 #include <format>
 #include <memory>

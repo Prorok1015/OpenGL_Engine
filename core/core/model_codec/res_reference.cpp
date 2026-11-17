@@ -1,4 +1,4 @@
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <string_view>
 
 namespace

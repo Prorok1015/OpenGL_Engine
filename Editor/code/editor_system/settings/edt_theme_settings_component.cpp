@@ -8,6 +8,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_panel_registry.h>
 #include <snk/gui/gui_gui_service_init.h>
+#include <snk/gui/gui_theme_service.h>
 
 edt::theme_settings_component::theme_settings_component(ports from)
 	: m_ports(from)
@@ -19,6 +20,10 @@ edt::theme_settings_component::theme_settings_component(ports from)
 	m_model->start();
 	m_ports.layer.register_implicit("edt/theme_settings", [this] {
 		m_model->poll();
+		// What the service applied, not what was asked for: a select() still loading or one that fell back.
+		if (m_ports.themes) {
+			m_ports.context.set_colors(m_ports.themes->applied().palette.semantic);
+		}
 		return true;
 	});
 }

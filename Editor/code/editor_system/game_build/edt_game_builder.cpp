@@ -2,6 +2,7 @@
 #include "edt_build_diagnostics.h"
 #include "edt_path_text.h"
 #include "edt_project_trust_service.h"
+#include "edt_ui_metrics.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
@@ -605,7 +606,7 @@ bool edt::game_builder::draw_progress()
 		const int idx = static_cast<int>(m_spinner_t * 8.f) % 4;
 		ImGui::Text("%s  Building the game (%s)...", spinners[idx], m_configuration.c_str());
 		if (const auto progress = m_jobs.progress(m_job)) {
-			ImGui::ProgressBar(progress->fraction, ImVec2(360.f, 0.f), progress->note.c_str());
+			ImGui::ProgressBar(progress->fraction, ImVec2(em(360.f), 0.f), progress->note.c_str());
 		}
 		if (ImGui::Button("Cancel") || escape) {
 			cancel();

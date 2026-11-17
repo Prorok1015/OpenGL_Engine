@@ -101,7 +101,7 @@ void mutate(splitmix64& rng, scn::prefab_desc& edited, uint64_t& next_id)
 		std::vector<scn::prefab_desc::prefab_node*> nodes;
 		collect_nodes(edited.get_root(), nodes);
 		auto& node = *nodes[rng.below(nodes.size())];
-		switch (rng.below(9)) {
+		switch (rng.below(10)) {
 		case 0: if (&node != &edited.get_root()) node.name = "renamed" + std::to_string(rng.below(100)); break;
 		case 1: node.has_transform = true; node.position = glm::vec3(static_cast<float>(rng.below(20)), 0.f, 0.f); break;
 		case 2: node.components.erase("stat"); break;
@@ -130,6 +130,9 @@ void mutate(splitmix64& rng, scn::prefab_desc& edited, uint64_t& next_id)
 			break;
 		}
 		case 7: node.has_transform = false; node.position = glm::vec3(0.f); break;
+		case 8:
+			if (!node.overrides.empty()) node.overrides.front().value = static_cast<int64_t>(300 + rng.below(50));
+			break;
 		default:
 			if (node.children.size() > 1) std::swap(node.children.front(), node.children[rng.below(node.children.size())]);
 			break;

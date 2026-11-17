@@ -2,6 +2,8 @@
 #include "edt_asset_picker.h"
 #include "edt_override_edit.h"
 #include "edt_reference.h"
+#include "edt_ui_metrics.h"
+#include <snk/gui/gui_theme.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
@@ -31,6 +33,12 @@ namespace
 
 	constexpr int max_depth = 8;
 	constexpr std::size_t max_listed = 50;
+
+	const gui::theme_semantic_colors& colors_of(const context& ctx)
+	{
+		static const gui::theme_semantic_colors defaults;
+		return ctx.colors ? *ctx.colors : defaults;
+	}
 
 	json::value zeros(std::size_t count)
 	{
@@ -346,7 +354,7 @@ namespace
 		// Where a null reads as the default, Unset of a value that is the default already would only write that null.
 		const bool can_unset = offers_unset && edt::schema_ui::unset_changes_value(field, *shown, ctx.registry);
 		if (here) {
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.75f, 1.0f, 1.0f });
+			ImGui::PushStyleColor(ImGuiCol_Text, colors_of(ctx).info);
 		}
 		bool clicked = false;
 		if (can_reset || offers_unset) {
@@ -386,7 +394,7 @@ namespace
 			}
 			ImGui::EndPopup();
 		}
-		ImGui::SameLine(0.0f, 4.0f);
+		ImGui::SameLine(0.0f, edt::em(4.0f));
 	}
 
 	bool draw_object(const desc::type_schema& schema, json::value& object, const std::string& prefix, const context& ctx, int depth)
@@ -621,7 +629,7 @@ namespace
 		}
 		std::vector<char> buffer(std::max<std::size_t>(query.size() + 64, 256), '\0');
 		std::copy(query.begin(), query.end(), buffer.begin());
-		ImGui::SetNextItemWidth(360.0f);
+		ImGui::SetNextItemWidth(edt::em(360.0f));
 		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
 			query = buffer.data();
 		}
@@ -632,7 +640,7 @@ namespace
 		} else {
 			ImGui::TextDisabled("%zu files", page.total);
 		}
-		if (ImGui::BeginChild("##list", ImVec2(420.0f, 260.0f))) {
+		if (ImGui::BeginChild("##list", ImVec2(edt::em(420.0f), edt::em(260.0f)))) {
 			for (std::size_t i = 0; i < page.items.size(); ++i) {
 				const edt::asset_record& record = *page.items[i].record;
 				const std::string what = record.desc_type ? *record.desc_type : record.type;
@@ -655,9 +663,9 @@ namespace
 		return picked;
 	}
 
-	void draw_red(const std::string& text)
+	void draw_red(const std::string& text, const context& ctx)
 	{
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+		ImGui::PushStyleColor(ImGuiCol_Text, colors_of(ctx).error);
 		ImGui::TextWrapped("%s", text.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -735,10 +743,10 @@ namespace
 			// The text of the field: its string, or the path of a {guid, path} reference.
 			const std::string shown = value.is_string() ? std::string(value.as_string()) : current;
 			if (const std::string problem = edt::schema_ui::tag_text_problem(shown); !problem.empty()) {
-				draw_red(problem);
+				draw_red(problem, ctx);
 			}
 			if (const auto refused = state.drop_refusals.find(field_id); refused != state.drop_refusals.end()) {
-				draw_red(refused->second);
+				draw_red(refused->second, ctx);
 			}
 			if (const auto noted = state.drop_notes.find(field_id); noted != state.drop_notes.end()) {
 				ImGui::TextDisabled("%s", noted->second.c_str());
@@ -746,7 +754,7 @@ namespace
 			if (catalog) {
 				const edt::picker::reference_state verdict = edt::picker::judge_text(edt::picker::filter_of(field), shown, *catalog);
 				if (verdict.severity == edt::picker::reference_state::level::error) {
-					draw_red(verdict.text);
+					draw_red(verdict.text, ctx);
 				} else if (verdict.severity == edt::picker::reference_state::level::note) {
 					ImGui::TextDisabled("%s", verdict.text.c_str());
 				}
@@ -882,7 +890,7 @@ namespace
 				changed |= draw_field(element, array[i], pointer + element.key, item_ctx, depth + 1);
 			}
 			if (const std::string problem = edt::schema_ui::list_item_problem(field, array[i], ctx.registry); !problem.empty()) {
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::PushStyleColor(ImGuiCol_Text, colors_of(ctx).error);
 				ImGui::TextWrapped("%s", problem.c_str());
 				ImGui::PopStyleColor();
 			}
@@ -946,7 +954,7 @@ namespace
 			ImGui::PushID(key.c_str());
 			std::vector<char> buffer(std::max<std::size_t>(key.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 			std::copy(key.begin(), key.end(), buffer.begin());
-			ImGui::SetNextItemWidth(140.0f);
+			ImGui::SetNextItemWidth(edt::em(140.0f));
 			const bool entered = ImGui::InputText("##key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
 			const ImGuiID row = ImGui::GetItemID();
 			if (ImGui::IsItemActivated()) {
@@ -980,7 +988,7 @@ namespace
 				remove = key;
 			}
 			if (const auto refused = state.rename_errors.find(row); refused != state.rename_errors.end()) {
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+				ImGui::PushStyleColor(ImGuiCol_Text, colors_of(ctx).error);
 				ImGui::TextWrapped("%s", refused->second.c_str());
 				ImGui::PopStyleColor();
 			}
@@ -999,7 +1007,7 @@ namespace
 		std::string& fresh = state.new_keys[ImGui::GetID("new_key")];
 		std::vector<char> buffer(std::max<std::size_t>(fresh.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 		std::copy(fresh.begin(), fresh.end(), buffer.begin());
-		ImGui::SetNextItemWidth(140.0f);
+		ImGui::SetNextItemWidth(edt::em(140.0f));
 		const bool entered = ImGui::InputTextWithHint("##new_key", "new key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
 		if (ImGui::IsItemEdited() || entered) {
 			fresh = buffer.data();

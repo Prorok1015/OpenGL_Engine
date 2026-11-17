@@ -1,6 +1,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include "edt_service_commands.h"
 #include <snk/resource/res_system.h>
+#include <snk/gui/gui_theme.h>
 #include <snk/common/engine_assert.h>
 #include <utility>
 
@@ -22,7 +23,10 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 	, m_documents(scene, m_events)
 	, m_jobs(tasks, &m_events)
 	, m_actions(commands)
+	, m_colors(std::make_unique<gui::theme_semantic_colors>())
 {
+	m_panels.set_colors(m_colors.get());
+	m_dialogs.set_colors(m_colors.get());
 	ASSERT_MSG(services.assembler() && services.descs(), "editor_context needs the desc system and the ecs assembler in the editor services");
 	m_documents.set_preview_kinds(m_asset_kinds, m_services, &m_problems);
 	adopt(register_job_commands(m_actions.commands(), m_jobs, agent_filter));
@@ -31,7 +35,21 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 	m_job_failures = report_failed_jobs(m_events, m_jobs, m_dialogs);
 }
 
-edt::editor_context::~editor_context() = default;
+edt::editor_context::~editor_context()
+{
+	m_panels.set_colors(nullptr);
+	m_dialogs.set_colors(nullptr);
+}
+
+const gui::theme_semantic_colors& edt::editor_context::colors() const
+{
+	return *m_colors;
+}
+
+void edt::editor_context::set_colors(const gui::theme_semantic_colors& colors)
+{
+	*m_colors = colors;
+}
 
 void edt::editor_context::track_module_scope(const registration_scope& scope)
 {

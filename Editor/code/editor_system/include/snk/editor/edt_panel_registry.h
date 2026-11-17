@@ -70,6 +70,10 @@ namespace edt
 
 		void render_all();
 
+		// Handed to every panel registered, now and later (panel_base::set_colors); a removed panel gets null back.
+		// editor_context sets its own and takes them back (null) in its destructor, before its members go.
+		void set_colors(const gui::theme_semantic_colors* colors);
+
 	private:
 		struct entry;
 		registration add_entry(panel_desc desc, callback_gate* gate);
@@ -78,5 +82,6 @@ namespace edt
 		std::vector<std::shared_ptr<entry>> m_entries;
 		std::uint64_t m_next_key = 1;
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+		const gui::theme_semantic_colors* m_colors = nullptr;
 	};
 }

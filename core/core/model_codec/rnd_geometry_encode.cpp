@@ -1,4 +1,4 @@
-#include <snk/render/geom/rnd_geometry_encode.h>
+#include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/common/eng_profiler.h>
 #include <boost/json/array.hpp>
 #include <boost/json/serialize.hpp>

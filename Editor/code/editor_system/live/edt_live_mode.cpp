@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/res_system.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
@@ -56,16 +57,16 @@ namespace {
 		return tag.is_valid() && prj::is_code_file(tag.relative());
 	}
 
-	ImVec4 color_of(edt::live_state state)
+	ImVec4 color_of(edt::live_state state, const gui::theme_semantic_colors& colors)
 	{
 		switch (state) {
 		case edt::live_state::building:
 		case edt::live_state::pending:
-		case edt::live_state::reloading: return { 0.45f, 0.75f, 1.f, 1.f };
-		case edt::live_state::settling: return { 0.9f, 0.8f, 0.35f, 1.f };
-		case edt::live_state::reloaded: return { 0.45f, 0.85f, 0.45f, 1.f };
+		case edt::live_state::reloading: return colors.info;
+		case edt::live_state::settling: return colors.warning;
+		case edt::live_state::reloaded: return colors.success;
 		case edt::live_state::errors:
-		case edt::live_state::reload_failed: return { 1.f, 0.4f, 0.35f, 1.f };
+		case edt::live_state::reload_failed: return colors.error;
 		case edt::live_state::off:
 		case edt::live_state::idle: break;
 		}
@@ -238,7 +239,7 @@ const std::string& edt::live_mode::reload_clock()
 	return m_clock_text;
 }
 
-void edt::live_mode::draw_status()
+void edt::live_mode::draw_status(const gui::theme_semantic_colors& colors)
 {
 	// Off: no widget, no spacing, no popup: the menu bar is exactly what it is without live mode.
 	if (!m_build.enabled()) return;
@@ -249,7 +250,7 @@ void edt::live_mode::draw_status()
 	const float right = ImGui::GetWindowWidth() - width - style.ItemSpacing.x * 2.f;
 	if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
 
-	ImGui::PushStyleColor(ImGuiCol_Text, color_of(status.state));
+	ImGui::PushStyleColor(ImGuiCol_Text, color_of(status.state, colors));
 	const bool clicked = ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2(width, 0.f));
 	ImGui::PopStyleColor();
 	if (clicked) ImGui::OpenPopup(k_status_popup);

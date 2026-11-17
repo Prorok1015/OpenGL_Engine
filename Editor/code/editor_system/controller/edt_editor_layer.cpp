@@ -1,6 +1,7 @@
 #include "edt_editor_layer.h"
 #include "edt_main_menu.h"
 #include <snk/editor/edt_editor_context.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -33,7 +34,7 @@ std::string edt::loading_screen_text(std::string_view level)
 	return std::format("Loading {}...", level);
 }
 
-void edt::draw_loading_screen(std::string_view text)
+void edt::draw_loading_screen(std::string_view text, const gui::theme_semantic_colors& colors)
 {
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(viewport->Pos);
@@ -46,7 +47,7 @@ void edt::draw_loading_screen(std::string_view text)
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 1.f));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, colors.backdrop);
 	const bool shown = ImGui::Begin(loading_screen_window, nullptr, flags);
 	ImGui::PopStyleColor();
 	ImGui::PopStyleVar(3);
