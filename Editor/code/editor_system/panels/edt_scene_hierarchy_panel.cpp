@@ -229,10 +229,11 @@ namespace edt
 
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
 			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
+			const float arrow_x = ImGui::GetCursorScreenPos().x;
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
 			probe_last_item(m_ui_probe.get(), "hierarchy", child.name);
-			if (kid.has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", child.name);
+			if (kid.has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", child.name, arrow_x);
 
 			// A click selects the node; its edits become override records on the instance
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
@@ -534,9 +535,10 @@ namespace edt
 		if (filter_active && has_children)
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
+		const float arrow_x = ImGui::GetCursorScreenPos().x;
 		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
 		probe_last_item(m_ui_probe.get(), "hierarchy", node.name);
-		if (has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", node.name);
+		if (has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", node.name, arrow_x);
 		if (by_agent && ImGui::IsItemHovered()) ImGui::SetTooltip("Changed by an agent (not saved or accepted yet)");
 
 		// ── selection ───────────────────────────────────────────────────────

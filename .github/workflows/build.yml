@@ -1212,8 +1212,8 @@ jobs:
           grep -q "opened project 'Sandbox' (${copy}/project.snkproj)" headless_out/outside/editor.log
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
-      # On the classic theme: its reference image (tools/headless/reference/checklist.png) was taken in it (#1109,
-      # #1130).
+      # On the classic theme: its reference image (tools/headless/reference/checklist.png) was taken in it
+      # (#1109, #1130).
       - name: Smoke run (checklist actions)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions --size 1920x1080 \

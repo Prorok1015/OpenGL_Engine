@@ -6,10 +6,11 @@
 
 namespace edt
 {
-	// The ImGui side of ui_probe: what the last item drew, clipped to the window's clip rect (a row a list cuts off is
-	// "visible" to ImGui; only its part inside counts, so a driver aiming at the centre does not land outside the panel).
+	// The ImGui side of ui_probe: what the last item drew, clipped to the window's clip rect (a row a list cuts off
+	// is "visible" to ImGui; only its part inside counts, so a driver aiming at the centre stays inside the panel).
 	// A null probe does nothing.
-	inline void probe_rect(ui_probe* probe, std::string_view area, std::string_view name, ImVec2 min, ImVec2 max, bool visible)
+	inline void probe_rect(
+		ui_probe* probe, std::string_view area, std::string_view name, ImVec2 min, ImVec2 max, bool visible)
 	{
 		if (!probe) return;
 		const ImDrawList* list = ImGui::GetWindowDrawList();
@@ -28,12 +29,13 @@ namespace edt
 		probe_rect(probe, area, name, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::IsItemVisible());
 	}
 
-	// The expand arrow of the tree node just drawn: its left end, GetTreeNodeToLabelSpacing wide, the row's height.
-	inline void probe_tree_arrow(ui_probe* probe, std::string_view area, std::string_view name)
+	// The expand arrow of the tree node just drawn, from arrow_x (the cursor x before the node: a SpanFullWidth row's
+	// rectangle starts at the panel's edge, not at its indent), GetTreeNodeToLabelSpacing wide, the row's height.
+	inline void probe_tree_arrow(ui_probe* probe, std::string_view area, std::string_view name, float arrow_x)
 	{
 		if (!probe) return;
-		const ImVec2 min = ImGui::GetItemRectMin();
-		probe_rect(probe, area, name, min, ImVec2(min.x + ImGui::GetTreeNodeToLabelSpacing(), ImGui::GetItemRectMax().y),
-			ImGui::IsItemVisible());
+		const ImVec2 min(arrow_x, ImGui::GetItemRectMin().y);
+		const ImVec2 max(arrow_x + ImGui::GetTreeNodeToLabelSpacing(), ImGui::GetItemRectMax().y);
+		probe_rect(probe, area, name, min, max, ImGui::IsItemVisible());
 	}
 }
