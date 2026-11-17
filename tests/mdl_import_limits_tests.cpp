@@ -183,8 +183,8 @@ BOOST_AUTO_TEST_CASE(ASceneTooDeep_IsRefused_AndNothingIsWritten)
 
 BOOST_AUTO_TEST_CASE(ASceneOfTooManyNodes_IsRefused_AndNothingIsWritten)
 {
-	const std::size_t count = static_cast<std::size_t>(mdl::k_max_scene_nodes) + 1;
-	const std::string text = gltf_of(count, [count](std::size_t i) {
+	constexpr std::size_t count = static_cast<std::size_t>(mdl::k_max_scene_nodes) + 1;
+	const std::string text = gltf_of(count, [](std::size_t i) {
 		std::vector<std::size_t> children;
 		if (i == 0) {
 			children.reserve(count - 1);
