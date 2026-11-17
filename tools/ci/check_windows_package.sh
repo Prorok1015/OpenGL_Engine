@@ -169,7 +169,9 @@ log="${work}/editor_headless"
 # what lies there (ALL APPLICATION PACKAGES), so the folder gets the same. Under `required` a decode without the
 # container is refused (an error in the log), and no copy of the decoder may appear: the copy is made only when the
 # decoder cannot run in place. First, so this run decodes the level's model itself.
-MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$root")" /grant "*S-1-15-2-1:(OI)(CI)RX" /T /Q > /dev/null
+if ! MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$root")" /grant "*S-1-15-2-1:(OI)(CI)RX" /T /Q; then
+	echo "::error::cannot give ALL APPLICATION PACKAGES read and execute on the unpacked package"; exit 1
+fi
 copies="$(cygpath -u "${LOCALAPPDATA}")/snk/decoder/snk_model_decoder"
 rm -rf "$copies"
 rc=0
@@ -182,11 +184,19 @@ if [[ $rc -ne 0 ]]; then echo "::error::editor.exe with the decoder sandbox requ
 if ! grep -q "level loaded: .*smoke_level.desc" "${log}_confined.stderr"; then
 	echo "::error::the packaged editor did not load the startup level with the decoder sandbox required"; exit 1
 fi
+# A decode cut off at exit leaves no error behind: the level must have settled.
+if grep -q "loads still pending after" "${log}_confined.stderr"; then
+	echo "::error::the startup level did not settle with the decoder sandbox required (#669)"; exit 1
+fi
 if grep -E '\[(error|critical)\]|cannot run in its sandbox|without OS isolation|without its system call filter' "${log}_confined.stderr"; then
 	echo "::error::the packaged decoder did not run in its AppContainer"; exit 1
 fi
 if [[ -e "$copies" ]]; then
 	echo "::error::the packaged decoder was copied to ${copies}: it did not run where it is installed"; exit 1
+fi
+# A confined decode logs nothing; the container's profile is made by the first confined start only.
+if [[ ! -d "$(cygpath -u "${LOCALAPPDATA}")/Packages/snk.model_decoder" ]]; then
+	echo "::error::no AppContainer profile snk.model_decoder: the decoder was never started confined"; exit 1
 fi
 rc=0
 # 1000, not 0: "level loaded" waits up to scene/level_settle_seconds = 10 s for the loads the level started (#669).
