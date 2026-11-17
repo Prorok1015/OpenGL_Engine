@@ -77,6 +77,15 @@ namespace edt
 		raw_reference_list references;
 		// A desc file bigger than asset_database::max_desc_bytes: its references (and __type) were not read.
 		bool references_skipped = false;
+		// A desc whose top-level "vertices" or "indices" is a range of its binary file (EPIC-79), once hashed; never one
+		// bigger than max_desc_bytes (not parsed).
+		bool binary_ranges = false;
+		// The file starts with res::desc_binary::magic, once hashed.
+		bool binary_header = false;
+		// A desc: its binary file <x>.<ext>.bin, and a .resource of that binary file, are regular files beside it in its
+		// layer (looked at by the walk and the batches, not hashed).
+		bool binary_beside = false;
+		bool binary_sidecar_beside = false;
 		// When the file's stamp (size, mtime) and the .resource's were taken, in ticks of
 		// std::filesystem::file_time_type::clock: a stamp this close to its check may not have moved for a change made
 		// just after (one tick of a coarse file system), so the cache trusts what was learned from it only after it was
@@ -153,6 +162,9 @@ namespace edt
 		bool references_skipped = false;
 		// The string "__guid" of a desc's root, as written (not checked).
 		std::optional<std::string> root_guid;
+		// As asset_record.
+		bool binary_ranges = false;
+		bool binary_header = false;
 	};
 
 	// What one batch of file changes did to the database.
@@ -169,6 +181,14 @@ namespace edt
 
 	// The kind of asset of a path by its suffix (lowercase compare).
 	std::string asset_type_of(std::string_view path);
+
+	// A name of a desc's binary file, "<x>.<ext>.bin" in any letter case (res::desc_binary_owner_name), not its staged file.
+	bool is_desc_binary_name(std::string_view name);
+	// A desc's binary file without its desc beside it (the walk lists a binary file only then) that starts with
+	// res::desc_binary::magic (#1129): it never gets an ID, and Problems shows it as asset.orphan_binary.
+	bool is_orphan_binary(const asset_record& record);
+	// The res:// path text of the .resource of the binary file of the desc `desc_path` ("<x>.<ext>.bin.resource").
+	std::string binary_sidecar_path(std::string_view desc_path);
 
 	// res::holds_id_before of two records (EPIC-57 section 10): the lowest layer, then the oldest, then the smaller path.
 	// Problems and the asset index both go by it, and so does the project migration's index.
@@ -338,6 +358,15 @@ namespace edt
 		asset_fix_result link_orphan(const res::tag& meta, const res::tag& file);
 		// Gives the .resource of `file` (in the top layer) a new ID, keeping everything else it holds.
 		asset_fix_result new_id_for_copy(const res::tag& file);
+		// Deletes `file`, a binary file of the top layer without its desc (is_orphan_binary); its bytes stay in the history
+		// for the undo, so one above max_deleted_binary_bytes is refused.
+		asset_fix_result delete_orphan_binary(const res::tag& file);
+		// Deletes the .resource of the binary file beside the desc `desc` (both in the top layer): a leftover of when the
+		// binary file had no desc.
+		asset_fix_result remove_binary_sidecar(const res::tag& desc);
+		static constexpr std::uint64_t max_deleted_binary_bytes = 64u * 1024u * 1024u;
+		// Tests only: called by delete_orphan_binary between its read of the file and the checks right before the removal.
+		void set_before_remove_for_tests(std::function<void()> hook) { m_before_remove = std::move(hook); }
 
 		static constexpr std::size_t max_history = 32;
 		// The label of the fix undo_last() would take back; none when there is nothing to undo.
@@ -503,6 +532,7 @@ namespace edt
 		std::function<bool()> m_vcs_busy;
 		bool m_ids_held_by_git = false;
 		std::function<std::optional<std::filesystem::path>()> m_git_dir;
+		std::function<void()> m_before_remove;
 		// An ID is being written: the batch its refresh applies gives none itself.
 		bool m_giving_ids = false;
 		std::chrono::steady_clock::time_point m_last_poll{};

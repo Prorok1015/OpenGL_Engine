@@ -17,26 +17,6 @@
 #include <stdexcept>
 #include <string_view>
 
-namespace
-{
-	// The desc as it is before a write, under the save lock: what a failed commit puts back. nullopt when there is none.
-	std::optional<std::vector<std::byte>> previous_desc_of(res::resource_system& system, const res::tag& file)
-	{
-		if (!system.exists(file)) {
-			return std::nullopt;
-		}
-		const auto current = system.fetch_data(file);
-		if (!current) {
-			return std::nullopt;
-		}
-		const std::vector<std::byte>& bytes = current->get();
-		if (current->has_error()) {
-			return std::nullopt;
-		}
-		return bytes;
-	}
-}
-
 std::string rnd::geometry_write_problem(const res::tag& file, const geometry_desc& geometry, const geometry_file_options& options)
 {
 	return geometry_write_problem(file, geometry_view_of(geometry), options);
@@ -59,14 +39,14 @@ std::string rnd::write_geometry_files(res::resource_system& system, const res::t
 	detail::geometry_chunks chunks;
 	detail::fill_geometry_chunks(view, chunks);
 	std::string desc_error;
-	std::optional<std::vector<std::byte>> previous_desc;
+	res::desc_binary::previous_desc previous;
 	std::vector<std::byte> written_desc;
 	try {
 		// Held across save() (it nests) and the take-back of a failed commit: no other save of the pair comes between.
 		const res::desc_binary::save_lock lock(file);
 		const res::desc_binary_written written = res::desc_binary::save(system, file, chunks.chunks,
 			[&](std::span<const res::binary_range> ranges) {
-				previous_desc = previous_desc_of(system, file);
+				previous = res::desc_binary::read_previous_desc(system, lock, file);
 				written_desc = detail::geometry_desc_bytes(view, options, ranges);
 				if (!system.store_sync(file, written_desc)) {
 					desc_error = std::format("'{}' could not be written (see the log); its old pair stays readable", file.view());
@@ -84,9 +64,11 @@ std::string rnd::write_geometry_files(res::resource_system& system, const res::t
 			// No desc names the staged file: it is stale, the caller may take it away.
 			if (left) left->push_back(staged);
 			return desc_error.empty() ? written.error : desc_error;
-		case res::desc_binary_save_step::commit:
-			if (const res::file_operation back = res::desc_binary::take_back(system, lock, file, written, written_desc, previous_desc);
-				!back) {
+		case res::desc_binary_save_step::commit: {
+			const res::file_operation back = res::desc_binary::take_back(system, lock, file, written, written_desc, previous);
+			// The new desc may be on disk either way: what was loaded of the old one must not stay.
+			system.signal_changed(file);
+			if (!back) {
 				// The desc stays and needs the staged file: both go back together or not at all.
 				if (left) {
 					left->push_back(staged);
@@ -94,8 +76,12 @@ std::string rnd::write_geometry_files(res::resource_system& system, const res::t
 				}
 				return std::format("{}; taking it back failed too, the desc and its staged file stay: {}", written.error, back.error);
 			}
-			system.signal_changed(file);
-			return std::format("{}; {}", written.error, previous_desc ? "the previous desc was put back" : "the desc was removed");
+			using origin = res::desc_binary::previous_desc::origin;
+			const std::string_view done = previous.from == origin::top_layer ? "the previous desc was put back"
+				: previous.from == origin::lower_layer ? "the new desc was removed, the one of a lower layer shows again"
+				: "the desc was removed";
+			return std::format("{}; {}", written.error, done);
+		}
 		}
 	} catch (const std::logic_error& e) {
 		// A tag outside the writes the resource system allows.

@@ -17,6 +17,7 @@
 #include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -433,6 +434,119 @@ BOOST_AUTO_TEST_CASE(ADescThatCannotBeTakenBack_KeepsItsStagedFile_AndNamesBoth)
 	const std::string read_error = rnd::read_geometry_file(root(), tag, desc_on_disk("stuck.geom.desc"), read);
 	BOOST_REQUIRE_MESSAGE(read_error.empty(), read_error);
 	BOOST_TEST((read.indices == triangles(2).indices));
+}
+
+// #1093: a desc that could not be taken back is still signalled: the cache must not keep the old one while the new one is
+// on disk.
+BOOST_AUTO_TEST_CASE(ADescThatCannotBeTakenBack_IsStillSignalledChanged)
+{
+	const res::tag tag{ "geomfiles://a/signalled.geom.desc" };
+	BOOST_REQUIRE(rnd::write_geometry_files(root(), tag, triangles(1)).empty());
+	tasks.drain_main();
+	int signals = 0;
+	int owner = 0;
+	root().watch(tag, &owner, [&signals](const res::tag&) { ++signals; });
+	std::atomic<int> desc_writes{ 0 };
+	failures = 2;
+	res::detail::write_hook_access::set(*resolver, [&](res::detail::write_stage stage, const fs::path& tmp) {
+		if (stage != res::detail::write_stage::after_check) return;
+		const std::string leaf = tmp.filename().string();
+		if (leaf.starts_with(".signalled.geom.desc.") && desc_writes.fetch_add(1) >= 1) {
+			throw std::runtime_error("a write the test fails");
+		}
+		if (leaf.starts_with(".signalled.geom.bin.") && !leaf.starts_with(".signalled.geom.bin.new.") && failures.fetch_sub(1) > 0) {
+			throw std::runtime_error("a write the test fails");
+		}
+	});
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(2));
+	stop_failing();
+	BOOST_TEST(mentions(error, "taking it back failed too"));
+	tasks.drain_main();
+	BOOST_TEST(signals >= 1);
+	root().unwatch(tag, &owner);
+}
+
+// #1093: the desc a failed save replaced was a lower layer's: the new one goes and the lower one shows again with its own
+// binary file; no copy of it is written on top, where it would have none.
+BOOST_AUTO_TEST_CASE(ACommitThatFailsTwiceOverALowerLayersDesc_RemovesTheNewOne)
+{
+	test_util::temp_dir layers{ "rnd_geometry_files_layers" };
+	const fs::path lower = layers.path() / "lower";
+	const fs::path upper = layers.path() / "upper";
+	fs::create_directories(lower / "a");
+	fs::create_directories(upper / "a");
+	const res::tag tag{ "geomlayers://a/low.geom.desc" };
+	const rnd::geometry_files old = rnd::encode_geometry_files(tag, triangles(1));
+	BOOST_REQUIRE_MESSAGE(old, old.error);
+	const auto put = [](const fs::path& file, const std::vector<std::byte>& bytes) {
+		std::ofstream out(file, std::ios::binary);
+		out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+	};
+	put(lower / "a" / "low.geom.desc", old.desc);
+	put(lower / "a" / "low.geom.bin", old.binary);
+
+	struct mounted
+	{
+		res::resource_system& system;
+		~mounted() { system.unregistrate_resolver("geomlayers"); }
+	};
+	auto& layered = root().registrate_resolver<res::vfs_resolver>("geomlayers", std::vector<fs::path>{ lower, upper });
+	const mounted unmount{ root() };
+	failures = 2;
+	res::detail::write_hook_access::set(layered, [this](res::detail::write_stage stage, const fs::path& tmp) {
+		const std::string leaf = tmp.filename().string();
+		if (stage == res::detail::write_stage::after_check && leaf.starts_with(".low.geom.bin.") && !leaf.starts_with(".low.geom.bin.new.")
+			&& failures.fetch_sub(1) > 0) {
+			throw std::runtime_error("a write the test fails");
+		}
+	});
+	std::vector<res::tag> left;
+	const std::string error = rnd::write_geometry_files(root(), tag, triangles(3), {}, &left);
+	res::detail::write_hook_access::set(layered, nullptr);
+	BOOST_TEST(mentions(error, "a lower layer shows again"));
+	BOOST_TEST(left.empty());
+	for (const char* name : { "low.geom.desc", "low.geom.bin", "low.geom.bin.new" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_TEST(!fs::exists(upper / "a" / name)); }
+	}
+	rnd::geometry_desc read;
+	const std::string read_error = rnd::read_geometry_file(root(), tag, json::parse(text_of(old.desc)).as_object(), read);
+	BOOST_REQUIRE_MESSAGE(read_error.empty(), read_error);
+	BOOST_TEST((read.indices == triangles(1).indices));
+}
+
+// #1093: a desc that was there but could not be read is not "no desc": its take-back removes nothing and names the pair.
+BOOST_AUTO_TEST_CASE(APreviousDescThatCannotBeRead_IsNotTakenForNone)
+{
+	// A folder at the desc's name is there and cannot be read as a desc.
+	const res::tag folder{ "geomfiles://a/folder.geom.desc" };
+	fs::create_directories(dir.path() / "a" / "folder.geom.desc");
+	{
+		const res::desc_binary::save_lock lock(folder);
+		const res::desc_binary::previous_desc previous = res::desc_binary::read_previous_desc(root(), lock, folder);
+		BOOST_TEST((previous.from == res::desc_binary::previous_desc::origin::unreadable));
+		BOOST_TEST(!previous.error.empty());
+	}
+
+	const res::tag tag{ "geomfiles://a/unread.geom.desc" };
+	const std::array<std::byte, 16> data{};
+	const res::binary_chunk chunk{ std::span<const std::byte>(data), "u8" };
+	const std::string text = R"({"__type":"geometry_desc"})";
+	std::vector<std::byte> desc_bytes(text.size());
+	std::memcpy(desc_bytes.data(), text.data(), text.size());
+	const res::desc_binary::save_lock lock(tag);
+	fail_writes_of("unread.geom.bin", 2);
+	const res::desc_binary_written written = res::desc_binary::save(root(), tag, std::span<const res::binary_chunk>(&chunk, 1),
+		[&](std::span<const res::binary_range>) { return root().store_sync(tag, desc_bytes); });
+	stop_failing();
+	BOOST_REQUIRE((written.failed_step == res::desc_binary_save_step::commit));
+	res::desc_binary::previous_desc unreadable;
+	unreadable.from = res::desc_binary::previous_desc::origin::unreadable;
+	unreadable.error = "a read the test fails";
+	const res::file_operation back = res::desc_binary::take_back(root(), lock, tag, written, desc_bytes, unreadable);
+	BOOST_TEST(!back);
+	BOOST_TEST(mentions(back.error, "a read the test fails"));
+	BOOST_TEST((bytes_on_disk("unread.geom.desc") == desc_bytes));
+	BOOST_TEST(fs::exists(dir.path() / "a" / "unread.geom.bin.new"));
 }
 
 // Topology is the caller's to say: only triangles get a binary file, the rest stays in arrays that name it.
