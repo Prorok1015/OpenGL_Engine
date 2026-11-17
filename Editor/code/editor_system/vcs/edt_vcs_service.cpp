@@ -11,6 +11,7 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
+#include <deque>
 #include <array>
 #include <cctype>
 #include <atomic>
@@ -3908,38 +3909,42 @@ std::vector<std::filesystem::path> edt::config_files_to_guard(const std::vector<
 		if (!path.empty() && std::find(guarded.begin(), guarded.end(), path) == guarded.end()) guarded.push_back(std::move(path));
 	};
 	// A checkout may repoint any link on the way, a folder link included, not only the first and the last: each one met
-	// while resolving the path is guarded, as written. A chain longer than this is no configuration a person wrote.
+	// while resolving the path is guarded, as written. The path is resolved one component at a time, the way the system
+	// does: a link's target is walked component by component too, and ".." leaves the folder actually reached, never a
+	// lexical one (a target "current/../x" goes through the link current). A chain longer than this is no
+	// configuration a person wrote, and the system refuses it too.
 	constexpr int k_max_links = 40;
 	for (const fs::path& file : files) {
 		if (file.empty()) continue;
 		std::error_code ec;
-		fs::path current = fs::absolute(file, ec).lexically_normal();
+		const fs::path written = fs::absolute(file, ec).lexically_normal();
 		if (ec) continue;
-		add(current);
-		for (int links = 0; links < k_max_links; ++links) {
-			fs::path walked = current.root_path();
-			fs::path rest;
-			bool followed = false;
-			const fs::path relative = current.relative_path();
-			for (auto part = relative.begin(); part != relative.end(); ++part) {
-				if (followed) {
-					rest /= *part;
-					continue;
-				}
-				walked /= *part;
-				std::error_code link_ec;
-				if (!fs::is_symlink(walked, link_ec)) continue;
-				const fs::path target = fs::read_symlink(walked, link_ec);
-				if (link_ec) break;
-				add(walked);
-				walked = (target.is_absolute() ? target : walked.parent_path() / target);
-				followed = true;
+		add(written);
+		const fs::path written_relative = written.relative_path();
+		std::deque<fs::path> pending(written_relative.begin(), written_relative.end());
+		fs::path walked = written.root_path();
+		int links = 0;
+		while (!pending.empty() && links <= k_max_links) {
+			const fs::path part = std::move(pending.front());
+			pending.pop_front();
+			if (part.empty() || part == ".") continue;
+			if (part == "..") {
+				walked = walked.parent_path();
+				continue;
 			}
-			if (!followed) break;
-			current = (walked / rest).lexically_normal();
-			add(current);
+			walked /= part;
+			std::error_code link_ec;
+			if (!fs::is_symlink(walked, link_ec)) continue;
+			const fs::path target = fs::read_symlink(walked, link_ec);
+			if (link_ec) break;
+			add(walked);
+			++links;
+			const fs::path relative = target.relative_path();
+			pending.insert(pending.begin(), relative.begin(), relative.end());
+			walked = target.is_absolute() ? target.root_path() : walked.parent_path();
 		}
-		const fs::path resolved = fs::weakly_canonical(current, ec);
+		if (pending.empty()) add(walked);
+		const fs::path resolved = fs::weakly_canonical(written, ec);
 		if (!ec) add(resolved);
 	}
 	return guarded;

@@ -3020,11 +3020,31 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatRepointsALinkInTheMiddleOfTheConfigura
 
 	const json::value refused = finish(service->start_checkout("folder_off", cmd::origin_kind::agent));
 	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("editor's configuration file")
+		!= std::string::npos, json::serialize(refused));
 	BOOST_TEST(head_of(repo) == main_head);
 	const auto guarded = edt::config_files_to_guard({ folder / "editor.cfg" });
 	for (const fs::path link : { folder / "editor.cfg", folder / "chosen.cfg", folder / "current" }) {
 		BOOST_TEST((std::find(guarded.begin(), guarded.end(), fs::absolute(link).lexically_normal()) != guarded.end()), link);
 	}
+}
+
+// #1090 (review): ".." in a link's target leaves the folder the system reached, not a lexical one: a target
+// "current/../sandbox.cfg" goes through the folder link current, which a branch may repoint.
+BOOST_AUTO_TEST_CASE(ConfigFilesToGuard_FollowsALinkBeforeTheDotDotAfterIt)
+{
+	isolate_config();
+	const fs::path folder = make_plain_repository("config_files_dotdot") / "cfg";
+	write(folder / "sets" / "on" / "sandbox.cfg", "a: 1\n");
+	fs::create_directories(folder / "sets" / "on" / "sub");
+	fs::create_symlink("sets/on/sub", folder / "current");
+	fs::create_symlink("current/../sandbox.cfg", folder / "editor.cfg");
+	const auto guarded = edt::config_files_to_guard({ folder / "editor.cfg" });
+	const auto has = [&guarded](const fs::path& path) { return std::find(guarded.begin(), guarded.end(), path) != guarded.end(); };
+	BOOST_TEST(has(fs::absolute(folder / "editor.cfg").lexically_normal()));
+	BOOST_TEST(has(fs::absolute(folder / "current").lexically_normal()));
+	BOOST_TEST(has(fs::absolute(folder / "sets" / "on" / "sandbox.cfg").lexically_normal()));
+	BOOST_TEST(!has(fs::absolute(folder / "sandbox.cfg").lexically_normal()));
 }
 
 // #1090: a link is guarded as itself and as what it resolves to; duplicates and empty entries go.

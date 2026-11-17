@@ -213,18 +213,21 @@ std::vector<std::filesystem::path> cfg::config_files_of(const std::filesystem::p
 	std::vector<std::filesystem::path> files;
 	std::vector<std::filesystem::path> visiting;
 	const auto walk = [&files, &visiting](const auto& self, const std::filesystem::path& path) -> void {
-		const std::filesystem::path normal = std::filesystem::absolute(path).lexically_normal();
-		if (visiting.size() >= k_max_extends_depth || std::find(visiting.begin(), visiting.end(), normal) != visiting.end()) {
+		std::error_code ec;
+		const std::filesystem::path normal = std::filesystem::absolute(path, ec).lexically_normal();
+		if (ec || visiting.size() >= k_max_extends_depth || std::find(visiting.begin(), visiting.end(), normal) != visiting.end()) {
 			return;
 		}
 		files.push_back(normal);
-		YAML::Node config;
+		// Whatever is there, a link checked out as text or a file that is no config, ends this branch, never the caller.
+		YAML::Node bases;
 		try {
-			config = load_yaml_file(normal);
+			const YAML::Node config = load_yaml_file(normal);
+			if (!config.IsMap()) return;
+			bases = config[EXTENDS_KEY];
 		} catch (const std::exception&) {
 			return;
 		}
-		const YAML::Node bases = config[EXTENDS_KEY];
 		if (!bases || !bases.IsSequence()) {
 			return;
 		}
