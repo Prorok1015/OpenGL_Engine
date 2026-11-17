@@ -180,7 +180,7 @@ namespace
 				++left;
 				continue;
 			}
-			const std::string_view binary = res::desc_binary::binary_tag(res::tag{ file.path })->view();
+			const std::string binary(res::desc_binary::binary_tag(res::tag{ file.path })->view());
 			context.warn(done.outcome == geometry_outcome::binary_kept
 				? std::format("{}: vertices and indices moved to {}, which an interrupted run had already written", file.path, binary)
 				: std::format("{}: vertices and indices moved to {}", file.path, binary));
