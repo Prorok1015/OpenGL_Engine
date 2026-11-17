@@ -1,5 +1,7 @@
 #include "edt_input_actions_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_platform_backend.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 
 namespace edt
@@ -82,15 +84,17 @@ namespace edt
 		} else {
 			ImGui::TextDisabled("Click a binding to change it");
 		}
-		if (!actions->user_file_saved()) ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "The player's bindings could not be saved");
+		if (!actions->user_file_saved()) {
+			ImGui::TextColored(colors().warning, "The player's bindings could not be saved");
+		}
 		ImGui::Separator();
 
 		constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
 		if (ImGui::BeginTable("##input_actions_rows", 3, flags)) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 150.f);
+			ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, em(150.f));
 			ImGui::TableSetupColumn("Bindings");
-			ImGui::TableSetupColumn("##reset", ImGuiTableColumnFlags_WidthFixed, 60.f);
+			ImGui::TableSetupColumn("##reset", ImGuiTableColumnFlags_WidthFixed, em(60.f));
 			ImGui::TableHeadersRow();
 			for (const input_actions_view::action_row& row : m_rows) {
 				ImGui::PushID(row.name.c_str());
@@ -99,7 +103,7 @@ namespace edt
 				ImGui::TextUnformatted(row.name.c_str());
 				if (!row.shares_with.empty()) {
 					ImGui::SameLine();
-					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "!");
+					ImGui::TextColored(colors().warning, "!");
 					if (ImGui::IsItemHovered()) {
 						std::string others;
 						for (const std::string& other : row.shares_with) others += (others.empty() ? "" : ", ") + other;
@@ -114,7 +118,7 @@ namespace edt
 					if (waiting) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 					if (ImGui::Button(label.c_str())) asked = { request::kind::assign, row.name, slot };
 					if (waiting) ImGui::PopStyleColor();
-					ImGui::SameLine(0.f, 2.f);
+					ImGui::SameLine(0.f, em(2.f));
 					if (ImGui::SmallButton("x")) asked = { request::kind::remove, row.name, slot };
 					ImGui::SameLine();
 					ImGui::PopID();

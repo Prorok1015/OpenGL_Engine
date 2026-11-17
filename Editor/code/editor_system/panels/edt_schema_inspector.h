@@ -15,6 +15,7 @@
 #include <memory>
 
 namespace edt::picker { class catalog; struct page_cache; }
+namespace gui { struct theme_semantic_colors; }
 
 // The inspector UI generated from a desc::type_schema (DESC_SCHEMA.md 2.5): every field gets the widget its kind and
 // hints ask for, and what the user changes is written back as the JSON pointers that differ, nothing else.
@@ -228,6 +229,8 @@ namespace edt::schema_ui
 		const edt::picker::catalog* assets = nullptr;
 		// Not null: every field gets its mark (set here / inherited) and the menu of it (Reset, Unset). Null: no marks.
 		const field_origin* origin = nullptr;
+		// The editor's semantic colours (panel_base::colors()); null: the defaults (tests).
+		const gui::theme_semantic_colors* colors = nullptr;
 	};
 
 	// Draws the visible fields of `schema` for `object` (the whole component, or a nested structure) and edits it in

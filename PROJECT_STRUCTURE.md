@@ -49,6 +49,7 @@ OpenGL_Engine/
 │   ├── core/                       ← "core" lib: engine foundation
 │   │   ├── ecs/                    ← EnTT-based ECS (system_factory, set channel; see docs/roadmap/design/WORLD_MESSAGING.md)
 │   │   ├── resource/               ← Resource system (VFS resolvers, adapters, cache)
+│   │   ├── image/                  ← Image decoding (stb_image); resource links it
 │   │   ├── desc/                   ← Descriptor system (JSON-based, desc_system)
 │   │   ├── config/                 ← Configuration system (include_base/cfg_variables.h: CFG_VAR_DEF_*, base-only; cfg_api.h: read-only config_view)
 │   │   ├── application/            ← App lifecycle, module_loader (module states, depends_on order)
@@ -64,7 +65,6 @@ OpenGL_Engine/
 │       ├── scene/                  ← Scene mgmt, descs; scene/level/ (context_manager, context_set, world_context, extractors)
 │       ├── render/render_system/   ← Render pipeline (passes/, geom/, shader/, skinning/, texture/)
 │       ├── gui/gui_system/         ← ImGui integration
-│       ├── image/                  ← Image loading
 │       ├── input/                  ← ECS input system
 │       └── game/                   ← The module layer (gs_game_module, the layout key and ABI revisions, input actions) and the engine bodies of the frame stages (gs_engine_frame_stages); the loop itself is core/core/application (app::loop_service)
 │

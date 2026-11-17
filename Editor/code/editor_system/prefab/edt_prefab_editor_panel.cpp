@@ -1,12 +1,14 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_close.h"
+#include "edt_ui_metrics.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/resource/res_tag.h>
+#include <snk/gui/gui_theme.h>
 #include <cfloat>
 #include <imgui.h>
 #include <entt/entt.hpp>
@@ -36,8 +38,8 @@ namespace edt
 	{
 		// The unapplied-edits mark is in the window's title; ### keeps its ImGui id while the text changes.
 		m_title = (m_ctx && m_ctx->is_open() ? "Prefab: " + m_ctx->display_title() : std::string{ "Prefab Editor" }) + "###prefab_editor";
-		ImGui::SetNextWindowSize(ImVec2(900.f, 650.f), ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowSizeConstraints(ImVec2(480.f, 320.f), ImVec2(FLT_MAX, FLT_MAX));
+		ImGui::SetNextWindowSize(ImVec2(em(900.f), em(650.f)), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(em(480.f), em(320.f)), ImVec2(FLT_MAX, FLT_MAX));
 	}
 
 	void prefab_editor_panel::on_render()
@@ -68,7 +70,7 @@ namespace edt
 
 	void prefab_editor_panel::render_tree()
 	{
-		if (ImGui::BeginChild("##prefab_tree", ImVec2(200.f, 0.f), ImGuiChildFlags_Borders)) {
+		if (ImGui::BeginChild("##prefab_tree", ImVec2(em(200.f), 0.f), ImGuiChildFlags_Borders)) {
 			if (const scn::prefab_desc* working = m_ctx->working()) {
 				std::vector<std::uint64_t> path;
 				render_tree_node(working->get_root(), path);
@@ -137,7 +139,7 @@ namespace edt
 		}
 		if (m_banner_later) {
 			// Later keeps a compact line, so the way out stays one click away.
-			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "Changed on disk");
+			ImGui::TextColored(colors().warning, "Changed on disk");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Reload")) {
 				m_error = m_ctx->reload();
@@ -155,7 +157,8 @@ namespace edt
 			}
 			return;
 		}
-		ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
+		ImGui::TextColored(colors().warning,
+			"The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
 		if (ImGui::Button("Reload")) {
 			m_error = m_ctx->reload();
 		}

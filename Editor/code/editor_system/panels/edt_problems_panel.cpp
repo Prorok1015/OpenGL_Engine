@@ -1,4 +1,6 @@
 #include "edt_problems_panel.h"
+#include "edt_ui_metrics.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -13,14 +15,14 @@ namespace {
 		return static_cast<std::size_t>(severity);
 	}
 
-	ImVec4 color_of(edt::problem_severity severity)
+	ImVec4 color_of(edt::problem_severity severity, const gui::theme_semantic_colors& colors)
 	{
 		switch (severity) {
-		case edt::problem_severity::error: return { 1.f, 0.3f, 0.3f, 1.f };
-		case edt::problem_severity::warning: return { 1.f, 0.8f, 0.f, 1.f };
-		case edt::problem_severity::note: return { 0.7f, 0.7f, 0.7f, 1.f };
+		case edt::problem_severity::error: return colors.error;
+		case edt::problem_severity::warning: return colors.warning;
+		case edt::problem_severity::note: return colors.text_secondary;
 		}
-		return { 1.f, 1.f, 1.f, 1.f };
+		return ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	}
 
 	// Well-formed UTF-8 (no overlongs, no surrogates, at most U+10FFFF).
@@ -200,7 +202,7 @@ void edt::problems_panel::on_render()
 	std::optional<std::size_t> menu_opened;
 	if (ImGui::BeginTable("##problems_rows", 3, flags)) {
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, 70.f);
+		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, dpi_px(70.f));
 		ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_WidthStretch, 1.f);
 		ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch, 3.f);
 		ImGui::TableHeadersRow();
@@ -216,7 +218,7 @@ void edt::problems_panel::on_render()
 				ImGui::PushID(entry.id.c_str());
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
-				ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity));
+				ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity, colors()));
 				ImGui::Selectable(problem_severity_name(severity), false,
 					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 				ImGui::PopStyleColor();

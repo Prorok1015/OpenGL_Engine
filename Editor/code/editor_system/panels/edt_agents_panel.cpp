@@ -1,15 +1,14 @@
 #include "edt_agents_panel.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <algorithm>
 #include <cctype>
 #include <format>
 #include <utility>
 
 namespace {
-	const ImVec4 k_error_color{ 1.f, 0.3f, 0.3f, 1.f };
-	const ImVec4 k_warning_color{ 1.f, 0.8f, 0.f, 1.f };
-	const ImVec4 k_ok_color{ 0.4f, 0.9f, 0.4f, 1.f };
 	constexpr std::size_t k_banner_line_bytes = 120;
 	constexpr const char* k_review_popup = "agent_policy_review";
 
@@ -23,7 +22,7 @@ namespace {
 	{
 		bool changed = false;
 		const char* shown = value ? cmd::to_string(*value) : "default";
-		ImGui::SetNextItemWidth(100.f);
+		ImGui::SetNextItemWidth(edt::em(100.f));
 		if (ImGui::BeginCombo(id, shown)) {
 			if (ImGui::Selectable("default", !value.has_value())) {
 				value.reset();
@@ -102,7 +101,7 @@ edt::agents_panel::agents_panel(agent_policy_model& model, agents_panel_services
 
 void edt::agents_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(700.f, 640.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(700.f), em(640.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -142,7 +141,7 @@ void edt::agents_panel::draw_banner()
 	if (ImGui::BeginChild("##approval_banner", ImVec2(0.f, ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_None,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
 		if (pending) {
-			ImGui::PushStyleColor(ImGuiCol_Text, k_warning_color);
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().warning);
 			ImGui::TextUnformatted("The project's agent policy lets agents do more than you approved.");
 			ImGui::PopStyleColor();
 			ImGui::SameLine();
@@ -230,7 +229,7 @@ void edt::agents_panel::draw_server()
 			: "The agent server did not start (is the port taken?).";
 		m_message_is_error = !took;
 	}
-	ImGui::SetNextItemWidth(120.f);
+	ImGui::SetNextItemWidth(em(120.f));
 	ImGui::InputInt("Port (0 = any free port)", &m_port_edit, 0, 0);
 	m_port_edit = std::clamp(m_port_edit, 0, 65535);
 	if (on) {
@@ -299,12 +298,13 @@ void edt::agents_panel::draw_policy()
 	m_scope = scope_index == 0 ? policy_scope::project : policy_scope::personal;
 
 	if (const std::string& error = m_model.error_of(m_scope); !error.empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, k_error_color);
+		ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 		ImGui::TextWrapped("This file cannot be used and everything is denied until it is fixed: %s", display_safe(error).c_str());
 		ImGui::PopStyleColor();
 	}
 	if (m_model.base_changed(m_scope)) {
-		ImGui::TextColored(k_warning_color, "The file changed on disk while you were editing. Revert to read it again.");
+		ImGui::TextColored(colors().warning,
+			"The file changed on disk while you were editing. Revert to read it again.");
 	}
 
 	if (m_scope == policy_scope::project) {
@@ -338,7 +338,7 @@ void edt::agents_panel::draw_policy()
 
 	if (ImGui::TreeNode("Single commands")) {
 		const char* current = label_of(m_command_category);
-		ImGui::SetNextItemWidth(160.f);
+		ImGui::SetNextItemWidth(em(160.f));
 		if (ImGui::BeginCombo("Category", current)) {
 			for (const cmd::agent_category category : settable_categories()) {
 				if (ImGui::Selectable(label_of(category), category == m_command_category)) m_command_category = category;
@@ -398,7 +398,7 @@ void edt::agents_panel::draw_vcs(policy_scope scope)
 			text = list.value->has_value() ? ((*list.value)->empty() ? std::string("none") : join_pattern_list(**list.value)) : std::string{};
 			m_list_loaded[index] = true;
 		}
-		ImGui::SetNextItemWidth(360.f);
+		ImGui::SetNextItemWidth(em(360.f));
 		if (ImGui::InputTextWithHint(list.label, "(default)", &text)) {
 			const std::string cleaned = trimmed(text);
 			if (cleaned.empty()) {
@@ -425,7 +425,7 @@ void edt::agents_panel::draw_vcs(policy_scope scope)
 	for (const flag_def& flag : flags) {
 		ImGui::PushID(flag.label);
 		const char* shown_value = !flag.value->has_value() ? "default (off)" : (**flag.value ? "on" : "off");
-		ImGui::SetNextItemWidth(120.f);
+		ImGui::SetNextItemWidth(em(120.f));
 		if (ImGui::BeginCombo(flag.label, shown_value)) {
 			if (ImGui::Selectable("default (off)", !flag.value->has_value())) m_model.set_vcs_flag(scope, flag.key, std::nullopt);
 			ImGui::BeginDisabled(scope == policy_scope::personal);
@@ -465,7 +465,10 @@ void edt::agents_panel::draw_footer()
 	ImGui::EndDisabled();
 	if (dirty && m_model.apply_drops_pending()) {
 		ImGui::SameLine();
-		ImGui::TextColored(k_warning_color, "Applying replaces the file with the approved version plus your edits.");
+		ImGui::TextColored(colors().warning, "Applying replaces the file with the approved version plus your edits.");
 	}
-	if (!m_message.empty()) ImGui::TextColored(m_message_is_error ? k_error_color : k_ok_color, "%s", display_safe(m_message).c_str());
+	if (!m_message.empty()) {
+		const ImVec4& color = m_message_is_error ? colors().error : colors().success;
+		ImGui::TextColored(color, "%s", display_safe(m_message).c_str());
+	}
 }

@@ -6,11 +6,13 @@
 #include "edt_agent_server_settings.h"
 #include "edt_agents_panel.h"
 #include "edt_editor_layer.h"
+#include "edt_ui_metrics.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/common/engine_assert.h>
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_panel_registry.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <cstdint>
 #include <format>
@@ -76,7 +78,9 @@ void edt::agent_ui_component::draw_policy_notice()
 	}
 	if (m_notice_dismissed_key == pending_key) return;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),
+	ImGui::SetNextWindowPos(
+		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f),
+			viewport->WorkPos.y + viewport->WorkSize.y - em(12.f)),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
@@ -108,8 +112,9 @@ void edt::agent_ui_component::draw_status()
 	std::string label = pending ? std::string("Agent policy: approve")
 		: questions > 0 ? std::format("Agent: {} waiting", questions) : std::format("Agent: {}", connected);
 	label += "###agent_status";
-	const ImVec4 color = pending || questions > 0 ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f)
-		: flash ? ImVec4(0.4f, 0.85f, 0.4f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const gui::theme_semantic_colors& colors = m_ports.context.colors();
+	const ImVec4 color = pending || questions > 0 ? colors.agent
+		: flash ? colors.success : ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	const float width = ImGui::CalcTextSize(label.c_str(), nullptr, true).x;
 	ImGui::PushStyleColor(ImGuiCol_Text, color);
 	const bool clicked = ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2(width, 0.f));

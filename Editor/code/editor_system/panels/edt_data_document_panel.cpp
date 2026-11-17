@@ -1,18 +1,14 @@
 #include "edt_data_document_panel.h"
+#include <snk/gui/gui_theme.h>
 #include "edt_data_document.h"
 #include "edt_data_document_view.h"
 #include "edt_schema_inspector.h"
+#include "edt_ui_metrics.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_services.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
-
-namespace
-{
-	constexpr ImVec4 k_warning{ 1.0f, 0.8f, 0.3f, 1.0f };
-	constexpr ImVec4 k_error{ 1.0f, 0.4f, 0.4f, 1.0f };
-}
 
 edt::data_document_panel::data_document_panel(data_document& document, editor_services& services, document_id id, bool quiet)
 	: panel_base(data_document_panel_id(id), data_document_window_title(document, id))
@@ -25,7 +21,7 @@ edt::data_document_panel::data_document_panel(data_document& document, editor_se
 
 void edt::data_document_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(520.f, 460.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(520.f), em(460.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -50,10 +46,11 @@ void edt::data_document_panel::on_render()
 		ImGui::TextDisabled("inherits: %s", status.parents.c_str());
 	}
 	if (!status.chain_problem.empty()) {
-		ImGui::TextColored(k_warning, "A parent could not be read, the last good values are shown: %s", status.chain_problem.c_str());
+		ImGui::TextColored(colors().warning, "A parent could not be read, the last good values are shown: %s",
+			status.chain_problem.c_str());
 	}
 	if (status.migrated) {
-		ImGui::TextColored(k_warning, "%s", status.migration_note.c_str());
+		ImGui::TextColored(colors().warning, "%s", status.migration_note.c_str());
 		if (!status.migration_details.empty() && ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("%s", status.migration_details.c_str());
 		}
@@ -61,7 +58,7 @@ void edt::data_document_panel::on_render()
 	if (!status.changed_on_disk) {
 		m_dismissed = false;
 	} else if (!m_dismissed || m_dismissed_serial != m_document.disk_change_serial()) {
-		ImGui::TextColored(k_warning, "The file changed on disk since it was opened.");
+		ImGui::TextColored(colors().warning, "The file changed on disk since it was opened.");
 		if (m_on_reload && m_on_overwrite) {
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Reload")) m_on_reload();
@@ -92,7 +89,7 @@ void edt::data_document_panel::on_render()
 		ImGui::TextDisabled("unsaved changes");
 	}
 	if (!m_error.empty()) {
-		ImGui::TextColored(k_error, "%s", m_error.c_str());
+		ImGui::TextColored(colors().error, "%s", m_error.c_str());
 	}
 	ImGui::Separator();
 
@@ -116,6 +113,7 @@ void edt::data_document_panel::on_render()
 				{} };
 			context.map_state = &m_map_state;
 			context.assets = m_asset_source ? m_asset_source() : nullptr;
+			context.colors = &colors();
 			m_document.edit_marked([&](boost::json::value& shown, const schema_ui::field_origin& origin) {
 				context.origin = &origin;
 				return schema_ui::draw_fields(*schema, shown, context);

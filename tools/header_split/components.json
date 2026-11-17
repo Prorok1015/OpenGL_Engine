@@ -206,7 +206,7 @@
   },
   {
    "name": "image",
-   "root": "core/engine/image",
+   "root": "core/core/image",
    "dest": "snk/image",
    "public": [
     "image.h"

@@ -208,6 +208,24 @@ BOOST_AUTO_TEST_CASE(ALinkAtTheBundle_IsRefused_NotFollowed)
 	BOOST_CHECK_MESSAGE(result.error.find("not a regular file") != std::string::npos, result.error);
 }
 
+// #1099: the other process may make the folder it writes in a link; the folder is entered, never followed. A folder of
+// this process's own (bundle_folder::own) is taken as it resolves.
+BOOST_AUTO_TEST_CASE(AFolderThatIsALink_IsRefused_ForAPeersBundle_AndReadForAnOwnOne)
+{
+	edt::decode_bundle bundle;
+	std::string error;
+	fs::create_directories(dir.path() / "real");
+	BOOST_REQUIRE_MESSAGE(edt::write_bundle(dir.path() / "real" / "out.bundle", bundle, error), error);
+	fs::create_directory_symlink(dir.path() / "real", dir.path() / "run");
+	for (const fs::path& through : { dir.path() / "run" / "out.bundle", dir.path() / "run" / "." / "out.bundle" }) {
+		const edt::bundle_read_result peer = edt::read_bundle(through);
+		BOOST_CHECK_MESSAGE(!peer.ok(), through.string());
+		const edt::bundle_read_result own = edt::read_bundle(through, {}, edt::bundle_folder::own);
+		BOOST_CHECK_MESSAGE(own.ok(), through.string() << ": " << own.error);
+	}
+	BOOST_CHECK(edt::read_bundle(dir.path() / "real" / "out.bundle").ok());
+}
+
 BOOST_AUTO_TEST_CASE(AFifoAtTheBundle_IsRefused_AndDoesNotHoldTheReader)
 {
 	const fs::path fifo = dir.path() / "fifo.bin";

@@ -54,7 +54,8 @@ edt::import_component::import_component(ports from)
 void edt::import_component::build()
 {
 	res::resource_system& resources = m_ports.resources;
-	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources);
+	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources,
+		m_ports.context.colors());
 	agent_import_options import_options;
 #if SNK_HAS_ASSIMP
 	// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
