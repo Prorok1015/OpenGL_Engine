@@ -2051,6 +2051,32 @@ BOOST_AUTO_TEST_CASE(ARuntimeBinaryRefHasNoDefaultNoOptionAndIsNoElement)
 	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "binary_ref", "optional": true })"), std::runtime_error);
 	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "binary_ref", "default": [1] })"), std::runtime_error);
 	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "array", "element": "binary_ref" })"), std::runtime_error);
+	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "binary_ref", "key": "/mesh/vertices" })"), std::runtime_error);
+}
+
+// A range of the binary file is a root field: no structure holds one, so nothing that walks nested values meets one.
+BOOST_AUTO_TEST_CASE(ABinaryRefIsNeverNested)
+{
+	const auto schema = [](const char* text, const desc::schema_registry* resolve = nullptr) {
+		return desc::parse_type_schema(json::parse(text).as_object(), resolve);
+	};
+	BOOST_CHECK_THROW(schema(R"({ "name": "ops.blob_part", "kind": "struct", "fields": [ { "name": "v", "kind": "binary_ref" } ] })"),
+		std::runtime_error);
+
+	desc::schema_registry registry;
+	BOOST_REQUIRE(registry.add(schema(R"({ "name": "ops.blob_root", "fields": [ { "name": "v", "kind": "binary_ref" } ] })")));
+	BOOST_CHECK_THROW(schema(R"({ "name": "ops.holder", "fields": [ { "name": "m", "kind": "structure", "ref_type": "ops.blob_root" } ] })",
+		&registry), std::runtime_error);
+	BOOST_CHECK_THROW(schema(R"({ "name": "ops.lister", "fields": [ { "name": "m", "kind": "array", "element": "structure",
+		"ref_type": "ops.blob_root" } ] })", &registry), std::runtime_error);
+
+	// Parsed without the registry, the nesting is only seen when the schema is added; in either order.
+	BOOST_CHECK(registry.add(schema(R"({ "name": "ops.mapper", "fields": [ { "name": "m", "kind": "array", "element": "structure",
+		"ref_type": "ops.blob_root" } ] })")) == nullptr);
+	BOOST_REQUIRE(registry.add(schema(R"({ "name": "ops.early", "fields": [ { "name": "m", "kind": "array", "element": "structure",
+		"ref_type": "ops.blob_late" } ] })")));
+	BOOST_CHECK(registry.add(schema(R"({ "name": "ops.blob_late", "fields": [ { "name": "v", "kind": "binary_ref" } ] })")) == nullptr);
+	BOOST_CHECK(registry.find("ops.blob_late") == nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(ARuntimeBinaryRefKeepsItsRangeInTheBlob, ops_fixture)

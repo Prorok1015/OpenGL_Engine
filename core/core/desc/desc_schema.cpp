@@ -371,6 +371,44 @@ namespace desc
 			}
 			return field;
 		}
+
+		bool nests_structure(const field_schema& field)
+		{
+			return field.kind == field_kind::structure
+				|| ((field.kind == field_kind::array || field.kind == field_kind::map) && field.element == field_kind::structure);
+		}
+
+		bool holds_binary_ref(const type_schema& schema)
+		{
+			return std::ranges::any_of(schema.fields, [](const field_schema& field) { return field.kind == field_kind::binary_ref; });
+		}
+
+		// A range of the binary file is a root field of the desc (or component) the file stands beside (EPIC-79, #1068): never
+		// inside a structure, so whatever walks nested values never meets one. Empty when `schema` keeps to that.
+		std::string binary_ref_problem(const type_schema& schema, const schema_registry* resolve)
+		{
+			for (const auto& field : schema.fields) {
+				if (field.kind == field_kind::binary_ref && field.key.find('/', 1) != std::string::npos) {
+					return std::format("binary_ref field '{}' must be a root field: its key '{}' is nested", field.name, field.key);
+				}
+			}
+			if (schema.kind == schema_kind::structure && holds_binary_ref(schema)) {
+				return "a structure cannot hold a binary_ref field: a range of the binary file is a root field of a desc";
+			}
+			if (!resolve) {
+				return {};
+			}
+			for (const auto& field : schema.fields) {
+				if (!nests_structure(field)) {
+					continue;
+				}
+				if (const type_schema* nested = resolve->find(field.ref_type); nested && holds_binary_ref(*nested)) {
+					return std::format("field '{}' nests '{}', which holds a binary_ref field: a range of the binary file is a root field",
+						field.name, field.ref_type);
+				}
+			}
+			return {};
+		}
 	}
 
 	std::string_view to_string(field_kind kind) { return name_of(field_kind_names, kind); }
@@ -409,6 +447,21 @@ namespace desc
 				egLOG_ERROR("desc/error", "Schema '{}' is stored without is_document: {}", schema.name, problem);
 				schema.is_document = false;
 			}
+		}
+		std::string blob_problem = binary_ref_problem(schema, this);
+		if (blob_problem.empty() && holds_binary_ref(schema)) {
+			// Registered after a schema that already names it as a structure.
+			for (const auto& [other_name, other] : m_types) {
+				for (const auto& field : other.fields) {
+					if (nests_structure(field) && field.ref_type == schema.name) {
+						blob_problem = std::format("'{}' nests it in field '{}': a range of the binary file is a root field", other_name, field.name);
+					}
+				}
+			}
+		}
+		if (!blob_problem.empty()) {
+			egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", schema.name, blob_problem);
+			return nullptr;
 		}
 		const std::string name = schema.name;
 		m_names_by_id.emplace(id, name);
@@ -593,6 +646,9 @@ namespace desc
 		}
 
 		compute_layout(schema, resolve);
+		if (std::string problem = binary_ref_problem(schema, resolve); !problem.empty()) {
+			fail(path, problem);
+		}
 		return schema;
 	}
 

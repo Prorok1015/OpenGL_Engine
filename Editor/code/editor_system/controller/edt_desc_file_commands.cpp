@@ -462,14 +462,46 @@ namespace {
 		return out;
 	}
 
+	std::string_view type_name_of(const json::value& value)
+	{
+		const json::value* type = value.is_object() ? value.as_object().if_contains("__type") : nullptr;
+		return type && type->is_string() ? view_of(type->as_string()) : std::string_view{};
+	}
+
+	bool is_mesh_type(std::string_view type_name)
+	{
+		return type_name == "geometry_desc" || type_name == "poly_mesh_desc";
+	}
+
+	// The pointer of the first inline geometry or editable mesh below the root of `value` (a desc_ref field takes an
+	// inline desc), empty when there is none.
+	std::string nested_mesh_at(const json::value& value, const std::string& pointer)
+	{
+		if (value.is_object()) {
+			for (const auto& member : value.as_object()) {
+				const std::string at = pointer + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size()));
+				if (is_mesh_type(type_name_of(member.value()))) return at;
+				if (std::string found = nested_mesh_at(member.value(), at); !found.empty()) return found;
+			}
+		} else if (value.is_array()) {
+			const json::array& items = value.as_array();
+			for (std::size_t index = 0; index < items.size(); ++index) {
+				const std::string at = std::format("{}/{}", pointer, index);
+				if (is_mesh_type(type_name_of(items[index]))) return at;
+				if (std::string found = nested_mesh_at(items[index], at); !found.empty()) return found;
+			}
+		}
+		return {};
+	}
+
 	// Mesh data is written by the editor, never as a desc: a geometry keeps its vertices in a binary file beside the desc
-	// (EPIC-79), an editable mesh is the editor's (EPIC-77). Empty when `relative` and the content's `__type` are neither.
+	// (EPIC-79), an editable mesh is the editor's (EPIC-77). Empty when neither `relative`, the content's `__type` nor an
+	// inline desc in it is one.
 	std::string mesh_file_refusal(std::string_view relative, const json::value& content)
 	{
 		std::string lower(relative);
 		std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		const json::value* type = content.is_object() ? content.as_object().if_contains("__type") : nullptr;
-		const std::string_view type_name = type && type->is_string() ? view_of(type->as_string()) : std::string_view{};
+		const std::string_view type_name = type_name_of(content);
 		if (lower.ends_with(".geom.desc") || type_name == "geometry_desc") {
 			return std::format("'res://{}': a geometry is written by the editor with its binary file (a model import: file.import_model, a mesh save), "
 				"not by desc.create or desc.write", relative);
@@ -477,6 +509,10 @@ namespace {
 		if (lower.ends_with(".poly.desc") || type_name == "poly_mesh_desc") {
 			return std::format("'res://{}': an editable mesh is written by the editor's mesh tools, not by desc.create or desc.write",
 				relative);
+		}
+		if (const std::string at = nested_mesh_at(content, {}); !at.empty()) {
+			return std::format("'res://{}': {} is an inline geometry or editable mesh; mesh data is written by the editor, refer to a "
+				"mesh file instead", relative, at);
 		}
 		return {};
 	}

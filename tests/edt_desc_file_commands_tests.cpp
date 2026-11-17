@@ -387,6 +387,21 @@ BOOST_AUTO_TEST_CASE(MeshFiles_AreRefusedByCreateAndWrite_ByPathAndByType)
 	BOOST_TEST(question->find("This request will be refused") != std::string::npos);
 }
 
+// A desc_ref field takes an inline desc: a geometry or editable mesh inline in another desc is refused the same way.
+BOOST_AUTO_TEST_CASE(AnInlineMesh_InAnotherDesc_IsRefused)
+{
+	const std::string geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})";
+	const auto in_field = call("desc.create", desc_args("meshes/node.desc",
+		(R"({"__type":"mesh_node_desc","geometry":)" + geometry + "}").c_str()));
+	BOOST_TEST(in_field.code == cmd::codes::invalid_args);
+	BOOST_TEST(in_field.error.find("/geometry") != std::string::npos, in_field.error);
+	const auto in_list = call("desc.create", desc_args("meshes/list.desc",
+		R"({"__type":"material_desc","parts":[{"x":1},{"__type":"poly_mesh_desc"}]})"));
+	BOOST_TEST(in_list.code == cmd::codes::invalid_args);
+	BOOST_TEST(in_list.error.find("/parts/1") != std::string::npos, in_list.error);
+	BOOST_TEST(!fs::exists(res_root / "meshes"));
+}
+
 BOOST_AUTO_TEST_CASE(Write_WithAnotherVersion_IsStale_AndTheFileStays)
 {
 	make_material("materials/s.mat.desc");
