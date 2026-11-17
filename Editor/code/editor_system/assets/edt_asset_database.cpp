@@ -2470,18 +2470,51 @@ edt::asset_fix_result edt::asset_database::delete_orphan_binary(const res::tag& 
 		return fix_refused(std::format("{} is not a binary file without its desc in the project's own folder", file.view()));
 	}
 	const fs::path root = m_layers[top_layer()];
-	const prj::project_file_text bytes = prj::read_project_file(root, fs_paths::path_from_utf8(here.in_layer), max_deleted_binary_bytes);
-	if (!bytes.exists || !bytes.error.empty()) {
-		return fix_refused(bytes.error.empty() ? std::format("{} is gone", file.view())
-			: std::format("{} is not deleted (it is kept for the undo, up to {} bytes): {}", file.view(), max_deleted_binary_bytes, bytes.error));
+	const auto [parent, name] = split_last(*relative);
+	const std::optional<std::string> owner = res::desc_binary_owner_name(name);
+	if (!owner) {
+		return fix_refused(std::format("{} is not named as a desc's binary file", file.view()));
 	}
-	if (!std::string_view{ bytes.text }.starts_with(std::string_view{ res::desc_binary::magic.data(), res::desc_binary::magic.size() })) {
+	// A save of the pair writes a new binary file and its desc under this lock: while it is held, what is read below is
+	// what is removed, and the undo keeps the right bytes.
+	const res::desc_binary::save_lock lock(res::tag::make(joined(parent, *owner)));
+	const fs::path bin_path = fs_paths::path_from_utf8(here.in_layer);
+	platform::beneath::read_request request;
+	request.root = root;
+	request.folder = bin_path.parent_path();
+	request.leaf = bin_path.filename();
+	request.max_bytes = max_deleted_binary_bytes;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+	if (read.status == platform::beneath::read_status::too_large) {
+		return fix_refused(std::format("{} is not deleted: it is kept for the undo, up to {} bytes", file.view(), max_deleted_binary_bytes));
+	}
+	if (read.status != platform::beneath::read_status::ok || !read.stamp) {
+		return fix_refused(std::format("{} is not deleted: {}", file.view(), read.error.empty() ? std::string{ "it cannot be read" } : read.error));
+	}
+	const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	if (!std::string_view{ text }.starts_with(std::string_view{ res::desc_binary::magic.data(), res::desc_binary::magic.size() })) {
 		return fix_refused(std::format("{} changed since: it is not a desc's binary file", file.view()));
+	}
+	if (m_before_remove) {
+		m_before_remove();
+	}
+	// Looked at again right before the removal: a writer outside this process does not take the lock.
+	std::error_code ec;
+	const fs::path desc_path = root / bin_path.parent_path() / fs_paths::path_from_utf8(*owner);
+	if (fs::exists(fs::symlink_status(desc_path, ec))) {
+		return fix_refused(std::format("{} is not deleted: its desc is beside it now", file.view()));
+	}
+	request.stamp_only = true;
+	std::vector<std::byte> unused;
+	const platform::beneath::read_result again = platform::beneath::read_beneath(request, unused);
+	if (again.status != platform::beneath::read_status::ok || again.stamp != read.stamp) {
+		return fix_refused(std::format("{} is not deleted: it changed since it was read", file.view()));
 	}
 	if (const std::string error = remove_file(root, here.in_layer); !error.empty()) {
 		return fix_refused(std::format("{} was not deleted: {}", file.view(), error));
 	}
-	push_history(std::format("Delete {}", file.view()), [this, root, in_layer = here.in_layer, text = bytes.text]() -> asset_fix_result {
+	push_history(std::format("Delete {}", file.view()), [this, root, in_layer = here.in_layer, text]() -> asset_fix_result {
 		asset_fix_result back = put_back(root, in_layer, text);
 		if (back.ok) {
 			refresh({ in_layer });

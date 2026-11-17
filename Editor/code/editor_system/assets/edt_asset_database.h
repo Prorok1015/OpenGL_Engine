@@ -365,6 +365,8 @@ namespace edt
 		// binary file had no desc.
 		asset_fix_result remove_binary_sidecar(const res::tag& desc);
 		static constexpr std::uint64_t max_deleted_binary_bytes = 64u * 1024u * 1024u;
+		// Tests only: called by delete_orphan_binary between its read of the file and the checks right before the removal.
+		void set_before_remove_for_tests(std::function<void()> hook) { m_before_remove = std::move(hook); }
 
 		static constexpr std::size_t max_history = 32;
 		// The label of the fix undo_last() would take back; none when there is nothing to undo.
@@ -530,6 +532,7 @@ namespace edt
 		std::function<bool()> m_vcs_busy;
 		bool m_ids_held_by_git = false;
 		std::function<std::optional<std::filesystem::path>()> m_git_dir;
+		std::function<void()> m_before_remove;
 		// An ID is being written: the batch its refresh applies gives none itself.
 		bool m_giving_ids = false;
 		std::chrono::steady_clock::time_point m_last_poll{};

@@ -1,4 +1,6 @@
 #include "edt_asset_problems.h"
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/resource/res_asset_id.h>
 #include <snk/resource/res_tag.h>
 #include <algorithm>
@@ -10,6 +12,9 @@
 
 namespace
 {
+	// A file name in a question: one line, nothing hidden.
+	constexpr std::size_t k_shown_path_bytes = 512;
+
 	bool same(const edt::problem& a, const edt::problem& b)
 	{
 		return a.severity == b.severity && a.file == b.file && a.line == b.line && a.column == b.column && a.code == b.code
@@ -206,12 +211,15 @@ std::vector<edt::problem_action> edt::asset_problem_publisher::actions_of(const 
 	case kind::orphan_binary:
 		if (found->in_top_layer) {
 			out.push_back({ "Delete", [&assets, path] { return assets.delete_orphan_binary(path); },
-				std::format("Delete {}? It is a binary file without its desc; Undo in Problems brings it back.", found->path) });
+				std::format("Delete {}? It is a binary file without its desc. Undo in Problems brings it back until the editor "
+					"is closed.", text_escape::escaped_text(found->path, k_shown_path_bytes)) });
 		}
 		break;
 	case kind::binary_sidecar:
 		if (found->in_top_layer) {
-			out.push_back({ "Remove the sidecar", [&assets, desc = res::tag{ found->link_to }] { return assets.remove_binary_sidecar(desc); }, {} });
+			out.push_back({ "Remove the sidecar", [&assets, desc = res::tag{ found->link_to }] { return assets.remove_binary_sidecar(desc); },
+				std::format("Remove {}? The binary file beside its desc needs no ID. Undo in Problems brings it back until the "
+					"editor is closed.", text_escape::escaped_text(found->path, k_shown_path_bytes)) });
 		}
 		break;
 	case kind::bad_meta:
@@ -219,4 +227,34 @@ std::vector<edt::problem_action> edt::asset_problem_publisher::actions_of(const 
 		break;
 	}
 	return out;
+}
+
+void edt::run_person_fix(const problem_action& action, const fix_question& ask, std::function<std::optional<problem_action>()> again)
+{
+	const auto run = [](const std::string& label, const std::function<asset_fix_result()>& fix) {
+		if (const asset_fix_result result = fix(); !result.ok) {
+			egLOG_WARN("assets", "{}: {}", label, result.error);
+		}
+	};
+	if (action.confirm.empty()) {
+		run(action.label, action.run);
+		return;
+	}
+	const bool asked = ask && ask(action, [run, label = action.label, question = action.confirm, again = std::move(again)](bool yes) {
+		if (!yes) {
+			return;
+		}
+		std::optional<problem_action> now;
+		if (again) {
+			now = again();
+		}
+		if (!now || now->confirm != question) {
+			egLOG_INFO("assets", "{}: not done, the problem or the project changed since the question", label);
+			return;
+		}
+		run(label, now->run);
+	});
+	if (!asked) {
+		egLOG_WARN("assets", "{}: refused, nobody can be asked", action.label);
+	}
 }

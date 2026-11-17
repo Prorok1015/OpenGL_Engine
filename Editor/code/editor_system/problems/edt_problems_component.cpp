@@ -41,35 +41,35 @@ void edt::problems_component::wire(problems_panel& panel)
 		if (source != asset_problem_publisher::source || !assets) {
 			return out;
 		}
-		const auto run_fix = [](const std::string& label, const std::function<asset_fix_result()>& run) {
-			if (const asset_fix_result result = run(); !result.ok) {
-				egLOG_WARN("assets", "{}: {}", label, result.error);
-			}
-		};
 		for (problem_action& action : assets->problem_actions(item)) {
-			if (action.confirm.empty()) {
-				out.emplace_back(action.label, [run_fix, label = action.label, run = std::move(action.run)] { run_fix(label, run); });
-				continue;
-			}
-			// Asked first; the answer runs the row's fix as offered then, found again, so a row gone meanwhile does nothing.
-			out.emplace_back(action.label, [this, run_fix, item, label = action.label, text = action.confirm] {
-				m_ports.context.dialogs().choose(label, text, { label, "Cancel" },
-					[this, run_fix, item, label, alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> answer) {
-						if (!answer || *answer != 0 || alive.expired()) {
-							return;
+			std::string label = action.label;
+			out.emplace_back(std::move(label), [this, item, action = std::move(action), layers = assets->database().layers()] {
+				const fix_question ask = [this](const problem_action& asked, std::function<void(bool)> answer) {
+					dialog_service& dialogs = m_ports.context.dialogs();
+					if (!dialogs.can_show()) {
+						return false;
+					}
+					dialogs.choose(asked.label, asked.confirm, { asked.label, "Cancel" },
+						[answer = std::move(answer)](std::optional<std::size_t> picked) { answer(picked && *picked == 0); });
+					return true;
+				};
+				// The answer may come after a project switch: the fix is found again only in the project it was asked for.
+				auto again = [this, item, label = action.label, layers, alive = std::weak_ptr<int>(m_alive)]() -> std::optional<problem_action> {
+					if (alive.expired()) {
+						return std::nullopt;
+					}
+					asset_component* now = m_ports.assets();
+					if (!now || now->database().layers() != layers) {
+						return std::nullopt;
+					}
+					for (problem_action& found : now->problem_actions(item)) {
+						if (found.label == label) {
+							return std::move(found);
 						}
-						asset_component* now = m_ports.assets();
-						if (!now) {
-							return;
-						}
-						for (problem_action& again : now->problem_actions(item)) {
-							if (again.label == label) {
-								run_fix(label, again.run);
-								return;
-							}
-						}
-						egLOG_WARN("assets", "{}: the problem is gone", label);
-					});
+					}
+					return std::nullopt;
+				};
+				run_person_fix(action, ask, std::move(again));
 			});
 		}
 		return out;

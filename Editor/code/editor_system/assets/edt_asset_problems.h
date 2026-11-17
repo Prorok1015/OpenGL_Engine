@@ -18,13 +18,19 @@ namespace edt
 		std::string confirm;
 	};
 
+	// How a person's click on a row's fix runs (problems_component): a fix without `confirm` at once; one with it only after
+	// `ask` put the question and the person said yes, and then as `again` finds it at that moment: none, or another question
+	// (the row, the file or the project changed meanwhile), runs nothing. `ask` false: nobody can be asked (headless), refused.
+	using fix_question = std::function<bool(const problem_action& action, std::function<void(bool yes)> answer)>;
+	void run_person_fix(const problem_action& action, const fix_question& ask, std::function<std::optional<problem_action>()> again);
+
 	// The source "assets" of Problems (S57-4): what the asset database finds wrong with the files of res://. Rows:
 	// asset.no_id (a file of the project's own layer without a .resource), asset.bad_meta (a .resource that cannot be
 	// read), asset.orphan (a .resource without its file), asset.duplicate_id (on each copy: of the files with one ID
 	// the one of the lowest layer, then the oldest by mtime, then the smaller path, is the original; an error, or a
 	// warning without a fix when no holder is in the project's own layer); of a desc and its binary file (EPIC-79, #1129):
 	// asset.orphan_binary (a binary file without its desc, no ID; "Delete" asks first), asset.binary_sidecar (a .resource
-	// of a binary file whose desc is beside it again; "Remove the sidecar"), asset.missing_binary (an error: a desc with
+	// of a binary file whose desc is beside it again; "Remove the sidecar" asks first), asset.missing_binary (an error: a desc with
 	// ranges and no binary file beside it). Main thread only.
 	class asset_problem_publisher
 	{

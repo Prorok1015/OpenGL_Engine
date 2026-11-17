@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -650,7 +651,7 @@ BOOST_AUTO_TEST_CASE(a_resource_of_a_binary_file_beside_its_desc_is_a_warning_wi
 	auto actions = publisher.actions_of(*found, *db);
 	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
 	BOOST_TEST(actions[0].label == "Remove the sidecar");
-	BOOST_TEST(actions[0].confirm.empty());
+	BOOST_TEST(!actions[0].confirm.empty());
 	const edt::asset_fix_result removed = actions[0].run();
 	BOOST_REQUIRE_MESSAGE(removed.ok, removed.error);
 	BOOST_TEST(!fs::exists(upper.path() / "mesh.geom.bin.resource"));
@@ -683,5 +684,105 @@ BOOST_AUTO_TEST_CASE(a_desc_with_ranges_and_no_binary_file_is_an_error)
 	db->apply_changes(std::vector<res::file_change>{ change("kept.geom.bin", res::change_kind::deleted) });
 	BOOST_TEST(row("asset.missing_binary", "kept.geom.desc").has_value());
 }
+
+// #1131 review: a fix that asks first runs only on "yes", and then as it is found again at that moment.
+BOOST_AUTO_TEST_CASE(a_fix_that_asks_first_runs_only_on_yes_as_found_again)
+{
+	upper.write("mesh.geom.bin", binary_text("data"));
+	open();
+	const auto found = row("asset.orphan_binary", "mesh.geom.bin");
+	BOOST_REQUIRE(found);
+	const auto find_again = [this, &found]() -> std::optional<edt::problem_action> {
+		std::vector<edt::problem_action> actions = publisher.actions_of(*found, *db);
+		if (actions.empty()) {
+			return std::nullopt;
+		}
+		return std::move(actions.front());
+	};
+	const edt::problem_action action = *find_again();
+	const fs::path file = upper.path() / "mesh.geom.bin";
+	int asked = 0;
+	const auto answering = [&asked](bool yes) {
+		return edt::fix_question([&asked, yes](const edt::problem_action&, std::function<void(bool)> answer) {
+			++asked;
+			answer(yes);
+			return true;
+		});
+	};
+
+	edt::run_person_fix(action, answering(false), find_again);
+	BOOST_TEST(asked == 1);
+	BOOST_TEST(fs::exists(file));
+
+	// Headless: nobody can be asked, so nothing runs.
+	edt::run_person_fix(action, [](const edt::problem_action&, std::function<void(bool)>) { return false; }, find_again);
+	edt::run_person_fix(action, {}, find_again);
+	BOOST_TEST(fs::exists(file));
+
+	// The row gone or another question by the time of the answer (another project, another file): nothing runs.
+	edt::run_person_fix(action, answering(true), [] { return std::optional<edt::problem_action>{}; });
+	edt::run_person_fix(action, answering(true), [&find_again] {
+		std::optional<edt::problem_action> changed = find_again();
+		changed->confirm += " (another file)";
+		return changed;
+	});
+	BOOST_TEST(fs::exists(file));
+
+	edt::run_person_fix(action, answering(true), find_again);
+	BOOST_TEST(!fs::exists(file));
+	BOOST_TEST(db->next_undo_label().has_value());
+}
+
+// #1131 review: a save of the pair, or anyone, that writes the file or its desc between the read and the removal stops it.
+BOOST_AUTO_TEST_CASE(a_binary_file_changed_after_its_read_is_not_deleted)
+{
+	upper.write("mesh.geom.bin", binary_text("data"));
+	upper.write("other.geom.bin", binary_text("data"));
+	open();
+	BOOST_REQUIRE(edt::is_orphan_binary(record("mesh.geom.bin")));
+	BOOST_REQUIRE(edt::is_orphan_binary(record("other.geom.bin")));
+
+	db->set_before_remove_for_tests([this] { upper.write("mesh.geom.bin", binary_text("fresh data of a new save")); });
+	const edt::asset_fix_result rewritten = db->delete_orphan_binary(res::tag::make("mesh.geom.bin"));
+	BOOST_TEST(!rewritten.ok);
+	BOOST_TEST(read_text(upper.path() / "mesh.geom.bin") == binary_text("fresh data of a new save"));
+
+	db->set_before_remove_for_tests([this] { upper.write("other.geom.desc", k_ranged_desc); });
+	const edt::asset_fix_result paired = db->delete_orphan_binary(res::tag::make("other.geom.bin"));
+	BOOST_TEST(!paired.ok);
+	BOOST_TEST(fs::exists(upper.path() / "other.geom.bin"));
+	db->set_before_remove_for_tests({});
+	BOOST_TEST(!db->next_undo_label().has_value());
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(a_link_at_a_binary_files_name_is_neither_followed_nor_deleted)
+{
+	test_util::temp_dir outside("asset_problems_outside");
+	const fs::path target = outside.write("target.geom.bin", binary_text("data"));
+	fs::create_symlink(target, upper.path() / "link.geom.bin");
+	open();
+	BOOST_TEST(!row("asset.orphan_binary", "link.geom.bin"));
+	BOOST_TEST(!db->delete_orphan_binary(res::tag::make("link.geom.bin")).ok);
+	BOOST_TEST(fs::is_symlink(fs::symlink_status(upper.path() / "link.geom.bin")));
+	BOOST_TEST(read_text(target) == binary_text("data"));
+}
+
+// A file name is shown in the question on one line, with nothing hidden.
+BOOST_AUTO_TEST_CASE(the_question_shows_a_file_name_escaped)
+{
+	upper.write("a\nb‮.geom.bin", binary_text("data"));
+	open();
+	const auto rows = rows_of("asset.orphan_binary");
+	BOOST_REQUIRE_EQUAL(rows.size(), 1u);
+	const auto actions = publisher.actions_of(rows[0], *db);
+	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
+	const std::string& question = actions[0].confirm;
+	BOOST_TEST(question.find('\n') == std::string::npos);
+	BOOST_TEST(question.find("‮") == std::string::npos);
+	BOOST_TEST(question.find("a\\nb\\u{202E}.geom.bin") != std::string::npos);
+	BOOST_TEST(question.find("until the editor is closed") != std::string::npos);
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
