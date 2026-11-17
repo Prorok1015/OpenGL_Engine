@@ -12,6 +12,8 @@
 #include <windows.h>
 #include <aclapi.h>
 #endif
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <ios>
@@ -24,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 #if !defined(_WIN32)
 #include <csignal>
 #include <sys/types.h>
@@ -468,12 +471,44 @@ struct confined_setup
 	std::shared_ptr<const platform::app_container> container;
 };
 
+// The files make_decoder_copy copies (the decoder, the DLLs its .deps names, the C/C++ runtime beside it) into the same
+// layout, <base>/<stem>/<folder>, without the SHA-256 of every file that costs seconds in a Debug build (#1144): these
+// tests are about the container, the copy has tests of its own. The container gets its ACEs from run_process either way.
+std::optional<edt::decoder_copy> plain_copy(const fs::path& decoder, const fs::path& base, std::string& error)
+{
+	const fs::path source = decoder.parent_path();
+	std::vector<fs::path> names{ decoder.filename() };
+	std::ifstream deps(source / (decoder.stem().string() + ".deps"));
+	for (std::string line; std::getline(deps, line);) {
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (!line.empty()) names.emplace_back(line);
+	}
+	std::error_code ec;
+	for (const fs::directory_entry& entry : fs::directory_iterator(source, ec)) {
+		std::string name = entry.path().filename().string();
+		std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const bool runtime = name.ends_with(".dll") && (name.starts_with("vcruntime") || name.starts_with("msvcp")
+			|| name.starts_with("concrt") || name.starts_with("ucrtbase") || name.starts_with("clang_rt"));
+		if (runtime) names.push_back(entry.path().filename());
+	}
+	const fs::path folder = base / decoder.stem() / "plain";
+	fs::create_directories(folder, ec);
+	for (const fs::path& name : names) {
+		fs::copy_file(source / name, folder / name, fs::copy_options::overwrite_existing, ec);
+		if (ec) {
+			error = "cannot copy " + name.string() + ": " + ec.message();
+			return std::nullopt;
+		}
+	}
+	return edt::decoder_copy{ folder / decoder.filename(), folder };
+}
+
 const confined_setup& confined_once()
 {
 	static const test_util::temp_dir copies{ "decoder_copies_shared" };
 	static const confined_setup setup = [] {
 		confined_setup made;
-		made.copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, copies.path(), made.error);
+		made.copy = plain_copy(SNK_MODEL_DECODER_SELFTEST_PATH, copies.path(), made.error);
 		made.container = platform::app_container::ensure(L"snk.model_decoder");
 		return made;
 	}();
