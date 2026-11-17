@@ -2,8 +2,8 @@
 #include <snk/common/ds/ds_bbox.hpp>
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_buffer_layout.h>
-#include <snk/resource/res_desc_binary.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/object.hpp>
 #include <array>
 #include <cstddef>

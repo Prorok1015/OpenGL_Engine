@@ -4,7 +4,7 @@
 // boost::json. Keeping <boost/json.hpp> + the tag_invoke customization points here means the
 // lightweight res::tag value type no longer drags Boost.JSON into every includer.
 // Include this header only in TUs that call json::value_from / json::value_to on a res::tag.
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <snk/common/snk_api.h>
 
