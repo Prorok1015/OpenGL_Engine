@@ -716,6 +716,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		return m_context->dialogs().pending() > 0 || (agent_access_object() && !agent_access_object()->confirmations().pending().empty());
 	});
 
+	editor_layer->set_ui_probe(m_panels->probe());
 	editor_layer->set_menu_bar_status([this] {
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		if (m_agent_ui) m_agent_ui->draw_status();
