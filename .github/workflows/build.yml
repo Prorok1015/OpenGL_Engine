@@ -1189,11 +1189,13 @@ jobs:
           grep -q "opened project 'Sandbox' (${copy}/project.snkproj)" headless_out/outside/editor.log
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
+      # On the classic theme (#1109): the actions click fixed points, which land on other rows in the other themes.
       - name: Smoke run (checklist actions)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
             --shot headless_out/checklist/final.png \
-            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
+            gui/theme engine://themes/classic.desc
           tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
             200x200+860+450 0 tools/headless/reference/checklist.png
 
@@ -1252,20 +1254,24 @@ jobs:
       # success (Editor/NewLevel, Editor/CreateWorld) and, when they fail, a line of the same category; the Asset Browser
       # drag-drop onto the viewport logs "Added '...' to scene" (Editor/Drop). The screenshots of every step are in the
       # artifact; no reference image is compared (the layouts differ from the checklist reference on purpose).
+      # On the classic theme (#1109): the actions click fixed points of the checklist layout (File, the world "+").
       - name: Smoke run (New Level, new world)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/new_level_world.actions --size 1920x1080 \
             --shot headless_out/new_level_world/final.png \
-            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
+            gui/theme engine://themes/classic.desc
           tools/headless/check_smoke.sh headless_out/new_level_world/final.png headless_out/new_level_world/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/new_level_world/editor.log 'Editor/NewLevel|Editor/CreateWorld' \
             'Created a new level with [0-9]+ world' "Created world 'world2'"
 
+      # On the classic theme (#1109): the bigger rows of the others push base_material.desc out of the 1920x1080 list.
       - name: Smoke run (drag-drop from the Asset Browser)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/drag_drop_asset.actions --size 1920x1080 \
             --shot headless_out/drag_drop/final.png \
-            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true \
+            gui/theme engine://themes/classic.desc
           tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
 
