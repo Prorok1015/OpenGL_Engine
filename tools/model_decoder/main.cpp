@@ -365,9 +365,12 @@ bool turn_run_folder_into_junction(const fs::path& target)
 		std::error_code ignored;
 		fs::remove_all(it->path(), ignored);
 	}
-	if (!make_junction(L".", target)) return false;
-	// Written through the junction, so it lands in `target`: the test sees that the folder really became one.
-	const HANDLE marker = CreateFileW(L"link_made", GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	const fs::path folder = fs::current_path(ec);
+	if (ec || !make_junction(L".", target)) return false;
+	// Written by the folder's full path, which now leads through the junction into `target` (a name relative to the
+	// working directory would be opened from its handle, not through the junction): the test sees the folder became one.
+	const HANDLE marker = CreateFileW((folder / "link_made").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+		nullptr);
 	if (marker != INVALID_HANDLE_VALUE) CloseHandle(marker);
 	return true;
 }
@@ -622,7 +625,7 @@ int main(int argc, char** argv)
 	}
 #endif
 
-	auto request_bundle = edt::read_bundle(args->request);
+	auto request_bundle = edt::read_bundle(args->request, {}, edt::bundle_folder::own);
 	if (!request_bundle.ok()) {
 		return fail("request: " + request_bundle.error);
 	}
