@@ -59,7 +59,8 @@ void edt::ui_probe::take(item& entry, std::string line)
 	entry.seen = true;
 }
 
-void edt::ui_probe::report(std::string_view area, std::string_view name, float min_x, float min_y, float max_x, float max_y)
+void edt::ui_probe::report(
+	std::string_view area, std::string_view name, float min_x, float min_y, float max_x, float max_y)
 {
 	take(entry_of(area, name), format(area, name, min_x, min_y, max_x, max_y));
 }
