@@ -65,6 +65,9 @@ namespace edt
 		// The UI font, then the TTF/OTF files of edt://fonts/.
 		const std::vector<res::tag>& fonts() const { return m_fonts; }
 		void refresh_lists();
+		// The window's Refresh: the lists, and the fonts read again (a file of edt://fonts/ replaced under its name,
+		// #1128), shown with the edits not saved yet.
+		void refresh();
 		res::tag current() const;
 
 		// Applies `preset`, keeps it as the person's choice and loads it for editing.

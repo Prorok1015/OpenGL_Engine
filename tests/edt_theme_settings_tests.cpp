@@ -273,6 +273,30 @@ BOOST_AUTO_TEST_CASE(AnEditIsShownAtOnce_AndWrittenOnlyBySave)
 	BOOST_TEST(file.at("accent").as_array().at(0).to_number<double>() == 1.0);
 }
 
+// #1128: Refresh reads the fonts again and keeps showing an edit not saved yet.
+BOOST_AUTO_TEST_CASE(Refresh_ReadsTheFontsAgain_AndKeepsAnEditNotSaved)
+{
+	auto model = make_model();
+	model.start();
+	model.choose(res::tag{ "engine://themes/dark_neutral.desc" });
+	settle(model);
+	BOOST_REQUIRE(!model.duplicate("mine").has_value());
+	settle(model);
+	BOOST_REQUIRE(model.working() != nullptr);
+	model.working()->accent = glm::vec3{ 1.f, 0.f, 0.f };
+	model.edited();
+	settle(model);
+
+	applied.clear();
+	model.refresh();
+	settle(model);
+
+	BOOST_REQUIRE(!applied.empty());
+	BOOST_TEST(applied.back().fonts_changed);
+	BOOST_TEST(applied.back().style.palette.accent.x == 1.f);
+	BOOST_TEST(model.dirty());
+}
+
 BOOST_AUTO_TEST_CASE(ABuiltInPreset_IsNotSaved)
 {
 	auto model = make_model();

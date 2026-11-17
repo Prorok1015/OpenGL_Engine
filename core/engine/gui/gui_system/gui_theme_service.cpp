@@ -167,6 +167,15 @@ void gui::theme_service::preview(const theme_desc& preset)
 	}
 }
 
+void gui::theme_service::forget_fonts()
+{
+	m_applied_fonts.reset();
+	for (const res::tag& font : m_read_fonts) {
+		m_resources.evict_cached(font);
+	}
+	m_read_fonts.clear();
+}
+
 void gui::theme_service::drop_loads()
 {
 	m_preset = {};
@@ -303,6 +312,9 @@ res::res_handle<res::binary_resource> gui::theme_service::request_font(const res
 {
 	if (!m_resources.exists(tag)) {
 		return m_resources.refused<res::binary_resource>(tag, "no such file");
+	}
+	if (tag != m_ui_font && tag != m_icon_font && std::ranges::find(m_read_fonts, tag) == m_read_fonts.end()) {
+		m_read_fonts.push_back(tag);
 	}
 	return m_resources.require<res::binary_resource>(tag);
 }
