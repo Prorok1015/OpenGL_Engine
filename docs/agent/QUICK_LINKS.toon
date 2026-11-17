@@ -19,7 +19,7 @@ ECS Framework:
 
 Resource System:
   → core/core/resource/include/snk/resource/res_system.h (resource_system: load/caching)
-  → core/core/resource/include/snk/resource/res_tag.h (res::tag; single-arg parses protocol from string)
+  → core/core/model_codec/include/snk/model_codec/res_tag.h (res::tag; single-arg parses protocol from string)
   → core/core/resource/adapters/ (Assimp/stb/text adapter pipeline)
   → core/core/resource/resolvers/ (VFS resolvers, e.g. res_vfs_resolver)
 
