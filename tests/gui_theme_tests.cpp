@@ -369,6 +369,27 @@ BOOST_AUTO_TEST_CASE(APreviewWhileAChosenPresetLoads_DoesNotReplaceIt)
 	BOOST_TEST(service.selected().view() == "engine://themes/light.desc");
 }
 
+// #1128: a font replaced under its name is cached and its key unchanged, so only forget_fonts() reads it again.
+BOOST_AUTO_TEST_CASE(AFontReplacedUnderItsName_IsReadAgainOnlyAfterForgetFonts)
+{
+	const fs::path fonts = fs::path{ SNK_CORE_RES_DIR } / "fonts";
+	const std::vector<std::byte> first = read_bytes(fonts / "lucide-icons.ttf");
+	const std::vector<std::byte> second = read_bytes(fonts / "NotoSans-Regular.ttf");
+	const res::tag font{ "memory://t/own.ttf" };
+	ram->files[font] = first;
+	const res::tag preset = put("own.desc",
+		R"({ "__type" : "gui.theme", "__version" : 1, "font" : "memory://t/own.ttf", "icons" : false })");
+	BOOST_REQUIRE((select(preset.view()).text_font == first));
+
+	ram->files[font] = second;
+	BOOST_TEST(!select(preset.view()).fonts_changed);
+
+	service.forget_fonts();
+	const auto& again = select(preset.view());
+	BOOST_TEST(again.fonts_changed);
+	BOOST_TEST((again.text_font == second));
+}
+
 BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)
 {
 	gui::theme_desc preset;

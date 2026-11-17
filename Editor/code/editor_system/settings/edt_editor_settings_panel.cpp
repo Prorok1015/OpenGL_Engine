@@ -66,7 +66,7 @@ void edt::editor_settings_panel::draw_theme_list()
 	}
 	ImGui::SameLine();
 	if (ImGui::Button("Refresh")) {
-		m_model.refresh_lists();
+		m_model.refresh();
 	}
 	ImGui::TextDisabled("Your presets: %s   Your fonts (.ttf, .otf): %s", k_personal_themes.data(),
 		k_personal_fonts.data());

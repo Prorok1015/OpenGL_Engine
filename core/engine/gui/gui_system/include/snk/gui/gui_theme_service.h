@@ -55,6 +55,9 @@ namespace gui
 		// Shows `preset` without a file (an edit not saved yet); selected() stays. A preset that cannot be used is a
 		// WARN and the look stays; nothing is shown while the preset of a select() still loads.
 		void preview(const theme_desc& preset);
+		// The next select() or preview() reads its fonts again: a font of the person's replaced under the same name
+		// (#1128). Drops the cached bytes of every such font read so far; the UI and icon fonts are not touched.
+		void forget_fonts();
 		// Advances the loads; called once a frame (theme_service::layer).
 		void poll();
 		// The preset asked for last, after a fallback the fallback.
@@ -108,5 +111,7 @@ namespace gui
 		res::res_handle<res::binary_resource> m_fallback_font;
 		res::res_handle<res::binary_resource> m_icons;
 		std::optional<font_key> m_applied_fonts;
+		// The fonts read besides the UI and icon fonts, for forget_fonts().
+		std::vector<res::tag> m_read_fonts;
 	};
 }
