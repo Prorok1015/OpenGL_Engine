@@ -31,6 +31,11 @@ EDITOR_EXTENSION = 'Editor/code/editor_system/include/snk/editor/edt_editor_exte
 PINS = 'tools/ci/vtable_pins.json'
 CHANGES_DIR = 'docs/abi/changes/'
 TOOL = 'check_abi_changes'
+# Watched files that moved: a base from before the move holds them at the former path, which is read there instead.
+FORMER_PATHS = {
+    # renamed in #1026 (core/engine/game_system -> core/engine/game)
+    LAYOUT_HEADER: ('core/engine/game_system/include/snk/game/gs_module_layout.h',),
+}
 
 REVISION = re.compile(r'layout_revision\s*=\s*(\d+)')
 MODULE_VERSION = re.compile(r'#define\s+SNK_MODULE_API_VERSION\s+(\S+)')
@@ -134,11 +139,20 @@ def text_at(repo, commit, path):
         return None
 
 
+def text_of_watched(read, path):
+    """The text of a watched file through `read(path)` (None when missing), at a former path when not at `path`."""
+    for candidate in (path, *FORMER_PATHS.get(path, ())):
+        text = read(candidate)
+        if text is not None:
+            return text
+    return None
+
+
 def collect(repo, base, head):
     watched = (LAYOUT_HEADER, MODULE_ENTRY, EDITOR_EXTENSION, PINS)
     change = {
-        'base': {path: text_at(repo, base, path) for path in watched},
-        'head': {path: text_at(repo, head, path) for path in watched},
+        'base': {path: text_of_watched(lambda at: text_at(repo, base, at), path) for path in watched},
+        'head': {path: text_of_watched(lambda at: text_at(repo, head, at), path) for path in watched},
         'added_lines': {},
         'removed_lines': {},
         'added_files': {},
@@ -181,13 +195,21 @@ def self_test():
         base = {LAYOUT_HEADER: 'inline constexpr std::uint64_t layout_revision = 14;',
                 MODULE_ENTRY: '// rule\n#define SNK_MODULE_API_VERSION 0x0004\'0000u\n',
                 EDITOR_EXTENSION: '#define SNK_EDITOR_API_VERSION 0x0002\'0000u\n', PINS: '{}'}
+        base.update(over.get('base', {}))
         head = dict(base)
         head.update(over.get('head', {}))
         return {'base': base, 'head': head, 'added_lines': over.get('added_lines', {}),
                 'removed_lines': over.get('removed_lines', {}), 'added_files': over.get('added_files', {})}
 
+    revision_14 = 'inline constexpr std::uint64_t layout_revision = 14;'
+    before_the_move = {FORMER_PATHS[LAYOUT_HEADER][0]: revision_14}
     cases = [
         ('nothing changes', change(), 0),
+        ('the layout header missing from the base reads as a changed revision',
+         change(base={LAYOUT_HEADER: None}, head={LAYOUT_HEADER: revision_14}), 1),
+        ('the layout header at its former path in the base (#1026)',
+         change(base={LAYOUT_HEADER: text_of_watched(before_the_move.get, LAYOUT_HEADER)},
+                head={LAYOUT_HEADER: revision_14}), 0),
         ('a comment changes', change(added_lines={'a/include/x.h': ['// note']}), 0),
         ('a raised layout_revision without an entry',
          change(head={LAYOUT_HEADER: 'inline constexpr std::uint64_t layout_revision = 15;'}), 1),
