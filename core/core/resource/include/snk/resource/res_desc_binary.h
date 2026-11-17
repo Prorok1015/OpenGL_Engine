@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +21,8 @@
 #include <snk/resource/res_tag.h>
 
 // Large numeric data of a desc (mesh vertices and indices first) kept in a binary file next to it (EPIC-79, #1068).
-// Format, naming and write order: docs/epics/desc-driven/EPIC-79.md.
+// Format, naming and write order: docs/epics/desc-driven/EPIC-79.md. What needs no resource_system (the layouts and ranges,
+// the tags, encode and save_lock) is in snk_model_codec (#1077), the rest in resource_system.
 namespace res
 {
 	class resource_system;
@@ -93,6 +95,16 @@ namespace res
 		commit,
 	};
 
+	// The step of desc_binary::save that failed: before `desc` the old pair stays readable; at `commit` the new desc is
+	// written and needs the staged file beside it until the caller commits or takes the desc back.
+	enum class desc_binary_save_step : std::uint8_t
+	{
+		none,
+		staging,
+		desc,
+		commit,
+	};
+
 	struct desc_binary_written
 	{
 		// For the desc, in the order of the chunks.
@@ -101,6 +113,8 @@ namespace res
 		std::vector<std::byte> file;
 		// Empty on success.
 		std::string error;
+		// Set by save() only; write_pending leaves it none.
+		desc_binary_save_step failed_step = desc_binary_save_step::none;
 
 		explicit operator bool() const { return error.empty(); }
 	};
@@ -131,6 +145,7 @@ namespace res
 	{
 		inline constexpr std::uint32_t version = 1;
 		// "SNKB", then the version as a little-endian u32.
+		inline constexpr std::array<char, 4> magic{ 'S', 'N', 'K', 'B' };
 		inline constexpr std::size_t header_bytes = 8;
 		// The writer starts every range at a multiple of this.
 		inline constexpr std::size_t range_alignment = 16;
@@ -187,11 +202,18 @@ namespace res
 		SNK_API file_operation commit_pending(resource_system& system, const save_lock& lock, const tag& desc,
 			const desc_binary_written& written);
 
+		// After a save that failed at its commit, under that save's lock: puts `previous_desc` back (nullopt: removes the desc
+		// while it still holds `written_desc`), and only then the staged file while it still holds `written.file`.
+		SNK_API file_operation take_back(resource_system& system, const save_lock& lock, const tag& desc,
+			const desc_binary_written& written, const std::vector<std::byte>& written_desc,
+			const std::optional<std::vector<std::byte>>& previous_desc);
+
 		// Step 2 of save(): stores the desc with `ranges`; false stops the save before the commit.
 		using desc_writer = std::function<bool(std::span<const binary_range> ranges)>;
 
-		// The whole save under one save_lock: write_pending, `write_desc`, commit_pending. `error` names the failed step;
-		// before the desc is written the old pair stays readable, after it a reader recovers from the staged file.
+		// The whole save under one save_lock: write_pending, `write_desc`, commit_pending (tried twice). `error` names the
+		// failed step and `failed_step` says which: before the desc the old pair stays readable, after it (commit) the new
+		// desc needs the staged file, which a reader recovers from; the caller completes or takes back the pair under the lock.
 		SNK_API desc_binary_written save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
 			const desc_writer& write_desc);
 	}

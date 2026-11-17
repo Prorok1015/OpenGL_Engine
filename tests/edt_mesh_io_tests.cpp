@@ -1,12 +1,20 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include "test_temp_dir.hpp"
 #include "edt_mesh_bake.h"
 #include "edt_mesh_io.h"
 #include "edt_mesh_shapes.h"
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -19,6 +27,30 @@ struct mesh_io_fixture : test_util::null_engine_fixture
 	mesh_io_fixture() : null_engine_fixture(false) {}
 
 	res::resource_system& resources() { return storage.require<res::resource_system>(); }
+
+	// A project layer on disk, where a geometry is saved through a staged binary file and a commit (EPIC-79).
+	res::tag mount_disk()
+	{
+		std::filesystem::create_directories(disk.path() / "a");
+		resources().registrate_resolver<res::vfs_resolver>("meshdisk", std::vector<std::filesystem::path>{ disk.path() });
+		mounted = true;
+		return res::tag{ "meshdisk://a/sphere.geom.desc" };
+	}
+
+	~mesh_io_fixture()
+	{
+		if (mounted) resources().unregistrate_resolver("meshdisk");
+	}
+
+	bool mounted = false;
+
+	boost::json::object desc_on_disk(std::string_view name) const
+	{
+		std::ifstream in(disk.path() / "a" / name, std::ios::binary);
+		return boost::json::parse(std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() }).as_object();
+	}
+
+	test_util::temp_dir disk{ "edt_mesh_io" };
 
 	template<class T>
 	res::res_handle<T> load(std::string_view name, const std::string& text)
@@ -132,24 +164,64 @@ BOOST_AUTO_TEST_CASE(APolyDesc_LoadsThroughTheResourceSystem_OnceItsTypeIsRegist
 	unregister_mesh_descs(descs);
 }
 
-BOOST_AUTO_TEST_CASE(TheGeometryFile_HasNoBounds_AndItsParentIsOptional)
+BOOST_AUTO_TEST_CASE(TheGeometryFile_HasNoBounds_ItsDataIsInTheBinaryFile_AndItsParentIsOptional)
 {
+	const res::tag tag = mount_disk();
 	const baked_mesh baked = bake(*make_shape(box_params{}).mesh);
 
-	const boost::json::object with_parent = boost::json::parse(write_geometry_json(baked.geometry)).as_object();
+	BOOST_REQUIRE(write_mesh_geometry(resources(), tag, baked.geometry).empty());
+	const boost::json::object with_parent = desc_on_disk("sphere.geom.desc");
 	BOOST_TEST(!with_parent.contains("bounds"));
 	BOOST_TEST(std::string(with_parent.at("__parent").as_string()) == "res://base_geometry.desc");
 	BOOST_TEST(std::string(with_parent.at("__type").as_string()) == "geometry_desc");
+	BOOST_TEST(with_parent.at("vertices").is_object());
+	BOOST_TEST(std::filesystem::exists(disk.path() / "a" / "sphere.geom.bin"));
 
-	const boost::json::object without = boost::json::parse(write_geometry_json(baked.geometry, { false })).as_object();
-	BOOST_TEST(!without.contains("__parent"));
+	BOOST_REQUIRE(write_mesh_geometry(resources(), tag, baked.geometry, { false }).empty());
+	BOOST_TEST(!desc_on_disk("sphere.geom.desc").contains("__parent"));
+}
+
+// Owner decision of #1068: a mesh an old project keeps in JSON arrays is converted at its next save, with a warning.
+BOOST_AUTO_TEST_CASE(AMeshInJsonArrays_IsConvertedAtItsSave_WithTheWarning)
+{
+	const res::tag tag = mount_disk();
+	const baked_mesh baked = bake(*make_shape(box_params{}).mesh);
+	boost::json::object arrays;
+	baked.geometry.serialize(arrays);
+	BOOST_REQUIRE(resources().store_sync(tag, test_util::to_bytes(boost::json::serialize(arrays))));
+	BOOST_REQUIRE(file_holds_geometry_arrays(resources(), tag));
+
+	std::mutex said_mutex;
+	std::vector<std::string> warned;
+	const auto sink = engine::add_log_sink([&](std::string_view category, engine::log_level level, std::string_view message) {
+		if (category != "Editor/Save" || level != engine::log_level::warn) return;
+		std::lock_guard lock(said_mutex);
+		warned.emplace_back(message);
+	});
+	BOOST_REQUIRE(write_mesh_geometry(resources(), tag, baked.geometry).empty());
+	BOOST_TEST(!file_holds_geometry_arrays(resources(), tag));
+	BOOST_TEST(desc_on_disk("sphere.geom.desc").at("vertices").is_object());
+	{
+		std::lock_guard lock(said_mutex);
+		BOOST_REQUIRE(warned.size() == 1u);
+		BOOST_TEST(warned.front().find("meshdisk://a/sphere.geom.desc") != std::string::npos);
+		BOOST_TEST(warned.front().find("binary format (EPIC-79)") != std::string::npos);
+	}
+
+	// Saved again in the binary form: nothing to convert, no warning.
+	BOOST_REQUIRE(write_mesh_geometry(resources(), tag, baked.geometry).empty());
+	std::lock_guard lock(said_mutex);
+	BOOST_TEST(warned.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(TheGeometryFile_LoadsInTheEngine_WithoutTheEditor_AndKeepsTheLayoutOrder)
 {
+	const res::tag tag = mount_disk();
 	const baked_mesh baked = bake(*make_shape(sphere_params{ 0.5f, 8, 4 }).mesh);
 
-	const auto loaded = load<rnd::geometry_desc>("sphere.geom.desc", write_geometry_json(baked.geometry, { false }));
+	BOOST_REQUIRE(write_mesh_geometry(resources(), tag, baked.geometry, { false }).empty());
+	const auto loaded = resources().require_sync<rnd::geometry_desc>(tag);
+	test_util::pump(tasks);
 
 	BOOST_REQUIRE_MESSAGE(loaded.is_ready() && !loaded.has_error(), loaded.error_text());
 	const auto geometry = loaded.get_sync();

@@ -113,8 +113,6 @@ namespace res::detail
 
 namespace
 {
-	constexpr std::array<char, 4> k_magic{ 'S', 'N', 'K', 'B' };
-	constexpr std::string_view k_desc_suffix = ".desc";
 
 	res::desc_binary_data refuse(res::desc_binary_error kind, std::string message)
 	{
@@ -127,11 +125,6 @@ namespace
 	std::string describe(std::size_t index, const res::binary_range& range)
 	{
 		return std::format("range {} (offset {}, size {})", index, range.offset, range.size);
-	}
-
-	std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment)
-	{
-		return (value + alignment - 1) / alignment * alignment;
 	}
 
 	// Everything a range can be checked for without the file. `extent` is where the last range ends.
@@ -198,34 +191,6 @@ namespace
 			break;
 		}
 		return refuse(res::desc_binary_error::io, std::format("{}: {}", file_name, read.error));
-	}
-
-	bool is_lower_hex(std::string_view text)
-	{
-		return std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
-	}
-
-	// One recursive mutex per binary file, alive while a save_lock holds it.
-	struct save_lock_table
-	{
-		std::mutex mutex;
-		std::unordered_map<std::string, std::weak_ptr<std::recursive_mutex>> entries;
-	};
-
-	std::shared_ptr<std::recursive_mutex> save_mutex_of(const res::tag& desc)
-	{
-		static save_lock_table table;
-		const auto binary = res::desc_binary::binary_tag(desc);
-		const std::string key{ binary ? binary->view() : desc.view() };
-		std::lock_guard lock(table.mutex);
-		std::erase_if(table.entries, [](const auto& entry) { return entry.second.expired(); });
-		std::weak_ptr<std::recursive_mutex>& slot = table.entries[key];
-		if (auto alive = slot.lock()) {
-			return alive;
-		}
-		auto made = std::make_shared<std::recursive_mutex>();
-		slot = made;
-		return made;
 	}
 
 	// commit mode, the save lock held: the verified staged bytes become the binary file.
@@ -310,185 +275,6 @@ namespace
 	}
 }
 
-std::optional<res::binary_layout> res::parse_binary_layout(std::string_view text)
-{
-	binary_layout out;
-	std::string_view rest;
-	if (text == "u8") {
-		return out;
-	}
-	if (text.starts_with("u32")) {
-		out.scalar = binary_scalar::u32;
-	} else if (text.starts_with("f32")) {
-		out.scalar = binary_scalar::f32;
-	} else {
-		return std::nullopt;
-	}
-	rest = text.substr(3);
-	if (rest.empty()) {
-		return out;
-	}
-	// "xN" with N written without a leading zero: one spelling per layout.
-	if (rest.size() < 2 || rest.size() > 3 || rest[0] != 'x' || rest[1] == '0') {
-		return std::nullopt;
-	}
-	unsigned count = 0;
-	for (const char c : rest.substr(1)) {
-		if (c < '0' || c > '9') {
-			return std::nullopt;
-		}
-		count = count * 10 + static_cast<unsigned>(c - '0');
-	}
-	if (count < 1 || count > 32) {
-		return std::nullopt;
-	}
-	out.count = static_cast<std::uint8_t>(count);
-	return out;
-}
-
-boost::json::object res::to_json(const binary_range& range)
-{
-	boost::json::object out;
-	out["offset"] = range.offset;
-	out["size"] = range.size;
-	out["sha256"] = range.sha256;
-	out["layout"] = range.layout;
-	return out;
-}
-
-std::optional<res::binary_range> res::binary_range_from_json(const boost::json::value& value, std::string& error)
-{
-	const auto* object = value.if_object();
-	if (object == nullptr) {
-		error = "a binary range is not an object";
-		return std::nullopt;
-	}
-	const auto unsigned_of = [&](std::string_view key) -> std::optional<std::uint64_t> {
-		const auto* field = object->if_contains(key);
-		if (field == nullptr) {
-			error = std::format("a binary range has no '{}'", key);
-			return std::nullopt;
-		}
-		// Up to 2^53: a reader that keeps JSON numbers as doubles still gets the exact value.
-		constexpr std::uint64_t max_exact = std::uint64_t{ 1 } << 53;
-		std::optional<std::uint64_t> found;
-		if (field->is_uint64()) {
-			found = field->get_uint64();
-		} else if (field->is_int64() && field->get_int64() >= 0) {
-			found = static_cast<std::uint64_t>(field->get_int64());
-		}
-		if (!found || *found > max_exact) {
-			error = std::format("'{}' of a binary range is not an integer from 0 to 2^53", key);
-			return std::nullopt;
-		}
-		return found;
-	};
-	const auto text_of = [&](std::string_view key) -> std::optional<std::string> {
-		const auto* field = object->if_contains(key);
-		const auto* text = field != nullptr ? field->if_string() : nullptr;
-		if (text == nullptr) {
-			error = std::format("'{}' of a binary range is missing or not a string", key);
-			return std::nullopt;
-		}
-		return std::string(text->data(), text->size());
-	};
-
-	const auto offset = unsigned_of("offset");
-	if (!offset) {
-		return std::nullopt;
-	}
-	const auto size = unsigned_of("size");
-	if (!size) {
-		return std::nullopt;
-	}
-	auto sha256 = text_of("sha256");
-	if (!sha256) {
-		return std::nullopt;
-	}
-	auto layout = text_of("layout");
-	if (!layout) {
-		return std::nullopt;
-	}
-	if (sha256->size() != 64 || !is_lower_hex(*sha256)) {
-		error = "'sha256' of a binary range is not 64 lowercase hex digits";
-		return std::nullopt;
-	}
-	if (!parse_binary_layout(*layout)) {
-		error = std::format("'layout' of a binary range is unknown: '{}'", *layout);
-		return std::nullopt;
-	}
-	return binary_range{ *offset, *size, std::move(*sha256), std::move(*layout) };
-}
-
-std::optional<res::tag> res::desc_binary::binary_tag(const tag& desc)
-{
-	const std::string_view name = desc.name();
-	if (!name.ends_with(k_desc_suffix)) {
-		return std::nullopt;
-	}
-	// `<name>.<ext>`: a desc kind is always named, so "a.desc" or ".geom.desc" has no binary file.
-	const std::string_view stem = name.substr(0, name.size() - k_desc_suffix.size());
-	const auto dot = stem.find_last_of('.');
-	if (dot == std::string_view::npos || dot == 0 || dot + 1 == stem.size()) {
-		return std::nullopt;
-	}
-	const std::string_view full = desc.view();
-	return tag{ std::string(full.substr(0, full.size() - k_desc_suffix.size())) + ".bin" };
-}
-
-std::optional<res::tag> res::desc_binary::staged_tag(const tag& desc)
-{
-	const auto binary = binary_tag(desc);
-	if (!binary) {
-		return std::nullopt;
-	}
-	return tag{ std::string(binary->view()) + ".new" };
-}
-
-std::optional<std::vector<std::byte>> res::desc_binary::encode(std::span<const binary_chunk> chunks,
-	std::vector<binary_range>& ranges, std::string& error)
-{
-	ranges.clear();
-	// A file is read at most max_ranges ranges at a time: one with more could never be read back whole.
-	if (chunks.size() > max_ranges) {
-		error = std::format("{} chunks in one file, at most {} are read", chunks.size(), max_ranges);
-		return std::nullopt;
-	}
-	ranges.reserve(chunks.size());
-	std::uint64_t end = header_bytes;
-	for (std::size_t i = 0; i < chunks.size(); ++i) {
-		const binary_chunk& chunk = chunks[i];
-		const auto layout = parse_binary_layout(chunk.layout);
-		if (!layout) {
-			error = std::format("chunk {} has an unknown layout '{}'", i, chunk.layout);
-			return std::nullopt;
-		}
-		if (chunk.bytes.size() % layout->element_bytes() != 0) {
-			error = std::format("chunk {} ({} bytes) is not a whole number of '{}' elements", i, chunk.bytes.size(), chunk.layout);
-			return std::nullopt;
-		}
-		const std::uint64_t offset = align_up(end, range_alignment);
-		if (chunk.bytes.size() > max_file_bytes || offset + chunk.bytes.size() > max_file_bytes) {
-			error = std::format("the binary file would be larger than {} bytes", max_file_bytes);
-			return std::nullopt;
-		}
-		ranges.push_back(binary_range{ offset, chunk.bytes.size(), cmn::sha256_hex(chunk.bytes), std::string(chunk.layout) });
-		end = offset + chunk.bytes.size();
-	}
-
-	std::vector<std::byte> file(static_cast<std::size_t>(end));
-	std::memcpy(file.data(), k_magic.data(), k_magic.size());
-	for (std::size_t i = 0; i < 4; ++i) {
-		file[k_magic.size() + i] = static_cast<std::byte>((version >> (8 * i)) & 0xffu);
-	}
-	for (std::size_t i = 0; i < chunks.size(); ++i) {
-		if (!chunks[i].bytes.empty()) {
-			std::memcpy(file.data() + ranges[i].offset, chunks[i].bytes.data(), chunks[i].bytes.size());
-		}
-	}
-	return file;
-}
-
 res::desc_binary_data res::desc_binary::parse(std::string_view file_name, std::span<const std::byte> file,
 	std::span<const binary_range> ranges, bool verify_hash)
 {
@@ -500,12 +286,12 @@ res::desc_binary_data res::desc_binary::parse(std::string_view file_name, std::s
 		return refuse(desc_binary_error::header,
 			std::format("{}: {} bytes, shorter than the {}-byte header", file_name, file.size(), header_bytes));
 	}
-	if (std::memcmp(file.data(), k_magic.data(), k_magic.size()) != 0) {
+	if (std::memcmp(file.data(), magic.data(), magic.size()) != 0) {
 		return refuse(desc_binary_error::header, std::format("{}: not a desc binary file (no SNKB magic)", file_name));
 	}
 	std::uint32_t found_version = 0;
 	for (std::size_t i = 0; i < 4; ++i) {
-		found_version |= static_cast<std::uint32_t>(file[k_magic.size() + i]) << (8 * i);
+		found_version |= static_cast<std::uint32_t>(file[magic.size() + i]) << (8 * i);
 	}
 	if (found_version != version) {
 		return refuse(desc_binary_error::header,
@@ -530,17 +316,6 @@ res::desc_binary_data res::desc_binary::parse(std::string_view file_name, std::s
 	return out;
 }
 
-res::desc_binary::save_lock::save_lock(const tag& desc)
-	: m_mutex(save_mutex_of(desc))
-{
-	m_mutex->lock();
-}
-
-res::desc_binary::save_lock::~save_lock()
-{
-	m_mutex->unlock();
-}
-
 res::desc_binary_data res::desc_binary::read(resource_system& system, const tag& desc, std::span<const binary_range> ranges,
 	bool verify_hash, std::uint64_t max_bytes, desc_binary_recovery recovery)
 {
@@ -562,11 +337,6 @@ res::desc_binary_data res::desc_binary::read(resource_system& system, const tag&
 		return read_pair(system, desc, *binary, *staged, ranges, verify_hash, max_bytes, true);
 	}
 	return read_pair(system, desc, *binary, *staged, ranges, verify_hash, max_bytes, false);
-}
-
-bool res::desc_binary::save_lock::guards(const tag& desc) const
-{
-	return m_mutex == save_mutex_of(desc);
 }
 
 namespace
@@ -618,20 +388,54 @@ res::file_operation res::desc_binary::commit_pending(resource_system& system, co
 	return detail::desc_binary_access::commit(system, *staged, *binary, written.file);
 }
 
+res::file_operation res::desc_binary::take_back(resource_system& system, const save_lock& lock, const tag& desc,
+	const desc_binary_written& written, const std::vector<std::byte>& written_desc,
+	const std::optional<std::vector<std::byte>>& previous_desc)
+{
+	require_guard(lock, desc, "take_back");
+	const auto staged = staged_tag(desc);
+	if (!staged) {
+		return file_operation::failure(std::format("'{}' is not named <name>.<ext>.desc: it has no binary file", desc.view()));
+	}
+	if (previous_desc) {
+		if (!system.store_sync(desc, *previous_desc)) {
+			return file_operation::failure(std::format("the previous '{}' could not be written back (see the log)", desc.view()));
+		}
+	} else if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, desc, written_desc); !removed) {
+		return file_operation::failure(std::format("'{}' could not be removed: {}", desc.view(), removed.error));
+	}
+	// No desc needs the staged file any more: a leftover is only stale, a reader ignores it.
+	if (!written.file.empty()) {
+		if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, *staged, written.file); !removed) {
+			egLOG_WARN("resource/desc_binary", "A stale staged file '{}' stays: {}", staged->view(), removed.error);
+		}
+	}
+	return file_operation::success();
+}
+
 res::desc_binary_written res::desc_binary::save(resource_system& system, const tag& desc, std::span<const binary_chunk> chunks,
 	const desc_writer& write_desc)
 {
 	const save_lock lock(desc);
 	desc_binary_written out = write_pending(system, lock, desc, chunks);
 	if (!out) {
+		out.failed_step = desc_binary_save_step::staging;
 		return out;
 	}
 	if (!write_desc || !write_desc(out.ranges)) {
 		out.error = std::format("'{}' was not written: the save stopped before the commit", desc.view());
+		out.failed_step = desc_binary_save_step::desc;
 		return out;
 	}
-	if (const file_operation committed = commit_pending(system, lock, desc, out); !committed) {
+	// The desc is on disk: one more try before the caller has to take it back.
+	file_operation committed = commit_pending(system, lock, desc, out);
+	if (!committed) {
+		egLOG_WARN("resource/desc_binary", "'{}': the commit of its binary file failed, tried again: {}", desc.view(), committed.error);
+		committed = commit_pending(system, lock, desc, out);
+	}
+	if (!committed) {
 		out.error = std::format("'{}' was written, its binary file was not committed: {}", desc.view(), committed.error);
+		out.failed_step = desc_binary_save_step::commit;
 	}
 	return out;
 }

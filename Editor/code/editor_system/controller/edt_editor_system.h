@@ -25,7 +25,6 @@
 #include "edt_level_controller.h"
 #include "edt_migration_startup.h"
 #include "edt_module_swap_gate.h"
-#include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -49,15 +48,16 @@ namespace edt {
 	class panels_component;
 	class problems_component;
 	class level_load_component;
+	class game_layer_component;
 	class asset_database;
 	class agent_server;
 	class agent_access;
-	class agent_policy_model;
-	class agents_panel;
-	class file_menu;
-	class agent_sessions;
+	class agent_component;
+	class agent_ui_component;
+	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
+	class startup_component;
 	class vcs_component;
 	class migration_component;
 	struct journal_offer;
@@ -66,12 +66,7 @@ namespace edt {
 	class editor_context;
 	class editor_layer;
 	class asset_open_component;
-	class model_importer;
-	class process_decoder;
-	class decoder_sandbox_notice;
-	class asset_exporter;
-	class agent_model_import;
-	class asset_export_dialog;
+	class import_component;
 	class scene_hierarchy_panel;
 	class inspector_panel;
 	class viewport_panel;
@@ -160,67 +155,21 @@ namespace edt {
 		// Input
 		inp::input_router* m_input_router = nullptr;
 
-		// Import/export
-#if SNK_HAS_ASSIMP
-		std::unique_ptr<edt::model_importer> m_model_importer;
-		// An agent's model is parsed in its process (#647); the agent import below calls it, so it goes after that.
-		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this system with.
-		std::shared_ptr<edt::process_decoder> m_process_decoder;
-		// What the decoders of this run said of their OS sandbox, in Problems (#1076).
-		std::shared_ptr<edt::decoder_sandbox_notice> m_decoder_sandbox;
-		bool m_model_adapter_registered = false;
-#endif
-		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
-		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
-		// The model import an agent asks for (#548): after the exporter it uses, before the context's job service goes.
-		std::unique_ptr<edt::agent_model_import> m_agent_import;
-#if SNK_HAS_ASSIMP
-		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
-		bool m_importing = false;
-		bool m_import_finished = false;
-		std::uint64_t m_import_job = 0;
-		std::string m_import_name;
-		float m_import_spinner_t = 0.f;
-		std::optional<import_intermediate> m_import_result;
-		// Set when the job itself failed (exception); a failed import reports through m_import_result->error.
-		std::string m_import_failure;
-		// The memory:// folders of the import in flight and of the one the export dialog shows (#987). The first goes with
-		// finish_import whatever the outcome (a cancelled job never reports), the second when the dialog closes.
-		std::string m_import_folder;
-		std::string m_dialog_import_folder;
-		std::uint64_t m_import_serial = 0;
-		void erase_import_folder(std::string& folder);
-		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
-		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
-		void start_import(const std::filesystem::path& abs_path);
-		bool poll_import_progress();
-		void finish_import();
-#endif
-		bool poll_import_pipeline();
+		// Import/export (the decoder, the person's import, the exporter, the agent's import)
+		std::unique_ptr<edt::import_component> m_import;
 
 		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
 		void wire_controller_callbacks();
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
-		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
-		void draw_save_notice();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
-		// The agents window (#449): the status bar slot, the notice and opening the window.
-		void draw_agent_status();
-		void draw_agent_policy_notice();
-		void open_agents_panel();
 
 	public:
-		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
-		// file; a different port restarts it) or off (every session ends and is reported). The choice is kept in
-		// edt://settings/agent_server.json, only when it took effect. False when there is no agent server object or the
-		// port cannot be bound. Main thread.
-		bool set_agent_server(bool enabled, std::uint16_t port);
-		agent_server* agent_server_object() { return m_agent_server.get(); }
+		agent_server* agent_server_object();
 		// The policy behind the agent server; null before init(). For tests that pin what an agent can never reach.
-		agent_access* agent_access_object() { return m_agent_access.get(); }
+		agent_access* agent_access_object();
 		// The asset database of the open project (#760); null without a project.
 		asset_database* assets();
 
@@ -242,23 +191,12 @@ namespace edt {
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
 
-		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
-		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
-		void follow_game_layer_change(bool before);
-		// Changes of the game layer reach follow_game_layer_change through it; a reload of the game module holds them (#435).
-		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
-		// The level whose load the change interrupted; loaded again into the new layer.
-		res::tag m_level_after_layer_change;
-		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
-		std::uint64_t m_game_layer_generation = 0;
 		std::optional<std::string> migration_blocker() const;
 		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
 		std::optional<std::string> project_write_blocker();
-		timed_notice m_save_notice;
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
-		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
 		// Set with editor/exit_after_level_loaded: stops the frame loop once a loaded level settled (CI headless run).
 		std::function<void()> m_stop_after_level_loaded;
@@ -266,16 +204,18 @@ namespace edt {
 		// The load of a level and the settle after it (US-24-4, #613, #1004); its action is in m_registrations, removed before it.
 		// Declared after m_tasks, which the settle uses.
 		std::unique_ptr<edt::level_load_component> m_level_load;
+		// A game module loaded, unloaded or reloaded (#435, #1004): the editor lets go of the old game layer and builds its level in
+		// the new one; owns the swap gate the build and Play components hand to the host. After what it reaches (the level load, the
+		// prefab and asset components), so it is destroyed before them.
+		std::unique_ptr<edt::game_layer_component> m_game_layer;
 		// Project migration (EPIC-58, #761, #1004): the commands, the window, the offer to roll back, the notice and the scan;
 		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
 		// changes and saves, builds, module reloads and quitting (migration_blocker).
 		std::unique_ptr<migration_component> m_migration;
-		std::unique_ptr<edt::file_menu> m_file_menu;
+		std::unique_ptr<edt::file_menu_component> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
 		std::unique_ptr<edt::game_build_component> m_build;
-		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
-		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 		// Version control and the code host (#458, #1004): git, the repository watcher, pull requests, the tokens and the Git
 		// Account window; its commands are in m_registrations, removed before it. Before the asset database, whose callbacks ask it
 		// whether a git write runs, so the database goes first.
@@ -289,6 +229,9 @@ namespace edt {
 		// Live mode and the question "Trust this project?" (#445, #921, #1004); after the builder and the reloader it calls, so it
 		// is destroyed first.
 		std::unique_ptr<edt::live_mode_component> m_live;
+		// The first frames (#1004): the held-project question, the start level, the question about the project's modules. Registers
+		// implicit callbacks only; after what they reach (the level load, live mode), so it is destroyed first.
+		std::unique_ptr<edt::startup_component> m_startup;
 		// Play of the scene document and the editor/game mode (#1004); its commands are in m_registrations, removed before it.
 		// Stopped in the destructor while the context it reports to is still there.
 		std::unique_ptr<edt::play_component> m_play_component;
@@ -302,34 +245,10 @@ namespace edt {
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
-		// Taken by work the stdio transport posts to the main thread: it finds the system gone through the weak copy.
-		std::shared_ptr<int> m_stdio_alive = std::make_shared<int>(0);
-		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
-		// null when both are off.
-		std::unique_ptr<agent_access> m_agent_access;
-		// Holds the check of #681 (make_agent_model_check over m_res) while this system lives.
-		cmd::command_registry* m_agent_argument_checks = nullptr;
-		// The engine's filter of log.read, filled in by this system and emptied when it goes.
-		cmd::log_read_filter* m_log_filter = nullptr;
-		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
-		std::unique_ptr<agent_server> m_agent_server;
-		std::filesystem::path m_agent_server_settings_file;
-		// The policy part of the agents window (#449); after the access it reads, so it is destroyed first.
-		std::unique_ptr<agent_policy_model> m_agent_policy_model;
-		std::shared_ptr<agents_panel> m_agents_panel;
-		// The last actions an agent made (editor_events::agent_action), for the status bar slot.
-		struct recent_agent_action
-		{
-			std::string command;
-			std::string target;
-			std::string session;
-			std::chrono::steady_clock::time_point at;
-		};
-		std::deque<recent_agent_action> m_recent_agent_actions;
-		// The pending loosenings (as text) the person sent away with "Later"; empty = not dismissed. A different set shows the notice again.
-		std::string m_policy_notice_dismissed_key;
-		std::chrono::steady_clock::time_point m_policy_refreshed{};
-		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
-		std::vector<connection> m_session_connections;
+		// What an agent can reach (the MCP server, the policy, the log filter, editor.quit). Declared before the agents window
+		// (m_agent_ui) below, which reads its access: that goes first, then this one (shutdown() already ran at the top of ~editor_system).
+		std::unique_ptr<agent_component> m_agent;
+		// The agents window, its status slot and notice (#449): reads the access of m_agent, so it is destroyed first.
+		std::unique_ptr<agent_ui_component> m_agent_ui;
 	};
 }

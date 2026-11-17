@@ -16,11 +16,12 @@
 #include <snk/desc/desc_template_files.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/render/rnd_render_service_init.h>
+#include <snk/gui/gui_gui_service_init.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_registration_scope.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -127,9 +128,10 @@ int main(int argc, char** argv)
 	rnd::skinning_manager skinning;
 	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
 	engine::render::register_render_descs(desc_sys);
+	engine::gui::register_gui_descs(desc_sys);
 #if SNK_HAS_ASSIMP
 	// Levels reference models (.glb) that are imported into prefabs while they load.
-	res_sys.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_sys), std::ref(res_sys));
+	mdl::register_model_adapter(res_sys, desc_sys);
 #endif
 	core::desc::desc_adapter_t adapter(res_sys, desc_sys);
 

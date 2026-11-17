@@ -7,6 +7,7 @@
 #include "edt_model_file_access.h"
 #include "edt_model_importer.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_system.h>
 #include <cstdint>
 #include <cstddef>
@@ -18,6 +19,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace desc { class desc_system; }
 
 namespace edt {
 
@@ -33,8 +36,14 @@ namespace edt {
 	// The answer to an import: `kind` is "import", the resources that came with it are exactly its created tags (every one of
 	// them there once), all tags are memory:// tags below the one folder of the prefab, and nothing of the model's path is
 	// taken from the child (the request's is). An import the child reported as failed comes back with `error` set and no
-	// resources.
-	std::optional<import_intermediate> accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem);
+	// resources. The geometry is decoded as the loader decodes it (#1068 PR3b): triangles as its desc and binary file
+	// <stem>.geom.bin (created, never listed), lines and points as arrays. With `geometry`, a pair is encoded again by the
+	// editor's writer from the decoded data, for the caller to store instead of the child's bytes. With `descs`, the prefab
+	// blob (the decoder stores it unstamped, #1077) is stamped by that desc system and becomes `prefab_json`: the caller
+	// stores desc::pretty_json_bytes of it instead of the child's bytes, as an import in this process stores it. Without, the
+	// prefab is left as it came (an answer read back from memory:// was stamped when it was stored).
+	std::optional<import_intermediate> accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem,
+		rnd::geometry_files* geometry = nullptr, const desc::desc_system* descs = nullptr);
 
 	// Whether `relative` (below the folder of an import named `stem`) is a name an import gives a resource: <stem>.prefab.desc,
 	// <stem>.geom.desc, materials/*.mat.desc, textures/*.txm.desc and images, __embedded_txm/* descs and images. Never a model
@@ -78,7 +87,9 @@ namespace edt {
 		// sandbox (#1076: the editor shows it in Problems).
 		using sandbox_listener = std::function<void(const decoder_sandbox_status&)>;
 
-		process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox = {});
+		// `descs` stamps the prefabs it accepts (accept_import_answer).
+		process_decoder(res::resource_system& resources, const desc::desc_system& descs, decode_runner_config config,
+			sandbox_listener on_sandbox = {});
 
 		// Empty when the decoder can be run; else why not, naming the file.
 		std::string unavailable_reason() const;
@@ -101,6 +112,7 @@ namespace edt {
 		std::optional<decoder_copy> renew_copy(const std::filesystem::path& decoder, const decoder_copy& stale, std::string& why) const;
 
 		res::resource_system& m_resources;
+		const desc::desc_system& m_descs;
 		decode_runner_config m_config;
 		sandbox_listener m_on_sandbox;
 		mutable std::mutex m_copy_mutex;

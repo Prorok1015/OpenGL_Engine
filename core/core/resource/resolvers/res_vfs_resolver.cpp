@@ -987,10 +987,7 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	}
 	fs::path candidate = fs::weakly_canonical(joined.parent_path(), ec);
 	if (ec) {
-		// A confined process (the model decoder in its AppContainer, #1054) may not read a folder's final name on its
-		// volume: the folder as written, which holds no ".." (refused above) and is checked to be below the root next.
-		ec.clear();
-		candidate = joined.parent_path().lexically_normal();
+		return std::nullopt;
 	}
 	candidate /= joined.filename();
 	// The last component is not resolved above, so a symlink there could point anywhere.

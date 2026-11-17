@@ -1,22 +1,28 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/resource/res_desc_binary.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <initializer_list>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-// scn::model_importer_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
+// mdl::model_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
 
 namespace json = boost::json;
 
@@ -118,7 +124,7 @@ struct importer_fixture : test_util::scene_env
 {
 	importer_fixture()
 	{
-		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
+		rs->registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
 
 	std::shared_ptr<scn::prefab_desc> import(const char* name, const char* text)
@@ -315,6 +321,7 @@ BOOST_AUTO_TEST_CASE(Obj_TriangleBecomesPrefabWithMeshNodeAndDefaultMaterial)
 	BOOST_TEST(mat.at("defines").at(0).as_string() == "LIGHTS_ENABLED");
 }
 
+// EPIC-79 (#1068): the vertices and indices are in the binary file beside the desc, the desc holds their ranges.
 BOOST_AUTO_TEST_CASE(Obj_StoresGeometryDescWithLayoutIndicesAndVertexBytes)
 {
 	import("tri.obj", OBJ_TRIANGLE);
@@ -324,9 +331,12 @@ BOOST_AUTO_TEST_CASE(Obj_StoresGeometryDescWithLayoutIndicesAndVertexBytes)
 	BOOST_TEST(geom.at("__type").as_string() == "geometry_desc");
 	BOOST_TEST(geom.at("layout").at("position").as_string() == "vec3");
 	BOOST_TEST(geom.at("layout").at("uv").as_string() == "vec2");
-	BOOST_TEST(geom.at("indices").as_array().size() == 3u);
+	BOOST_TEST(geom.at("indices").at("layout").as_string() == "u32");
+	BOOST_TEST(geom.at("indices").at("size").to_number<std::uint64_t>() == 3u * sizeof(std::uint32_t));
 	// stride = pos3 + normal3 + uv2 + tangent3 + bitangent3 floats
-	BOOST_TEST(geom.at("vertices").as_array().size() == 3u * 14u * sizeof(float));
+	BOOST_TEST(geom.at("vertices").at("layout").as_string() == "f32x14");
+	BOOST_TEST(geom.at("vertices").at("size").to_number<std::uint64_t>() == 3u * 14u * sizeof(float));
+	BOOST_TEST(ram->files.contains(res::tag{ "memory://models/tri.geom.bin" }));
 }
 
 BOOST_AUTO_TEST_CASE(Obj_RegistersAliasFromSourceTagToStoredPrefab)
@@ -408,12 +418,17 @@ BOOST_AUTO_TEST_CASE(Gltf_NinetyDegreeYawRoundTripsThroughPrefabTransform)
 	BOOST_TEST(diff < 1e-2f);
 }
 
-BOOST_AUTO_TEST_CASE(Obj_MeshWithoutUvsImportsWithZeroUvBounds)
+// #1108: a mesh without uvs has no uv bounds (the importers once differed: the engine's wrote a (0, 0) box per triangle).
+BOOST_AUTO_TEST_CASE(Obj_AMeshWithoutUvs_ImportsWithoutUvBounds)
 {
 	auto prefab = import("nouv.obj", OBJ_NO_UV);
 	BOOST_REQUIRE(prefab);
 	auto out = serialized(*prefab);
 	BOOST_TEST(child_named(child_named(out, "Tri"), "mesh_Tri").at("components").at("mesh_node_desc").at("ind_end").to_number<int>() == 3);
+	const auto geometry = ram->files.find(res::tag{ "memory://models/nouv.geom.desc" });
+	BOOST_REQUIRE(geometry != ram->files.end());
+	const json::object desc = json::parse(std::string_view(reinterpret_cast<const char*>(geometry->second.data()), geometry->second.size())).as_object();
+	BOOST_TEST(!desc.contains("bounds"));
 }
 
 BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
@@ -476,6 +491,43 @@ BOOST_AUTO_TEST_CASE(Obj_ATextureAboveTheProtocolsRootOrAbsolute_IsNotLoaded)
 	}
 }
 
+// #1112: the embedded textures of a model go to a folder of the model's own, so two models of one name in two folders
+// keep theirs apart (they once shared memory://__embedded_txm_<name>/).
+BOOST_AUTO_TEST_CASE(EmbeddedTextures_OfTwoModelsOfOneNameInTwoFolders_DoNotCollide)
+{
+	std::ifstream in(std::filesystem::path(SNK_TEST_PROJECT_DIR) / "res" / "objects" / "robot" / "gen_robot.glb", std::ios::binary);
+	const std::string model{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	BOOST_REQUIRE(!model.empty());
+	const auto load = [&](const std::string& folder) {
+		const res::tag tag{ "memory://models/" + folder + "/gen_robot.glb" };
+		rs->store(tag, test_util::to_bytes(model));
+		return require_loaded<scn::prefab_desc>(tag).get_sync();
+	};
+	// The embedded textures stored under memory://models/<folder>/.
+	const auto embedded_of = [&](const std::string& folder) {
+		std::vector<std::string> found;
+		for (const auto& file : ram->files) {
+			const std::string_view tag = file.first.view();
+			if (tag.find("__embedded_txm") != std::string_view::npos && tag.starts_with("memory://models/" + folder + "/")) {
+				found.emplace_back(tag);
+			}
+		}
+		return found;
+	};
+	BOOST_REQUIRE(load("a1112"));
+	BOOST_REQUIRE(load("b1112"));
+	const std::vector<std::string> first = embedded_of("a1112");
+	const std::vector<std::string> second = embedded_of("b1112");
+	BOOST_TEST(!first.empty());
+	BOOST_TEST(first.size() == second.size());
+	for (const std::string& tag : first) {
+		BOOST_CHECK_MESSAGE(tag.starts_with("memory://models/a1112/gen_robot__embedded_txm/"), tag);
+	}
+	for (const auto& file : ram->files) {
+		BOOST_CHECK_MESSAGE(!file.first.view().starts_with("memory://__embedded_txm"), file.first.view());
+	}
+}
+
 // #977: bytes imported before under the same tag are written again as that import wrote them, without assimp.
 namespace {
 
@@ -491,38 +543,44 @@ const res::tag* file_of(const test_util::ram_resolver& ram, std::string_view mod
 
 BOOST_AUTO_TEST_CASE(TheSameBytesImportedAgain_AreWrittenAgain_WithoutAssimp)
 {
-	scn::remember_model_imports(true);
-	const std::size_t before = scn::model_importer_runs();
+	mdl::remember_model_imports(true);
+	const std::size_t before = mdl::model_importer_runs();
 	const auto first = import("cache977/once.obj", OBJ_TRIANGLE);
 	BOOST_REQUIRE(first);
-	BOOST_REQUIRE(scn::model_importer_runs() == before + 1u);
+	BOOST_REQUIRE(mdl::model_importer_runs() == before + 1u);
 	const json::object first_prefab = serialized(*first);
 	const res::tag* geometry = file_of(*ram, "cache977/", ".geom.desc");
 	BOOST_REQUIRE(geometry != nullptr);
 	const res::tag geometry_tag = *geometry;
 	const std::vector<std::byte> geometry_bytes = ram->files.at(geometry_tag);
+	const res::tag binary_tag = *res::desc_binary::binary_tag(geometry_tag);
+	BOOST_REQUIRE(ram->files.contains(binary_tag));
+	const std::vector<std::byte> binary_bytes = ram->files.at(binary_tag);
 
 	// What the import wrote is gone, as in another resource system; the model's change makes it load again.
 	ram->files.erase(geometry_tag);
+	ram->files.erase(binary_tag);
 	ram->files.erase(res::tag{ "memory://models/cache977/once.desc" });
 	const res::tag model{ "memory://models/cache977/once.obj" };
 	rs->signal_changed(model);
 	const auto second = import("cache977/once.obj", OBJ_TRIANGLE);
 	BOOST_REQUIRE(second);
-	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	BOOST_TEST(mdl::model_importer_runs() == before + 1u);
 	BOOST_REQUIRE(ram->files.contains(geometry_tag));
 	BOOST_TEST((ram->files.at(geometry_tag) == geometry_bytes));
+	BOOST_REQUIRE(ram->files.contains(binary_tag));
+	BOOST_TEST((ram->files.at(binary_tag) == binary_bytes));
 	BOOST_TEST(json::serialize(serialized(*second)) == json::serialize(first_prefab));
 }
 
 BOOST_AUTO_TEST_CASE(OtherBytesUnderTheSameTag_AreImportedAgain)
 {
-	scn::remember_model_imports(true);
-	const std::size_t before = scn::model_importer_runs();
+	mdl::remember_model_imports(true);
+	const std::size_t before = mdl::model_importer_runs();
 	BOOST_REQUIRE(import("cache977/changed.obj", OBJ_TRIANGLE));
 	rs->signal_changed(res::tag{ "memory://models/cache977/changed.obj" });
 	BOOST_REQUIRE(import("cache977/changed.obj", OBJ_NO_UV));
-	BOOST_TEST(scn::model_importer_runs() == before + 2u);
+	BOOST_TEST(mdl::model_importer_runs() == before + 2u);
 }
 
 // A side file can change while the model's bytes stay the same: such a model is imported every time.
@@ -531,12 +589,12 @@ BOOST_AUTO_TEST_CASE(AModelThatReadsAnotherFile_IsImportedEveryTime)
 	const std::string bin(reinterpret_cast<const char*>(GLTF_TRIANGLE_BIN), sizeof(GLTF_TRIANGLE_BIN));
 	rs->store(res::tag{ "memory://models/cache977/side/data/tri.bin" }, test_util::to_bytes(bin));
 	const std::string gltf = gltf_with_buffer_uri("data/tri.bin");
-	scn::remember_model_imports(true);
-	const std::size_t before = scn::model_importer_runs();
+	mdl::remember_model_imports(true);
+	const std::size_t before = mdl::model_importer_runs();
 	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
 	rs->signal_changed(res::tag{ "memory://models/cache977/side/tri.gltf" });
 	BOOST_REQUIRE(import("cache977/side/tri.gltf", gltf.c_str()));
-	BOOST_TEST(scn::model_importer_runs() == before + 2u);
+	BOOST_TEST(mdl::model_importer_runs() == before + 2u);
 }
 
 // A file the import writes only where it is missing (a texture desc) stays as the caller has it, as with assimp.
@@ -548,10 +606,10 @@ BOOST_AUTO_TEST_CASE(AFileTheCallerHas_IsKept_WhenTheImportIsWrittenAgain)
 	json::object& pbr = gltf["materials"].as_array()[0].as_object()["pbrMetallicRoughness"].as_object();
 	pbr["baseColorTexture"] = json::object{ { "index", 0 } };
 	const std::string text = json::serialize(gltf);
-	scn::remember_model_imports(true);
-	const std::size_t before = scn::model_importer_runs();
+	mdl::remember_model_imports(true);
+	const std::size_t before = mdl::model_importer_runs();
 	BOOST_REQUIRE(import("cache977/kept/tri.gltf", text.c_str()));
-	BOOST_REQUIRE(scn::model_importer_runs() == before + 1u);
+	BOOST_REQUIRE(mdl::model_importer_runs() == before + 1u);
 	const res::tag* texture = file_of(*ram, "cache977/kept/", ".txm.desc");
 	BOOST_REQUIRE(texture != nullptr);
 	const res::tag texture_tag = *texture;
@@ -561,24 +619,24 @@ BOOST_AUTO_TEST_CASE(AFileTheCallerHas_IsKept_WhenTheImportIsWrittenAgain)
 
 	rs->signal_changed(res::tag{ "memory://models/cache977/kept/tri.gltf" });
 	BOOST_REQUIRE(import("cache977/kept/tri.gltf", text.c_str()));
-	BOOST_TEST(scn::model_importer_runs() == before + 1u);
+	BOOST_TEST(mdl::model_importer_runs() == before + 1u);
 	BOOST_TEST((ram->files.at(texture_tag) == callers));
 }
 
 // Off, as in the editor and a game: every import runs assimp, and what was remembered is forgotten.
 BOOST_AUTO_TEST_CASE(RememberingImportsTurnedOff_ImportsEveryTime)
 {
-	scn::remember_model_imports(true);
+	mdl::remember_model_imports(true);
 	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
-	scn::remember_model_imports(false);
-	const std::size_t before = scn::model_importer_runs();
+	mdl::remember_model_imports(false);
+	const std::size_t before = mdl::model_importer_runs();
 	const res::tag model{ "memory://models/cache977/off.obj" };
 	rs->signal_changed(model);
 	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
 	rs->signal_changed(model);
 	BOOST_REQUIRE(import("cache977/off.obj", OBJ_TRIANGLE));
-	BOOST_TEST(scn::model_importer_runs() == before + 2u);
-	scn::remember_model_imports(true);
+	BOOST_TEST(mdl::model_importer_runs() == before + 2u);
+	mdl::remember_model_imports(true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

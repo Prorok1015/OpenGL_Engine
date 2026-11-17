@@ -4,7 +4,11 @@
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
+#include <snk/desc/desc_pretty_json.h>
+#include <snk/desc/desc_system.h>
 #include <snk/platform/plt_process.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <boost/json/parse_options.hpp>
 #include <boost/json/stream_parser.hpp>
 #include <algorithm>
@@ -17,7 +21,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <stop_token>
 #include <system_error>
@@ -240,7 +246,8 @@ namespace {
 // The tags a model import makes below its folder, by what they hold; anything else is refused. In particular no model
 // file (.fbx, .glb, .gltf, .obj and the rest the importer's adapter reads) can come back as a resource: the exporter copies
 // every resource into the project, and a model there is parsed inside the editor when something refers to it.
-enum class blob_kind { desc, image, embedded_raw, embedded_image };
+// geom_bin: the binary file of the geometry (EPIC-79, #1068 PR3b), decoded and checked as the loader reads it.
+enum class blob_kind { desc, image, embedded_raw, embedded_image, geom_bin };
 
 std::string lower(std::string text)
 {
@@ -262,6 +269,7 @@ std::string_view extension_of(std::string_view name)
 std::optional<blob_kind> classify(std::string_view relative, std::string_view stem)
 {
 	if (relative == std::string(stem) + ".prefab.desc" || relative == std::string(stem) + ".geom.desc") return blob_kind::desc;
+	if (relative == std::string(stem) + ".geom.bin") return blob_kind::geom_bin;
 	const auto in_folder = [&relative](std::string_view folder) { return relative.starts_with(folder) && relative.size() > folder.size(); };
 	if (in_folder("materials/")) {
 		return ends_with_text(relative, ".mat.desc") ? std::optional(blob_kind::desc) : std::nullopt;
@@ -300,6 +308,7 @@ bool content_matches(blob_kind kind, std::string_view relative, const std::vecto
 {
 	switch (kind) {
 	case blob_kind::desc: return true;	// checked as JSON by the caller
+	case blob_kind::geom_bin: return true;	// decoded with its desc by geometry_problem
 	case blob_kind::image: {
 		const std::string extension = lower(std::string(extension_of(relative)));
 		if (extension == "png") return is_png(bytes);
@@ -389,7 +398,8 @@ std::string json_problem(const boost::json::value& value, const std::unordered_s
 	return {};
 }
 
-std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered_set<std::string>& bundle_tags)
+// A desc of the bundle as JSON, within the depth the checks allow; nullopt when it is not valid JSON within it.
+std::optional<boost::json::value> parse_desc_blob(const edt::bundle_blob& blob)
 {
 	boost::json::parse_options options;
 	options.max_depth = 64;
@@ -397,10 +407,104 @@ std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered
 	boost::system::error_code error;
 	parser.write(reinterpret_cast<const char*>(blob.bytes.data()), blob.bytes.size(), error);
 	if (!error) parser.finish(error);
-	if (error) return "a desc of the import is not valid JSON within the limits";
+	if (error) return std::nullopt;
+	return parser.release();
+}
+
+std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered_set<std::string>& bundle_tags)
+{
+	const std::optional<boost::json::value> value = parse_desc_blob(blob);
+	if (!value) return "a desc of the import is not valid JSON within the limits";
+	if (!value->is_object()) return "a desc of the import is not a JSON object";
+	return json_problem(*value, bundle_tags);
+}
+
+const edt::bundle_blob* blob_named(const edt::decode_bundle& bundle, std::string_view tag)
+{
+	for (const edt::bundle_blob& blob : bundle.blobs) {
+		if (blob.tag == tag) return &blob;
+	}
+	return nullptr;
+}
+
+// The geometry of an import (#1068 PR3b): its desc and, for triangles, its binary file are decoded here exactly as the
+// loader decodes them (desc_binary::parse: header, layouts, ranges inside the file and apart; every SHA-256 computed here;
+// then the loader's data checks). Triangles always come as the pair, lines and points (and a model without meshes) as
+// arrays. With `rewritten`, a pair is encoded again by the editor's own writer from the decoded data: no offset, hash or
+// header field of the child's is stored.
+std::string geometry_problem(const edt::decode_bundle& bundle, const res::tag& geom_tag, std::string_view binary_tag,
+	rnd::geometry_files* rewritten)
+{
+	const edt::bundle_blob* desc_blob = blob_named(bundle, geom_tag.view());
+	if (desc_blob == nullptr) return "the geometry desc did not come with the answer";
+	const edt::bundle_blob* binary_blob = blob_named(bundle, binary_tag);
+
+	boost::json::parse_options options;
+	options.max_depth = 64;
+	boost::json::stream_parser parser(boost::json::storage_ptr{}, options);
+	boost::system::error_code error;
+	parser.write(reinterpret_cast<const char*>(desc_blob->bytes.data()), desc_blob->bytes.size(), error);
+	if (!error) parser.finish(error);
+	if (error) return "the geometry desc is not valid JSON within the limits";
 	const boost::json::value value = parser.release();
-	if (!value.is_object()) return "a desc of the import is not a JSON object";
-	return json_problem(value, bundle_tags);
+	if (!value.is_object()) return "the geometry desc is not a JSON object";
+	const boost::json::object& desc = value.as_object();
+
+	// Ranges are objects ({offset, size, sha256, layout}); a desc without "vertices" holds no data (a model without meshes).
+	const auto is_range = [&desc](std::string_view key) {
+		const boost::json::value* found = desc.if_contains(key);
+		return found != nullptr && found->is_object();
+	};
+	const bool ranges = is_range("vertices") || is_range("indices");
+	const rnd::geometry_topology topology = rnd::topology_of(desc);
+	const auto holds = [&desc](std::string_view key) {
+		const boost::json::value* found = desc.if_contains(key);
+		return found != nullptr && (!found->is_array() || !found->as_array().empty());
+	};
+	const bool lines_or_points = topology == rnd::geometry_topology::lines || topology == rnd::geometry_topology::points;
+	if (!ranges) {
+		if (binary_blob != nullptr) return "a binary file came with a geometry that does not refer to one";
+		// Arrays are only lines or points named as such: triangles, a mixed or unknown topology would be stored as the
+		// child wrote them.
+		if (!holds("vertices") && !holds("indices")) {
+			return {};	// no data (a model without meshes): the loader takes the layout from its parent
+		}
+		if (!lines_or_points) {
+			return "a geometry in arrays that is not lines or points";
+		}
+	} else {
+		if (binary_blob == nullptr) return "the geometry refers to a binary file that did not come with the answer";
+		if (topology != rnd::geometry_topology::triangles) return "a geometry of lines or points came with a binary file";
+	}
+
+	rnd::geometry_desc data;
+	const std::span<const std::byte> binary = binary_blob != nullptr ? std::span<const std::byte>(binary_blob->bytes) : std::span<const std::byte>{};
+	if (std::string why = rnd::decode_geometry_files(geom_tag, desc, binary, data); !why.empty()) return why;
+	// The loader lets indices over no vertex load (they draw nothing); the child's answer has no such geometry.
+	if (!data.indices.empty() && (data.vertices.empty() || data.layout.get_stride() == 0)) {
+		return "indices with no vertex to index";
+	}
+	if (topology == rnd::geometry_topology::lines && data.indices.size() % 2 != 0) {
+		return std::format("{} indices are not whole lines", data.indices.size());
+	}
+
+	if (binary_blob != nullptr && rewritten != nullptr) {
+		rnd::geometry_file_options encode;
+		// desc_blob_problem allowed only a base resource as the parent; nothing else of the child's header is kept.
+		if (const boost::json::value* parent = desc.if_contains("__parent"); parent != nullptr && parent->is_string()) {
+			encode.header["__parent"] = *parent;
+		}
+		encode.bounds = desc.contains("bounds");
+		try {
+			*rewritten = rnd::encode_geometry_files(geom_tag, data, encode);
+		} catch (const std::bad_alloc&) {
+			return "the geometry is too big to be written again";
+		} catch (const std::exception& e) {
+			return std::string("the geometry cannot be written again: ") + e.what();
+		}
+		if (!*rewritten) return rewritten->error;
+	}
+	return {};
 }
 
 }
@@ -417,7 +521,8 @@ std::string edt::file_extension_lowercase(std::string_view path)
 	return lower(std::string(extension_of(name)));
 }
 
-std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem)
+std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem,
+	rnd::geometry_files* geometry, const desc::desc_system* descs)
 {
 	const boost::json::object& manifest = bundle.manifest;
 	const boost::json::string* kind = string_of(manifest, "kind");
@@ -482,8 +587,15 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 			return std::nullopt;
 		}
 	}
+	// The binary file of the geometry is created but not listed (whoever copies the desc carries it along).
+	const std::string binary_tag = prefix + stem + ".geom.bin";
 	std::unordered_set<std::string> listed;
 	for (const res::tag& tag : imported->all_tags) listed.insert(std::string(tag.view()));
+	if (listed.contains(binary_tag)) {
+		problem = "the import lists the binary file of its geometry";
+		return std::nullopt;
+	}
+	if (created.contains(binary_tag)) listed.insert(binary_tag);
 	if (listed != created) {
 		problem = "the import lists resources it did not create";
 		return std::nullopt;
@@ -538,6 +650,23 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 				return std::nullopt;
 			}
 		}
+	}
+	if (std::string why = geometry_problem(bundle, imported->geom_tag, binary_tag, geometry); !why.empty()) {
+		problem = "the geometry of the import is refused: " + cleaned(why);
+		return std::nullopt;
+	}
+	// The decoder has no desc system (#1077): the prefab it stored is stamped here, by the editor's, and becomes the JSON the
+	// editor builds from, so what is stored and what is built are the same bytes an import in this process makes.
+	if (descs != nullptr) {
+		const bundle_blob* prefab_blob = blob_named(bundle, imported->prefab_tag.view());
+		std::optional<boost::json::value> prefab = prefab_blob != nullptr ? parse_desc_blob(*prefab_blob) : std::nullopt;
+		if (!prefab || !prefab->is_object()) {
+			problem = "the prefab of the import is not a JSON object";
+			return std::nullopt;
+		}
+		boost::json::object stamped = std::move(prefab->as_object());
+		descs->stamp_tree(stamped);
+		imported->prefab_json = std::move(stamped);
 	}
 	// The prefab the editor builds from this JSON is checked like the descs of the bundle.
 	if (std::string why = json_problem(imported->prefab_json, created); !why.empty()) {
@@ -597,8 +726,10 @@ std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources
 	return std::nullopt;
 }
 
-edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox)
+edt::process_decoder::process_decoder(res::resource_system& resources, const desc::desc_system& descs, decode_runner_config config,
+	sandbox_listener on_sandbox)
 	: m_resources(resources)
+	, m_descs(descs)
 	, m_config(std::move(config))
 	, m_on_sandbox(std::move(on_sandbox))
 {
@@ -859,7 +990,8 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 
 	// Nothing of the answer reaches memory:// before it passed every check.
 	std::string problem;
-	std::optional<import_intermediate> imported = accept_import_answer(*outcome.bundle, request, problem);
+	rnd::geometry_files geometry;
+	std::optional<import_intermediate> imported = accept_import_answer(*outcome.bundle, request, problem, &geometry, &m_descs);
 	if (!imported) {
 		egLOG_WARN("edt/decoder", "the answer to an import was refused: {}", problem);
 		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
@@ -879,12 +1011,30 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	const auto drop_stored = [&] {
 		for (const res::tag& tag : stored) m_resources.erase(tag);
 	};
+	const auto store = [&](const res::tag& tag, const std::vector<std::byte>& bytes) {
+		if (!m_resources.store(tag, bytes)) throw std::runtime_error(std::format("'{}' could not be stored", tag.view()));
+		stored.push_back(tag);
+		imported->created_digests.emplace_back(tag, digest_of(bytes));
+	};
+	// A geometry pair is the editor's own encoding of the checked data (geometry_problem), stored as the writer stores it:
+	// the binary file first, then the desc, under the save lock of the desc.
+	const bool pair = !geometry.binary.empty();
+	const std::optional<res::tag> binary_tag = pair ? res::desc_binary::binary_tag(imported->geom_tag) : std::nullopt;
 	try {
 		for (const bundle_blob& blob : outcome.bundle->blobs) {
 			const res::tag tag(blob.tag);
-			if (!m_resources.store(tag, blob.bytes)) throw std::runtime_error(std::format("'{}' could not be stored", blob.tag));
-			stored.push_back(tag);
-			imported->created_digests.emplace_back(tag, digest_of(blob.bytes));
+			if (pair && (tag == imported->geom_tag || tag == *binary_tag)) continue;
+			// The prefab as accept_import_answer stamped it, written as desc_system::serialize_to_bytes writes it.
+			if (tag == imported->prefab_tag) {
+				store(tag, desc::pretty_json_bytes(imported->prefab_json));
+				continue;
+			}
+			store(tag, blob.bytes);
+		}
+		if (pair) {
+			const res::desc_binary::save_lock lock(imported->geom_tag);
+			store(*binary_tag, geometry.binary);
+			store(imported->geom_tag, geometry.desc);
 		}
 		if (task != nullptr) task->throw_if_stopped();
 	} catch (...) {

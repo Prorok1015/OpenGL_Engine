@@ -18,8 +18,9 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 
 # --- Assimp (model importer) ---
-# OFF: assimp is neither configured nor linked, scn::model_importer_adapter and the editor model import
-# are not compiled (SNK_HAS_ASSIMP=0); .glb/.gltf/.obj/.fbx then have no resource adapter. EPIC-41 US-41-7.
+# OFF: assimp is neither configured nor linked, the model import library (core/model_import, which alone adds and links
+# assimp, #1108) and the editor model import are not compiled (SNK_HAS_ASSIMP=0); .glb/.gltf/.obj/.fbx then have no
+# resource adapter. EPIC-41 US-41-7.
 option(SNK_WITH_ASSIMP "Build the Assimp-based model importer (glb, gltf, obj, fbx)" ON)
 if(SNK_WITH_ASSIMP)
 	set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
