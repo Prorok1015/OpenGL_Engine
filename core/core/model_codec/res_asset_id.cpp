@@ -1,4 +1,4 @@
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <random>
 
 namespace
