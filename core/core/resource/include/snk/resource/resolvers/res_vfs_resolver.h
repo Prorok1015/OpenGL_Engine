@@ -70,6 +70,9 @@ namespace res
 		// a file paired with another (a desc's binary file, #1068) never comes from a layer the other is not in.
 		::platform::beneath::read_result read_beside(const ::res::tag& anchor, const ::res::tag& tag, std::uint64_t max_bytes,
 			std::vector<std::byte>& out) const;
+		// The stamp of the file read_beside would read, without reading it; nullopt while a store of it is queued, when it
+		// was erased, or when it cannot be opened as read_beside opens it.
+		std::optional<::platform::beneath::file_stamp> stamp_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
 		// Whether the file of `tag` is in the layer read_beside would read it from; nothing is read.
 		bool exists_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
 		// The file resolve() opens for `tag` now: the highest layer that has it, the top one when none does (#1086).

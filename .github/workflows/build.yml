@@ -293,6 +293,17 @@ jobs:
           if command -v sccache >/dev/null; then sccache --show-stats; fi
           if command -v ccache >/dev/null; then ccache -s; fi
 
+      # #1077: the model decoder imports no window, GDI, GL or engine DLL directly. Only its direct imports are checked: a
+      # system DLL it imports (shell32) may still load user32/gdi32, which win32k lockdown (#1054) must rule out. unit_tests
+      # builds both decoders; the shipped one is copied next to it, the self-test build stays in tools/model_decoder.
+      - name: Model decoder imports
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          deny=user32.dll,gdi32.dll,opengl32.dll,snk_engine.dll,snk_engined.dll,snk_model_import_assimp.dll,snk_model_import_assimpd.dll
+          bash tools/ci/check_windows_deps.sh --deny "$deny" build/${{ matrix.preset }} snk_model_decoder.exe
+          bash tools/ci/check_windows_deps.sh --deny "$deny" build/${{ matrix.preset }}/tools/model_decoder snk_model_decoder_selftest.exe
+
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.
       # 20 min on Windows Debug until #898 makes the null-backend suites cheaper (#892): a slow runner took 600 s.
@@ -437,6 +448,14 @@ jobs:
         if: matrix.preset == 'ci-linux-clang-debug'
         shell: bash
         run: bash tools/ci/check_game_deps.sh build/ci-linux-clang-debug/apps/game/game
+
+      # #1077: the model decoder of the static engine links none of it either: no GL, X11 or GLFW library.
+      - name: Model decoder dependency check
+        if: matrix.preset == 'ci-linux-clang-debug'
+        shell: bash
+        run: |
+          bash tools/ci/check_decoder_deps.sh build/ci-linux-clang-debug/snk_model_decoder
+          bash tools/ci/check_decoder_deps.sh build/ci-linux-clang-debug/tools/model_decoder/snk_model_decoder_selftest
 
       # #592: a game module compiled into the host (snk_add_game_host, tests/static_game). The project's manifest requires
       # it; its system, listed by the start level's world, logs once on its first frame. The run ends after
@@ -890,6 +909,12 @@ jobs:
       # The shared engine carries config_system: a copy of it in the tool made the engine's cfg variables register into
       # the tool's registry and crash at exit (#874). snk_check_engine_copies() refuses such a link at configure time;
       # this checks the binary itself.
+      # #1077: the model decoder of the shared engine does not load it (nor GL, X11, GLFW).
+      - name: Model decoder dependency check
+        run: |
+          bash tools/ci/check_decoder_deps.sh build/ci-linux-coverage/snk_model_decoder
+          bash tools/ci/check_decoder_deps.sh build/ci-linux-coverage/tools/model_decoder/snk_model_decoder_selftest
+
       - name: desc_resave carries no engine component code
         run: |
           tool=build/ci-linux-coverage/tools/desc_resave/desc_resave

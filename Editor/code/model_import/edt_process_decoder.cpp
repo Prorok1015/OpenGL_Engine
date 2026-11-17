@@ -4,6 +4,8 @@
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
+#include <snk/desc/desc_pretty_json.h>
+#include <snk/desc/desc_system.h>
 #include <snk/platform/plt_process.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_desc_binary.h>
@@ -395,7 +397,8 @@ std::string json_problem(const boost::json::value& value, const std::unordered_s
 	return {};
 }
 
-std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered_set<std::string>& bundle_tags)
+// A desc of the bundle as JSON, within the depth the checks allow; nullopt when it is not valid JSON within it.
+std::optional<boost::json::value> parse_desc_blob(const edt::bundle_blob& blob)
 {
 	boost::json::parse_options options;
 	options.max_depth = 64;
@@ -403,10 +406,16 @@ std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered
 	boost::system::error_code error;
 	parser.write(reinterpret_cast<const char*>(blob.bytes.data()), blob.bytes.size(), error);
 	if (!error) parser.finish(error);
-	if (error) return "a desc of the import is not valid JSON within the limits";
-	const boost::json::value value = parser.release();
-	if (!value.is_object()) return "a desc of the import is not a JSON object";
-	return json_problem(value, bundle_tags);
+	if (error) return std::nullopt;
+	return parser.release();
+}
+
+std::string desc_blob_problem(const edt::bundle_blob& blob, const std::unordered_set<std::string>& bundle_tags)
+{
+	const std::optional<boost::json::value> value = parse_desc_blob(blob);
+	if (!value) return "a desc of the import is not valid JSON within the limits";
+	if (!value->is_object()) return "a desc of the import is not a JSON object";
+	return json_problem(*value, bundle_tags);
 }
 
 const edt::bundle_blob* blob_named(const edt::decode_bundle& bundle, std::string_view tag)
@@ -512,7 +521,7 @@ std::string edt::file_extension_lowercase(std::string_view path)
 }
 
 std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_bundle& bundle, const decode_request& request, std::string& problem,
-	rnd::geometry_files* geometry)
+	rnd::geometry_files* geometry, const desc::desc_system* descs)
 {
 	const boost::json::object& manifest = bundle.manifest;
 	const boost::json::string* kind = string_of(manifest, "kind");
@@ -645,6 +654,19 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 		problem = "the geometry of the import is refused: " + cleaned(why);
 		return std::nullopt;
 	}
+	// The decoder has no desc system (#1077): the prefab it stored is stamped here, by the editor's, and becomes the JSON the
+	// editor builds from, so what is stored and what is built are the same bytes an import in this process makes.
+	if (descs != nullptr) {
+		const bundle_blob* prefab_blob = blob_named(bundle, imported->prefab_tag.view());
+		std::optional<boost::json::value> prefab = prefab_blob != nullptr ? parse_desc_blob(*prefab_blob) : std::nullopt;
+		if (!prefab || !prefab->is_object()) {
+			problem = "the prefab of the import is not a JSON object";
+			return std::nullopt;
+		}
+		boost::json::object stamped = std::move(prefab->as_object());
+		descs->stamp_tree(stamped);
+		imported->prefab_json = std::move(stamped);
+	}
 	// The prefab the editor builds from this JSON is checked like the descs of the bundle.
 	if (std::string why = json_problem(imported->prefab_json, created); !why.empty()) {
 		problem = std::move(why);
@@ -703,8 +725,10 @@ std::optional<res::tag> edt::erase_memory_folder(res::resource_system& resources
 	return std::nullopt;
 }
 
-edt::process_decoder::process_decoder(res::resource_system& resources, decode_runner_config config, sandbox_listener on_sandbox)
+edt::process_decoder::process_decoder(res::resource_system& resources, const desc::desc_system& descs, decode_runner_config config,
+	sandbox_listener on_sandbox)
 	: m_resources(resources)
+	, m_descs(descs)
 	, m_config(std::move(config))
 	, m_on_sandbox(std::move(on_sandbox))
 {
@@ -881,7 +905,7 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	// Nothing of the answer reaches memory:// before it passed every check.
 	std::string problem;
 	rnd::geometry_files geometry;
-	std::optional<import_intermediate> imported = accept_import_answer(*outcome.bundle, request, problem, &geometry);
+	std::optional<import_intermediate> imported = accept_import_answer(*outcome.bundle, request, problem, &geometry, &m_descs);
 	if (!imported) {
 		egLOG_WARN("edt/decoder", "the answer to an import was refused: {}", problem);
 		throw std::runtime_error("the decoder's answer was refused (more in the editor log)");
@@ -914,6 +938,11 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 		for (const bundle_blob& blob : outcome.bundle->blobs) {
 			const res::tag tag(blob.tag);
 			if (pair && (tag == imported->geom_tag || tag == *binary_tag)) continue;
+			// The prefab as accept_import_answer stamped it, written as desc_system::serialize_to_bytes writes it.
+			if (tag == imported->prefab_tag) {
+				store(tag, desc::pretty_json_bytes(imported->prefab_json));
+				continue;
+			}
 			store(tag, blob.bytes);
 		}
 		if (pair) {

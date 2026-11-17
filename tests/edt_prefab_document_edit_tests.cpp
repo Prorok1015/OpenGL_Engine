@@ -954,8 +954,39 @@ BOOST_AUTO_TEST_CASE(TheApplyQuestion_NamesThePrefab_TheInstancesAndTheRecords)
 	const std::string text = edt::apply_to_prefab_question(tag, 3, 2);
 
 	BOOST_TEST(text.find("prefabs/a.prefab.desc") != std::string::npos);
-	BOOST_TEST(text.find("for all of its instances (3 in this level)") != std::string::npos);
+	BOOST_TEST(text.find("for all of its instances (3 in this level") != std::string::npos);
+	BOOST_TEST(text.find("cannot be undone") != std::string::npos);
 	BOOST_TEST(text.find("2 of this instance") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_IsAllOrNone_AFailingRecordLeavesTheFileAlone)
+{
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+	const scn::override_record fits{ .target = {}, .component = "stat", .path = "/hp", .value = 77 };
+	const scn::override_record gone{ .target = { 0xff }, .component = "stat", .path = "/hp", .value = 1 };
+
+	const std::string error = edt::apply_override_records(services, layout(), tag, { fits, gone }, nullptr);
+
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(FoldRecord_TheSameFieldTwice_IsOneRecordOfTheInstanceNodeWithTheLaterValue)
+{
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
+	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
+	pump();
+	BOOST_REQUIRE(user.is_ready());
+	scn::prefab_desc edited;
+	user->copy_to(edited);
+
+	BOOST_REQUIRE(edt::override_edit::fold_record(edited, scn::override_record{ .target = { 0xb1, 0xa1 }, .component = "stat", .path = "/hp", .value = 9 }).empty());
+	BOOST_REQUIRE(edt::override_edit::fold_record(edited, scn::override_record{ .target = { 0xb1, 0xa1 }, .component = "stat", .path = "/hp", .value = 11 }).empty());
+
+	const auto& inst = edited.get_root().children.at(0);
+	BOOST_REQUIRE(inst.overrides.size() == 1u);
+	BOOST_TEST(inst.overrides[0].value.to_number<int>() == 11);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

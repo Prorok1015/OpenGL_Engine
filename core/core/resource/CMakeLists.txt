@@ -10,4 +10,6 @@ snk_component_headers(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system PRIVATE snk::project)
 # PUBLIC: res_vfs_resolver.h names the no-follow file primitives of platform::beneath (#414, #484, #523).
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::platform)
+# res::tag, its JSON and the pure part of res_desc_binary.h live in snk_model_codec (#1077).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::model_codec)
 

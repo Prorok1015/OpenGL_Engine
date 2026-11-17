@@ -50,6 +50,7 @@ namespace res
 	struct SNK_API when_all_result : resource_entry {};
 
 	class resource_system;
+	class desc_binary_hash_cache;
 
 	namespace detail {
 		// res_desc_binary.cpp: reads a desc's binary file from the desc's own layer through the root's resolver.
@@ -340,6 +341,14 @@ namespace res
 		// A require_sync of a tag with one of these extensions (lower case) logs a warning, once per tag: its adapter may
 		// block the main thread for seconds (the editor's models, parsed in the decoder process, #925). Kept by the root.
 		void warn_on_sync_require(std::vector<std::string> extensions);
+
+		// Pairs of a desc and its binary file whose hashes were checked unchanged (EPIC-79 section 7, #1126): a read of an
+		// unchanged pair skips SHA-256. Kept by the root, any thread; nullptr (the default) remembers nothing.
+		void set_desc_binary_hash_cache(std::shared_ptr<desc_binary_hash_cache> cache);
+		std::shared_ptr<desc_binary_hash_cache> desc_binary_hash_cache_ptr() const;
+		// false (an editor debug setting): a read of one root without a staged file skips SHA-256. Kept by the root.
+		void set_verify_desc_binary_hash(bool verify);
+		bool verify_desc_binary_hash() const;
 
 		data fetch_data(const tag& tag) const;
 
@@ -886,6 +895,10 @@ namespace res
 		mutable std::unordered_set<std::string> m_sync_warned;
 		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
 		std::unique_ptr<held_changes> m_held;
+		// Root only (set_desc_binary_hash_cache, set_verify_desc_binary_hash). After m_held for the same reason.
+		mutable std::mutex m_desc_binary_cache_mutex;
+		std::shared_ptr<desc_binary_hash_cache> m_desc_binary_cache;
+		std::atomic<bool> m_verify_desc_binary_hash{ true };
 	};
 
 	// The tag a handle with the tag `own` and `block` was asked for: for a handle of resource_system::refused, whose own

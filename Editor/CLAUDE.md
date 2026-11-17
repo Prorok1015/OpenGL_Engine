@@ -110,8 +110,10 @@ Editor/
     │
     └── CMakeLists.txt
 
-code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code
-    ├── edt_model_importer.cpp/h      # model_importer (mdl::import_model -> memory:// descs), scan_files, import_background
+code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code; its decoder side is compiled again as snk_model_decoder_side for the decoder process, which links no engine (#1077)
+    ├── edt_model_import_core.cpp/h   # import_source, scan_model_files, list_model_requests, import_model_into (mdl::import_model into an mdl::import_sink, prefab stamped by the caller): decoder side, no desc/resource system
+    ├── edt_model_importer.cpp/h      # model_importer: import_model_into over the resource system with the prefab stamped (import_background), finalize_on_main
+    ├── edt_process_decoder.cpp/h     # process_decoder, accept_import_answer (stamps the decoder's unstamped prefab with the editor's desc_system, #1077)
     ├── edt_decode_{bundle,codec,runner}.cpp/h  # the decoder process (#647): bundle file format, JSON of request/scan/import, decode_runner (scratch folder 0700, kill on deadline/cancel, stale-folder cleanup)
     ├── edt_model_file_source.cpp/h   # mdl::file_source of the import: the model from memory, side files through model_file_access
     ├── edt_model_file_access.cpp/h   # what a model may make the import read (#548)

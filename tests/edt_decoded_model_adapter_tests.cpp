@@ -512,11 +512,11 @@ BOOST_AUTO_TEST_CASE(TheVersionOfTheDecoderProcess_IsTheSha256OfItsFile_AndEmpty
 	const fs::path file = dir.write("bin/snk_model_decoder", "decoder bytes");
 	edt::decode_runner_config config;
 	config.decoder = file;
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	BOOST_TEST(decoder.version() == cmn::sha256_file_hex(file).value());
 
 	config.decoder = dir.path() / "bin" / "missing";
-	const edt::process_decoder missing(*rs, config);
+	const edt::process_decoder missing(*rs, *descs, config);
 	const warnings warned;
 	BOOST_TEST(missing.version().empty());
 	BOOST_TEST(missing.version().empty());
@@ -569,7 +569,7 @@ struct real_decoder_env : adapter_env
 	{
 		edt::decode_runner_config config;
 		config.decoder = SNK_MODEL_DECODER_PATH;
-		return edt::decoded_model_adapter(*descs, *rs, edt::decoded_model_adapter::steps_of(std::make_shared<edt::process_decoder>(*rs, config)));
+		return edt::decoded_model_adapter(*descs, *rs, edt::decoded_model_adapter::steps_of(std::make_shared<edt::process_decoder>(*rs, *descs, config)));
 	}
 
 	static std::vector<std::byte> text(std::string_view content)

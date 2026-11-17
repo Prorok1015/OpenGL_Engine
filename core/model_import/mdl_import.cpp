@@ -10,10 +10,9 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_pretty_json.h>
-#include <snk/render/geom/rnd_geometry_desc.h>
-#include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/render/geom/rnd_geometry_encode.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_image_format.h>
 #include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_tag_json.h>
@@ -164,6 +163,17 @@ std::vector<std::byte> json_bytes(const json::object& object)
 	std::memcpy(bytes.data(), text.data(), text.size());
 	return bytes;
 }
+
+// The geometry of the whole model, as the loader's geometry_desc holds it; encoded through rnd::geometry_view (#1077).
+struct geometry_data
+{
+	rnd::driver::BufferLayout layout;
+	std::vector<unsigned int> indices;
+	std::vector<std::byte> vertices;
+	std::vector<std::pair<ds::bbox, std::uint32_t>> bounds;
+
+	rnd::geometry_view view() const { return rnd::geometry_view{ layout, vertices, indices, bounds }; }
+};
 
 // One import: the scene, where it writes, what it refers to.
 class scene_import
@@ -341,18 +351,18 @@ private:
 		// Model files are untrusted: keep the name from leaving the folder of the embedded textures.
 		const std::string file = res::sanitize_relative_path(texture.mFilename.C_Str());
 		const res::tag data_tag{ res::tag::memory, std::format("{}{}.{}", m_options.embedded_folder, file,
-			texture.mHeight != 0 ? res::raw_image_adapter::EXTENSION : res::pct_adapter::EXTENSIONS[0]) };
+			texture.mHeight != 0 ? res::image_format::raw_extension : res::image_format::picture_extensions[0]) };
 
 		if (!m_sink.exists(data_tag)) {
 			std::vector<std::byte> bytes;
 			if (texture.mHeight != 0) {
 				const glm::ivec2 size(texture.mWidth, texture.mHeight);
 				const int channels = 4;
-				res::raw_image_adapter::raw_image_header header;
+				res::image_format::raw_header header;
 				header.size = size;
 				header.channels = channels;
-				bytes.resize(res::raw_image_adapter::HEADER_SIZE);
-				std::memcpy(bytes.data(), &header, res::raw_image_adapter::HEADER_SIZE);
+				bytes.resize(res::image_format::raw_header_size);
+				std::memcpy(bytes.data(), &header, res::image_format::raw_header_size);
 				const auto* pixels = reinterpret_cast<const std::byte*>(texture.pcData);
 				std::copy(pixels, pixels + static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y) * channels, std::back_inserter(bytes));
 			} else {
@@ -722,7 +732,7 @@ private:
 		geometry_options.topology = m_topology;
 		const bool has_meshes = !m_geometry.vertices.empty();
 		if (has_meshes && m_topology == rnd::geometry_topology::triangles) {
-			const rnd::geometry_files files = rnd::encode_geometry_files(geom_tag, m_geometry, geometry_options);
+			const rnd::geometry_files files = rnd::encode_geometry_files(geom_tag, m_geometry.view(), geometry_options);
 			if (!files) {
 				m_out.failed = mdl::failure::geometry;
 				m_out.error = files.error;
@@ -742,7 +752,7 @@ private:
 					geom_tag.view(), rnd::topology_name(m_topology));
 				jsgeometry[rnd::geometry_topology_key] = rnd::topology_name(m_topology);
 			}
-			m_geometry.serialize(jsgeometry);
+			rnd::write_geometry_arrays(geom_tag, m_geometry.view(), jsgeometry);
 			m_sink.store(geom_tag, json_bytes(jsgeometry));
 		}
 		refer(geom_tag);
@@ -754,7 +764,7 @@ private:
 	mdl::file_source& m_files;
 	const mdl::import_options& m_options;
 	mdl::import_result& m_out;
-	rnd::geometry_desc m_geometry;
+	geometry_data m_geometry;
 	rnd::geometry_topology m_topology = rnd::geometry_topology::triangles;
 	unsigned int m_face_size = 3;
 	std::unordered_map<std::string, int> m_bone_index;

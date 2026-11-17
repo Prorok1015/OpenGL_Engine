@@ -115,7 +115,8 @@ std::shared_ptr<::res::resource_entry> rnd::geometry_desc_adapter::deserialize(c
 
 void rnd::geometry_desc_adapter::load_binary(const ::res::tag& tag, rnd::geometry_desc& geometry) const
 {
-	detail::load_geometry_binary(m_resources, tag, geometry, verify_hash_on_load);
+	// Hashes are asked for; the resource system skips them for a pair it knows unchanged (EPIC-79 section 7).
+	detail::load_geometry_binary(m_resources, tag, geometry, true);
 }
 
 namespace

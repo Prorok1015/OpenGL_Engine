@@ -7,6 +7,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_desc_binary.h>
@@ -162,6 +163,40 @@ BOOST_AUTO_TEST_CASE(AWrittenGeometry_LoadsBackIdentically_FromItsBinaryFile)
 	BOOST_TEST((loaded->indices == written.indices));
 	BOOST_TEST(loaded->layout.get_stride() == written.layout.get_stride());
 	BOOST_TEST(loaded->bounds.empty());
+}
+
+// #1077: the encoder over a view of data held anywhere (what the model decoder encodes without a geometry_desc) writes the
+// same desc, binary file and arrays as the one over a geometry_desc.
+BOOST_AUTO_TEST_CASE(AGeometryView_EncodesTheSameBytes_AsTheGeometryDesc)
+{
+	const rnd::geometry_desc geometry = triangles(3);
+	const rnd::driver::BufferLayout layout = geometry.layout;
+	const std::vector<std::byte> vertices = geometry.vertices;
+	const std::vector<unsigned int> indices = geometry.indices;
+	std::vector<std::pair<ds::bbox, std::uint32_t>> bounds;
+	bounds.push_back({ ds::bbox{ { 0.0f, 0.0f }, { 1.0f, 0.5f } }, 0u });
+	const rnd::geometry_view view{ layout, vertices, indices, bounds };
+	const res::tag tag{ "geomfiles://a/view.geom.desc" };
+	rnd::geometry_file_options options;
+	options.header["__parent"] = "res://base_geometry.desc";
+	options.bounds = true;
+
+	const rnd::geometry_files from_view = rnd::encode_geometry_files(tag, view, options);
+	const rnd::geometry_files from_desc = rnd::encode_geometry_files(tag, geometry, options);
+	BOOST_REQUIRE_MESSAGE(from_view, from_view.error);
+	BOOST_REQUIRE_MESSAGE(from_desc, from_desc.error);
+	BOOST_TEST((from_view.desc == from_desc.desc));
+	BOOST_TEST((from_view.binary == from_desc.binary));
+	BOOST_TEST(rnd::geometry_write_problem(tag, view).empty());
+
+	// The arrays form: what geometry_desc::serialize writes, from the view.
+	rnd::geometry_desc with_bounds = geometry;
+	with_bounds.bounds = bounds;
+	json::object from_serialize;
+	with_bounds.serialize(from_serialize);
+	json::object from_arrays;
+	rnd::write_geometry_arrays(tag, view, from_arrays);
+	BOOST_TEST(json::serialize(from_arrays) == json::serialize(from_serialize));
 }
 
 BOOST_AUTO_TEST_CASE(AnAttributeThatIsNoFloat_MakesTheVerticesBytes)
@@ -593,7 +628,7 @@ BOOST_AUTO_TEST_CASE(GenRobot_ImportAndGeometryLoad_AreTimed)
 	egLOG_INFO("test/timing", "gen_robot: import (assimp, memory:// files): {:.1f} ms; first geometry load: {:.1f} ms", import_ms, first_load_ms);
 	egLOG_INFO("test/timing", "gen_robot: geometry write, JSON arrays: {:.1f} ms ({} bytes); binary pair: {:.1f} ms ({} + {} bytes)",
 		arrays_write_ms, arrays_text.size(), binary_write_ms, files.desc.size(), files.binary.size());
-	egLOG_INFO("test/timing", "gen_robot: geometry load, JSON arrays: {:.1f} ms; binary file (verify_hash_on_load): {:.1f} ms; "
+	egLOG_INFO("test/timing", "gen_robot: geometry load, JSON arrays: {:.1f} ms; binary file (hashes checked, no cache): {:.1f} ms; "
 		"SHA-256 of the binary file: {:.1f} ms", arrays_load_ms, binary_load_ms, sha_ms);
 }
 #endif

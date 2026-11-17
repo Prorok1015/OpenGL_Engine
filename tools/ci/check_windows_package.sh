@@ -8,7 +8,8 @@
 # 1. The debug archive unpacks over the main one without replacing any of its files.
 # 2. The layout: the editor, the model decoder and the model import DLL beside them (#1108), snk_engine.dll and the Debug
 #    snk_engined.dll, PDBs, the MSVC runtime, the SDK.
-# 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh).
+# 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh); the model
+#    decoder loads none of user32, gdi32, opengl32, snk_engine or the model import DLL (--deny, #1077).
 # 4. tests/package_consumer builds and runs against snk::engine and snk::engine_static, Debug and Release.
 # 5. The project template's game module builds against the package (Release, and DebugGame on the Release engine), and
 #    its shipping executable (preset `shipping`, #592): game.exe with the static engine, built only (tests/static_game
@@ -101,6 +102,9 @@ ls -l "${root}/bin"
 # ---- 3. dependencies ----
 bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_model_decoder.exe snk_model_import_assimp.dll snk_engine.dll \
 	snk_editor_api.dll || status=1
+# #1077: the decoder imports no window, GDI, GL, engine or model import DLL directly (not what those DLLs load: #1054).
+bash tools/ci/check_windows_deps.sh --deny user32.dll,gdi32.dll,opengl32.dll,snk_engine.dll,snk_engined.dll,snk_model_import_assimp.dll,snk_model_import_assimpd.dll \
+	"${root}/bin" snk_model_decoder.exe || status=1
 [[ $status -eq 0 ]] || exit 1
 
 # ---- 4. consumer, both engines, both configurations ----
