@@ -771,7 +771,7 @@ BOOST_AUTO_TEST_CASE(a_link_at_a_binary_files_name_is_neither_followed_nor_delet
 // A file name is shown in the question on one line, with nothing hidden.
 BOOST_AUTO_TEST_CASE(the_question_shows_a_file_name_escaped)
 {
-	upper.write("a\nb‮.geom.bin", binary_text("data"));
+	upper.write("a\nb\xE2\x80\xAE.geom.bin", binary_text("data"));
 	open();
 	const auto rows = rows_of("asset.orphan_binary");
 	BOOST_REQUIRE_EQUAL(rows.size(), 1u);
@@ -779,7 +779,7 @@ BOOST_AUTO_TEST_CASE(the_question_shows_a_file_name_escaped)
 	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
 	const std::string& question = actions[0].confirm;
 	BOOST_TEST(question.find('\n') == std::string::npos);
-	BOOST_TEST(question.find("‮") == std::string::npos);
+	BOOST_TEST(question.find("\xE2\x80\xAE") == std::string::npos);
 	BOOST_TEST(question.find("a\\nb\\u{202E}.geom.bin") != std::string::npos);
 	BOOST_TEST(question.find("until the editor is closed") != std::string::npos);
 }
