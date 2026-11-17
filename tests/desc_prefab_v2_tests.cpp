@@ -44,6 +44,78 @@ uint64_t id_of(const json::value& node)
 	return desc::parse_node_id(node.at("__id").as_string()).value_or(0);
 }
 
+// splitmix64: the same sequence on every standard library (std::uniform_*_distribution and std::shuffle are not).
+struct splitmix64
+{
+	uint64_t state;
+	uint64_t next()
+	{
+		uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+		return z ^ (z >> 31);
+	}
+	std::size_t below(std::size_t n) { return static_cast<std::size_t>(next() % n); }
+};
+
+json::object random_node(splitmix64& rng, uint64_t& next_id, int depth)
+{
+	json::object node;
+	node["__id"] = desc::format_node_id(next_id++);
+	node["name"] = "n" + std::to_string(rng.below(1000));
+	if (rng.below(2) == 0) {
+		json::object transform;
+		transform["position"] = json::array{ static_cast<double>(rng.below(9)), 0.0, 1.0 };
+		node["transform"] = std::move(transform);
+	}
+	if (rng.below(2) == 0) {
+		node["components"] = json::object{ { "stat", json::object{ { "__type", "stat_desc" }, { "hp", static_cast<int64_t>(rng.below(50)) } } } };
+	}
+	json::array children;
+	const std::size_t count = depth >= 2 ? 0 : rng.below(4);
+	for (std::size_t i = 0; i < count; ++i) children.push_back(random_node(rng, next_id, depth + 1));
+	node["children"] = std::move(children);
+	return node;
+}
+
+void collect_nodes(scn::prefab_desc::prefab_node& node, std::vector<scn::prefab_desc::prefab_node*>& out)
+{
+	out.push_back(&node);
+	for (auto& child : node.children) collect_nodes(child, out);
+}
+
+void mutate(splitmix64& rng, scn::prefab_desc& edited, uint64_t& next_id)
+{
+	for (int step = 0, steps = 1 + static_cast<int>(rng.below(5)); step < steps; ++step) {
+		std::vector<scn::prefab_desc::prefab_node*> nodes;
+		collect_nodes(edited.get_root(), nodes);
+		auto& node = *nodes[rng.below(nodes.size())];
+		switch (rng.below(7)) {
+		case 0: if (&node != &edited.get_root()) node.name = "renamed" + std::to_string(rng.below(100)); break;
+		case 1: node.has_transform = true; node.position = glm::vec3(static_cast<float>(rng.below(20)), 0.f, 0.f); break;
+		case 2: node.components.erase("stat"); break;
+		case 3: {
+			scn::prefab_desc::prefab_comp_node comp;
+			comp.type_name = "stat_desc";
+			comp.overrides["hp"] = static_cast<int64_t>(100 + rng.below(50));
+			node.components["stat"] = std::move(comp);
+			break;
+		}
+		case 4: if (!node.children.empty()) node.children.erase(node.children.begin() + static_cast<std::ptrdiff_t>(rng.below(node.children.size()))); break;
+		case 5: {
+			scn::prefab_desc::prefab_node added;
+			added.node_id = next_id++;
+			added.name = "added";
+			node.children.push_back(std::move(added));
+			break;
+		}
+		default:
+			if (node.children.size() > 1) std::swap(node.children.front(), node.children[rng.below(node.children.size())]);
+			break;
+		}
+	}
+}
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(DescPrefabV2Tests, v2_fixture)
@@ -361,6 +433,44 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AnInheritedOverrideRecordTakenOut_IsRefusedAndBo
 	const json::object before = body;
 	BOOST_TEST(!scn::write_prefab_layer(*descs, *rs, edited, body).empty());
 	BOOST_TEST(json::value(body) == json::value(before));
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_RandomEdits_ReadBackAndWriteTheSameBytesAgain)
+{
+	for (uint64_t seed = 1; seed <= 60; ++seed) {
+		splitmix64 rng{ seed };
+		uint64_t next_id = 0x100;
+		json::object base_file;
+		base_file["__type"] = "prefab_desc";
+		base_file["__version"] = 4;
+		base_file["children"] = json::array{ random_node(rng, next_id, 1), random_node(rng, next_id, 1) };
+		const std::string base_name = "base" + std::to_string(seed) + ".prefab.desc";
+		put(base_name, json::serialize(base_file));
+		auto base = load<scn::prefab_desc>(tag_of(base_name));
+		BOOST_REQUIRE_MESSAGE(base, "seed " << seed);
+
+		scn::prefab_desc edited;
+		base->copy_to(edited);
+		edited.set_parent(base->get_tag());
+		mutate(rng, edited, next_id);
+
+		json::object body;
+		edited.serialize(body);
+		const std::string why = scn::write_prefab_layer(*descs, *rs, edited, body);
+		BOOST_REQUIRE_MESSAGE(why.empty(), "seed " << seed << ": " << why);
+
+		scn::prefab_desc again;
+		base->copy_to(again);
+		again.set_parent(base->get_tag());
+		again.deserialize(*descs, body);
+		BOOST_REQUIRE_MESSAGE(json::value(saved(again)) == json::value(saved(edited)), "seed " << seed << ": the layer does not read back");
+
+		json::object second;
+		again.serialize(second);
+		const std::string why_again = scn::write_prefab_layer(*descs, *rs, again, second);
+		BOOST_REQUIRE_MESSAGE(why_again.empty(), "seed " << seed << ": " << why_again);
+		BOOST_REQUIRE_MESSAGE(json::serialize(second) == json::serialize(body), "seed " << seed << ": the second write differs");
+	}
 }
 
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
