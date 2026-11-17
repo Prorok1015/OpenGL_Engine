@@ -27,6 +27,8 @@ const char* const k_document = R"({
 	"list": [ "res://sky.desc", "res://other.desc" ]
 })";
 
+constexpr std::string_view k_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+
 const std::vector<std::string> k_pointers{ "/sky", "/mesh", "/by_path", "/guid_only", "/list/0" };
 
 }
@@ -36,7 +38,7 @@ BOOST_AUTO_TEST_SUITE(EdtReferenceRewriteTests)
 BOOST_AUTO_TEST_CASE(AStringAndAnObject_GetTheNewPath_TheGuidIsKept)
 {
 	const std::string text = canonical(k_document);
-	const edt::rewrite_outcome outcome = edt::rewrite_references(text, k_pointers, "res://sky.desc", "res://env/clouds.desc", false);
+	const edt::rewrite_outcome outcome = edt::rewrite_references(text, k_pointers, "res://sky.desc", "res://env/clouds.desc", false, k_guid);
 	BOOST_REQUIRE_MESSAGE((outcome.status == edt::rewrite_status::rewritten), outcome.reason);
 	BOOST_TEST(outcome.pointers == (std::vector<std::string>{ "/sky", "/mesh", "/by_path", "/list/0" }),
 		"a {guid} without a path holds nothing to change");
@@ -48,6 +50,22 @@ BOOST_AUTO_TEST_CASE(AStringAndAnObject_GetTheNewPath_TheGuidIsKept)
 	BOOST_TEST(std::string(after.at("by_path").at("path").as_string().c_str()) == "res://env/clouds.desc");
 	BOOST_TEST(std::string(after.at("list").as_array().at(1).as_string().c_str()) == "res://other.desc", "what was not asked for stays");
 	BOOST_TEST(outcome.text == canonical(outcome.text), "the result is in the project's layout too");
+}
+
+BOOST_AUTO_TEST_CASE(AnObjectWithAnotherGuid_IsNotThisAssetsReference_AndFailsTheFile)
+{
+	const std::string text = canonical(R"({ "mesh": { "guid": "00000000-0000-4000-8000-000000000009", "path": "res://sky.desc" } })");
+	const std::vector<std::string> pointers{ "/mesh" };
+	const edt::rewrite_outcome other = edt::rewrite_references(text, pointers, "res://sky.desc", "res://b.desc", false, k_guid);
+	BOOST_TEST((other.status == edt::rewrite_status::guid_mismatch));
+	BOOST_TEST(other.text.empty());
+	BOOST_TEST(other.pointers.empty());
+	BOOST_TEST((edt::rewrite_references(text, pointers, "res://sky.desc", "res://b.desc", false).status == edt::rewrite_status::guid_mismatch),
+		"a target with no guid owns no object that has one");
+
+	const std::string upper = canonical(R"({ "mesh": { "guid": "3F2A9C1E-7B4D-4E8A-9C0F-1A2B3C4D5E6F", "path": "res://old.desc" } })");
+	BOOST_TEST((edt::rewrite_references(upper, pointers, "res://sky.desc", "res://b.desc", false, k_guid).status == edt::rewrite_status::rewritten),
+		"the guid is compared in any letter case");
 }
 
 BOOST_AUTO_TEST_CASE(AFileThatDoesNotWriteBackUnchanged_IsNotTouched)

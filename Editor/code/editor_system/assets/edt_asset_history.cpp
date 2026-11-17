@@ -98,8 +98,13 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 			egLOG_WARN("asset_ops", "the journal '{}' is not JSON and is ignored", fs_paths::generic_utf8_of(file));
 			continue;
 		}
-		std::optional<operation_journal> journal = journal_from_json(parsed);
-		if (!journal || journal->steps.empty()) continue;
+		std::string reason;
+		std::optional<operation_journal> journal = journal_from_json(parsed, reason);
+		if (!journal) {
+			egLOG_WARN("asset_ops", "the journal '{}' is not trusted and is ignored: {}", fs_paths::generic_utf8_of(file), reason);
+			continue;
+		}
+		if (journal->steps.empty() || fs_paths::generic_utf8_of(it->path().filename()) != journal->id) continue;
 		const bool known_roots = std::ranges::all_of(journal->steps, [&allowed](const journal_step& step) {
 			return std::ranges::find(allowed, step.root) != allowed.end();
 		});
@@ -107,8 +112,8 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 			egLOG_WARN("asset_ops", "the journal '{}' names a folder that is not the project's and is ignored", fs_paths::generic_utf8_of(file));
 			continue;
 		}
-		// Where it was found, not where it says it was written: a project folder that moved keeps its journals.
-		journal->directory = fs_paths::generic_utf8_of(it->path());
+		// The folder asset_ops::undo expects, whatever the journal says it was written to.
+		journal->directory = fs_paths::generic_utf8_of(m_root / journal->id);
 		const fs::file_time_type written = fs::last_write_time(file, entry_ec);
 		journals.push_back(found{ entry_ec ? fs::file_time_type{} : written, std::move(*journal) });
 	}

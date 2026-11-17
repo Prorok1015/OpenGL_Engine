@@ -30,7 +30,7 @@ namespace edt
 		asset_history(std::filesystem::path journal_root, std::function<std::uint64_t()> serial);
 
 		// Reads <journal_root>/*/journal.json again: the newest max_entries, oldest first. A journal that does not parse, has no
-		// step, or names a root that is not in `roots` (the layers and the manifest's folder) is left alone and not listed.
+		// step, or names a root that is not in `roots` (the folders an operation may change: the layers below the engine's and the manifest's folder), or does not pass journal_from_json (not trusted) is left alone and not listed.
 		// Returns how many entries there are.
 		std::size_t restore(const std::vector<std::filesystem::path>& roots);
 		// An operation that was done (operation_report::journal, already on the disk).

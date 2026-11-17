@@ -46,7 +46,8 @@ edt::asset_component::asset_component(ports from)
 	ops.manifest = [shown = &m_ports.project]() -> std::optional<asset_ops_manifest> {
 		return asset_ops_manifest{ shown->manifest_file.parent_path(), fs_paths::utf8_of(shown->manifest_file.filename()), manifest_references_of(*shown) };
 	};
-	ops.engine_base = res::resource_system::configured_engine_base();
+	const std::filesystem::path ops_engine_base = res::resource_system::configured_engine_base();
+	ops.engine_base = ops_engine_base;
 	ops.journal_root = project.cache_dir() / "asset_ops";
 	ops.is_open_with_unsaved_changes = m_ports.is_open_with_unsaved_changes;
 	ops.hold_changes = [this]() -> std::shared_ptr<void> { return std::make_shared<res::change_hold>(m_ports.resources.hold_changes()); };
@@ -54,7 +55,10 @@ edt::asset_component::asset_component(ports from)
 	m_ops = std::make_unique<asset_ops>(std::move(ops));
 
 	m_history = std::make_unique<asset_history>(project.cache_dir() / "asset_ops", [this] { return m_database->next_history_serial(); });
-	std::vector<std::filesystem::path> roots = m_database->layers();
+	std::vector<std::filesystem::path> roots;
+	for (std::size_t layer = 0; layer < m_database->layers().size(); ++layer) {
+		if (!is_engine_layer(m_database->layers(), layer, ops_engine_base)) roots.push_back(m_database->layers()[layer]);
+	}
 	roots.push_back(project.manifest_file.parent_path());
 	m_history->restore(roots);
 }

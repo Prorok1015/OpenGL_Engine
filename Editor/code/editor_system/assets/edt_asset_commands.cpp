@@ -169,6 +169,13 @@ namespace
 				for (std::size_t i = 0; i < why.skipped.size(); ++i) error += (i > 0 ? ", " : "") + why.skipped[i];
 				error += ")";
 			}
+			if (!why.unrewritable.empty()) {
+				error += " (cannot be rewritten: ";
+				for (std::size_t i = 0; i < why.unrewritable.size() && i < k_listed_files; ++i) {
+					error += std::format("{}{} [{}]", i > 0 ? ", " : "", why.unrewritable[i].file, why.unrewritable[i].code);
+				}
+				error += ")";
+			}
 			cmd::result out = cmd::result::failure(edt::command_code_of(why.code), std::move(error));
 			out.value = edt::refusal_json(why);
 			return out;
@@ -232,6 +239,8 @@ const char* edt::command_code_of(refusal_code code)
 		return cmd::codes::needs_input;
 	case refusal_code::no_database:
 	case refusal_code::io_error:
+	case refusal_code::binary_pair_blocked:
+	case refusal_code::unrewritable_references:
 	case refusal_code::engine_layer:
 	case refusal_code::not_top_layer:
 	case refusal_code::meta_in_other_layer:
@@ -256,8 +265,12 @@ json::value edt::refusal_json(const refusal& why)
 	for (const asset_usage& usage : why.referrers) referrers.push_back(usage_json(usage));
 	json::array skipped;
 	for (const std::string& file : why.skipped) skipped.push_back(json::string(file));
+	json::array unrewritable;
+	for (const rewrite_failure& failure : why.unrewritable) {
+		unrewritable.push_back(json::object{ { "file", failure.file }, { "code", failure.code }, { "reason", failure.reason } });
+	}
 	return json::object{ { "code", std::string(refusal_code_name(why.code)) }, { "reason", why.reason }, { "referrers", std::move(referrers) },
-		{ "skipped", std::move(skipped) } };
+		{ "skipped", std::move(skipped) }, { "unrewritable", std::move(unrewritable) } };
 }
 
 json::value edt::operation_report_json(const operation_report& report)
@@ -404,7 +417,7 @@ std::vector<edt::registration> edt::register_asset_commands(cmd::command_registr
 	add("asset.rename", "Rename one asset of the project's res/ folder (a person confirms each time). Its .resource (and for a desc its binary file) go with it; "
 			"references that name it by guid stay, references by path are rewritten in the files that hold them. The answer is a report: what moved, "
 			"which files were rewritten, what could not be, and an `operation` id. Refused with `busy` while the asset database reads the files or "
-			"a file that refers to the asset is open with unsaved changes; the refusal's value has a machine `code`",
+			"a file that refers to the asset is open with unsaved changes; `unrewritable_references` (`failed`, nothing was changed) lists the referrers that cannot be rewritten (a lower layer's file, a guid that is another asset's, a file not laid out as the editor writes it) in the value's `unrewritable`; the refusal's value has a machine `code`",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"the asset, res://materials/a.mat.desc or materials/a.mat.desc"},
 			"to":{"type":"string","minLength":1,"description":"the new file name, without a folder"}},
