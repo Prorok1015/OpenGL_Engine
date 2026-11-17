@@ -473,6 +473,71 @@ BOOST_AUTO_TEST_CASE(WriteLayer_RandomEdits_ReadBackAndWriteTheSameBytesAgain)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(WriteLayer_AChainOfTwoLayers_EachReadsBackOverItsOwnBase)
+{
+	for (uint64_t seed = 1; seed <= 30; ++seed) {
+		splitmix64 rng{ seed * 7919 };
+		uint64_t next_id = 0x100;
+		json::object base_file;
+		base_file["__type"] = "prefab_desc";
+		base_file["__version"] = 4;
+		base_file["children"] = json::array{ random_node(rng, next_id, 1), random_node(rng, next_id, 1) };
+		const std::string base_name = "chain_base" + std::to_string(seed) + ".prefab.desc";
+		put(base_name, json::serialize(base_file));
+		auto base = load<scn::prefab_desc>(tag_of(base_name));
+		BOOST_REQUIRE_MESSAGE(base, "seed " << seed);
+
+		scn::prefab_desc first;
+		base->copy_to(first);
+		first.set_parent(base->get_tag());
+		mutate(rng, first, next_id);
+		json::object first_body;
+		first.serialize(first_body);
+		BOOST_REQUIRE_MESSAGE(scn::write_prefab_layer(*descs, *rs, first, first_body).empty(), "seed " << seed);
+		const std::string first_name = "chain_first" + std::to_string(seed) + ".prefab.desc";
+		put(first_name, json::serialize(first_body));
+		auto loaded_first = load<scn::prefab_desc>(tag_of(first_name));
+		BOOST_REQUIRE_MESSAGE(loaded_first, "seed " << seed << ": the first layer does not load");
+		BOOST_REQUIRE_MESSAGE(json::value(saved(*loaded_first)) == json::value(saved(first)), "seed " << seed << ": the first layer reads differently");
+
+		scn::prefab_desc second;
+		loaded_first->copy_to(second);
+		second.set_parent(loaded_first->get_tag());
+		mutate(rng, second, next_id);
+		json::object second_body;
+		second.serialize(second_body);
+		const std::string why = scn::write_prefab_layer(*descs, *rs, second, second_body);
+		BOOST_REQUIRE_MESSAGE(why.empty(), "seed " << seed << ": " << why);
+		const std::string second_name = "chain_second" + std::to_string(seed) + ".prefab.desc";
+		put(second_name, json::serialize(second_body));
+		auto loaded_second = load<scn::prefab_desc>(tag_of(second_name));
+		BOOST_REQUIRE_MESSAGE(loaded_second, "seed " << seed << ": the second layer does not load");
+		BOOST_REQUIRE_MESSAGE(json::value(saved(*loaded_second)) == json::value(saved(second)), "seed " << seed << ": the chain reads differently");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_AVariantOfFormatV1_IsReadAsBeforeAndWrittenAsALayerThatReadsTheSame)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":1}}},
+		{"__id":"00000000000000b2","name":"b"}]})");
+	auto v1 = load<scn::prefab_desc>(put("v1.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","children":[
+		{"__id":"00000000000000b1","name":"a_renamed","components":{"stat":{"__type":"stat_desc","hp":7}}},
+		{"__id":"00000000000000c1","name":"c"}]})"));
+	BOOST_REQUIRE(v1);
+	BOOST_TEST(v1->get_root().children[0].name == "a_renamed");
+	BOOST_TEST(v1->get_root().children.size() == 3u);
+
+	json::object body;
+	v1->serialize(body);
+	BOOST_REQUIRE(scn::write_prefab_layer(*descs, *rs, *v1, body).empty());
+	BOOST_TEST(body.at("__layer").as_int64() == 2);
+	auto v2 = load<scn::prefab_desc>(put("v2.prefab.desc", json::serialize(body)));
+	BOOST_REQUIRE(v2);
+	BOOST_TEST(json::value(saved(*v2)) == json::value(saved(*v1)));
+}
+
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
 {
 	json::value v = json::parse(R"({"a":{"position":[1,2,3],"list":[{"x":1},{"x":2}]},"empty":[]})");
