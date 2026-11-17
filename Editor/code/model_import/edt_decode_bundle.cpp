@@ -144,7 +144,13 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	// blocking (a FIFO cannot hold the worker), and checked to be a regular file through the handle it is read from, so
 	// nothing swapped between a check and the read is seen. Too big to be a bundle under the limits: nothing is read.
 	std::error_code ec;
-	const std::filesystem::path folder = std::filesystem::canonical(file.parent_path(), ec);
+	std::filesystem::path folder = std::filesystem::canonical(file.parent_path(), ec);
+	if (ec) {
+		// In an AppContainer the folder's final name on its volume may not be readable (#1054): the folder as given. The read
+		// below still opens the file beneath it without following a link.
+		ec.clear();
+		folder = std::filesystem::absolute(file.parent_path(), ec).lexically_normal();
+	}
 	if (ec || file.filename().empty()) return refuse("the bundle file cannot be opened");
 	platform::beneath::read_request request;
 	request.root = folder;
@@ -157,7 +163,7 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	case platform::beneath::read_status::not_regular: return refuse("the bundle is not a regular file");
 	case platform::beneath::read_status::too_large: return refuse("the bundle is bigger than the limits allow");
 	case platform::beneath::read_status::missing: return refuse("the bundle file is missing");
-	default: return refuse("the bundle file cannot be read");
+	default: return refuse(read.error.empty() ? std::string("the bundle file cannot be read") : "the bundle file cannot be read: " + read.error);
 	}
 	bounded_reader reader(contents);
 

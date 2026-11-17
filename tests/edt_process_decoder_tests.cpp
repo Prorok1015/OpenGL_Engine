@@ -468,27 +468,33 @@ BOOST_AUTO_TEST_CASE(AScanThatTheChildReportedAsFailed_ComesBackWithItsError)
 // the model's, which must not be able to say the sandbox is on.
 BOOST_AUTO_TEST_CASE(OnlyTheChildsFirstStderrLine_SaysHowItIsSandboxed)
 {
+	// This system's names of the two parts: landlock and seccomp, or (Windows, #1054) appcontainer and policy.
+	const std::string fs_name(edt::k_decoder_sandbox_fs_name);
+	const std::string syscalls_name(edt::k_decoder_sandbox_syscalls_name);
+	const std::string whole = "snk-sandbox-status: fs=" + fs_name + " syscalls=" + syscalls_name;
+
 	edt::sandbox_status_reader reader;
-	BOOST_CHECK(reader.line("snk-sandbox-status: fs=none syscalls=seccomp why=no Landlock"));
+	BOOST_CHECK(reader.line("snk-sandbox-status: fs=none syscalls=" + syscalls_name + " why=no Landlock"));
 	BOOST_CHECK(reader.status().reported);
 	BOOST_CHECK(!reader.status().fs);
 	BOOST_CHECK(reader.status().syscalls);
 	BOOST_CHECK_EQUAL(reader.status().why, "no Landlock");
-	BOOST_CHECK(!reader.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(!reader.line(whole));
 	BOOST_CHECK(!reader.status().fs);
 
 	edt::sandbox_status_reader full;
-	BOOST_CHECK(full.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(full.line(whole));
 	BOOST_CHECK(full.status().reported && full.status().fs && full.status().syscalls);
 	BOOST_CHECK(full.status().why.empty());
 
 	edt::sandbox_status_reader late;
 	BOOST_CHECK(!late.line("some parser warning"));
-	BOOST_CHECK(!late.line("snk-sandbox-status: fs=landlock syscalls=seccomp"));
+	BOOST_CHECK(!late.line(whole));
 	BOOST_CHECK(!late.status().reported);
 
-	for (const char* garbled : { "snk-sandbox-status: fs=maybe syscalls=seccomp", "snk-sandbox-status: fs=landlock syscalls=seccomp more",
-			 "snk-sandbox-status: fs=landlock" }) {
+	const std::string other_system = fs_name == "landlock" ? "appcontainer" : "landlock";
+	for (const std::string& garbled : { std::string("snk-sandbox-status: fs=maybe syscalls=") + syscalls_name, whole + " more",
+			 "snk-sandbox-status: fs=" + fs_name, "snk-sandbox-status: fs=" + other_system + " syscalls=" + syscalls_name }) {
 		edt::sandbox_status_reader reading;
 		BOOST_CHECK(reading.line(garbled));
 		BOOST_CHECK_MESSAGE(!reading.status().reported, garbled);
@@ -1351,13 +1357,20 @@ BOOST_AUTO_TEST_CASE(AnImportThatAsksForTheRequiredSandbox_FailsWithTheReason_Wh
 	auto config = decoder_config();
 	config.decoder = SNK_MODEL_DECODER_SELFTEST_PATH;
 	config.extra_arguments = { "--self-test-pretend-no-landlock" };
+#if defined(_WIN32)
+	// No container can be made without a name (#1054): what a machine's policy that stops one does.
+	config.container_name.clear();
+	const char* missing = "AppContainer";
+#else
+	const char* missing = "Landlock";
+#endif
 	const edt::process_decoder decoder(*rs, *descs, config);
 	try {
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder without its sandbox decoded a model that required it");
 	} catch (const std::runtime_error& e) {
 		BOOST_CHECK_MESSAGE(std::string(e.what()).find("cannot run in its sandbox") != std::string::npos, e.what());
-		BOOST_CHECK_MESSAGE(std::string(e.what()).find("Landlock") != std::string::npos, e.what());
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find(missing) != std::string::npos, e.what());
 	}
 }
 
@@ -1426,10 +1439,82 @@ BOOST_AUTO_TEST_CASE(ADecoderThatNeverSaidHowItIsSandboxed_CountsAsUnsandboxed_E
 }
 #endif
 
+#if defined(_WIN32)
+// #1054: where no AppContainer can be started (a machine's policy; here: no name), the setting `on` decodes without one,
+// and the editor itself says so: the child's word on a start it did not get proves nothing.
+BOOST_AUTO_TEST_CASE(WhereNoContainerCanStart_OnDecodesWithoutIt_AndTheEditorSaysSo)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	auto config = decoder_config();
+	config.sandbox = edt::sandbox_mode::best_effort;
+	config.container_name.clear();
+	std::vector<edt::decoder_sandbox_status> heard;
+	const edt::process_decoder decoder(*rs, *descs, config, [&heard](const edt::decoder_sandbox_status& status) { heard.push_back(status); });
+	const edt::import_intermediate imported = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	BOOST_CHECK(imported.sandbox.reported && !imported.sandbox.fs);
+	BOOST_CHECK_MESSAGE(imported.sandbox.why.find("could not be started in its AppContainer") != std::string::npos, imported.sandbox.why);
+	BOOST_REQUIRE_EQUAL(heard.size(), 1u);
+	BOOST_CHECK(!heard.front().fs);
+	for (const res::tag& tag : imported.created_tags) rs->erase(tag);
+}
+
+// #1054: another editor of another build removes the copies it does not use: a copy that is gone is made again, and
+// the decoder still runs in its AppContainer.
+BOOST_AUTO_TEST_CASE(ACopyOfTheDecoderThatWasRemoved_IsMadeAgain)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	auto config = decoder_config();
+	config.sandbox = edt::sandbox_mode::required;
+	const edt::process_decoder decoder(*rs, *descs, config);
+	const edt::import_intermediate first = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(first.error.empty(), first.error);
+	for (const res::tag& tag : first.created_tags) rs->erase(tag);
+
+	std::error_code ec;
+	fs::remove_all(edt::decoder_copy_base() / fs::path(config.decoder).stem(), ec);
+	const edt::import_intermediate again = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(again.error.empty(), again.error);
+	BOOST_CHECK_MESSAGE(again.sandbox.fs && again.sandbox.syscalls, again.sandbox.why);
+	for (const res::tag& tag : again.created_tags) rs->erase(tag);
+}
+
+// #1054: in its AppContainer the decoder says so; the setting `on` asks for nothing more.
+BOOST_AUTO_TEST_CASE(OnWindows_TheDecoderRunsInItsAppContainer)
+{
+	const std::vector<std::byte> bytes = bytes_of(k_triangle_obj);
+	const std::vector<edt::referenced_file> nothing;
+	edt::import_source source;
+	source.path = "x.obj";
+	source.preloaded = &bytes;
+	source.allowed = &nothing;
+	auto config = decoder_config();
+	config.sandbox = edt::sandbox_mode::best_effort;
+	const edt::process_decoder decoder(*rs, *descs, config);
+	const edt::import_intermediate imported = decoder.import(source, nullptr);
+	BOOST_REQUIRE_MESSAGE(imported.error.empty(), imported.error);
+	BOOST_CHECK_MESSAGE(imported.sandbox.reported && imported.sandbox.fs && imported.sandbox.syscalls, imported.sandbox.why);
+	for (const res::tag& tag : imported.created_tags) rs->erase(tag);
+}
+#endif
+
 // #1043: the real decoder decodes real models inside Landlock and the seccomp filter (the CI test of the allowlist).
 BOOST_AUTO_TEST_CASE(AGltfWithItsBin_AndAnObjWithItsMtl_DecodeInTheRequiredSandbox)
 {
+	// Windows (#1054): in the AppContainer, from a copy of the decoder when the build's folder is not readable by it.
+#if !defined(_WIN32)
 	if (test_util::skipped_without_landlock()) return;
+#endif
 	test_util::temp_dir dir{ "process_decoder_sandbox" };
 	const std::string gltf = R"json({"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":36}],
 		"bufferViews":[{"buffer":0,"byteLength":36}],

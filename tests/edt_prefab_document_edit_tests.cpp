@@ -2,6 +2,9 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_prefab_document.h"
+#include "edt_prefab_file_edit.h"
+#include "edt_override_edit.h"
+#include "edt_instance_overrides_view.h"
 #include "edt_inspector_target.h"
 #include "edt_scene_document.h"
 #include "edt_prefab_close.h"
@@ -854,6 +857,136 @@ BOOST_AUTO_TEST_CASE(Close_DropsTheWorkingCopy)
 	document->close();
 	BOOST_TEST(document->working() == nullptr);
 	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_MovesTheValueIntoTheFile_AndTellsWhatItDoes)
+{
+	const scn::override_record record{ .target = {}, .component = "stat", .path = "/hp", .value = 77 };
+
+	const std::string error = edt::apply_override_records(services, layout(), tag, { record }, nullptr);
+
+	BOOST_TEST(error.empty());
+	const std::string file = text_of(res_root, "prefabs/a.prefab.desc");
+	BOOST_TEST(file.find("77") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_RefusesWhileThePrefabIsOpenWithUnappliedEdits_WritingNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("renamed"));
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+	const scn::override_record record{ .target = {}, .component = "stat", .path = "/hp", .value = 77 };
+
+	const std::string error = edt::apply_override_records(services, layout(), tag, { record }, document.get());
+
+	BOOST_TEST(error.find("apply or revert") != std::string::npos);
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_ALowerLayerPrefab_IsNotWritten)
+{
+	write(lower, "prefabs/low.prefab.desc", PREFAB);
+	const scn::override_record record{ .target = {}, .component = "stat", .path = "/hp", .value = 77 };
+
+	const std::string error = edt::apply_override_records(services, layout(), res::tag::make("prefabs/low.prefab.desc"), { record }, nullptr);
+
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(text_of(lower, "prefabs/low.prefab.desc") == PREFAB);
+}
+
+BOOST_AUTO_TEST_CASE(FoldRecord_BelowANestedInstance_BecomesARecordOfThatInstanceNode)
+{
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
+	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
+	pump();
+	BOOST_REQUIRE(user.is_ready());
+	scn::prefab_desc edited;
+	user->copy_to(edited);
+	const scn::override_record record{ .target = { 0xb1, 0xa1 }, .component = "stat", .path = "/hp", .value = 9 };
+
+	const std::string error = edt::override_edit::fold_record(edited, record);
+
+	BOOST_TEST(error.empty());
+	const auto& inst = edited.get_root().children.at(0);
+	BOOST_REQUIRE(inst.overrides.size() == 1);
+	BOOST_TEST((inst.overrides[0].target == std::vector<uint64_t>{ 0xa1 }));
+	BOOST_TEST(inst.overrides[0].path == "/hp");
+}
+
+BOOST_AUTO_TEST_CASE(FoldRecord_ANodeThePrefabLacks_AndRemoveRecords_AreRefusedLeavingThePrefabAlone)
+{
+	auto handle = rs->require_sync<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(handle.is_ready());
+	scn::prefab_desc edited;
+	handle->copy_to(edited);
+	const std::string before = std::to_string(edited.get_root().children.size());
+
+	const std::string missing = edt::override_edit::fold_record(edited,
+		scn::override_record{ .target = { 0xff }, .component = "stat", .path = "/hp", .value = 1 });
+	const std::string removal = edt::override_edit::fold_record(edited,
+		scn::override_record{ .target = {}, .component = "stat", .path = {}, .value = {}, .op = scn::override_op::remove });
+
+	BOOST_TEST(!missing.empty());
+	BOOST_TEST(!removal.empty());
+	BOOST_TEST(std::to_string(edited.get_root().children.size()) == before);
+}
+
+BOOST_AUTO_TEST_CASE(FoldRecord_ATransformRecord_ChangesThePlacementOfTheNode)
+{
+	auto handle = rs->require_sync<scn::prefab_desc>(tag);
+	BOOST_REQUIRE(handle.is_ready());
+	scn::prefab_desc edited;
+	handle->copy_to(edited);
+
+	const std::string error = edt::override_edit::fold_record(edited, scn::override_record{ .target = { 0xa1 },
+		.component = std::string(scn::transform_pseudo_component), .path = "/position", .value = boost::json::array{ 1, 2, 3 } });
+
+	BOOST_TEST(error.empty());
+	const auto& arm = edited.get_root().children.at(0);
+	BOOST_TEST(arm.position.y == 2.0f);
+	BOOST_TEST(arm.has_transform);
+}
+
+BOOST_AUTO_TEST_CASE(TheApplyQuestion_NamesThePrefab_TheInstancesAndTheRecords)
+{
+	const std::string text = edt::apply_to_prefab_question(tag, 3, 2);
+
+	BOOST_TEST(text.find("prefabs/a.prefab.desc") != std::string::npos);
+	BOOST_TEST(text.find("for all of its instances (3 in this level") != std::string::npos);
+	BOOST_TEST(text.find("cannot be undone") != std::string::npos);
+	BOOST_TEST(text.find("2 of this instance") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_IsAllOrNone_AFailingRecordLeavesTheFileAlone)
+{
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+	const scn::override_record fits{ .target = {}, .component = "stat", .path = "/hp", .value = 77 };
+	const scn::override_record gone{ .target = { 0xff }, .component = "stat", .path = "/hp", .value = 1 };
+
+	const std::string error = edt::apply_override_records(services, layout(), tag, { fits, gone }, nullptr);
+
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(FoldRecord_TheSameFieldTwice_IsOneRecordOfTheInstanceNodeWithTheLaterValue)
+{
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
+	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
+	pump();
+	BOOST_REQUIRE(user.is_ready());
+	scn::prefab_desc edited;
+	user->copy_to(edited);
+
+	BOOST_REQUIRE(edt::override_edit::fold_record(edited, scn::override_record{ .target = { 0xb1, 0xa1 }, .component = "stat", .path = "/hp", .value = 9 }).empty());
+	BOOST_REQUIRE(edt::override_edit::fold_record(edited, scn::override_record{ .target = { 0xb1, 0xa1 }, .component = "stat", .path = "/hp", .value = 11 }).empty());
+
+	const auto& inst = edited.get_root().children.at(0);
+	BOOST_REQUIRE(inst.overrides.size() == 1u);
+	BOOST_TEST(inst.overrides[0].value.to_number<int>() == 11);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

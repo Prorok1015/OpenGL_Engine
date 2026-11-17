@@ -457,7 +457,7 @@ BOOST_AUTO_TEST_CASE(TheJobsResult_CarriesWhatTheDecoderSaidOfItsSandbox)
 	BOOST_REQUIRE(parked.contains("decoder_sandbox"));
 	const json::object& listed = parked.at("decoder_sandbox").as_object();
 	BOOST_CHECK_EQUAL(std::string(listed.at("fs").as_string()), "none");
-	BOOST_CHECK_EQUAL(std::string(listed.at("syscalls").as_string()), "seccomp");
+	BOOST_CHECK_EQUAL(std::string(listed.at("syscalls").as_string()), std::string(edt::k_decoder_sandbox_syscalls_name));
 	BOOST_CHECK_EQUAL(std::string(listed.at("why").as_string()), "the kernel has no usable Landlock");
 	BOOST_CHECK(std::string(listed.at("warning").as_string()).find("every file") != std::string::npos);
 
@@ -469,7 +469,7 @@ BOOST_AUTO_TEST_CASE(TheJobsResult_CarriesWhatTheDecoderSaidOfItsSandbox)
 	const json::object done = finished(started.job);
 	BOOST_REQUIRE(done.contains("decoder_sandbox"));
 	const json::object& imported = done.at("decoder_sandbox").as_object();
-	BOOST_CHECK_EQUAL(std::string(imported.at("fs").as_string()), "landlock");
+	BOOST_CHECK_EQUAL(std::string(imported.at("fs").as_string()), std::string(edt::k_decoder_sandbox_fs_name));
 	BOOST_CHECK(!imported.contains("warning"));
 	BOOST_CHECK(!imported.contains("why"));
 }

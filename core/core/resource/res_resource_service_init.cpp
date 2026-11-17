@@ -109,7 +109,7 @@ void core::res::resource_term(ds::app_data_storage& data)
 	data.destruct<::res::resource_system>();
 	if (data.has_value<scratch_folder>()) {
 		std::error_code ec;
-		std::filesystem::remove_all(data.require<scratch_folder>().path, ec);
+		remove_tree_without_following(data.require<scratch_folder>().path, ec);
 		if (ec) {
 			egLOG_WARN("resource", "cannot remove the scratch folder '{}': {}", fs_paths::utf8_of(data.require<scratch_folder>().path),
 				ec.message());

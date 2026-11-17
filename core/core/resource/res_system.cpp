@@ -6,6 +6,7 @@
 #include <snk/project/prj_code.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_desc_binary_hash_cache.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -3326,6 +3327,30 @@ void res::resource_system::warn_on_sync_require(std::vector<std::string> extensi
 	std::lock_guard lock(top.m_sync_warning_mutex);
 	top.m_slow_sync_extensions = std::unordered_set<std::string>(std::make_move_iterator(extensions.begin()), std::make_move_iterator(extensions.end()));
 	top.m_sync_warnings_on.store(!top.m_slow_sync_extensions.empty(), std::memory_order_release);
+}
+
+void res::resource_system::set_desc_binary_hash_cache(std::shared_ptr<desc_binary_hash_cache> cache)
+{
+	resource_system& top = root();
+	std::lock_guard lock(top.m_desc_binary_cache_mutex);
+	top.m_desc_binary_cache = std::move(cache);
+}
+
+std::shared_ptr<res::desc_binary_hash_cache> res::resource_system::desc_binary_hash_cache_ptr() const
+{
+	const resource_system& top = root();
+	std::lock_guard lock(top.m_desc_binary_cache_mutex);
+	return top.m_desc_binary_cache;
+}
+
+void res::resource_system::set_verify_desc_binary_hash(bool verify)
+{
+	root().m_verify_desc_binary_hash.store(verify, std::memory_order_relaxed);
+}
+
+bool res::resource_system::verify_desc_binary_hash() const
+{
+	return root().m_verify_desc_binary_hash.load(std::memory_order_relaxed);
 }
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const

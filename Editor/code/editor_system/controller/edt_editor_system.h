@@ -35,7 +35,7 @@
 
 // Forward declarations — full types only needed in .cpp
 namespace desc { class desc_system; class desc_base; }
-namespace res  { class resource_system; }
+namespace res  { class resource_system; class file_desc_binary_hash_cache; }
 namespace rnd  { class render_system; }
 namespace gui  { class gui_system; }
 namespace scn  { class ecs_assembler; class level_desc; }
@@ -124,6 +124,8 @@ namespace edt {
 		void tick_repository_watcher();
 		// The source "assets" of Problems follows the asset database: the `editor_assets` frame stage.
 		void tick_asset_problems();
+		// The cache of checked binary files (EPIC-79 section 7) written at most every 5 s: the `editor_assets` frame stage.
+		void tick_desc_binary_cache();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
 		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
 		bool person_is_editing() const;
@@ -253,5 +255,11 @@ namespace edt {
 		std::unique_ptr<agent_ui_component> m_agent_ui;
 		// The editor's theme and the Editor Settings window (#1109).
 		std::unique_ptr<theme_settings_component> m_theme_settings;
+
+		// Set on the base resource system with a project open (#1126); taken off it and written in the destructor.
+		std::shared_ptr<res::file_desc_binary_hash_cache> m_desc_binary_cache;
+		std::chrono::steady_clock::time_point m_desc_binary_cache_written{};
+		// The one write of it in flight on the io lane.
+		ds::task_handle<void> m_desc_binary_cache_write;
 	};
 }
