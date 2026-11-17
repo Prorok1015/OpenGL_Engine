@@ -202,7 +202,10 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
 Access goes through an injected `res::resource_system&` (there is no global accessor):
 `system.require<T>(res::tag{"res://path"})` returns a `res_handle<T>`.
 
-- **Protocols**: `res://` (filesystem), `memory://` (runtime data)
+- **Protocols**: `res://` (the project's files), `engine://` (the engine's own resources, `core/res`), `memory://`
+  (runtime data), `edt://` (editor-only data; the editor alone mounts it); also `user://`, `cache://`, `code://`.
+  The data of a `.desc` refers only to `res://`, `engine://`, `memory://` and its own protocol
+  (`res::reference_problem`, #697)
 - **Async loading**: `res_handle<T>` with `.then()` callbacks
 - **Hot-reload**: file watching via Boost.ASIO
 - **Aliasing**: `register_alias()` for tag remapping
@@ -229,8 +232,8 @@ Hierarchy: `level_desc` → `world_desc` → `prefab_desc` → `prefab_node` →
 Macro-based tunable parameters, defined by the engine and the editor (`<snk/config/cfg_variables.h>`, base-only, not in the SDK; a game module reads them through `gs::module_context::config()`, a read-only `cfg::config_view` from `<snk/config/cfg_api.h>`):
 
 ```cpp
-CFG_VAR_DEF_INT(my_var, "path.to.var", 42);
-CFG_VAR_DEF_FLOAT(speed, "player.speed", 5.0f);
+CFG_VAR_DEF_INT(my_var, "path/to/var", 42);
+CFG_VAR_DEF_FLOAT(speed, "player/speed", 5.0f);
 
 // Access
 int value = *my_var;
@@ -249,7 +252,7 @@ Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are tw
 
 ## Rendering Pipeline
 
-Multi-pass forward renderer with OpenGL 4.2+:
+Multi-pass forward renderer (OpenGL 4.5 context):
 
 ```
  1. Sky Pass           ← cubemap sampling, rotation-only view matrix
@@ -258,8 +261,6 @@ Multi-pass forward renderer with OpenGL 4.2+:
  4. Transparent Pass   ← alpha blending
  5. Composition Pass   ← opaque + transparent mixing
 ```
-
-Pre-allocated buffers: 8M vertices, 800K indices.
 
 **Shader library system** — reusable GLSL includes:
 - `phong_model_lib.frag` — Phong shading with directional/point lights, gamma correction
@@ -423,7 +424,7 @@ See `CLAUDE.md` and `docs/agent/CODE_CONVENTIONS.toon` for full details.
 - **C++ Standard:** C++20, no extensions
 - **Namespaces:** 3-4 letter abbreviations (`ds`, `ecs`, `scn`, `gui`, `rnd`, `res`, `inp`, `edt`, `gs`, `cfg`, `wnd`)
 - **Naming:** `snake_case` everywhere; private members use `m_` prefix
-- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_level.cpp`)
+- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_context_set.cpp`)
 - **Headers:** `#pragma once`
 - **Indentation:** tabs (size 4)
 - **Braces:** new line for functions, same line for control flow
