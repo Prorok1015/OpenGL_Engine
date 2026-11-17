@@ -701,6 +701,60 @@ BOOST_AUTO_TEST_CASE(a_record_of_the_world_that_instantiates_the_instances_prefa
 	BOOST_TEST(refused.code == cmd::codes::not_found);
 }
 
+BOOST_AUTO_TEST_CASE(a_node_that_instantiates_no_prefab_has_no_stale_records)
+{
+	edt::override_edit::view_cache cache(services, scene);
+
+	BOOST_TEST(cache.stale(*child(root(), 0xa4))->empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_record_turns_stale_when_the_prefab_file_changes_under_an_unchanged_level)
+{
+	scene.active_world_idx = 1;
+	auto& inst = const_cast<prefab_node&>(*child(root(1), 0xe1));
+	inst.overrides.push_back(scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = "/fov", .value = 55 });
+	edt::override_edit::view_cache cache(services, scene);
+	BOOST_REQUIRE(cache.stale(inst)->empty());
+
+	rs->store(rig, test_util::to_bytes(R"({"__type":"prefab_desc","__version":4,"children":[]})"));
+	rs->evict_cached(rig);
+	pump();
+
+	const auto stale = cache.stale(inst);
+	BOOST_REQUIRE(stale->size() == 1u);
+	BOOST_TEST(stale->front().index == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(whole_component_records_and_array_indexes_are_judged_by_their_fields_not_dropped_from_stale)
+{
+	scene.active_world_idx = 1;
+	auto& inst = const_cast<prefab_node&>(*child(root(1), 0xe1));
+	const auto record = [](const char* path, boost::json::value value) {
+		return scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = path, .value = std::move(value) };
+	};
+	inst.overrides.push_back(record("", boost::json::object{ { "nonexistent_field", 1 } }));
+	inst.overrides.push_back(record("", boost::json::object{ { "fov", 50 } }));
+	inst.overrides.push_back(record("/fov/0", 1));
+	inst.overrides.push_back(record("/nonexistent_field", 1));
+	edt::override_edit::view_cache cache(services, scene);
+
+	const auto stale = cache.stale(inst);
+
+	std::vector<std::size_t> indices;
+	for (const auto& entry : *stale) indices.push_back(entry.index);
+	BOOST_TEST((indices == std::vector<std::size_t>{ 0, 3 }));
+}
+
+BOOST_AUTO_TEST_CASE(resetting_the_history_after_an_apply_leaves_nothing_to_undo)
+{
+	BOOST_REQUIRE(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Renamed"})").ok);
+	BOOST_REQUIRE(scene.next_undo_entry().has_value());
+
+	scene.reset_history();
+
+	BOOST_TEST(!scene.next_undo_entry().has_value());
+}
+
 BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
 {
 	gesture = true;

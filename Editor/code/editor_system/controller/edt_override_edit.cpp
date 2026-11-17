@@ -8,6 +8,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_override_record.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_scene_document.h"
@@ -20,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -372,15 +374,35 @@ void edt::override_edit::view_cache::sync_generation()
 	m_generation = m_state.desc_generation;
 }
 
+std::shared_ptr<const void> edt::override_edit::view_cache::source_of(const prefab_node& owner) const
+{
+	const scn::prefab_desc* prefab = referenced_prefab(owner);
+	res::resource_system* resources = m_services.resources();
+	if (!prefab || !resources) return {};
+	return resources->require<scn::prefab_desc>(prefab->get_tag()).get_control_block();
+}
+
+template<typename T>
+const edt::override_edit::view_cache::entry<T>* edt::override_edit::view_cache::find_entry(std::vector<entry<T>>& entries, int world,
+	uint64_t owner_id, std::span<const uint64_t> target, const std::weak_ptr<const void>& source)
+{
+	for (auto it = entries.begin(); it != entries.end(); ++it) {
+		if (it->world != world || it->owner_id != owner_id || !std::ranges::equal(it->target, target)) continue;
+		if (!it->source.owner_before(source) && !source.owner_before(it->source)) return &*it;
+		entries.erase(it);
+		break;
+	}
+	return nullptr;
+}
+
 std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::override_edit::view_cache::base(
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	for (const auto& e : m_bases) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
-	}
+	const std::weak_ptr<const void> source = source_of(owner);
+	if (const auto* found = find_entry(m_bases, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target, active_file()));
-	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
 	return value;
 }
 
@@ -388,21 +410,66 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
 	sync_generation();
-	for (const auto& e : m_children) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
-	}
+	const std::weak_ptr<const void> source = source_of(owner);
+	if (const auto* found = find_entry(m_children, m_state.active_world_idx, owner.node_id, target, source)) return found->value;
 	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target, active_file()));
-	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value, source });
 	return value;
+}
+
+namespace
+{
+	bool is_index_token(std::string_view token)
+	{
+		return !token.empty() && std::ranges::all_of(token, [] (char c) { return c >= '0' && c <= '9'; });
+	}
+
+	// What a `set` record changes, as a merge patch the schema can judge: a whole-component record is its object; a pointer is built
+	// into an object, cut before the first array index (an index would become a key of an object): the array field itself is judged,
+	// with a null that fits any value. Nothing to judge (a value that is no object at ''): nullopt.
+	std::optional<json::object> field_patch(const scn::override_record& record)
+	{
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return std::nullopt;
+			json::object whole;
+			for (const auto& member : record.value.as_object()) {
+				if (!member.key().starts_with("__")) whole.insert_or_assign(member.key(), member.value());
+			}
+			return whole;
+		}
+		std::string pointer;
+		bool cut = false;
+		std::string_view rest = record.path;
+		while (!rest.empty()) {
+			rest.remove_prefix(1);
+			const std::size_t end = rest.find('/');
+			const std::string_view token = rest.substr(0, end);
+			if (is_index_token(token)) {
+				cut = true;
+				break;
+			}
+			pointer += "/";
+			pointer += token;
+			rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end);
+		}
+		if (pointer.empty()) return std::nullopt;
+		json::value patch = json::object{};
+		if (!desc::json_pointer_set(patch, pointer, cut ? json::value{} : record.value)) return std::nullopt;
+		return std::move(patch.as_object());
+	}
 }
 
 std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::override_edit::view_cache::stale(const prefab_node& owner)
 {
 	sync_generation();
-	for (const auto& e : m_stale) {
-		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id) return e.value;
-	}
+	const std::weak_ptr<const void> source = source_of(owner);
+	if (const auto* found = find_entry(m_stale, m_state.active_world_idx, owner.node_id, {}, source)) return found->value;
 	std::vector<stale_record> found;
+	if (!referenced_prefab(owner)) {
+		auto none = std::make_shared<const std::vector<stale_record>>();
+		m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, none, source });
+		return none;
+	}
 	std::vector<bool> known(owner.overrides.size(), false);
 	for (const scn::stale_override& entry : scn::find_stale_records(*m_services.assembler(), owner)) {
 		found.push_back({ entry.index, entry.what });
@@ -411,7 +478,7 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 	if (const desc::desc_system* descs = m_services.descs()) {
 		for (std::size_t i = 0; i < owner.overrides.size(); ++i) {
 			const scn::override_record& record = owner.overrides[i];
-			if (known[i] || record.op != scn::override_op::set || record.path.empty()
+			if (known[i] || record.op != scn::override_op::set
 				|| record.component.empty() || record.component == scn::transform_pseudo_component) continue;
 			const auto composed = base(owner, record.target);
 			if (!composed->has_value()) continue;
@@ -423,14 +490,18 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 			}
 			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
 			if (!schema || schema->fields.empty()) continue;
-			if (desc::validate_override(*schema, desc::json_change{ record.path, record.value }, &descs->schemas()) == desc::override_status::stale) {
-				found.push_back({ i, std::format("field {} is not in component '{}' any more", record.path, record.component) });
+			const std::optional<json::object> patch = field_patch(record);
+			if (!patch) continue;
+			const desc::override_failure failure = desc::check_override_object(*schema, *patch, nullptr, &descs->schemas());
+			if (failure.status == desc::override_status::stale) {
+				found.push_back({ i, std::format("field {} is not in component '{}' any more",
+					failure.pointer.empty() ? (record.path.empty() ? std::string{ "(whole)" } : record.path) : failure.pointer, record.component) });
 			}
 		}
 	}
 	std::ranges::sort(found, {}, &stale_record::index);
 	auto value = std::make_shared<const std::vector<stale_record>>(std::move(found));
-	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value });
+	m_stale.push_back({ m_state.active_world_idx, owner.node_id, {}, value, source });
 	return value;
 }
 
@@ -575,4 +646,131 @@ bool edt::override_edit::reset(prefab_node& owner, std::span<const uint64_t> tar
 	const bool had = has_record(owner, target, component);
 	erase_records(owner, target, component);
 	return had;
+}
+
+namespace
+{
+	bool is_vec3(const json::value* value)
+	{
+		if (!value || !value->is_array() || value->as_array().size() != 3) return false;
+		return std::ranges::all_of(value->as_array(), [] (const json::value& number) { return number.is_number(); });
+	}
+
+	std::string write_transform_record(prefab_node& node, const scn::override_record& record)
+	{
+		json::value transform = json::object{
+			{ "position", json::value_from(node.position) },
+			{ "rotation", json::value_from(node.rotation) },
+			{ "scale", json::value_from(node.scale) },
+		};
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return "the transform record needs an object value";
+			desc::json_deep_merge(transform.as_object(), record.value.as_object());
+		} else if (!desc::json_pointer_set(transform, record.path, record.value)) {
+			return std::format("the transform has no '{}'", record.path);
+		}
+		const auto& fields = transform.as_object();
+		if (!is_vec3(fields.if_contains("position")) || !is_vec3(fields.if_contains("rotation")) || !is_vec3(fields.if_contains("scale"))) {
+			return "the transform record does not leave three numbers per field";
+		}
+		node.position = json::value_to<glm::vec3>(fields.at("position"));
+		node.rotation = json::value_to<glm::vec3>(fields.at("rotation"));
+		node.scale = json::value_to<glm::vec3>(fields.at("scale"));
+		node.has_transform = true;
+		return {};
+	}
+
+	std::string write_component_record(prefab_node& node, const scn::override_record& record)
+	{
+		scn::prefab_desc::prefab_comp_node& comp = node.components.at(record.component);
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return std::format("component '{}' can only be merged with an object", record.component);
+			desc::json_deep_merge(comp.overrides, record.value.as_object());
+			return {};
+		}
+		json::value held{ std::move(comp.overrides) };
+		const bool written = desc::json_pointer_set(held, record.path, record.value);
+		comp.overrides = std::move(held.as_object());
+		return written ? std::string{} : std::format("component '{}' has no field '{}'", record.component, record.path);
+	}
+}
+
+namespace
+{
+	// The record replaces the one of the same field: a second apply of a field changes its value, it does not add a record.
+	void put_record(std::vector<scn::override_record>& records, scn::override_record record)
+	{
+		const auto same = std::ranges::find_if(records, [&record] (const scn::override_record& held) {
+			return held.op == record.op && held.component == record.component && held.path == record.path && held.target == record.target;
+		});
+		if (same != records.end()) *same = std::move(record);
+		else records.push_back(std::move(record));
+	}
+
+	// A node that instantiates a prefab, also while the handle of that prefab is still loading: then the type name of the component tells.
+	bool instantiates_prefab(const prefab_node& node)
+	{
+		if (edt::override_edit::referenced_prefab(node)) return true;
+		return std::ranges::any_of(node.components, [] (const auto& entry) {
+			const auto& comp = entry.second;
+			return comp.parent_desc.is_valid() && !comp.parent_desc.is_ready() && comp.type_name == scn::prefab_desc::__type;
+		});
+	}
+}
+
+std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn::override_record& record)
+{
+	if (record.op != scn::override_op::set) {
+		return "only a changed value can be moved into a prefab, not a removed or added node or component";
+	}
+	scn::prefab_desc working = prefab;
+	prefab_node* node = &working.get_root();
+	for (std::size_t depth = 0; depth < record.target.size(); ++depth) {
+		const auto child = std::ranges::find(node->children, record.target[depth], &prefab_node::node_id);
+		if (child != node->children.end()) {
+			node = &*child;
+			continue;
+		}
+		if (!instantiates_prefab(*node)) {
+			return std::format("node '{}' of the prefab has no child with that id any more", node->name);
+		}
+		scn::override_record forwarded = record;
+		forwarded.target.erase(forwarded.target.begin(), forwarded.target.begin() + static_cast<std::ptrdiff_t>(depth));
+		put_record(node->overrides, std::move(forwarded));
+		prefab = std::move(working);
+		return {};
+	}
+
+	std::string error;
+	if (record.component == scn::transform_pseudo_component) {
+		error = write_transform_record(*node, record);
+	} else if (node->components.contains(record.component)) {
+		error = write_component_record(*node, record);
+	} else if (instantiates_prefab(*node)) {
+		scn::override_record forwarded = record;
+		forwarded.target.clear();
+		put_record(node->overrides, std::move(forwarded));
+	} else {
+		error = std::format("the prefab has no component '{}' on node '{}'", record.component, node->name);
+	}
+	if (error.empty()) prefab = std::move(working);
+	return error;
+}
+
+namespace
+{
+	std::size_t count_in(const prefab_node& node, const res::tag& tag)
+	{
+		const scn::prefab_desc* prefab = edt::override_edit::referenced_prefab(node);
+		std::size_t count = prefab && prefab->get_tag() == tag ? 1 : 0;
+		for (const prefab_node& child : node.children) count += count_in(child, tag);
+		return count;
+	}
+}
+
+std::size_t edt::override_edit::count_instances(const std::vector<scn::world_desc>& worlds, const res::tag& tag)
+{
+	std::size_t total = 0;
+	for (const scn::world_desc& world : worlds) total += count_in(world.get_root(), tag);
+	return total;
 }
