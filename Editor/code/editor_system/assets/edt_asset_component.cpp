@@ -43,8 +43,8 @@ edt::asset_component::asset_component(ports from)
 	asset_ops_ports ops;
 	ops.assets = [this]() -> const asset_database* { return m_database.get(); };
 	ops.descs = m_ports.descs;
-	ops.manifest = [&project]() -> std::optional<asset_ops_manifest> {
-		return asset_ops_manifest{ project.manifest_file.parent_path(), fs_paths::utf8_of(project.manifest_file.filename()), manifest_references_of(project) };
+	ops.manifest = [shown = &m_ports.project]() -> std::optional<asset_ops_manifest> {
+		return asset_ops_manifest{ shown->manifest_file.parent_path(), fs_paths::utf8_of(shown->manifest_file.filename()), manifest_references_of(*shown) };
 	};
 	ops.engine_base = res::resource_system::configured_engine_base();
 	ops.journal_root = project.cache_dir() / "asset_ops";
