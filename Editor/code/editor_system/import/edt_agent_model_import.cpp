@@ -165,7 +165,8 @@ namespace {
 	void add_decoder_sandbox(json::object& result, const edt::decoder_sandbox_status& sandbox)
 	{
 		if (!sandbox.reported) return;
-		json::object reported{ { "fs", sandbox.fs ? "landlock" : "none" }, { "syscalls", sandbox.syscalls ? "seccomp" : "none" } };
+		json::object reported{ { "fs", sandbox.fs ? edt::k_decoder_sandbox_fs_name : std::string_view("none") },
+			{ "syscalls", sandbox.syscalls ? edt::k_decoder_sandbox_syscalls_name : std::string_view("none") } };
 		if (!sandbox.why.empty()) reported["why"] = sandbox.why;
 		if (const std::string warning = edt::decoder_sandbox_warning(sandbox); !warning.empty()) reported["warning"] = warning;
 		result["decoder_sandbox"] = std::move(reported);

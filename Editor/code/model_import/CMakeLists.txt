@@ -15,7 +15,7 @@ if(SNK_WITH_ASSIMP)
 endif()
 list(TRANSFORM SE_MODEL_DECODER_SIDE_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 
-set(SE_MODEL_IMPORT_SOURCES edt_decode_runner.cpp edt_process_decoder.cpp edt_person_model_import.cpp)
+set(SE_MODEL_IMPORT_SOURCES edt_decoder_copy.cpp edt_decode_runner.cpp edt_process_decoder.cpp edt_person_model_import.cpp)
 if(SNK_WITH_ASSIMP)
 	list(APPEND SE_MODEL_IMPORT_SOURCES edt_model_importer.cpp edt_decoded_model_adapter.cpp)
 endif()

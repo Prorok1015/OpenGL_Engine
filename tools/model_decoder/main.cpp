@@ -27,6 +27,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <cstddef>
 #include <new>
 #include <optional>
 #include <filesystem>
@@ -64,8 +66,13 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#if defined(SNK_MODEL_DECODER_SELF_TEST)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 #include <Windows.h>
 #include <shellapi.h>
+#include <winioctl.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -151,6 +158,8 @@ struct arguments
 	// print what the sandbox applied, instead of decoding. Exit 0: refused (or printed), 5: it worked.
 	fs::path self_test_open;
 	bool self_test_connect = false;
+	// Connect here instead of port 9: a listener the test holds, so a connection that is not refused is seen.
+	unsigned short self_test_connect_port = 0;
 	bool self_test_exec = false;
 	bool self_test_sandbox_report = false;
 	// Signal the parent, or make the kernel signal it for this process's I/O (fcntl F_SETOWN, F_SETSIG, O_ASYNC,
@@ -159,6 +168,9 @@ struct arguments
 	bool self_test_pretend_no_landlock = false;
 	// Start a second thread before the sandbox is applied: the sandbox must refuse to cover only one of them.
 	bool self_test_extra_thread = false;
+	// Plant a link in the run folder that points at this folder (a symlink; Windows: a junction): the editor must remove
+	// the run folder without going through it (#1054). Exit 5: planted, 0: refused.
+	fs::path self_test_link_out;
 	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork.
 	std::string self_test_call;
 	fs::path self_test_path;
@@ -214,6 +226,9 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_open = args[++i];
 		} else if (arg == "--self-test-connect") {
 			parsed.self_test_connect = true;
+		} else if (arg == "--self-test-connect-port" && has_value) {
+			parsed.self_test_connect = true;
+			parsed.self_test_connect_port = static_cast<unsigned short>(std::strtoul(args[++i].string().c_str(), nullptr, 10));
 		} else if (arg == "--self-test-exec") {
 			parsed.self_test_exec = true;
 		} else if (arg == "--self-test-sandbox-report") {
@@ -224,6 +239,8 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_pretend_no_landlock = true;
 		} else if (arg == "--self-test-extra-thread") {
 			parsed.self_test_extra_thread = true;
+		} else if (arg == "--self-test-link-out" && has_value) {
+			parsed.self_test_link_out = args[++i];
 		} else if (arg == "--self-test-call" && has_value) {
 			parsed.self_test_call = args[++i].string();
 		} else if (arg == "--self-test-path" && has_value) {
@@ -236,7 +253,8 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
 		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
-		|| parsed.self_test_signal || parsed.self_test_extra_thread || !parsed.self_test_call.empty()) {
+		|| parsed.self_test_signal || parsed.self_test_extra_thread || !parsed.self_test_link_out.empty()
+		|| !parsed.self_test_call.empty()) {
 		return parsed;
 	}
 #endif
@@ -294,6 +312,37 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 	manifest["error"] = error;
 	return manifest;
 }
+
+#if defined(SNK_MODEL_DECODER_SELF_TEST) && defined(_WIN32)
+// A junction ./escape -> `target` (a mount point reparse point, which any user may set on an empty folder of theirs).
+bool plant_junction(const fs::path& target)
+{
+	if (!CreateDirectoryW(L"escape", nullptr)) return false;
+	const HANDLE folder = CreateFileW(L"escape", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (folder == INVALID_HANDLE_VALUE) return false;
+	const std::wstring substitute = L"\\??\\" + fs::absolute(target).wstring();
+	const auto name_bytes = static_cast<WORD>(substitute.size() * sizeof(wchar_t));
+	// REPARSE_DATA_BUFFER (MountPointReparseBuffer), spelled out: the type is in the driver kit's headers only.
+	std::vector<std::byte> buffer(8 + 8 + name_bytes + 2 * sizeof(wchar_t));
+	const auto put16 = [&buffer](std::size_t at, WORD value) { std::memcpy(buffer.data() + at, &value, sizeof(value)); };
+	const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+	std::memcpy(buffer.data(), &tag, sizeof(tag));
+	put16(4, static_cast<WORD>(buffer.size() - 8));	// ReparseDataLength
+	put16(8, 0);									// SubstituteNameOffset
+	put16(10, name_bytes);							// SubstituteNameLength
+	put16(12, static_cast<WORD>(name_bytes + sizeof(wchar_t)));	// PrintNameOffset
+	put16(14, 0);									// PrintNameLength
+	std::memcpy(buffer.data() + 16, substitute.data(), name_bytes);
+	DWORD returned = 0;
+	const BOOL set = DeviceIoControl(folder, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0,
+		&returned, nullptr);
+	const DWORD error = GetLastError();
+	CloseHandle(folder);
+	SetLastError(error);
+	return set != FALSE;
+}
+#endif
 
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 #if defined(__linux__)
@@ -372,6 +421,9 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		::close(fd);
 		return connected != 0 && refused(error) == 0 ? 0 : 5;
 	}
+	if (!args.self_test_link_out.empty()) {
+		return ::symlink(args.self_test_link_out.c_str(), "escape") == 0 ? 5 : refused(errno);
+	}
 	if (args.self_test_signal) {
 		const pid_t parent = ::getppid();
 		const int directory = ::open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -403,6 +455,60 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		::execve(shell.c_str(), program_args, no_environment);
 		return refused(errno);
 	}
+#elif defined(_WIN32)
+	// What the AppContainer, its policies and its job refuse (#1054) come back as access denied.
+	const auto refused = [](DWORD error) { return error == ERROR_ACCESS_DENIED ? 0 : 6; };
+	if (!args.self_test_open.empty()) {
+		const HANDLE file = CreateFileW(args.self_test_open.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (file == INVALID_HANDLE_VALUE) return refused(GetLastError());
+		CloseHandle(file);
+		return 5;
+	}
+	if (!args.self_test_link_out.empty()) {
+		return plant_junction(args.self_test_link_out) ? 5 : refused(GetLastError());
+	}
+	if (args.self_test_connect) {
+		WSADATA wsa{};
+		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 6;
+		const SOCKET socket_handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (socket_handle == INVALID_SOCKET) {
+			const int error = WSAGetLastError();
+			WSACleanup();
+			return error == WSAEACCES ? 0 : 6;
+		}
+		sockaddr_in address{};
+		address.sin_family = AF_INET;
+		address.sin_port = htons(args.self_test_connect_port != 0 ? args.self_test_connect_port : 9);
+		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		const int connected = ::connect(socket_handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+		const int error = WSAGetLastError();
+		closesocket(socket_handle);
+		WSACleanup();
+		if (connected == 0) return 5;
+		std::fprintf(stderr, "connect refused: %d\n", error);
+		// With a listener there, any failure is the container's refusal; without one, only an access error is.
+		return args.self_test_connect_port != 0 || error == WSAEACCES ? 0 : 5;
+	}
+	if (args.self_test_exec) {
+		// cmd.exe that exits 5: a start that worked is seen as such, not as a refusal.
+		wchar_t system_dir[MAX_PATH] = {};
+		const UINT length = GetSystemDirectoryW(system_dir, MAX_PATH);
+		if (length == 0 || length >= MAX_PATH) return 6;
+		const std::wstring shell = std::wstring(system_dir) + L"\\cmd.exe";
+		std::wstring command = L"cmd.exe /c exit 5";
+		STARTUPINFOW startup{};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION started{};
+		if (!CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &started)) {
+			// cmd.exe is there: a start that fails is the child process policy or the job refusing it, whatever the code.
+			std::fprintf(stderr, "start refused: %lu\n", GetLastError());
+			return 0;
+		}
+		WaitForSingleObject(started.hProcess, INFINITE);
+		CloseHandle(started.hThread);
+		CloseHandle(started.hProcess);
+		return 5;
+	}
 #endif
 	return 5;
 }
@@ -412,6 +518,10 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 
 int main(int argc, char** argv)
 {
+#if defined(_WIN32)
+	// DLLs only from System32 and this program's folder, never from the run folder the child writes (#1054).
+	SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+#endif
 	harden_process(parent_pid_argument(argc, argv));
 	const auto args = parse_arguments(command_line(argc, argv));
 	if (!args) {
@@ -458,7 +568,8 @@ int main(int argc, char** argv)
 	std::fflush(stderr);
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
-		|| args->self_test_signal || args->self_test_extra_thread || !args->self_test_call.empty()) {
+		|| args->self_test_signal || args->self_test_extra_thread || !args->self_test_link_out.empty()
+		|| !args->self_test_call.empty()) {
 		return self_test_probe(*args, sandbox);
 	}
 #endif

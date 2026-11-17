@@ -40,4 +40,8 @@ namespace core::res {
 	// link or a junction) is removed; on POSIX also only one owned by this user with mode 0700, so a folder someone else
 	// put in a shared temp folder is never walked. Returns how many.
 	SNK_API std::size_t remove_stale_scratch_dirs(std::string_view project_name);
+	// Removes `path` and what it holds without ever going through a link: a symlink, a junction or any other reparse point
+	// inside is removed itself, never entered (#1054: a child that wrote the folder could plant one that points at the
+	// user's files). False with `ec` set when something could not be removed; what could be is gone.
+	SNK_API bool remove_tree_without_following(const std::filesystem::path& path, std::error_code& ec);
 }

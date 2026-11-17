@@ -17,7 +17,17 @@ endif()
 foreach(_target snk_model_decoder snk_model_decoder_selftest)
 	add_executable(${_target} main.cpp decoder_sandbox.cpp)
 	target_link_libraries(${_target} PRIVATE snk::model_decoder_side snk::platform snk::engine_logger snk::sanitizers)
+	if(WIN32)
+		# The DLLs it loads from its own folder, by name (#1054): the editor copies exactly these with it when its
+		# AppContainer cannot read the folder it is in (a dev build). The C/C++ runtime beside it is copied too.
+		file(GENERATE OUTPUT "$<TARGET_FILE_DIR:${_target}>/${_target}.deps"
+			CONTENT "$<JOIN:$<PATH:GET_FILENAME,$<TARGET_RUNTIME_DLLS:${_target}>>,\n>\n")
+	endif()
 endforeach()
+if(WIN32)
+	# The --self-test-connect probe (#1054).
+	target_link_libraries(snk_model_decoder_selftest PRIVATE ws2_32)
+endif()
 target_compile_definitions(snk_model_decoder_selftest PRIVATE SNK_MODEL_DECODER_SELF_TEST=1)
 
 # Next to editor.exe in the editor package (component `editor`): the editor starts it from its own folder. A static
@@ -29,5 +39,8 @@ if(SNK_ENGINE_SHARED)
 	endif()
 	if(MSVC)
 		install(FILES $<TARGET_PDB_FILE:snk_model_decoder> DESTINATION bin OPTIONAL COMPONENT editor)
+	endif()
+	if(WIN32)
+		install(FILES "$<TARGET_FILE_DIR:snk_model_decoder>/snk_model_decoder.deps" DESTINATION bin COMPONENT editor)
 	endif()
 endif()
