@@ -60,6 +60,8 @@ namespace edt
 		bool apply_dirty();
 		// Closes the window and the document without asking, the Inspector first: it holds a pointer into the working copy.
 		void close();
+		// Ends the wait for a prefab being opened and leaves the window as it was: a prefab that was open stays open.
+		void cancel_open();
 		// Closes the document with unapplied edits, window and Inspector left as they are (quitting).
 		void drop_dirty_document();
 		// The game layer goes: the prefab editor closes, with a WARN when that loses edits.
@@ -78,6 +80,8 @@ namespace edt
 		std::shared_ptr<int> m_alive = std::make_shared<int>();
 		inspector_target m_inspector_target;
 		prefab_open_watch m_open_watch;
+		bool m_polling = false;
+		bool m_depth_warned = false;
 		// The document whose diagnostics the scope "prefab" of Problems holds; closing it clears them.
 		document_id m_desc_document{};
 		// Last member: they go before what they reach.
@@ -86,7 +90,11 @@ namespace edt
 		// Waits for the prefab and what it refers to to load in the background (prefab_open_watch), then finish_open(): the window says
 		// "Loading" meanwhile and the rest of the editor keeps drawing.
 		void open_now(const res::tag& tag);
-		void finish_open(const res::tag& tag);
+		// `loaded`: the handle the wait held (it keeps the prefab cached while the document opens); empty: read it now.
+		void finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded);
+		// One poll of the wait: false while it is still loading; true when it ended (opened, failed or timed out) or is not running.
+		bool settle_open();
+		void report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out);
 		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
 		void confirm_close(std::function<void()> proceed);
 		bool apply(prefab_document& prefab);
