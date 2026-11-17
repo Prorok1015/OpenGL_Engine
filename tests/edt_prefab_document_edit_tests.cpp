@@ -531,6 +531,30 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndTheEdit)
 	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatChangesAValueTheBaseAlreadyOverrides_WritesAnAddedRecord_AndReadsBackTheNewValue)
+{
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})");
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		auto& records = prefab.get_root().children[0].overrides;
+		records[0].value = 7;
+		return true;
+	}));
+
+	BOOST_TEST_REQUIRE(document->save().saved);
+
+	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
+	BOOST_TEST(file.find("7") != std::string::npos);
+	document->revert();
+	BOOST_REQUIRE(!document->working()->get_root().children[0].overrides.empty());
+	BOOST_TEST(document->working()->get_root().children[0].overrides.back().value.as_int64() == 7);
+}
+
 BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatTakesOutAnInheritedRecord_IsRefused_AndSaveWithoutBaseWritesItWhole)
 {
 	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[

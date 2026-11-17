@@ -655,6 +655,31 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AV1VariantThatHidAComponentOfTheBase_IsWrittenWi
 	BOOST_TEST(v2->get_root().children[0].components.empty());
 }
 
+BOOST_AUTO_TEST_CASE(WriteLayer_AnInheritedRecordWithANewValue_IsAddedAsALaterRecord_AndReadsBackAsTheNewValue)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","overrides":[{"target":["00000000000000b1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2})"));
+	BOOST_REQUIRE(variant);
+	scn::prefab_desc edited;
+	variant->copy_to(edited);
+	edited.set_parent(variant->get_parent());
+	auto& records = edited.get_root().children[0].overrides;
+	BOOST_REQUIRE(records.size() == 1u);
+	records[0].value = 7;
+
+	json::object body;
+	edited.serialize(body);
+	BOOST_REQUIRE_MESSAGE(scn::write_prefab_layer(*descs, *rs, edited, body).empty(), "the edit of an inherited record was refused");
+	BOOST_TEST(json::serialize(body).find("\"overrides\"") != std::string::npos);
+	body["__type"] = "prefab_desc";
+	auto again = load<scn::prefab_desc>(put("again.prefab.desc", json::serialize(body)));
+	BOOST_REQUIRE(again);
+	BOOST_REQUIRE(!again->get_root().children[0].overrides.empty());
+	BOOST_TEST(json::value(saved(*again)) == json::value(saved(edited)));
+}
+
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
 {
 	json::value v = json::parse(R"({"a":{"position":[1,2,3],"list":[{"x":1},{"x":2}]},"empty":[]})");

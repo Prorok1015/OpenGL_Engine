@@ -179,13 +179,32 @@ namespace scn {
 			const auto now_found = records.now.find(node_id_of(target));
 			const json::array& was_records = was_found != records.was.end() ? was_found->second : no_records;
 			const json::array& now_records = now_found != records.now.end() ? now_found->second : no_records;
-			if (now_records.size() < was_records.size() || !std::equal(was_records.begin(), was_records.end(), now_records.begin())) {
-				why = std::format("{}: the override records of the base cannot be taken out or changed in a layer", where);
-				return false;
+			// An edit of a record the base has (the editor puts a changed value in the slot of the same field) is a record added
+			// after it: the canonical form keeps the later one of a field. A record the target no longer has, with no later one for
+			// its field, cannot be said by a layer.
+			const auto same_field = [] (const json::value& one, const json::value& other) {
+				const json::object& a = one.as_object();
+				const json::object& b = other.as_object();
+				for (const std::string_view key : { "target", "op", "component", "path" }) {
+					const auto* left = a.if_contains(key);
+					const auto* right = b.if_contains(key);
+					if ((left == nullptr) != (right == nullptr) || (left && *left != *right)) return false;
+				}
+				return true;
+			};
+			for (const auto& held : was_records) {
+				const bool kept = std::ranges::find(now_records, held) != now_records.end()
+					|| std::ranges::any_of(now_records, [&] (const json::value& later) { return same_field(held, later); });
+				if (!kept) {
+					why = std::format("{}: an override record of the base cannot be taken out in a layer", where);
+					return false;
+				}
 			}
-			if (now_records.size() > was_records.size()) {
-				layer["overrides"] = json::array(now_records.begin() + static_cast<std::ptrdiff_t>(was_records.size()), now_records.end());
+			json::array extra;
+			for (const auto& record : now_records) {
+				if (std::ranges::find(was_records, record) == was_records.end()) extra.push_back(record);
 			}
+			if (!extra.empty()) layer["overrides"] = std::move(extra);
 
 			return layer_children(inherited, target, layer, why, where, records);
 		}
