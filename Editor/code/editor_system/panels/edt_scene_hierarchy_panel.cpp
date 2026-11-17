@@ -313,7 +313,6 @@ namespace edt
 			return;
 
 		ImGuiTabBarFlags bar_flags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton;
-		if (m_ui_probe) m_ui_probe->begin_pass("hierarchy_tabs");
 		if (ImGui::BeginTabBar("##world_tabs", bar_flags)) {
 			for (int i = 0; i < (int)m_world_names.size(); ++i) {
 				ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
@@ -354,7 +353,6 @@ namespace edt
 			ImGui::EndTabBar();
 		}
 
-		if (m_ui_probe) m_ui_probe->end_pass("hierarchy_tabs");
 		m_force_tab_switch = false;
 	}
 
@@ -379,8 +377,14 @@ namespace edt
 		}
 	}
 
+	void scene_hierarchy_panel::on_hidden()
+	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"hierarchy", "hierarchy_toggle", "hierarchy_tabs"});
+	}
+
 	void scene_hierarchy_panel::on_render()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"hierarchy", "hierarchy_toggle", "hierarchy_tabs"});
 		const bool edits_locked = locked();
 		if (edits_locked) {
 			ImGui::TextDisabled("Stop Play to edit");
@@ -452,16 +456,8 @@ namespace edt
 		auto& children = m_world_desc->get_root().children;
 		int flat_index = 0;
 		m_rename_seen = false;
-		if (m_ui_probe) {
-			m_ui_probe->begin_pass("hierarchy");
-			m_ui_probe->begin_pass("hierarchy_toggle");
-		}
 		for (int i = 0; i < (int)children.size(); ++i)
 			draw_node(children[i], lower_filter, flat_index);
-		if (m_ui_probe) {
-			m_ui_probe->end_pass("hierarchy");
-			m_ui_probe->end_pass("hierarchy_toggle");
-		}
 		// The node went away (an agent's edit, an undo) or out of sight: no rename may land on another one.
 		if (!m_rename_seen) m_rename_id = 0;
 

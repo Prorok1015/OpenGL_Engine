@@ -1,6 +1,7 @@
 #include "edt_main_menu.h"
 #include "edt_ui_probe_imgui.h"
 #include <imgui.h>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -90,11 +91,23 @@ bool edt::fire_shortcuts(action_registry& actions, const std::function<bool(std:
 
 void edt::draw_main_menu(action_registry& actions, panel_registry& panels, ui_probe* probe)
 {
-	if (probe) probe->begin_pass("menu");
+	const ui_probe::scoped_pass probe_pass(probe, {"menu"});
 	for (const std::string& menu : actions.menus()) {
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		const ImVec2 bar_clip_min = ImGui::GetWindowDrawList()->GetClipRectMin();
+		const ImVec2 bar_clip_max = ImGui::GetWindowDrawList()->GetClipRectMax();
 		const bool open = ImGui::BeginMenu(menu.c_str());
-		probe_last_item(probe, "menu", menu);
-		if (!open) continue;
+		if (!open) {
+			probe_last_item(probe, "menu", menu);
+			continue;
+		}
+		if (probe) {
+			// The open menu's popup is now the last item: the header is where BeginMenu put it in the menu bar.
+			const float x = at.x + std::floor(ImGui::GetStyle().ItemSpacing.x * 0.5f);
+			const ImVec2 text = ImGui::CalcTextSize(menu.c_str());
+			probe_rect_in(probe, "menu", menu, ImVec2(x, at.y), ImVec2(x + text.x, at.y + text.y),
+				true, bar_clip_min, bar_clip_max);
+		}
 
 		for (const menu_item_info& item : actions.items(menu)) {
 			if (item.separator_before) ImGui::Separator();
@@ -108,5 +121,4 @@ void edt::draw_main_menu(action_registry& actions, panel_registry& panels, ui_pr
 		if (menu == view_menu_name) draw_panel_toggles(panels, probe);
 		ImGui::EndMenu();
 	}
-	if (probe) probe->end_pass("menu");
 }

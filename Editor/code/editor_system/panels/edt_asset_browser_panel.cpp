@@ -56,10 +56,7 @@ namespace edt
 
 	void asset_browser_panel::on_hidden()
 	{
-		if (m_ui_probe) {
-			m_ui_probe->begin_pass("asset_browser");
-			m_ui_probe->end_pass("asset_browser");
-		}
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search"});
 	}
 
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
@@ -236,6 +233,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
+		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search"});
 		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;

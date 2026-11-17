@@ -115,4 +115,47 @@ BOOST_AUTO_TEST_CASE(APassWithNoItem_HidesEverythingTheAreaReported_AsWhenItsPan
 	BOOST_CHECK_EQUAL(lines[1], "item asset_browser 'b.desc' hidden");
 }
 
+BOOST_AUTO_TEST_CASE(TwoItemsOfOneNameInAPass_AreOneAmbiguousLine_NotWrittenAgainEachFrame)
+{
+	for (int frame = 0; frame < 3; ++frame) {
+		probe.begin_pass("hierarchy");
+		probe.report("hierarchy", "Bone", 10.f, 20.f, 110.f, 37.f);
+		probe.report("hierarchy", "Bone", 10.f, 40.f, 110.f, 57.f);
+		probe.report("hierarchy", "Armature", 10.f, 60.f, 110.f, 77.f);
+		probe.end_pass("hierarchy");
+	}
+	std::ranges::sort(lines);
+	BOOST_REQUIRE_EQUAL(lines.size(), 2u);
+	BOOST_CHECK_EQUAL(lines[0], "item hierarchy 'Armature' center 60 69 size 100 17");
+	BOOST_CHECK_EQUAL(lines[1], "item hierarchy 'Bone' ambiguous");
+
+	lines.clear();
+	probe.begin_pass("hierarchy");
+	probe.report("hierarchy", "Bone", 10.f, 20.f, 110.f, 37.f);
+	probe.report("hierarchy", "Armature", 10.f, 60.f, 110.f, 77.f);
+	probe.end_pass("hierarchy");
+	BOOST_REQUIRE_EQUAL(lines.size(), 1u);
+	BOOST_CHECK_EQUAL(lines[0], "item hierarchy 'Bone' center 60 29 size 100 17");
+}
+
+BOOST_AUTO_TEST_CASE(AScopedPass_EndsItsAreasWhenItGoes_AndAPanelNotDrawnHidesItsItems)
+{
+	{
+		const edt::ui_probe::scoped_pass pass(&probe, {"viewport_toolbar", "menu"});
+		probe.report("viewport_toolbar", "Bones", 10.f, 20.f, 50.f, 40.f);
+		probe.report("menu", "File", 0.f, 0.f, 30.f, 20.f);
+		BOOST_CHECK(lines.empty());
+	}
+	BOOST_CHECK_EQUAL(lines.size(), 2u);
+
+	lines.clear();
+	{
+		const edt::ui_probe::scoped_pass hidden_panel(&probe, {"viewport_toolbar"});
+	}
+	BOOST_REQUIRE_EQUAL(lines.size(), 1u);
+	BOOST_CHECK_EQUAL(lines[0], "item viewport_toolbar 'Bones' hidden");
+
+	const edt::ui_probe::scoped_pass no_probe(nullptr, {"menu"});
+}
+
 BOOST_AUTO_TEST_SUITE_END()

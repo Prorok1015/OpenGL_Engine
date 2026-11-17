@@ -154,7 +154,11 @@ item_center() {
 		if [[ -z "$line" ]]; then
 			echo "error: the editor logged no item '$2' of $1 in $LOG (is it run with --set editor/ui_probe true, and does the item exist?)" >&2
 		else
-			echo "error: item '$2' of $1 has no place on the screen, its last line: $line" >&2
+			if [[ "$line" == *" ambiguous" ]]; then
+				echo "error: more than one item '$2' of $1 is drawn, a script cannot tell which: give it a unique name" >&2
+			else
+				echo "error: item '$2' of $1 has no place on the screen, its last line: $line" >&2
+			fi
 		fi
 		return 1
 	fi

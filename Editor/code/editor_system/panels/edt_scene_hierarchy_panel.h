@@ -62,6 +62,7 @@ namespace edt
 
 	protected:
 		void on_render() override;
+		void on_hidden() override;
 
 	private:
 		const char* get_type_prefix(const scn::prefab_desc::prefab_node& node) const;

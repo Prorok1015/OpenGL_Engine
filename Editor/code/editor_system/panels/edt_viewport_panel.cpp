@@ -36,6 +36,7 @@ namespace edt
 
 	void viewport_panel::on_hidden()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"viewport_toolbar"});
 		if (entt::registry* reg = m_get_registry ? m_get_registry() : nullptr)
 			set_editor_camera_input(*reg, false);
 	}
@@ -73,6 +74,7 @@ namespace edt
 
 	void viewport_panel::on_render()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"viewport_toolbar"});
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		// A registry that is not the one seen last time (the world was rebuilt): the selected entity is taken again and a
 		// drag of the rotate ring that was in progress ends.
@@ -159,7 +161,6 @@ namespace edt
 
 	void viewport_panel::render_toolbar()
 	{
-		if (m_ui_probe) m_ui_probe->begin_pass("viewport_toolbar");
 		// Highlight the active gizmo operation button
 		const char* labels[] = {"T", "R", "S"};
 		for (int i = 0; i < 3; ++i) {
@@ -207,7 +208,6 @@ namespace edt
 
 		ImGui::SameLine();
 		ImGui::TextDisabled("| FPS: %.1f", m_fps);
-		if (m_ui_probe) m_ui_probe->end_pass("viewport_toolbar");
 		ImGui::Separator();
 	}
 
