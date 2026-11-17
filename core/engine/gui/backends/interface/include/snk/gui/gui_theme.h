@@ -6,16 +6,16 @@ namespace gui
 	// What the editor's panels draw states with instead of literal colours (#1136). Taken whatever imgui_dark says, so
 	// the classic look has them too; default constructed they are the colours the panels used before.
 	struct theme_semantic_colors {
-		ImVec4 error{ 1.f, 0.3f, 0.3f, 1.f };
-		ImVec4 warning{ 1.f, 0.8f, 0.f, 1.f };
-		ImVec4 success{ 0.45f, 0.8f, 0.45f, 1.f };
-		ImVec4 info{ 0.45f, 0.75f, 1.f, 1.f };
-		ImVec4 text_secondary{ 0.6f, 0.6f, 0.6f, 1.f };
+		ImVec4 error{ 1.f, 0.30078125f, 0.30078125f, 1.f };
+		ImVec4 warning{ 1.f, 0.80078125f, 0.f, 1.f };
+		ImVec4 success{ 0.44921875f, 0.80078125f, 0.44921875f, 1.f };
+		ImVec4 info{ 0.44921875f, 0.75f, 1.f, 1.f };
+		ImVec4 text_secondary{ 0.6015625f, 0.6015625f, 0.6015625f, 1.f };
 		// What an agent did or asks about.
-		ImVec4 agent{ 0.95f, 0.75f, 0.3f, 1.f };
-		ImVec4 diff_added{ 0.45f, 0.8f, 0.45f, 1.f };
-		ImVec4 diff_removed{ 0.9f, 0.45f, 0.45f, 1.f };
-		ImVec4 diff_hunk{ 0.45f, 0.7f, 0.95f, 1.f };
+		ImVec4 agent{ 0.94921875f, 0.75f, 0.30078125f, 1.f };
+		ImVec4 diff_added{ 0.44921875f, 0.80078125f, 0.44921875f, 1.f };
+		ImVec4 diff_removed{ 0.8984375f, 0.44921875f, 0.44921875f, 1.f };
+		ImVec4 diff_hunk{ 0.44921875f, 0.69921875f, 0.94921875f, 1.f };
 		// Behind a full-window image (the viewport, the game view).
 		ImVec4 backdrop{ 0.f, 0.f, 0.f, 1.f };
 	};
