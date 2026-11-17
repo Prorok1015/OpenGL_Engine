@@ -390,7 +390,7 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 
 Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/model_import`, #1108); a game and the tools load them through `mdl::model_adapter`, the editor through the decoder process (`edt::decoded_model_adapter`) (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
 - Outputs `prefab_desc` (not legacy prototype)
-- Geometry stored at `memory://path/name.geom.desc` (separate resource)
+- Geometry stored at `memory://path/name.geom.desc` (separate resource); triangle data in `name.geom.bin` beside it (EPIC-79), lines/points as JSON arrays
 - Mesh nodes → `mesh_node_desc` components referencing geometry by tag
 - Skinning → `skinning_desc` + bone weights registered with `rnd::skinning_manager`
 - Bone nodes → `bone_desc` components with offset matrix + global index
@@ -398,7 +398,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/
 
 Import in editor: File menu → `dialog_service::pick_file` → `import_component::start_import` → async import → export dialog → auto-add to scene.
 
-**JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` (vertex and index arrays) stays on one line. A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
+**JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` stays on one line and its triangle data goes to `.geom.bin` (`rnd::write_geometry_files`). A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
 
 ## File Dialog
 
@@ -481,4 +481,5 @@ Nothing is written into the folder a process was started from (the current folde
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`
 - **`get_field_desc<T>` with inline objects** requires `__type` field present in the JSON object
 - **`children` is a JSON array of named nodes (v2)** — iterate via `as_array()`; a v1 object is only valid before `migrate_tree`
+- **MCP never writes mesh data** (EPIC-79): `desc.create`/`desc.write` refuse `*.geom.desc`/`*.poly.desc` and `geometry_desc`/`poly_mesh_desc` content, inline ones nested anywhere included; `component.set`/`component.add`/`scene.node.create` refuse an inline mesh desc in a reference field and a patch that touches a `binary_ref` field (read-only in the Inspector). Mesh data comes from import/export and the mesh save only
 - **No C functions** — prefer `std::format_to_n` over `snprintf`/`strncpy`, C++ alternatives over C stdlib
