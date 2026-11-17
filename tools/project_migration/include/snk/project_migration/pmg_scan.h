@@ -90,6 +90,9 @@ namespace prj::migration
 		// A geometry_desc of triangles whose vertices and indices are still JSON arrays, named <name>.<ext>.desc
 		// (holds_convertible_geometry): engine.geometry_blobs moves its data to a binary file beside it (EPIC-79, #1129).
 		bool geometry_arrays = false;
+		// Why engine.geometry_blobs leaves such a desc in JSON arrays (geometry_conversion_problem, or too big for the
+		// scan); skipped_by lists it as not migrated. Empty otherwise.
+		std::string geometry_left;
 	};
 
 	struct manifest_state

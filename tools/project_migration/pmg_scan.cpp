@@ -256,15 +256,32 @@ namespace
 	// read twice, and only for these candidates, not for every file.
 	using reference_texts = std::map<std::string, std::string>;
 
+	// A geometry desc over the scan's limit (a model's arrays) is left as it is, not invalid: the engine still reads it,
+	// so a migration need not stop for it (#1129).
+	bool too_big_geometry(prj::migration::scanned_file& file, const fs::path& path, std::uintmax_t max_bytes)
+	{
+		if (!lower(file.path).ends_with(".geom.desc")) return false;
+		std::error_code ec;
+		if (!fs::is_regular_file(fs::symlink_status(path, ec))) return false;
+		const std::uintmax_t size = fs::file_size(path, ec);
+		if (ec || size <= max_bytes) return false;
+		file.geometry_left = std::format("too big for the scan ({} bytes, at most {}): not read, left as it is", size, max_bytes);
+		return true;
+	}
+
 	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
 		std::uintmax_t max_bytes, reference_texts& texts)
 	{
+		if (too_big_geometry(file, path, max_bytes)) return;
 		std::string text;
 		const json::value root = read_desc(file, project, path, max_bytes, &text);
 		if (!root.is_object()) return;
 		classify(file, root.as_object(), descs);
-		file.geometry_arrays = (file.kind == file_class::current || file.kind == file_class::outdated)
-			&& prj::migration::holds_convertible_geometry(file.path, root.as_object());
+		if ((file.kind == file_class::current || file.kind == file_class::outdated)
+			&& prj::migration::holds_convertible_geometry(file.path, root.as_object())) {
+			file.geometry_left = prj::migration::geometry_conversion_problem(file.path, root.as_object());
+			file.geometry_arrays = file.geometry_left.empty();
+		}
 		if (prj::migration::reads_references(file) && prj::migration::may_hold_references(text)) texts.emplace(file.path, std::move(text));
 	}
 

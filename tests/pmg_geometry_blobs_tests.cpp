@@ -124,10 +124,11 @@ struct blobs_fixture : test_util::scene_env
 		engine::render::unregister_render_descs(*descs);
 	}
 
-	pmg::migration_plan plan()
+	pmg::migration_plan plan(std::uintmax_t max_file_bytes = pmg::scan_options{}.max_file_bytes)
 	{
 		pmg::plan_options options;
 		options.project_steps = &registry;
+		options.scan.max_file_bytes = max_file_bytes;
 		return pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
 	}
 
@@ -154,6 +155,34 @@ struct blobs_fixture : test_util::scene_env
 		BOOST_TEST(read_text(at(k_desc)) == desc);
 		BOOST_TEST(read_text(at(beside)) == "not ours");
 		BOOST_TEST(outcome.report.created_files.empty());
+	}
+
+	// The scan already runs the writer's checks: a desc they refuse is listed as not migrated with the reason, the step is
+	// not planned for it, and nothing is written; after the migration the next scan says the same (the project does not
+	// stay "needs a migration" forever).
+	void is_left_by_the_scan(const std::string& desc_text, std::string_view reason_part)
+	{
+		write_text(at(k_desc), desc_text);
+		for (int run = 0; run < 2; ++run) {
+			const pmg::migration_plan planned_now = plan();
+			BOOST_TEST(!planned(planned_now));
+			const pmg::scanned_file* file = planned_now.scan.find(k_desc);
+			BOOST_REQUIRE(file);
+			BOOST_TEST(!file->geometry_arrays);
+			BOOST_TEST(file->geometry_left.find(reason_part) != std::string::npos, file->geometry_left);
+			const std::vector<pmg::skipped_file> skipped = pmg::skipped_by(planned_now);
+			const auto listed = std::ranges::find(skipped, std::string(k_desc), &pmg::skipped_file::path);
+			BOOST_REQUIRE(listed != skipped.end());
+			BOOST_TEST(listed->reason.starts_with("its geometry stays in JSON arrays: "));
+			BOOST_TEST(pmg::plan_text(planned_now).find("Not migrated:") != std::string::npos);
+			if (run == 1) break;
+
+			const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+			BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+			BOOST_TEST((outcome.report.status == pmg::migration_status::partial), outcome.report.error);
+			BOOST_TEST(read_text(at(k_desc)) == desc_text);
+			BOOST_TEST(!fs::exists(at(k_binary)));
+		}
 	}
 
 	test_util::fixture_copy copy{ "migration_v1" };
@@ -266,18 +295,98 @@ BOOST_AUTO_TEST_CASE(AStagedFileAlreadyBeside_LeavesTheDescAsItIs)
 	leaves_the_desc_beside(k_staged);
 }
 
-// Data the loader would refuse (an index past the vertices) is reported with the check and written nowhere.
-BOOST_AUTO_TEST_CASE(RefusedData_IsNotMigrated_AndNamesTheCheck)
+// Data the loader would refuse is left by the scan, with the check that refuses it.
+BOOST_AUTO_TEST_CASE(AnIndexPastTheVertices_IsNotMigrated_AndNamesTheCheck)
 {
-	write_text(at(k_desc), arrays_desc({ 0, 1, 5 }));
-	const std::string desc = read_text(at(k_desc));
+	is_left_by_the_scan(arrays_desc({ 0, 1, 5 }), "/indices");
+}
 
-	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+BOOST_AUTO_TEST_CASE(NoIndices_IsNotMigrated)
+{
+	is_left_by_the_scan(arrays_desc({}), "/indices: there are no indices");
+}
+
+BOOST_AUTO_TEST_CASE(NoLayoutOfItsOwn_IsNotMigrated)
+{
+	json::object desc = json::parse(arrays_desc({ 0, 1, 2 })).as_object();
+	desc.erase("layout");
+	desc["__parent"] = "res://geom/base.geom.desc";
+	is_left_by_the_scan(json::serialize(desc), "geometry '");
+}
+
+// Stored bounds go (the loader builds them for a desc with ranges): only when they are the ones it builds.
+BOOST_AUTO_TEST_CASE(StoredBoundsOtherThanTheLoaders_AreNotMigrated)
+{
+	const json::object bounds{ { "bounds", json::parse(R"([[[{"x":7,"y":7},{"x":9,"y":9}],0]])") } };
+	is_left_by_the_scan(arrays_desc({ 0, 1, 2 }, bounds), "bounds");
+}
+
+BOOST_AUTO_TEST_CASE(StoredBoundsTheLoaderBuilds_AreMigrated)
+{
+	// One triangle without uv: the loader's box is the point (0, 0).
+	const json::object bounds{ { "bounds", json::parse(R"([[[{"x":0,"y":0},{"x":0,"y":0}],0]])") } };
+	write_text(at(k_desc), arrays_desc({ 0, 1, 2 }, bounds));
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned(planned_now));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
 	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
-	BOOST_TEST(any_note(outcome.report, std::string(k_desc) + ": not migrated: "));
-	BOOST_TEST(any_note(outcome.report, "/indices"));
-	BOOST_TEST(read_text(at(k_desc)) == desc);
-	BOOST_TEST(!fs::exists(at(k_binary)));
+	const json::object desc = json::parse(read_text(at(k_desc))).as_object();
+	BOOST_TEST(desc.at("vertices").is_object());
+	// Kept as the empty key the loader reads as "build them".
+	BOOST_TEST(desc.contains("bounds"));
+}
+
+// A run stopped between creating the binary file and its journal leaves that very file beside the unchanged desc: the
+// next run takes it as it is (it is not the run's to delete on a rollback, so it is not listed as created).
+BOOST_AUTO_TEST_CASE(TheBinaryFileOfAnInterruptedRun_IsTakenAsItIs)
+{
+	const std::string arrays = arrays_desc({ 0, 1, 2 });
+	write_text(at(k_desc), arrays);
+	rnd::geometry_desc geometry;
+	const json::object parsed = json::parse(arrays).as_object();
+	BOOST_REQUIRE(rnd::decode_geometry_files(res::tag{ k_desc }, parsed, {}, geometry).empty());
+	const rnd::geometry_files pair = rnd::encode_geometry_files(res::tag{ k_desc }, geometry);
+	BOOST_REQUIRE(pair);
+	const std::string binary(reinterpret_cast<const char*>(pair.binary.data()), pair.binary.size());
+	write_text(at(k_binary), binary);
+
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned(planned_now));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
+	BOOST_TEST(any_note(outcome.report, "which an interrupted run had already written"));
+	BOOST_TEST((std::ranges::find(outcome.report.created_files, k_binary) == outcome.report.created_files.end()));
+	BOOST_TEST(read_text(at(k_binary)) == binary);
+
+	const json::object desc = json::parse(read_text(at(k_desc))).as_object();
+	rnd::geometry_desc read;
+	const std::string problem = rnd::decode_geometry_files(res::tag{ "res://geom/tri.geom.desc" }, desc, bytes_of(binary), read);
+	BOOST_REQUIRE_MESSAGE(problem.empty(), problem);
+	BOOST_TEST((read.vertices == vertex_bytes()));
+}
+
+// A geometry desc over the scan's limit is not read: it is listed as not migrated, and the migration is not refused for
+// it as it is for any other file over the limit.
+BOOST_AUTO_TEST_CASE(AGeometryDescTooBigForTheScan_IsNotMigrated_AndDoesNotStopTheMigration)
+{
+	constexpr std::uintmax_t limit = std::uintmax_t{ 1 } << 20;
+	const std::string big = arrays_desc({ 0, 1, 2 }) + std::string(limit, ' ');
+	write_text(at(k_desc), big);
+
+	const pmg::migration_plan planned_now = plan(limit);
+	BOOST_TEST(pmg::plan_refusal(planned_now).empty(), pmg::plan_refusal(planned_now));
+	BOOST_TEST(!planned(planned_now));
+	const pmg::scanned_file* file = planned_now.scan.find(k_desc);
+	BOOST_REQUIRE(file);
+	BOOST_TEST((file->kind != pmg::file_class::invalid));
+	BOOST_TEST(file->geometry_left.find("too big for the scan") != std::string::npos, file->geometry_left);
+	const std::vector<pmg::skipped_file> skipped = pmg::skipped_by(planned_now);
+	BOOST_TEST((std::ranges::find(skipped, std::string(k_desc), &pmg::skipped_file::path) != skipped.end()));
+
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::partial), outcome.report.error);
+	BOOST_TEST(read_text(at(k_desc)) == big);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
