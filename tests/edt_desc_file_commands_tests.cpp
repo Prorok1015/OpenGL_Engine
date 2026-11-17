@@ -990,6 +990,16 @@ BOOST_AUTO_TEST_CASE(AnUnknownKeyWithTwoUnderscores_IsRefused_SoNoObjectHidesFro
 	BOOST_TEST(kept.ok);
 }
 
+BOOST_AUTO_TEST_CASE(TheMarkersOfAVariantLayer_AreNotAcceptedFromAnAgent_TheEditorsWriterMakesThem)
+{
+	for (const char* marker : { "__layer", "__remove", "__new", "__order" }) {
+		const std::string text = std::string{ R"({"__type":"prefab_desc","__parent":"res://p.prefab.desc",")" } + marker + R"(":true})";
+		const auto refused = call("desc.create", desc_args("prefabs/layer.prefab.desc", text));
+		BOOST_TEST(refused.code == cmd::codes::invalid_args, marker);
+		BOOST_TEST(!fs::exists(res_root / "prefabs" / "layer.prefab.desc"), marker);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(ManyProblems_AreCappedWithoutLettingTheFilePass)
 {
 	std::string worlds;
