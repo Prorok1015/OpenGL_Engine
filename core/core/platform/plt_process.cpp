@@ -1,5 +1,6 @@
 #include <snk/platform/plt_process.h>
 #include <snk/common/logger/engine_log.h>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -342,16 +343,23 @@ namespace
 		const scope_exit free_descriptor{ [descriptor] { LocalFree(descriptor); } };
 		std::error_code ec;
 		const bool folder = fs::is_directory(path, ec);
-		EXPLICIT_ACCESS_W entry{};
-		entry.grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD)
+		std::array<EXPLICIT_ACCESS_W, 2> entries{};
+		for (EXPLICIT_ACCESS_W& entry : entries) {
+			entry.grfAccessMode = GRANT_ACCESS;
+			entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+			entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+			entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+		}
+		entries[0].grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD)
 			: (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
-		entry.grfAccessMode = GRANT_ACCESS;
-		entry.grfInheritance = folder ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
-		entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-		entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
-		entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+		entries[0].grfInheritance = folder ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+		// The read below a held folder (platform::beneath) opens each folder for traversal; on a file the same bit is
+		// execute, so it goes to folders only.
+		entries[1].grfAccessPermissions = FILE_TRAVERSE;
+		entries[1].grfInheritance = SUB_CONTAINERS_ONLY_INHERIT;
+		const ULONG entry_count = write && folder ? 2 : 1;
 		PACL updated = nullptr;
-		status = SetEntriesInAclW(1, &entry, current, &updated);
+		status = SetEntriesInAclW(entry_count, entries.data(), current, &updated);
 		if (status != ERROR_SUCCESS) return std::format("cannot extend the access list of '{}': {}", utf8_of(path), system_text(status));
 		const scope_exit free_updated{ [updated] { LocalFree(updated); } };
 		status = SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr,

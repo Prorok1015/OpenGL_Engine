@@ -163,7 +163,7 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	case platform::beneath::read_status::not_regular: return refuse("the bundle is not a regular file");
 	case platform::beneath::read_status::too_large: return refuse("the bundle is bigger than the limits allow");
 	case platform::beneath::read_status::missing: return refuse("the bundle file is missing");
-	default: return refuse("the bundle file cannot be read");
+	default: return refuse(read.error.empty() ? std::string("the bundle file cannot be read") : "the bundle file cannot be read: " + read.error);
 	}
 	bounded_reader reader(contents);
 
