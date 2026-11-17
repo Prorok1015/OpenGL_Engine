@@ -1060,8 +1060,8 @@ BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
 		}
 		return out;
 	};
-	// A hash or layout that would look like a tag elsewhere is not read as one.
-	const std::string range = R"({"offset":16,"size":12,"layout":"user://f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
+	// A layout or hash is a plain string, never read as a (relative) tag.
+	const std::string range = R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
 	const auto fine = errors_of(R"({"__type":"test.blob_mesh","vertices":)" + range + R"(,"indices":[0,1,2]})");
 	BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
 
