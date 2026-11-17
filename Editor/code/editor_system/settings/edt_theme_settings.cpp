@@ -98,7 +98,7 @@ res::tag edt::personal_theme_tag(std::string_view name)
 
 bool edt::is_personal_theme(const res::tag& tag)
 {
-	return tag.view().starts_with(k_personal_themes) && res::portable_path_problem(tag.path()).empty();
+	return tag.view().starts_with(k_personal_themes) && res::portable_path_problem(tag.relative()).empty();
 }
 
 std::string edt::theme_name_of(const res::tag& tag)
@@ -143,7 +143,7 @@ void edt::theme_settings_model::poll()
 		m_choice = {};
 		const std::optional<res::tag> chosen = text ? chosen_theme_of(text->str()) : std::nullopt;
 		const bool engine_preset = chosen && chosen->view().starts_with("engine://")
-			&& res::portable_path_problem(chosen->path()).empty();
+			&& res::portable_path_problem(chosen->relative()).empty();
 		if (chosen && (engine_preset || is_personal_theme(*chosen))) {
 			m_ports.themes->select(*chosen);
 			load_working(*chosen);

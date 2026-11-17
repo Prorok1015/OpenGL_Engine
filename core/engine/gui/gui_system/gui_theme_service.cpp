@@ -190,7 +190,7 @@ bool gui::theme_service::readable(const res::tag& tag, const std::vector<std::st
 		return true;
 	}
 	const std::string_view text = tag.view();
-	return res::portable_path_problem(tag.path()).empty()
+	return res::portable_path_problem(tag.relative()).empty()
 		&& std::ranges::any_of(sources, [&](const std::string& prefix) { return text.starts_with(prefix); });
 }
 
