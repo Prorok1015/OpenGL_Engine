@@ -900,6 +900,7 @@ BOOST_AUTO_TEST_CASE(FoldRecord_BelowANestedInstance_BecomesARecordOfThatInstanc
 	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
 		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
 	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
+	pump();
 	BOOST_REQUIRE(user.is_ready());
 	scn::prefab_desc edited;
 	user->copy_to(edited);

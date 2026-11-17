@@ -650,6 +650,19 @@ namespace
 	}
 }
 
+namespace
+{
+	// A node that instantiates a prefab, also while the handle of that prefab is still loading: then the type name of the component tells.
+	bool instantiates_prefab(const prefab_node& node)
+	{
+		if (edt::override_edit::referenced_prefab(node)) return true;
+		return std::ranges::any_of(node.components, [] (const auto& entry) {
+			const auto& comp = entry.second;
+			return comp.parent_desc.is_valid() && !comp.parent_desc.is_ready() && comp.type_name == scn::prefab_desc::__type;
+		});
+	}
+}
+
 std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn::override_record& record)
 {
 	if (record.op != scn::override_op::set) {
@@ -663,7 +676,7 @@ std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn:
 			node = &*child;
 			continue;
 		}
-		if (!referenced_prefab(*node)) {
+		if (!instantiates_prefab(*node)) {
 			return std::format("node '{}' of the prefab has no child with that id any more", node->name);
 		}
 		scn::override_record forwarded = record;
@@ -678,7 +691,7 @@ std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn:
 		error = write_transform_record(*node, record);
 	} else if (node->components.contains(record.component)) {
 		error = write_component_record(*node, record);
-	} else if (referenced_prefab(*node)) {
+	} else if (instantiates_prefab(*node)) {
 		scn::override_record forwarded = record;
 		forwarded.target.clear();
 		node->overrides.push_back(std::move(forwarded));
