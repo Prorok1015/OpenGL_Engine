@@ -241,6 +241,8 @@ wasm — инструмент разработки; при упаковке дв
 
 Шаблон `Editor/data/templates/projects/empty/.gitignore` держит личное вне git. Новый проект после работы редактора даёт чистый `git status`; проверяется тестом `RealRepository_TheProjectTemplate_KeepsWhatTheEditorWritesOutOfGit`.
 
+Двоичные файлы desc (`*.bin`, EPIC-79) помечены в `.gitattributes` шаблона как `binary`; `prj::create_project` дописывает строку `*.bin binary`, если её нет (#1129). Git LFS проект может включить сам — редактор его не настраивает.
+
 | Путь | Что это | В git |
 |---|---|---|
 | `project.snkproj` | манифест проекта | да |

@@ -48,7 +48,7 @@ std::string version_of_text(const std::string& text)
 
 shape_asset_files built(const shape_params& params)
 {
-	const shape_asset_result result = build_shape_asset(params);
+	const shape_asset_result result = build_shape_asset(params, res::tag{ "res://shapes/ball.geom.desc" });
 	BOOST_REQUIRE_MESSAGE(result.files.has_value(), result.error);
 	return *result.files;
 }
@@ -138,7 +138,9 @@ BOOST_AUTO_TEST_CASE(TheFiles_AreTheSameForTheSameParameters_AndTheBoxIsTheBaseS
 	const shape_asset_files second = built(box_params{});
 	BOOST_TEST(first.poly == second.poly);
 	BOOST_TEST(first.geometry == second.geometry);
-	BOOST_TEST(first.geometry == base_shape_file_text(*find_base_shape("box")));
+	const base_shape_pair box = base_shape_files(*find_base_shape("box"));
+	BOOST_TEST(first.geometry == box.desc);
+	BOOST_TEST((first.binary == box.binary));
 	BOOST_TEST(first.vertices == 24u);
 	BOOST_TEST(first.indices == 36u);
 	BOOST_TEST(first.poly.find("\"__version\"") != std::string::npos);
@@ -188,7 +190,7 @@ BOOST_AUTO_TEST_CASE(AGeometryFileThatIsNotOurs_HasNoRange_AndAScaleNeedsPositiv
 
 BOOST_AUTO_TEST_CASE(AShapeThatTheGeneratorRefuses_HasNoFiles)
 {
-	const shape_asset_result refused = build_shape_asset(sphere_params{ 0.5f, 1000, 4 });
+	const shape_asset_result refused = build_shape_asset(sphere_params{ 0.5f, 1000, 4 }, res::tag{ "res://shapes/a.geom.desc" });
 	BOOST_TEST(!refused.files.has_value());
 	BOOST_TEST(!refused.error.empty());
 }
@@ -245,6 +247,7 @@ BOOST_AUTO_TEST_CASE(Create_WritesTheTwoFiles_InTheFormOfTheRepositoryDescs)
 	const shape_asset_files expected = built(small_sphere);
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == expected.poly);
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == expected.geometry);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.bin") == std::string(reinterpret_cast<const char*>(expected.binary.data()), expected.binary.size()));
 	BOOST_TEST(std::string(made.value.at("poly").as_string()) == "res://shapes/ball.poly.desc");
 	BOOST_TEST(std::string(made.value.at("geometry").as_string()) == "res://shapes/ball.geom.desc");
 	BOOST_TEST(std::string(made.value.at("version").as_string()) == version_of_text(expected.poly));
@@ -281,7 +284,7 @@ BOOST_AUTO_TEST_CASE(Create_RefusesWhatTheGeneratorRefuses_ABadPath_ABusyProject
 	BOOST_TEST(call("shape.create", json::object{ { "name", "a" }, { "kind", "box" }, { "folder", "../out" } }).code == cmd::codes::invalid_args);
 
 	const auto large = call("shape.create", json::object{ { "name", "big" }, { "kind", "sphere" },
-		{ "params", json::object{ { "segments", 128 }, { "rings", 128 } } } });
+		{ "params", json::object{ { "segments", 200 }, { "rings", 200 } } } });
 	BOOST_TEST(large.code == cmd::codes::invalid_args);
 	BOOST_TEST(large.error.find("too large") != std::string::npos);
 

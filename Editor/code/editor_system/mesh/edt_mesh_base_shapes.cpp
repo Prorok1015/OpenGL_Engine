@@ -1,7 +1,10 @@
 #include "edt_mesh_base_shapes.h"
 #include "edt_mesh_shape_asset.h"
 #include <snk/common/engine_assert.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_tag.h>
 #include <array>
+#include <string_view>
 
 namespace edt::mesh
 {
@@ -49,9 +52,14 @@ namespace edt::mesh
 		return "res://shapes/" + std::string(shape.name) + ".geom.desc";
 	}
 
-	std::string base_shape_file_text(const base_shape& shape)
+	base_shape_pair base_shape_files(const base_shape& shape)
 	{
-		return geometry_file_text(bake_of(shape).geometry);
+		static_assert(base_shape_file_version == rnd::geometry_binary_version, "a shape file is a desc with ranges");
+		const baked_mesh baked = bake_of(shape);
+		std::string error;
+		geometry_pair pair = encode_geometry_pair(res::tag{ base_shape_path(shape) }, baked.geometry, error);
+		ASSERT_MSG(error.empty(), "a base shape is refused by the geometry writer: {}", error);
+		return { std::move(pair.desc), std::move(pair.binary) };
 	}
 
 	material_range base_shape_range(const base_shape& shape)

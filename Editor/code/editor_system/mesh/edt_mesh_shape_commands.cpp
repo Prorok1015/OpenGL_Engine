@@ -7,6 +7,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <format>
@@ -18,8 +19,8 @@ namespace edt::mesh
 	namespace
 	{
 		constexpr std::string_view default_folder = "shapes";
-		// A vertex is 14 floats written as bytes: never less than this many characters in a geometry file.
-		constexpr std::size_t k_least_geometry_bytes_per_vertex = 150;
+		// A vertex of the poly file is its id and three coordinates, and its faces name it again: never less than this many characters.
+		constexpr std::size_t k_least_poly_bytes_per_vertex = 40;
 
 		json::value parse_schema(std::string_view text)
 		{
@@ -71,6 +72,7 @@ namespace edt::mesh
 		{
 			std::string poly;
 			std::string geometry;
+			std::string binary;
 		};
 
 		// Project-relative paths of the two files of one shape, checked by the rules of the desc.* commands.
@@ -87,7 +89,9 @@ namespace edt::mesh
 			}
 			shape_paths out;
 			out.poly = named.path;
-			out.geometry = named.path.substr(0, named.path.size() - poly_file_suffix.size()) + std::string(geometry_file_suffix);
+			const std::string stem = named.path.substr(0, named.path.size() - poly_file_suffix.size());
+			out.geometry = stem + std::string(geometry_file_suffix);
+			out.binary = stem + ".geom.bin";
 			return out;
 		}
 
@@ -99,26 +103,26 @@ namespace edt::mesh
 			shape_params params = box_params{};
 		};
 
-		prepared_shape prepare_shape(const shape_params& params)
+		prepared_shape prepare_shape(const shape_params& params, const std::string& geometry_path)
 		{
 			prepared_shape out;
 			const std::size_t estimated = estimate_shape_vertices(params);
-			if (estimated > k_desc_file_limit / k_least_geometry_bytes_per_vertex) {
+			if (estimated > k_desc_file_limit / k_least_poly_bytes_per_vertex) {
 				out.failed = true;
 				out.failure = refuse(cmd::codes::invalid_args,
 					std::format("the shape is too large: about {} vertices would not fit a file of {} bytes (desc.read and shape.rebuild move at most that); lower the segments or rings", estimated, k_desc_file_limit));
 				return out;
 			}
-			shape_asset_result built = build_shape_asset(params);
+			shape_asset_result built = build_shape_asset(params, res::tag("res://" + geometry_path));
 			if (!built.files) {
 				out.failed = true;
 				out.failure = refuse(cmd::codes::invalid_args, std::move(built.error));
 				return out;
 			}
-			if (built.files->poly.size() > k_desc_file_limit || built.files->geometry.size() > k_desc_file_limit) {
+			if (built.files->poly.size() > k_desc_file_limit) {
 				out.failed = true;
 				out.failure = refuse(cmd::codes::invalid_args,
-					std::format("the shape is too large: its files may not pass {} bytes (desc.read and shape.rebuild move at most that); lower the segments", k_desc_file_limit));
+					std::format("the shape is too large: its source file may not pass {} bytes (desc.read and shape.rebuild move at most that); lower the segments", k_desc_file_limit));
 				return out;
 			}
 			out.files = std::move(*built.files);
@@ -169,7 +173,7 @@ namespace edt::mesh
 				const std::optional<shape_params> params = params_of_call(args, std::nullopt, error);
 				if (!params) return refuse(cmd::codes::invalid_args, error);
 				if (std::optional<std::string> why = write_blocked()) return refuse(cmd::codes::busy, std::move(*why));
-				const prepared_shape ready = prepare_shape(*params);
+				const prepared_shape ready = prepare_shape(*params, paths->geometry);
 				if (ready.failed) return ready.failure;
 
 				for (const std::string& path : { paths->poly, paths->geometry }) {
@@ -186,13 +190,15 @@ namespace edt::mesh
 				}
 				const res::tag poly_tag = tag_of(paths->poly);
 				const res::tag geometry_tag = tag_of(paths->geometry);
-				const res::file_operation geometry_made = m_deps.res.create_sync(geometry_tag, bytes_of(ready.files.geometry));
-				if (!geometry_made.ok) return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}", paths->geometry, geometry_made.error));
+				if (const std::string why = rnd::write_geometry_files(m_deps.res, geometry_tag, ready.files.data); !why.empty()) {
+					return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}", paths->geometry, why));
+				}
 				const res::file_operation poly_made = m_deps.res.create_sync(poly_tag, bytes_of(ready.files.poly));
 				if (!poly_made.ok) {
-					const res::file_operation removed = m_deps.res.remove(geometry_tag);
+					const res::file_operation removed_desc = m_deps.res.remove(geometry_tag);
+					const res::file_operation removed_binary = m_deps.res.remove(tag_of(paths->binary));
 					return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}{}", paths->poly, poly_made.error,
-						removed.ok ? std::string{} : std::format(" ('res://{}' was written and could not be taken back: {})", paths->geometry, removed.error)));
+						removed_desc.ok && removed_binary.ok ? std::string{} : std::format(" ('res://{}' was written and could not be taken back)", paths->geometry)));
 				}
 				changed(call, "shape.create", paths->poly, ready.files.poly.size() + ready.files.geometry.size());
 				return success_of(*paths, ready.files, std::nullopt);
@@ -208,16 +214,13 @@ namespace edt::mesh
 					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written", plan.paths.poly));
 				}
 				m_deps.res.signal_changed(poly_tag);
-				const bool geometry_new = plan.geometry_missing;
-				const bool geometry_written = geometry_new ? m_deps.res.create_sync(geometry_tag, bytes_of(plan.ready.files.geometry)).ok
-					: m_deps.res.store_sync(geometry_tag, bytes_of(plan.ready.files.geometry));
-				if (!geometry_written) {
+				const std::string geometry_problem = rnd::write_geometry_files(m_deps.res, geometry_tag, plan.ready.files.data);
+				if (!geometry_problem.empty()) {
 					const bool restored = m_deps.res.store_sync(poly_tag, plan.old_poly);
 					m_deps.res.signal_changed(poly_tag);
-					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written{}", plan.paths.geometry,
+					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written: {}{}", plan.paths.geometry, geometry_problem,
 						restored ? std::string{} : std::format(" and 'res://{}' could not be put back: it holds the new parameters", plan.paths.poly)));
 				}
-				m_deps.res.signal_changed(geometry_tag);
 				changed(call, "shape.rebuild", plan.paths.poly, plan.ready.files.poly.size() + plan.ready.files.geometry.size());
 				return success_of(plan.paths, plan.ready.files, update_nodes(call, plan.paths, plan.ready.files));
 			}
@@ -278,7 +281,6 @@ namespace edt::mesh
 				cmd::result failure = cmd::result::success();
 				shape_paths paths;
 				prepared_shape ready;
-				bool geometry_missing = false;
 				std::vector<std::byte> old_poly;
 			};
 
@@ -327,7 +329,7 @@ namespace edt::mesh
 					out.failure = refuse(cmd::codes::invalid_args, error);
 					return out;
 				}
-				out.ready = prepare_shape(*params);
+				out.ready = prepare_shape(*params, paths->geometry);
 				if (out.ready.failed) {
 					out.failure = out.ready.failure;
 					return out;
@@ -340,7 +342,6 @@ namespace edt::mesh
 				} else if (!geometry.missing && !geometry.top_layer) {
 					out.failure = refuse(cmd::codes::invalid_args, std::format("'res://{}' belongs to a lower layer, not to the project's own res/", paths->geometry));
 				}
-				out.geometry_missing = geometry.missing;
 				return out;
 			}
 

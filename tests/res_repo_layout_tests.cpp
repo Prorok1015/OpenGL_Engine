@@ -20,7 +20,8 @@
 
 // The layout of the shipped resources (#163): res:// holds game resources only (no stray test files; the fixtures that
 // stay are listed one by one), and every res:// / engine:// / edt:// path that shipped descs and engine sources
-// mention resolves to a file. Every file of the repository's resource trees has its .resource (#768).
+// mention resolves to a file. Every file of the repository's resource trees has its .resource (#768), but a desc's binary
+// file, which a walk never gives an ID (res::is_desc_binary_entry, #1129).
 
 #ifndef SNK_TEST_PROJECT_DIR
 #error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
@@ -161,7 +162,7 @@ tree_files walk_tree(const fs::path& root)
 		if (!it->is_regular_file()) {
 			continue;
 		}
-		if (res::is_skipped_asset_name(name, false)) {
+		if (res::is_skipped_asset_name(name, false) || res::is_desc_binary_entry(it->path().parent_path(), name, false)) {
 			continue;
 		}
 		(res::is_asset_meta_sidecar(name) ? out.sidecars : out.assets).push_back(rel);

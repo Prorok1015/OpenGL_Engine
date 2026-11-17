@@ -107,7 +107,7 @@ void edt::live_mode_component::install()
 		}
 		apply();
 	});
-	m_ports.layer.set_menu_bar_status([this] { m_live->draw_status(); });
+	m_ports.layer.set_menu_bar_status([this] { m_live->draw_status(m_ports.context.colors()); });
 
 	apply_live_consent();
 }
@@ -209,5 +209,5 @@ void edt::live_mode_component::tick()
 
 void edt::live_mode_component::draw_status() const
 {
-	if (m_live) m_live->draw_status();
+	if (m_live) m_live->draw_status(m_ports.context.colors());
 }

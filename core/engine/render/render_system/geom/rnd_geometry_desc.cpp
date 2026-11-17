@@ -230,11 +230,9 @@ void rnd::detail::check_geometry_arrays(const res::tag& file, const geometry_des
 	check_data(file, geometry, false);
 }
 
-void rnd::detail::rebuild_bounds(geometry_desc& geometry)
+std::vector<std::pair<ds::bbox, std::uint32_t>> rnd::built_geometry_bounds(const geometry_desc& geometry)
 {
-	PROFILE_SCOPE("geometry_desc bounds rebuild");
-	geometry.bounds.clear();
-	geometry.rtree = {};
+	std::vector<std::pair<ds::bbox, std::uint32_t>> bounds;
 	const std::size_t stride = geometry.layout.get_stride();
 	const auto* uv = element_named(geometry.layout, "uv");
 	const bool has_uv = uv != nullptr && uv->Type == rnd::driver::SHADER_DATA_TYPE::VEC2_F && stride != 0;
@@ -245,14 +243,22 @@ void rnd::detail::rebuild_bounds(geometry_desc& geometry)
 		const std::size_t at = vertex * stride + uv->Offset;
 		return ds::point2d{ float_at(geometry.vertices, at), float_at(geometry.vertices, at + sizeof(float)) };
 	};
-	geometry.bounds.reserve(geometry.indices.size() / 3);
+	bounds.reserve(geometry.indices.size() / 3);
 	for (std::size_t i = 0; i + 2 < geometry.indices.size(); i += 3) {
 		ds::bbox box;
 		for (std::size_t k = 0; k < 3; ++k) {
 			ds::expand(box, uv_of(geometry.indices[i + k]));
 		}
-		geometry.bounds.push_back({ box, static_cast<std::uint32_t>(geometry.bounds.size()) });
+		bounds.push_back({ box, static_cast<std::uint32_t>(bounds.size()) });
 	}
+	return bounds;
+}
+
+void rnd::detail::rebuild_bounds(geometry_desc& geometry)
+{
+	PROFILE_SCOPE("geometry_desc bounds rebuild");
+	geometry.bounds = built_geometry_bounds(geometry);
+	geometry.rtree = {};
 	for (const auto& [box, triangle] : geometry.bounds) {
 		geometry.rtree.insert(box, triangle);
 	}

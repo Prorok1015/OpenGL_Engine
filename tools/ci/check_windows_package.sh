@@ -16,7 +16,9 @@
 #    runs a host), needing no snk_engine.dll nor any other DLL but Windows' own and the MSVC runtime.
 # 6. editor.exe runs from the unpacked folder: --headless (a null window and the null renderer, no GL context, #452)
 #    opens projects/sandbox, loads a level and exits with 0. That proves the DLLs resolve and the config, the engine
-#    resources (res_core/) and the project are found; it does not draw anything (hosted runners have no GPU). A second
+#    resources (res_core/) and the project are found; it does not draw anything (hosted runners have no GPU). A first
+#    run, with import/decoder_sandbox required and the folder readable by AppContainers as Program Files is, decodes the
+#    level's model with the shipped decoder in its container, where it is installed, without a copy (#1099). A last
 #    run, without --config and from another working directory, takes config/editor.cfg next to bin/ (#160).
 # Run from the repository root in an MSVC developer shell (cl, ninja, dumpbin, 7z on PATH).
 set -euo pipefail
@@ -163,6 +165,39 @@ bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${proj}/build/shipping"
 
 # ---- 6. editor.exe from the unpacked folder ----
 log="${work}/editor_headless"
+# #1099: the shipped decoder runs where it is, in its AppContainer, as from Program Files: containers may read and run
+# what lies there (ALL APPLICATION PACKAGES), so the folder gets the same. Under `required` a decode without the
+# container is refused (an error in the log), and no copy of the decoder may appear: the copy is made only when the
+# decoder cannot run in place. First, so this run decodes the level's model itself.
+if ! MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$root")" /grant "*S-1-15-2-1:(OI)(CI)RX" /T /Q; then
+	echo "::error::cannot give ALL APPLICATION PACKAGES read and execute on the unpacked package"; exit 1
+fi
+copies="$(cygpath -u "${LOCALAPPDATA}")/snk/decoder/snk_model_decoder"
+rm -rf "$copies"
+rc=0
+(cd "$root" && timeout 180 bin/editor.exe --config config/editor.cfg --headless --project projects/sandbox \
+	--set editor/startup_level levels/smoke_level.desc editor/exit_after_level_loaded true \
+	app/exit_after_frames 20000 app/headless_target_fps 1000 import/decoder_sandbox required \
+	> "${log}_confined.stdout" 2> "${log}_confined.stderr") || rc=$?
+tail -30 "${log}_confined.stderr"
+if [[ $rc -ne 0 ]]; then echo "::error::editor.exe with the decoder sandbox required exited with ${rc} (124 = timed out)"; exit 1; fi
+if ! grep -q "level loaded: .*smoke_level.desc" "${log}_confined.stderr"; then
+	echo "::error::the packaged editor did not load the startup level with the decoder sandbox required"; exit 1
+fi
+# A decode cut off at exit leaves no error behind: the level must have settled.
+if grep -q "loads still pending after" "${log}_confined.stderr"; then
+	echo "::error::the startup level did not settle with the decoder sandbox required (#669)"; exit 1
+fi
+if grep -E '\[(error|critical)\]|cannot run in its sandbox|without OS isolation|without its system call filter' "${log}_confined.stderr"; then
+	echo "::error::the packaged decoder did not run in its AppContainer"; exit 1
+fi
+if [[ -e "$copies" ]]; then
+	echo "::error::the packaged decoder was copied to ${copies}: it did not run where it is installed"; exit 1
+fi
+# A confined decode logs nothing; the container's profile is made by the first confined start only.
+if [[ ! -d "$(cygpath -u "${LOCALAPPDATA}")/Packages/snk.model_decoder" ]]; then
+	echo "::error::no AppContainer profile snk.model_decoder: the decoder was never started confined"; exit 1
+fi
 rc=0
 # 1000, not 0: "level loaded" waits up to scene/level_settle_seconds = 10 s for the loads the level started (#669).
 (cd "$root" && timeout 180 bin/editor.exe --config config/editor.cfg --headless --project projects/sandbox \

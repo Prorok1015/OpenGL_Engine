@@ -1,6 +1,7 @@
 #include "edt_mesh_shape_asset.h"
 #include "edt_mesh_io.h"
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <boost/json.hpp>
 #include <cmath>
 #include <variant>
@@ -50,17 +51,32 @@ namespace edt::mesh
 		const json::object* object = parse_error ? nullptr : parsed.if_object();
 		const json::value* vertices = object ? object->if_contains("vertices") : nullptr;
 		const json::value* indices = object ? object->if_contains("indices") : nullptr;
-		if (!vertices || !vertices->is_array() || !indices || !indices->is_array()) {
+		if (!vertices || !indices) {
 			error = "the file is not a geometry desc";
 			return std::nullopt;
 		}
-		if (vertices->get_array().size() % vertex_bytes != 0) {
+		// A desc with ranges (EPIC-79) says the size in bytes of each chunk of its binary file, a desc with arrays holds the values.
+		const auto count_of = [](const json::value& chunk, std::size_t unit) -> std::optional<std::size_t> {
+			if (chunk.is_array()) return chunk.get_array().size() / unit;
+			const json::object* ranges = chunk.if_object();
+			const json::value* size = ranges ? ranges->if_contains("size") : nullptr;
+			if (!size || !size->is_uint64()) return std::nullopt;
+			return static_cast<std::size_t>(size->get_uint64() / unit);
+		};
+		const bool vertex_fit = vertices->is_array() ? vertices->get_array().size() % vertex_bytes == 0 : true;
+		const std::optional<std::size_t> vertex_count = count_of(*vertices, vertex_bytes);
+		const std::optional<std::size_t> index_count = count_of(*indices, indices->is_array() ? 1 : sizeof(std::uint32_t));
+		if (!vertex_count || !index_count) {
+			error = "the file is not a geometry desc";
+			return std::nullopt;
+		}
+		if (!vertex_fit || *vertex_count == 0 || *index_count == 0) {
 			error = "the vertices are not in the layout of the shapes (position, normal, uv, tangent, bitangent)";
 			return std::nullopt;
 		}
 		material_range range;
-		range.vx_end = static_cast<std::uint32_t>(vertices->get_array().size() / vertex_bytes);
-		range.ind_end = static_cast<std::uint32_t>(indices->get_array().size());
+		range.vx_end = static_cast<std::uint32_t>(*vertex_count);
+		range.ind_end = static_cast<std::uint32_t>(*index_count);
 		return range;
 	}
 
@@ -74,14 +90,23 @@ namespace edt::mesh
 		return {};
 	}
 
-	std::string geometry_file_text(const rnd::geometry_desc& geometry)
+	geometry_pair encode_geometry_pair(const res::tag& desc_file, const rnd::geometry_desc& geometry, std::string& error)
 	{
-		json::object body;
-		geometry.serialize(body);
-		return repository_text(std::move(body), geometry_file_version);
+		static_assert(geometry_file_version == rnd::geometry_binary_version, "a shape's geometry is a desc with ranges");
+		rnd::geometry_file_options options;
+		options.bounds = !geometry.bounds.empty();
+		rnd::geometry_files files = rnd::encode_geometry_files(desc_file, geometry, options);
+		if (!files) {
+			error = std::move(files.error);
+			return {};
+		}
+		// The form of a repository desc (DescRepoRoundtripTests, desc_resave --check): the text of desc::pretty_json_bytes.
+		const std::string_view compact(reinterpret_cast<const char*>(files.desc.data()), files.desc.size());
+		const std::vector<std::byte> bytes = desc::pretty_json_bytes(json::parse(compact));
+		return { std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), std::move(files.binary) };
 	}
 
-	shape_asset_result build_shape_asset(const shape_params& params)
+	shape_asset_result build_shape_asset(const shape_params& params, const res::tag& geometry_file)
 	{
 		shape_asset_result out;
 		shape_result generated = make_shape(params);
@@ -89,7 +114,7 @@ namespace edt::mesh
 			out.error = std::move(generated.error);
 			return out;
 		}
-		const baked_mesh baked = bake(*generated.mesh);
+		baked_mesh baked = bake(*generated.mesh);
 
 		poly_mesh_desc source;
 		source.mesh = std::move(*generated.mesh);
@@ -97,7 +122,11 @@ namespace edt::mesh
 
 		shape_asset_files files;
 		files.poly = repository_text(poly_mesh_to_json(source), poly_file_version);
-		files.geometry = geometry_file_text(baked.geometry);
+		geometry_pair pair = encode_geometry_pair(geometry_file, baked.geometry, out.error);
+		if (!out.error.empty()) return out;
+		files.geometry = std::move(pair.desc);
+		files.binary = std::move(pair.binary);
+		files.data = std::move(baked.geometry);
 		for (const material_range& range : baked.ranges) {
 			files.vertices += range.vx_end - range.vx_begin;
 			files.indices += range.ind_end - range.ind_begin;

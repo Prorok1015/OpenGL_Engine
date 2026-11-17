@@ -43,21 +43,23 @@ namespace
 {
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
-	// Logs the screen rectangle of the Asset Browser entries (Editor/UiProbe), so a headless smoke script finds an item by name.
+	// Logs the screen rectangle of the probed items (Editor/UiProbe), so a headless smoke script finds one by name.
 	CFG_VAR_DEF_BOOL(cfg_ui_probe, "editor/ui_probe", false);
 }
 
 edt::panels_component::panels_component(ports from)
 	: m_ports(std::move(from))
 {
+	if (cfg_ui_probe)
+		m_ui_probe = std::make_shared<edt::ui_probe>();
 	m_hierarchy = std::make_shared<scene_hierarchy_panel>();
+	m_hierarchy->set_ui_probe(m_ui_probe);
 	m_inspector = std::make_shared<inspector_panel>();
 	m_inspector->set_inspector_registry(&m_ports.context.inspectors());
 	m_console = std::make_shared<console_panel>();
 	m_asset_browser = std::make_shared<asset_browser_panel>();
 	m_asset_browser->set_layers(m_ports.resources.get_resource_layers());
-	if (cfg_ui_probe)
-		m_asset_browser->set_ui_probe(std::make_shared<ui_probe>());
+	m_asset_browser->set_ui_probe(m_ui_probe);
 	if (const auto code_roots = m_ports.resources.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_ports.resources, code_tree_model{ code_roots.back() },
 			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };
@@ -92,6 +94,7 @@ edt::panels_component::panels_component(ports from)
 	m_inspector->set_agent_marks(changed_by_agent);
 
 	m_viewport = std::make_shared<viewport_panel>(m_ports.rnd, m_ports.gui);
+	m_viewport->set_ui_probe(m_ui_probe);
 	m_viewport->set_registry_getter([this]() -> entt::registry* { return view_registry(m_ports.services, m_ports.state); });
 	m_viewport->set_input_router(m_ports.input_router, [this] { return active_input_target(m_ports.services, m_ports.state); });
 	m_viewport->set_on_asset_dropped([this](const std::string& res_rel_path) {

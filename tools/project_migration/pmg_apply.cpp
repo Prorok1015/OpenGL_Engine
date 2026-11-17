@@ -427,7 +427,7 @@ namespace
 
 	bool is_engine_key(std::string_view key)
 	{
-		return key == "__type" || key == "__version" || key == "__guid" || key == "__id";
+		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__layer" || key == "__order";
 	}
 
 	// Why `written` loses what derives from a parent in `migrated`: an object with __parent whose saved form names
@@ -1038,7 +1038,11 @@ std::vector<prj::migration::skipped_file> prj::migration::skipped_by(const migra
 	for (const scanned_file& file : plan.scan.files) {
 		const bool left = file.kind == file_class::unknown_type || file.kind == file_class::newer
 			|| (file.kind == file_class::invalid && plan.force);
-		if (left) skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
+		if (left) {
+			skipped.push_back(skipped_file{ file.path, file.kind, file.reason, file.unknown_types });
+		} else if (!file.geometry_left.empty()) {
+			skipped.push_back(skipped_file{ file.path, file.kind, "its geometry stays in JSON arrays: " + file.geometry_left, {} });
+		}
 	}
 	return skipped;
 }

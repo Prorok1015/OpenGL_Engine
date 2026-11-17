@@ -5,6 +5,8 @@
 #include <snk/scene/scn_skybox_desc.h>
 #include <snk/scene/scn_bone_desc.h>
 #include "edt_override_edit.h"
+#include "edt_ui_probe_imgui.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <string>
 #include <algorithm>
@@ -226,10 +228,13 @@ namespace edt
 			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = "[B] ";
 			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
 
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
 			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
+			const float arrow_x = ImGui::GetCursorScreenPos().x;
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
+			probe_last_item(m_ui_probe.get(), "hierarchy", child.name);
+			if (kid.has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", child.name, arrow_x);
 
 			// A click selects the node; its edits become override records on the instance
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
@@ -315,7 +320,10 @@ namespace edt
 				if (m_force_tab_switch && i == m_world_idx)
 					flags |= ImGuiTabItemFlags_SetSelected;
 
-				if (ImGui::BeginTabItem(m_world_names[i].c_str(), nullptr, flags)) {
+				const bool tab_open = ImGui::BeginTabItem(m_world_names[i].c_str(), nullptr, flags);
+				// A tab that is not selected returns false, but its rectangle is valid.
+				probe_last_item(m_ui_probe.get(), "hierarchy_tabs", m_world_names[i]);
+				if (tab_open) {
 					if (i != m_world_idx) {
 						m_world_idx     = i;
 						m_selected_node = nullptr;
@@ -332,7 +340,10 @@ namespace edt
 			}
 
 			ImGui::BeginDisabled(locked());
-			if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+			const bool plus_clicked =
+				ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip);
+			probe_last_item(m_ui_probe.get(), "hierarchy_tabs", "+");
+			if (plus_clicked) {
 				m_new_world_buf[0] = '\0';
 				ImGui::OpenPopup("##new_world_popup");
 			}
@@ -367,8 +378,14 @@ namespace edt
 		}
 	}
 
+	void scene_hierarchy_panel::on_hidden()
+	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"hierarchy", "hierarchy_toggle", "hierarchy_tabs"});
+	}
+
 	void scene_hierarchy_panel::on_render()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"hierarchy", "hierarchy_toggle", "hierarchy_tabs"});
 		const bool edits_locked = locked();
 		if (edits_locked) {
 			ImGui::TextDisabled("Stop Play to edit");
@@ -515,7 +532,10 @@ namespace edt
 		if (filter_active && has_children)
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
+		const float arrow_x = ImGui::GetCursorScreenPos().x;
 		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
+		probe_last_item(m_ui_probe.get(), "hierarchy", node.name);
+		if (has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", node.name, arrow_x);
 		if (by_agent && ImGui::IsItemHovered()) ImGui::SetTooltip("Changed by an agent (not saved or accepted yet)");
 
 		// ── selection ───────────────────────────────────────────────────────
@@ -580,7 +600,7 @@ namespace edt
 			float fraction = (item_h > 0.f) ? (mouse_y / item_h) : 0.5f;
 
 			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			ImU32 line_col = IM_COL32(80, 160, 255, 200);
+			const ImU32 line_col = ImGui::GetColorU32(ImGuiCol_CheckMark, 0.8f);
 			float line_thickness = 2.0f;
 
 			if (fraction < 0.25f) {

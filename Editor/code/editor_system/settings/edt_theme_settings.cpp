@@ -185,6 +185,20 @@ void edt::theme_settings_model::refresh_lists()
 	}
 }
 
+void edt::theme_settings_model::refresh()
+{
+	refresh_lists();
+	if (!available()) {
+		return;
+	}
+	m_ports.themes->forget_fonts();
+	if (m_dirty && m_working) {
+		m_ports.themes->preview(*m_working);
+	} else if (const res::tag shown = current(); shown.is_valid()) {
+		m_ports.themes->select(shown);
+	}
+}
+
 res::tag edt::theme_settings_model::current() const
 {
 	return available() ? m_ports.themes->selected() : res::tag{};

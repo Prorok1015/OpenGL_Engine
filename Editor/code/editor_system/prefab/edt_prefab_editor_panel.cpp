@@ -7,6 +7,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/resource/res_tag.h>
+#include <snk/gui/gui_theme.h>
 #include <cfloat>
 #include <imgui.h>
 #include <entt/entt.hpp>
@@ -42,6 +43,11 @@ namespace edt
 
 	void prefab_editor_panel::on_render()
 	{
+		if (!m_loading.empty()) {
+			ImGui::TextUnformatted(m_loading.c_str());
+			if (m_on_cancel_loading && ImGui::Button("Cancel")) m_on_cancel_loading();
+			return;
+		}
 		if (!m_ctx || !m_ctx->is_open()) {
 			ImGui::TextDisabled("(no prefab open)");
 			// If context was closed externally, close the panel
@@ -132,7 +138,7 @@ namespace edt
 		}
 		if (m_banner_later) {
 			// Later keeps a compact line, so the way out stays one click away.
-			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "Changed on disk");
+			ImGui::TextColored(colors().warning, "Changed on disk");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Reload")) {
 				m_error = m_ctx->reload();
@@ -150,7 +156,8 @@ namespace edt
 			}
 			return;
 		}
-		ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
+		ImGui::TextColored(colors().warning,
+			"The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
 		if (ImGui::Button("Reload")) {
 			m_error = m_ctx->reload();
 		}

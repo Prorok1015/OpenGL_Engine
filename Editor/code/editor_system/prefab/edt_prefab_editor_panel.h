@@ -39,6 +39,12 @@ namespace edt
 		}
 		void clear_selection() { m_selected_path.clear(); m_has_selection = false; }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
+		// While a prefab loads in the background the window says so (and offers Cancel); an empty text ends it.
+		void set_loading(std::string text) { m_loading = std::move(text); }
+		void set_on_cancel_loading(std::function<void()> cb) { m_on_cancel_loading = std::move(cb); }
+		bool loading() const { return !m_loading.empty(); }
+		// What the Cancel button does (tests press it here).
+		void cancel_loading() { if (m_on_cancel_loading) m_on_cancel_loading(); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
 
 	protected:
@@ -59,6 +65,8 @@ namespace edt
 		gui::gui_system& m_gui;
 		prefab_document* m_ctx = nullptr;
 		std::function<void()> m_on_close;
+		std::function<void()> m_on_cancel_loading;
+		std::string m_loading;
 		std::function<void()> m_on_apply;
 		std::function<void()> m_on_revert;
 		inp::input_router* m_router = nullptr;

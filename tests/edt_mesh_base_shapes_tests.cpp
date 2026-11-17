@@ -3,14 +3,19 @@
 #include "null_engine_fixture.hpp"
 #include "edt_mesh_base_shapes.h"
 #include <snk/desc/desc_system.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_tag.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -27,67 +32,107 @@ std::string read_text(const fs::path& path)
 	return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
-std::vector<std::byte> bytes_of(const boost::json::array& numbers)
+std::vector<std::byte> read_bytes(const fs::path& path)
 {
-	std::vector<std::byte> out;
-	out.reserve(numbers.size());
-	for (const boost::json::value& number : numbers) {
-		out.push_back(static_cast<std::byte>(boost::json::value_to<unsigned>(number)));
+	const std::string text = read_text(path);
+	std::vector<std::byte> out(text.size());
+	if (!text.empty()) {
+		std::memcpy(out.data(), text.data(), text.size());
 	}
 	return out;
 }
 
+res::tag tag_of(const base_shape& shape)
+{
+	return res::tag{ base_shape_path(shape) };
+}
+
+// The desc without what follows from the bytes of the binary file: the SHA-256 of each range and where it starts.
+boost::json::object without_hashes(boost::json::object desc)
+{
+	for (const std::string_view key : { "vertices", "indices" }) {
+		if (boost::json::value* range = desc.if_contains(key); range && range->is_object()) {
+			range->as_object().erase("sha256");
+			range->as_object().erase("offset");
+		}
+	}
+	return desc;
+}
+
 // The float arithmetic of sin, cos and acos is the C runtime's: another compiler or runtime may differ in the last bit of a
-// vertex. So the file is compared as data: everything but the vertices exactly, the vertices float by float with a tolerance.
-// Empty: the file is what the generator writes; else the first difference.
-std::string difference(const std::string& expected_text, const std::string& committed_text)
+// vertex, and so in the SHA-256 of the binary file. So a pair is compared as data: the desc's fields exactly but the hashes
+// and offsets of its ranges, both pairs decoded as the loader reads them, the indices exactly and the vertices float by float
+// with a tolerance. Empty: the committed pair is what the generator makes; else the first difference.
+std::string difference(const res::tag& tag, const base_shape_pair& expected, const base_shape_pair& committed)
 {
 	constexpr float tolerance = 1e-6f;
 	boost::json::value expected_value;
 	boost::json::value committed_value;
 	try {
-		expected_value = boost::json::parse(expected_text);
-		committed_value = boost::json::parse(committed_text);
+		expected_value = boost::json::parse(expected.desc);
+		committed_value = boost::json::parse(committed.desc);
 	} catch (const std::exception& error) {
-		return std::string("the file is not JSON: ") + error.what();
+		return std::string("the desc is not JSON: ") + error.what();
 	}
 	if (!expected_value.is_object() || !committed_value.is_object()) {
-		return "the file is not an object";
+		return "the desc is not an object";
 	}
-	const boost::json::object& expected = expected_value.as_object();
-	const boost::json::object& committed = committed_value.as_object();
-	if (expected.size() != committed.size()) {
-		return "the file has other keys";
+	const boost::json::object& expected_desc = expected_value.as_object();
+	const boost::json::object& committed_desc = committed_value.as_object();
+	const boost::json::object want_fields = without_hashes(expected_desc);
+	const boost::json::object have_fields = without_hashes(committed_desc);
+	if (want_fields.size() != have_fields.size()) {
+		return "the desc has other keys";
 	}
-	for (const auto& member : expected) {
-		const std::string_view key = member.key();
-		const boost::json::value& value = member.value();
-		const boost::json::value* other = committed.if_contains(key);
+	for (const auto& member : want_fields) {
+		const boost::json::value* other = have_fields.if_contains(member.key());
 		if (!other) {
-			return "'" + std::string(key) + "' is missing";
+			return "'" + std::string(member.key()) + "' is missing";
 		}
-		if (key != "vertices") {
-			if (value != *other) {
-				return "'" + std::string(key) + "' differs";
-			}
-			continue;
+		if (member.value() != *other) {
+			return "'" + std::string(member.key()) + "' differs";
 		}
-		if (!value.is_array() || !other->is_array() || value.as_array().size() != other->as_array().size()) {
-			return "the number of vertex bytes differs";
-		}
-		const std::vector<std::byte> want = bytes_of(value.as_array());
-		const std::vector<std::byte> have = bytes_of(other->as_array());
-		for (std::size_t i = 0; i + sizeof(float) <= want.size(); i += sizeof(float)) {
-			float a = 0.f;
-			float b = 0.f;
-			std::memcpy(&a, want.data() + i, sizeof(float));
-			std::memcpy(&b, have.data() + i, sizeof(float));
-			if (!(std::abs(a - b) <= tolerance)) {
-				return "float " + std::to_string(i / sizeof(float)) + " of the vertices differs: " + std::to_string(a) + " against " + std::to_string(b);
-			}
+	}
+
+	rnd::geometry_desc want;
+	rnd::geometry_desc have;
+	if (const std::string problem = rnd::decode_geometry_files(tag, expected_desc, expected.binary, want); !problem.empty()) {
+		return "the generator's pair does not decode: " + problem;
+	}
+	if (const std::string problem = rnd::decode_geometry_files(tag, committed_desc, committed.binary, have); !problem.empty()) {
+		return "the pair does not decode: " + problem;
+	}
+	if (want.indices != have.indices) {
+		return "the indices differ";
+	}
+	if (want.vertices.size() != have.vertices.size()) {
+		return "the number of vertex bytes differs";
+	}
+	for (std::size_t i = 0; i + sizeof(float) <= want.vertices.size(); i += sizeof(float)) {
+		float a = 0.f;
+		float b = 0.f;
+		std::memcpy(&a, want.vertices.data() + i, sizeof(float));
+		std::memcpy(&b, have.vertices.data() + i, sizeof(float));
+		if (!(std::abs(a - b) <= tolerance)) {
+			return "float " + std::to_string(i / sizeof(float)) + " of the vertices differs: " + std::to_string(a) + " against " + std::to_string(b);
 		}
 	}
 	return {};
+}
+
+// The pair of `pair`'s data with `change` made to it, encoded again as the generator encodes it.
+base_shape_pair changed(const res::tag& tag, const base_shape_pair& pair, const std::function<void(rnd::geometry_desc&)>& change)
+{
+	const boost::json::object desc = boost::json::parse(pair.desc).as_object();
+	rnd::geometry_desc geometry;
+	const std::string problem = rnd::decode_geometry_files(tag, desc, pair.binary, geometry);
+	BOOST_REQUIRE_MESSAGE(problem.empty(), problem);
+	change(geometry);
+	rnd::geometry_file_options options;
+	options.bounds = desc.contains("bounds");
+	const rnd::geometry_files files = rnd::encode_geometry_files(tag, geometry, options);
+	BOOST_REQUIRE_MESSAGE(static_cast<bool>(files), files.error);
+	return { std::string(reinterpret_cast<const char*>(files.desc.data()), files.desc.size()), files.binary };
 }
 
 struct bounds
@@ -125,53 +170,72 @@ struct shapes_fixture : test_util::null_engine_fixture
 
 BOOST_FIXTURE_TEST_SUITE(EdtBaseShapesTests, shapes_fixture)
 
-// A mismatch writes what the bake gives to generated_shapes/ next to the test binary: the Linux Clang job of CI uploads that
-// folder as an artifact, and its files go into core/res/shapes unchanged (no one builds locally).
+// A mismatch writes the generator's pair to generated_shapes/ next to the test binary: the Linux Clang job of CI uploads that
+// folder as the artifact generated-base-shapes, and its files (desc and .bin) go into core/res/shapes unchanged (no one
+// builds locally).
 BOOST_AUTO_TEST_CASE(TheCommittedFiles_AreWhatTheBakeWrites)
 {
 	for (const base_shape& shape : base_shapes()) {
 		BOOST_TEST_CONTEXT(shape.name) {
-			const std::string expected = base_shape_file_text(shape);
-			const fs::path committed = fs::path(SNK_CORE_RES_DIR) / "shapes" / (std::string(shape.name) + ".geom.desc");
-			const std::string found = difference(expected, read_text(committed));
+			const base_shape_pair expected = base_shape_files(shape);
+			const fs::path desc = fs::path(SNK_CORE_RES_DIR) / "shapes" / (std::string(shape.name) + ".geom.desc");
+			const fs::path binary = fs::path(SNK_CORE_RES_DIR) / "shapes" / (std::string(shape.name) + ".geom.bin");
+			const base_shape_pair committed{ read_text(desc), read_bytes(binary) };
+			const std::string found = difference(tag_of(shape), expected, committed);
 			if (!found.empty()) {
-				const fs::path generated = fs::path("generated_shapes") / committed.filename();
-				fs::create_directories(generated.parent_path());
-				std::ofstream(generated, std::ios::binary) << expected;
-				BOOST_ERROR("core/res/shapes/" + committed.filename().string() + " is missing or differs from the generator (" + found
-					+ "): take the file from the generated_shapes artifact");
+				const fs::path folder = "generated_shapes";
+				fs::create_directories(folder);
+				std::ofstream(folder / desc.filename(), std::ios::binary) << expected.desc;
+				std::ofstream(folder / binary.filename(), std::ios::binary)
+					.write(reinterpret_cast<const char*>(expected.binary.data()), static_cast<std::streamsize>(expected.binary.size()));
+				BOOST_ERROR("core/res/shapes/" + desc.filename().string() + " and " + binary.filename().string()
+					+ " are missing or differ from the generator (" + found
+					+ "): take both files from the generated-base-shapes artifact of CI");
 			}
 		}
 	}
 }
 
-BOOST_AUTO_TEST_CASE(TheComparison_AcceptsAFloatOffByTheTolerance_AndRefusesAMovedVertexOrAnotherIndex)
+BOOST_AUTO_TEST_CASE(TheComparison_AcceptsAFloatOffByTheTolerance_AndRefusesAMovedVertexAnotherIndexOrAnotherField)
 {
-	const std::string text = base_shape_file_text(*find_base_shape("plane"));
-	BOOST_TEST(difference(text, text).empty());
+	const base_shape& plane = *find_base_shape("plane");
+	const res::tag tag = tag_of(plane);
+	const base_shape_pair pair = base_shape_files(plane);
+	BOOST_TEST(difference(tag, pair, pair).empty());
 
-	// The first vertex's x is the float with the bytes 00 00 00 BF (-0.5): one bit more is a change of 6e-8, 0xBE80 in the high
-	// bytes is -0.25.
-	const auto changed = [&](const char* array, std::size_t index, unsigned value) {
-		boost::json::value file = boost::json::parse(text);
-		file.as_object()[array].as_array()[index] = value;
-		return boost::json::serialize(file);
-	};
-	BOOST_TEST(changed("vertices", 0, 1) != text);
-	BOOST_TEST(difference(text, changed("vertices", 0, 1)).empty());
-	BOOST_TEST(!difference(text, changed("vertices", 3, 190)).empty());
-	BOOST_TEST(!difference(text, changed("indices", 2, 3)).empty());
-	BOOST_TEST(!difference(text, "[]").empty());
+	// The first vertex's x is the float with the bytes 00 00 00 BF (-0.5): one bit more is a change of 6e-8 (and another
+	// SHA-256), BE in the high byte is -0.125.
+	const base_shape_pair one_bit = changed(tag, pair, [](rnd::geometry_desc& g) { g.vertices[0] = std::byte{ 1 }; });
+	BOOST_TEST((one_bit.binary != pair.binary));
+	BOOST_TEST(difference(tag, pair, one_bit).empty());
+	BOOST_TEST(!difference(tag, pair, changed(tag, pair, [](rnd::geometry_desc& g) { g.vertices[3] = std::byte{ 0xBE }; })).empty());
+	BOOST_TEST(!difference(tag, pair, changed(tag, pair, [](rnd::geometry_desc& g) { g.indices[2] = 3; })).empty());
+
+	boost::json::object other_field = boost::json::parse(pair.desc).as_object();
+	other_field["__guid"] = "00000000-0000-4000-8000-000000000001";
+	BOOST_TEST(!difference(tag, pair, { boost::json::serialize(other_field), pair.binary }).empty());
+	BOOST_TEST(!difference(tag, pair, { "[]", pair.binary }).empty());
+	BOOST_TEST(!difference(tag, pair, { pair.desc, {} }).empty());
 }
 
-BOOST_AUTO_TEST_CASE(TheFileVersion_IsTheEnginesGeometryVersion_AndTheTextIsPrettyWithANewline)
+BOOST_AUTO_TEST_CASE(TheFileVersion_IsTheEnginesGeometryVersion_AndTheDescIsPrettyWithRanges)
 {
 	BOOST_TEST(base_shape_file_version == storage.require<desc::desc_system>().current_version("geometry_desc"));
 	for (const base_shape& shape : base_shapes()) {
-		const std::string text = base_shape_file_text(shape);
-		BOOST_TEST(text.starts_with("{\n    \"__type\" : \"geometry_desc\",\n    \"__version\" : 2,\n"));
-		BOOST_TEST(text.back() == '\n');
-		BOOST_TEST(text.find("__parent") == std::string::npos);
+		BOOST_TEST_CONTEXT(shape.name) {
+			const base_shape_pair pair = base_shape_files(shape);
+			BOOST_TEST(pair.desc.starts_with("{\n    \"__type\" : \"geometry_desc\",\n    \"__version\" : 2,\n"));
+			BOOST_TEST(pair.desc.back() == '\n');
+			BOOST_TEST(pair.desc.find("__parent") == std::string::npos);
+			const boost::json::object desc = boost::json::parse(pair.desc).as_object();
+			BOOST_TEST(desc.at("vertices").is_object());
+			BOOST_TEST(desc.at("indices").is_object());
+			BOOST_TEST(pair.binary.size() > 8u);
+			// Two runs give the same bytes: nothing of the time or of chance goes into a pair.
+			const base_shape_pair again = base_shape_files(shape);
+			BOOST_TEST(again.desc == pair.desc);
+			BOOST_TEST((again.binary == pair.binary));
+		}
 	}
 }
 

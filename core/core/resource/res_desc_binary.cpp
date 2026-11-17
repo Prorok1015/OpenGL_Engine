@@ -453,21 +453,58 @@ res::file_operation res::desc_binary::commit_pending(resource_system& system, co
 	return detail::desc_binary_access::commit(system, *staged, *binary, written.file);
 }
 
+res::desc_binary::previous_desc res::desc_binary::read_previous_desc(resource_system& system, const save_lock& lock,
+	const tag& desc)
+{
+	using access = detail::desc_binary_access;
+	require_guard(lock, desc, "read_previous_desc");
+	previous_desc out;
+	if (!system.exists(desc)) {
+		return out;
+	}
+	access::read_outcome read = access::read_beside(system, desc, desc, max_geometry_json_bytes);
+	switch (read.status) {
+	case ::platform::beneath::read_status::ok:
+		out.bytes = std::move(read.bytes);
+		out.from = access::layered(system, desc) && !access::writes_beside(system, desc) ? previous_desc::origin::lower_layer
+			: previous_desc::origin::top_layer;
+		break;
+	case ::platform::beneath::read_status::missing:
+		break;
+	default:
+		out.from = previous_desc::origin::unreadable;
+		out.error = read.error.empty() ? std::string{ "it cannot be read" } : std::move(read.error);
+		break;
+	}
+	return out;
+}
+
 res::file_operation res::desc_binary::take_back(resource_system& system, const save_lock& lock, const tag& desc,
-	const desc_binary_written& written, const std::vector<std::byte>& written_desc,
-	const std::optional<std::vector<std::byte>>& previous_desc)
+	const desc_binary_written& written, const std::vector<std::byte>& written_desc, const previous_desc& previous)
 {
 	require_guard(lock, desc, "take_back");
 	const auto staged = staged_tag(desc);
 	if (!staged) {
 		return file_operation::failure(std::format("'{}' is not named <name>.<ext>.desc: it has no binary file", desc.view()));
 	}
-	if (previous_desc) {
-		if (!system.store_sync(desc, *previous_desc)) {
+	switch (previous.from) {
+	case previous_desc::origin::top_layer:
+		if (!system.store_sync(desc, previous.bytes)) {
 			return file_operation::failure(std::format("the previous '{}' could not be written back (see the log)", desc.view()));
 		}
-	} else if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, desc, written_desc); !removed) {
-		return file_operation::failure(std::format("'{}' could not be removed: {}", desc.view(), removed.error));
+		break;
+	case previous_desc::origin::none:
+	case previous_desc::origin::lower_layer:
+		// A copy of a lower layer's desc written on top would have no binary file beside it.
+		if (const file_operation removed = detail::desc_binary_access::remove_if_same(system, desc, written_desc); !removed) {
+			return file_operation::failure(std::format("'{}' could not be removed: {}", desc.view(), removed.error));
+		}
+		break;
+	case previous_desc::origin::unreadable:
+		egLOG_WARN("resource/desc_binary", "'{}' is not taken back: the desc before the save could not be read ({})",
+			desc.view(), previous.error);
+		return file_operation::failure(std::format("the desc before the save could not be read ({}), so '{}' was not taken back",
+			previous.error, desc.view()));
 	}
 	// No desc needs the staged file any more: a leftover is only stale, a reader ignores it.
 	if (!written.file.empty()) {

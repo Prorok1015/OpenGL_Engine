@@ -10,6 +10,7 @@
 #include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
 #include "edt_editor_camera.h"
+#include "edt_ui_probe_imgui.h"
 #include <imgui.h>
 #include <optional>
 #include <utility>
@@ -35,6 +36,7 @@ namespace edt
 
 	void viewport_panel::on_hidden()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"viewport_toolbar"});
 		if (entt::registry* reg = m_get_registry ? m_get_registry() : nullptr)
 			set_editor_camera_input(*reg, false);
 	}
@@ -72,6 +74,7 @@ namespace edt
 
 	void viewport_panel::on_render()
 	{
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"viewport_toolbar"});
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		// A registry that is not the one seen last time (the world was rebuilt): the selected entity is taken again and a
 		// drag of the rotate ring that was in progress ends.
@@ -166,6 +169,7 @@ namespace edt
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (ImGui::Button(labels[i]))
 				m_gizmo_op = i;
+			probe_last_item(m_ui_probe.get(), "viewport_toolbar", labels[i]);
 			if (active)
 				ImGui::PopStyleColor();
 			ImGui::SameLine();
@@ -179,6 +183,7 @@ namespace edt
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (ImGui::Button("Wireframe"))
 				m_wireframe = !m_wireframe;
+			probe_last_item(m_ui_probe.get(), "viewport_toolbar", "Wireframe");
 			if (active)
 				ImGui::PopStyleColor();
 		}
@@ -195,6 +200,7 @@ namespace edt
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 				if (ImGui::Button("Bones"))
 					skel->show_skeleton = !skel->show_skeleton;
+				probe_last_item(m_ui_probe.get(), "viewport_toolbar", "Bones");
 				if (active)
 					ImGui::PopStyleColor();
 			}

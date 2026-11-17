@@ -127,7 +127,7 @@ void edt::agent_component::build()
 		if (m_server) m_server->tick();
 		// Nothing to do for a person who does not use agents: no question can come, and the policy files are not read.
 		if (m_server == nullptr || !m_server->active()) return true;
-		return headless ? m_access->frame_headless() : m_access->frame(ImGui::GetFont());
+		return headless ? m_access->frame_headless() : m_access->frame(ImGui::GetFont(), m_ports.context.colors());
 	});
 	// One signal for the end of an MCP session; whoever keeps something per session listens to it.
 	editor_events& events = m_ports.context.events();

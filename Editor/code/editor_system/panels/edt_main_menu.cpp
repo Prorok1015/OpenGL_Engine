@@ -1,5 +1,7 @@
 #include "edt_main_menu.h"
+#include "edt_ui_probe_imgui.h"
 #include <imgui.h>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -49,13 +51,14 @@ namespace {
 		return ImGuiKey_None;
 	}
 
-	void draw_panel_toggles(edt::panel_registry& panels)
+	void draw_panel_toggles(edt::panel_registry& panels, edt::ui_probe* probe)
 	{
 		for (const edt::panel_info& panel : panels.panels()) {
 			if (!panel.show_in_view_menu) continue;
 			bool open = panel.open;
 			if (ImGui::MenuItem(panel.title.c_str(), nullptr, &open))
 				panels.set_open(panel.id, open);
+			edt::probe_last_item(probe, "menu", panel.title);
 		}
 	}
 }
@@ -86,20 +89,36 @@ bool edt::fire_shortcuts(action_registry& actions, const std::function<bool(std:
 	return pressed && actions.dispatch(*pressed, io.WantTextInput, allowed);
 }
 
-void edt::draw_main_menu(action_registry& actions, panel_registry& panels)
+void edt::draw_main_menu(action_registry& actions, panel_registry& panels, ui_probe* probe)
 {
+	const ui_probe::scoped_pass probe_pass(probe, {"menu"});
 	for (const std::string& menu : actions.menus()) {
-		if (!ImGui::BeginMenu(menu.c_str())) continue;
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		const ImVec2 bar_clip_min = ImGui::GetWindowDrawList()->GetClipRectMin();
+		const ImVec2 bar_clip_max = ImGui::GetWindowDrawList()->GetClipRectMax();
+		const bool open = ImGui::BeginMenu(menu.c_str());
+		if (!open) {
+			probe_last_item(probe, "menu", menu);
+			continue;
+		}
+		if (probe) {
+			// The open menu's popup is now the last item: the header is where BeginMenu put it in the menu bar.
+			const float x = at.x + std::floor(ImGui::GetStyle().ItemSpacing.x * 0.5f);
+			const ImVec2 text = ImGui::CalcTextSize(menu.c_str());
+			probe_rect_in(probe, "menu", menu, ImVec2(x, at.y), ImVec2(x + text.x, at.y + text.y),
+				true, bar_clip_min, bar_clip_max);
+		}
 
 		for (const menu_item_info& item : actions.items(menu)) {
 			if (item.separator_before) ImGui::Separator();
 			const char* shortcut_text = item.shortcut_text.empty() ? nullptr : item.shortcut_text.c_str();
 			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, item.checked, item.enabled))
 				actions.activate(item.id);
+			probe_last_item(probe, "menu", item.label);
 			if (!item.enabled && !item.disabled_tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 				ImGui::SetTooltip("%s", item.disabled_tooltip.c_str());
 		}
-		if (menu == view_menu_name) draw_panel_toggles(panels);
+		if (menu == view_menu_name) draw_panel_toggles(panels, probe);
 		ImGui::EndMenu();
 	}
 }

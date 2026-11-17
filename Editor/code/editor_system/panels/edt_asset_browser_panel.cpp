@@ -2,7 +2,9 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include "edt_ui_probe_imgui.h"
 #include <snk/gui/gui_ui_font.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -55,10 +57,7 @@ namespace edt
 
 	void asset_browser_panel::on_hidden()
 	{
-		if (m_ui_probe) {
-			m_ui_probe->begin_pass("asset_browser");
-			m_ui_probe->end_pass("asset_browser");
-		}
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search"});
 	}
 
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
@@ -129,12 +128,12 @@ namespace edt
 		}
 		ImGui::TextDisabled(".desc is added when the name has no extension");
 		if (const std::string problem = form.problem(); !problem.empty()) {
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::TextWrapped("%s", problem.c_str());
 			ImGui::PopStyleColor();
 		}
 		if (!form.error().empty()) {
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 1.f, 0.3f, 0.3f, 1.f });
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::TextWrapped("%s", form.error().c_str());
 			ImGui::PopStyleColor();
 		}
@@ -235,6 +234,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
+		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search"});
 		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;
@@ -264,6 +264,7 @@ namespace edt
 		ImGui::SetNextItemWidth(-1.f);
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
+		edt::probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
 
 		ImGui::Separator();
 
@@ -282,7 +283,7 @@ namespace edt
 		ImGui::PopStyleVar();
 
 		if (m_code_section)
-			m_code_section->render();
+			m_code_section->render(colors());
 
 		ImGui::NextColumn();
 

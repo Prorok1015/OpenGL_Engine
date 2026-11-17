@@ -206,7 +206,7 @@
   },
   {
    "name": "image",
-   "root": "core/engine/image",
+   "root": "core/core/image",
    "dest": "snk/image",
    "public": [
     "image.h"
@@ -215,7 +215,7 @@
   },
   {
    "name": "game",
-   "root": "core/engine/game_system",
+   "root": "core/engine/game",
    "dest": "snk/game",
    "public": [
     "gs_engine_frame_stages.h"

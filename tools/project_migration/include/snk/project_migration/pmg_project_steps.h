@@ -2,6 +2,7 @@
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/project_migration/pmg_scan.h>
 #include <boost/json/object.hpp>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -82,6 +83,26 @@ namespace prj::migration
 		std::vector<project_step> m_steps;
 	};
 
+	// Whether the desc `root` (the file at `path`) is one engine.geometry_blobs converts: a geometry_desc whose vertices
+	// and indices are JSON arrays with at least one vertex, of triangles (no "topology" other than that) and named
+	// <name>.<ext>.desc, so that a binary file can stand beside it (EPIC-79, #1129).
+	bool holds_convertible_geometry(std::string_view path, const boost::json::object& root);
+
+	// Why engine.geometry_blobs would leave such a desc as it is, by the writer's own checks: the loader's checks of
+	// rnd::encode_geometry_files refuse its data (no indices, a count not a multiple of 3, an index past the vertices,
+	// a value that is not finite, no "layout" of its own), its stored bounds are not those the loader builds, the binary
+	// file would be over k_geometry_binary_max_bytes, or the pair would not read back. Empty when it converts. The scan
+	// asks it, so such a desc is "not migrated" with this reason and never keeps the step needed (#1129).
+	std::string geometry_conversion_problem(std::string_view path, const boost::json::object& root);
+
+	// What a migration writes at most for one file (scan_options::max_file_bytes, the applier's limit).
+	inline constexpr std::uint64_t k_geometry_binary_max_bytes = std::uint64_t{ 64 } << 20;
+
 	// engine.manifest_format (pre): brings format_version of project.snkproj to prj::k_manifest_format_version.
+	// engine.geometry_blobs (post, EPIC-79 #1129): every desc the scan marks geometry_arrays gets its vertices and indices
+	// in <name>.<ext>.bin beside it (created) and keeps their ranges (written), as rnd::encode_geometry_files makes the
+	// pair. A .bin already at the name with exactly the bytes it would write (a run stopped between creating it and its
+	// journal) is taken as it is. A desc it cannot convert then (a .bin.new or another .bin at the name, a check that the
+	// type migrations made fail) stays as it is with a line "<path>: not migrated: <why>" in the report.
 	void register_engine_project_steps(project_step_registry& registry);
 }

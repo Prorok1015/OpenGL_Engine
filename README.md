@@ -39,34 +39,45 @@ git clone --recursive https://github.com/Prorok1015/OpenGL_Engine.git
 git submodule update --init --checkout projects/sandbox/res/samples
 ```
 
-`projects/sandbox/res/objects/robot` (small skinned + animated glb) stays in the repo for a quick check; larger test
-models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
+The repository history is large; it is going to be cleaned up (#57). `projects/sandbox/res/objects/robot/gen_robot.glb`
+(a small glb) is in the repo for a quick check; larger test models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
 
 ### Building
 
 ```bash
-cmake --preset dev-debug        # Ninja, build/dev-debug (see CMakePresets.json for all presets)
-cmake --build build/dev-debug
+cmake --preset dev-debug        # Ninja, build/dev-debug
+cmake --build build/dev-debug --target editor unit_tests
 # or without presets: mkdir build && cd build && cmake .. && make -j$(nproc)
 ```
 
-A compiler cache (ccache; sccache for MSVC) and a shared precompiled header are used automatically
-when available: `-DSNK_COMPILER_CACHE=OFF` / `-DSNK_PCH=OFF` turn them off.
+Presets (`CMakePresets.json`): `dev-debug`, `dev-release`, `release`, `no-assimp`, and the `ci-*` presets that
+are the exact CI configurations (for example `ci-linux-asan`, `ci-linux-clang-debug`, `ci-windows-msvc-debug`).
 
-Produces two executables:
+Main targets:
+
 | Target | Description |
 |--------|-------------|
-| `Editor/editor` | Scene editor application |
+| `editor` | Scene editor application (`Editor/`); not built with `SNK_ENGINE_SHARED=OFF` |
 | `unit_tests` | Boost.Test unit test suite |
+| `snk_model_decoder` | Isolated process that decodes one model file (`tools/model_decoder`); needs `SNK_WITH_ASSIMP=ON` |
+| `desc_resave` | Console tool: loads every `.desc` under a resource directory and writes it back in the current format (`tools/desc_resave`) |
+| `game` | Shipping game host with the static engine (`apps/game`); only with `SNK_ENGINE_SHARED=OFF` |
+
+Two CMake options:
+- `SNK_WITH_ASSIMP=ON|OFF`: assimp and the model import library `core/model_import`; OFF disables model import (preset `no-assimp`).
+- `SNK_ENGINE_SHARED=ON|OFF`: the engine as one shared library (default ON), or the static engine without the editor.
+
+The other options (compiler cache, PCH, warnings as errors, sanitizers, assimp formats) are described in
+[CLAUDE.md, "Build & Test"](CLAUDE.md#-build--test).
 
 ### Running the Editor
 
 ```bash
 # With config file
-./Editor/editor --config ../Editor/config/editor.cfg
+build/dev-debug/Editor/editor --config Editor/config/editor.cfg
 
 # Open the test project (projects/sandbox: game content and test levels, EPIC-42)
-./Editor/editor --config ../Editor/config/editor.cfg --project ../projects/sandbox
+build/dev-debug/Editor/editor --config Editor/config/editor.cfg --project projects/sandbox
 ```
 
 ---
@@ -79,47 +90,53 @@ OpenGL_Engine/
 ├── core/
 │   ├── core/                       # Low-level foundation
 │   │   ├── common/                 # Data structures, math, logging
-│   │   │   ├── ds/                 # event, fixed_vector, rtree, bbox, store, bit_flags
-│   │   │   └── logger/             # spdlog-based logging
 │   │   ├── ecs/                    # ECS framework (EnTT wrapper)
 │   │   ├── resource/               # VFS, async loading, caching, adapters
+│   │   ├── image/                  # Image decoding (stb_image)
+│   │   ├── model_codec/            # Encoding of geometry and descriptors for the decoder process protocol
 │   │   ├── desc/                   # Descriptor system (.desc JSON files)
 │   │   ├── input/                  # Low-level input events
 │   │   ├── config/                 # Configuration: CFG_VAR_* (base-only cfg_variables.h), read-only cfg_api.h
 │   │   ├── application/            # App base class, module lifecycle
+│   │   ├── project/                # Project support
 │   │   ├── windows/                # GLFW window management
-│   │   └── video/drivers/          # Graphics API abstraction (RHI)
-│   │       ├── interface/          # Abstract driver interface
-│   │       └── impls/opengl/       # OpenGL implementation (glad)
+│   │   └── video/                  # Graphics API abstraction (RHI), OpenGL implementation
 │   │
-│   └── engine/                     # High-level systems
-│       ├── render/render_system/   # Render pipeline, shaders, geometry, textures
-│       ├── scene/                  # Scene graph, cameras, lights, animation
-│       ├── gui/                    # ImGui integration (backends + layer system)
-│       ├── game_system/            # Game loop, frame timing
-│       ├── input/                  # High-level input mapping
-│       └── image/                  # Image loading (stb_image)
+│   ├── engine/                     # High-level systems
+│   │   ├── render/                 # Render pipeline, shaders, geometry, textures
+│   │   ├── scene/                  # Scene graph, cameras, lights, animation
+│   │   ├── gui/                    # ImGui integration (backends + layer system)
+│   │   ├── game/                   # Module layer: game modules, layout key, input actions, frame stages
+│   │   └── input/                  # High-level input mapping
+│   │
+│   ├── model_import/               # Model import library (namespace mdl): the only place that includes assimp
+│   └── res/                        # Engine resources: base shapes, shaders, skybox, fonts, themes
 │
 ├── Editor/
 │   ├── main.cpp                    # Entry point
 │   ├── config/editor.cfg           # Editor configuration
-│   ├── code/editor_system/         # Editor systems (UI, spawn, input, gizmos)
-│   ├── res/                        # Assets (res://)
-│   │   ├── shaders/                # GLSL 420/460 shaders + library includes
-│   │   ├── objects/                # 3D models (glb, gltf, fbx, obj)
-│   │   ├── levels/                 # Level descriptors (.desc)
-│   │   └── skybox/                 # Cubemap face textures
-│   └── data/                       # Editor-only resources (edt://)
-│       ├── icons/                  # Editor branding
-│       └── templates/              # Level / world / prefab preview templates
+│   ├── code/
+│   │   ├── editor_system/          # Editor systems (UI panels, prefabs, import, play, gizmos, ...)
+│   │   ├── model_import/           # Editor side of the model import (runs the decoder process)
+│   │   └── mcp_server/             # MCP server for agent access
+│   └── data/                       # Editor-only resources (edt://): icons, templates
+│
+├── apps/game/                      # Shipping game host (static engine)
+├── projects/sandbox/               # Test project: project.snkproj, res/ (levels, materials, objects, input, shaders)
+├── tools/
+│   ├── model_decoder/              # Isolated model decoder process
+│   ├── desc_resave/                # Rewrites .desc files in the current format
+│   ├── project_migration/          # Project migration
+│   ├── headless/                   # Scripts and action files for headless editor runs
+│   └── ci/                         # CI check scripts
 │
 ├── lib3dparty/                     # Third-party dependencies (git submodules)
 │   ├── entt, glfw, glm, imgui, assimp, spdlog, yaml
 │   ├── glad/, stb_image/           # Internal libraries
-│   └── natvis/                     # Visual Studio debugger visualizers (lib3dparty/natvis)
+│   └── natvis/                     # Visual Studio debugger visualizers
 │
-├── tests/                      # Boost.Test suite (180+ test cases)
-├── docs/epics/                     # Task tracker (epics & user stories)
+├── tests/                          # Boost.Test suite
+├── docs/                           # agent/ (agent docs), epics/, roadmap/, abi/, security/
 └── CMakeLists.txt                  # Root build configuration
 ```
 
@@ -171,7 +188,7 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
 ### Resource System
 
 ```
- res::tag("objects/robot.glb")
+ resources.require<T>(res::tag{"res://objects/robot/gen_robot.glb"})
      │
      ▼
  VFS Resolver ──► Adapter (Assimp / stb / text) ──► Cache
@@ -182,7 +199,13 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
                        (auto-cleanup)           (held in memory)
 ```
 
-- **Protocols**: `res://` (filesystem), `memory://` (runtime data)
+Access goes through an injected `res::resource_system&` (there is no global accessor):
+`system.require<T>(res::tag{"res://path"})` returns a `res_handle<T>`.
+
+- **Protocols**: `res://` (the project's files), `engine://` (the engine's own resources, `core/res`), `memory://`
+  (runtime data), `edt://` (editor-only data; the editor alone mounts it); also `user://`, `cache://`, `code://`.
+  The data of a `.desc` refers only to `res://`, `engine://`, `memory://` and its own protocol
+  (`res::reference_problem`, #697)
 - **Async loading**: `res_handle<T>` with `.then()` callbacks
 - **Hot-reload**: file watching via Boost.ASIO
 - **Aliasing**: `register_alias()` for tag remapping
@@ -209,8 +232,8 @@ Hierarchy: `level_desc` → `world_desc` → `prefab_desc` → `prefab_node` →
 Macro-based tunable parameters, defined by the engine and the editor (`<snk/config/cfg_variables.h>`, base-only, not in the SDK; a game module reads them through `gs::module_context::config()`, a read-only `cfg::config_view` from `<snk/config/cfg_api.h>`):
 
 ```cpp
-CFG_VAR_DEF_INT(my_var, "path.to.var", 42);
-CFG_VAR_DEF_FLOAT(speed, "player.speed", 5.0f);
+CFG_VAR_DEF_INT(my_var, "path/to/var", 42);
+CFG_VAR_DEF_FLOAT(speed, "player/speed", 5.0f);
 
 // Access
 int value = *my_var;
@@ -229,7 +252,7 @@ Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are tw
 
 ## Rendering Pipeline
 
-Multi-pass forward renderer with OpenGL 4.2+:
+Multi-pass forward renderer (OpenGL 4.5 context):
 
 ```
  1. Sky Pass           ← cubemap sampling, rotation-only view matrix
@@ -238,8 +261,6 @@ Multi-pass forward renderer with OpenGL 4.2+:
  4. Transparent Pass   ← alpha blending
  5. Composition Pass   ← opaque + transparent mixing
 ```
-
-Pre-allocated buffers: 8M vertices, 800K indices.
 
 **Shader library system** — reusable GLSL includes:
 - `phong_model_lib.frag` — Phong shading with directional/point lights, gamma correction
@@ -252,16 +273,24 @@ Render modes (topology of a draw, `rnd::driver::RENDER_MODE`): `TRIANGLE`, `TRIA
 
 ## Editor
 
-Snake Editor provides a full scene editing environment:
+Snake Editor provides a scene editing environment:
 
+- **Projects** — open a project folder (`project.snkproj`), e.g. `projects/sandbox`
 - **Viewport** — 3D scene with camera orbit control and grid overlay
-- **Hierarchy** — entity tree with context menus (add/delete/reparent)
+- **Scene Hierarchy** — entity tree with context menus (add/delete/reparent)
 - **Properties** — transform, light, camera, animation, material editing
 - **Gizmo** — translate/rotate/scale manipulation
-- **Import** — model import dialog (glb, gltf, fbx, obj)
+- **Prefabs** — prefab editor and prefab instances with per-instance overrides
+- **Asset Browser, Console** panels
+- **Problems panel** — problems reported by asset checks and builds
+- **Editor Settings** (Edit > Editor Settings...) — themes and fonts
+- **Model import** — glb, gltf, fbx, obj (with `SNK_WITH_ASSIMP=ON`); the model is decoded in a separate
+  `snk_model_decoder` process. On Linux the decoder runs under Landlock and a seccomp filter, on Windows in an
+  AppContainer. The mode is set by the config variable `import/decoder_sandbox` (`on` is the default, `off`, `required`);
+  see [the threat model](docs/security/model-decoder-threat-model.md) (in Russian)
+- **Agent access** — the editor runs an MCP server (`--mcp-stdio`, see `Editor/code/mcp_server`)
 - **Animation** — playback controls with keyframe support
 - **Skybox** — cubemap-based background
-- **Asset Browser, Prefab Editor, Console** panels
 - **Profiler overlay** — real-time performance stats with smoothing, multi-select rows, copy to clipboard
 - **Profiler hotkey** — `F3` dumps frame stats to engine log
 
@@ -312,10 +341,10 @@ Snake Editor provides a full scene editing environment:
 
 ## Testing
 
-**Framework:** Boost.Test | **180+ test cases across 15+ files**
+**Framework:** Boost.Test
 
 ```bash
-cd build && ./unit_tests
+build/dev-debug/unit_tests [--run_test=SuiteName]
 ```
 
 **Sanitizers (Linux, GCC/Clang):** configure with `-DSNK_SANITIZE=address` (ASan + UBSan) or
@@ -352,7 +381,7 @@ TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 suppressions=../../.github
 Built-in profiler with macro API. Enable via CMake:
 
 ```bash
-cmake --preset x64-Debug -DENGINE_PROFILE_MODE=INTERNAL
+cmake --preset dev-debug -DENGINE_PROFILE_MODE=INTERNAL
 ```
 
 Usage in code:
@@ -374,20 +403,17 @@ void update() {
 
 ---
 
-## CMake Targets
+## Development
 
-All engine libraries use `snk::` namespace aliases (EPIC-41, partially done):
+The main branch is `main`; pull requests target `main`.
 
-```
-snk::common          STATIC      Math, logging, data structures
-snk::application     STATIC      App lifecycle, module system
-snk::ecs             STATIC      ECS framework
-snk::scene           STATIC      Scene graph, cameras, lights
-snk::render          STATIC      Render pipeline, shaders
-snk::gui             STATIC      ImGui integration
-snk::input_system    STATIC      Input mapping
-snk::engine          STATIC      Aggregates all engine systems
-```
+CI (`.github/workflows/build.yml`) runs 6 fast jobs on every PR: Coverage (Linux GCC Debug), Linux Clang Debug,
+Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke (Linux). A non-draft PR that touches
+headers, CMake files or workflows also runs Windows MSVC Shared+PCH and Linux GCC Shared.
+`.github/workflows/nightly.yml` runs on a schedule (23:37 UTC).
+
+- Agent documentation index: [docs/agent/README.toon](docs/agent/README.toon)
+- Tasks and bugs: [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues)
 
 ---
 
@@ -398,7 +424,7 @@ See `CLAUDE.md` and `docs/agent/CODE_CONVENTIONS.toon` for full details.
 - **C++ Standard:** C++20, no extensions
 - **Namespaces:** 3-4 letter abbreviations (`ds`, `ecs`, `scn`, `gui`, `rnd`, `res`, `inp`, `edt`, `gs`, `cfg`, `wnd`)
 - **Naming:** `snake_case` everywhere; private members use `m_` prefix
-- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_level.cpp`)
+- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_context_set.cpp`)
 - **Headers:** `#pragma once`
 - **Indentation:** tabs (size 4)
 - **Braces:** new line for functions, same line for control flow
