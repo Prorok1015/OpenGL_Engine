@@ -364,6 +364,9 @@ namespace edt
 						if (ImGui::MenuItem("Copy relative path")) {
 							ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
 						}
+						if (m_on_create_variant && e.src.relative.generic_string().ends_with(".prefab.desc") && ImGui::MenuItem("Create Variant")) {
+							m_on_create_variant(e.src.relative);
+						}
 						ImGui::EndPopup();
 					}
 				}

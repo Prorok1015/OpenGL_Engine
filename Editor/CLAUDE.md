@@ -31,6 +31,8 @@ Editor/
     ├── prefab/                       # the prefab editor, whole (#1004): nothing of it lives in edt_editor_system.*
     │   ├── edt_prefab_document.h/.cpp # prefab_document: the prefab editor's document (working copy, Apply/Revert), owns the preview:<tag> set
     │   ├── edt_prefab_editor_component.h/.cpp # prefab_editor_component (#1004): the window, the close question, Apply/Revert callbacks and the Inspector hand-over; `editor_system` only creates it, calls `install()` where the window goes in the View menu and asks `dirty()/apply_dirty()/close()/open()`
+    │   ├── edt_prefab_file_edit.h/.cpp # prefab_file_bytes (the adapter's form a prefab is written as) and edit_prefab_file / apply_override_records: change a prefab file without opening it ("Apply to Prefab" of an instance, #150)
+    │   ├── edt_prefab_variant_creator.h/.cpp # prefab_variant_creator (#151): `<name>.prefab.desc` next to its base holding only `__parent`; the action `prefab.create_variant {base, name?}` (prefab_editor_component::install) and the asset browser's "Create Variant" run it, the variant opens in the prefab editor
     │   ├── edt_prefab_close.h/.cpp    # the close question and the toolbar state, testable without ImGui
     │   ├── edt_inspector_target.h/.cpp # whose selection the Inspector shows (the level's or one prefab node) and where its edits go
     │   └── edt_prefab_editor_panel.h/.cpp # the window: toolbar, node tree, viewport

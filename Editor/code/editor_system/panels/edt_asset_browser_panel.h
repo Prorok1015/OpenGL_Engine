@@ -45,6 +45,8 @@ namespace edt
 		}
 
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
+		// "Create Variant" in the context menu of a `*.prefab.desc` file: gets the file's path below res://. Null: no item.
+		void set_on_create_variant(std::function<void(const std::filesystem::path&)> cb) { m_on_create_variant = std::move(cb); }
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
 		}
@@ -85,6 +87,7 @@ namespace edt
 		// The labels were built with icon glyphs; a theme that loads or drops the icon font rebuilds them.
 		bool m_labels_have_icons = false;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
+		std::function<void(const std::filesystem::path&)> m_on_create_variant;
 
 		// The menu item of one folder (`folder` is relative to res://): asks for the window to open at the end of the frame.
 		void draw_create_menu_item(const std::filesystem::path& folder);

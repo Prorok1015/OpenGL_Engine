@@ -12,7 +12,9 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
+#include <boost/json.hpp>
 #include <filesystem>
+#include <format>
 #include <utility>
 
 edt::asset_open_component::asset_open_component(ports from)
@@ -44,6 +46,11 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 		[this](const res::tag& tag) { open(tag, false); });
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);
+	});
+	m_ports.browser.set_on_create_variant([this](const std::filesystem::path& res_rel) {
+		const std::string base = res::tag::make(res_rel.generic_string()).string();
+		const action_result made = m_ports.context.actions().invoke("prefab.create_variant", boost::json::object{ { "base", base } });
+		if (!made.ok) m_ports.context.dialogs().message(message_level::error, std::format("The variant was not created:\n{}", made.error));
 	});
 }
 

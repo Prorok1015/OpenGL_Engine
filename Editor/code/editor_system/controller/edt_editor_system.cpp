@@ -361,7 +361,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Prefab editor (EPIC-25, #1004): after wire_selection, whose Inspector hand-over its selection listener follows.
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
-		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc() });
+		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc(),
+		[this] { return m_asset_open->desc_layout(); } });
 
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },

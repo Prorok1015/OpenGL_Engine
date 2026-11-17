@@ -1,6 +1,9 @@
 #pragma once
+#include "edt_desc_file_commands.h"
 #include "edt_inspector_target.h"
+#include <snk/command/cmd_types.h>
 #include <snk/editor/edt_editor_events.h>
+#include <boost/json/object.hpp>
 #include <snk/editor/edt_registration.h>
 #include <snk/resource/res_tag.h>
 #include <cstdint>
@@ -38,6 +41,8 @@ namespace edt
 			inp::input_router* input_router;
 			inspector_panel& inspector;
 			desc_problem_publisher& desc_problems;
+			// The project's desc files (late-bound: the asset opening is made after this component); without it no variant is created.
+			std::function<desc_file_layout()> desc_layout = {};
 		};
 
 		explicit prefab_editor_component(ports from);
@@ -47,6 +52,8 @@ namespace edt
 		// to the selection after the selection wiring of the panels has: an empty selection blanks the Inspector there.
 		void install(std::vector<registration>& out);
 
+		// The action `prefab.create_variant {base, name?}` (#151): a new `<name>.prefab.desc` next to `base` that holds only its `__parent`, opened
+		// in the prefab editor. Also what the asset browser's "Create Variant" runs. Registered by install().
 		// Opens the prefab for editing; asks first when another one has unapplied edits.
 		void open(const res::tag& tag);
 		// The open prefab when it has unapplied edits, else null.
@@ -81,6 +88,7 @@ namespace edt
 		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
 		void confirm_close(std::function<void()> proceed);
 		bool apply(prefab_document& prefab);
+		cmd::result create_variant(const boost::json::object& args);
 		void select_node(const std::vector<std::uint64_t>& path);
 		// `blank_inspector` false: the caller sets the Inspector's node itself right after (a level selection).
 		void release_inspector(bool blank_inspector);
