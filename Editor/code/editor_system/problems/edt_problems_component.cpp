@@ -8,9 +8,12 @@
 #include "edt_world_controller.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
 #include <imgui.h>
 #include <algorithm>
+#include <memory>
+#include <optional>
 #include <utility>
 
 edt::problems_component::problems_component(ports from)
@@ -38,11 +41,35 @@ void edt::problems_component::wire(problems_panel& panel)
 		if (source != asset_problem_publisher::source || !assets) {
 			return out;
 		}
+		const auto run_fix = [](const std::string& label, const std::function<asset_fix_result()>& run) {
+			if (const asset_fix_result result = run(); !result.ok) {
+				egLOG_WARN("assets", "{}: {}", label, result.error);
+			}
+		};
 		for (problem_action& action : assets->problem_actions(item)) {
-			out.emplace_back(action.label, [label = action.label, run = std::move(action.run)] {
-				if (const asset_fix_result result = run(); !result.ok) {
-					egLOG_WARN("assets", "{}: {}", label, result.error);
-				}
+			if (action.confirm.empty()) {
+				out.emplace_back(action.label, [run_fix, label = action.label, run = std::move(action.run)] { run_fix(label, run); });
+				continue;
+			}
+			// Asked first; the answer runs the row's fix as offered then, found again, so a row gone meanwhile does nothing.
+			out.emplace_back(action.label, [this, run_fix, item, label = action.label, text = action.confirm] {
+				m_ports.context.dialogs().choose(label, text, { label, "Cancel" },
+					[this, run_fix, item, label, alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> answer) {
+						if (!answer || *answer != 0 || alive.expired()) {
+							return;
+						}
+						asset_component* now = m_ports.assets();
+						if (!now) {
+							return;
+						}
+						for (problem_action& again : now->problem_actions(item)) {
+							if (again.label == label) {
+								run_fix(label, again.run);
+								return;
+							}
+						}
+						egLOG_WARN("assets", "{}: the problem is gone", label);
+					});
 			});
 		}
 		return out;

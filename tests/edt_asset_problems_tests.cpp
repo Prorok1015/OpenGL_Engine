@@ -54,6 +54,15 @@ std::string read_text(const fs::path& path)
 	return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
+// A file that starts as a desc's binary file does (res::desc_binary::magic and the version).
+std::string binary_text(std::string_view data)
+{
+	return std::string{ "SNKB" } + std::string("\x01\0\0\0", 4) + std::string{ data };
+}
+
+constexpr std::string_view k_ranged_desc = R"({ "__type": "geometry_desc", "layout": {}, "indices": [],
+	"vertices": { "offset": 16, "size": 4, "sha256": "", "layout": "u8" } })";
+
 constexpr std::string_view k_guid_a = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 constexpr std::string_view k_guid_b = "00000000-0000-4000-8000-000000000002";
 
@@ -591,6 +600,88 @@ BOOST_AUTO_TEST_CASE(create_resource_never_replaces_one_written_meanwhile)
 	BOOST_TEST(!db->create_meta(res::tag::make("plain.png")).ok);
 	BOOST_TEST(read_text(upper.path() / "plain.png.resource") == meta_text(k_guid_a));
 	BOOST_TEST(!db->next_undo_label().has_value());
+}
+
+// #1129: the pair of a desc and its binary file.
+BOOST_AUTO_TEST_CASE(a_binary_file_without_its_desc_is_a_warning_that_a_person_may_delete)
+{
+	upper.write("mesh.geom.bin", binary_text("data"));
+	lower.write("engine.geom.bin", binary_text("data"));
+	upper.write("scene.gltf.bin", "glTF buffer bytes");
+	open();
+
+	const auto found = row("asset.orphan_binary", "mesh.geom.bin");
+	BOOST_REQUIRE(found);
+	BOOST_TEST((found->severity == edt::problem_severity::warning));
+	BOOST_TEST(!row("asset.no_id", "mesh.geom.bin"));
+	// Without the header it is an ordinary file; below the project's own layer it is not the editor's to delete.
+	BOOST_TEST(!row("asset.orphan_binary", "scene.gltf.bin"));
+	BOOST_TEST(row("asset.no_id", "scene.gltf.bin").has_value());
+	const auto engine = row("asset.orphan_binary", "engine.geom.bin");
+	BOOST_REQUIRE(engine);
+	BOOST_TEST(publisher.actions_of(*engine, *db).empty());
+
+	auto actions = publisher.actions_of(*found, *db);
+	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
+	BOOST_TEST(actions[0].label == "Delete");
+	BOOST_TEST(!actions[0].confirm.empty());
+	const edt::asset_fix_result deleted = actions[0].run();
+	BOOST_REQUIRE_MESSAGE(deleted.ok, deleted.error);
+	BOOST_TEST(!fs::exists(upper.path() / "mesh.geom.bin"));
+	BOOST_TEST(!row("asset.orphan_binary", "mesh.geom.bin"));
+
+	const edt::asset_fix_result undone = db->undo_last();
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(read_text(upper.path() / "mesh.geom.bin") == binary_text("data"));
+	test_util::pump(tasks);
+	BOOST_TEST(row("asset.orphan_binary", "mesh.geom.bin").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(a_resource_of_a_binary_file_beside_its_desc_is_a_warning_with_its_removal)
+{
+	upper.write("mesh.geom.desc", k_ranged_desc);
+	upper.write("mesh.geom.bin", binary_text("data"));
+	upper.write("mesh.geom.bin.resource", meta_text(k_guid_a));
+	open();
+
+	const auto found = row("asset.binary_sidecar", "mesh.geom.bin.resource");
+	BOOST_REQUIRE(found);
+	BOOST_TEST((found->severity == edt::problem_severity::warning));
+	auto actions = publisher.actions_of(*found, *db);
+	BOOST_REQUIRE_EQUAL(actions.size(), 1u);
+	BOOST_TEST(actions[0].label == "Remove the sidecar");
+	BOOST_TEST(actions[0].confirm.empty());
+	const edt::asset_fix_result removed = actions[0].run();
+	BOOST_REQUIRE_MESSAGE(removed.ok, removed.error);
+	BOOST_TEST(!fs::exists(upper.path() / "mesh.geom.bin.resource"));
+	BOOST_TEST(fs::exists(upper.path() / "mesh.geom.bin"));
+	BOOST_TEST(!row("asset.binary_sidecar", "mesh.geom.bin.resource"));
+
+	const edt::asset_fix_result undone = db->undo_last();
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(read_text(upper.path() / "mesh.geom.bin.resource") == meta_text(k_guid_a));
+	BOOST_TEST(row("asset.binary_sidecar", "mesh.geom.bin.resource").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(a_desc_with_ranges_and_no_binary_file_is_an_error)
+{
+	upper.write("lost.geom.desc", k_ranged_desc);
+	upper.write("kept.geom.desc", k_ranged_desc);
+	upper.write("kept.geom.bin", binary_text("data"));
+	upper.write("arrays.geom.desc", R"({ "__type": "geometry_desc", "layout": {}, "indices": [], "vertices": [] })");
+	open();
+
+	const auto lost = row("asset.missing_binary", "lost.geom.desc");
+	BOOST_REQUIRE(lost);
+	BOOST_TEST((lost->severity == edt::problem_severity::error));
+	BOOST_TEST(publisher.actions_of(*lost, *db).empty());
+	BOOST_TEST(!row("asset.missing_binary", "kept.geom.desc"));
+	BOOST_TEST(!row("asset.missing_binary", "arrays.geom.desc"));
+
+	// The binary file going away is seen through the batch that names it, not only the desc's.
+	fs::remove(upper.path() / "kept.geom.bin");
+	db->apply_changes(std::vector<res::file_change>{ change("kept.geom.bin", res::change_kind::deleted) });
+	BOOST_TEST(row("asset.missing_binary", "kept.geom.desc").has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

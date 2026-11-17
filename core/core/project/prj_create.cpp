@@ -10,6 +10,7 @@
 #include <iterator>
 #include <optional>
 #include <random>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -58,25 +59,26 @@ namespace
 
 	// What a new project's repository must never carry (#912): the person's MCP token, caches, build trees. A line is
 	// there when the file has it or one of the lines that ignore at least as much.
-	struct ignored_line
+	struct required_line
 	{
 		std::string_view line;
 		std::array<std::string_view, 3> covered_by;
 	};
-	constexpr std::array<ignored_line, 3> k_ignored_lines{ {
+	constexpr std::array<required_line, 3> k_ignored_lines{ {
 		{ ".snk/mcp.json", { ".snk/*", ".snk/", ".snk" } },
 		{ ".cache/", { ".cache", "/.cache/", "/.cache" } },
 		{ "build/", { "build", "/build/", "/build" } } } };
+	// A desc's binary file (EPIC-79) is never merged or converted as text.
+	constexpr std::array<required_line, 1> k_attribute_lines{ { { "*.bin binary", {} } } };
 
-	// The project's .gitignore with k_ignored_lines: written, or the lines the template's file lacks added at its end.
-	std::optional<std::string> ignore_private_files(const fs::path& project_dir)
+	// `file` with `lines`: written, or the lines the template's file lacks added at its end.
+	std::optional<std::string> require_lines(const fs::path& file, std::span<const required_line> lines)
 	{
-		const fs::path file = project_dir / ".gitignore";
 		std::string text = read_text(file);
 		// A file written with CRLF keeps them: git takes a mixed file as changed whenever autocrlf touches it.
 		const std::string_view eol = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
 		std::string added;
-		for (const auto& [line, covered_by] : k_ignored_lines) {
+		for (const auto& [line, covered_by] : lines) {
 			bool present = false;
 			std::size_t start = 0;
 			while (start <= text.size() && !present) {
@@ -84,7 +86,7 @@ namespace
 				if (end == std::string::npos) end = text.size();
 				std::string_view existing(text.data() + start, end - start);
 				if (!existing.empty() && existing.back() == '\r') existing.remove_suffix(1);
-				present = existing == line || std::ranges::find(covered_by, existing) != covered_by.end();
+				present = existing == line || (!existing.empty() && std::ranges::find(covered_by, existing) != covered_by.end());
 				start = end + 1;
 			}
 			if (!present) {
@@ -100,6 +102,16 @@ namespace
 		out.close();
 		if (out.fail()) return std::format("cannot write '{}'", utf8_of(file));
 		return std::nullopt;
+	}
+
+	std::optional<std::string> ignore_private_files(const fs::path& project_dir)
+	{
+		return require_lines(project_dir / ".gitignore", k_ignored_lines);
+	}
+
+	std::optional<std::string> mark_binary_files(const fs::path& project_dir)
+	{
+		return require_lines(project_dir / ".gitattributes", k_attribute_lines);
 	}
 
 	// Writes the copied manifest with the new project's name and this engine's version; the rest stays as the
@@ -193,6 +205,9 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 		return fail(std::move(*problem));
 	}
 	if (auto problem = ignore_private_files(staging)) {
+		return fail(std::move(*problem));
+	}
+	if (auto problem = mark_binary_files(staging)) {
 		return fail(std::move(*problem));
 	}
 	if (prepare) {

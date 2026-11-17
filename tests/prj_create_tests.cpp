@@ -140,6 +140,28 @@ BOOST_AUTO_TEST_CASE(Create_FromATemplateWithoutTheIgnoreLines_AddsThem)
 	BOOST_TEST(read_text(dir.path() / "game_crlf" / ".gitignore") == "# ours\r\n.cache/\r\n.snk/mcp.json\r\nbuild/\r\n");
 }
 
+// EPIC-79 (#1129): a desc's binary file is marked binary for git, from the shipped template or added to a template's own
+// .gitattributes when it lacks the line; a template without one gets the file.
+BOOST_AUTO_TEST_CASE(Create_MarksBinaryFilesAsBinary)
+{
+	test_util::temp_dir dir("prj_create_attributes");
+	const auto shipped = prj::create_project(k_empty_template, dir.path() / "game", "Game");
+	BOOST_REQUIRE_MESSAGE(shipped.error.empty(), shipped.error);
+	BOOST_TEST((lines_of(read_text(dir.path() / "game" / ".gitattributes")) == std::vector<std::string>{ "*.bin binary" }));
+
+	fs::copy(k_empty_template, dir.path() / "bare", fs::copy_options::recursive);
+	fs::remove(dir.path() / "bare" / ".gitattributes");
+	const auto bare = prj::create_project(dir.path() / "bare", dir.path() / "game_bare", "Bare");
+	BOOST_REQUIRE_MESSAGE(bare.error.empty(), bare.error);
+	BOOST_TEST(read_text(dir.path() / "game_bare" / ".gitattributes") == "*.bin binary\n");
+
+	fs::copy(k_empty_template, dir.path() / "own", fs::copy_options::recursive);
+	dir.write("own/.gitattributes", "*.png binary\r\n*.desc text eol=lf");
+	const auto own = prj::create_project(dir.path() / "own", dir.path() / "game_own", "Own");
+	BOOST_REQUIRE_MESSAGE(own.error.empty(), own.error);
+	BOOST_TEST(read_text(dir.path() / "game_own" / ".gitattributes") == "*.png binary\r\n*.desc text eol=lf\r\n*.bin binary\r\n");
+}
+
 BOOST_AUTO_TEST_CASE(Create_IntoAnEmptyFolder_FillsIt)
 {
 	test_util::temp_dir dir("prj_create_empty");

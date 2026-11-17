@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <format>
 #include <map>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -38,7 +39,44 @@ void edt::asset_problem_publisher::publish(problem_list& problems, const asset_d
 			row.item.message = std::format("the .resource cannot be read: {}", record.meta_error);
 			found.push_back(std::move(row));
 		}
-		if (record.layer != top || record.has_meta) {
+		if (record.type == "desc" && record.binary_ranges && !record.binary_beside) {
+			entry row;
+			row.what = kind::missing_binary;
+			row.path = key;
+			row.item.severity = problem_severity::error;
+			row.item.file = key;
+			row.item.code = "asset.missing_binary";
+			row.item.message = "the desc keeps its data in a binary file that is not beside it: restore the .bin or import the "
+				"model again";
+			found.push_back(std::move(row));
+		}
+		if (record.type == "desc" && record.binary_sidecar_beside) {
+			entry row;
+			row.what = kind::binary_sidecar;
+			row.path = binary_sidecar_path(key);
+			row.link_to = key;
+			row.in_top_layer = record.layer == top;
+			row.item.severity = problem_severity::warning;
+			row.item.file = row.path;
+			row.item.code = "asset.binary_sidecar";
+			row.item.message = "a .resource of a binary file whose desc is beside it: the binary file has no ID of its own";
+			found.push_back(std::move(row));
+		}
+		const std::string_view name = std::string_view{ key }.substr(key.find_last_of('/') + 1);
+		if (is_orphan_binary(record)) {
+			entry row;
+			row.what = kind::orphan_binary;
+			row.path = key;
+			row.in_top_layer = record.layer == top;
+			row.item.severity = problem_severity::warning;
+			row.item.file = key;
+			row.item.code = "asset.orphan_binary";
+			row.item.message = "a binary file without its desc: it gets no asset ID";
+			found.push_back(std::move(row));
+			continue;
+		}
+		// A binary file not hashed yet may be one: no "no ID" row before its header is known.
+		if (record.layer != top || record.has_meta || (is_desc_binary_name(name) && record.content_hash.empty())) {
 			continue;
 		}
 		entry row;
@@ -152,20 +190,32 @@ std::vector<edt::problem_action> edt::asset_problem_publisher::actions_of(const 
 	const res::tag path{ found->path };
 	switch (found->what) {
 	case kind::no_id:
-		out.push_back({ "Create .resource", [&assets, path] { return assets.create_meta(path); } });
+		out.push_back({ "Create .resource", [&assets, path] { return assets.create_meta(path); }, {} });
 		break;
 	case kind::orphan:
 		if (!found->link_to.empty()) {
 			out.push_back({ std::format("Link to {}", found->link_to),
-				[&assets, path, file = res::tag{ found->link_to }] { return assets.link_orphan(path, file); } });
+				[&assets, path, file = res::tag{ found->link_to }] { return assets.link_orphan(path, file); }, {} });
 		}
 		break;
 	case kind::duplicate_id:
 		if (found->in_top_layer) {
-			out.push_back({ "New ID for this copy", [&assets, path] { return assets.new_id_for_copy(path); } });
+			out.push_back({ "New ID for this copy", [&assets, path] { return assets.new_id_for_copy(path); }, {} });
+		}
+		break;
+	case kind::orphan_binary:
+		if (found->in_top_layer) {
+			out.push_back({ "Delete", [&assets, path] { return assets.delete_orphan_binary(path); },
+				std::format("Delete {}? It is a binary file without its desc; Undo in Problems brings it back.", found->path) });
+		}
+		break;
+	case kind::binary_sidecar:
+		if (found->in_top_layer) {
+			out.push_back({ "Remove the sidecar", [&assets, desc = res::tag{ found->link_to }] { return assets.remove_binary_sidecar(desc); }, {} });
 		}
 		break;
 	case kind::bad_meta:
+	case kind::missing_binary:
 		break;
 	}
 	return out;

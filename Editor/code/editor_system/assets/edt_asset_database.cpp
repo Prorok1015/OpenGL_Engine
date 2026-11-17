@@ -7,12 +7,14 @@
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
+#include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/monotonic_resource.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <format>
@@ -130,6 +132,67 @@ namespace
 		return out;
 	}
 
+	// What the content of `from` says, for a record of the same file (its hash taken over).
+	void take_content(edt::asset_record& to, const edt::asset_record& from)
+	{
+		to.content_hash = from.content_hash;
+		to.desc_type = from.desc_type;
+		to.references = from.references;
+		to.references_skipped = from.references_skipped;
+		to.binary_ranges = from.binary_ranges;
+		to.binary_header = from.binary_header;
+	}
+
+	// For a desc at `physical`: whether its binary file and that file's .resource are regular files beside it.
+	void look_beside(edt::asset_record& record, const fs::path& physical)
+	{
+		record.binary_beside = false;
+		record.binary_sidecar_beside = false;
+		if (record.type != "desc") {
+			return;
+		}
+		const std::string name = fs_paths::utf8_of(physical.filename());
+		const std::string binary = name.substr(0, name.size() - std::string_view{ ".desc" }.size()) + ".bin";
+		if (!res::desc_binary_owner_name(binary)) {
+			return;
+		}
+		const auto regular = [&physical](const std::string& leaf) {
+			std::error_code ec;
+			const fs::file_status status = fs::symlink_status(physical.parent_path() / fs_paths::path_from_utf8(leaf), ec);
+			return !ec && fs::is_regular_file(status);
+		};
+		record.binary_beside = regular(binary);
+		record.binary_sidecar_beside = regular(binary + std::string{ res::asset_meta_suffix });
+	}
+
+}
+
+bool edt::is_desc_binary_name(std::string_view name)
+{
+	constexpr std::string_view suffix = ".bin";
+	if (name.size() < suffix.size()) {
+		return false;
+	}
+	const std::string_view tail = name.substr(name.size() - suffix.size());
+	const bool bin = std::ranges::equal(tail, suffix, [](char a, char b) {
+		return std::tolower(static_cast<unsigned char>(a)) == static_cast<unsigned char>(b);
+	});
+	return bin && res::desc_binary_owner_name(name).has_value();
+}
+
+bool edt::is_orphan_binary(const asset_record& record)
+{
+	if (!record.binary_header) {
+		return false;
+	}
+	const std::string_view path = record.path.view();
+	return is_desc_binary_name(path.substr(path.find_last_of('/') + 1));
+}
+
+std::string edt::binary_sidecar_path(std::string_view desc_path)
+{
+	constexpr std::string_view desc_suffix = ".desc";
+	return std::string{ desc_path.substr(0, desc_path.size() - desc_suffix.size()) } + ".bin" + std::string{ res::asset_meta_suffix };
 }
 
 bool edt::known_file_id(const file_id& id)
@@ -215,6 +278,7 @@ edt::asset_scan edt::scan_asset_layers(const std::vector<fs::path>& layers, cons
 			scan.layers_without_ids.insert(file.layer);
 		}
 		record.type = asset_type_of(relative);
+		look_beside(record, file.physical);
 		if (const std::optional<std::size_t> meta_index = pairing.meta_of[index]) {
 			const res::asset_walk_file& meta = files[*meta_index];
 			const file_stat meta_stat = stat_of(meta.physical);
@@ -279,6 +343,9 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 
 	res::content_hasher hash;
 	std::string text;
+	// The first bytes, for res::desc_binary::magic.
+	std::array<char, res::desc_binary::magic.size()> head{};
+	std::size_t head_size = 0;
 	bool keep_text = is_desc;
 	if (keep_text && before.ok && before.size >= 0 && static_cast<std::uint64_t>(before.size) <= max_desc_bytes) {
 		text.reserve(static_cast<std::size_t>(before.size));
@@ -286,6 +353,9 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	const platform::beneath::read_result result = platform::beneath::read_beneath_stream(request,
 		[&](std::span<const std::byte> chunk) {
 			hash.update(chunk);
+			for (std::size_t i = 0; i < chunk.size() && head_size < head.size(); ++i) {
+				head[head_size++] = static_cast<char>(chunk[i]);
+			}
 			if (keep_text) {
 				if (text.size() + chunk.size() > max_desc_bytes) {
 					keep_text = false;
@@ -306,6 +376,7 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 	out.mtime = after.mtime;
 	out.unchanged = before.ok && before == after;
 	out.content_hash = hash.text();
+	out.binary_header = head_size == head.size() && head == res::desc_binary::magic;
 	out.references_skipped = is_desc && !keep_text;
 	if (keep_text) {
 		boost::system::error_code ec;
@@ -325,6 +396,12 @@ edt::asset_content edt::read_asset_content(const fs::path& layer_root, const fs:
 			}
 			if (const boost::json::value* guid = document.as_object().if_contains("__guid"); guid && guid->is_string()) {
 				out.root_guid = std::string{ guid->get_string() };
+			}
+			for (const std::string_view key : { "vertices", "indices" }) {
+				const boost::json::value* field = document.as_object().if_contains(key);
+				if (field && field->is_object() && field->as_object().contains("offset")) {
+					out.binary_ranges = true;
+				}
 			}
 		}
 	}
@@ -360,7 +437,8 @@ bool edt::asset_record::same_as(const asset_record& other) const
 		&& meta_mtime == other.meta_mtime && meta_error == other.meta_error && flags == other.flags && type == other.type
 		&& content_hash == other.content_hash && desc_type == other.desc_type && same_references(references, other.references)
 		&& references_skipped == other.references_skipped && content_id == other.content_id
-		&& meta_id == other.meta_id;
+		&& meta_id == other.meta_id && binary_ranges == other.binary_ranges && binary_header == other.binary_header
+		&& binary_beside == other.binary_beside && binary_sidecar_beside == other.binary_sidecar_beside;
 }
 
 edt::asset_database::asset_database(job_service& jobs, editor_events* events, std::vector<fs::path> layers, asset_cache_location cache)
@@ -536,10 +614,7 @@ void edt::asset_database::apply_scan(asset_scan scan)
 		}
 		// A file the walk found as it was keeps what the background pass learned of it.
 		if (known != previous.end() && !known->second.content_hash.empty() && same_content(known->second, record)) {
-			record.content_hash = known->second.content_hash;
-			record.desc_type = known->second.desc_type;
-			record.references = known->second.references;
-			record.references_skipped = known->second.references_skipped;
+			take_content(record, known->second);
 			// The hash is as old as that record's check, so a stamp it could not trust stays untrusted. Within a session a
 			// record with the same stamp is carried over without the racy check; a restart catches it through this min.
 			record.content_checked_at = std::min(record.content_checked_at, known->second.content_checked_at);
@@ -646,10 +721,7 @@ void edt::asset_database::pair_moves(std::vector<asset_record> gone, const std::
 			continue;
 		}
 		if (arrived.content_hash.empty() && !match->content_hash.empty() && match->size == arrived.size && match->mtime == arrived.mtime) {
-			arrived.content_hash = match->content_hash;
-			arrived.desc_type = match->desc_type;
-			arrived.references = std::move(match->references);
-			arrived.references_skipped = match->references_skipped;
+			take_content(arrived, *match);
 			arrived.content_checked_at = std::min(arrived.content_checked_at, match->content_checked_at);
 			std::erase(m_unhashed, key);
 			note_hash(key, arrived);
@@ -855,6 +927,8 @@ void edt::asset_database::hash_next()
 					found->second.desc_type = std::move(content.desc_type);
 					found->second.references = std::move(content.references);
 					found->second.references_skipped = content.references_skipped;
+					found->second.binary_ranges = content.binary_ranges;
+					found->second.binary_header = content.binary_header;
 					note_hash(key, found->second);
 					if (m_pending_ids.contains(key)) {
 						m_root_guids.insert_or_assign(key, std::move(content.root_guid));
@@ -976,7 +1050,7 @@ namespace
 	constexpr std::string_view k_cache_type = "asset_db";
 	// Raise it with any change of the hash, of how desc_type is found or of this format: an older cache is then
 	// dropped, never read with other meanings.
-	constexpr std::int64_t k_cache_version = 5;
+	constexpr std::int64_t k_cache_version = 6;
 	constexpr std::string_view k_hash_prefix = "fnv1a64:";
 
 	boost::json::array layer_texts(const std::vector<fs::path>& layers)
@@ -1106,6 +1180,15 @@ namespace
 		if (record.references_skipped) {
 			out["references_skipped"] = true;
 		}
+		const auto flag = [&out](std::string_view name, bool set) {
+			if (set) {
+				out[name] = true;
+			}
+		};
+		flag("binary_ranges", record.binary_ranges);
+		flag("binary_header", record.binary_header);
+		flag("binary_beside", record.binary_beside);
+		flag("binary_sidecar_beside", record.binary_sidecar_beside);
 		out["content_checked_at"] = record.content_checked_at;
 		out["meta_checked_at"] = record.meta_checked_at;
 		return out;
@@ -1288,6 +1371,25 @@ namespace
 			}
 			record.references_skipped = skipped->get_bool();
 		}
+		// What the content says needs the hash; what lies beside a desc, a desc.
+		const auto flag = [object](std::string_view name, bool allowed, bool& to) {
+			const boost::json::value* field = object->if_contains(name);
+			if (!field) {
+				return true;
+			}
+			if (!field->is_bool() || !allowed) {
+				return false;
+			}
+			to = field->get_bool();
+			return true;
+		};
+		const bool desc = record.type == "desc";
+		const bool hashed = !record.content_hash.empty();
+		if (!flag("binary_ranges", desc && hashed, record.binary_ranges) || !flag("binary_header", hashed, record.binary_header)
+			|| !flag("binary_beside", desc, record.binary_beside)
+			|| !flag("binary_sidecar_beside", desc, record.binary_sidecar_beside)) {
+			return std::nullopt;
+		}
 		return record;
 	}
 
@@ -1299,6 +1401,8 @@ namespace
 			record.desc_type.reset();
 			record.references.reset();
 			record.references_skipped = false;
+			record.binary_ranges = false;
+			record.binary_header = false;
 		}
 		if (record.has_meta && racy_stamp(record.meta_mtime, record.meta_checked_at)) {
 			// No stamp of a real file: the walk reads the .resource again.
@@ -1725,11 +1829,9 @@ std::optional<edt::asset_record> edt::asset_database::look_up(const std::string&
 	}
 	record.type = asset_type_of(canonical);
 	const asset_record* before = before_of ? before_of(record.path.string()) : nullptr;
+	look_beside(record, m_layers[file.layer] / fs_paths::path_from_utf8(file.in_layer));
 	if (before && !before->content_hash.empty() && same_content(*before, record)) {
-		record.content_hash = before->content_hash;
-		record.desc_type = before->desc_type;
-		record.references = before->references;
-		record.references_skipped = before->references_skipped;
+		take_content(record, *before);
 		record.content_checked_at = std::min(record.content_checked_at, before->content_checked_at);
 	}
 
@@ -1840,6 +1942,14 @@ edt::asset_batch edt::asset_database::apply_changes(std::span<const res::file_ch
 	for (std::string& relative : touched) {
 		if (res::is_asset_meta_sidecar(relative)) {
 			relative.resize(res::asset_meta_owner(relative).size());
+		}
+		// A binary file or its .resource that came or went changes what the desc beside it says of its pair: look at it again.
+		if (const auto [parent, name] = split_last(relative); is_desc_binary_name(name)) {
+			if (const std::optional<std::string> owner = res::desc_binary_owner_name(name)) {
+				std::string desc = joined(parent, *owner);
+				std::string desc_key = lookup.key_of(desc);
+				files.emplace(std::move(desc_key), std::move(desc));
+			}
 		}
 		// A desc that came or went decides whether its binary files are assets (res::is_desc_binary_entry): look at them again.
 		if (relative.ends_with(".desc")) {
@@ -2322,6 +2432,99 @@ edt::asset_fix_result edt::asset_database::new_id_for_copy(const res::tag& file)
 	return fix_done();
 }
 
+namespace
+{
+	// Removes the file `relative` below `root`; the error, empty once removed.
+	std::string remove_file(const fs::path& root, const std::string& relative)
+	{
+		const fs::path path = fs_paths::path_from_utf8(relative);
+		platform::beneath::pinned_root pinned{ root };
+		return platform::beneath::remove_beneath(pinned, path.parent_path(), path.filename(), true);
+	}
+
+	// The undo of a removal: `bytes` at `relative` again, never over a file that took the name meanwhile.
+	edt::asset_fix_result put_back(const fs::path& root, const std::string& relative, const std::string& bytes)
+	{
+		const prj::project_file_text now = prj::read_project_file(root, fs_paths::path_from_utf8(relative), 0);
+		if (now.exists) {
+			return fix_refused(std::format("{} is taken again", res::tag::make(relative).view()));
+		}
+		if (const std::string error = write_new_file(root, relative, bytes); !error.empty()) {
+			return fix_io_error(error);
+		}
+		return fix_done();
+	}
+}
+
+edt::asset_fix_result edt::asset_database::delete_orphan_binary(const res::tag& file)
+{
+	const std::optional<std::string> relative = relative_of(file);
+	const asset_record* record = find(file);
+	if (!relative || !record || m_layers.empty() || !is_orphan_binary(*record)) {
+		return fix_refused(std::format("{} is not a binary file without its desc", file.view()));
+	}
+	asset_layer_lookup lookup(m_layers, m_case_insensitive);
+	// Not found when its desc is beside it again.
+	const asset_layer_lookup::slot here = slot_of(lookup, *relative);
+	if (record->layer != top_layer() || !here.found || here.is_dir || here.layer != top_layer()) {
+		return fix_refused(std::format("{} is not a binary file without its desc in the project's own folder", file.view()));
+	}
+	const fs::path root = m_layers[top_layer()];
+	const prj::project_file_text bytes = prj::read_project_file(root, fs_paths::path_from_utf8(here.in_layer), max_deleted_binary_bytes);
+	if (!bytes.exists || !bytes.error.empty()) {
+		return fix_refused(bytes.error.empty() ? std::format("{} is gone", file.view())
+			: std::format("{} is not deleted (it is kept for the undo, up to {} bytes): {}", file.view(), max_deleted_binary_bytes, bytes.error));
+	}
+	if (!std::string_view{ bytes.text }.starts_with(std::string_view{ res::desc_binary::magic.data(), res::desc_binary::magic.size() })) {
+		return fix_refused(std::format("{} changed since: it is not a desc's binary file", file.view()));
+	}
+	if (const std::string error = remove_file(root, here.in_layer); !error.empty()) {
+		return fix_refused(std::format("{} was not deleted: {}", file.view(), error));
+	}
+	push_history(std::format("Delete {}", file.view()), [this, root, in_layer = here.in_layer, text = bytes.text]() -> asset_fix_result {
+		asset_fix_result back = put_back(root, in_layer, text);
+		if (back.ok) {
+			refresh({ in_layer });
+		}
+		return back;
+	});
+	refresh({ here.in_layer });
+	return fix_done();
+}
+
+edt::asset_fix_result edt::asset_database::remove_binary_sidecar(const res::tag& desc)
+{
+	const std::optional<std::string> relative = relative_of(desc);
+	const asset_record* record = find(desc);
+	if (!relative || !record || m_layers.empty() || record->type != "desc" || !record->binary_sidecar_beside) {
+		return fix_refused(std::format("{} has no .resource of its binary file beside it", desc.view()));
+	}
+	asset_layer_lookup lookup(m_layers, m_case_insensitive);
+	const asset_layer_lookup::slot here = slot_of(lookup, *relative);
+	if (record->layer != top_layer() || !here.found || here.is_dir || here.layer != top_layer()) {
+		return fix_refused(std::format("{} is not a desc of the project's own folder", desc.view()));
+	}
+	const fs::path root = m_layers[top_layer()];
+	const std::string sidecar = binary_sidecar_path(here.in_layer);
+	const res::tag shown = res::tag::make(sidecar);
+	const prj::project_file_text before = prj::read_project_file(root, fs_paths::path_from_utf8(sidecar), res::asset_meta_max_bytes);
+	if (!before.exists || !before.error.empty()) {
+		return fix_refused(before.error.empty() ? std::format("{} is gone", shown.view()) : before.error);
+	}
+	if (const std::string error = remove_file(root, sidecar); !error.empty()) {
+		return fix_refused(std::format("{} was not removed: {}", shown.view(), error));
+	}
+	push_history(std::format("Remove {}", shown.view()), [this, root, sidecar, desc_relative = here.in_layer, text = before.text]() -> asset_fix_result {
+		asset_fix_result back = put_back(root, sidecar, text);
+		if (back.ok) {
+			refresh({ desc_relative });
+		}
+		return back;
+	});
+	refresh({ here.in_layer });
+	return fix_done();
+}
+
 void edt::asset_database::remember_gone(const std::vector<asset_record>& gone)
 {
 	const auto now = steady_now();
@@ -2357,7 +2560,8 @@ void edt::asset_database::queue_new_file(const std::string& key, bool own)
 	}
 	const asset_record& record = found->second;
 	const std::string_view name = record.path.view().substr(record.path.view().find_last_of('/') + 1);
-	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(name) || matches_gone(record)) {
+	if (record.layer != top_layer() || record.has_meta || res::is_ignored_asset_name(name) || matches_gone(record)
+		|| is_orphan_binary(record)) {
 		return;
 	}
 	// A desc's binary file whose desc came after it gets no ID: the batch over the desc drops its record.
@@ -2469,7 +2673,9 @@ void edt::asset_database::give_pending_ids()
 		asset_record& record = found->second;
 		const bool own = it->second.own;
 		const bool is_desc = record.type == "desc";
-		if ((!own || is_desc) && record.content_hash.empty()) {
+		// A binary file is known to be a desc's (no ID) only once hashed.
+		const bool binary_name = is_desc_binary_name(record.path.view().substr(record.path.view().find_last_of('/') + 1));
+		if ((!own || is_desc || binary_name) && record.content_hash.empty()) {
 			// A file that is never hashed (unreadable) stops waiting.
 			if (now - it->second.since > pending_timeout) {
 				m_root_guids.erase(key);
@@ -2479,12 +2685,19 @@ void edt::asset_database::give_pending_ids()
 			}
 			continue;
 		}
+		if (is_orphan_binary(record)) {
+			m_root_guids.erase(key);
+			it = m_pending_ids.erase(it);
+			continue;
+		}
 		if (is_desc && !m_root_guids.contains(key)) {
 			// Hashed before it waited: hashed again for its root's "__guid", read off the main thread.
 			record.content_hash.clear();
 			record.desc_type.reset();
 			record.references.reset();
 			record.references_skipped = false;
+			record.binary_ranges = false;
+			record.binary_header = false;
 			if (std::ranges::find(m_in_flight, key) == m_in_flight.end() && std::ranges::find(m_unhashed, key) == m_unhashed.end()) {
 				m_unhashed.push_back(key);
 			}
@@ -2560,7 +2773,7 @@ bool edt::asset_database::git_busy()
 void edt::asset_database::give_id(const std::string& key)
 {
 	const auto found = m_records.find(key);
-	if (found == m_records.end() || m_layers.empty() || found->second.layer != top_layer()) {
+	if (found == m_records.end() || m_layers.empty() || found->second.layer != top_layer() || is_orphan_binary(found->second)) {
 		return;
 	}
 	const std::optional<std::string> relative = relative_of(found->second.path);

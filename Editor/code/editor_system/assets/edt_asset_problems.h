@@ -14,13 +14,18 @@ namespace edt
 	{
 		std::string label;
 		std::function<asset_fix_result()> run;
+		// Asked of the person before it runs (a deletion); empty: it runs at once.
+		std::string confirm;
 	};
 
 	// The source "assets" of Problems (S57-4): what the asset database finds wrong with the files of res://. Rows:
 	// asset.no_id (a file of the project's own layer without a .resource), asset.bad_meta (a .resource that cannot be
 	// read), asset.orphan (a .resource without its file), asset.duplicate_id (on each copy: of the files with one ID
 	// the one of the lowest layer, then the oldest by mtime, then the smaller path, is the original; an error, or a
-	// warning without a fix when no holder is in the project's own layer). Main thread only.
+	// warning without a fix when no holder is in the project's own layer); of a desc and its binary file (EPIC-79, #1129):
+	// asset.orphan_binary (a binary file without its desc, no ID; "Delete" asks first), asset.binary_sidecar (a .resource
+	// of a binary file whose desc is beside it again; "Remove the sidecar"), asset.missing_binary (an error: a desc with
+	// ranges and no binary file beside it). Main thread only.
 	class asset_problem_publisher
 	{
 	public:
@@ -34,7 +39,7 @@ namespace edt
 		std::vector<problem_action> actions_of(const problem& row, asset_database& assets) const;
 
 	private:
-		enum class kind { no_id, bad_meta, orphan, duplicate_id };
+		enum class kind { no_id, bad_meta, orphan, duplicate_id, orphan_binary, binary_sidecar, missing_binary };
 
 		struct entry
 		{
@@ -44,7 +49,7 @@ namespace edt
 			std::string path;
 			// A duplicate whose file and .resource are both in the project's own layer (its ID may be replaced).
 			bool in_top_layer = false;
-			// The file an orphan may be linked to; empty: none.
+			// The file an orphan may be linked to, or the desc of a binary sidecar; empty: none.
 			std::string link_to;
 		};
 
