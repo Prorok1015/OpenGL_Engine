@@ -27,3 +27,9 @@ sleep 1
 click_item hierarchy Directional Light
 sleep 1
 shot headless_out/checklist/12_light_sel.png
+# End where tools/headless/reference/checklist.png is: scene collapsed, Game Camera selected. That image was taken
+# with the old fixed-point clicks, which hit these rows (and Wireframe instead of Bones) in the classic layout (#1130).
+click_item hierarchy_toggle scene
+sleep 0.5
+click_item hierarchy Game Camera
+sleep 1
