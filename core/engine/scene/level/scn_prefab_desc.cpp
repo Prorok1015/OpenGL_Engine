@@ -208,6 +208,40 @@ namespace scn {
 	}
 }
 
+namespace
+{
+	// A node of a file with a `__parent` that has the id of one of the parent's lays over it: only what the file spells out changes
+	// (its name, the fields of its transform, the components it names; what it does not name stays as the parent has it). A
+	// child of it pairs the same way. `src` is the JSON `parsed` was made from.
+	void overlay_node(scn::prefab_desc::prefab_node& dst, scn::prefab_desc::prefab_node&& parsed, const json::object& src)
+	{
+		if (src.contains("name")) dst.name = std::move(parsed.name);
+		if (const auto* transform = src.if_contains("transform"); transform && transform->is_object()) {
+			const auto& fields = transform->as_object();
+			dst.has_transform = true;
+			if (fields.contains("position")) dst.position = parsed.position;
+			if (fields.contains("rotation")) dst.rotation = parsed.rotation;
+			if (fields.contains("scale"))    dst.scale = parsed.scale;
+		}
+		for (auto& [key, comp] : parsed.components) {
+			dst.components[key] = std::move(comp);
+		}
+		dst.overrides.insert(dst.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
+		const auto* kids = src.if_contains("children");
+		const bool paired = kids && kids->is_array() && kids->as_array().size() == parsed.children.size();
+		for (std::size_t i = 0; i < parsed.children.size(); ++i) {
+			auto it = std::ranges::find(dst.children, parsed.children[i].node_id, &scn::prefab_desc::prefab_node::node_id);
+			if (it == dst.children.end()) {
+				dst.children.push_back(std::move(parsed.children[i]));
+			} else if (paired && kids->as_array()[i].is_object()) {
+				overlay_node(*it, std::move(parsed.children[i]), kids->as_array()[i].as_object());
+			} else {
+				*it = std::move(parsed.children[i]);
+			}
+		}
+	}
+}
+
 void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	prefab_node parsed = parse_node(desc_system, *this, data, true);
@@ -236,10 +270,17 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 	}
 	// Records of the file come after the parent's own: they are applied to the merged tree when it is built.
 	root.overrides.insert(root.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
-	for (auto& child : parsed.children) {
-		auto it = std::ranges::find(root.children, child.node_id, &prefab_node::node_id);
-		if (it != root.children.end()) *it = std::move(child);
-		else root.children.push_back(std::move(child));
+	const auto* kids = data.if_contains("children");
+	const bool paired = kids && kids->is_array() && kids->as_array().size() == parsed.children.size();
+	for (std::size_t i = 0; i < parsed.children.size(); ++i) {
+		auto it = std::ranges::find(root.children, parsed.children[i].node_id, &prefab_node::node_id);
+		if (it == root.children.end()) {
+			root.children.push_back(std::move(parsed.children[i]));
+		} else if (paired && kids->as_array()[i].is_object()) {
+			overlay_node(*it, std::move(parsed.children[i]), kids->as_array()[i].as_object());
+		} else {
+			*it = std::move(parsed.children[i]);
+		}
 	}
 	finalize_node_ids(root);
 }

@@ -273,4 +273,38 @@ BOOST_AUTO_TEST_CASE(StampTree_StampsNestedTypedObjectsAndOrdersTheHeader)
 	BOOST_TEST(obj.at("inner").as_array()[1].at("__version").as_int64() == 2);
 }
 
+BOOST_AUTO_TEST_CASE(ParentLayer_ANodeThatSpellsOutOnlyItsNameKeepsTheParentsComponentsAndChildren)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":3}},"children":[
+			{"__id":"00000000000000b3","name":"inner"}]}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":2,
+		"__parent":"memory://t/base.prefab.desc","children":[{"__id":"00000000000000b1","name":"a_renamed"}]})"));
+	BOOST_REQUIRE(variant);
+
+	const auto& children = variant->get_root().children;
+
+	BOOST_REQUIRE(children.size() == 1u);
+	BOOST_TEST(children[0].name == "a_renamed");
+	BOOST_REQUIRE(children[0].components.contains("stat"));
+	BOOST_TEST(children[0].components.at("stat").overrides.at("hp").as_int64() == 3);
+	BOOST_REQUIRE(children[0].children.size() == 1u);
+	BOOST_TEST(children[0].children[0].name == "inner");
+}
+
+BOOST_AUTO_TEST_CASE(ParentLayer_ANodeThatNamesAComponent_ReplacesThatComponentOnly)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":3},"other":{"__type":"stat_desc","hp":9}}}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":2,
+		"__parent":"memory://t/base.prefab.desc","children":[{"__id":"00000000000000b1","components":{"stat":{"__type":"stat_desc","hp":7}}}]})"));
+	BOOST_REQUIRE(variant);
+
+	const auto& node = variant->get_root().children.at(0);
+
+	BOOST_TEST(node.name == "a");
+	BOOST_TEST(node.components.at("stat").overrides.at("hp").as_int64() == 7);
+	BOOST_TEST(node.components.at("other").overrides.at("hp").as_int64() == 9);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

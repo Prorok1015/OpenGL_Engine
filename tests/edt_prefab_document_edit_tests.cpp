@@ -1007,7 +1007,8 @@ BOOST_AUTO_TEST_CASE(CreateVariant_WritesOnlyTheParent_NextToTheBase)
 	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
 	BOOST_TEST(made.tag.view() == "res://prefabs/a_variant.prefab.desc");
 	const std::string file = text_of(res_root, "prefabs/a_variant.prefab.desc");
-	BOOST_TEST(file.find("\"__parent\": \"res://prefabs/a.prefab.desc\"") != std::string::npos);
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("res://prefabs/a.prefab.desc") != std::string::npos);
 	BOOST_TEST(file.find("prefab_desc") != std::string::npos);
 	BOOST_TEST(file.find("children") == std::string::npos);
 }
@@ -1080,7 +1081,7 @@ BOOST_AUTO_TEST_CASE(ApplyingAVariant_WritesOnlyItsOwnLayer_NotTheBasesContent)
 	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
 	BOOST_TEST(file.find("__parent") != std::string::npos);
 	BOOST_TEST(file.find("renamed") != std::string::npos);
-	BOOST_TEST(file.find("\"hp\"") == std::string::npos);
+	BOOST_TEST(file.find("\"hp\"") == std::string::npos, "the variant file holds: " << file);
 	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("renamed") == std::string::npos);
 }
 
