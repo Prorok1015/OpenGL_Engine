@@ -14,11 +14,13 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <span>
 #include <string>
 #include <string_view>
@@ -61,7 +63,6 @@ const char* const k_level = R"({
 			"sky": "res://sky.desc",
 			"mesh": { "__type": "mesh_node_desc", "material": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://old_sky.desc" } },
 			"inst": { "__type": "prefab_desc", "__parent": "res://sky.desc" },
-			"lost": { "__type": "mesh_node_desc", "material": { "guid": "00000000-0000-4000-8000-000000000009", "path": "res://sky.desc" } },
 			"other": { "__type": "mesh_node_desc", "material": "res://other.desc" },
 			"foreign": { "__type": "mesh_node_desc", "material": { "guid": "5b1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "path": "res://sky.desc" } }
 		} } ] } ],
@@ -72,7 +73,8 @@ const std::string k_node = "/worlds/0/children/0/components";
 
 struct ops_fixture
 {
-	ops_fixture() : layer("asset_ops"), engine("asset_ops_engine"), cache("asset_ops_cache"), journal("asset_ops_journal")
+	ops_fixture() : layer("asset_ops"), engine("asset_ops_engine"), lower("asset_ops_lower"), cache("asset_ops_cache"), journal("asset_ops_journal"),
+		foreign("asset_ops_foreign")
 	{
 		write("sky.desc", canonical(R"({ "__type": "material_desc" })"));
 		write("sky.desc.resource", meta_text(k_sky_guid));
@@ -101,9 +103,12 @@ struct ops_fixture
 		fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(1));
 	}
 
-	edt::asset_database& open(bool with_cache = false, bool case_insensitive = edt::platform_case_insensitive)
+	edt::asset_database& open(bool with_cache = false, bool case_insensitive = edt::platform_case_insensitive, bool with_lower = false)
 	{
-		db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ engine.path(), layer.path() },
+		std::vector<fs::path> layers{ engine.path() };
+		if (with_lower) layers.push_back(lower.path());
+		layers.push_back(layer.path());
+		db = std::make_unique<edt::asset_database>(jobs, &events, std::move(layers),
 			with_cache ? edt::asset_cache_location{ cache.path(), "asset_db" } : edt::asset_cache_location{});
 		db->set_case_insensitive(case_insensitive);
 		db->rebuild();
@@ -132,10 +137,14 @@ struct ops_fixture
 		ports.journal_root = journal.path();
 		ports.is_open_with_unsaved_changes = [this](const res::tag& tag) { return open_files.contains(std::string(tag.view())); };
 		ports.hold_changes = [this]() -> std::shared_ptr<void> {
+			if (throw_in_hold) throw std::runtime_error("hold refused");
 			++holds;
 			return std::make_shared<int>(0);
 		};
 		ports.fail_step = [this](std::string_view step) -> std::string {
+			steps.emplace_back(step);
+			if (on_step) on_step(step);
+			if (!throw_at.empty() && step == throw_at) throw std::runtime_error("port threw");
 			if (step != fail_at) return {};
 			return "injected failure";
 		};
@@ -191,14 +200,20 @@ struct ops_fixture
 
 	test_util::temp_dir layer;
 	test_util::temp_dir engine;
+	test_util::temp_dir lower;
 	test_util::temp_dir cache;
 	test_util::temp_dir journal;
+	test_util::temp_dir foreign;
 	ds::task_system tasks{ test_util::manual_tasks() };
 	edt::editor_events events;
 	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
 	std::set<std::string> open_files;
 	std::string fail_at;
+	std::string throw_at;
+	bool throw_in_hold = false;
+	std::function<void(std::string_view)> on_step;
+	std::vector<std::string> steps;
 	int holds = 0;
 };
 
@@ -230,7 +245,6 @@ BOOST_AUTO_TEST_CASE(ARename_KeepsEveryFormOfReference_AndTheReportListsWhatWasR
 	BOOST_TEST(std::string(mesh.at("path").as_string().c_str()) == "res://clouds.desc", "an object: the path");
 	BOOST_TEST(std::string(mesh.at("guid").as_string().c_str()) == k_sky_guid, "an object: the guid stays");
 	BOOST_TEST(std::string(components.at("inst").at("__parent").as_string().c_str()) == "res://clouds.desc");
-	BOOST_TEST(std::string(components.at("lost").at("material").at("path").as_string().c_str()) == "res://clouds.desc");
 	BOOST_TEST(std::string(components.at("foreign").at("material").at("path").as_string().c_str()) == "res://sky.desc", "another asset's reference stays");
 	BOOST_TEST(std::string(components.at("other").at("material").as_string().c_str()) == "res://other.desc");
 	BOOST_TEST(std::string(level.at("web").as_string().c_str()) == "https://example.com/sky.desc");
@@ -242,11 +256,10 @@ BOOST_AUTO_TEST_CASE(ARename_KeepsEveryFormOfReference_AndTheReportListsWhatWasR
 	BOOST_REQUIRE(report.rewritten.size() == 2u);
 	const edt::rewritten_file* main = rewritten_in(report, "res://levels/main.desc");
 	BOOST_REQUIRE(main);
-	BOOST_TEST(main->json_pointers.size() == 4u);
+	BOOST_TEST(main->json_pointers.size() == 3u);
 	BOOST_TEST(contains(main->json_pointers, k_node + "/sky"));
 	BOOST_TEST(contains(main->json_pointers, k_node + "/mesh/material"));
 	BOOST_TEST(contains(main->json_pointers, k_node + "/inst/__parent"));
-	BOOST_TEST(contains(main->json_pointers, k_node + "/lost/material"));
 	const edt::rewritten_file* inherited = rewritten_in(report, "res://materials/child.desc");
 	BOOST_REQUIRE(inherited);
 	BOOST_TEST((inherited->json_pointers == std::vector<std::string>{ "/__parent" }));
@@ -404,21 +417,74 @@ BOOST_AUTO_TEST_CASE(AReferrerOpenWithUnsavedChanges_RefusesTheOperation_AndNoth
 		"the asset itself, open and dirty, is as good a reason");
 }
 
-BOOST_AUTO_TEST_CASE(AReferrerThatDoesNotWriteBackUnchanged_IsReportedAndLeftAlone)
+BOOST_AUTO_TEST_CASE(AReferrerThatDoesNotWriteBackUnchanged_RefusesTheOperation_AndNothingIsTouched)
 {
 	write("levels/main.desc", k_level);
 	open();
-	const std::string untouched = text_of("levels/main.desc");
+	const auto before = snapshot();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(report.refused.has_value());
+	BOOST_TEST((report.refused->code == edt::refusal_code::unrewritable_references));
+	BOOST_REQUIRE(report.refused->unrewritable.size() == 1u);
+	BOOST_TEST(report.refused->unrewritable[0].file == "res://levels/main.desc");
+	BOOST_TEST(report.refused->unrewritable[0].code == "not_canonical");
+	BOOST_TEST(!report.refused->unrewritable[0].reason.empty());
+	BOOST_TEST(!report.refused->referrers.empty(), "a reference by path alone no longer finds the asset");
+	BOOST_TEST((snapshot() == before), "no partial operation: the other referrer is not rewritten either");
+	BOOST_TEST(holds == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnObjectWithAnotherGuidThanTheAssets_IsReported_AndRefusesTheOperation)
+{
+	write("levels/lost.desc", canonical(R"({ "__type": "level_desc",
+		"lost": { "__type": "mesh_node_desc", "material": { "guid": "00000000-0000-4000-8000-000000000009", "path": "res://sky.desc" } } })"));
+	open();
+	const auto before = snapshot();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::unrewritable_references));
+	BOOST_REQUIRE(planned.refused->unrewritable.size() == 1u);
+	BOOST_TEST(planned.refused->unrewritable[0].file == "res://levels/lost.desc");
+	BOOST_TEST(planned.refused->unrewritable[0].code == "guid_mismatch");
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AReferrerInAnyLowerLayer_IsNotRewritten_AndAPathReferenceThereRefusesTheOperation)
+{
+	lower.write("refs.desc", canonical(R"({ "__type": "level_desc", "sky": "res://sky.desc" })"));
+	open(false, edt::platform_case_insensitive, true);
+	const auto before = snapshot();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::unrewritable_references));
+	BOOST_REQUIRE(planned.refused->unrewritable.size() == 1u);
+	BOOST_TEST(planned.refused->unrewritable[0].file == "res://refs.desc");
+	BOOST_TEST(planned.refused->unrewritable[0].code == "lower_layer");
+	BOOST_TEST(planned.refused->unrewritable[0].reason.find("lower layer") != std::string::npos);
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(text_of("sky.desc") == canonical(R"({ "__type": "material_desc" })"));
+}
+
+BOOST_AUTO_TEST_CASE(AReferrerInTheEngineLayer_ByPath_RefusesTheOperation)
+{
+	engine.write("eng_ref.desc", canonical(R"({ "__type": "level_desc", "sky": "res://sky.desc" })"));
+	open();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::unrewritable_references));
+	BOOST_REQUIRE(planned.refused->unrewritable.size() == 1u);
+	BOOST_TEST(planned.refused->unrewritable[0].code == "engine_layer");
+}
+
+BOOST_AUTO_TEST_CASE(AReferrerInALowerLayer_ByGuidAlone_StaysValid_AndIsReportedAsNotRewritten)
+{
+	lower.write("refs.desc", canonical(R"({ "__type": "level_desc", "mat": { "guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f" } })"));
+	open(false, edt::platform_case_insensitive, true);
 	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
 	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
-	BOOST_TEST(text_of("levels/main.desc") == untouched);
-	BOOST_REQUIRE(report.could_not_rewrite.size() == 1u);
-	BOOST_TEST(report.could_not_rewrite[0].file == "res://levels/main.desc");
-	BOOST_TEST(report.could_not_rewrite[0].code == "not_canonical");
-	BOOST_TEST(!report.could_not_rewrite[0].reason.empty());
-	BOOST_TEST(!report.broken_references.empty(), "a reference by path alone no longer finds the asset");
-	BOOST_TEST(std::ranges::all_of(report.broken_references, [](const edt::asset_usage& usage) { return !usage.by_guid; }));
-	BOOST_TEST(rewritten_in(report, "res://materials/child.desc") != nullptr, "the other referrer is rewritten");
+	const bool reported = std::ranges::any_of(report.warnings, [](const std::string& warning) { return warning.find("lower layer") != std::string::npos; });
+	BOOST_TEST(reported);
+	BOOST_TEST(rewritten_in(report, "res://refs.desc") == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ADeleteWithReferrersAndNoForce_IsRefusedWithTheirList)
@@ -428,7 +494,7 @@ BOOST_AUTO_TEST_CASE(ADeleteWithReferrersAndNoForce_IsRefusedWithTheirList)
 	const edt::operation_report report = run(request(edt::asset_operation::remove, "sky.desc"));
 	BOOST_REQUIRE(report.refused.has_value());
 	BOOST_TEST((report.refused->code == edt::refusal_code::has_referrers));
-	BOOST_TEST(report.refused->referrers.size() == 5u);
+	BOOST_TEST(report.refused->referrers.size() == 4u);
 	BOOST_TEST((snapshot() == before));
 }
 
@@ -438,7 +504,7 @@ BOOST_AUTO_TEST_CASE(AForcedDelete_LeavesTheReferrers_AndReportsThemBroken)
 	const std::string level = text_of("levels/main.desc");
 	const edt::operation_report report = run(request(edt::asset_operation::remove, "sky.desc"), true);
 	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
-	BOOST_TEST(report.broken_references.size() == 5u);
+	BOOST_TEST(report.broken_references.size() == 4u);
 	BOOST_TEST(text_of("levels/main.desc") == level);
 	BOOST_TEST(report.rewritten.empty());
 	BOOST_TEST(!report.warnings.empty());
@@ -550,6 +616,300 @@ BOOST_AUTO_TEST_CASE(AnUndo_RefusesWhenATouchedFileChangedSince_AndTouchesNothin
 	BOOST_TEST(!moved_file.ok);
 	const bool clouds_reported = std::ranges::find(moved_file.changed_since, "clouds.desc") != moved_file.changed_since.end();
 	BOOST_TEST(clouds_reported);
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteOrAMoveOfAFileOpenWithUnsavedChanges_IsRefused_AsIsARename)
+{
+	open();
+	const auto before = snapshot();
+	open_files = { "res://lonely.desc" };
+	for (const edt::asset_operation operation : { edt::asset_operation::remove, edt::asset_operation::move, edt::asset_operation::rename }) {
+		const edt::operation_report report = run(request(operation, "lonely.desc", operation == edt::asset_operation::move ? "env" : "x.desc"), true);
+		BOOST_REQUIRE_MESSAGE(report.refused.has_value(), edt::asset_operation_name(operation));
+		BOOST_TEST((report.refused->code == edt::refusal_code::referrer_open), edt::asset_operation_name(operation));
+	}
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(holds == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatTurnsDirtyBetweenThePlanAndTheExecute_IsRefusedAtTheExecute)
+{
+	open();
+	edt::asset_ops operations = ops();
+	const edt::asset_request asked = request(edt::asset_operation::remove, "lonely.desc");
+	const edt::operation_plan planned = operations.plan(std::span<const edt::asset_request>(&asked, 1));
+	BOOST_REQUIRE(!planned.refused.has_value());
+	open_files = { "res://lonely.desc" };
+	const edt::operation_report report = operations.execute(planned);
+	BOOST_REQUIRE(report.refused.has_value());
+	BOOST_TEST((report.refused->code == edt::refusal_code::referrer_open));
+	BOOST_TEST(has("lonely.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithAForeignRoot_IsRefused_AndNothingIsTouched)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const fs::path victim = foreign.write("clouds.desc", "not the project's");
+	const auto after = snapshot();
+
+	edt::operation_journal bad = report.journal;
+	for (edt::journal_step& step : bad.steps) step.root = foreign.path().generic_string();
+	const edt::undo_report undone = ops().undo(bad);
+	BOOST_TEST(!undone.ok);
+	BOOST_TEST(!undone.error.empty());
+	BOOST_TEST(undone.restored.empty());
+	BOOST_TEST((snapshot() == after));
+	BOOST_TEST(fs::is_regular_file(victim));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithAFolderThatIsNotItsOwn_OrAnUnsafeId_IsRefused_AndNothingIsTouched)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+
+	edt::operation_journal elsewhere = report.journal;
+	elsewhere.directory = (foreign.path() / report.journal.id).generic_string();
+	const edt::undo_report folder = ops().undo(elsewhere);
+	BOOST_TEST(!folder.ok);
+	BOOST_TEST(!folder.error.empty());
+
+	for (const std::string_view id : { "../evil", "a/b", "", "..", "x y" }) {
+		edt::operation_journal other = report.journal;
+		other.id = std::string(id);
+		other.directory = (journal.path() / other.id).generic_string();
+		const edt::undo_report refused = ops().undo(other);
+		BOOST_TEST(!refused.ok, id);
+		BOOST_TEST(refused.restored.empty(), id);
+	}
+	BOOST_TEST((snapshot() == after));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithAnAbsoluteOrDotDotPath_IsRefusedWhenRead_AndWhenUndone)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+	const std::string unsafe_paths[] = { "../outside.desc", "a/../../outside.desc", "/etc/passwd", "a\\b", "C:/x", "a//b", "" };
+	for (const std::string& path : unsafe_paths) {
+		for (const bool in_from : { true, false }) {
+			edt::operation_journal bad = report.journal;
+			BOOST_REQUIRE(!bad.steps.empty());
+			(in_from ? bad.steps.front().from : bad.steps.front().to) = path;
+			BOOST_TEST(!edt::journal_problem(bad).empty(), path);
+			std::string reason;
+			const std::optional<edt::operation_journal> read = edt::journal_from_json(edt::journal_to_json(bad), reason);
+			BOOST_TEST(!read.has_value(), path);
+			BOOST_TEST(!reason.empty(), path);
+			const edt::undo_report undone = ops().undo(bad);
+			BOOST_TEST(!undone.ok, path);
+			BOOST_TEST(undone.restored.empty(), path);
+		}
+	}
+	BOOST_TEST((snapshot() == after));
+
+	edt::operation_journal original_path = report.journal;
+	const auto rewrite = std::ranges::find(original_path.steps, edt::journal_step_kind::rewrite, &edt::journal_step::kind);
+	BOOST_REQUIRE(rewrite != original_path.steps.end());
+	rewrite->original = "../../secret";
+	BOOST_TEST(!edt::journal_problem(original_path).empty());
+	BOOST_TEST(!ops().undo(original_path).ok);
+	BOOST_TEST((snapshot() == after));
+	BOOST_TEST(edt::journal_problem(report.journal).empty(), "the journal of an operation is fine");
+}
+
+BOOST_AUTO_TEST_CASE(APortThatThrows_RollsEverythingBack_AndTheReportSaysWhy)
+{
+	open();
+	const auto before = snapshot();
+	for (const std::string_view step : { "move:sky.desc", "move:sky.desc.resource", "rewrite:levels/main.desc", "rewrite:materials/child.desc" }) {
+		throw_at = std::string(step);
+		edt::operation_report report;
+		BOOST_REQUIRE_NO_THROW(report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc")));
+		BOOST_TEST(!report.ok, step);
+		BOOST_TEST(!report.refused.has_value(), step);
+		BOOST_TEST(report.error == "port threw", step);
+		BOOST_TEST(report.rollback_failures.empty(), step);
+		BOOST_TEST((snapshot() == before), std::string("everything is as it was after a throw at ") + std::string(step));
+	}
+	throw_at = "stash:sky.desc.resource";
+	edt::operation_report removal;
+	BOOST_REQUIRE_NO_THROW(removal = run(request(edt::asset_operation::remove, "sky.desc"), true));
+	BOOST_TEST(!removal.ok);
+	BOOST_TEST((snapshot() == before));
+
+	throw_at.clear();
+	throw_in_hold = true;
+	edt::operation_report held;
+	BOOST_REQUIRE_NO_THROW(held = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc")));
+	BOOST_TEST(!held.ok);
+	BOOST_TEST(held.error == "hold refused");
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(EveryStepIsInTheJournalOnTheDisk_BeforeItsActionIsDone)
+{
+	open();
+	std::size_t journaled_at_rewrite = 0;
+	on_step = [&](std::string_view step) {
+		if (step != "rewrite:levels/main.desc") return;
+		for (const fs::directory_entry& entry : fs::directory_iterator(journal.path())) {
+			std::ifstream file(entry.path() / "journal.json", std::ios::binary);
+			const json::value document = json::parse(std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()));
+			journaled_at_rewrite = document.at("steps").as_array().size();
+		}
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(journaled_at_rewrite == 2u, "the two moves were on the disk before the first rewrite began");
+
+	const json::value last = json::parse([&] {
+		std::ifstream file(journal.path() / report.operation_id / "journal.json", std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+	}());
+	BOOST_TEST(last.at("steps").as_array().size() == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteOfADescWithItsBinaryFile_StashesBothInChunks_AndUndoPutsThemBack)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "meshes/rock.mesh.desc"), true);
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(!has("meshes/rock.mesh.desc"));
+	BOOST_TEST(!has("meshes/rock.mesh.bin"));
+	BOOST_TEST(!has("meshes/rock.mesh.bin.resource"));
+	BOOST_TEST(fs::is_regular_file(journal.path() / report.operation_id / "files" / "meshes" / "rock.mesh.bin"));
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(ARenameMovesTheBinaryFileBeforeTheDesc_AndADeleteRemovesTheDescFirst)
+{
+	open();
+	run(request(edt::asset_operation::rename, "meshes/rock.mesh.desc", "stone.mesh.desc"));
+	const std::vector<std::string> rename_order{ "move:meshes/rock.mesh.bin", "move:meshes/rock.mesh.bin.resource", "move:meshes/rock.mesh.desc",
+		"move:meshes/rock.mesh.desc.resource", "rewrite:levels/rocks.desc" };
+	BOOST_TEST((steps == rename_order));
+
+	steps.clear();
+	open();
+	run(request(edt::asset_operation::remove, "meshes/stone.mesh.desc"), true);
+	const std::vector<std::string> delete_order{ "stash:meshes/stone.mesh.desc", "stash:meshes/stone.mesh.desc.resource", "stash:meshes/stone.mesh.bin",
+		"stash:meshes/stone.mesh.bin.resource" };
+	BOOST_TEST((steps == delete_order));
+}
+
+BOOST_AUTO_TEST_CASE(ADestinationThatTheProjectDoesNotList_IsRefused)
+{
+	open();
+	for (const std::string_view name : { ".hidden.desc", "x.tmp", "Thumbs.db", "x.desc.resource", "x.mesh.bin", "x.mesh.bin.new", "~$x.desc" }) {
+		const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "lonely.desc", name));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), name);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::bad_name), name);
+		BOOST_TEST(!planned.refused->reason.empty(), name);
+	}
+	write(".git/.keep", "x");
+	write(".cache/.keep", "x");
+	for (const std::string_view folder : { ".git", ".cache" }) {
+		const edt::operation_plan planned = plan(request(edt::asset_operation::move, "lonely.desc", folder));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), folder);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::bad_name), folder);
+	}
+	BOOST_TEST(has("lonely.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AnOrphanResourceOrBinaryFileAtTheDestination_Refuses_EvenWhenTheSourceHasNone)
+{
+	write("meshes/lonely2.mesh.desc", canonical(R"({ "__type": "mesh_desc" })"));
+	open();
+	const std::pair<std::string_view, std::string_view> orphans[] = {
+		{ "clouds.desc.resource", "clouds.desc" },
+		{ "meshes/ghost.mesh.bin", "ghost.mesh.desc" },
+		{ "meshes/ghost.mesh.bin.resource", "ghost.mesh.desc" },
+		{ "meshes/ghost.mesh.bin.new", "ghost.mesh.desc" },
+	};
+	for (const auto& [orphan, name] : orphans) {
+		write(orphan, "stray");
+		const std::string asset = orphan.starts_with("meshes/") ? "meshes/lonely2.mesh.desc" : "lonely.desc";
+		const edt::operation_plan planned = plan(request(edt::asset_operation::rename, asset, name));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), orphan);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::target_exists), orphan);
+		fs::remove(layer.path() / std::string(orphan));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryFileInALowerLayer_RefusesTheOperation_WithItsReason)
+{
+	engine.write("meshes/pebble.mesh.bin", "SNKB");
+	write("meshes/pebble.mesh.desc", canonical(R"({ "__type": "mesh_desc" })"));
+	open();
+	for (const edt::asset_operation operation : { edt::asset_operation::rename, edt::asset_operation::remove }) {
+		const edt::operation_plan planned = plan(request(operation, "meshes/pebble.mesh.desc", "sand.mesh.desc"));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), edt::asset_operation_name(operation));
+		BOOST_TEST((planned.refused->code == edt::refusal_code::binary_pair_blocked), edt::asset_operation_name(operation));
+		BOOST_TEST(planned.refused->reason.find("lower layer") != std::string::npos);
+	}
+	BOOST_TEST(has("meshes/pebble.mesh.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AStagedBinaryFile_RefusesTheOperation)
+{
+	write("meshes/rock.mesh.bin.new", "half written");
+	open();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "meshes/rock.mesh.desc", "stone.mesh.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::binary_pair_blocked));
+	BOOST_TEST(has("meshes/rock.mesh.bin"));
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryFileThatSomethingElseRefersTo_RefusesTheOperation_WithTheReferrers)
+{
+	write("levels/blob_user.desc", canonical(R"({ "__type": "level_desc", "blob": "res://meshes/rock.mesh.bin" })"));
+	open();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::remove, "meshes/rock.mesh.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::binary_pair_blocked));
+	BOOST_REQUIRE(planned.refused->referrers.size() == 1u);
+	BOOST_TEST(planned.refused->referrers[0].file == "res://levels/blob_user.desc");
+}
+
+BOOST_AUTO_TEST_CASE(AReferrerSavedBetweenThePlanAndTheReplace_IsNotOverwritten)
+{
+	open();
+	const std::string edited = canonical(R"({ "__type": "level_desc", "edited": true, "sky": "res://sky.desc" })");
+	on_step = [&](std::string_view step) {
+		if (step == "rewrite:levels/main.desc") write("levels/main.desc", edited);
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_TEST(report.error.find("changed meanwhile") != std::string::npos);
+	BOOST_TEST(text_of("levels/main.desc") == edited, "the file saved meanwhile is what stays");
+	BOOST_TEST(has("sky.desc"), "the moves were taken back");
+	BOOST_TEST(!has("clouds.desc"));
+	BOOST_TEST(report.rollback_failures.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AReferrerSavedAfterItWasRewritten_IsNotOverwrittenByTheRollback)
+{
+	open();
+	const std::string edited = canonical(R"({ "__type": "level_desc", "edited": true })");
+	fail_at = "rewrite:materials/child.desc";
+	on_step = [&](std::string_view step) {
+		if (step == "rewrite:materials/child.desc") write("levels/main.desc", edited);
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_TEST(text_of("levels/main.desc") == edited, "the rollback leaves what was saved after the rewrite");
+	BOOST_REQUIRE(!report.rollback_failures.empty());
+	BOOST_TEST(report.rollback_failures.front().find("levels/main.desc") != std::string::npos);
+	BOOST_TEST(has("sky.desc"), "the moves, which nobody touched, were taken back");
 }
 
 BOOST_AUTO_TEST_CASE(AnEngineLayerHelper_NamesTheLayerThatIsTheEngines)

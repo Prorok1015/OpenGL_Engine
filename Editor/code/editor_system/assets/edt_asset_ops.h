@@ -56,9 +56,22 @@ namespace edt
 		has_referrers,
 		stale_plan,
 		io_error,
+		// The desc's binary file is in a lower layer, a save of it is in flight, or something else refers to it.
+		binary_pair_blocked,
+		// A file that refers to the asset cannot be rewritten (a file of a lower layer, a reference whose guid is another
+		// asset's, a file not laid out as the editor writes it): the reference would break, so nothing is done.
+		unrewritable_references,
 	};
 
 	std::string_view refusal_code_name(refusal_code code);
+
+	struct rewrite_failure
+	{
+		std::string file;
+		// engine_layer, lower_layer, unknown_file, unreadable, not_canonical, pointer_missing, not_a_reference, guid_mismatch.
+		std::string code;
+		std::string reason;
+	};
 
 	struct refusal
 	{
@@ -68,6 +81,8 @@ namespace edt
 		std::vector<asset_usage> referrers;
 		// usage_scan_skipped: the desc files that were not read.
 		std::vector<std::string> skipped;
+		// unrewritable_references: the files that were not rewritten and why.
+		std::vector<rewrite_failure> unrewritable;
 	};
 
 	struct file_move
@@ -82,14 +97,6 @@ namespace edt
 		// A res:// tag, or the manifest's file name.
 		std::string file;
 		std::vector<std::string> json_pointers;
-	};
-
-	struct rewrite_failure
-	{
-		std::string file;
-		// engine_layer, unknown_file, unreadable, not_canonical, pointer_missing, not_a_reference.
-		std::string code;
-		std::string reason;
 	};
 
 	// A file the operation will move (the asset, its .resource, for a desc its .bin and .bin.resource), below the root.
@@ -176,6 +183,11 @@ namespace edt
 	};
 
 	boost::json::value journal_to_json(const operation_journal& journal);
+	// Why `journal` cannot be trusted as it is (empty: its shape is fine): an id that is not one safe name, a step path that is
+	// absolute, has '..' or is not where its kind keeps it. A journal read from a disk is data, never instructions.
+	std::string journal_problem(const operation_journal& journal);
+	// nullopt: not a journal, or journal_problem found one (`reason` says which).
+	std::optional<operation_journal> journal_from_json(const boost::json::value& value, std::string& reason);
 	std::optional<operation_journal> journal_from_json(const boost::json::value& value);
 
 	struct operation_report
@@ -227,7 +239,8 @@ namespace edt
 		std::function<bool(const res::tag&)> is_open_with_unsaved_changes;
 		// Held for the length of an operation (resource_system::hold_changes), so the watcher reports it as one batch.
 		std::function<std::shared_ptr<void>()> hold_changes;
-		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"); a non-empty answer fails it.
+		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"), before it is written to the journal; a
+		// non-empty answer fails it.
 		std::function<std::string(std::string_view)> fail_step;
 	};
 
@@ -243,11 +256,17 @@ namespace edt
 		operation_plan plan(std::span<const asset_request> requests) const;
 		// Does what `plan` found: the asset first, then the files that refer to it; any failure takes everything back.
 		operation_report execute(const operation_plan& plan, const execute_options& options = {}) const;
-		// Puts back what `journal` records, when none of its files changed since.
+		// Puts back what `journal` records, when none of its files changed since. The journal is not trusted: its folder must be
+		// journal_root/<id>, its roots the project's own layers or the manifest's folder, its paths relative and without '..'.
 		undo_report undo(const operation_journal& journal) const;
 
 	private:
 		std::optional<refusal> plan_one(plan_item& item) const;
+		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;
+		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
+		void roll_back(operation_report& report) const;
+		// The folders an operation may have changed files in: the project's layers below the engine's, and the manifest's.
+		std::vector<std::filesystem::path> changeable_roots() const;
 
 		asset_ops_ports m_ports;
 	};
