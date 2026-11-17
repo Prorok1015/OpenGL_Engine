@@ -131,7 +131,7 @@ bool edt::write_bundle(const std::filesystem::path& file, const decode_bundle& b
 	return true;
 }
 
-edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, const bundle_limits& limits)
+edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, const bundle_limits& limits, bundle_folder where)
 {
 	bundle_read_result result;
 	const auto refuse = [&](std::string why) {
@@ -144,16 +144,16 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	// blocking (a FIFO cannot hold the worker), and checked to be a regular file through the handle it is read from, so
 	// nothing swapped between a check and the read is seen. Too big to be a bundle under the limits: nothing is read.
 	std::error_code ec;
-	std::filesystem::path folder = std::filesystem::canonical(file.parent_path(), ec);
-	if (ec) {
-		// In an AppContainer the folder's final name on its volume may not be readable (#1054): the folder as given. The read
-		// below still opens the file beneath it without following a link.
-		ec.clear();
-		folder = std::filesystem::absolute(file.parent_path(), ec).lexically_normal();
-	}
+	const std::filesystem::path folder = std::filesystem::absolute(file.parent_path(), ec).lexically_normal();
 	if (ec || file.filename().empty()) return refuse("the bundle file cannot be opened");
+	const bool has_holder = where == bundle_folder::written_by_peer && !folder.filename().empty() && folder.has_parent_path();
+	std::filesystem::path holder = has_holder ? folder.parent_path() : folder;
+	std::filesystem::path resolved = std::filesystem::canonical(holder, ec);
+	// In an AppContainer a folder's final name on its volume may not be readable (#1054): the holder as given.
+	if (!ec) holder = std::move(resolved);
 	platform::beneath::read_request request;
-	request.root = folder;
+	request.root = holder;
+	if (has_holder) request.folder = folder.filename();
 	request.leaf = file.filename();
 	request.max_bytes = largest_bundle_bytes(limits);
 	std::vector<std::byte> contents;

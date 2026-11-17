@@ -2,9 +2,11 @@
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
 #include "edt_decoder_sandbox.h"
+#include <snk/platform/plt_process.h>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -32,7 +34,9 @@ namespace edt {
 		// read and write on its run folder. process_decoder sets it; ignored elsewhere.
 		bool confine = false;
 		std::vector<std::filesystem::path> confine_read_execute;
+		// The AppContainer process_decoder makes (or finds) once from this name, and the one it runs the child in.
 		std::wstring container_name = L"snk.model_decoder";
+		std::shared_ptr<const platform::app_container> container;
 	};
 
 	// Reads the child's stderr lines in their order: only the first may be the status.

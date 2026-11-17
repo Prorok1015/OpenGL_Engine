@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -38,18 +39,47 @@ namespace platform
 	// backslashes right before a '"' (or the closing one) are doubled. Pure, so it is tested on every platform.
 	SNK_API std::wstring quote_windows_arg(std::wstring_view arg);
 
+	// Windows (#1054, #1099): an AppContainer profile and its SID, made (or found) once and held for every confined start.
+	// The profile exists before the first start, so a start that fails never has to be read as "no profile". Other
+	// systems have no AppContainer: `ok()` is false there, with the reason.
+	class SNK_API app_container
+	{
+	public:
+		// CreateAppContainerProfile; one that already exists is taken by its name.
+		static std::shared_ptr<const app_container> ensure(std::wstring name);
+
+		~app_container();
+		app_container(const app_container&) = delete;
+		app_container& operator=(const app_container&) = delete;
+
+		bool ok() const;
+		// Why there is no container; empty when ok().
+		const std::string& error() const;
+		const std::wstring& name() const;
+		// The container's PSID (a Windows SID); null unless ok().
+		void* sid() const;
+
+	private:
+		struct state;
+		explicit app_container(std::unique_ptr<state> held);
+		std::unique_ptr<state> m_state;
+	};
+
 	// Windows (#1054): how a child is confined. An AppContainer with no capabilities (no network, no user profile, no
 	// file a container may not open), a child process policy and process mitigations (no child processes, no dynamic
-	// code, no extension points, no images from remote paths (the C/C++ runtime beside the program wins over an older one in System32), strict handle checks, no fonts), and a job
-	// of one process without UI access. The container's SID gets read and write on `read_write` and read and execute on
-	// `read_execute` (inherited by what they hold), and `read_write` is labelled low integrity (an AppContainer runs at low
-	// integrity and writes nowhere else); nothing else of the machine's access lists is changed. The child gets no console
+	// code, no extension points, no images from remote paths (the C/C++ runtime beside the program wins over an older one
+	// in System32), strict handle checks, no fonts), and a job of one process without UI access. The child gets no console
 	// (an AppContainer process that attaches one does not start); its stdio are the pipes.
 	struct process_confinement
 	{
-		// The AppContainer's name (a profile is created on first use only if the system needs one); must not be empty.
-		std::wstring container_name;
+		// Null or not ok(): nothing starts, and the result says why (confinement_failed).
+		std::shared_ptr<const app_container> container;
+		// Read and write for the container, inherited by what the folder holds, and the low integrity label (an
+		// AppContainer writes nowhere else). Both are set by name (through a reparse point there) and never taken back:
+		// only a folder the caller made for this one start and removes after it, never a path a person chose.
 		std::vector<std::filesystem::path> read_write;
+		// Read and execute for the container, inherited by what the folder holds; added only when the folder's access
+		// list does not hold it yet, and never taken back.
 		std::vector<std::filesystem::path> read_execute;
 	};
 

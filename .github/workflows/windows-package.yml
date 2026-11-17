@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       ref:
-        description: What to check out (the nightly run checks aibranch from the default branch's workflow); empty for the event's own ref
+        description: What to check out (the nightly run checks main from the default branch's workflow); empty for the event's own ref
         type: string
         default: ""
 

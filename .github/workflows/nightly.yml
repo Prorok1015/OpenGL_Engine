@@ -1,12 +1,12 @@
 name: Nightly
 
 # The jobs too slow for every pull request (#830): Linux TSan, the SDK packages (Linux, with and without assimp),
-# the Windows release package and the extract benchmark. They run on aibranch once a night and by hand
+# the Windows release package and the extract benchmark. They run on main once a night and by hand
 # (Actions > Nightly > Run workflow). build.yml keeps the six fast jobs on every PR and the two shared-engine builds
 # on PRs that touch headers, CMake or workflows.
 #
 # A schedule fires only from the workflow file on the default branch (main), and `uses: ./.github/workflows/...` is
-# read from the branch the run started on: until this file is on the default branch, the night runs only by hand.
+# read from the branch the run started on.
 # Every job checks out the SHA the plan picked itself.
 # A red night (a failed plan included) opens an issue (labels bug, ci, P0) or comments on the open one; the next green
 # night closes it.
@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch or SHA to check (default aibranch)
+        description: Branch or SHA to check (default main)
         type: string
-        default: aibranch
+        default: main
       force:
         description: Run even when the last green night was on the same SHA
         type: boolean
@@ -34,7 +34,7 @@ permissions:
   contents: read
 
 jobs:
-  # What to check: aibranch's head (or the SHA given by hand). A night with no new commit since the last green night
+  # What to check: main's head (or the SHA given by hand). A night with no new commit since the last green night
   # runs nothing.
   plan:
     name: Plan (nightly)
@@ -53,7 +53,7 @@ jobs:
         with:
           script: |
             const inputs = context.payload.inputs || {};
-            const ref = inputs.ref || 'aibranch';
+            const ref = inputs.ref || 'main';
             const force = String(inputs.force) === 'true';
             const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref });
             const sha = commit.sha;

@@ -494,7 +494,11 @@ BOOST_AUTO_TEST_CASE(OnlyTheChildsFirstStderrLine_SaysHowItIsSandboxed)
 
 	const std::string other_system = fs_name == "landlock" ? "appcontainer" : "landlock";
 	for (const std::string& garbled : { std::string("snk-sandbox-status: fs=maybe syscalls=") + syscalls_name, whole + " more",
-			 "snk-sandbox-status: fs=" + fs_name, "snk-sandbox-status: fs=" + other_system + " syscalls=" + syscalls_name }) {
+			 "snk-sandbox-status: fs=" + fs_name, "snk-sandbox-status: fs=" + other_system + " syscalls=" + syscalls_name,
+			 // #1099: the parse stays strict; another order, spacing or line end is no claim of a sandbox.
+			 "snk-sandbox-status: syscalls=" + syscalls_name + " fs=" + fs_name, "snk-sandbox-status: fs=" + fs_name + "  syscalls=" + syscalls_name,
+			 "snk-sandbox-status:  fs=" + fs_name + " syscalls=" + syscalls_name, whole + " ", whole + "\r",
+			 "snk-sandbox-status: fs=" + fs_name + " syscalls=" + syscalls_name + "x", "snk-sandbox-status: FS=" + fs_name + " syscalls=" + syscalls_name }) {
 		edt::sandbox_status_reader reading;
 		BOOST_CHECK(reading.line(garbled));
 		BOOST_CHECK_MESSAGE(!reading.status().reported, garbled);

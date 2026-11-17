@@ -483,15 +483,23 @@ BOOST_AUTO_TEST_CASE(ALinkAtTheFileCacheIsNotFollowed)
 
 BOOST_AUTO_TEST_CASE(TheFileCacheDropsTheOldestPastItsLimit)
 {
+	constexpr std::size_t limit = 8;
 	test_util::temp_dir project{ "res_desc_binary_hash_cache_limit" };
-	res::file_desc_binary_hash_cache cache(project.path());
-	for (std::size_t i = 0; i <= res::file_desc_binary_hash_cache::max_entries; ++i) {
-		cache.remember(some_key("res://a/" + std::to_string(i) + ".geom.bin"));
+	{
+		res::file_desc_binary_hash_cache cache(project.path(), res::file_desc_binary_hash_cache::max_file_bytes, limit);
+		for (std::size_t i = 0; i <= limit; ++i) {
+			cache.remember(some_key("res://a/" + std::to_string(i) + ".geom.bin"));
+		}
+		BOOST_TEST(cache.size() == limit);
+		BOOST_TEST(!cache.verified(some_key("res://a/0.geom.bin")));
+		BOOST_TEST(cache.verified(some_key("res://a/1.geom.bin")));
+		BOOST_TEST(cache.verified(some_key(std::format("res://a/{}.geom.bin", limit))));
 	}
-	BOOST_TEST(cache.size() == res::file_desc_binary_hash_cache::max_entries);
-	BOOST_TEST(!cache.verified(some_key("res://a/0.geom.bin")));
-	BOOST_TEST(cache.verified(some_key("res://a/1.geom.bin")));
-	BOOST_TEST(cache.verified(some_key(std::format("res://a/{}.geom.bin", res::file_desc_binary_hash_cache::max_entries))));
+	// The file the cache wrote holds `limit` entries: one more limit lower and it is ignored whole.
+	res::file_desc_binary_hash_cache smaller(project.path(), res::file_desc_binary_hash_cache::max_file_bytes, limit - 1);
+	BOOST_TEST(smaller.size() == 0u);
+	res::file_desc_binary_hash_cache same(project.path(), res::file_desc_binary_hash_cache::max_file_bytes, limit);
+	BOOST_TEST(same.size() == limit);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -844,6 +844,7 @@ edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, co
 #if defined(_WIN32)
 	if (config.sandbox == sandbox_mode::off) return run_once(config);
 	config.confine = true;
+	config.container = container(config.container_name);
 	// The container could not be set up, or the child could not load its DLLs where it is (a folder no container reads).
 	const auto failed_where_it_is = [](const decode_outcome& outcome) {
 		return outcome.confinement_failed
@@ -860,7 +861,11 @@ edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, co
 		copy = m_copy;
 	}
 	const bool copy_from_before = copy.has_value();
-	if (!copy) {
+	if (!config.container->ok()) {
+		// No container to start in: a copy cannot help.
+		why = config.container->error();
+		copy.reset();
+	} else if (!copy) {
 		decode_outcome in_place = run_once(config);
 		if (!failed_where_it_is(in_place)) return in_place;
 		why = why_of(in_place);
@@ -872,7 +877,7 @@ edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, co
 		copied.confine_read_execute = { from.folder };
 		return run_once(copied);
 	};
-	if (copy) {
+	if (copy && config.container->ok()) {
 		decode_outcome confined = run_copy(*copy);
 		if (failed_where_it_is(confined) && copy_from_before) {
 			copy = renew_copy(config.decoder, *copy, why);
@@ -896,6 +901,13 @@ edt::decode_outcome edt::process_decoder::launch(decode_runner_config config, co
 #else
 	return run_once(config);
 #endif
+}
+
+std::shared_ptr<const platform::app_container> edt::process_decoder::container(const std::wstring& name) const
+{
+	const std::lock_guard lock(m_container_mutex);
+	if (!m_container || m_container->name() != name) m_container = platform::app_container::ensure(name);
+	return m_container;
 }
 
 std::optional<edt::decoder_copy> edt::process_decoder::copy_of_decoder(const std::filesystem::path& decoder, std::string& why) const

@@ -110,6 +110,8 @@ namespace edt {
 		std::optional<decoder_copy> copy_of_decoder(const std::filesystem::path& decoder, std::string& why) const;
 		// `stale` did not run: another editor of another build may have removed it. Made again, once per failure.
 		std::optional<decoder_copy> renew_copy(const std::filesystem::path& decoder, const decoder_copy& stale, std::string& why) const;
+		// The AppContainer of `name`, made (or found) on first use and kept for the life of this decoder (#1099).
+		std::shared_ptr<const platform::app_container> container(const std::wstring& name) const;
 
 		res::resource_system& m_resources;
 		const desc::desc_system& m_descs;
@@ -118,6 +120,8 @@ namespace edt {
 		mutable std::mutex m_copy_mutex;
 		mutable std::optional<decoder_copy> m_copy;
 		mutable std::string m_copy_error;
+		mutable std::mutex m_container_mutex;
+		mutable std::shared_ptr<const platform::app_container> m_container;
 		mutable std::once_flag m_version_once;
 		mutable std::string m_version;
 	};
