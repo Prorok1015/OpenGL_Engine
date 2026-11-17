@@ -541,13 +541,15 @@ BOOST_AUTO_TEST_CASE(AnUndo_RefusesWhenATouchedFileChangedSince_AndTouchesNothin
 	const edt::undo_report undone = ops().undo(report.journal);
 	BOOST_TEST(!undone.ok);
 	BOOST_TEST(!undone.changed_since.empty());
-	BOOST_TEST(std::ranges::find(undone.changed_since, "levels/main.desc") != undone.changed_since.end());
+	const bool main_reported = std::ranges::find(undone.changed_since, "levels/main.desc") != undone.changed_since.end();
+	BOOST_TEST(main_reported);
 	BOOST_TEST((snapshot() == after_edit));
 
 	write("clouds.desc", canonical(R"({ "__type": "material_desc", "edited": true })"));
 	const edt::undo_report moved_file = ops().undo(report.journal);
 	BOOST_TEST(!moved_file.ok);
-	BOOST_TEST(std::ranges::find(moved_file.changed_since, "clouds.desc") != moved_file.changed_since.end());
+	const bool clouds_reported = std::ranges::find(moved_file.changed_since, "clouds.desc") != moved_file.changed_since.end();
+	BOOST_TEST(clouds_reported);
 }
 
 BOOST_AUTO_TEST_CASE(AnEngineLayerHelper_NamesTheLayerThatIsTheEngines)
