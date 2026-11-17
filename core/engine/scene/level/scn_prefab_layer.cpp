@@ -119,7 +119,7 @@ namespace scn {
 		{
 			for (const auto& member : target) {
 				if (!is_node_key(member.key()) && inherited.if_contains(member.key()) == nullptr) {
-					why = std::format("{}: the key '{}' has no place in a layer", where, member.key());
+					why = std::format("{}: the key '{}' has no place in a layer", where, std::string_view{ member.key() });
 					return false;
 				}
 			}
