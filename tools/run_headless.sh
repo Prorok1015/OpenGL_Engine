@@ -29,6 +29,11 @@
 #                            wherever the editor drew it: it logs the item rectangles with --set editor/ui_probe true
 #                            (Editor/UiProbe lines). No line, or a last line saying the item is hidden (scrolled or
 #                            clipped out of its panel), within 20 s fails the run with that said. NAME has no spaces
+#   click_item AREA NAME...  left click at the centre of the item; NAME is the rest of the line, spaces allowed
+#                            (click_item menu New Level). Same wait and failure as drag_item. Areas the editor probes:
+#                            asset_browser, asset_browser_search, hierarchy, hierarchy_toggle (the expand arrow of a
+#                            node), hierarchy_tabs (world tabs and "+"), viewport_toolbar, menu (menus and their items)
+#   dclick_item AREA NAME... the same, double click
 #   move X Y                 move the mouse
 #   key KEYS                 xdotool key syntax, e.g. ctrl+s, Delete, Escape
 #   type TEXT                type text
@@ -207,6 +212,12 @@ if [[ -n "$ACTIONS" ]]; then
 			sleep) sleep "$a" ;;
 			click) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click "${c:-1}" ;; # hover first: ImGui needs a frame at the new position
 			dclick) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click --repeat 2 --delay 80 1 ;;
+			click_item|dclick_item)
+				name="${line#*"$a"}"; name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"
+				at=$(item_center "$a" "$name") || exit 1
+				read -r fx fy <<<"$at"
+				xdotool mousemove "$fx" "$fy"; sleep 0.4
+				if [[ "$cmd" == dclick_item ]]; then xdotool click --repeat 2 --delay 80 1; else xdotool click 1; fi ;;
 			drag) xdotool mousemove "$a" "$b" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
 			drag_item)
 				from=$(item_center "$a" "$b") || exit 1

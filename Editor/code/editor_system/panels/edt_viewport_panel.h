@@ -16,6 +16,7 @@
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
+namespace edt { class ui_probe; }
 namespace scn { struct skeleton_component; }
 
 namespace edt
@@ -27,6 +28,8 @@ namespace edt
 
 
 		void set_registry_getter(std::function<entt::registry*()> getter);
+		// Reports the toolbar buttons (headless smoke, editor/ui_probe); null: nothing.
+		void set_ui_probe(std::shared_ptr<ui_probe> probe) { m_ui_probe = std::move(probe); }
 		void set_selected_entity(ecs::entity ent) { m_selection.set(ent); }
 		// What names the selected entity again when the registry on show is another one (a world rebuilt without a
 		// selection event: a hot reload, a module swap): editor_system gives it selection_service::entity.
@@ -82,6 +85,7 @@ namespace edt
 		gui::gui_system&    m_gui;
 
 		std::function<entt::registry*()> m_get_registry;
+		std::shared_ptr<ui_probe> m_ui_probe;
 		std::function<bool()> m_edits_locked;
 		inp::input_router* m_router = nullptr;
 		input_target_getter m_input_target;

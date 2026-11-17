@@ -10,6 +10,7 @@
 #include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
 #include "edt_editor_camera.h"
+#include "edt_ui_probe_imgui.h"
 #include <imgui.h>
 #include <optional>
 #include <utility>
@@ -158,6 +159,7 @@ namespace edt
 
 	void viewport_panel::render_toolbar()
 	{
+		if (m_ui_probe) m_ui_probe->begin_pass("viewport_toolbar");
 		// Highlight the active gizmo operation button
 		const char* labels[] = {"T", "R", "S"};
 		for (int i = 0; i < 3; ++i) {
@@ -166,6 +168,7 @@ namespace edt
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (ImGui::Button(labels[i]))
 				m_gizmo_op = i;
+			probe_last_item(m_ui_probe.get(), "viewport_toolbar", labels[i]);
 			if (active)
 				ImGui::PopStyleColor();
 			ImGui::SameLine();
@@ -179,6 +182,7 @@ namespace edt
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (ImGui::Button("Wireframe"))
 				m_wireframe = !m_wireframe;
+			probe_last_item(m_ui_probe.get(), "viewport_toolbar", "Wireframe");
 			if (active)
 				ImGui::PopStyleColor();
 		}
@@ -195,6 +199,7 @@ namespace edt
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 				if (ImGui::Button("Bones"))
 					skel->show_skeleton = !skel->show_skeleton;
+				probe_last_item(m_ui_probe.get(), "viewport_toolbar", "Bones");
 				if (active)
 					ImGui::PopStyleColor();
 			}
@@ -202,6 +207,7 @@ namespace edt
 
 		ImGui::SameLine();
 		ImGui::TextDisabled("| FPS: %.1f", m_fps);
+		if (m_ui_probe) m_ui_probe->end_pass("viewport_toolbar");
 		ImGui::Separator();
 	}
 

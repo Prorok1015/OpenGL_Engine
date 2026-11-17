@@ -9,6 +9,7 @@
 #include <cstdint>
 
 namespace edt::override_edit { class view_cache; }
+namespace edt { class ui_probe; }
 
 namespace edt
 {
@@ -20,6 +21,8 @@ namespace edt
 		void set_world_desc(scn::world_desc* desc);
 		// Composed expansions of instances (shared with the inspector); null lists no instantiated nodes.
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
+		// Reports the rows, expand arrows and world tabs (headless smoke, editor/ui_probe); null: nothing.
+		void set_ui_probe(std::shared_ptr<ui_probe> probe) { m_ui_probe = std::move(probe); }
 		void set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb);
 		void set_on_delete_node(std::function<void(uint64_t node_id)> cb);
 		void set_on_delete_nodes(std::function<void(const std::vector<uint64_t>&)> cb);
@@ -76,6 +79,7 @@ namespace edt
 		void duplicate_selected();
 
 		scn::world_desc* m_world_desc = nullptr;
+		std::shared_ptr<ui_probe> m_ui_probe;
 		scn::prefab_desc::prefab_node* m_selected_node = nullptr;
 		scn::prefab_desc::prefab_node  m_instance_selection; // m_selected_node points here for a node inside an instance
 		std::shared_ptr<override_edit::view_cache> m_view_cache;

@@ -264,6 +264,7 @@ namespace edt
 		ImGui::SetNextItemWidth(-1.f);
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
+		probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
 
 		ImGui::Separator();
 

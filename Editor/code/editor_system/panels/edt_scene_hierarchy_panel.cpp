@@ -5,6 +5,7 @@
 #include <snk/scene/scn_skybox_desc.h>
 #include <snk/scene/scn_bone_desc.h>
 #include "edt_override_edit.h"
+#include "edt_ui_probe_imgui.h"
 #include <imgui.h>
 #include <string>
 #include <algorithm>
@@ -230,6 +231,8 @@ namespace edt
 			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
+			probe_last_item(m_ui_probe.get(), "hierarchy", child.name);
+			if (kid.has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", child.name);
 
 			// A click selects the node; its edits become override records on the instance
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
@@ -309,13 +312,17 @@ namespace edt
 			return;
 
 		ImGuiTabBarFlags bar_flags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton;
+		if (m_ui_probe) m_ui_probe->begin_pass("hierarchy_tabs");
 		if (ImGui::BeginTabBar("##world_tabs", bar_flags)) {
 			for (int i = 0; i < (int)m_world_names.size(); ++i) {
 				ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
 				if (m_force_tab_switch && i == m_world_idx)
 					flags |= ImGuiTabItemFlags_SetSelected;
 
-				if (ImGui::BeginTabItem(m_world_names[i].c_str(), nullptr, flags)) {
+				const bool tab_open = ImGui::BeginTabItem(m_world_names[i].c_str(), nullptr, flags);
+				// A tab that is not selected returns false, but its rectangle is valid.
+				probe_last_item(m_ui_probe.get(), "hierarchy_tabs", m_world_names[i]);
+				if (tab_open) {
 					if (i != m_world_idx) {
 						m_world_idx     = i;
 						m_selected_node = nullptr;
@@ -332,7 +339,10 @@ namespace edt
 			}
 
 			ImGui::BeginDisabled(locked());
-			if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+			const bool plus_clicked =
+				ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip);
+			probe_last_item(m_ui_probe.get(), "hierarchy_tabs", "+");
+			if (plus_clicked) {
 				m_new_world_buf[0] = '\0';
 				ImGui::OpenPopup("##new_world_popup");
 			}
@@ -343,6 +353,7 @@ namespace edt
 			ImGui::EndTabBar();
 		}
 
+		if (m_ui_probe) m_ui_probe->end_pass("hierarchy_tabs");
 		m_force_tab_switch = false;
 	}
 
@@ -440,8 +451,16 @@ namespace edt
 		auto& children = m_world_desc->get_root().children;
 		int flat_index = 0;
 		m_rename_seen = false;
+		if (m_ui_probe) {
+			m_ui_probe->begin_pass("hierarchy");
+			m_ui_probe->begin_pass("hierarchy_toggle");
+		}
 		for (int i = 0; i < (int)children.size(); ++i)
 			draw_node(children[i], lower_filter, flat_index);
+		if (m_ui_probe) {
+			m_ui_probe->end_pass("hierarchy");
+			m_ui_probe->end_pass("hierarchy_toggle");
+		}
 		// The node went away (an agent's edit, an undo) or out of sight: no rename may land on another one.
 		if (!m_rename_seen) m_rename_id = 0;
 
@@ -516,6 +535,8 @@ namespace edt
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
 		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
+		probe_last_item(m_ui_probe.get(), "hierarchy", node.name);
+		if (has_children) probe_tree_arrow(m_ui_probe.get(), "hierarchy_toggle", node.name);
 		if (by_agent && ImGui::IsItemHovered()) ImGui::SetTooltip("Changed by an agent (not saved or accepted yet)");
 
 		// ── selection ───────────────────────────────────────────────────────

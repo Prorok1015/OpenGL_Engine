@@ -7,12 +7,16 @@
 
 namespace edt
 {
+	class ui_probe;
+
 	// Declares the menus in the order the editor shows them (File, View, Build, Help) and the placeholder "About" item.
 	// Keep the returned registrations as long as the menus should exist.
 	std::vector<registration> register_builtin_menus(action_registry& actions);
 
 	// Draws the items of the registries inside an open menu bar. The View menu shows its actions, then a toggle per panel.
-	void draw_main_menu(action_registry& actions, panel_registry& panels);
+	// With `probe` (headless smoke, editor/ui_probe) every menu and every item of an open menu is reported in the area
+	// "menu".
+	void draw_main_menu(action_registry& actions, panel_registry& panels, ui_probe* probe = nullptr);
 
 	// Activates the action whose shortcut was pressed this ImGui frame (at most one; while ImGui wants text input, not
 	// one that yields to it). Called once per UI frame by editor_layer before either layout draws, so the shortcuts work

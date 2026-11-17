@@ -25,6 +25,17 @@ BOOST_AUTO_TEST_CASE(ALineNamesTheAreaTheItemAndTheCentreOfItsRectangle)
 	BOOST_CHECK_EQUAL(lines[0], "item asset_browser 'base_material.desc' center 610 1027 size 220 18");
 }
 
+BOOST_AUTO_TEST_CASE(ANameWithASpace_IsOneQuotedItem_InItsRectangleAndItsHiddenLine)
+{
+	probe.report("menu", "New Level", 20.f, 40.f, 120.f, 58.f);
+	probe.report_hidden("menu", "New Level");
+	BOOST_REQUIRE_EQUAL(lines.size(), 2u);
+	BOOST_CHECK_EQUAL(lines[0], "item menu 'New Level' center 70 49 size 100 18");
+	BOOST_CHECK_EQUAL(lines[1], "item menu 'New Level' hidden");
+	BOOST_CHECK_EQUAL(edt::ui_probe::format_hidden("hierarchy", "Directional Light"),
+		"item hierarchy 'Directional Light' hidden");
+}
+
 BOOST_AUTO_TEST_CASE(ARectangleThatDoesNotChange_IsNotReportedAgain)
 {
 	for (int frame = 0; frame < 5; ++frame) {

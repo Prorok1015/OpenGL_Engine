@@ -27,6 +27,7 @@ namespace edt
 	class inspector_panel;
 	class level_controller;
 	class panel_base;
+	class ui_probe;
 	class problems_component;
 	class problems_panel;
 	class scene_document;
@@ -100,6 +101,8 @@ namespace edt
 		std::shared_ptr<git_panel>& git() { return m_git; }
 		std::shared_ptr<world_systems_panel>& world_systems() { return m_world_systems; }
 		std::shared_ptr<asset_browser_panel>& asset_browser() { return m_asset_browser; }
+		// The one probe of the headless smoke (editor/ui_probe), shared by the panels and the main menu; null without it.
+		std::shared_ptr<ui_probe> probe() const { return m_ui_probe; }
 
 	private:
 		void wire_scene_callbacks();
@@ -107,6 +110,7 @@ namespace edt
 		ports m_ports;
 		// The console's feed from the engine log; removed with the panels.
 		engine::log_sink_handle m_log_sink;
+		std::shared_ptr<ui_probe> m_ui_probe;
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy;
 		std::shared_ptr<inspector_panel> m_inspector;
 		std::shared_ptr<viewport_panel> m_viewport;
