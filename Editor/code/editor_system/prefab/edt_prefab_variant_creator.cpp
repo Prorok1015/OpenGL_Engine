@@ -42,7 +42,7 @@ std::string edt::prefab_variant_creator::check(const res::tag& base, std::string
 
 edt::document_creation edt::prefab_variant_creator::create(const res::tag& base, std::string_view stem) const
 {
-	if (const std::optional<std::string> why = m_ports.blocker ? m_ports.blocker() : std::nullopt) return { {}, *why };
+	if (const std::optional<std::string> why = m_ports.blocker ? m_ports.blocker() : std::nullopt) return { {}, *why, true };
 	const desc::desc_system* descs = m_ports.descs ? m_ports.descs() : nullptr;
 	res::resource_system* resources = m_ports.resources ? m_ports.resources() : nullptr;
 	if (!descs || !resources) return { {}, "the editor has no project open" };
@@ -60,7 +60,7 @@ edt::document_creation edt::prefab_variant_creator::create(const res::tag& base,
 	const auto base_prefab = resources->require_sync<scn::prefab_desc>(base);
 	if (!base_prefab.is_ready() || base_prefab.has_error()) return { {}, std::format("'{}' does not load as a prefab", base.view()) };
 	if (m_claim) {
-		if (std::string claimed = m_claim(tag); !claimed.empty()) return { {}, std::move(claimed) };
+		if (std::string claimed = m_claim(tag); !claimed.empty()) return { {}, std::move(claimed), true };
 	}
 	if (const res::file_operation made = resources->create_sync(tag, desc::pretty_json_bytes(content)); !made.ok) return { {}, made.error };
 	return { tag, {} };
@@ -94,11 +94,9 @@ std::optional<res::tag> edt::prefab_variant_form::submit()
 	return made.tag;
 }
 
-std::string edt::open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag)
+std::string edt::open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag, bool agent)
 {
 	const desc_file_read probe = read_desc_file(resources, descs, layout, tag);
-	if (probe.in_open_level) {
-		return std::format("'{}' is a name of the open level (its file or one of its worlds): choose another name", tag.view());
-	}
+	if (probe.in_open_level || (agent && probe.level_unreadable)) return probe.level_refusal;
 	return {};
 }

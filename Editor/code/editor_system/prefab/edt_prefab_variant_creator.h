@@ -44,7 +44,8 @@ namespace edt
 	};
 
 	// The reason a new file `tag` is not the project's to make because the open level has that name (its file or one of its worlds), else empty (#966).
-	std::string open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag);
+	// An entry of the level's `worlds` that cannot be read refuses the name only for `agent` (as desc.create does).
+	std::string open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag, bool agent = false);
 
 	// What the "Create Variant" window of the asset browser holds between frames, without ImGui: the base, the name (the suggested one
 	// at first) and what is wrong with it.

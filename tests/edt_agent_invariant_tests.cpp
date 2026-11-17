@@ -1541,5 +1541,48 @@ BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_ReplacesTheWait, desc_
 	BOOST_TEST(document->source_tag() == second);
 }
 
+// #151: prefab.create_variant: a person's call opens the variant in the prefab editor, an agent's call only makes the file.
+BOOST_FIXTURE_TEST_CASE(CreateVariantByAPerson_OpensItInThePrefabEditor, desc_problems_fixture)
+{
+	const res::tag base = res::tag::make("prefabs/variant_base.prefab.desc");
+	store(base, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+
+	cmd::result made;
+	gui().run_without_drawing([&] {
+		made = registry().invoke("prefab.create_variant", boost::json::object{ { "base", std::string(base.view()) }, { "name", "by_person" } }, cmd::origin::ui());
+	});
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
+	for (int frame = 0; frame < 300 && window && window->loading(); ++frame) {
+		test_util::pump(tasks);
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+	}
+
+	const edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	BOOST_REQUIRE(document && document->is_open());
+	BOOST_TEST(document->source_tag().view() == "res://prefabs/by_person.prefab.desc");
+}
+
+BOOST_FIXTURE_TEST_CASE(CreateVariantByAnAgent_MakesTheFile_AndOpensNoWindow, desc_problems_fixture)
+{
+	const res::tag base = res::tag::make("prefabs/variant_base2.prefab.desc");
+	store(base, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+
+	const cmd::result made = invoke_as_agent("prefab.create_variant", boost::json::object{ { "base", std::string(base.view()) }, { "name", "by_agent" } });
+
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	for (int frame = 0; frame < 5; ++frame) {
+		test_util::pump(tasks);
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+	}
+	BOOST_TEST(edt::prefab_of(editor().context()->documents()) == nullptr);
+	const auto variant = storage.require<res::resource_system>().require_sync<scn::prefab_desc>(res::tag::make("prefabs/by_agent.prefab.desc"));
+	BOOST_TEST(variant.is_ready());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 

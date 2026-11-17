@@ -127,16 +127,16 @@ cmd::result edt::prefab_editor_component::create_variant(const cmd::call& call)
 		.resources = [this] { return m_ports.services.writable_resources(); },
 		.layers = files.layers,
 		.blocker = files.write_blocker },
-		[this, files](const res::tag& tag) {
+		[this, files, agent = call.from.kind != cmd::origin_kind::ui](const res::tag& tag) {
 			desc::desc_system* descs = m_ports.services.descs();
 			res::resource_system* resources = m_ports.services.resources();
-			return descs && resources ? open_level_claim(*resources, *descs, files, tag) : std::string{};
+			return descs && resources ? open_level_claim(*resources, *descs, files, tag, agent) : std::string{};
 		});
 	const res::tag base{ std::string(args.at("base").as_string()) };
 	std::string stem;
 	if (const boost::json::value* given = args.if_contains("name"); given && given->is_string()) stem = std::string(given->as_string());
 	const document_creation made = creator.create(base, stem);
-	if (!made.ok()) return cmd::result::failure(cmd::codes::invalid_args, made.error);
+	if (!made.ok()) return cmd::result::failure(made.busy ? cmd::codes::busy : cmd::codes::invalid_args, made.error);
 	// An agent makes the file; a person's call is the one that gets the window (an agent must not open an editor for a person).
 	if (call.from.kind == cmd::origin_kind::ui) open(made.tag);
 	if (call.from.kind == cmd::origin_kind::agent) {

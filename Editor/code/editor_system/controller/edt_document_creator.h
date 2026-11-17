@@ -20,6 +20,8 @@ namespace edt
 	{
 		res::tag tag;
 		std::string error;
+		// The refusal is a state of the project (it may not be written, the open level holds the name), not a wrong argument: the agents' `busy`.
+		bool busy = false;
 
 		bool ok() const { return error.empty(); }
 	};
