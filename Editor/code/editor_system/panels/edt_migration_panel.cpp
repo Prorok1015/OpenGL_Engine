@@ -37,7 +37,7 @@ namespace {
 	// The height left above a row of buttons.
 	float body_height()
 	{
-		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y, 60.0f);
+		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y, em(60.f));
 	}
 }
 

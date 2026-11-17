@@ -576,7 +576,7 @@ namespace edt
 		shown.reserve(requests.size());
 
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + 12.f), ImGuiCond_Always,
+		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f), viewport->WorkPos.y + em(12.f)), ImGuiCond_Always,
 			ImVec2(1.f, 0.f));
 		// One width whatever the requests say: a window that grows and shrinks with its text moves the buttons sideways.
 		ImGui::SetNextWindowSizeConstraints(ImVec2(em(640.f), 0.f), ImVec2(em(640.f), em(720.f)));

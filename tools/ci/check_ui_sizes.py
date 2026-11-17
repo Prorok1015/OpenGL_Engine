@@ -5,15 +5,18 @@
     check_ui_sizes.py --self-test
 
 A size written in pixels does not follow the font size (and so the DPI): a panel wraps it in edt::em(...) (scaled by
-the font size, core/edt_ui_metrics.h) or edt::dpi_px(...) (by the DPI only, for the few sizes of the default layout).
-This script, run in the CI job Plan, refuses a numeric literal with an absolute value above 2 outside those calls in
-the size argument of:
+the font size, core/edt_ui_metrics.h) or edt::dpi_px(...) (by the DPI only, for the sizes of the default layout).
+This script, run in the CI job Plan, refuses a numeric literal with an absolute value above 2 in an argument of:
   - SetNextItemWidth, PushItemWidth (the width), SetNextWindowSize (the size), SetNextWindowSizeConstraints (both);
   - SetColumnWidth (the width), TableSetupColumn (the width of a column that is WidthFixed);
-  - BeginChild, Button, InvisibleButton, ProgressBar (the size);
-  - SameLine (the offset and the spacing).
+  - BeginChild, Button, InvisibleButton, ProgressBar (the size); SameLine (the offset and the spacing);
+  - PushStyleVar (the value), SetNextWindowPos (the position), Dummy, Indent, Unindent (the size),
+    SetCursorPos, SetCursorPosX, SetCursorPosY, SetCursorScreenPos (the position);
+and so in the std::max / std::min / std::clamp and any other expression inside those arguments. A literal is allowed
+only as a direct part of em(...), dpi_px(...), em_of(...), or as a factor of a product with GetFontSize(),
+GetFrameHeight*() or GetTextLineHeight*() (`ImGui::GetFontSize() * 36`); `x + 40.f` and `CalcTextSize(a).x + 40` are not.
 -1, 0 and the like (fill the space, auto size) are not read. Comments and string literals are not read. EXCEPTIONS
-below allow a fixed number of literals in one file, each with its reason; one more in that file fails as any other.
+below allow one literal each, with its reason; an exception that no longer matches fails too.
 """
 import re
 import string
@@ -24,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCANNED = ROOT / 'Editor' / 'code'
 SUFFIXES = {'.cpp', '.h', '.hpp'}
 
-# (path relative to the repository root, how many, why)
+# (path relative to the repository root, call, why): allows one literal of that call in that file
 EXCEPTIONS = [
 ]
 
@@ -40,12 +43,21 @@ SIZE_ARGS = {
 	'InvisibleButton': (1,),
 	'ProgressBar': (1,),
 	'SameLine': (0, 1),
+	'PushStyleVar': (1,),
+	'SetNextWindowPos': (0,),
+	'Dummy': (0,),
+	'Indent': (0,),
+	'Unindent': (0,),
+	'SetCursorPos': (0,),
+	'SetCursorPosX': (0,),
+	'SetCursorPosY': (0,),
+	'SetCursorScreenPos': (0,),
 }
 CALL = re.compile(r'\b(?:ImGui::)?(' + '|'.join(SIZE_ARGS) + r'|TableSetupColumn)\s*\(')
-SCALED = re.compile(r'\b(?:edt::)?(?:em|dpi_px)\s*\(')
+SCALED = re.compile(r'\b(?:edt::)?(?:em|dpi_px|em_of)\s*\(')
 NUMBER = re.compile(r'(?<![\w.])(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?[fF]?(?![\w.])')
-# An argument that is a multiple of one of these already follows the font size.
-FONT_RELATIVE = re.compile(r'\b(?:GetFontSize|GetFrameHeight|GetTextLineHeight\w*|CalcTextSize)\s*\(')
+# A literal that is a factor in a product with one of these follows the font size.
+FONT_RELATIVE = re.compile(r'\b(?:GetFontSize|GetFrameHeight\w*|GetTextLineHeight\w*)\s*\(')
 LIMIT = 2.0
 
 
@@ -129,10 +141,39 @@ def blank_scaled(arg):
 		arg = arg[:m.start()] + ' ' * (end + 1 - m.start()) + arg[end + 1:]
 
 
+def term_of(code, start, end):
+	"""The product around code[start:end]: up to the nearest + - , or bracket that encloses it."""
+	depth = 0
+	left = start
+	for i in range(start - 1, -1, -1):
+		c = code[i]
+		if c in ')]}':
+			depth += 1
+		elif c in '([{':
+			depth -= 1
+			if depth < 0:
+				break
+		elif depth == 0 and (c in ',+' or (c == '-' and code[i + 1:i + 2] != '>')):
+			break
+		left = i
+	depth = 0
+	right = end
+	for i in range(end, len(code)):
+		c = code[i]
+		if c in '([{':
+			depth += 1
+		elif c in ')]}':
+			depth -= 1
+			if depth < 0:
+				break
+		elif depth == 0 and (c in ',+' or (c == '-' and code[i - 1:i] != '' and code[i + 1:i + 2] != '>')):
+			break
+		right = i + 1
+	return code[left:right]
+
+
 def literal_of(arg):
-	"""The first numeric literal above the limit in `arg`, or None."""
-	if FONT_RELATIVE.search(arg):
-		return None
+	"""The first numeric literal above the limit in `arg` that is not scaled, or None."""
 	code = blank_scaled(arg)
 	for m in NUMBER.finditer(code):
 		before = code[:m.start()].rstrip()
@@ -140,7 +181,7 @@ def literal_of(arg):
 		operand_end = tuple(')]}') + tuple(string.ascii_letters + string.digits + '_.')
 		if before.endswith('-') and not before[:-1].rstrip().endswith(operand_end):
 			continue
-		if float(m.group(0).rstrip('fF')) > LIMIT:
+		if float(m.group(0).rstrip('fF')) > LIMIT and not FONT_RELATIVE.search(term_of(code, m.start(), m.end())):
 			return m.group(0)
 	return None
 
@@ -173,23 +214,21 @@ def find_literals(text):
 
 def scan(root, scanned):
 	problems = []
-	allowed = {path: (count, why) for path, count, why in EXCEPTIONS}
-	used = {}
+	unused = list(EXCEPTIONS)
 	for file in sorted(scanned.rglob('*')):
 		if file.suffix not in SUFFIXES or not file.is_file():
 			continue
 		relative = file.relative_to(root).as_posix()
 		text = file.read_text(encoding='utf-8', errors='replace')
 		for line, name, literal in find_literals(text):
-			if relative in allowed:
-				used[relative] = used.get(relative, 0) + 1
-				if used[relative] <= allowed[relative][0]:
-					continue
+			allowed = next((e for e in unused if e[0] == relative and e[1] == name), None)
+			if allowed is not None:
+				unused.remove(allowed)
+				continue
 			problems.append(f'{relative}:{line}: {name}: pixel size {literal} outside em(...) / dpi_px(...)')
-	for path, (count, _) in allowed.items():
-		if used.get(path, 0) < count:
-			problems.append(f'{path}: the exception for {count} literal size(s) now covers {used.get(path, 0)}: '
-				'lower its count in tools/ci/check_ui_sizes.py')
+	for path, name, _ in unused:
+		problems.append(f'{path}: the exception for {name} matches no literal size any more: remove it from '
+			'tools/ci/check_ui_sizes.py')
 	return problems
 
 
@@ -227,7 +266,42 @@ def self_test():
 		('ImGui::Button(label, ImVec2(w3, 0));', []),
 		('ImGui::Button("Size 100 px", ImVec2(0, 0));', []),
 		('ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);', []),
-		('ImGui::Button("x", ImVec2(ImGui::CalcTextSize("abc").x + 40.f, 0));', []),
+		('ImGui::Button("x", ImVec2(ImGui::CalcTextSize("abc").x + 40.f, 0));', ['Button']),
+		('ImGui::Button("x", ImVec2(ImGui::CalcTextSize("abc").x + em(40.f), 0));', []),
+		('ImGui::SetNextItemWidth(ImGui::GetFontSize() + 40.f);', ['SetNextItemWidth']),
+		('ImGui::SetNextItemWidth(36.f * ImGui::GetFrameHeight());', []),
+		('ImGui::SetNextItemWidth(ImGui::GetTextLineHeightWithSpacing() * 20);', []),
+		('ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 36.0f, 0.0f), ImGuiCond_Appearing);', []),
+		('ImGui::SetNextItemWidth(em_of(120.f, 13.f));', []),
+		('ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));', ['PushStyleVar']),
+		('ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);', ['PushStyleVar']),
+		('ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.0f));', []),
+		('ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, em(ImVec2(8, 6)));', []),
+		('ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));', []),
+		('ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);', []),
+		('ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12.f, vp->WorkPos.y), ImGuiCond_Always,'
+		 ' ImVec2(1.f, 0.f));', ['SetNextWindowPos']),
+		('ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - em(12.f), vp->WorkPos.y + em(12.f)),'
+		 ' ImGuiCond_Always, ImVec2(1.f, 0.f));', []),
+		('ImGui::SetNextWindowPos(vp->Pos);', []),
+		('ImGui::Dummy(ImVec2(0, 6));', ['Dummy']),
+		('ImGui::Dummy(ImVec2(0, em(6)));', []),
+		('ImGui::Dummy(ImVec2(0, 0));', []),
+		('ImGui::Indent(16.f);', ['Indent']),
+		('ImGui::Unindent(16.f);', ['Unindent']),
+		('ImGui::Indent();', []),
+		('ImGui::Indent(em(16.f));', []),
+		('ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8);', ['SetCursorPosY']),
+		('ImGui::SetCursorPosY(ImGui::GetCursorPosY() + em(8.f));', []),
+		('ImGui::SetCursorPosX((avail - w) * 0.5f);', []),
+		('ImGui::SetCursorPosX(48.f);', ['SetCursorPosX']),
+		('ImGui::SetCursorPos(ImVec2(24.f, 0.f));', ['SetCursorPos']),
+		('ImGui::SetCursorScreenPos(ImVec2(p.x - 10.f, p.y));', ['SetCursorScreenPos']),
+		('ImGui::SetCursorScreenPos({ p.x - em(10.f), p.y });', []),
+		('ImGui::BeginChild("c", ImVec2(0, std::max(avail, 80.f)), true);', ['BeginChild']),
+		('ImGui::BeginChild("c", ImVec2(0, std::max(avail, em(80.f))), true);', []),
+		('ImGui::SetCursorPos(ImVec2(std::max(0.f, (a - b) * 0.5f), std::clamp(y, 0.f, 60.f)));', ['SetCursorPos']),
+		('const float h = std::max(avail, 60.f);', []),
 		('// ImGui::SetNextItemWidth(120.f);', []),
 		('ImGui::SetNextItemWidth(\n\t120.f);', ['SetNextItemWidth']),
 	]

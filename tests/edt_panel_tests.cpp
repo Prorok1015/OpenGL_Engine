@@ -322,6 +322,31 @@ BOOST_AUTO_TEST_CASE(UiMetrics_EmFollowsTheFontSize_DpiPxFollowsTheViewportDpi)
 	ImGui::DestroyContext(context);
 }
 
+BOOST_AUTO_TEST_CASE(UiMetrics_EmIgnoresTheCurrentWindow_DpiPxTreatsAnUnsetScaleAsOne)
+{
+	ImGuiContext* context = ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(800.f, 600.f);
+	unsigned char* pixels = nullptr;
+	int width = 0, height = 0;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	ImGui::GetMainViewport()->DpiScale = 0.f;
+
+	ImGui::NewFrame();
+	BOOST_TEST(edt::dpi_px(100.f) == 100.f);
+	BOOST_TEST(edt::em(100.f) == 100.f);
+	ImGui::SetNextWindowSize(ImVec2(200.f, 200.f));
+	if (ImGui::Begin("window")) {
+		ImGui::SetWindowFontScale(2.f);
+		BOOST_TEST(ImGui::GetFontSize() == 26.f);
+		BOOST_TEST(edt::em(100.f) == 100.f);
+	}
+	ImGui::End();
+	ImGui::EndFrame();
+	ImGui::DestroyContext(context);
+}
+
 BOOST_AUTO_TEST_CASE(Rename_FollowsItsNodeAndEndsWhenTheNodeGoes)
 {
 	ImGuiContext* context = ImGui::CreateContext();

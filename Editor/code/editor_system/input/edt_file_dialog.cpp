@@ -77,7 +77,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
 			return false;
 		}
         // Path navigation bar with better styling
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, em(ImVec2(8.f, 6.f)));
         
         // Back button
         if (ImGui::Button((icons.back + "##back").c_str())) {
@@ -92,7 +92,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         
         // Current path with background
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
         std::string path_str = current_path.string();
         // Reserve space for filter
         float filter_width = em(200.0f);
@@ -106,14 +106,14 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         ImGui::SameLine();
         // Filter with icon
         ImGui::PushItemWidth(filter_width);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
         ImGui::TextUnformatted(icons.search.c_str());
         ImGui::SameLine();
         ImGui::InputTextWithHint("##filter", "Filter...", &filter);
         ImGui::PopStyleVar(2);
 
         // File list with better styling
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, em(4.f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
         if (ImGui::BeginChild("Files", ImVec2(0, -em(80.f)), true)) {
             float item_height = ImGui::GetTextLineHeightWithSpacing() * 1.2f;
@@ -189,8 +189,8 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
 
         // Selected path display with background
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, em(ImVec2(8.f, 6.f)));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
 		std::string selected_path_str = selected_path.string();
         ImGui::InputText("##selected", &selected_path_str, ImGuiInputTextFlags_ReadOnly);
         ImGui::PopStyleVar(2);
@@ -213,12 +213,12 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         }
 
         // Buttons
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + em(8.f));
 
         // Center buttons
         ImGui::SetCursorPosX((ImGui::GetWindowSize().x - total_width) * 0.5f);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
 
         // A button that cannot be pressed keeps the style's plain button colour, hovered or not.
         if (!can_accept) {

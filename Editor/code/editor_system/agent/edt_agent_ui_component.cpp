@@ -6,6 +6,7 @@
 #include "edt_agent_server_settings.h"
 #include "edt_agents_panel.h"
 #include "edt_editor_layer.h"
+#include "edt_ui_metrics.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/common/engine_assert.h>
 #include <snk/editor/edt_action_registry.h>
@@ -77,7 +78,8 @@ void edt::agent_ui_component::draw_policy_notice()
 	}
 	if (m_notice_dismissed_key == pending_key) return;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),
+	ImGui::SetNextWindowPos(
+		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f), viewport->WorkPos.y + viewport->WorkSize.y - em(12.f)),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
