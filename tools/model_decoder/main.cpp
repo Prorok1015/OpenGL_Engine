@@ -156,6 +156,8 @@ struct arguments
 	// print what the sandbox applied, instead of decoding. Exit 0: refused (or printed), 5: it worked.
 	fs::path self_test_open;
 	bool self_test_connect = false;
+	// Connect here instead of port 9: a listener the test holds, so a connection that is not refused is seen.
+	unsigned short self_test_connect_port = 0;
 	bool self_test_exec = false;
 	bool self_test_sandbox_report = false;
 	// Signal the parent, or make the kernel signal it for this process's I/O (fcntl F_SETOWN, F_SETSIG, O_ASYNC,
@@ -219,6 +221,9 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_open = args[++i];
 		} else if (arg == "--self-test-connect") {
 			parsed.self_test_connect = true;
+		} else if (arg == "--self-test-connect-port" && has_value) {
+			parsed.self_test_connect = true;
+			parsed.self_test_connect_port = static_cast<unsigned short>(std::strtoul(args[++i].string().c_str(), nullptr, 10));
 		} else if (arg == "--self-test-exec") {
 			parsed.self_test_exec = true;
 		} else if (arg == "--self-test-sandbox-report") {
@@ -393,13 +398,16 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		}
 		sockaddr_in address{};
 		address.sin_family = AF_INET;
-		address.sin_port = htons(9);
+		address.sin_port = htons(args.self_test_connect_port != 0 ? args.self_test_connect_port : 9);
 		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		const int connected = ::connect(socket_handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
 		const int error = WSAGetLastError();
 		closesocket(socket_handle);
 		WSACleanup();
-		return connected != 0 && error == WSAEACCES ? 0 : 5;
+		if (connected == 0) return 5;
+		std::fprintf(stderr, "connect refused: %d\n", error);
+		// With a listener there, any failure is the container's refusal; without one, only an access error is.
+		return args.self_test_connect_port != 0 || error == WSAEACCES ? 0 : 5;
 	}
 	if (args.self_test_exec) {
 		// cmd.exe that exits 5: a start that worked is seen as such, not as a refusal.
@@ -412,7 +420,9 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		startup.cb = sizeof(startup);
 		PROCESS_INFORMATION started{};
 		if (!CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &started)) {
-			return refused(GetLastError());
+			// cmd.exe is there: a start that fails is the child process policy or the job refusing it, whatever the code.
+			std::fprintf(stderr, "start refused: %lu\n", GetLastError());
+			return 0;
 		}
 		WaitForSingleObject(started.hProcess, INFINITE);
 		CloseHandle(started.hThread);

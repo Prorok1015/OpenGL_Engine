@@ -22,6 +22,7 @@
 #endif
 #include <windows.h>
 #include <aclapi.h>
+#include <sddl.h>
 #include <userenv.h>
 #else
 #include <cerrno>
@@ -356,30 +357,23 @@ namespace
 		status = SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr,
 			updated, nullptr);
 		if (status != ERROR_SUCCESS) return std::format("cannot change the access list of '{}': {}", utf8_of(path), system_text(status));
-		return {};
-	}
-
-	// Read access for the container to a window station or desktop (user32 opens both when it starts).
-	std::string grant_window_object(HANDLE object, PSID sid, DWORD access, std::string_view what)
-	{
-		PACL current = nullptr;
-		PSECURITY_DESCRIPTOR descriptor = nullptr;
-		DWORD status = GetSecurityInfo(object, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &current, nullptr, &descriptor);
-		if (status != ERROR_SUCCESS) return std::format("cannot read the access list of the {}: {}", what, system_text(status));
-		const scope_exit free_descriptor{ [descriptor] { LocalFree(descriptor); } };
-		EXPLICIT_ACCESS_W entry{};
-		entry.grfAccessPermissions = access;
-		entry.grfAccessMode = GRANT_ACCESS;
-		entry.grfInheritance = NO_INHERITANCE;
-		entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-		entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
-		entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
-		PACL updated = nullptr;
-		status = SetEntriesInAclW(1, &entry, current, &updated);
-		if (status != ERROR_SUCCESS) return std::format("cannot extend the access list of the {}: {}", what, system_text(status));
-		const scope_exit free_updated{ [updated] { LocalFree(updated); } };
-		status = SetSecurityInfo(object, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, updated, nullptr);
-		if (status != ERROR_SUCCESS) return std::format("cannot change the access list of the {}: {}", what, system_text(status));
+		if (!write) return {};
+		// An AppContainer runs at low integrity: it writes only where the label is low, whatever the access list says.
+		PSECURITY_DESCRIPTOR low = nullptr;
+		if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(folder ? L"S:(ML;OICI;NW;;;LW)" : L"S:(ML;;NW;;;LW)", SDDL_REVISION_1,
+				&low, nullptr)) {
+			return std::format("cannot make the low integrity label for '{}': {}", utf8_of(path), system_text(GetLastError()));
+		}
+		const scope_exit free_low{ [low] { LocalFree(low); } };
+		PACL label = nullptr;
+		BOOL present = FALSE;
+		BOOL defaulted = FALSE;
+		if (!GetSecurityDescriptorSacl(low, &present, &label, &defaulted) || !present) {
+			return std::format("cannot make the low integrity label for '{}': {}", utf8_of(path), system_text(GetLastError()));
+		}
+		status = SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION, nullptr, nullptr,
+			nullptr, label);
+		if (status != ERROR_SUCCESS) return std::format("cannot label '{}' low integrity: {}", utf8_of(path), system_text(status));
 		return {};
 	}
 
@@ -474,22 +468,9 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		for (const fs::path& folder : confinement->read_execute) {
 			if (std::string why = grant_container(folder, sid.get(), false); !why.empty()) return confinement_failure(std::move(why));
 		}
-		if (confinement->desktop_access) {
-			if (std::string why = grant_window_object(GetProcessWindowStation(), sid.get(),
-					WINSTA_ACCESSGLOBALATOMS | WINSTA_ENUMDESKTOPS | WINSTA_READATTRIBUTES | READ_CONTROL, "window station");
-				!why.empty()) {
-				return confinement_failure(std::move(why));
-			}
-			if (std::string why = grant_window_object(GetThreadDesktop(GetCurrentThreadId()), sid.get(),
-					DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS | READ_CONTROL, "desktop");
-				!why.empty()) {
-				return confinement_failure(std::move(why));
-			}
-		}
 	}
 
-	const bool with_mitigations = confinement != nullptr && confinement->mitigations;
-	const DWORD attribute_count = confinement != nullptr ? (with_mitigations ? 4 : 3) : 1;
+	const DWORD attribute_count = confinement != nullptr ? 4 : 1;
 	SIZE_T list_size = 0;
 	InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &list_size);
 	std::vector<std::byte> list_storage(list_size);
@@ -514,9 +495,8 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		capabilities.AppContainerSid = sid.get();
 		if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities),
 				nullptr, nullptr)
-			|| (with_mitigations
-				&& !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations, sizeof(mitigations),
-					nullptr, nullptr))
+			|| !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations, sizeof(mitigations),
+				nullptr, nullptr)
 			|| !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, &child_processes,
 				sizeof(child_processes), nullptr, nullptr)) {
 			return confinement_failure(std::format("cannot prepare the confinement of '{}': {}", utf8_of(program), system_text(GetLastError())));
@@ -602,8 +582,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 	if (job.get() == nullptr
 		|| !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))
-		|| (confinement != nullptr && confinement->ui_limits
-			&& !SetInformationJobObject(job.get(), JobObjectBasicUIRestrictions, &no_ui, sizeof(no_ui)))
+		|| (confinement != nullptr && !SetInformationJobObject(job.get(), JobObjectBasicUIRestrictions, &no_ui, sizeof(no_ui)))
 		|| !AssignProcessToJobObject(job.get(), process_handle.get())) {
 		auto result = system_failure("cannot put into a job object", program);
 		result.confinement_failed = confinement != nullptr;

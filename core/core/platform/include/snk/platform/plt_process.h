@@ -42,19 +42,15 @@ namespace platform
 	// file a container may not open), a child process policy and process mitigations (no child processes, no dynamic
 	// code, no extension points, no images from remote paths (the C/C++ runtime beside the program wins over an older one in System32), strict handle checks, no fonts), and a job
 	// of one process without UI access. The container's SID gets read and write on `read_write` and read and execute on
-	// `read_execute` (inherited by what they hold); nothing else of the machine's access lists is changed.
+	// `read_execute` (inherited by what they hold), and `read_write` is labelled low integrity (an AppContainer runs at low
+	// integrity and writes nowhere else); nothing else of the machine's access lists is changed. The child gets no console
+	// (an AppContainer process that attaches one does not start); its stdio are the pipes.
 	struct process_confinement
 	{
 		// The AppContainer's name (a profile is created on first use only if the system needs one); must not be empty.
 		std::wstring container_name;
 		std::vector<std::filesystem::path> read_write;
 		std::vector<std::filesystem::path> read_execute;
-		// What a machine lets a confined child start with differs (a CI runner's window station, a DLL's own start): the
-		// process mitigations and the job's UI limits can be left out, and the container can be given access to this
-		// process's window station and desktop, which user32 needs to start.
-		bool mitigations = true;
-		bool ui_limits = true;
-		bool desktop_access = false;
 	};
 
 	struct process_options

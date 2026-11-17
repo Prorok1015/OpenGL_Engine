@@ -3,6 +3,10 @@
 #include "test_temp_dir.hpp"
 #include "edt_decode_runner.h"
 #include "edt_decoder_copy.h"
+#if defined(_WIN32)
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#endif
 #include <chrono>
 #include <cstdint>
 #include <ios>
@@ -396,51 +400,14 @@ BOOST_AUTO_TEST_CASE(AConfinedChild_IsInItsAppContainer_AndCannotOpenAFileOutsid
 
 	const auto opened = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-open", outside.string() });
 	BOOST_CHECK_MESSAGE(opened.exit_code == 0, "open outside: " << opened.exit_code << " " << opened.err << opened.error);
-	const auto connected = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-connect" });
+	// A listener on the loopback: without the container the probe connects (5); in it, no capability, no connection.
+	boost::asio::io_context io;
+	boost::asio::ip::tcp::acceptor listener(io, boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::loopback(), 0));
+	const std::string port = std::to_string(listener.local_endpoint().port());
+	const auto connected = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-connect-port", port });
 	BOOST_CHECK_MESSAGE(connected.exit_code == 0, "connect: " << connected.exit_code << " " << connected.err << connected.error);
 	const auto executed = run_confined_probe(base, scratch, { "--sandbox", "required", "--self-test-exec" });
 	BOOST_CHECK_MESSAGE(executed.exit_code == 0, "exec: " << executed.exit_code << " " << executed.err << executed.error);
-}
-
-// Diagnosis for a machine's limits (#1054): which confinement a confined child starts under, logged as warnings; the test
-// above is the one that must pass. Exit 0: it started and reported; 4: it started and refused (its own check); a status
-// like 0xc0000142: it never ran its main.
-BOOST_AUTO_TEST_CASE(WhatAConfinedChildStartsUnder_IsLogged)
-{
-	std::string error;
-	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_SELFTEST_PATH, dir.path() / "copies", error);
-	BOOST_REQUIRE_MESSAGE(copy.has_value(), error);
-	struct variant
-	{
-		const char* name;
-		bool mitigations;
-		bool ui_limits;
-		bool desktop_access;
-	};
-	const variant variants[] = { { "all", true, true, false }, { "no-mitigations", false, true, false }, { "no-ui-limits", true, false, false },
-		{ "desktop-access", true, true, true }, { "bare", false, false, true } };
-	for (const variant& tried : variants) {
-		const fs::path scratch = dir.path() / "diagnosis" / tried.name;
-		fs::create_directories(scratch);
-		platform::process_options options;
-		options.working_dir = scratch;
-		platform::process_confinement confinement{ L"snk.model_decoder", { scratch }, { copy->folder } };
-		confinement.mitigations = tried.mitigations;
-		confinement.ui_limits = tried.ui_limits;
-		confinement.desktop_access = tried.desktop_access;
-		options.confinement = confinement;
-		std::string out;
-		const auto run = platform::run_process(copy->program, { "--sandbox", "best_effort", "--self-test-sandbox-report" }, options,
-			[&out](std::string_view line) { out += std::string(line) + " "; }, {});
-		BOOST_WARN_MESSAGE(false, "confined child, " << tried.name << ": exit " << std::hex << static_cast<std::uint32_t>(run.exit_code)
-			<< std::dec << " error '" << run.error << "' out '" << out << "'");
-	}
-	platform::process_options cmd_options;
-	cmd_options.working_dir = dir.path() / "diagnosis";
-	cmd_options.confinement = platform::process_confinement{ L"snk.model_decoder", { dir.path() / "diagnosis" }, {} };
-	const auto cmd = platform::run_process("C:\\Windows\\System32\\cmd.exe", { "/c", "exit", "7" }, cmd_options, [](std::string_view) {}, {});
-	BOOST_WARN_MESSAGE(false, "confined cmd.exe: exit " << std::hex << static_cast<std::uint32_t>(cmd.exit_code) << std::dec << " error '"
-		<< cmd.error << "'");
 }
 
 BOOST_AUTO_TEST_CASE(AConfinementThatCannotBeSetUp_StartsNothing_AndSaysSo)
