@@ -528,8 +528,32 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		address.sin_family = AF_INET;
 		address.sin_port = htons(args.self_test_connect_port != 0 ? args.self_test_connect_port : 9);
 		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-		const int connected = ::connect(socket_handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
-		const int error = WSAGetLastError();
+		// Not blocking: an AppContainer's loopback connect may be dropped rather than refused, and a blocking connect then
+		// waits out the system's 21 s timeout (#1144). A listener on the loopback answers at once, so 3 s is plenty.
+		u_long non_blocking = 1;
+		ioctlsocket(socket_handle, FIONBIO, &non_blocking);
+		int connected = ::connect(socket_handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+		int error = connected == 0 ? 0 : WSAGetLastError();
+		if (connected != 0 && error == WSAEWOULDBLOCK) {
+			fd_set writable;
+			fd_set failed;
+			FD_ZERO(&writable);
+			FD_ZERO(&failed);
+			FD_SET(socket_handle, &writable);
+			FD_SET(socket_handle, &failed);
+			timeval wait{ 3, 0 };
+			const int ready = ::select(0, nullptr, &writable, &failed, &wait);
+			if (ready > 0 && FD_ISSET(socket_handle, &writable)) {
+				connected = 0;
+			} else if (ready > 0) {
+				int socket_error = 0;
+				int length = sizeof(socket_error);
+				getsockopt(socket_handle, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socket_error), &length);
+				error = socket_error;
+			} else {
+				error = WSAETIMEDOUT;
+			}
+		}
 		closesocket(socket_handle);
 		WSACleanup();
 		if (connected == 0) return 5;
