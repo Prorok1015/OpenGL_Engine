@@ -49,6 +49,13 @@ namespace
 		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
+	bool same_layout(const rnd::driver::BufferLayout& a, const rnd::driver::BufferLayout& b)
+	{
+		return std::ranges::equal(a.get_elements(), b.get_elements(), [](const auto& x, const auto& y) {
+			return x.Name == y.Name && x.Type == y.Type && x.Offset == y.Offset && x.Normalized == y.Normalized;
+		});
+	}
+
 	// Why the pair would not give the data it was made of back, as the loader decodes it; empty when it does.
 	std::string read_back_problem(const res::tag& tag, const rnd::geometry_files& pair, const rnd::geometry_desc& geometry)
 	{
@@ -59,7 +66,7 @@ namespace
 		if (std::string problem = rnd::decode_geometry_files(tag, desc.as_object(), pair.binary, read); !problem.empty()) {
 			return std::format("its new pair would not read back: {}", problem);
 		}
-		if (read.vertices != geometry.vertices || read.indices != geometry.indices || read.layout.get_stride() != geometry.layout.get_stride()) {
+		if (read.vertices != geometry.vertices || read.indices != geometry.indices || !same_layout(read.layout, geometry.layout)) {
 			return "its new pair would read back other data";
 		}
 		return {};
