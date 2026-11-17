@@ -21,6 +21,7 @@
 namespace edt
 {
 	class asset_database;
+	class document;
 
 	enum class asset_operation : std::uint8_t { rename, move, remove };
 
@@ -237,6 +238,12 @@ namespace edt
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).
 	bool is_engine_layer(const std::vector<std::filesystem::path>& layers, std::size_t layer, const std::filesystem::path& engine_base);
+
+	// The port is_open_with_unsaved_changes from what the editor knows of one asset: `open` is the open document that has it as its
+	// source (null: none), `scene` the editor's scene document, `is_editor_copy` whether the asset is the open level's editor copy.
+	// An operation would lose the unsaved edits of a dirty document; the open level, clean or not, cannot take a change of its file
+	// from outside yet (US-60-C, #1188).
+	bool is_open_with_unsaved_changes(const document* open, const document& scene, bool is_editor_copy);
 
 	class asset_ops
 	{

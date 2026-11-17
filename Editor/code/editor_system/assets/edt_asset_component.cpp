@@ -107,10 +107,7 @@ std::vector<edt::problem_action> edt::asset_component::problem_actions(const pro
 
 bool edt::asset_component::next_undo_is_operation() const
 {
-	const std::optional<std::uint64_t> operation = m_history->next_serial();
-	if (!operation) return false;
-	const std::optional<std::uint64_t> fix = m_database->next_undo_serial();
-	return !fix || *operation > *fix;
+	return asset_history::newer_than(m_history->next_serial(), m_database->next_undo_serial());
 }
 
 std::optional<std::string> edt::asset_component::next_undo_label() const

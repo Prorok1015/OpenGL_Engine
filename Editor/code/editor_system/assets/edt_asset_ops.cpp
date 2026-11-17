@@ -3,6 +3,7 @@
 #include "edt_reference_rewrite.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/platform/plt_beneath.h>
@@ -351,6 +352,11 @@ bool edt::is_engine_layer(const std::vector<fs::path>& layers, std::size_t layer
 	const fs::path b = ec ? fs::path{} : fs::weakly_canonical(engine_base, ec);
 	if (ec) return layers[layer].lexically_normal() == engine_base.lexically_normal();
 	return a == b;
+}
+
+bool edt::is_open_with_unsaved_changes(const document* open, const document& scene, bool is_editor_copy)
+{
+	return is_editor_copy || open == &scene || (open != nullptr && open->is_dirty());
 }
 
 edt::asset_ops::asset_ops(asset_ops_ports ports)

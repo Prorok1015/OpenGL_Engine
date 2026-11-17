@@ -39,6 +39,12 @@ namespace edt
 		std::size_t size() const { return m_entries.size(); }
 		std::optional<std::string> next_label() const;
 		std::optional<std::uint64_t> next_serial() const;
+		// Whether the newest operation was done after the newest fix of the asset database: the one Edit > Undo takes. Their serials come from
+		// asset_database::next_history_serial; none for an empty list.
+		static bool newer_than(std::optional<std::uint64_t> operation, std::optional<std::uint64_t> fix)
+		{
+			return operation.has_value() && (!fix.has_value() || *operation > *fix);
+		}
 		// The id of the operation undo_last would take back.
 		std::optional<std::string> next_operation_id() const;
 		// Takes back the newest operation and forgets it: put back, refused (a file changed since: nothing was touched, and

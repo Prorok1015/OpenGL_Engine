@@ -3,6 +3,7 @@
 #include "edt_level_load_component.h"
 #include "edt_asset_component.h"
 #include "edt_asset_open_component.h"
+#include "edt_asset_ops.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -553,13 +554,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		asset_ports.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; };
 		asset_ports.write_blocker = [this] { return project_write_blocker(); };
-		// The open level takes no change from outside yet (US-60-C, #1188), clean or not; any other open document only when it is dirty.
 		asset_ports.is_open_with_unsaved_changes = [this](const res::tag& tag) {
-			document* open = m_context->documents().find_by_source(tag);
-			if (open == &m_context->documents().scene()) return true;
-			if (open && open->is_dirty()) return true;
 			const res::tag& editor_copy = m_state.editor_tag;
-			return editor_copy.is_valid() && editor_copy.relative() == tag.relative();
+			return edt::is_open_with_unsaved_changes(m_context->documents().find_by_source(tag), m_context->documents().scene(),
+				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
 		};
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
