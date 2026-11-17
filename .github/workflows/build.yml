@@ -6,14 +6,14 @@ name: Build
 # persisted by .github/actions/compiler-cache.
 
 on:
-  # Work branches (wip/*) are checked through their draft PR into aibranch; a push trigger on them
+  # Work branches (wip/*) are checked through their draft PR into main; a push trigger on them
   # too would run every job twice.
   push:
     branches: [aibranch, main]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
-  # By hand on aibranch or main (Actions > Build > Run workflow): the same jobs as a push.
+  # By hand on main or aibranch (Actions > Build > Run workflow): the same jobs as a push.
   workflow_dispatch:
   # No paths-ignore: Plan and CI summary are required checks, and a run that never starts would leave a PR of docs only
   # waiting for them. The plan skips every build of such a PR instead.
@@ -31,7 +31,7 @@ on:
 #     A draft and a PR that touches none of them no longer build Linux GCC Shared.
 #   CI summary - the last job: red when the plan or any job the plan asked for did not pass. Plan and CI summary are
 #     the required checks that guard against a run where everything was skipped.
-#   nightly.yml, on aibranch once a night and by hand - Linux TSan, the SDK packages (Linux, with and without assimp),
+#   nightly.yml, on main once a night and by hand - Linux TSan, the SDK packages (Linux, with and without assimp),
 #     the Windows package (#223) and the extract benchmark (#505).
 # Every build uses the shared engine but Linux Clang Debug (#223).
 
@@ -52,7 +52,7 @@ jobs:
   #          passed in one earlier Build run of this PR on this very head SHA and on the base this run builds: the same
   #          merge commit again. The earlier run's base is the name of its "Base <sha>" job (#836); a run without one
   #          does not count. Keeping the base fresh is not this check's job: the lead's check before the merge
-  #          (merge-tree, overlapping files) and merging aibranch into the PR when code overlaps do that.
+  #          (merge-tree, overlapping files) and merging main into the PR when code overlaps do that.
   #   base - the base the run checks: the first parent of the merge commit GitHub built for the PR. Not
   #          pull_request.base.sha, which GitHub refreshes only on a push to the PR. Both can lag behind the branch:
   #          GitHub does not rebuild the merge commit on ready_for_review.
