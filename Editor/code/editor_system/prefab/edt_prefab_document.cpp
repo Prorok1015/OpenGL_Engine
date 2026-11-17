@@ -288,7 +288,11 @@ edt::save_result edt::prefab_document::save()
 	if (on_disk.version != m_disk_version) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", m_source_tag.view()));
 	}
-	const std::vector<std::byte> bytes = working_bytes();
+	std::string why;
+	const std::vector<std::byte> bytes = m_working ? prefab_file_bytes(m_services, *m_working, m_source_tag, &why) : std::vector<std::byte>{};
+	if (bytes.empty()) {
+		return save_result::failure(std::format("{} cannot be written over its base: {}. Nothing was written, the edits stay.", m_source_tag.view(), why.empty() ? "no file form" : why));
+	}
 	if (bytes.size() > k_desc_file_limit) {
 		return save_result::failure(std::format("{} would be {} bytes: a prefab holds at most {}", m_source_tag.view(), bytes.size(), k_desc_file_limit));
 	}

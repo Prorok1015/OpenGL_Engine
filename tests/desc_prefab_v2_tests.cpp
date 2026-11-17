@@ -1,3 +1,4 @@
+#include <snk/scene/level/scn_prefab_layer.h>
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/desc_node_id.h>
@@ -308,6 +309,58 @@ BOOST_AUTO_TEST_CASE(LayerV2_ANullWhereOnlyAComponentOrATransformFieldMayBe_Fail
 		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[{"__id":"00000000000000b1","name":null}]})")));
 	BOOST_TEST(!load<scn::prefab_desc>(put("v2.prefab.desc", R"({"__type":"prefab_desc","__version":4,
 		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[{"__id":"00000000000000b1","overrides":null}]})")));
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_AnEditedVariant_IsWrittenAsALayerAndReadsBack)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":1}}},
+		{"__id":"00000000000000b2","name":"b"},
+		{"__id":"00000000000000b3","name":"c"}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"children":[]})"));
+	BOOST_REQUIRE(variant);
+
+	scn::prefab_desc edited;
+	variant->copy_to(edited);
+	edited.set_parent(variant->get_parent());
+	auto& children = edited.get_root().children;
+	children.erase(children.begin() + 1);
+	std::swap(children[0], children[1]);
+	children[0].name = "c_renamed";
+	children[1].components.clear();
+
+	json::object body;
+	edited.serialize(body);
+	BOOST_TEST(scn::write_prefab_layer(*descs, *rs, edited, body) == "");
+	BOOST_TEST(body.at("__layer").as_int64() == 2);
+	BOOST_TEST(body.at("__parent").as_string() == "memory://t/base.prefab.desc");
+
+	scn::prefab_desc again;
+	auto base = load<scn::prefab_desc>(tag_of("base.prefab.desc"));
+	base->copy_to(again);
+	again.set_parent(base->get_tag());
+	again.deserialize(*descs, body);
+	BOOST_TEST(json::value(saved(again)) == json::value(saved(edited)));
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_AnInheritedOverrideRecordTakenOut_IsRefusedAndBodyStaysAsItWas)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","overrides":[{"target":"00000000000000b1","component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2})"));
+	BOOST_REQUIRE(variant);
+	scn::prefab_desc edited;
+	variant->copy_to(edited);
+	edited.set_parent(variant->get_parent());
+	edited.get_root().children[0].overrides.clear();
+
+	json::object body;
+	edited.serialize(body);
+	const json::object before = body;
+	BOOST_TEST(!scn::write_prefab_layer(*descs, *rs, edited, body).empty());
+	BOOST_TEST(json::value(body) == json::value(before));
 }
 
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
