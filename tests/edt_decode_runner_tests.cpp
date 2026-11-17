@@ -501,17 +501,6 @@ confined_probe_result run_confined_probe(const fs::path& scratch, std::vector<st
 	result.error = run.error;
 	return result;
 }
-	fs::create_directories(scratch);
-	platform::process_options options;
-	options.working_dir = scratch;
-	if (confined) options.confinement = platform::process_confinement{ std::move(container), { scratch }, { copy->folder } };
-	options.on_stderr_line = [&result](std::string_view line) { result.err += std::string(line) + "\n"; };
-	const auto run = platform::run_process(copy->program, arguments, options,
-		[&result](std::string_view line) { result.out += std::string(line) + "\n"; }, {});
-	result.exit_code = run.exit_code;
-	result.error = run.error;
-	return result;
-}
 
 }
 
