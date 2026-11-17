@@ -254,6 +254,17 @@ bool edt::prefab_document::notify_edited()
 
 edt::save_result edt::prefab_document::save()
 {
+	return save_with(false);
+}
+
+edt::save_result edt::prefab_document::save_without_base()
+{
+	return save_with(true);
+}
+
+edt::save_result edt::prefab_document::save_with(bool without_base)
+{
+	m_layer_refused = false;
 	if (!m_open || !m_working) {
 		return save_result::failure("the prefab is not open");
 	}
@@ -289,7 +300,16 @@ edt::save_result edt::prefab_document::save()
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", m_source_tag.view()));
 	}
 	std::string why;
-	const std::vector<std::byte> bytes = m_working ? prefab_file_bytes(m_services, *m_working, m_source_tag, &why) : std::vector<std::byte>{};
+	std::vector<std::byte> bytes;
+	if (without_base) {
+		scn::prefab_desc whole;
+		m_working->copy_to(whole);
+		whole.set_guid(m_working->get_guid());
+		bytes = prefab_file_bytes(m_services, whole, m_source_tag, &why);
+	} else {
+		bytes = prefab_file_bytes(m_services, *m_working, m_source_tag, &why);
+	}
+	m_layer_refused = !without_base && bytes.empty() && m_working->get_parent().is_valid();
 	if (bytes.empty()) {
 		return save_result::failure(std::format("{} cannot be written over its base: {}. Nothing was written, the edits stay.", m_source_tag.view(), why.empty() ? "no file form" : why));
 	}
@@ -300,6 +320,7 @@ edt::save_result edt::prefab_document::save()
 		return save_result::failure(std::format("{} could not be written", m_source_tag.view()));
 	}
 	writer->signal_changed(m_source_tag);
+	if (without_base) m_working->set_parent({});
 	m_saved_form = working_form();
 	m_disk_version = code_version_of(bytes);
 	m_dirty = false;
