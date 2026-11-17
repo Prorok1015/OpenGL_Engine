@@ -33,7 +33,7 @@ namespace edt
 		// Once per frame, between windows (never inside one): re-reads a changed policy, decides whether a person can
 		// be asked, times out what waited too long and draws the question. `font` is the UI font of the frame; without
 		// it, or without Cyrillic in it, an `ask` is a `deny`. Returns true: it fits an implicit-layout registrar.
-		bool frame(ImFont* font);
+		bool frame(ImFont* font, const gui::theme_semantic_colors& colors);
 
 		// frame() without a person (headless): re-reads a changed policy and times out what waited; nobody is asked,
 		// so an `ask` is a `deny`, and nothing is drawn. Returns true, like frame().

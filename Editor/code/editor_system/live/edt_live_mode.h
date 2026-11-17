@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace res { class resource_system; }
+namespace gui { struct theme_semantic_colors; }
 
 namespace edt
 {
@@ -93,7 +94,7 @@ namespace edt
 		// Every frame, outside the job pump.
 		void tick();
 		// Into the open main menu bar, right-aligned; draws nothing at all while live mode is off.
-		void draw_status();
+		void draw_status(const gui::theme_semantic_colors& colors);
 
 		[[nodiscard]] const live_status& status() const { return m_build.status(); }
 		live_build& build() { return m_build; }

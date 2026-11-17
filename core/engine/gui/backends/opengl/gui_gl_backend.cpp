@@ -38,6 +38,8 @@ void gui::gl::gl_imgui_backend::init()
     if (m_dpi_scale > 1.f) {
         ImGui::GetStyle().ScaleAllSizes(m_dpi_scale);
     }
+    // ImGui keeps it across frames while no platform monitors are filled (UpdateViewportsNewFrame).
+    ImGui::GetMainViewport()->DpiScale = m_dpi_scale;
 
     ImGui_ImplOpenGL3_Init("#version 330 core");
     // TODO: change to load from memory
@@ -89,6 +91,7 @@ void gui::gl::gl_imgui_backend::apply_pending_theme()
     gui::apply_theme(m_style, *m_base_style);
     ImGui::GetStyle() = *m_base_style;
     ImGui::GetStyle().ScaleAllSizes(m_dpi_scale);
+    ImGui::GetMainViewport()->DpiScale = m_dpi_scale;
 }
 
 void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
@@ -106,6 +109,7 @@ void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
     ImGui::GetStyle() = *m_base_style;
     ImGui::GetStyle().ScaleAllSizes(scale);
     m_dpi_scale = scale;
+    ImGui::GetMainViewport()->DpiScale = scale;
 }
 
 void gui::gl::gl_imgui_backend::new_frame()

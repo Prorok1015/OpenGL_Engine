@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/gui/gui_theme.h>
 #include "test_manual_tasks.hpp"
 #include "test_agent_confirmations.hpp"
 #include "test_temp_dir.hpp"
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE(NobodyToAsk_AnAskIsADeny)
 
 BOOST_AUTO_TEST_CASE(FrameWithoutAFont_KeepsNobodyToAsk)
 {
-	BOOST_TEST(access->frame(nullptr));
+	BOOST_TEST(access->frame(nullptr, gui::theme_semantic_colors{}));
 	ask_as("s1");
 
 	BOOST_REQUIRE(finished.size() == 1u);
@@ -225,7 +226,7 @@ BOOST_AUTO_TEST_CASE(TheFontStopsBeingReadable_WaitingRequestsAreDeclinedAndNewO
 	ask_as("s1");
 	BOOST_REQUIRE(access->confirmations().pending().size() == 1u);
 
-	BOOST_TEST(access->frame(nullptr));
+	BOOST_TEST(access->frame(nullptr, gui::theme_semantic_colors{}));
 
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);

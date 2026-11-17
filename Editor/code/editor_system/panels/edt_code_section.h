@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt
 {
 	// The "Code" tree of the Asset Browser (#450): the files of the project's code/ folder as code:// resources.
@@ -20,7 +22,8 @@ namespace edt
 		code_section& operator=(const code_section&) = delete;
 
 		// Draws the tree node and, whatever its state, the dialogs it opened.
-		void render();
+		// `colors`: the Asset Browser's (panel_base::colors()).
+		void render(const gui::theme_semantic_colors& colors);
 
 		// A change was reported (also what the subscription calls): the next frame lists the folders again.
 		void mark_changed() { m_listings.clear(); }
@@ -30,7 +33,7 @@ namespace edt
 
 		void draw_folder(const std::string& relative);
 		void draw_entry_menu(const code_entry& entry);
-		void draw_dialogs();
+		void draw_dialogs(const gui::theme_semantic_colors& colors);
 		void open_dialog(dialog_kind kind, std::string target, std::string initial_text);
 		void report(const res::file_operation& result);
 		const std::vector<code_entry>& listing(const std::string& relative);

@@ -504,7 +504,7 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleOfAnotherMajorVersion_AndAcceptsOneItC
 		reported = old_version;
 		const std::string older_major = edt::check_editor_api_version([]() -> std::uint32_t { return reported; }, &current_editor_key);
 		BOOST_CHECK_MESSAGE(older_major.find("rebuild the project") != std::string::npos, older_major);
-		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("3.x") != std::string::npos, older_major);
+		BOOST_CHECK_MESSAGE(older_major.find("1.") != std::string::npos && older_major.find("4.x") != std::string::npos, older_major);
 	}
 
 	reported = host + (1u << 16);
@@ -535,7 +535,7 @@ BOOST_AUTO_TEST_CASE(TheHostRefusesAModuleWithoutTheEditorKeyOrWithAnotherOne)
 
 	// A module of editor API 2.x has no key: the version tells it why.
 	const std::string old = edt::check_editor_api_version([]() -> std::uint32_t { return 0x0002'0000u; }, nullptr);
-	BOOST_CHECK_MESSAGE(old.find("2.0") != std::string::npos && old.find("3.x") != std::string::npos, old);
+	BOOST_CHECK_MESSAGE(old.find("2.0") != std::string::npos && old.find("4.x") != std::string::npos, old);
 }
 
 BOOST_AUTO_TEST_CASE(AModuleWithAnotherEditorKey_IsRefusedByTheHost_NotLoaded_AndTouchesNothing)

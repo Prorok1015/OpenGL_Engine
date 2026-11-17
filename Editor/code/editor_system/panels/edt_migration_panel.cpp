@@ -1,4 +1,6 @@
 #include "edt_migration_panel.h"
+#include "edt_ui_metrics.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -8,9 +10,6 @@
 #include <vector>
 
 namespace {
-	const ImVec4 k_error{ 1.0f, 0.45f, 0.40f, 1.0f };
-	const ImVec4 k_warning{ 1.0f, 0.80f, 0.35f, 1.0f };
-	const ImVec4 k_ok{ 0.45f, 0.80f, 0.45f, 1.0f };
 
 	void wrapped(const std::string& text)
 	{
@@ -38,7 +37,8 @@ namespace {
 	// The height left above a row of buttons.
 	float body_height()
 	{
-		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y, 60.0f);
+		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y,
+			edt::em(60.f));
 	}
 }
 
@@ -64,7 +64,7 @@ void edt::migration_panel::show_rollback_question(const std::string& id)
 
 void edt::migration_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(720.f, 520.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(720.f), em(520.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -114,10 +114,11 @@ void edt::migration_panel::draw_rollback_question()
 	}
 	wrapped("Roll back migration " + question->id + "?");
 	if (!question->refused.empty()) {
-		coloured(k_error, "This rollback would be refused: " + question->refused);
+		coloured(colors().error, "This rollback would be refused: " + question->refused);
 	} else {
 		// Every path of the journal, however many: a long list scrolls inside its own region.
-		if (ImGui::BeginChild("##rollback_files", ImVec2(640.0f, 280.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+		if (ImGui::BeginChild("##rollback_files", ImVec2(em(640.0f), em(280.0f)), ImGuiChildFlags_Borders,
+				ImGuiWindowFlags_HorizontalScrollbar)) {
 			ImGui::TextUnformatted(question->text.c_str(), question->text.c_str() + question->text.size());
 		}
 		ImGui::EndChild();
@@ -141,7 +142,7 @@ void edt::migration_panel::draw_rollback_question()
 void edt::migration_panel::draw_error()
 {
 	if (m_model.error_code().empty()) return;
-	coloured(k_error, m_model.error_code() + ": " + m_model.error_text());
+	coloured(colors().error, m_model.error_code() + ": " + m_model.error_text());
 	if (!m_model.error_hint().empty()) wrapped(m_model.error_hint());
 }
 
@@ -161,16 +162,16 @@ void edt::migration_panel::draw_plan()
 			for (const std::string& warning : file.warnings) warnings.push_back(file.path + ": " + warning);
 		}
 		if (!m_model.notice().empty()) {
-			coloured(k_warning, m_model.notice());
+			coloured(colors().warning, m_model.notice());
 			ImGui::Separator();
 		}
 		if (!warnings.empty()) {
-			coloured(k_warning, "Warnings (data may be lost):");
+			coloured(colors().warning, "Warnings (data may be lost):");
 			bullets(warnings);
 			ImGui::Separator();
 		}
 		if (!plan.refused.empty()) {
-			coloured(k_error, "The migration would be refused: " + plan.refused);
+			coloured(colors().error, "The migration would be refused: " + plan.refused);
 			if (!plan.unfinished.empty()) {
 				ImGui::TextUnformatted("Unfinished migrations (Roll Back... below, or editor --migrate-rollback <id>):");
 				bullets(plan.unfinished);
@@ -249,17 +250,17 @@ void edt::migration_panel::draw_report()
 		if (!report.status.empty()) line += ", " + report.status;
 		if (!report.id.empty()) line += ", .snk/migrations/" + report.id;
 		line += ")";
-		coloured(good ? k_ok : k_error, line);
+		coloured(good ? colors().success : colors().error, line);
 	}
 	if (!report.error_code.empty()) {
-		coloured(k_error, report.error_code + ": " + report.error_text);
+		coloured(colors().error, report.error_code + ": " + report.error_text);
 		if (const std::string hint = migration_window_model::hint_of(report.error_code); !hint.empty()) wrapped(hint);
 	}
-	if (!report.refused.empty()) coloured(k_error, "Refused: " + report.refused);
+	if (!report.refused.empty()) coloured(colors().error, "Refused: " + report.refused);
 	if (!report.level.empty()) wrapped(report.level);
 	if (ImGui::BeginChild("##report", ImVec2(0.0f, body_height()), ImGuiChildFlags_Borders)) {
 		if (!report.warnings.empty()) {
-			coloured(k_warning, "Warnings:");
+			coloured(colors().warning, "Warnings:");
 			bullets(report.warnings);
 			ImGui::Separator();
 		}

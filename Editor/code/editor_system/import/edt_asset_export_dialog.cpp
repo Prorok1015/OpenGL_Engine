@@ -1,7 +1,9 @@
 #include "edt_asset_export_dialog.h"
+#include "edt_ui_metrics.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/fs_paths.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cstddef>
@@ -36,8 +38,10 @@ std::string written_before_text(const std::vector<res::tag>& written)
 
 }
 
-edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_service& jobs, res::resource_system& resources)
+edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_service& jobs,
+	res::resource_system& resources, const gui::theme_semantic_colors& colors)
 	: m_exporter(exporter)
+	, m_colors(colors)
 	, m_jobs(jobs)
 	, m_resources(resources)
 {
@@ -79,7 +83,7 @@ bool edt::asset_export_dialog::render()
 	// Handle folder browser sub-dialog
 	if (m_browse_folder) {
 		bool folder_open = true;
-		if (m_folder_dialog.show("Select Target Folder", &folder_open)) {
+		if (m_folder_dialog.show("Select Target Folder", &folder_open, m_colors)) {
 			auto selected = m_folder_dialog.get_selected_path();
 			auto base = m_resources.get_resources_path();
 			auto rel = selected.lexically_relative(base);
@@ -98,7 +102,7 @@ bool edt::asset_export_dialog::render()
 
 	bool is_open = true;
 
-	ImGui::SetNextWindowSize(ImVec2(500.f, 400.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(500.f), em(400.f)), ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal("Export to Project##edt_export", nullptr, ImGuiWindowFlags_None))
 	{
 		if (m_exporting)
@@ -137,7 +141,7 @@ void edt::asset_export_dialog::render_export_form()
 
 	const std::string asset_name(m_asset_name);
 	const std::string target_folder(m_target_folder);
-	const ImVec4 error_color(1.0f, 0.4f, 0.4f, 1.0f);
+	const ImVec4 error_color = m_colors.error;
 
 	// build_remap asserts on a path holding "://", so the name and the folder are checked before it runs.
 	std::string problem = asset_exporter::asset_name_problem(asset_name);
@@ -167,12 +171,12 @@ void edt::asset_export_dialog::render_export_form()
 			buttons_height += ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(lines + 1);
 		}
 		float available = ImGui::GetContentRegionAvail().y - buttons_height;
-		ImGui::BeginChild("##file_list", ImVec2(0.f, std::max(available, 80.f)),
+		ImGui::BeginChild("##file_list", ImVec2(0.f, std::max(available, em(80.f))),
 			ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
 		for (const auto& [mem_tag, res_tag] : remap) {
 			const std::string rel(res_tag.relative());
 			if (m_resources.exists(res_tag))
-				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s [overwrite]", rel.c_str());
+				ImGui::TextColored(m_colors.warning, "%s [overwrite]", rel.c_str());
 			else
 				ImGui::Text("%s", rel.c_str());
 		}
@@ -189,7 +193,7 @@ void edt::asset_export_dialog::render_export_form()
 	ImGui::Separator();
 	ImGui::Spacing();
 
-	const float bw = 110.f;
+	const float bw = em(110.f);
 	const float avail = ImGui::GetContentRegionAvail().x;
 	ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 

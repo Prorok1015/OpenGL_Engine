@@ -10,6 +10,7 @@
 #include "edt_migration_window_model.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_scene_document.h"
+#include "edt_ui_metrics.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
@@ -286,7 +287,9 @@ bool edt::migration_component::draw_notice()
 	if (!m_notice->visible()) return false;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	// Above the agent policy's notice, which takes the corner.
-	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 110.f),
+	ImGui::SetNextWindowPos(
+		ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f),
+			viewport->WorkPos.y + viewport->WorkSize.y - em(110.f)),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 		| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
