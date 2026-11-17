@@ -133,7 +133,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
 #if defined(_WIN32)
 	if (m_config.confine) {
-		options.confinement = platform::process_confinement{ m_config.container_name, { folder }, m_config.confine_read_execute };
+		options.confinement = platform::process_confinement{ m_config.container, { folder }, m_config.confine_read_execute };
 	}
 #endif
 	decode_log_budget budget;

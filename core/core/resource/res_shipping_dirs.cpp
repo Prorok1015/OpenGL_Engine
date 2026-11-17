@@ -357,30 +357,65 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 	return removed;
 }
 
+#ifdef _WIN32
+namespace {
+	// A path past MAX_PATH is reached only in its \\?\ form; that form takes the path as it is, so it is made whole first.
+	fs::path extended_form(const fs::path& path)
+	{
+		std::error_code ec;
+		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().wstring();
+		if (ec || whole.starts_with(L"\\\\?\\")) return path;
+		if (whole.starts_with(L"\\\\")) return fs::path(L"\\\\?\\UNC\\" + whole.substr(2));
+		return fs::path(L"\\\\?\\" + whole);
+	}
+
+	// Clears READONLY on `path` itself: through a handle that opens a reparse point and not what it points at, where
+	// SetFileAttributesW by name could change the target's attributes.
+	void clear_read_only(const fs::path& path, DWORD attributes)
+	{
+		const HANDLE entry = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (entry == INVALID_HANDLE_VALUE) return;
+		FILE_BASIC_INFO basic{};
+		// Zero times are left as they are; zero attributes would be too, so a plain file gets NORMAL.
+		basic.FileAttributes = attributes & ~static_cast<DWORD>(FILE_ATTRIBUTE_READONLY);
+		if (basic.FileAttributes == 0) basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+		SetFileInformationByHandle(entry, FileBasicInfo, &basic, sizeof(basic));
+		CloseHandle(entry);
+	}
+
+	bool remove_tree_below(const fs::path& path, std::error_code& ec)
+	{
+		const DWORD attributes = GetFileAttributesW(path.c_str());
+		if (attributes == INVALID_FILE_ATTRIBUTES) {
+			const DWORD error = GetLastError();
+			if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) ec = std::error_code(static_cast<int>(error), std::system_category());
+			return !ec;
+		}
+		const bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		// A junction, a symlink, a mount point: the link goes, what it points at stays.
+		if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 && directory) {
+			std::error_code list_ec;
+			for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
+				std::error_code child_ec;
+				if (!remove_tree_below(it->path(), child_ec) && !ec) ec = child_ec;
+			}
+			if (list_ec && !ec) ec = list_ec;
+		}
+		if ((attributes & FILE_ATTRIBUTE_READONLY) != 0) clear_read_only(path, attributes);
+		if (!(directory ? RemoveDirectoryW(path.c_str()) : DeleteFileW(path.c_str())) && !ec) {
+			ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+		}
+		return !ec;
+	}
+}
+#endif
+
 bool core::res::remove_tree_without_following(const fs::path& path, std::error_code& ec)
 {
 	ec.clear();
 #ifdef _WIN32
-	const DWORD attributes = GetFileAttributesW(path.c_str());
-	if (attributes == INVALID_FILE_ATTRIBUTES) {
-		const DWORD error = GetLastError();
-		if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) ec = std::error_code(static_cast<int>(error), std::system_category());
-		return !ec;
-	}
-	const bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-	// A junction, a symlink, a mount point: the link goes, what it points at stays.
-	if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 && directory) {
-		std::error_code list_ec;
-		for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
-			std::error_code child_ec;
-			if (!remove_tree_without_following(it->path(), child_ec) && !ec) ec = child_ec;
-		}
-		if (list_ec && !ec) ec = list_ec;
-	}
-	if ((attributes & FILE_ATTRIBUTE_READONLY) != 0) SetFileAttributesW(path.c_str(), attributes & ~static_cast<DWORD>(FILE_ATTRIBUTE_READONLY));
-	if (!(directory ? RemoveDirectoryW(path.c_str()) : DeleteFileW(path.c_str())) && !ec) {
-		ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-	}
+	return remove_tree_below(extended_form(path), ec);
 #else
 	const fs::file_status status = fs::symlink_status(path, ec);
 	if (ec) {
