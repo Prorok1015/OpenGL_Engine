@@ -1325,6 +1325,18 @@ jobs:
           for variant in classic dark_neutral dark_contrast light; do
             shoot "$variant" gui/theme "engine://themes/${variant}.desc"
           done
+          # #1136 EXPERIMENT: the Console with log lines in each mono face (no --frames: deterministic time captures no log).
+          console_shot() {
+            local variant="$1"; shift
+            local out="headless_out/themes/console_$variant"
+            mkdir -p "$out"
+            sed "s|@OUT@|$out|g" tools/headless/console_tour.actions > "$out/tour.actions"
+            tools/run_headless.sh --editor "$EDITOR_BIN" --actions "$out/tour.actions" --size 1920x1080 \
+              --shot "$out/final.png" \
+              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true "$@"
+          }
+          console_shot noto_mono gui/theme engine://themes/dark_neutral.desc
+          console_shot jetbrains_mono gui/theme engine://themes/dark_neutral_jbmono.desc
           # EXPERIMENT (#1136, remove after the owner's choice): dark_neutral with JetBrains Mono as the mono face.
           shoot dark_neutral_jbmono gui/theme engine://themes/dark_neutral_jbmono.desc
           # #1130: the scripts that click by name (editor/ui_probe) also work in a theme other than classic.

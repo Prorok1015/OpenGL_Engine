@@ -1,0 +1,13 @@
+# #1136 EXPERIMENT (for the owner's choice of the mono face, removed with the jbmono preset): the Console with real log
+# lines. Run without --frames: under deterministic time the console captures nothing (capture_log), so this run is not
+# frame-exact and is never compared to a reference.
+sleep 20
+click_item menu View
+sleep 1
+click_item menu Console
+sleep 1
+click_item menu View
+sleep 1
+click_item menu Console
+sleep 2
+shot @OUT@/console.png
