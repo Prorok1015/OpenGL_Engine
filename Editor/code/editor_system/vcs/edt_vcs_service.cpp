@@ -3899,3 +3899,21 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	keep(out, commands.add(std::move(push)));
 	return out;
 }
+
+std::vector<std::filesystem::path> edt::config_files_to_guard(const std::vector<std::filesystem::path>& files)
+{
+	std::vector<std::filesystem::path> guarded;
+	const auto add = [&guarded](std::filesystem::path path) {
+		if (!path.empty() && std::find(guarded.begin(), guarded.end(), path) == guarded.end()) guarded.push_back(std::move(path));
+	};
+	for (const std::filesystem::path& file : files) {
+		if (file.empty()) continue;
+		std::error_code ec;
+		const std::filesystem::path written = std::filesystem::absolute(file, ec).lexically_normal();
+		if (ec) continue;
+		add(written);
+		const std::filesystem::path resolved = std::filesystem::weakly_canonical(written, ec);
+		if (!ec) add(resolved);
+	}
+	return guarded;
+}

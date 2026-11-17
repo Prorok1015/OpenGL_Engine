@@ -21,6 +21,9 @@ namespace po = boost::program_options;
 bool is_initialized = false;
 namespace {
 	std::filesystem::path loaded_config_file;
+	std::vector<std::filesystem::path> loaded_config_chain;
+	// Deeper is a mistake, not a configuration: a chain of links that leads back to itself under other names ends here.
+	constexpr std::size_t k_max_extends_depth = 16;
 }
 
 constexpr auto EXTENDS_KEY = "extends";
@@ -150,17 +153,34 @@ YAML::Node load_yaml_file(const std::filesystem::path& file)
 	return YAML::Load(in);
 }
 
-void load_config_file_with_extends(std::filesystem::path file_path)
+// `visiting` holds the files of the chain above this one: a file that extends one of them, itself included, is a cycle.
+// `read` gets every file loaded, the top one first, each as written (a link stays a link, #1090).
+void load_config_file_with_extends(const std::filesystem::path& file_path, std::vector<std::filesystem::path>& visiting,
+	std::vector<std::filesystem::path>* read)
 {
-	YAML::Node config = load_yaml_file(std::filesystem::absolute(file_path));
-	if (config[EXTENDS_KEY]) {
-		// TODO: add assert if its not a sequence
-		for (auto it = config[EXTENDS_KEY].begin(); it != config[EXTENDS_KEY].end(); ++it) {
-			auto file = file_path.parent_path() / it->as<std::string>();
-			load_config_file_with_extends(file);
+	const std::filesystem::path file = std::filesystem::absolute(file_path).lexically_normal();
+	if (std::find(visiting.begin(), visiting.end(), file) != visiting.end()) {
+		throw std::runtime_error("'" + fs_paths::utf8_of(file) + "' extends itself through its extends chain");
+	}
+	if (visiting.size() >= k_max_extends_depth) {
+		throw std::runtime_error("the extends chain of '" + fs_paths::utf8_of(visiting.front()) + "' is deeper than "
+			+ std::to_string(k_max_extends_depth) + " files");
+	}
+	YAML::Node config = load_yaml_file(file);
+	if (read != nullptr) {
+		read->push_back(file);
+	}
+	visiting.push_back(file);
+	if (const YAML::Node bases = config[EXTENDS_KEY]) {
+		if (!bases.IsSequence()) {
+			throw std::runtime_error("'extends' in '" + fs_paths::utf8_of(file) + "' is not a list of files");
+		}
+		for (const YAML::Node& base : bases) {
+			load_config_file_with_extends(file.parent_path() / base.as<std::string>(), visiting, read);
 		}
 	}
-	
+	visiting.pop_back();
+
 	config.remove(EXTENDS_KEY);
 	load_map(file_path.parent_path(), "", config);
 }
@@ -174,12 +194,18 @@ void cfg::initialize_configs(std::filesystem::path init_file)
 	is_initialized = true;
 
 	loaded_config_file = std::filesystem::absolute(init_file).lexically_normal();
-	load_config_file_with_extends(init_file);
+	std::vector<std::filesystem::path> visiting;
+	load_config_file_with_extends(init_file, visiting, &loaded_config_chain);
 }
 
 std::filesystem::path cfg::loaded_config_path()
 {
 	return loaded_config_file;
+}
+
+std::vector<std::filesystem::path> cfg::loaded_config_files()
+{
+	return loaded_config_chain;
 }
 
 std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
@@ -361,9 +387,10 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 bool cfg::load_config_file(const std::filesystem::path& file)
 {
 	try {
-		load_config_file_with_extends(file);
+		std::vector<std::filesystem::path> visiting;
+		load_config_file_with_extends(file, visiting, nullptr);
 		return true;
-	} catch (const YAML::Exception& e) {
+	} catch (const std::exception& e) {
 		egLOG_ERROR("config", "cannot load '{}': {}", fs_paths::utf8_of(file), e.what());
 		return false;
 	}

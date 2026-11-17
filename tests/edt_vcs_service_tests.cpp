@@ -15,6 +15,7 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
+#include <set>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -2929,6 +2930,79 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheEditorsConfiguration_IsDenie
 	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
 	BOOST_TEST(head_of(repo) != main_head);
 }
+
+// #1090: a file the editor's configuration extends is guarded like the configuration itself: a branch that changes
+// only the base would change the setting just the same.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesABaseOfTheEditorsConfiguration_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("editor_config_base");
+	const fs::path project = repo / "game";
+	const fs::path config = repo / "Editor" / "config" / "editor.cfg";
+	const fs::path base_config = repo / "Editor" / "config" / "base.cfg";
+	write(project / "res" / "a.txt", "a\n");
+	write(config, "extends:\n  - base.cfg\n");
+	write(base_config, "import:\n  decoder_sandbox: on\n");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "a project and the editor's configuration with a base" });
+	const std::string main_head = head_of(repo);
+	git(repo, { "checkout", "-q", "-b", "base_off" });
+	write(base_config, "import:\n  decoder_sandbox: off\n");
+	git(repo, { "commit", "-q", "-am", "turn the decoder's sandbox off in the base" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(project));
+	service->set_config_files(edt::config_files_to_guard({ config, base_config }));
+
+	const json::value refused = finish(service->start_checkout("base_off", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == main_head);
+}
+
+#if !defined(_WIN32)
+// #1090: a configuration path that is a tracked link is guarded as the link: a branch may point it at another file
+// whose own contents never change.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatPointsATrackedConfigurationLinkElsewhere_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("editor_config_link");
+	const fs::path project = repo / "game";
+	const fs::path folder = repo / "Editor" / "config";
+	const fs::path config = folder / "editor.cfg";
+	write(project / "res" / "a.txt", "a\n");
+	write(folder / "sandbox_on.cfg", "import:\n  decoder_sandbox: on\n");
+	write(folder / "sandbox_off.cfg", "import:\n  decoder_sandbox: off\n");
+	fs::create_symlink("sandbox_on.cfg", config);
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "the editor's configuration is a link" });
+	const std::string main_head = head_of(repo);
+	git(repo, { "checkout", "-q", "-b", "link_off" });
+	fs::remove(config);
+	fs::create_symlink("sandbox_off.cfg", config);
+	git(repo, { "commit", "-q", "-am", "point the configuration at the sandbox off" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(project));
+	service->set_config_files(edt::config_files_to_guard({ config }));
+
+	const json::value refused = finish(service->start_checkout("link_off", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == main_head);
+}
+
+// #1090: a link is guarded as itself and as what it resolves to; duplicates and empty entries go.
+BOOST_AUTO_TEST_CASE(ConfigFilesToGuard_HoldsALinkAndItsTarget_OnceEach)
+{
+	isolate_config();
+	const fs::path folder = make_plain_repository("config_files_to_guard") / "cfg";
+	write(folder / "real.cfg", "a: 1\n");
+	fs::create_symlink("real.cfg", folder / "link.cfg");
+	const auto guarded = edt::config_files_to_guard({ folder / "link.cfg", {}, folder / "real.cfg", folder / "." / "link.cfg" });
+	const fs::path real = fs::weakly_canonical(folder / "real.cfg");
+	BOOST_TEST(std::set<fs::path>(guarded.begin(), guarded.end()).size() == guarded.size());
+	BOOST_TEST((std::find(guarded.begin(), guarded.end(), fs::path{}) == guarded.end()));
+	BOOST_TEST((std::find(guarded.begin(), guarded.end(), fs::absolute(folder / "link.cfg").lexically_normal()) != guarded.end()));
+	BOOST_TEST((std::find(guarded.begin(), guarded.end(), real) != guarded.end()));
+}
+#endif
 
 // #909: an agent's checkout must not bring in what decides the code that is built and loaded: the project's .snk/,
 // its manifest, build/ (in any letter case where the file system ignores it) and, while live mode is on, code/ (with
