@@ -307,4 +307,39 @@ BOOST_AUTO_TEST_CASE(ParentLayer_ANodeThatNamesAComponent_ReplacesThatComponentO
 	BOOST_TEST(node.components.at("other").overrides.at("hp").as_int64() == 9);
 }
 
+BOOST_AUTO_TEST_CASE(ParentLayer_AFileThatWritesAWholeNode_ReadsAsItDidBeforeTheMerge)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":3}},"children":[
+			{"__id":"00000000000000b3","name":"inner"}]}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":2,
+		"__parent":"memory://t/base.prefab.desc","children":[
+		{"__id":"00000000000000b1","name":"a_whole","components":{"stat":{"__type":"stat_desc","hp":5}},"children":[
+			{"__id":"00000000000000b3","name":"inner_whole"}]}]})"));
+	BOOST_REQUIRE(variant);
+
+	const auto& node = variant->get_root().children.at(0);
+
+	BOOST_TEST(node.name == "a_whole");
+	BOOST_TEST(node.components.at("stat").overrides.at("hp").as_int64() == 5);
+	BOOST_REQUIRE(node.children.size() == 1u);
+	BOOST_TEST(node.children[0].name == "inner_whole");
+}
+
+// The one thing that reads differently from before: what the parent has and a node of the file leaves out stays (it used to go with
+// the node that was replaced whole), as it always did for the children of the root. Removing it is a record of the file, not an omission.
+BOOST_AUTO_TEST_CASE(ParentLayer_WhatANodeOfTheFileLeavesOut_StaysAsTheParentHasIt)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":3},"other":{"__type":"stat_desc","hp":9}}}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":2,
+		"__parent":"memory://t/base.prefab.desc","children":[
+		{"__id":"00000000000000b1","name":"a","components":{"stat":{"__type":"stat_desc","hp":3}}}]})"));
+	BOOST_REQUIRE(variant);
+
+	const auto& node = variant->get_root().children.at(0);
+
+	BOOST_TEST(node.components.contains("other"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
