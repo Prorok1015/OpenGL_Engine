@@ -263,6 +263,8 @@ namespace
 		const json::value root = read_desc(file, project, path, max_bytes, &text);
 		if (!root.is_object()) return;
 		classify(file, root.as_object(), descs);
+		file.geometry_arrays = (file.kind == file_class::current || file.kind == file_class::outdated)
+			&& prj::migration::holds_convertible_geometry(file.path, root.as_object());
 		if (prj::migration::reads_references(file) && prj::migration::may_hold_references(text)) texts.emplace(file.path, std::move(text));
 	}
 

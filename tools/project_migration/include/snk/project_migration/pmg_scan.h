@@ -87,6 +87,9 @@ namespace prj::migration
 		// a "guid"): its type migration may move one into a tag field, which reference_fixes, read by the current schemas
 		// from the file as it is, cannot see. assets.refs is planned for it, so one run is enough.
 		bool outdated_references = false;
+		// A geometry_desc of triangles whose vertices and indices are still JSON arrays, named <name>.<ext>.desc
+		// (holds_convertible_geometry): engine.geometry_blobs moves its data to a binary file beside it (EPIC-79, #1129).
+		bool geometry_arrays = false;
 	};
 
 	struct manifest_state
