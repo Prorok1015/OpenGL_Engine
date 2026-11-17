@@ -5,6 +5,7 @@
 #include "edt_scene_hierarchy_panel.h"
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_editor_layer.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_debug_layer.h>
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
@@ -289,6 +290,36 @@ BOOST_AUTO_TEST_CASE(SetWorldNames_DoesNotCrash)
 {
 	edt::scene_hierarchy_panel panel;
 	BOOST_CHECK_NO_THROW(panel.set_world_names({ "World1", "World2" }, 0));
+}
+
+BOOST_AUTO_TEST_CASE(UiMetrics_EmFollowsTheFontSize_DpiPxFollowsTheViewportDpi)
+{
+	BOOST_TEST(edt::em_of(100.f, 13.f) == 100.f);
+	BOOST_TEST(edt::em_of(100.f, 26.f) == 200.f);
+
+	ImGuiContext* context = ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(800.f, 600.f);
+	unsigned char* pixels = nullptr;
+	int width = 0, height = 0;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	ImGui::GetMainViewport()->DpiScale = 1.5f;
+
+	ImGui::NewFrame();
+	BOOST_TEST(ImGui::GetFontSize() == 13.f);
+	BOOST_TEST(edt::em(100.f) == 100.f);
+	BOOST_TEST(edt::em(ImVec2(10.f, 20.f)).y == 20.f);
+	BOOST_TEST(edt::dpi_px(100.f) == 150.f);
+	ImGui::EndFrame();
+
+	// ImGui keeps the main viewport's scale across frames while no platform monitors are filled.
+	io.FontGlobalScale = 2.f;
+	ImGui::NewFrame();
+	BOOST_TEST(edt::em(100.f) == 200.f);
+	BOOST_TEST(edt::dpi_px(100.f) == 150.f);
+	ImGui::EndFrame();
+	ImGui::DestroyContext(context);
 }
 
 BOOST_AUTO_TEST_CASE(Rename_FollowsItsNodeAndEndsWhenTheNodeGoes)

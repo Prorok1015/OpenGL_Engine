@@ -1,5 +1,6 @@
 #include "edt_blackboard_panel.h"
 #include "edt_blackboard_view.h"
+#include "edt_ui_metrics.h"
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <imgui.h>
@@ -27,7 +28,7 @@ namespace edt
 			return;
 		}
 
-		ImGui::SetNextItemWidth(160.f);
+		ImGui::SetNextItemWidth(em(160.f));
 		if (ImGui::BeginCombo("Set", m_set.c_str())) {
 			for (const auto& name : names) {
 				if (ImGui::Selectable(name.c_str(), name == m_set)) m_set = name;
@@ -52,8 +53,8 @@ namespace edt
 			ImGui::TableSetupScrollFreeze(0, 1);
 			ImGui::TableSetupColumn("Key");
 			ImGui::TableSetupColumn("Value");
-			ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 70.f);
-			ImGui::TableSetupColumn("Writer", ImGuiTableColumnFlags_WidthFixed, 90.f);
+			ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, em(70.f));
+			ImGui::TableSetupColumn("Writer", ImGuiTableColumnFlags_WidthFixed, em(90.f));
 			ImGui::TableHeadersRow();
 			for (const auto& row : rows) {
 				ImGui::TableNextRow();

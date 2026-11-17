@@ -3,6 +3,7 @@
 #include "edt_data_document.h"
 #include "edt_data_document_view.h"
 #include "edt_schema_inspector.h"
+#include "edt_ui_metrics.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_services.h>
@@ -20,7 +21,7 @@ edt::data_document_panel::data_document_panel(data_document& document, editor_se
 
 void edt::data_document_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(520.f, 460.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(520.f), em(460.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;

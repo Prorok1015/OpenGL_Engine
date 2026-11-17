@@ -1,4 +1,5 @@
 #include "edt_forge_account_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -79,7 +80,7 @@ void edt::forge_account_panel::wipe_all()
 
 void edt::forge_account_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(560.f, 220.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(560.f), em(220.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
