@@ -34,6 +34,7 @@
 #                            asset_browser, asset_browser_search, hierarchy, hierarchy_toggle (the expand arrow of a
 #                            node), hierarchy_tabs (world tabs and "+"), viewport_toolbar, menu (menus and their items)
 #   dclick_item AREA NAME... the same, double click
+#   scroll_item AREA NAME... wheel down 5 steps over the item (scrolls the list it is in), same wait and failure
 #   move X Y                 move the mouse
 #   key KEYS                 xdotool key syntax, e.g. ctrl+s, Delete, Escape
 #   type TEXT                type text
@@ -218,6 +219,11 @@ if [[ -n "$ACTIONS" ]]; then
 				read -r fx fy <<<"$at"
 				xdotool mousemove "$fx" "$fy"; sleep 0.4
 				if [[ "$cmd" == dclick_item ]]; then xdotool click --repeat 2 --delay 80 1; else xdotool click 1; fi ;;
+			scroll_item)
+				name="${line#*"$a"}"; name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"
+				at=$(item_center "$a" "$name") || exit 1
+				read -r fx fy <<<"$at"
+				xdotool mousemove "$fx" "$fy"; sleep 0.4; xdotool click --repeat 5 --delay 50 5 ;;
 			drag) xdotool mousemove "$a" "$b" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
 			drag_item)
 				from=$(item_center "$a" "$b") || exit 1
