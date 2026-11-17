@@ -23,6 +23,9 @@ namespace edt
 		pointer_missing,
 		// The value at a pointer is neither a string nor an object, or names another file.
 		not_a_reference,
+		// An object at a pointer has a guid that is not the target's: it refers to another asset (or to none), so its path is
+		// left alone and the file is not rewritten.
+		guid_mismatch,
 	};
 
 	std::string_view rewrite_status_name(rewrite_status status);
@@ -41,9 +44,10 @@ namespace edt
 	std::string canonical_json_text(std::string_view text, std::string& error);
 
 	// Replaces `old_path` by `new_path` at each of `pointers` in `text`: a string naming the old path becomes the new
-	// one; an object keeps its other members (the guid) and gets the new "path" (an object with a guid is the asset's
-	// whatever path it held, one without must name the old path); a {guid} with no path holds nothing to change.
+	// one; an object keeps its other members (the guid) and gets the new "path" only when its guid is `target_guid` (any
+	// other guid, or none known, fails the file as guid_mismatch: it is not this asset's reference), one without a guid must
+	// name the old path; a {guid} with no path holds nothing to change.
 	// Paths are compared as res::asset_name_key does. The text is edited only when parse then write gives it back unchanged.
 	rewrite_outcome rewrite_references(std::string_view text, std::span<const std::string> pointers, std::string_view old_path,
-		std::string_view new_path, bool case_insensitive);
+		std::string_view new_path, bool case_insensitive, std::string_view target_guid = {});
 }

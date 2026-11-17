@@ -20,6 +20,15 @@ namespace
 		return std::string_view(text.data(), text.size());
 	}
 
+	std::string lower(std::string_view text)
+	{
+		std::string out(text);
+		for (char& ch : out) {
+			if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+		}
+		return out;
+	}
+
 	std::string text_of(const json::value& document)
 	{
 		const std::vector<std::byte> bytes = res::pretty_json_bytes(document);
@@ -49,6 +58,7 @@ std::string_view edt::rewrite_status_name(rewrite_status status)
 	case rewrite_status::not_canonical: return "not_canonical";
 	case rewrite_status::pointer_missing: return "pointer_missing";
 	case rewrite_status::not_a_reference: return "not_a_reference";
+	case rewrite_status::guid_mismatch: return "guid_mismatch";
 	}
 	return "unreadable";
 }
@@ -60,7 +70,7 @@ std::string edt::canonical_json_text(std::string_view text, std::string& error)
 }
 
 edt::rewrite_outcome edt::rewrite_references(std::string_view text, std::span<const std::string> pointers, std::string_view old_path,
-	std::string_view new_path, bool case_insensitive)
+	std::string_view new_path, bool case_insensitive, std::string_view target_guid)
 {
 	rewrite_outcome out;
 	const auto fail = [&out](rewrite_status status, std::string reason) {
@@ -83,6 +93,11 @@ edt::rewrite_outcome edt::rewrite_references(std::string_view text, std::span<co
 		return path && res::asset_name_key(view_of(*path), case_insensitive) == old_key;
 	};
 
+	const auto same_guid = [&](const json::value& value) {
+		const json::string* guid = value.if_string();
+		return guid && !target_guid.empty() && lower(view_of(*guid)) == lower(target_guid);
+	};
+
 	for (const std::string& pointer : pointers) {
 		boost::system::error_code ec;
 		json::value* slot = document->find_pointer(pointer, ec);
@@ -95,7 +110,9 @@ edt::rewrite_outcome edt::rewrite_references(std::string_view text, std::span<co
 		} else if (json::object* object = slot->if_object()) {
 			json::value* path = object->if_contains("path");
 			if (!path || !path->is_string()) continue;
-			if (!object->contains("guid") && !names_old(*path)) {
+			if (const json::value* guid = object->if_contains("guid")) {
+				if (!same_guid(*guid)) return fail(rewrite_status::guid_mismatch, std::format("{} holds the guid of another asset", pointer));
+			} else if (!names_old(*path)) {
 				return fail(rewrite_status::not_a_reference, std::format("{} names another file", pointer));
 			}
 			if (view_of(path->as_string()) == new_path) continue;
