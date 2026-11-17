@@ -112,6 +112,7 @@ namespace edt
 		std::vector<const registration_scope*> m_module_scopes;
 		// Shows a failed job to the person; uses m_jobs and m_dialogs, so it goes first.
 		connection m_job_failures;
+		// Last (#1136: appended), so it goes first: ~editor_context takes it back from m_panels and m_dialogs before.
 		std::unique_ptr<gui::theme_semantic_colors> m_colors;
 	};
 }

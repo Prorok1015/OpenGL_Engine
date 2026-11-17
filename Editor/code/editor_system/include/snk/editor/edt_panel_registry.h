@@ -71,7 +71,7 @@ namespace edt
 		void render_all();
 
 		// Handed to every panel registered, now and later (panel_base::set_colors); a removed panel gets null back.
-		// editor_context sets its own, which outlive the registry's panels.
+		// editor_context sets its own and takes them back (null) in its destructor, before its members go.
 		void set_colors(const gui::theme_semantic_colors* colors);
 
 	private:

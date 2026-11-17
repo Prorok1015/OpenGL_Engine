@@ -35,7 +35,11 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 	m_job_failures = report_failed_jobs(m_events, m_jobs, m_dialogs);
 }
 
-edt::editor_context::~editor_context() = default;
+edt::editor_context::~editor_context()
+{
+	m_panels.set_colors(nullptr);
+	m_dialogs.set_colors(nullptr);
+}
 
 const gui::theme_semantic_colors& edt::editor_context::colors() const
 {
