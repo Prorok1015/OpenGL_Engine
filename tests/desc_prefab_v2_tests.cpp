@@ -516,6 +516,7 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AChainOfTwoLayers_EachReadsBackOverItsOwnBase)
 		first.serialize(first_body);
 		BOOST_REQUIRE_MESSAGE(scn::write_prefab_layer(*descs, *rs, first, first_body).empty(), "seed " << seed);
 		const std::string first_name = "chain_first" + std::to_string(seed) + ".prefab.desc";
+		first_body["__type"] = "prefab_desc";
 		put(first_name, json::serialize(first_body));
 		auto loaded_first = load<scn::prefab_desc>(tag_of(first_name));
 		BOOST_REQUIRE_MESSAGE(loaded_first, "seed " << seed << ": the first layer does not load");
@@ -530,6 +531,7 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AChainOfTwoLayers_EachReadsBackOverItsOwnBase)
 		const std::string why = scn::write_prefab_layer(*descs, *rs, second, second_body);
 		BOOST_REQUIRE_MESSAGE(why.empty(), "seed " << seed << ": " << why);
 		const std::string second_name = "chain_second" + std::to_string(seed) + ".prefab.desc";
+		second_body["__type"] = "prefab_desc";
 		put(second_name, json::serialize(second_body));
 		auto loaded_second = load<scn::prefab_desc>(tag_of(second_name));
 		BOOST_REQUIRE_MESSAGE(loaded_second, "seed " << seed << ": the second layer does not load");
@@ -554,6 +556,7 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AVariantOfFormatV1_IsReadAsBeforeAndWrittenAsALa
 	v1->serialize(body);
 	BOOST_REQUIRE(scn::write_prefab_layer(*descs, *rs, *v1, body).empty());
 	BOOST_TEST(body.at("__layer").as_int64() == 2);
+	body["__type"] = "prefab_desc";
 	auto v2 = load<scn::prefab_desc>(put("v2.prefab.desc", json::serialize(body)));
 	BOOST_REQUIRE(v2);
 	BOOST_TEST(json::value(saved(*v2)) == json::value(saved(*v1)));
@@ -573,11 +576,13 @@ BOOST_AUTO_TEST_CASE(WriteLayer_TheGenericWritePath_KeepsFormatV2_AndRefusesWhat
 	variant->serialize(body);
 	descs->reduce_to_parent(*variant, body);
 	BOOST_TEST(body.at("__layer").as_int64() == 2);
+	body["__type"] = "prefab_desc";
 	auto again = load<scn::prefab_desc>(put("again.prefab.desc", json::serialize(body)));
 	BOOST_REQUIRE(again);
 	json::object second;
 	again->serialize(second);
 	descs->reduce_to_parent(*again, second);
+	second["__type"] = "prefab_desc";
 	BOOST_TEST(json::serialize(second) == json::serialize(body));
 
 	scn::prefab_desc edited;
@@ -644,6 +649,7 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AV1VariantThatHidAComponentOfTheBase_IsWrittenWi
 	v1->serialize(body);
 	BOOST_REQUIRE(scn::write_prefab_layer(*descs, *rs, *v1, body).empty());
 	BOOST_TEST(json::serialize(body).find("\"stat\":null") != std::string::npos);
+	body["__type"] = "prefab_desc";
 	auto v2 = load<scn::prefab_desc>(put("v2.prefab.desc", json::serialize(body)));
 	BOOST_REQUIRE(v2);
 	BOOST_TEST(v2->get_root().children[0].components.empty());
