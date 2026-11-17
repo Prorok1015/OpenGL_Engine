@@ -201,6 +201,10 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 		im.error = std::format("the geometry of the model is refused: {}", imported.error);
 		egLOG_ERROR("edt/import", "{}", im.error);
 		return im;
+	case mdl::failure::too_large:
+		im.error = std::format("the model is too large: {}", imported.error);
+		egLOG_ERROR("edt/import", "{}", im.error);
+		return im;
 	}
 	checkpoint(ctx);
 
