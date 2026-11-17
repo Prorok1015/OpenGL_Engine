@@ -51,9 +51,15 @@ namespace edt {
 	// Writes the file; false (with `error`) when the folder cannot be written or a tag is refused.
 	bool write_bundle(const std::filesystem::path& file, const decode_bundle& bundle, std::string& error);
 
+	// Who may have made the folder the bundle lies in. The other process's run folder may itself be a link or a junction
+	// it made (#1099): it is entered below what holds it, never through a link. A folder of this process is taken as
+	// it resolves (a confined decoder may not open what holds its run folder).
+	enum class bundle_folder { written_by_peer, own };
+
 	// Reads the file under `limits`. Nothing is returned for a file that is truncated, has bytes after the end, a
 	// declared size over its limit or over what is left of the file, a repeated or unacceptable tag, or a manifest
 	// that is not a JSON object within the depth limit.
-	bundle_read_result read_bundle(const std::filesystem::path& file, const bundle_limits& limits = {});
+	bundle_read_result read_bundle(const std::filesystem::path& file, const bundle_limits& limits = {},
+		bundle_folder folder = bundle_folder::written_by_peer);
 
 } // namespace edt

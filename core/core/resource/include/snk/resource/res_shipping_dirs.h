@@ -42,6 +42,9 @@ namespace core::res {
 	SNK_API std::size_t remove_stale_scratch_dirs(std::string_view project_name);
 	// Removes `path` and what it holds without ever going through a link: a symlink, a junction or any other reparse point
 	// inside is removed itself, never entered (#1054: a child that wrote the folder could plant one that points at the
-	// user's files). False with `ec` set when something could not be removed; what could be is gone.
+	// user's files). False with `ec` set when something could not be removed; what could be is gone. Only for a tree no
+	// one writes into any more: an entry swapped for a link between its check and its removal is not caught. Windows:
+	// READONLY is cleared on an entry itself, a link included, never on what it points at; a path past MAX_PATH is removed
+	// too (#1099).
 	SNK_API bool remove_tree_without_following(const std::filesystem::path& path, std::error_code& ec);
 }
