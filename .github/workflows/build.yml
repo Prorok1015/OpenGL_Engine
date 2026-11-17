@@ -1254,11 +1254,13 @@ jobs:
       # success (Editor/NewLevel, Editor/CreateWorld) and, when they fail, a line of the same category; the Asset Browser
       # drag-drop onto the viewport logs "Added '...' to scene" (Editor/Drop). The screenshots of every step are in the
       # artifact; no reference image is compared (the layouts differ from the checklist reference on purpose).
+      # On the classic theme (#1109): the actions click fixed points of the checklist layout (File, the world "+").
       - name: Smoke run (New Level, new world)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/new_level_world.actions --size 1920x1080 \
             --shot headless_out/new_level_world/final.png \
-            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
+            gui/theme engine://themes/classic.desc
           tools/headless/check_smoke.sh headless_out/new_level_world/final.png headless_out/new_level_world/editor.log 200x200+860+450 0
           tools/headless/check_log.sh headless_out/new_level_world/editor.log 'Editor/NewLevel|Editor/CreateWorld' \
             'Created a new level with [0-9]+ world' "Created world 'world2'"
