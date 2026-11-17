@@ -19,7 +19,7 @@ click_item menu Console
 sleep 2
 shot @OUT@/2b_console.png
 # File menu
-click 19 10
+click_item menu File
 sleep 1
 shot @OUT@/3_file_menu.png
 key Escape
