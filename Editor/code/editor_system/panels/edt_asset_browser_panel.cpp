@@ -2,6 +2,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include "edt_ui_probe_imgui.h"
 #include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <algorithm>
@@ -264,7 +265,7 @@ namespace edt
 		ImGui::SetNextItemWidth(-1.f);
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
-		probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
+		edt::probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
 
 		ImGui::Separator();
 
