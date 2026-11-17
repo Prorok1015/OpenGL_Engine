@@ -20,6 +20,7 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 {
 	m_panel = std::make_shared<prefab_editor_panel>(m_ports.rnd, m_ports.gui);
 	m_panel->set_on_close([this] { confirm_close([this] { close(); }); });
+	m_panel->set_on_cancel_loading([this] { close(); });
 	m_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_node(path); });
 	m_panel->set_on_apply([this] {
 		if (prefab_document* prefab = prefab_of(m_ports.context.documents())) apply(*prefab);
@@ -121,6 +122,8 @@ bool edt::prefab_editor_component::apply_dirty()
 
 void edt::prefab_editor_component::close()
 {
+	m_open_watch.cancel();
+	m_panel->set_loading({});
 	release_inspector(true);
 	auto& documents = m_ports.context.documents();
 	if (prefab_document* prefab = prefab_of(documents)) {
@@ -157,6 +160,32 @@ void edt::prefab_editor_component::detach_document()
 
 void edt::prefab_editor_component::open_now(const res::tag& tag)
 {
+	res::resource_system* resources = m_ports.services.resources();
+	if (!m_ports.register_frame || !resources) {
+		finish_open(tag);
+		return;
+	}
+	m_open_watch.begin(resources->require<scn::prefab_desc>(tag));
+	if (m_open_watch.poll() != prefab_open_watch::state::loading) {
+		m_open_watch.cancel();
+		finish_open(tag);
+		return;
+	}
+	m_panel->set_loading(std::format("Loading '{}'...", tag.pure_name()));
+	m_panel->set_open(true);
+	m_ports.register_frame("edt/prefab_open", [this, alive = std::weak_ptr<int>(m_alive)] {
+		if (!alive.lock() || !m_open_watch.active()) return false;
+		if (m_open_watch.poll() == prefab_open_watch::state::loading) return true;
+		const res::tag loaded = m_open_watch.tag();
+		m_open_watch.cancel();
+		m_panel->set_loading({});
+		finish_open(loaded);
+		return false;
+	});
+}
+
+void edt::prefab_editor_component::finish_open(const res::tag& tag)
+{
 	release_inspector(true);
 	prefab_document& prefab = edt::open_prefab(m_ports.context.documents(), tag);
 	// The diagnostics of the load the preview made, or of a load again when the preview let it go meanwhile.
@@ -166,6 +195,8 @@ void edt::prefab_editor_component::open_now(const res::tag& tag)
 	if (prefab.is_open()) {
 		m_panel->set_context(&prefab);
 		m_panel->set_open(true);
+	} else {
+		m_panel->set_open(false);
 	}
 }
 
