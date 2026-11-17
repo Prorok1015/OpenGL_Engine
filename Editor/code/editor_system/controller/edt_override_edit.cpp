@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -416,6 +417,48 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	return value;
 }
 
+namespace
+{
+	bool is_index_token(std::string_view token)
+	{
+		return !token.empty() && std::ranges::all_of(token, [] (char c) { return c >= '0' && c <= '9'; });
+	}
+
+	// What a `set` record changes, as a merge patch the schema can judge: a whole-component record is its object; a pointer is built
+	// into an object, cut before the first array index (an index would become a key of an object): the array field itself is judged,
+	// with a null that fits any value. Nothing to judge (a value that is no object at ''): nullopt.
+	std::optional<json::object> field_patch(const scn::override_record& record)
+	{
+		if (record.path.empty()) {
+			if (!record.value.is_object()) return std::nullopt;
+			json::object whole;
+			for (const auto& member : record.value.as_object()) {
+				if (!member.key().starts_with("__")) whole.insert_or_assign(member.key(), member.value());
+			}
+			return whole;
+		}
+		std::string pointer;
+		bool cut = false;
+		std::string_view rest = record.path;
+		while (!rest.empty()) {
+			rest.remove_prefix(1);
+			const std::size_t end = rest.find('/');
+			const std::string_view token = rest.substr(0, end);
+			if (is_index_token(token)) {
+				cut = true;
+				break;
+			}
+			pointer += "/";
+			pointer += token;
+			rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end);
+		}
+		if (pointer.empty()) return std::nullopt;
+		json::value patch = json::object{};
+		if (!desc::json_pointer_set(patch, pointer, cut ? json::value{} : record.value)) return std::nullopt;
+		return std::move(patch.as_object());
+	}
+}
+
 std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::override_edit::view_cache::stale(const prefab_node& owner)
 {
 	sync_generation();
@@ -435,7 +478,7 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 	if (const desc::desc_system* descs = m_services.descs()) {
 		for (std::size_t i = 0; i < owner.overrides.size(); ++i) {
 			const scn::override_record& record = owner.overrides[i];
-			if (known[i] || record.op != scn::override_op::set || record.path.empty()
+			if (known[i] || record.op != scn::override_op::set
 				|| record.component.empty() || record.component == scn::transform_pseudo_component) continue;
 			const auto composed = base(owner, record.target);
 			if (!composed->has_value()) continue;
@@ -447,10 +490,12 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 			}
 			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
 			if (!schema || schema->fields.empty()) continue;
-			json::value patch = json::object{};
-			if (!desc::json_pointer_set(patch, record.path, record.value)) continue;
-			if (desc::check_override_object(*schema, patch.as_object(), nullptr, &descs->schemas()).status == desc::override_status::stale) {
-				found.push_back({ i, std::format("field {} is not in component '{}' any more", record.path, record.component) });
+			const std::optional<json::object> patch = field_patch(record);
+			if (!patch) continue;
+			const desc::override_failure failure = desc::check_override_object(*schema, *patch, nullptr, &descs->schemas());
+			if (failure.status == desc::override_status::stale) {
+				found.push_back({ i, std::format("field {} is not in component '{}' any more",
+					failure.pointer.empty() ? (record.path.empty() ? std::string{ "(whole)" } : record.path) : failure.pointer, record.component) });
 			}
 		}
 	}
@@ -652,6 +697,16 @@ namespace
 
 namespace
 {
+	// The record replaces the one of the same field: a second apply of a field changes its value, it does not add a record.
+	void put_record(std::vector<scn::override_record>& records, scn::override_record record)
+	{
+		const auto same = std::ranges::find_if(records, [&record] (const scn::override_record& held) {
+			return held.op == record.op && held.component == record.component && held.path == record.path && held.target == record.target;
+		});
+		if (same != records.end()) *same = std::move(record);
+		else records.push_back(std::move(record));
+	}
+
 	// A node that instantiates a prefab, also while the handle of that prefab is still loading: then the type name of the component tells.
 	bool instantiates_prefab(const prefab_node& node)
 	{
@@ -681,7 +736,7 @@ std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn:
 		}
 		scn::override_record forwarded = record;
 		forwarded.target.erase(forwarded.target.begin(), forwarded.target.begin() + static_cast<std::ptrdiff_t>(depth));
-		node->overrides.push_back(std::move(forwarded));
+		put_record(node->overrides, std::move(forwarded));
 		prefab = std::move(working);
 		return {};
 	}
@@ -694,7 +749,7 @@ std::string edt::override_edit::fold_record(scn::prefab_desc& prefab, const scn:
 	} else if (instantiates_prefab(*node)) {
 		scn::override_record forwarded = record;
 		forwarded.target.clear();
-		node->overrides.push_back(std::move(forwarded));
+		put_record(node->overrides, std::move(forwarded));
 	} else {
 		error = std::format("the prefab has no component '{}' on node '{}'", record.component, node->name);
 	}

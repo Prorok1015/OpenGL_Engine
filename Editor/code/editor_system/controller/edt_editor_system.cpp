@@ -355,8 +355,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
-		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) { return apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty()); },
-		.instances_in_level = [this](const res::tag& tag) { return override_edit::count_instances(m_state.world_descs, tag); } });
+		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
+			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty());
+			if (error.empty()) m_state.reset_history();
+			return error;
+		},
+		.instances_in_level = [this](const res::tag& tag) { return override_edit::count_instances(m_state.world_descs, tag); },
+		.can_apply = [this] { return !m_prefab->owns_inspector(); } });
 
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
 		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
