@@ -1983,4 +1983,90 @@ BOOST_FIXTURE_TEST_CASE(ANullOverrideIsValidForEveryKindOfOptionalField, ops_fix
 	BOOST_TEST((null_at(runtime, "/must") == desc::override_status::bad_value));
 }
 
+namespace {
+
+	constexpr const char* k_mesh_range = R"({ "offset": 16, "size": 48, "layout": "f32x3",
+		"sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" })";
+
+	desc::type_schema blob_schema()
+	{
+		return desc::parse_type_schema(json::parse(R"({
+			"name": "ops.blob_mesh", "fields": [ { "name": "vertices", "kind": "binary_ref" }, { "name": "note", "kind": "string" } ]
+		})").as_object());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryRefFitsARangeOrTheOldInlineArray)
+{
+	const auto fits = [](const json::value& value) {
+		return desc::json_fits(desc::field_kind::binary_ref, desc::field_kind::boolean, nullptr, value);
+	};
+	BOOST_TEST(fits(json::parse(k_mesh_range)));
+	BOOST_TEST(fits(json::parse("[1, 2, 3]")));
+	BOOST_TEST(!fits(json::parse(R"({ "offset": 16, "size": 48, "layout": "f32x3" })")));
+	BOOST_TEST(!fits(json::parse(R"({ "offset": -1, "size": 48, "layout": "f32x3", "sha256": "00" })")));
+	BOOST_TEST(!fits(json::value("res://mesh.geom.bin")));
+	BOOST_TEST(!fits(json::value()));
+}
+
+BOOST_AUTO_TEST_CASE(TheJsonSchemaOfABinaryRefIsAReadOnlyRange)
+{
+	desc::schema_registry registry;
+	const json::object generated = desc::to_json_schema(blob_schema(), registry);
+	const json::object& vertices = generated.at("properties").as_object().at("vertices").as_object();
+	BOOST_TEST(vertices.at("readOnly").as_bool());
+	const json::array& forms = vertices.at("oneOf").as_array();
+	BOOST_REQUIRE_EQUAL(forms.size(), 2u);
+	const json::object& range = forms[0].as_object();
+	BOOST_TEST(range.at("type").as_string() == "object");
+	BOOST_TEST(range.at("required").as_array().size() == 4u);
+	BOOST_TEST(range.at("properties").as_object().at("offset").as_object().at("type").as_string() == "integer");
+	BOOST_TEST(range.at("properties").as_object().at("sha256").as_object().contains("pattern"));
+	BOOST_TEST(forms[1].as_object().at("type").as_string() == "array");
+}
+
+BOOST_AUTO_TEST_CASE(ABinaryRefIsCheckedWholeAndNeverInPart)
+{
+	const desc::type_schema schema = blob_schema();
+	const auto status_of = [&](const char* pointer, json::value value) {
+		return desc::validate_override(schema, desc::json_change{ pointer, std::move(value) });
+	};
+	BOOST_TEST((status_of("/vertices", json::parse(k_mesh_range)) == desc::override_status::valid));
+	BOOST_TEST((status_of("/vertices/size", json::value(4)) == desc::override_status::bad_value));
+	BOOST_TEST((status_of("/vertices", json::value("res://a.bin")) == desc::override_status::bad_value));
+
+	const desc::override_failure failure = desc::check_override_object(schema, json::parse(R"({ "vertices": { "offset": 1 } })").as_object());
+	BOOST_TEST((failure.status == desc::override_status::bad_value));
+	BOOST_TEST(failure.pointer == "/vertices");
+	BOOST_TEST(desc::override_expectation(schema, failure).find("saving the mesh") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ARuntimeBinaryRefHasNoDefaultNoOptionAndIsNoElement)
+{
+	const auto parses = [](const char* field) {
+		const std::string text = std::string(R"({ "name": "ops.bad_blob", "fields": [ )") + field + " ] }";
+		desc::parse_type_schema(json::parse(text).as_object());
+	};
+	BOOST_CHECK_NO_THROW(parses(R"({ "name": "v", "kind": "binary_ref" })"));
+	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "binary_ref", "optional": true })"), std::runtime_error);
+	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "binary_ref", "default": [1] })"), std::runtime_error);
+	BOOST_CHECK_THROW(parses(R"({ "name": "v", "kind": "array", "element": "binary_ref" })"), std::runtime_error);
+}
+
+BOOST_FIXTURE_TEST_CASE(ARuntimeBinaryRefKeepsItsRangeInTheBlob, ops_fixture)
+{
+	BOOST_REQUIRE(ds.register_schema(blob_schema()));
+	const auto first = spawn("ops.blob_mesh");
+	const auto second = spawn("ops.blob_mesh");
+	BOOST_REQUIRE(first);
+	BOOST_REQUIRE(second);
+	BOOST_TEST(first->get("/vertices").is_null());
+	first->deserialize(ds, parse((std::string(R"({ "vertices": )") + k_mesh_range + " }").c_str()));
+	first->copy_to(*second);
+	BOOST_TEST(second->get("/vertices") == json::parse(k_mesh_range));
+	// Not a range: the field keeps what it had.
+	second->deserialize(ds, parse(R"({ "vertices": "res://elsewhere.bin" })"));
+	BOOST_TEST(second->get("/vertices") == json::parse(k_mesh_range));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -43,6 +43,22 @@ namespace {
 		return out;
 	}
 
+	// res::binary_range as to_json writes it.
+	boost::json::object binary_range_object()
+	{
+		auto sha256 = typed("string");
+		sha256["pattern"] = "^[0-9a-f]{64}$";
+		auto offset = typed("integer");
+		offset["minimum"] = 0;
+		auto size = typed("integer");
+		size["minimum"] = 0;
+		auto out = typed("object");
+		out["properties"] = boost::json::object{ { "offset", std::move(offset) }, { "size", std::move(size) },
+			{ "sha256", std::move(sha256) }, { "layout", typed("string") } };
+		out["required"] = boost::json::array{ "offset", "size", "sha256", "layout" };
+		return out;
+	}
+
 	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth, int& budget);
 
 	boost::json::object value_schema(desc::field_kind kind, const std::string& ref_type, const desc::schema_registry& resolve, int depth, int& budget)
@@ -113,6 +129,15 @@ namespace {
 			}
 			return typed("object");
 		}
+		case field_kind::binary_ref: {
+			// desc::json_fits takes the array too: the inline data of a file written before the binary file (EPIC-79).
+			boost::json::array forms;
+			forms.emplace_back(binary_range_object());
+			forms.emplace_back(typed("array"));
+			boost::json::object out{ { "oneOf", std::move(forms) } };
+			out["description"] = "a range of the binary file beside the desc, written only by saving the mesh; an array is the inline data of an older file";
+			return out;
+		}
 		case field_kind::array:
 		case field_kind::map:
 		case field_kind::custom: break;
@@ -162,7 +187,7 @@ namespace {
 		if (!field.tooltip.empty()) {
 			out["description"] = boost::json::string(field.tooltip);
 		}
-		if (field.read_only || field.write == desc::write_policy::never) {
+		if (field.read_only || field.write == desc::write_policy::never || field.kind == desc::field_kind::binary_ref) {
 			out["readOnly"] = true;
 		}
 		if (field.degrees) {

@@ -500,12 +500,14 @@ BOOST_AUTO_TEST_CASE(MigrationsKeyIsReportedAsNotSupportedYet)
 
 BOOST_AUTO_TEST_CASE(KindNamesRoundTrip)
 {
-	for (int i = 0; i <= static_cast<int>(desc::field_kind::custom); ++i) {
+	for (int i = 0; i <= static_cast<int>(desc::field_kind::binary_ref); ++i) {
 		const auto kind = static_cast<desc::field_kind>(i);
 		const auto parsed = desc::field_kind_from_string(desc::to_string(kind));
 		BOOST_REQUIRE(parsed.has_value());
 		BOOST_CHECK(*parsed == kind);
 	}
+	BOOST_CHECK(desc::to_string(desc::field_kind::map) == "map");
+	BOOST_CHECK(desc::to_string(desc::field_kind::binary_ref) == "binary_ref");
 	BOOST_CHECK(!desc::field_kind_from_string("bool_").has_value());
 	BOOST_CHECK(desc::write_policy_from_string("if_not_default") == desc::write_policy::if_not_default);
 	BOOST_CHECK(desc::schema_kind_from_string("struct") == desc::schema_kind::structure);

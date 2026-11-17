@@ -38,6 +38,9 @@ namespace desc
 		// A JSON object with string keys, every value of the kind `element` (not a container): std::map and
 		// std::unordered_map of std::string. Appended after custom, so the kinds before it keep their values.
 		map,
+		// A range of the binary file beside the desc (EPIC-79): {offset, size, sha256, layout}, res::binary_range. Written
+		// only by saving the file that owns the binary data, never by an override or an edit; not a reference.
+		binary_ref,
 	};
 
 	// always: written as is. if_valid: skipped when empty (null, "", []). if_not_default: skipped when equal to the
@@ -217,7 +220,7 @@ namespace desc
 	SNK_API std::string document_problem(const type_schema& schema, const schema_registry& resolve, std::span<const std::string_view> codec_fields = {});
 
 	// Size and alignment of one field in a runtime blob (C layout, no pointers): string, res_tag,
-	// desc_ref, array and custom are a u32 index into the handle table; structure is resolved by
+	// desc_ref, array, custom and binary_ref are a u32 index into the handle table; structure is resolved by
 	// compute_layout from the nested schema.
 	SNK_API blob_layout layout_of(field_kind kind);
 

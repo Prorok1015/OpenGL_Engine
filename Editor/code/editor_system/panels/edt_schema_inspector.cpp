@@ -5,6 +5,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_tag.h>
 #include <imgui.h>
 #include <algorithm>
@@ -119,7 +120,8 @@ namespace
 		case field_kind::array: return json::value(json::array());
 		case field_kind::map: return json::value(json::object());
 		case field_kind::entity:
-		case field_kind::custom: break;
+		case field_kind::custom:
+		case field_kind::binary_ref: break;
 		}
 		return json::value();
 	}
@@ -1058,7 +1060,12 @@ namespace
 		case widget::group: changed = edit_group(label.c_str(), field, spec, *nested, value, pointer, ctx, depth); break;
 		case widget::list: changed = edit_list(label.c_str(), field, spec, value, pointer, ctx, depth); break;
 		case widget::map: changed = edit_map(label.c_str(), field, spec, value, pointer, ctx, depth); break;
-		case widget::label: ImGui::TextDisabled("%s: %s", label.c_str(), json::serialize(value).c_str()); break;
+		case widget::label: {
+			// The inline data of an old mesh is megabytes of numbers: a range or an array is summed up, never printed.
+			const std::string text = field.kind == field_kind::binary_ref ? edt::schema_ui::binary_ref_summary(value) : json::serialize(value);
+			ImGui::TextDisabled("%s: %s", label.c_str(), text.c_str());
+			break;
+		}
 		case widget::json: changed = edit_json(label.c_str(), value, ctx); break;
 		case widget::hidden: break;
 		}
@@ -1114,6 +1121,11 @@ edt::schema_ui::widget_spec edt::schema_ui::describe_widget(const desc::field_sc
 	case field_kind::array: spec.kind = widget::list; break;
 	case field_kind::map: spec.kind = widget::map; break;
 	case field_kind::custom: spec.kind = widget::json; break;
+	// Written only by saving the mesh with its binary file.
+	case field_kind::binary_ref:
+		spec.kind = widget::label;
+		spec.disabled = true;
+		break;
 	}
 
 	if (spec.kind == widget::real || spec.kind == widget::vector) {
@@ -1245,6 +1257,19 @@ bool edt::schema_ui::rename_map_key(json::object& entries, std::string_view from
 	}
 	entries = std::move(renamed);
 	return true;
+}
+
+std::string edt::schema_ui::binary_ref_summary(const json::value& value)
+{
+	if (value.is_array()) {
+		return std::format("inline, {} values", value.as_array().size());
+	}
+	std::string error;
+	const std::optional<res::binary_range> range = res::binary_range_from_json(value, error);
+	if (!range) {
+		return "not a range";
+	}
+	return std::format("{} bytes, {}, sha256 {}", range->size, range->layout, std::string_view{ range->sha256 }.substr(0, 12));
 }
 
 json::value edt::schema_ui::zero_value(const desc::field_schema& field, const desc::schema_registry& registry)

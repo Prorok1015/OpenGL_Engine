@@ -1,6 +1,7 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/resource/res_reference.h>
 #include <algorithm>
@@ -147,7 +148,8 @@ namespace desc
 			case field_kind::res_tag:
 			case field_kind::desc_ref:
 			case field_kind::array:
-			case field_kind::custom: return true;
+			case field_kind::custom:
+			case field_kind::binary_ref: return true;
 			default: return false;
 			}
 		}
@@ -166,7 +168,8 @@ namespace desc
 			case field_kind::enumeration:
 			case field_kind::res_tag:
 			case field_kind::node_ref:
-			case field_kind::entity: return 0.0;
+			case field_kind::entity:
+			case field_kind::binary_ref: return 0.0;
 			default: return float_relative_tolerance;
 			}
 		}
@@ -307,7 +310,7 @@ namespace desc
 					out = ref->blob->handles[slot - 1];
 				} else if (ops.kind == field_kind::array) {
 					out = json::value(json::array{});
-				} else if (ops.kind == field_kind::custom) {
+				} else if (ops.kind == field_kind::custom || ops.kind == field_kind::binary_ref) {
 					out = json::value();
 				} else {
 					out = json::value(std::string_view{});
@@ -591,9 +594,11 @@ namespace desc
 			case field_kind::array: return json::value(json::array{});
 			case field_kind::node_ref: return json::value(std::string_view{ "0000000000000000" });
 			// An entity reads a null as "no entity" itself; a custom value has its own default (the codec's T{}), and a runtime
-			// schema does not take a custom field that is optional without one (parse_type_schema).
+			// schema does not take a custom field that is optional without one (parse_type_schema). A binary_ref has no empty
+			// range: no value is "no range", and a runtime schema does not take one that is optional.
 			case field_kind::entity:
-			case field_kind::custom: break;
+			case field_kind::custom:
+			case field_kind::binary_ref: break;
 			}
 			return json::value();
 		}
@@ -829,6 +834,9 @@ namespace desc
 				}
 				case field_kind::custom:
 					return override_status::valid;
+				// A range is the whole object or nothing: a part of it names bytes no hash covers.
+				case field_kind::binary_ref:
+					return override_status::bad_value;
 				case field_kind::vec2:
 				case field_kind::vec3:
 				case field_kind::vec4:
@@ -911,6 +919,7 @@ namespace desc
 			case field_kind::structure: return field.ref_type.empty() ? std::string{ "an object" } : std::format("an object of '{}'", field.ref_type);
 			case field_kind::array: return "a list";
 			case field_kind::map: return "an object (key to value)";
+			case field_kind::binary_ref: return "a range of the binary file {offset, size, sha256, layout}, written only by saving the mesh";
 			case field_kind::enumeration: return field.ref_type.empty() ? std::string{ "an enumeration value" } : std::format("one of the values of '{}'", field.ref_type);
 			default: return std::format("a value of kind {}", to_string(field.kind));
 			}
@@ -1096,6 +1105,14 @@ namespace desc
 				return !item.key().empty() && (item.value().is_null() || json_fits(element, field_kind::boolean, enumeration, item.value()));
 			});
 		case field_kind::custom: return true;
+		case field_kind::binary_ref: {
+			// An array is the inline data of a file written before the binary file (EPIC-79), read as before.
+			if (value.is_array()) {
+				return true;
+			}
+			std::string error;
+			return res::binary_range_from_json(value, error).has_value();
+		}
 		}
 		return false;
 	}

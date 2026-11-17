@@ -16,7 +16,7 @@ namespace desc
 			"bool", "i32", "u32", "i64", "u64", "f32", "f64",
 			"vec2", "vec3", "vec4", "quat", "color",
 			"string", "enumeration", "res_tag", "desc_ref", "node_ref", "entity",
-			"structure", "array", "custom", "map",
+			"structure", "array", "custom", "map", "binary_ref",
 		};
 		constexpr std::string_view write_policy_names[] = { "always", "if_valid", "if_not_default", "null_if_empty", "never" };
 		constexpr std::string_view schema_kind_names[] = { "desc", "component", "struct" };
@@ -234,6 +234,9 @@ namespace desc
 			case field_kind::entity:
 				// Entities are runtime ids of one registry: a number would name whatever entity has it.
 				fail(path, "an entity field has no default but null");
+			case field_kind::binary_ref:
+				// A range only means something in the binary file its desc was saved with.
+				fail(path, "a binary_ref field has no default but null");
 			case field_kind::array: {
 				if (!value.is_array()) {
 					fail(path, "default must be an array");
@@ -301,6 +304,9 @@ namespace desc
 				if (field.kind == field_kind::map && (field.element == field_kind::array || field.element == field_kind::map)) {
 					fail(where, "the values of a map are not containers: 'element' must not be array or map");
 				}
+				if (field.element == field_kind::binary_ref) {
+					fail(where, "'element' must not be binary_ref: a range of the binary file is a field of its own");
+				}
 			} else if (element) {
 				fail(where, "'element' is only valid for array and map fields");
 			}
@@ -324,6 +330,9 @@ namespace desc
 
 			if (field.optional && field.kind == field_kind::custom && field.default_value.is_null()) {
 				fail(where, "a custom field cannot be optional without a 'default': a null would have nothing to reset it to");
+			}
+			if (field.optional && field.kind == field_kind::binary_ref) {
+				fail(where, "a binary_ref field cannot be optional: a null would have no range to reset it to");
 			}
 
 			if (const json::value* range = find_value(object, "range")) {
@@ -685,6 +694,8 @@ namespace desc
 			}
 			case field_kind::structure:
 				return structure_problem(field.ref_type);
+			case field_kind::binary_ref:
+				return std::format("field '{}' is a range of a binary file, which only a mesh desc saved with its binary file has", where);
 			case field_kind::map:
 			case field_kind::array:
 				if (field.element == field_kind::custom) {
