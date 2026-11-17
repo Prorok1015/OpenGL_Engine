@@ -1325,7 +1325,8 @@ jobs:
           for variant in classic dark_neutral dark_contrast light; do
             shoot "$variant" gui/theme "engine://themes/${variant}.desc"
           done
-          # #1136 EXPERIMENT: the Console with log lines in each mono face (no --frames: deterministic time captures no log).
+          # #1136 EXPERIMENT: the Console with log lines in each mono face (no --frames: deterministic time
+          # captures no log).
           console_shot() {
             local variant="$1"; shift
             local out="headless_out/themes/console_$variant"
