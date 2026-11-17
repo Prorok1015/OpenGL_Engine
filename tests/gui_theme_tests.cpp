@@ -323,6 +323,28 @@ BOOST_AUTO_TEST_CASE(TheSourcesOfPresetsAndFonts_AreSetApart)
 	BOOST_TEST(other.style.imgui_dark);
 }
 
+// Each built-in preset passes the path check (66afa94e checked tag::path(), the folder, and refused them all).
+BOOST_AUTO_TEST_CASE(EveryPresetOfEngineThemes_PassesThePathCheck)
+{
+	for (const auto& entry : fs::directory_iterator(fs::path{ SNK_CORE_RES_DIR } / "themes")) {
+		if (entry.path().extension() != ".desc") continue;
+		const std::string tag = "engine://themes/" + entry.path().filename().generic_string();
+		BOOST_TEST_CONTEXT(tag)
+		{
+			select(editor_service, tag);
+			BOOST_TEST(editor_service.selected().view() == tag);
+		}
+	}
+	BOOST_TEST(select(editor_service, "engine://themes/light.desc").style.palette.light);
+}
+
+BOOST_AUTO_TEST_CASE(APresetPathWithAControlCharacter_IsNotRead)
+{
+	select(editor_service, "engine://themes/li\x01ght.desc");
+
+	BOOST_TEST(editor_service.selected().view() == "engine://themes/classic.desc");
+}
+
 BOOST_AUTO_TEST_CASE(APresetPathWithADotDotSegment_IsNotRead)
 {
 	const auto& theme = select(editor_service, "engine://themes/../themes/light.desc");
