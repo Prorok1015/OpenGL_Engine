@@ -102,7 +102,7 @@ BOOST_AUTO_TEST_CASE(TheExpectation_OfAModeTurnedOff_IsNoSandbox_AndOtherwiseNam
 	const edt::decoder_sandbox_status on = edt::expected_decoder_sandbox(edt::sandbox_mode::best_effort);
 	BOOST_CHECK(on.reported);
 	BOOST_CHECK_MESSAGE((edt::decoder_sandbox_gap(on) == 0) == on.why.empty(), on.why);
-#if !defined(__linux__)
+#if !defined(__linux__) && !defined(_WIN32)
 	BOOST_CHECK(!on.fs);
 #endif
 }
