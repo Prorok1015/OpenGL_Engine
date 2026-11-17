@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-LAYOUT_HEADER = 'core/engine/game_system/include/snk/game/gs_module_layout.h'
+LAYOUT_HEADER = 'core/engine/game/include/snk/game/gs_module_layout.h'
 MODULE_ENTRY = 'core/core/application/include/snk/application/app_module_entry.h'
 EDITOR_EXTENSION = 'Editor/code/editor_system/include/snk/editor/edt_editor_extension.h'
 PINS = 'tools/ci/vtable_pins.json'

@@ -66,7 +66,7 @@ OpenGL_Engine/
 │       ├── gui/gui_system/         ← ImGui integration
 │       ├── image/                  ← Image loading
 │       ├── input/                  ← ECS input system
-│       └── game_system/            ← Engine bodies of the frame stages (gs_engine_frame_stages); the loop itself is core/core/application (app::loop_service)
+│       └── game/                   ← The module layer (gs_game_module, the layout key and ABI revisions, input actions) and the engine bodies of the frame stages (gs_engine_frame_stages); the loop itself is core/core/application (app::loop_service)
 │
 ├── Editor/                         ← Editor application
 │   ├── main.cpp                    ← Module bootstrap (Core → Engine → Editor)

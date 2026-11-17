@@ -215,7 +215,7 @@
   },
   {
    "name": "game",
-   "root": "core/engine/game_system",
+   "root": "core/engine/game",
    "dest": "snk/game",
    "public": [
     "gs_engine_frame_stages.h"
