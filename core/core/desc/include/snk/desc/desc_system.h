@@ -178,6 +178,12 @@ namespace desc
 
 		void unregister_desc(std::string_view type_name);
 
+		// How a desc of `type_name` with a `__parent` is written (#972): fills `body` (its serialize) with the file form over the
+		// parent and returns "" , or returns why none can be written (the write is then refused, nothing is written). Replaces the
+		// generic merge patch of reduce_to_parent for that type; removed with the type (unregister_desc).
+		using layer_writer = std::function<std::string(desc_system&, res::resource_system&, const desc_base&, json::object& body)>;
+		void set_layer_writer(std::string_view type_name, layer_writer writer);
+
 		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
 		// current_version(name). Migrations registered later move the stored schema's version along, so the order
@@ -393,5 +399,7 @@ namespace desc
 		// Guards the four registries above against loads that read them on other threads (#988). A leaf of the lock order:
 		// only lookups and copies under it; a factory or a step runs after it is released, and so does a call to m_parent.
 		mutable std::shared_mutex m_registry_mutex;
+		std::unordered_map<std::string, std::shared_ptr<const layer_writer>> m_layer_writers;
+		std::shared_ptr<const layer_writer> find_layer_writer(std::string_view type_name) const;
 	};
 }

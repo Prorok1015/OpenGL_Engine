@@ -270,6 +270,21 @@ bool edt::prefab_editor_component::apply(prefab_document& prefab)
 	const save_result saved = prefab.save();
 	if (saved.saved) return true;
 	egLOG_WARN("editor", "{}", saved.error);
+	if (prefab.layer_refused()) {
+		m_ports.context.dialogs().choose("Apply to a variant",
+			std::format("{}\n\nThe edits stay in the window. The file can be saved whole instead, without '__parent': it then stops following its base prefab.", saved.error),
+			{ "Save without base", "Cancel" },
+			[this, id = prefab.id(), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
+				if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
+				prefab_document* open = prefab_of(m_ports.context.documents());
+				if (!open || open->id() != id) return;
+				if (const save_result whole = open->save_without_base(); !whole.saved) {
+					egLOG_WARN("editor", "{}", whole.error);
+					m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not saved:\n{}", open->title(), whole.error));
+				}
+			});
+		return false;
+	}
 	m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not applied:\n{}", prefab.title(), saved.error));
 	return false;
 }
