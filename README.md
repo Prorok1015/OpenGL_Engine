@@ -92,6 +92,7 @@ OpenGL_Engine/
 │   │   ├── common/                 # Data structures, math, logging
 │   │   ├── ecs/                    # ECS framework (EnTT wrapper)
 │   │   ├── resource/               # VFS, async loading, caching, adapters
+│   │   ├── image/                  # Image decoding (stb_image)
 │   │   ├── model_codec/            # Encoding of geometry and descriptors for the decoder process protocol
 │   │   ├── desc/                   # Descriptor system (.desc JSON files)
 │   │   ├── input/                  # Low-level input events
@@ -106,8 +107,7 @@ OpenGL_Engine/
 │   │   ├── scene/                  # Scene graph, cameras, lights, animation
 │   │   ├── gui/                    # ImGui integration (backends + layer system)
 │   │   ├── game/                   # Module layer: game modules, layout key, input actions, frame stages
-│   │   ├── input/                  # High-level input mapping
-│   │   └── image/                  # Image loading (stb_image)
+│   │   └── input/                  # High-level input mapping
 │   │
 │   ├── model_import/               # Model import library (namespace mdl): the only place that includes assimp
 │   └── res/                        # Engine resources: base shapes, shaders, skybox, fonts, themes
