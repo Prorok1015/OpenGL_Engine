@@ -3,6 +3,9 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 #include <unordered_map>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/level/scn_override_record.h>
@@ -154,6 +157,25 @@ namespace scn {
 		prefab_desc::prefab_node& out,
 		res::tag& source,
 		const res::tag& file);
+
+	// A record of an instance that changes something the prefab no longer has: its node, or the component it sets or removes.
+	// Nothing deletes it by itself (it stays in the file, apply skips it with a warning); an editor shows it as stale.
+	struct stale_override
+	{
+		enum class reason : std::uint8_t { node_gone, component_gone };
+		// Number of the record among `node.overrides` of the node it was found for.
+		std::size_t index = 0;
+		reason why = reason::node_gone;
+		// For a person: what is gone, by node id and component key.
+		std::string what;
+	};
+	// The stale records of `node`, in the order of `node.overrides`: judged by expanding the node, so a record that an earlier one
+	// makes meaningful (an added node) is not stale, and one handed down to a nested instance is judged there (each nested instance
+	// is expanded once; one that instantiates a prefab it is inside is refused, as in a spawn). Applies nothing. A node that cannot
+	// be expanded reports nothing. Not module API until stale_override is in gs::module_layout_key (docs/abi/changes/148.md).
+	SNK_API std::vector<stale_override> find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node);
+	// Removes them from `node.overrides` (what the editor's "clear stale overrides" and a cook do); returns how many went.
+	SNK_API std::size_t prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node);
 
 	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);

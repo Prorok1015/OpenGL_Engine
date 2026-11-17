@@ -7,13 +7,14 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/geom/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_vfs_test_hook.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <algorithm>
 #include <atomic>
@@ -162,6 +163,40 @@ BOOST_AUTO_TEST_CASE(AWrittenGeometry_LoadsBackIdentically_FromItsBinaryFile)
 	BOOST_TEST((loaded->indices == written.indices));
 	BOOST_TEST(loaded->layout.get_stride() == written.layout.get_stride());
 	BOOST_TEST(loaded->bounds.empty());
+}
+
+// #1077: the encoder over a view of data held anywhere (what the model decoder encodes without a geometry_desc) writes the
+// same desc, binary file and arrays as the one over a geometry_desc.
+BOOST_AUTO_TEST_CASE(AGeometryView_EncodesTheSameBytes_AsTheGeometryDesc)
+{
+	const rnd::geometry_desc geometry = triangles(3);
+	const rnd::driver::BufferLayout layout = geometry.layout;
+	const std::vector<std::byte> vertices = geometry.vertices;
+	const std::vector<unsigned int> indices = geometry.indices;
+	std::vector<std::pair<ds::bbox, std::uint32_t>> bounds;
+	bounds.push_back({ ds::bbox{ { 0.0f, 0.0f }, { 1.0f, 0.5f } }, 0u });
+	const rnd::geometry_view view{ layout, vertices, indices, bounds };
+	const res::tag tag{ "geomfiles://a/view.geom.desc" };
+	rnd::geometry_file_options options;
+	options.header["__parent"] = "res://base_geometry.desc";
+	options.bounds = true;
+
+	const rnd::geometry_files from_view = rnd::encode_geometry_files(tag, view, options);
+	const rnd::geometry_files from_desc = rnd::encode_geometry_files(tag, geometry, options);
+	BOOST_REQUIRE_MESSAGE(from_view, from_view.error);
+	BOOST_REQUIRE_MESSAGE(from_desc, from_desc.error);
+	BOOST_TEST((from_view.desc == from_desc.desc));
+	BOOST_TEST((from_view.binary == from_desc.binary));
+	BOOST_TEST(rnd::geometry_write_problem(tag, view).empty());
+
+	// The arrays form: what geometry_desc::serialize writes, from the view.
+	rnd::geometry_desc with_bounds = geometry;
+	with_bounds.bounds = bounds;
+	json::object from_serialize;
+	with_bounds.serialize(from_serialize);
+	json::object from_arrays;
+	rnd::write_geometry_arrays(tag, view, from_arrays);
+	BOOST_TEST(json::serialize(from_arrays) == json::serialize(from_serialize));
 }
 
 BOOST_AUTO_TEST_CASE(AnAttributeThatIsNoFloat_MakesTheVerticesBytes)
@@ -521,13 +556,13 @@ BOOST_AUTO_TEST_CASE(GenRobot_ImportAndGeometryLoad_AreTimed)
 	BOOST_REQUIRE(!model.empty());
 
 	// assimp runs: nothing remembered from another case.
-	scn::remember_model_imports(false);
+	mdl::remember_model_imports(false);
 	struct remember_again
 	{
-		~remember_again() { scn::remember_model_imports(true); }
+		~remember_again() { mdl::remember_model_imports(true); }
 	} restore;
 
-	scn::model_importer_adapter importer(storage.require<desc::desc_system>(), root());
+	mdl::model_adapter importer(storage.require<desc::desc_system>(), root());
 	const res::tag geometry_tag{ "memory://objects/robot/gen_robot.geom.desc" };
 	clock::time_point start = clock::now();
 	const auto prefab = importer(res::tag{ "res://objects/robot/gen_robot.glb" }, model);

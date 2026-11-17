@@ -5,27 +5,23 @@
 //
 // The request bundle holds the JSON of edt::decode_request, the model's bytes and the bytes of the side files the editor
 // read for it by its rule (#1043): this process opens no file but its run folder. The out bundle holds a manifest
-// ({"kind":"scan","requests"|"error"} or {"kind":"import",...}) and, for an import, the resources it stored under
-// memory://. Exit codes: 0 an out bundle was written (a refused model is an "error" inside it), 1 no out bundle could
-// be made, 2 usage, 4 it refused to run without its OS sandbox (#1043, `--sandbox off|best_effort|required`, one line on stderr
-// says why). Run it with the working directory a scratch folder: memory:// is ./sandbox there, and the sandbox leaves it
-// nothing else to touch.
+// ({"kind":"scan","requests"|"error"} or {"kind":"import",...}) and, for an import, the resources it made under
+// memory://, held in memory until they are written out; the prefab is not stamped (the editor stamps what it accepts).
+// Exit codes: 0 an out bundle was written (a refused model is an "error" inside it), 1 no out bundle could be made, 2 usage,
+// 4 it refused to run without its OS sandbox (#1043, `--sandbox off|best_effort|required`, one line on stderr says why).
+// Run it with the working directory a scratch folder: the sandbox leaves it nothing else to touch.
+// It links no engine (#1077): the import core, snk_model_codec, common, the logger and platform, no window, GL or
+// resource system.
 // The self-test flags (--self-test-*) exist only in the test build (SNK_MODEL_DECODER_SELF_TEST), never in the shipped tool.
 #include "decoder_sandbox.h"
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
-#include "edt_model_importer.h"
-#include <snk/common/ds/ds_task_system.hpp>
-#include <snk/config/cfg_variables.h>
+#include "edt_model_import_core.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/model_import/mdl_import.h>
 #include <snk/platform/plt_process.h>
-#include <snk/desc/adapters/desc_adapter_t.h>
-#include <snk/desc/desc_system.h>
-#include <snk/render/rnd_render_service_init.h>
-#include <snk/render/skinning/rnd_skinning_manager.h>
-#include <snk/resource/res_system.h>
-#include <snk/scene/scn_ecs_assembler.h>
-#include <snk/scene/scn_registration_scope.h>
+#include <snk/resource/res_tag.h>
+#include <boost/json/object.hpp>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -41,6 +37,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if defined(__linux__)
@@ -247,6 +245,29 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 	}
 	return parsed;
 }
+
+// Where the import writes: memory:// of this process only. The tags in the order they were first stored, each once.
+class memory_sink final : public mdl::import_sink
+{
+public:
+	bool exists(const res::tag& tag) override { return m_index.contains(std::string(tag.view())); }
+
+	void store(const res::tag& tag, const std::vector<std::byte>& bytes) override
+	{
+		const auto [found, added] = m_index.try_emplace(std::string(tag.view()), m_stored.size());
+		if (added) {
+			m_stored.push_back({ tag, bytes });
+		} else {
+			m_stored[found->second].second = bytes;
+		}
+	}
+
+	const std::vector<std::pair<res::tag, std::vector<std::byte>>>& stored() const { return m_stored; }
+
+private:
+	std::unordered_map<std::string, std::size_t> m_index;
+	std::vector<std::pair<res::tag, std::vector<std::byte>>> m_stored;
+};
 
 int fail(const std::string& message)
 {
@@ -503,33 +524,6 @@ int main(int argc, char** argv)
 		return fail("request: it carries bytes that belong to no file of the request");
 	}
 
-	// No watcher threads in the child.
-	cfg::set_variable("res/watch_files", "false");
-	std::error_code ec;
-	fs::create_directories("./res", ec);
-	fs::create_directories("./sandbox", ec);
-
-	// No threads: the import runs on this one.
-	ds::task_system_config tasks_config;
-	tasks_config.mode = ds::policy::manual;
-	ds::task_system tasks(tasks_config);
-	// res:// is the empty ./res of this run folder, read-only: the decoder reads no project and writes nothing there.
-	// memory:// is ./sandbox, where the import stores what it makes. Nothing else is mounted (no user://, engine://, cache://).
-	res::mount_table mounts;
-	mounts.push_back(res::mount{ .protocol = res::tag::default_protocol(), .roots = { fs::absolute("./res") },
-		.access = res::mount_access::read_only, .writable = res::write_policy::allow_all(), .watch = res::watch_options{},
-		.file_operations = false });
-	mounts.push_back(res::mount{ .protocol = res::tag::memory, .roots = { fs::absolute("./sandbox") },
-		.access = res::mount_access::read_write, .writable = res::write_policy::allow_all(), .watch = res::watch_options{},
-		.file_operations = false });
-	res::resource_system res_sys(tasks, std::move(mounts));
-	desc::desc_system desc_sys(res_sys);
-	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
-	scn::ecs_assembler assembler(desc_sys, res_sys);
-	rnd::skinning_manager skinning;
-	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
-	engine::render::register_render_descs(desc_sys);
-
 	edt::import_source import;
 	import.path = request->source_path;
 	import.preloaded = source;
@@ -545,23 +539,20 @@ int main(int argc, char** argv)
 	edt::decode_bundle out;
 	try {
 		if (request->mode == edt::decode_request::mode_kind::scan) {
-			out.manifest = edt::to_json(edt::model_importer::list_requests(import));
+			out.manifest = edt::to_json(edt::list_model_requests(import));
 			out.manifest["kind"] = "scan";
 		} else {
-			edt::model_importer importer(desc_sys, res_sys);
-			const edt::import_intermediate imported = importer.import_background(import);
-			out.manifest["kind"] = "import";
-			out.manifest["import"] = edt::to_json(imported);
+			// An agent's import: nothing was there before it, so everything it stored is its own (created_tags).
+			memory_sink sink;
+			edt::import_intermediate imported = edt::import_model_into(import, sink);
 			if (imported.error.empty()) {
-				for (const res::tag& tag : imported.created_tags) {
-					const auto block = res_sys.fetch_data(tag);
-					if (!block) {
-						return fail("a stored resource cannot be read back: " + tag.string());
-					}
-					const auto& bytes = block->get();
-					out.blobs.push_back({ tag.string(), std::vector<std::byte>(bytes.begin(), bytes.end()) });
+				for (const auto& [tag, bytes] : sink.stored()) {
+					imported.created_tags.push_back(tag);
+					out.blobs.push_back({ tag.string(), bytes });
 				}
 			}
+			out.manifest["kind"] = "import";
+			out.manifest["import"] = edt::to_json(imported);
 		}
 	} catch (const std::exception& e) {
 		out = {};

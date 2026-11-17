@@ -9,7 +9,8 @@
 #include "edt_document_creator.h"
 #include "edt_asset_problems.h"
 #include "edt_asset_usages.h"
-#include "edt_begin_then_poll.h"
+#include "edt_startup_component.h"
+#include "edt_game_layer_component.h"
 #include <memory>
 #include <algorithm>
 #include <chrono>
@@ -44,7 +45,7 @@
 #include "edt_import_component.h"
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
-#include "edt_file_menu.h"
+#include "edt_file_menu_component.h"
 #include "edt_template_ids.h"
 #include "edt_scene_commands.h"
 #include "edt_code_commands.h"
@@ -133,8 +134,6 @@
 #include <utility>
 #include <vector>
 
-// Editor/data (editor_module): the project templates live under it.
-CFG_VAR_EXT_PATH(cfg_edt_data_path);
 // --headless (edt_editor_init.cpp).
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
 // --trust-project (#921), also read by main.cpp: known here before live mode at open is decided.
@@ -171,49 +170,6 @@ namespace {
 		return true;
 	}
 
-	std::string utf8_of(const std::filesystem::path& path)
-	{
-		const std::u8string text = path.u8string();
-		return std::string(text.begin(), text.end());
-	}
-
-	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
-	// Overrides given with --set are not carried over.
-	// --open-migration (#761): the new editor opens the Project Migration window once the project is open.
-	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch,
-		bool open_migration)
-	{
-		const std::filesystem::path program = platform::current_executable();
-		if (program.empty()) {
-			return std::string{ "the editor cannot find its own program file" };
-		}
-		std::vector<std::string> args;
-		if (const auto config = cfg::loaded_config_path(); !config.empty()) {
-			args.insert(args.end(), { "--config", utf8_of(config) });
-		}
-		args.insert(args.end(), { "--project", utf8_of(manifest_file) });
-		if (allow_engine_version_mismatch) {
-			args.push_back("--allow-engine-version-mismatch");
-		}
-		if (open_migration) {
-			args.push_back("--open-migration");
-		}
-		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", utf8_of(manifest_file));
-		auto started = platform::spawn_detached(program, args);
-		if (!started) {
-			egLOG_ERROR("Editor/Project", "the editor was not restarted on '{}': {}", utf8_of(manifest_file), started.error);
-			return started.error;
-		}
-		return std::nullopt;
-	}
-
-	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
-	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
-	// "game" (--game, #294): once the start level has loaded, the Game view fills the window and Play starts; "editor":
-	// the panels. Anything else warns and is "editor".
-	CFG_VAR_DEF_STRING(cfg_start_mode, "editor/start_mode", "editor");
-	// --game=res://<level>: the level game mode starts on, instead of editor/startup_level. Only a res:// tag is taken.
-	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
 	// The run ends with 0 once the first loaded level settled (#669; CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The Play report of a module reload (.cache/hot_reload/last_play_snapshot.json) holds every world's whole state too.
@@ -222,26 +178,7 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
 
-	// What the level file at a project path is in the layers of res:// (a lower content root, the engine), not only the top
-	// one: an agent's save_as onto a file that only a lower layer has would shadow it, and its open of such a level works.
-	// A link or a folder in any layer is unsafe; a layer that is not a folder (a RAM or archive resolver) is asked itself.
-	edt::level_file_state inspect_level_in_layers(const res::resource_system& resources, const std::string& relative)
-	{
-		bool found = false;
-		for (const std::filesystem::path& root : resources.get_resource_layers()) {
-			switch (edt::inspect_level_file(root, relative)) {
-			case edt::level_file_state::unsafe: return edt::level_file_state::unsafe;
-			case edt::level_file_state::file: found = true; break;
-			case edt::level_file_state::missing: break;
-			}
-		}
-		if (found) return edt::level_file_state::file;
-		if (const auto raw = resources.fetch_data(res::tag::make(relative))) {
-			raw->wait();
-			if (raw->is_ready()) return edt::level_file_state::file;
-		}
-		return edt::level_file_state::missing;
-	}
+
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -417,6 +354,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc() });
 
+	m_panels->inspector()->set_open_prefab([this](const res::tag& tag) { m_prefab->open(tag); });
+
 	asset_open_component::ports open_ports{ .context = *m_context, .services = m_services, .layer = *editor_layer, .resources = m_res,
 		.state = m_state, .scene = m_scene_editor, .level_ctrl = m_level_ctrl, .desc_problems = m_problems->desc(),
 		.browser = *m_panels->asset_browser(),
@@ -452,101 +391,26 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.refresh_world_problems = [this] { m_problems->refresh_world(); },
 		.stop_after_level_loaded = m_stop_after_level_loaded };
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
+	m_game_layer = std::make_unique<game_layer_component>(game_layer_component::ports{ .services = m_services, .level_ctrl = m_level_ctrl,
+		.level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open,
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); } });
 
-	file_menu_hooks hooks;
-	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
-	hooks.is_dirty = [this] { return m_state.is_dirty(); };
-	hooks.level_path = [this] {
-		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
-	};
-	hooks.new_level = [this] {
-		if (m_play && m_play->active()) m_play->stop();
-		m_level_load->cancel_settle();
-		m_problems->desc().clear(m_context->problems(), "level");
-		m_level_ctrl.new_level();
-	};
-	hooks.quick_save = [this] { return m_state.save().saved; };
-	hooks.save_level_as = [this](const std::string& rel_path) {
-		if (rel_path.find("://") != std::string::npos) {
-			egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
-			return false;
-		}
-		return m_state.save_as(res::tag::make(rel_path)).saved;
-	};
-	hooks.discard_changes = [this] { m_state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_asset_open->data_documents().dirty().empty() || m_prefab->dirty() != nullptr; };
-	hooks.save_other_documents = [this] {
-		if (!m_prefab->apply_dirty()) return false;
-		return m_asset_open->data_documents().save_all();
-	};
-	hooks.discard_other_documents = [this] {
-		for (const document_id id : m_asset_open->data_documents().dirty()) m_asset_open->data_documents().close(id);
-		if (m_prefab->dirty()) m_prefab->close();
-	};
-	hooks.load_level = [this](const std::filesystem::path& abs_path) {
-		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
-		m_level_load->begin_and_watch(res::tag::make(relative.string()));
-	};
-	// The commands an agent calls name a level by its project path: no file system path in between.
-	hooks.load_level_tag = [this](const std::string& relative) -> std::optional<std::string> {
-		if (!m_level_load->begin_and_watch(res::tag::make(relative))) return "'" + relative + "' is not a level file";
-		return std::nullopt;
-	};
-	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_res, relative); };
-	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
-		if (auto migrating = migration_blocker()) return migrating;
-		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
-		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
-		std::optional<std::string> stopped = m_migration ? m_migration->stopped_reason() : std::nullopt;
-		if (m_level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
-		return stopped;
-	};
-	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
-	// its level (#518). A person has no menu or shortcut then.
-	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
-		if (auto migrating = migration_blocker()) return migrating;
-		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
-		if (m_level_load->in_progress()) return std::string{ "a level is loading" };
-		return std::nullopt;
-	};
-#if SNK_HAS_ASSIMP
-	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_import->start_import(abs_path); };
-#endif
-	hooks.agent_import = m_import->agent_import();
-	hooks.exit = m_exit_action;
-	hooks.exit_blocker = [this] { return migration_blocker(); };
-	hooks.resources_path = m_res.get_resources_path();
-	hooks.open_project = start_editor_on;
-	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
-	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
-		// The template ships without .resource sidecars: each new project gets ids of its own (#765).
-		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name,
-			[](const std::filesystem::path& staging) { return edt::give_template_fresh_ids(staging); });
-	};
-	// Next to the open project, else where the editor was started.
-	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
-		: std::filesystem::current_path();
-	hooks.recent_projects = edt::recent_projects_besides(m_res, data.has_value<prj::project_context>()
-		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().manifest_file } : std::nullopt);
-	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
-	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
-	m_file_menu->register_actions();
+	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
+		.level_ctrl = m_level_ctrl, .level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open, .problems = *m_problems,
+		.import = *m_import,
+		.project_manifest = data.has_value<prj::project_context>()
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().manifest_file } : std::nullopt,
+		.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
+			: std::filesystem::current_path(),
+		.exit = m_exit_action,
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(); },
+		.migration_blocker = [this] { return migration_blocker(); },
+		.migration_stopped_reason = [this]() -> std::optional<std::string> { return m_migration ? m_migration->stopped_reason() : std::nullopt; },
+		.startup_pending = [this] { return m_modes && m_modes->startup_pending(); },
+		.assets = [this] { return m_asset_component.get(); } });
+	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
-	const auto asset_undo_label = [this]() -> std::optional<std::string> { return m_asset_component ? m_asset_component->next_undo_label() : std::nullopt; };
-	const auto asset_undo = [this] {
-		if (!m_asset_component) {
-			return false;
-		}
-		const asset_fix_result result = m_asset_component->undo_last();
-		if (!result.ok) {
-			egLOG_ERROR("assets", "{}", result.error);
-		}
-		return result.ok;
-	};
-	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo, [this] { return m_prefab->owns_inspector(); })) {
-		m_registrations.push_back(std::move(action));
-	}
+	m_file_menu->install_edit_actions(m_registrations);
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
 	// #968: until the asset index is complete, an agent's guid is answered `busy` rather than judged against it.
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
@@ -605,7 +469,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			});
 			return dirty;
 		},
-		.game_layer_generation = [this] { return m_game_layer_generation; },
+		.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; },
 		.approved_internally = [this](std::string_view ticket) {
 			return m_agent != nullptr && m_agent->access() != nullptr && m_agent->access()->confirmations().approved_internally(ticket);
 		},
@@ -617,7 +481,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu->attach_window_close(wnd_sys);
 
 	game_build_component::ports build_ports{ .context = *m_context, .layer = *editor_layer, .settings_panel = *m_panels->build_settings(),
-		.swap_gate = m_swap_gate, .trust = m_trust,
+		.swap_gate = m_game_layer->swap_gate(), .trust = m_trust,
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
 		.default_configuration = *cfg_build_configuration,
 		.module_host = [&data]() -> core::project_module_host* {
@@ -666,85 +530,25 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return m_vcs ? m_vcs->git_dir() : std::nullopt;
 		};
 		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
-		asset_ports.game_layer_generation = [this] { return m_game_layer_generation; };
+		asset_ports.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; };
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
 	}
 	m_vcs->install(m_registrations);
 
-	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
-	const bool project_held = data.has_value<prj::held_project>();
-	if (project_held) {
-		auto& held = data.require<prj::held_project>();
-		// Open Anyway, and Migrate... (#761): the same restart, the new editor opening the Project Migration window.
-		const auto restart_on = [this, manifest = held.manifest_file](bool open_migration) {
-			const auto outcome = m_context->actions().invoke("file.open_project", boost::json::object{
-				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true },
-				{ "open_migration", open_migration } });
-			if (!outcome.ok) {
-				m_context->dialogs().message(message_level::error, std::format("The project was not opened: {}.", outcome.error));
-			}
-		};
-		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [restart_on] { restart_on(false); },
-			[restart_on] { restart_on(true); });
-	}
-
-	std::string startup_level = scn::start_level_name(data, *cfg_startup_level);
-	const std::optional<editor_mode> start_mode = editor_mode_of(*cfg_start_mode);
-	if (!start_mode) {
-		egLOG_WARN("editor", "editor/start_mode '{}' is neither 'editor' nor 'game': the editor starts in editor mode", *cfg_start_mode);
-	}
-	const bool start_in_game = start_mode == editor_mode::game;
-	if (start_in_game && !cfg_game_level->empty()) {
-		if (const std::string problem = game_level_problem(*cfg_game_level); problem.empty()) {
-			startup_level = *cfg_game_level;
-		} else {
-			// Never read as a file path; and no other level stands in for the one asked for.
-			egLOG_ERROR("editor", "--game='{}' is not taken: {}; no level is loaded at startup", *cfg_game_level, problem);
-			startup_level.clear();
-		}
-	}
-	if (start_in_game && (project_held || startup_level.empty())) {
-		egLOG_WARN("editor", "game mode needs a start level (--game=<level>, editor/startup_level or the project's start "
-			"scene) and none is loaded: the editor starts in editor mode");
-	}
-	if (!project_held && !startup_level.empty()) {
-		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
-		const res::tag level = scn::start_level_tag(startup_level);
-		// #518: a neutral loading screen until the load ends; every end of it (loaded, failed, Esc in its modal) passes
-		// through the poll below to finish_startup.
-		if (start_in_game && m_modes) m_modes->begin_startup(std::string(level.view()));
-		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { static_cast<void>(m_level_load->begin(level)); },
-			[this, start_in_game] {
-				bool loaded = false;
-				if (m_level_load->poll(&loaded)) {
-					return true;
-				}
-				// Begun in a frame, the load ends a frame later, and closing its modal focuses the top panel. The
-				// editor starts with no panel focused, as when the load began before the first frame (#437).
-				ImGui::SetWindowFocus(nullptr);
-				if (start_in_game && m_modes) m_modes->finish_startup(loaded, static_cast<bool>(m_stop_after_level_loaded));
-				return false;
-			}));
-	}
+	m_startup = std::make_unique<startup_component>(startup_component::ports{ .context = *m_context, .layer = *editor_layer,
+		.level_load = *m_level_load,
+		.held = data.has_value<prj::held_project>() ? &data.require<prj::held_project>() : nullptr,
+		.trust = m_trust, .headless = headless,
+		.start_level_name = [&data](const std::string& configured) { return scn::start_level_name(data, configured); },
+		.modes = [this] { return m_modes; },
+		.ask_trust = [this](std::function<void()> on_trusted) { m_live->ask_trust(std::move(on_trusted)); },
+		.exit = m_exit_action, .stop_after_level_loaded = m_stop_after_level_loaded });
+	m_startup->install_start_level();
 
 	m_migration->install_startup();
 
-	// #921: main loads the project's modules after init, so the first frame knows which wait for the person's answer.
-	// Headless nobody is asked: they stay unloaded unless --trust-project was given.
-	if (!project_held) {
-		editor_layer->register_implicit("edt/project_trust", [this, headless] {
-			const auto trust = m_trust.lock();
-			if (!trust || !trust->waiting()) return false;
-			if (headless) {
-				egLOG_WARN("editor/trust", "not loaded: {}: project modules are not trusted: pass --trust-project",
-					module_list(trust->waiting_modules()));
-			} else {
-				m_live->ask_trust(nullptr);
-			}
-			return false;
-		});
-	}
+	m_startup->install_trust_check();
 
 	m_migration->install_open_on_start();
 
@@ -824,7 +628,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 {
 	m_play_component = std::make_unique<play_component>(play_component::ports{
 		.context = *m_context, .services = m_services, .level = m_state, .worlds = m_world_ctrl, .resources = m_res,
-		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_swap_gate, .hierarchy = *m_panels->hierarchy(),
+		.input_router = m_input_router, .layer = *editor_layer, .swap_gate = m_game_layer->swap_gate(), .hierarchy = *m_panels->hierarchy(),
 		.inspector = *m_panels->inspector(), .viewport = *m_panels->viewport(), .game_view = *m_panels->game_view(),
 		.problems = *m_panels->problems(), .preflight = m_problems->play_preflight(),
 		.project = data.has_value<prj::project_context>() ? &data.require<prj::project_context>() : nullptr,
@@ -867,7 +671,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		m_problems->follow_input_actions(actions);
 	});
 	m_level_ctrl.on_worlds_replaced = [this] { m_problems->refresh_world(); };
-	m_level_ctrl.on_file_upgraded = [this](const std::string& text) { m_save_notice.show(text, timed_notice::clock::now()); };
 	m_problems->install();
 	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
 	m_panels->game_view()->set_input_blocked([this] {
@@ -878,7 +681,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		if (m_agent_ui) m_agent_ui->draw_status();
 		m_play_component->draw_status();
-		draw_save_notice();
+		m_file_menu->draw_status();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
 				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
@@ -886,13 +689,6 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		}
 		m_live->draw_status();
 	});
-}
-
-void edt::editor_system::draw_save_notice()
-{
-	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
-	if (!text) return;
-	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
 }
 
 void edt::editor_system::wire_controller_callbacks()
@@ -916,41 +712,11 @@ void edt::editor_system::wire_controller_callbacks()
 			m_problems->desc().report(m_context->problems(), "level", diagnostics_of(handle), m_state.editor_tag, m_state.level_tag,
 				level_locator(handle, m_state.editor_tag, m_state.level_tag));
 		});
-		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
-			++m_game_layer_generation;
-			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
-		});
 		// The set "level" is the edited document: a game's request_level only ever replaces the worlds of Play (#564).
 		ctx_mgr->set_level_set_switchable(false);
 		ctx_mgr->set_on_level_switched([this](scn::context_set& set) {
 			if (set.name() == k_play_set && m_play) m_play->on_level_switched();
 		});
-	}
-}
-
-void edt::editor_system::follow_game_layer_change(bool before)
-{
-	if (before) {
-		// Nothing of the editor may refer to the old layer once it goes: the set "play", the preview set, the loads in
-		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
-		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
-		if (m_play && m_play->active()) m_play->stop(play_reason::user);
-		m_prefab->close_for_layer_change();
-		m_asset_open->drop_pending();
-		m_level_after_layer_change = res::tag{};
-		if (m_level_load->in_progress()) {
-			m_level_after_layer_change = m_level_load->loading_tag();
-			m_level_load->abandon();
-		}
-		m_level_ctrl.detach_from_game_layer();
-		return;
-	}
-	if (scn::context_set* level = m_services.level_set()) {
-		level->set_mode(ecs::run_mode::edit);
-	}
-	m_level_ctrl.attach_to_game_layer();
-	if (m_level_after_layer_change.is_valid()) {
-		m_level_load->begin(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
 

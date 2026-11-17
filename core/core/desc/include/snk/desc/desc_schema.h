@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/snk_api.h>
+#include <snk/desc/desc_fnv1a.h>
 #include <snk/resource/res_tag.h>
 #include <array>
 #include <cstddef>
@@ -24,12 +25,7 @@ namespace desc
 	// std::hash is not stable across platforms/STLs; type ids end up in saved data.
 	constexpr std::uint64_t schema_id(std::string_view name) noexcept
 	{
-		std::uint64_t h = 14695981039346656037ull;
-		for (unsigned char c : name) {
-			h ^= c;
-			h *= 1099511628211ull;
-		}
-		return h;
+		return fnv1a_64(name);
 	}
 
 	// Vectors are arrays of numbers, quat is [x, y, z, w], node_ref is a 16-char hex string.

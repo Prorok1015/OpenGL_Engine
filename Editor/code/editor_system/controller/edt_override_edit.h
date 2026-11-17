@@ -29,6 +29,13 @@ namespace edt::override_edit
 	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
 		const res::tag& file);
 
+	// A record of an instance that changes something the prefab no longer has, for a person: its number among `owner.overrides`
+	// and what is gone (a node or component: scn::find_stale_records; a field the component's schema no longer has).
+	struct stale_record {
+		std::size_t index = 0;
+		std::string what;
+	};
+
 	// A node of an instance as the hierarchy lists it: no children, `has_children` says whether it has some.
 	struct listed_node {
 		prefab_node node;
@@ -55,6 +62,10 @@ namespace edt::override_edit
 		void invalidate();
 		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
 		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
+		// The records of `owner` that find nothing to change in the prefab any more, kept like the others: the node and component
+		// level from scn::find_stale_records, then the field level: a `set` record whose pointer the schema of the component it
+		// sets (as the base content defines it) no longer has (desc::validate_override; it logs a warning for each).
+		std::shared_ptr<const std::vector<stale_record>> stale(const prefab_node& owner);
 
 	private:
 		template<typename T>
@@ -74,6 +85,7 @@ namespace edt::override_edit
 		uint64_t m_generation = 0;
 		std::vector<entry<std::optional<prefab_node>>> m_bases;
 		std::vector<entry<std::vector<listed_node>>> m_children;
+		std::vector<entry<std::vector<stale_record>>> m_stale;
 	};
 
 	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.

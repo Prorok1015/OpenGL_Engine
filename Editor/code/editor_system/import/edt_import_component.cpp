@@ -4,13 +4,14 @@
 #include "edt_asset_exporter.h"
 #include "edt_decoder_sandbox_notice.h"
 #include "edt_editor_layer.h"
+#include "edt_import_problems.h"
 #include "edt_model_importer.h"
 #include "edt_play_session.h"
 #include "edt_process_decoder.h"
 #if SNK_HAS_ASSIMP
 #include "edt_decoded_model_adapter.h"
 #include "edt_person_model_import.h"
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -40,6 +41,18 @@ edt::import_component::import_component(ports from)
 #endif
 	, m_exporter(std::make_unique<asset_exporter>(m_ports.resources))
 {
+	// A throw below must not leave the adapter registered: it holds the decoder, and a destructor does not run for this object.
+	try {
+		build();
+	}
+	catch (...) {
+		shutdown();
+		throw;
+	}
+}
+
+void edt::import_component::build()
+{
 	res::resource_system& resources = m_ports.resources;
 	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources);
 	agent_import_options import_options;
@@ -66,17 +79,17 @@ edt::import_component::import_component(ports from)
 				if (const auto alive = notice.lock()) alive->seen(status);
 			});
 		};
-		m_decoder = std::make_shared<process_decoder>(resources, std::move(decoder_config), std::move(on_sandbox));
+		m_decoder = std::make_shared<process_decoder>(resources, m_ports.desc, std::move(decoder_config), std::move(on_sandbox));
 	}
 	// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
 	// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
 	if (const std::string why = m_decoder->unavailable_reason(); !why.empty()) {
 		egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
 	}
-	resources.registrate_adapter<decoded_model_adapter>(scn::model_importer_adapter::INFO, std::ref(m_ports.desc), std::ref(resources),
+	resources.registrate_adapter<decoded_model_adapter>(mdl::model_adapter::INFO, std::ref(m_ports.desc), std::ref(resources),
 		decoded_model_adapter::steps_of(m_decoder));
 	m_adapter_registered = true;
-	resources.warn_on_sync_require(scn::model_importer_adapter::INFO.extensions);
+	resources.warn_on_sync_require(mdl::model_adapter::INFO.extensions);
 	// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk.
 	std::string earlier_imports = "__imports/";
 	erase_import_folder(earlier_imports);
@@ -121,7 +134,7 @@ void edt::import_component::shutdown()
 	m_shut_down = true;
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
-	if (m_adapter_registered) m_ports.resources.unregistrate_adapter(scn::model_importer_adapter::INFO);
+	if (m_adapter_registered) m_ports.resources.unregistrate_adapter(mdl::model_adapter::INFO);
 	erase_import_folder(m_import_folder);
 	erase_import_folder(m_dialog_folder);
 #endif
@@ -286,6 +299,8 @@ bool edt::import_component::poll_progress()
 		return false;
 	}
 
+	// A new import replaces what the last one reported.
+	context.problems().set(k_import_problem_source, import_problems(intermediate, name));
 	auto result = m_importer->finalize_on_main(std::move(intermediate));
 	if (result.prefab) {
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());

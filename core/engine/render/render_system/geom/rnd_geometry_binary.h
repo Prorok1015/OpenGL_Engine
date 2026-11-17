@@ -39,8 +39,9 @@ namespace rnd::detail
 	void set_binary_loaded(const geometry_desc& geometry);
 	void forget_binary(const geometry_desc& geometry);
 
-	// Throws res::load_error naming `file` and the JSON path: a stride of 0, vertex bytes off the stride, an index count
-	// off 3, an index past the vertices, a position or uv that is not finite.
+	// Throws res::load_error naming `file` and the JSON path: what geometry_data_problem (rnd_geometry_encode.h) refuses of
+	// triangles: a stride of 0, vertex bytes off the stride, an index count off 3, an index past the vertices, a position or
+	// uv that is not finite.
 	void check_geometry_data(const res::tag& file, const geometry_desc& geometry);
 	// Arrays of any topology the loader takes (lines, points too): vertex bytes off the stride, an index past the vertices,
 	// a position or uv that is not finite. Nothing for a geometry without vertices or with an empty layout.
@@ -50,8 +51,6 @@ namespace rnd::detail
 
 	// What geometry_desc::deserialize reads: the layout, arrays as they are, ranges recorded (state not_loaded).
 	void read_geometry_json(geometry_desc& geometry, const boost::json::object& resource);
-	// The "layout" object of a desc.
-	boost::json::value layout_json(const driver::BufferLayout& layout);
 	// The recorded ranges read from the binary file beside `file` (its layer), checked, copied into the vectors, bounds
 	// built again when the file has the key. Throws res::load_error naming the JSON path.
 	void load_geometry_binary(res::resource_system& system, const res::tag& file, geometry_desc& geometry, bool verify_hash);

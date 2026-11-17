@@ -14,7 +14,7 @@ Editor/
     │   └── edt_camera_redirect.cpp/h # redirects backbuffer cameras to textures (editor shows them in the viewport)
     │
     ├── controller/                   # Editor controllers (decomposed from editor_system)
-    │   ├── edt_editor_system.cpp/h   # composition root: creates the services and editor_context, panels, wires callbacks, registers the built-ins, async orchestration
+    │   ├── edt_editor_system.cpp/h   # composition root (#1004): creates the services, the editor_context and the components below in order, wires the controllers' callbacks; no feature logic
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
     │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
     │   ├── edt_world_controller.cpp/h # switch/create world
@@ -41,6 +41,15 @@ Editor/
     ├── edt_component_renderers/      # per-type ImGui renderers for components
     │   ├── edt_component_renderers.cpp/h
     │   └── edt_cr_*.cpp              # skin, animation (camera, light, skybox and mesh are drawn from their schemas)
+    │
+    ├── game_layer/                   # a game module loaded, unloaded or reloaded (#1004)
+    │   └── edt_game_layer_component.cpp/h # game_layer_component: lets go of the old game layer (ends Play, closes the prefab preview, drops pending asset adds, abandons the load in flight) and builds the level in the new one; owns the `module_swap_gate` the build and Play components hand to the host and the `generation()` counter `project.migrate` binds a plan to; listens to `context_manager` from its constructor, so it is made before them
+    │
+    ├── startup/                      # the first frames (#1004)
+    │   └── edt_startup_component.cpp/h # startup_component: the question about a project held back for its engine version (`ask_about_held_project`), the start level (`--game`, `editor/startup_level`, `editor/start_mode`, `editor/game_level`; the loading screen of game mode through `editor_mode_controller`) as the implicit `edt/load_level`, and the question about the project's modules (implicit `edt/project_trust`, #921); `install_start_level()` / `install_trust_check()` are called where the order of implicit callbacks needs them
+    │
+    ├── file_menu/                    # the File and Edit menus (#1004)
+    │   └── edt_file_menu_component.cpp/h # file_menu_component: the hooks of `file_menu` (`controller/edt_file_menu.h`: new/save/save as/open level, the other open documents, the blockers of a migration, a level load and the start level, exit, New/Open Project, `start_editor_on`), the built-in menus, the file.* actions (`install`) and the Edit actions (`install_edit_actions`: undo/redo with the asset undo); `attach_window_close` for the window's close request
     │
     ├── import/                       # Asset import/export pipeline (the importer itself is in ../model_import)
     │   ├── edt_asset_exporter.cpp/h
@@ -104,12 +113,14 @@ Editor/
     │
     └── CMakeLists.txt
 
-code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code
-    ├── edt_model_importer.cpp/h      # model_importer (assimp -> memory:// descs), scan_files, import_background
+code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code; its decoder side is compiled again as snk_model_decoder_side for the decoder process, which links no engine (#1077)
+    ├── edt_model_import_core.cpp/h   # import_source, scan_model_files, list_model_requests, import_model_into (mdl::import_model into an mdl::import_sink, prefab stamped by the caller): decoder side, no desc/resource system
+    ├── edt_model_importer.cpp/h      # model_importer: import_model_into over the resource system with the prefab stamped (import_background), finalize_on_main
+    ├── edt_process_decoder.cpp/h     # process_decoder, accept_import_answer (stamps the decoder's unstamped prefab with the editor's desc_system, #1077)
     ├── edt_decode_{bundle,codec,runner}.cpp/h  # the decoder process (#647): bundle file format, JSON of request/scan/import, decode_runner (scratch folder 0700, kill on deadline/cancel, stale-folder cleanup)
-    ├── edt_filesystem_assimp_io.cpp/h
+    ├── edt_model_file_source.cpp/h   # mdl::file_source of the import: the model from memory, side files through model_file_access
     ├── edt_model_file_access.cpp/h   # what a model may make the import read (#548)
-    └── edt_async_import_task.h       # import_intermediate: background-thread import result
+    └── edt_async_import_task.h       # import_intermediate: background-thread import result (missing_textures: the person's import shows them in Problems, source `import`)
 
 code/file_identity/                   # snk::file_identity (#888): no engine, no importer; editor_system and model_import link it
     └── edt_file_identity.cpp/h       # file id + SHA-256 (#622); file_id_reader takes ids from a folder's listing on Windows
@@ -121,10 +132,39 @@ code/file_identity/                   # snk::file_identity (#888): no engine, no
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `editor_system` | `controller/edt_editor_system.cpp/h` | Thin coordinator: init, panel wiring, camera, async orchestration |
+| `editor_system` | `controller/edt_editor_system.cpp/h` | Composition root: `init()` creates the components (table below) and wires the controllers; the queries other areas ask (`person_is_editing`, `load_in_progress`, the migration blockers) and the frame ticks |
 | `scene_editor` | `controller/edt_scene_editor.cpp/h` | Entity CRUD (create/delete/duplicate/reparent), desc tree helpers, `serialize_and_push`, `sync_ecs_transforms_to_desc` |
 | `level_controller` | `controller/edt_level_controller.cpp/h` | Level I/O: new/load/save/quicksave, `write_level_to_disk`, `populate_worlds_from_level`, templates; a load keeps the file's root `__version` (`scene_document::level_file_version`), and a save over a file of an older version WARNs `Editor/Save` (`version_upgrade_text`) and calls `on_file_upgraded` (the menu bar shows it for 5 s, `timed_notice` in `edt_version_notice.h`; #761, R26) |
 | `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
+
+
+## Where what is wired now (#1004)
+
+`editor_system::init` creates these in this order, each from a `ports` struct (references to what it uses; late-bound `std::function`s for what is made after it) and registers it with one `install(...)` where it has registrations; the order of `install` calls is the order of the registry, of the View menu and of the implicit frame callbacks. Nothing is a singleton: services are injected.
+
+| # | Component (`edt::`) | Folder | Owns |
+|---|---|---|---|
+| 1 | `import_component` | `import/` | decoder process, adapter of models, the person's import, exporter + export dialog, the agent's import |
+| 2 | `problems_component` | `problems/` | the publishers of Problems (`desc`, `world`, `play`, `assets`, `input`), `go_to_problem` |
+| 3 | `panels_component` | `panels/` | the editor's panels, their wiring to the controllers, View menu order |
+| 4 | `prefab_editor_component` | `prefab/` | the prefab window and its Inspector hand-over (nothing of it is in `edt_editor_system.*`) |
+| 5 | `asset_open_component` | `assets/` | the data documents' host, asset kinds, opening and adding an asset to the scene |
+| 6 | `level_load_component` | `level/` | the working copy, the "Loading Level" window, `level.cancel_load`, the settle |
+| 7 | `game_layer_component` | `game_layer/` | what the editor does when the game layer changes, the `module_swap_gate`, the generation counter |
+| 8 | `file_menu_component` | `file_menu/` | the File and Edit menus, the file.* and edit.* actions, the save notice, `start_editor_on` |
+| 9 | `migration_component` | `migration/` | project.migrate and friends, the window, the rollback offer, the notice and the scan |
+| 10 | `game_build_component` | `game_build/` | the builder and the reloader of the game module |
+| 11 | `live_mode_component` | `live/` | live mode and the trust question |
+| 12 | `play_component` | `play/` | Play of the scene document and the editor/game mode |
+| 13 | `vcs_component` | `vcs/`, `forge/` | git, the repository watcher, pull requests, tokens |
+| 14 | `asset_component` | `assets/` | the asset database and what hangs on it (only with a project) |
+| 15 | `startup_component` | `startup/` | the held-project question, the start level, the project trust check |
+| 16 | `agent_component`, `agent_ui_component` | `agent/` | the MCP server and the agent policy; the agents window, the status slot and the notice |
+| 17 | `theme_settings_component` | `settings/` | the person's theme (applied after `edt://` is registered), the Editor Settings window (#1109) |
+
+What stays in `editor_system` on purpose: the services and controllers they share (`m_services`, `m_state`, `scene_editor`, `world_controller`, `level_controller`), `project_trust_service` creation and the `project.trust` action (the Project menu position is the registration order), `wire_controller_callbacks` (callbacks between the controllers, the context manager and Problems), the command sets registered as plain loops (scene, code, desc file commands), the menu bar status line and the layer hooks of `create_play_session`, and the small questions other components ask it through `std::function` ports.
+
+**Destruction.** `~editor_system` first runs `agent_component::shutdown()` (the server's thread and the log filter's closures name this system) and `import_component::shutdown()` (adapter, memory:// folders), clears the layer's hooks, stops Play, cancels the jobs, shuts the documents and closes the prefab editor, then clears the context manager's callbacks. The members then go in reverse declaration order: `theme_settings_component`, `agent_ui_component`, `agent_component`, `m_registrations`, the selection connections, `play_component`, `startup_component`, `live_mode_component`, `asset_component`, `vcs_component`, `game_build_component`, `file_menu_component`, `migration_component`, `game_layer_component`, `level_load_component`, `asset_open_component`, `prefab_editor_component` (already reset), `panels_component`, `problems_component`, `import_component`, the controllers, `m_state`, `m_services`. Each declaration in `edt_editor_system.h` says what it must outlive. The context manager's callbacks and the layer's hooks (`set_menu_bar_status`, the loading screen, the modal probe, the frame hook) are cleared in the destructor body above; implicit frame callbacks registered on the layer capture their component and are not unregistered when it goes.
 
 **Documents** (`include/snk/editor/edt_document.h`, `edt_document_manager.h`; `editor_context::documents()`): `document` has `id/kind/title/source/is_dirty/generation/can_save/save/save_as`. `document_manager` holds the one `scene_document` (owned by `editor_system`, the controllers are built on it) and at most one `prefab_document` preview: `scene()`, `active()`, `set_active(id)`, `open_prefab(tag)`, `preview()`, `close(id)` (the scene cannot be closed), `for_each`. It raises `document_opened/closed/activated`.
 
@@ -346,7 +386,7 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 
 ## Model Import Pipeline
 
-Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_adapter` (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
+Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/model_import`, #1108); a game and the tools load them through `mdl::model_adapter`, the editor through the decoder process (`edt::decoded_model_adapter`) (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
 - Outputs `prefab_desc` (not legacy prototype)
 - Geometry stored at `memory://path/name.geom.desc` (separate resource)
 - Mesh nodes → `mesh_node_desc` components referencing geometry by tag
@@ -354,7 +394,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_ada
 - Bone nodes → `bone_desc` components with offset matrix + global index
 - Animations → `animations_desc` on root, `keyframes_desc` on each animated node
 
-Import in editor: File menu → `dialog_service::pick_file` → `editor_system::start_import` → async import → export dialog → auto-add to scene.
+Import in editor: File menu → `dialog_service::pick_file` → `import_component::start_import` → async import → export dialog → auto-add to scene.
 
 **JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` (vertex and index arrays) stays on one line. A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
 

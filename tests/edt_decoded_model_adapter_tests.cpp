@@ -3,9 +3,8 @@
 #include "test_temp_dir.hpp"
 #include "edt_decoded_model_adapter.h"
 #include "edt_process_decoder.h"
-#include "edt_filesystem_assimp_io.h"
+#include "edt_model_file_source.h"
 #include "edt_file_identity.h"
-#include <assimp/IOStream.hpp>
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/res_mount_table.h>
@@ -513,11 +512,11 @@ BOOST_AUTO_TEST_CASE(TheVersionOfTheDecoderProcess_IsTheSha256OfItsFile_AndEmpty
 	const fs::path file = dir.write("bin/snk_model_decoder", "decoder bytes");
 	edt::decode_runner_config config;
 	config.decoder = file;
-	const edt::process_decoder decoder(*rs, config);
+	const edt::process_decoder decoder(*rs, *descs, config);
 	BOOST_TEST(decoder.version() == cmn::sha256_file_hex(file).value());
 
 	config.decoder = dir.path() / "bin" / "missing";
-	const edt::process_decoder missing(*rs, config);
+	const edt::process_decoder missing(*rs, *descs, config);
 	const warnings warned;
 	BOOST_TEST(missing.version().empty());
 	BOOST_TEST(missing.version().empty());
@@ -570,7 +569,7 @@ struct real_decoder_env : adapter_env
 	{
 		edt::decode_runner_config config;
 		config.decoder = SNK_MODEL_DECODER_PATH;
-		return edt::decoded_model_adapter(*descs, *rs, edt::decoded_model_adapter::steps_of(std::make_shared<edt::process_decoder>(*rs, config)));
+		return edt::decoded_model_adapter(*descs, *rs, edt::decoded_model_adapter::steps_of(std::make_shared<edt::process_decoder>(*rs, *descs, config)));
 	}
 
 	static std::vector<std::byte> text(std::string_view content)
@@ -631,25 +630,24 @@ BOOST_AUTO_TEST_CASE(BytesFromMemoryThatAreNoModel_FailTheLoad)
 
 // The reading side of the decoder for a model given only as bytes (#925): the model itself is served, every other name is
 // refused, also when a file of that name lies next to the path.
-BOOST_AUTO_TEST_CASE(TheAssimpIoOfAModelGivenOnlyAsBytes_ServesTheModelAndRefusesEveryOtherFile)
+BOOST_AUTO_TEST_CASE(TheFileSourceOfAModelGivenOnlyAsBytes_ServesTheModelAndRefusesEveryOtherFile)
 {
 	dir.write("ram/m.mtl", "newmtl red\n");
 	const fs::path model = dir.path() / "ram" / "m.obj";
 	const std::vector<std::byte> bytes = text("v 0 0 0\n");
 	edt::model_file_access access(model, {}, nullptr, {}, false);
-	edt::filesystem_assimp_io io(model, bytes, &access);
+	edt::model_file_source files(model, bytes, &access);
 
-	BOOST_TEST(io.Exists(model.string().c_str()));
-	Assimp::IOStream* stream = io.Open(model.string().c_str(), "rb");
-	BOOST_REQUIRE(stream != nullptr);
-	BOOST_TEST(stream->FileSize() == bytes.size());
-	io.Close(stream);
+	BOOST_TEST(files.exists(model.string()));
+	const mdl::opened_file opened = files.open(model.string());
+	BOOST_REQUIRE(opened.bytes != nullptr);
+	BOOST_TEST(opened.bytes->size() == bytes.size());
 
 	const std::string side = (dir.path() / "ram" / "m.mtl").string();
 	for (const std::string& name : { std::string("m.mtl"), side }) {
 		BOOST_TEST_CONTEXT(name) {
-			BOOST_CHECK_THROW(io.Exists(name.c_str()), std::runtime_error);
-			BOOST_CHECK_THROW(io.Open(name.c_str(), "rb"), std::runtime_error);
+			BOOST_CHECK_THROW(files.exists(name), std::runtime_error);
+			BOOST_CHECK_THROW(files.open(name), std::runtime_error);
 		}
 	}
 	BOOST_TEST(access.files().empty());

@@ -1,0 +1,175 @@
+{
+	"memory://bare/bare.geom.bin": {
+		"binary": 108
+	},
+	"memory://bare/bare.geom.desc": {
+		"json": {
+			"__type": "geometry_desc",
+			"__version": 2,
+			"__parent": "res://base_geometry.desc",
+			"layout": {
+				"position": "vec3",
+				"normal": "vec3"
+			},
+			"vertices": {
+				"offset": 16,
+				"size": 72,
+				"layout": "f32x6"
+			},
+			"indices": {
+				"offset": 96,
+				"size": 12,
+				"layout": "u32"
+			}
+		},
+		"geometry": {
+			"topology": "triangles",
+			"stride": 24,
+			"vertices": 3,
+			"indices": [
+				0,
+				1,
+				2
+			],
+			"elements": {
+				"position": [
+					[
+						-1E0,
+						-1E0,
+						0E0
+					],
+					[
+						1E0,
+						-1E0,
+						0E0
+					],
+					[
+						0E0,
+						1E0,
+						0E0
+					]
+				],
+				"normal": [
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					],
+					[
+						0E0,
+						0E0,
+						1E0
+					]
+				]
+			}
+		}
+	},
+	"memory://bare/bare.prefab.desc": {
+		"json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "a22f314ee1c4605e",
+			"children": [
+				{
+					"__id": "7a500f3a94bbd04b",
+					"name": "Bare",
+					"children": [
+						{
+							"__id": "bf3df155f36467ea",
+							"name": "mesh_Bare",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://bare/bare.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://bare/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"memory://bare/materials/DefaultMaterial.mat.desc": {
+		"json": {
+			"__type": "material_desc",
+			"__parent": "res://base_material.desc",
+			"name": "DefaultMaterial",
+			"uniforms": {
+				"albedo": [
+					6.000000238418579E-1,
+					6.000000238418579E-1,
+					6.000000238418579E-1,
+					1E0
+				],
+				"emissive": [
+					0E0,
+					0E0,
+					0E0,
+					1E0
+				],
+				"shininess": 0E0
+			},
+			"defines": [
+				"LIGHTS_ENABLED"
+			],
+			"queue": "mix",
+			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://bare/bare.geom.desc",
+		"prefab_tag": "memory://bare/bare.prefab.desc",
+		"all_tags": [
+			"memory://bare/bare.geom.desc",
+			"memory://bare/bare.prefab.desc",
+			"memory://bare/materials/DefaultMaterial.mat.desc"
+		],
+		"created_tags": [
+			"memory://bare/bare.geom.bin",
+			"memory://bare/bare.geom.desc",
+			"memory://bare/bare.prefab.desc",
+			"memory://bare/materials/DefaultMaterial.mat.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "a22f314ee1c4605e",
+			"children": [
+				{
+					"__id": "7a500f3a94bbd04b",
+					"name": "Bare",
+					"children": [
+						{
+							"__id": "bf3df155f36467ea",
+							"name": "mesh_Bare",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://bare/bare.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://bare/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
+	}
+}

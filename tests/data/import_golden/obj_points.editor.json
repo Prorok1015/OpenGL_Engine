@@ -1,0 +1,160 @@
+{
+	"memory://dots/dots.geom.desc": {
+		"json": {
+			"__type": "geometry_desc",
+			"__parent": "res://base_geometry.desc",
+			"topology": "points",
+			"layout": {
+				"position": "vec3"
+			},
+			"indices": [
+				0,
+				1,
+				2
+			],
+			"vertices": {
+				"numbers": {
+					"count": 36,
+					"sum": 5.73E2,
+					"magnitude": 5.73E2,
+					"probe": 1.4539762989317035E2,
+					"probe_magnitude": 1.880707842221858E2,
+					"min": 0E0,
+					"max": 1.28E2
+				}
+			},
+			"bounds": []
+		},
+		"geometry": {
+			"topology": "points",
+			"stride": 12,
+			"vertices": 3,
+			"indices": [
+				0,
+				1,
+				2
+			],
+			"elements": {
+				"position": [
+					[
+						0E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						0E0,
+						0E0
+					],
+					[
+						1E0,
+						1E0,
+						0E0
+					]
+				]
+			}
+		}
+	},
+	"memory://dots/dots.prefab.desc": {
+		"json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "d5b70fbcbb5436fa",
+			"children": [
+				{
+					"__id": "50ebdb0d6e73be7b",
+					"name": "Dots",
+					"children": [
+						{
+							"__id": "3212ce8402e12f16",
+							"name": "mesh_Dots",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://dots/dots.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://dots/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"memory://dots/materials/DefaultMaterial.mat.desc": {
+		"json": {
+			"__type": "material_desc",
+			"__parent": "res://base_material.desc",
+			"name": "DefaultMaterial",
+			"uniforms": {
+				"albedo": [
+					6.000000238418579E-1,
+					6.000000238418579E-1,
+					6.000000238418579E-1,
+					1E0
+				],
+				"emissive": [
+					0E0,
+					0E0,
+					0E0,
+					1E0
+				],
+				"shininess": 0E0
+			},
+			"defines": [
+				"LIGHTS_ENABLED"
+			],
+			"queue": "mix",
+			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+		}
+	},
+	"(import result)": {
+		"geom_tag": "memory://dots/dots.geom.desc",
+		"prefab_tag": "memory://dots/dots.prefab.desc",
+		"all_tags": [
+			"memory://dots/dots.geom.desc",
+			"memory://dots/dots.prefab.desc",
+			"memory://dots/materials/DefaultMaterial.mat.desc"
+		],
+		"created_tags": [
+			"memory://dots/dots.geom.desc",
+			"memory://dots/dots.prefab.desc",
+			"memory://dots/materials/DefaultMaterial.mat.desc"
+		],
+		"prefab_json": {
+			"__type": "prefab_desc",
+			"__version": 4,
+			"__id": "d5b70fbcbb5436fa",
+			"children": [
+				{
+					"__id": "50ebdb0d6e73be7b",
+					"name": "Dots",
+					"children": [
+						{
+							"__id": "3212ce8402e12f16",
+							"name": "mesh_Dots",
+							"components": {
+								"mesh_node_desc": {
+									"__type": "mesh_node_desc",
+									"__version": 1,
+									"geometry": "memory://dots/dots.geom.desc",
+									"vx_begin": 0,
+									"vx_end": 3,
+									"ind_begin": 0,
+									"ind_end": 3,
+									"material": "memory://dots/materials/DefaultMaterial.mat.desc"
+								}
+							}
+						}
+					]
+				}
+			]
+		},
+		"skin_weights": []
+	}
+}

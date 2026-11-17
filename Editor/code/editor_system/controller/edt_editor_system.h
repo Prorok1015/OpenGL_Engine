@@ -48,15 +48,17 @@ namespace edt {
 	class panels_component;
 	class problems_component;
 	class level_load_component;
+	class game_layer_component;
 	class asset_database;
 	class agent_server;
 	class agent_access;
 	class agent_component;
 	class agent_ui_component;
 	class theme_settings_component;
-	class file_menu;
+	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
+	class startup_component;
 	class vcs_component;
 	class migration_component;
 	struct journal_offer;
@@ -161,8 +163,6 @@ namespace edt {
 		void wire_controller_callbacks();
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
-		// The last save that upgraded a file, for a few seconds (#761); nothing otherwise.
-		void draw_save_notice();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
@@ -192,19 +192,9 @@ namespace edt {
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
 
-		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
-		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
-		void follow_game_layer_change(bool before);
-		// Changes of the game layer reach follow_game_layer_change through it; a reload of the game module holds them (#435).
-		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
-		// The level whose load the change interrupted; loaded again into the new layer.
-		res::tag m_level_after_layer_change;
-		// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
-		std::uint64_t m_game_layer_generation = 0;
 		std::optional<std::string> migration_blocker() const;
 		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.
 		std::optional<std::string> project_write_blocker();
-		timed_notice m_save_notice;
 		// A level or a dropped asset is loading: Play does not start and a module reload waits (#600).
 		std::optional<std::string> load_in_progress() const;
 
@@ -215,11 +205,15 @@ namespace edt {
 		// The load of a level and the settle after it (US-24-4, #613, #1004); its action is in m_registrations, removed before it.
 		// Declared after m_tasks, which the settle uses.
 		std::unique_ptr<edt::level_load_component> m_level_load;
+		// A game module loaded, unloaded or reloaded (#435, #1004): the editor lets go of the old game layer and builds its level in
+		// the new one; owns the swap gate the build and Play components hand to the host. After what it reaches (the level load, the
+		// prefab and asset components), so it is destroyed before them.
+		std::unique_ptr<edt::game_layer_component> m_game_layer;
 		// Project migration (EPIC-58, #761, #1004): the commands, the window, the offer to roll back, the notice and the scan;
 		// declared after what its scan callback touches, so the scan is cancelled first. A running migration refuses Play, level
 		// changes and saves, builds, module reloads and quitting (migration_blocker).
 		std::unique_ptr<migration_component> m_migration;
-		std::unique_ptr<edt::file_menu> m_file_menu;
+		std::unique_ptr<edt::file_menu_component> m_file_menu;
 		// Build > Build Game and the reload of the game module (#434, #435, #1004); after the file menu, so it is destroyed first
 		// (its job is stopped in the destructor), and after the swap gate it hands to the host.
 		std::unique_ptr<edt::game_build_component> m_build;
@@ -236,6 +230,9 @@ namespace edt {
 		// Live mode and the question "Trust this project?" (#445, #921, #1004); after the builder and the reloader it calls, so it
 		// is destroyed first.
 		std::unique_ptr<edt::live_mode_component> m_live;
+		// The first frames (#1004): the held-project question, the start level, the question about the project's modules. Registers
+		// implicit callbacks only; after what they reach (the level load, live mode), so it is destroyed first.
+		std::unique_ptr<edt::startup_component> m_startup;
 		// Play of the scene document and the editor/game mode (#1004); its commands are in m_registrations, removed before it.
 		// Stopped in the destructor while the context it reports to is still there.
 		std::unique_ptr<edt::play_component> m_play_component;

@@ -8,9 +8,8 @@
 #include <vector>
 
 // #1100: one vertex layout for the whole geometry of an imported model, the union of the attributes of the meshes it
-// holds. A mesh without one of them gets its default here: both importers (engine and editor) write the same stride and
-// the same values, and nothing a model file holds can make a mesh's vertices disagree with the layout.
-// For the two model importers only: not part of the module API.
+// holds. A mesh without one of them gets its default here, so nothing a model file holds can make a mesh's vertices
+// disagree with the layout. For the model import (core/model_import, #1108) only: not part of the module API.
 namespace scn::import_layout
 {
 	struct vertex_attributes

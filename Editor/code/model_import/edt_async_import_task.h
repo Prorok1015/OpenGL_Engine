@@ -29,6 +29,11 @@ namespace edt {
 		// Skinning weights to register on main thread.
 		std::vector<std::vector<uint32_t>> skin_weights;
 
+		// External textures as the model names them that were not loaded: their materials have no sampler for them.
+		std::vector<std::string>           missing_textures;
+		// How many more were not loaded than missing_textures lists (mdl::k_max_missing_textures).
+		std::size_t                        missing_textures_not_listed = 0;
+
 		// Non-empty means failure.
 		std::string                        error;
 
