@@ -33,6 +33,16 @@ namespace desc {
 		f("accent").color().tooltip("Check marks, sliders, the selected tab's line"),
 		f("accent_hover").color(),
 		f("selection").color().tooltip("Selected rows and pressed buttons"),
+		f("error").color().tooltip("Errors in the editor's panels"),
+		f("warning").color().tooltip("Warnings in the editor's panels"),
+		f("success").color().tooltip("Something that went well"),
+		f("info").color().tooltip("Something running or to note"),
+		f("text_secondary").color().tooltip("Text of less weight: notes, inherited values"),
+		f("agent").color().tooltip("What an agent changed or asks about"),
+		f("diff_added").color().tooltip("Added lines of a diff"),
+		f("diff_removed").color().tooltip("Removed lines of a diff"),
+		f("diff_hunk").color().tooltip("Hunk headers of a diff"),
+		f("backdrop").color().tooltip("Behind the viewport and the game view"),
 		f("rounding").range(0, 16, 1),
 		f("scrollbar_rounding").range(0, 16, 1),
 		f("window_padding").range(0, 32, 1),
@@ -68,6 +78,16 @@ namespace gui
 		glm::vec3 accent{ 0.23828125f, 0.48046875f, 0.87890625f };
 		glm::vec3 accent_hover{ 0.33203125f, 0.5625f, 0.9296875f };
 		glm::vec3 selection{ 0.1796875f, 0.26171875f, 0.41796875f };
+		glm::vec3 error{ 1.f, 0.3f, 0.3f };
+		glm::vec3 warning{ 1.f, 0.8f, 0.f };
+		glm::vec3 success{ 0.45f, 0.8f, 0.45f };
+		glm::vec3 info{ 0.45f, 0.75f, 1.f };
+		glm::vec3 text_secondary{ 0.6f, 0.6f, 0.6f };
+		glm::vec3 agent{ 0.95f, 0.75f, 0.3f };
+		glm::vec3 diff_added{ 0.45f, 0.8f, 0.45f };
+		glm::vec3 diff_removed{ 0.9f, 0.45f, 0.45f };
+		glm::vec3 diff_hunk{ 0.45f, 0.7f, 0.95f };
+		glm::vec3 backdrop{ 0.f, 0.f, 0.f };
 		float rounding = 4.f;
 		float scrollbar_rounding = 6.f;
 		glm::vec2 window_padding{ 8.f, 8.f };
@@ -81,7 +101,8 @@ namespace gui
 		bool icons = true;
 
 		BOOST_DESCRIBE_CLASS(theme_desc, (), (base, light, window, panel, frame, frame_hover, border, text, text_dim,
-			accent, accent_hover, selection, rounding, scrollbar_rounding, window_padding, frame_padding, item_spacing,
-			scrollbar_size, border_size, tab_overline, font, font_size, icons), (), ())
+			accent, accent_hover, selection, error, warning, success, info, text_secondary, agent, diff_added,
+			diff_removed, diff_hunk, backdrop, rounding, scrollbar_rounding, window_padding, frame_padding,
+			item_spacing, scrollbar_size, border_size, tab_overline, font, font_size, icons), (), ())
 	};
 }

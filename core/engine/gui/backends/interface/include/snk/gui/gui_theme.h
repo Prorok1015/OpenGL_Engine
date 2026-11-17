@@ -3,6 +3,23 @@
 
 namespace gui
 {
+	// What the editor's panels draw states with instead of literal colours (#1136). Taken whatever imgui_dark says, so
+	// the classic look has them too; default constructed they are the colours the panels used before.
+	struct theme_semantic_colors {
+		ImVec4 error{ 1.f, 0.3f, 0.3f, 1.f };
+		ImVec4 warning{ 1.f, 0.8f, 0.f, 1.f };
+		ImVec4 success{ 0.45f, 0.8f, 0.45f, 1.f };
+		ImVec4 info{ 0.45f, 0.75f, 1.f, 1.f };
+		ImVec4 text_secondary{ 0.6f, 0.6f, 0.6f, 1.f };
+		// What an agent did or asks about.
+		ImVec4 agent{ 0.95f, 0.75f, 0.3f, 1.f };
+		ImVec4 diff_added{ 0.45f, 0.8f, 0.45f, 1.f };
+		ImVec4 diff_removed{ 0.9f, 0.45f, 0.45f, 1.f };
+		ImVec4 diff_hunk{ 0.45f, 0.7f, 0.95f, 1.f };
+		// Behind a full-window image (the viewport, the game view).
+		ImVec4 backdrop{ 0.f, 0.f, 0.f, 1.f };
+	};
+
 	// The look a theme preset (gui::theme_desc, #1109) resolves to, without the font bytes. Default constructed it is
 	// the classic look: ImGui's dark style with the UI font at 13 px, what the smoke references were taken with.
 	struct theme_palette {
@@ -17,6 +34,7 @@ namespace gui
 		ImVec4 accent_hover{ 0.333f, 0.565f, 0.933f, 1.f };
 		ImVec4 selection{ 0.180f, 0.263f, 0.420f, 1.f };
 		bool light = false;
+		theme_semantic_colors semantic;
 	};
 
 	struct theme_metrics {

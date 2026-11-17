@@ -1,4 +1,5 @@
 #include "edt_build_settings_panel.h"
+#include <snk/gui/gui_theme.h>
 #include "edt_path_text.h"
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
@@ -10,9 +11,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-	const ImVec4 k_error_color{ 1.f, 0.3f, 0.3f, 1.f };
-	const ImVec4 k_warning_color{ 1.f, 0.8f, 0.f, 1.f };
-
 	// What build.json's `configuration` accepts (parse_build_settings).
 	bool is_build_configuration(std::string_view name)
 	{
@@ -86,7 +84,7 @@ void edt::build_settings_panel::on_render()
 	ImGui::TextDisabled("%s", utf8_of(m_model.code_dir()).c_str());
 	for (const auto& error : m_model.load_errors()) {
 		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextColored(k_warning_color, "%s", error.c_str());
+		ImGui::TextColored(colors().warning, "%s", error.c_str());
 		ImGui::PopTextWrapPos();
 	}
 
@@ -289,7 +287,7 @@ void edt::build_settings_panel::draw_defines()
 	}
 	if (!m_define_error.empty()) {
 		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextColored(k_error_color, "%s", m_define_error.c_str());
+		ImGui::TextColored(colors().error, "%s", m_define_error.c_str());
 		ImGui::PopTextWrapPos();
 	}
 }
@@ -358,12 +356,12 @@ void edt::build_settings_panel::draw_footer()
 	}
 
 	ImGui::PushTextWrapPos(0.f);
-	if (blocked) ImGui::TextColored(k_warning_color, "%s", blocked->c_str());
+	if (blocked) ImGui::TextColored(colors().warning, "%s", blocked->c_str());
 	for (const auto& file : m_changed) {
-		ImGui::TextColored(k_warning_color, "%s changed outside the editor - Apply merges onto the current file",
+		ImGui::TextColored(colors().warning, "%s changed outside the editor - Apply merges onto the current file",
 			relative(file).c_str());
 	}
-	for (const auto& error : m_apply_errors) ImGui::TextColored(k_error_color, "%s", error.c_str());
+	for (const auto& error : m_apply_errors) ImGui::TextColored(colors().error, "%s", error.c_str());
 	for (const auto& configuration : m_model.settings().fresh_configure) {
 		ImGui::TextDisabled("Next build of %s reconfigures from scratch (--fresh)", display_name_of(m_model, configuration).c_str());
 	}

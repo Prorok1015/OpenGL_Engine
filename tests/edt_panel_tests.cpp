@@ -6,6 +6,7 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_editor_layer.h"
 #include <snk/gui/gui_debug_layer.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <cstdint>
 #include <memory>
@@ -330,6 +331,70 @@ BOOST_AUTO_TEST_CASE(Rename_FollowsItsNodeAndEndsWhenTheNodeGoes)
 	BOOST_TEST(desc.get_root().children[0].name == "n3");
 
 	ImGui::DestroyContext(context);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #1136: a panel draws states with the editor's semantic colours; the registry hands them to every panel it holds.
+namespace {
+	struct colored_panel : public edt::panel_base
+	{
+		colored_panel() : panel_base("colored", "Colored") {}
+		using panel_base::colors;
+
+	protected:
+		void on_render() override {}
+	};
+
+	bool same(const ImVec4& a, const ImVec4& b)
+	{
+		return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+	}
+}
+
+BOOST_AUTO_TEST_SUITE(EditorPanelColorsTests)
+
+BOOST_AUTO_TEST_CASE(APanelWithoutColors_DrawsWithTheDefaults)
+{
+	const colored_panel panel;
+	const gui::theme_semantic_colors defaults;
+
+	BOOST_TEST(same(panel.colors().error, defaults.error));
+	BOOST_TEST(same(panel.colors().backdrop, defaults.backdrop));
+}
+
+BOOST_AUTO_TEST_CASE(SetColors_IsFollowed_AndChangesToTheObjectAreSeen)
+{
+	colored_panel panel;
+	gui::theme_semantic_colors colors;
+	colors.error = ImVec4(0.5f, 0.f, 0.f, 1.f);
+	panel.set_colors(&colors);
+	BOOST_TEST(same(panel.colors().error, colors.error));
+
+	colors.error = ImVec4(0.25f, 0.f, 0.f, 1.f);
+	BOOST_TEST(&panel.colors() == &colors);
+	BOOST_TEST(same(panel.colors().error, ImVec4(0.25f, 0.f, 0.f, 1.f)));
+
+	panel.set_colors(nullptr);
+	BOOST_TEST(same(panel.colors().error, gui::theme_semantic_colors{}.error));
+}
+
+BOOST_AUTO_TEST_CASE(TheRegistry_HandsItsColorsToEveryPanel_AndTakesThemBackOnRemove)
+{
+	gui::theme_semantic_colors colors;
+	edt::panel_registry registry;
+	auto before = std::make_shared<colored_panel>();
+	edt::registration first = registry.add({ .id = "colored", .title = "Colored", .panel = before });
+
+	registry.set_colors(&colors);
+	BOOST_TEST(&before->colors() == &colors);
+
+	first = {};
+	BOOST_TEST(&before->colors() != &colors);
+
+	auto after = std::make_shared<colored_panel>();
+	const edt::registration second = registry.add({ .id = "colored", .title = "Colored", .panel = after });
+	BOOST_TEST(&after->colors() == &colors);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

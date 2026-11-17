@@ -23,6 +23,7 @@
 #include <snk/project/prj_create.h>
 #include <snk/resource/res_system.h>
 #include <snk/window/wnd_window_system.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <utility>
 
@@ -209,5 +210,5 @@ void edt::file_menu_component::draw_status()
 {
 	const std::optional<std::string_view> text = m_save_notice.text(timed_notice::clock::now());
 	if (!text) return;
-	ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%.*s", static_cast<int>(text->size()), text->data());
+	ImGui::TextColored(m_ports.context.colors().warning, "%.*s", static_cast<int>(text->size()), text->data());
 }

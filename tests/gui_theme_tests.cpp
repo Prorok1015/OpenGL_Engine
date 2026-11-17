@@ -6,6 +6,7 @@
 #include <snk/gui/gui_theme_service.h>
 #include <snk/gui/gui_ui_font.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -30,6 +31,32 @@ namespace fs = std::filesystem;
 float luminance(const ImVec4& c)
 {
 	return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z;
+}
+
+// WCAG 2: the relative luminance of an sRGB colour and the contrast ratio of two.
+float relative_luminance(const ImVec4& c)
+{
+	const auto linear = [](float v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+	return 0.2126f * linear(c.x) + 0.7152f * linear(c.y) + 0.0722f * linear(c.z);
+}
+
+float contrast(const ImVec4& a, const ImVec4& b)
+{
+	const float la = relative_luminance(a);
+	const float lb = relative_luminance(b);
+	return (std::max(la, lb) + 0.05f) / (std::min(la, lb) + 0.05f);
+}
+
+bool same(const ImVec4& a, const ImVec4& b)
+{
+	return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+}
+
+bool same(const gui::theme_semantic_colors& a, const gui::theme_semantic_colors& b)
+{
+	return same(a.error, b.error) && same(a.warning, b.warning) && same(a.success, b.success) && same(a.info, b.info)
+		&& same(a.text_secondary, b.text_secondary) && same(a.agent, b.agent) && same(a.diff_added, b.diff_added)
+		&& same(a.diff_removed, b.diff_removed) && same(a.diff_hunk, b.diff_hunk) && same(a.backdrop, b.backdrop);
 }
 
 bool same_colors(const ImGuiStyle& a, const ImGuiStyle& b)
@@ -398,6 +425,64 @@ BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)
 
 	BOOST_TEST(!gui::theme_style_of(preset, problem).has_value());
 	BOOST_TEST(problem.find("accent") != std::string::npos);
+}
+
+// #1136: the semantic colours the editor's panels draw states with.
+BOOST_AUTO_TEST_CASE(APresetWithoutTheSemanticColors_ReadsTheDefaults)
+{
+	const res::tag preset = put("old.desc", R"({ "__type" : "gui.theme", "__version" : 1, "base" : "palette" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(service.selected().view() == preset.view());
+	BOOST_TEST(same(theme.style.palette.semantic, gui::theme_semantic_colors{}));
+	BOOST_TEST(same(service.applied().palette.semantic, gui::theme_semantic_colors{}));
+}
+
+BOOST_AUTO_TEST_CASE(APresetThatSetsTheSemanticColors_GetsThem_AlsoOnTheClassicBase)
+{
+	const res::tag preset = put("own_colors.desc", R"({ "__type" : "gui.theme", "__version" : 1, "base" : "imgui_dark",
+		"error" : [0.5, 0.25, 0.125], "diff_hunk" : [0.0, 0.5, 1.0], "backdrop" : [0.25, 0.25, 0.25] })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(theme.style.imgui_dark);
+	const gui::theme_semantic_colors& colors = theme.style.palette.semantic;
+	BOOST_TEST(same(colors.error, ImVec4(0.5f, 0.25f, 0.125f, 1.f)));
+	BOOST_TEST(same(colors.diff_hunk, ImVec4(0.f, 0.5f, 1.f, 1.f)));
+	BOOST_TEST(same(colors.backdrop, ImVec4(0.25f, 0.25f, 0.25f, 1.f)));
+	BOOST_TEST(same(colors.warning, gui::theme_semantic_colors{}.warning));
+	BOOST_TEST(same(service.applied().palette.semantic, colors));
+}
+
+BOOST_AUTO_TEST_CASE(ASemanticColorOutsideZeroToOne_IsRefusedWithItsName)
+{
+	gui::theme_desc preset;
+	preset.base = gui::theme_base::imgui_dark;
+	preset.text_secondary = glm::vec3{ 0.5f, -1.f, 0.5f };
+	std::string problem;
+
+	BOOST_TEST(!gui::theme_style_of(preset, problem).has_value());
+	BOOST_TEST(problem.find("text_secondary") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(EveryShippedPreset_KeepsItsSemanticColorsReadableOnItsPanels)
+{
+	for (const std::string_view preset : { "engine://themes/classic.desc", "engine://themes/dark_neutral.desc",
+		"engine://themes/dark_contrast.desc", "engine://themes/light.desc" }) {
+		BOOST_TEST_CONTEXT(preset) {
+			const auto& theme = select(preset);
+			ImGuiStyle style;
+			gui::apply_theme(theme.style, style);
+			const ImVec4 panel = style.Colors[ImGuiCol_WindowBg];
+			const gui::theme_semantic_colors& c = theme.style.palette.semantic;
+			// The backdrop is no text: it is drawn behind images.
+			for (const ImVec4* color : { &c.error, &c.warning, &c.success, &c.info, &c.text_secondary, &c.agent,
+				&c.diff_added, &c.diff_removed, &c.diff_hunk }) {
+				BOOST_TEST(contrast(*color, panel) >= 3.f);
+			}
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -12,6 +12,7 @@
 #include "edt_problem_list.h"
 #include "edt_registration_scope.h"
 #include "edt_selection_service.h"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,11 @@ namespace edt
 		inspector_registry& inspectors() { return m_inspectors; }
 		asset_kind_registry& asset_kinds() { return m_asset_kinds; }
 
+		// The semantic colours of the theme applied last (#1136), the one copy every panel of panels() follows; code
+		// that is not a panel takes them from here. The defaults until a theme is applied, and headless.
+		const gui::theme_semantic_colors& colors() const;
+		void set_colors(const gui::theme_semantic_colors& colors);
+
 		// The registrations die with the context, before the services their commands call.
 		void adopt(std::vector<registration> added);
 
@@ -106,5 +112,6 @@ namespace edt
 		std::vector<const registration_scope*> m_module_scopes;
 		// Shows a failed job to the person; uses m_jobs and m_dialogs, so it goes first.
 		connection m_job_failures;
+		std::unique_ptr<gui::theme_semantic_colors> m_colors;
 	};
 }

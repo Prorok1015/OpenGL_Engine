@@ -6,6 +6,7 @@
 #include <snk/scene/scn_bone_desc.h>
 #include "edt_override_edit.h"
 #include "edt_ui_probe_imgui.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <string>
 #include <algorithm>
@@ -227,7 +228,7 @@ namespace edt
 			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = "[B] ";
 			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
 
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
 			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
 			const float arrow_x = ImGui::GetCursorScreenPos().x;
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
@@ -599,7 +600,7 @@ namespace edt
 			float fraction = (item_h > 0.f) ? (mouse_y / item_h) : 0.5f;
 
 			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			ImU32 line_col = IM_COL32(80, 160, 255, 200);
+			const ImU32 line_col = ImGui::GetColorU32(ImGuiCol_CheckMark, 0.8f);
 			float line_thickness = 2.0f;
 
 			if (fraction < 0.25f) {

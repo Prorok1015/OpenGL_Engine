@@ -1,6 +1,7 @@
 #include "edt_agent_confirmations.h"
 #include "edt_forge_types.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/gui/gui_theme.h>
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -556,7 +557,7 @@ namespace edt
 		return true;
 	}
 
-	bool draw_agent_confirmations(agent_confirmations& confirmations)
+	bool draw_agent_confirmations(agent_confirmations& confirmations, const gui::theme_semantic_colors& colors)
 	{
 		const std::vector<confirmation_request> requests = confirmations.pending();
 		if (requests.empty()) {
@@ -587,7 +588,7 @@ namespace edt
 			for (const confirmation_request& request : requests) {
 				ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(request.id)));
 				ImGui::PushTextWrapPos(0.f);
-				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "An agent wants to run %s", request.command.c_str());
+				ImGui::TextColored(colors.agent, "An agent wants to run %s", request.command.c_str());
 				if (!request.summary.empty()) ImGui::TextUnformatted(request.summary.c_str(), request.summary.c_str() + request.summary.size());
 				ImGui::TextDisabled("session %s, %s", request.session.empty() ? "?" : request.session.c_str(), cmd::to_string(request.category));
 				ImGui::PopTextWrapPos();
