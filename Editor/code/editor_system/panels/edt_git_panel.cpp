@@ -6,6 +6,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
@@ -202,7 +203,7 @@ void edt::git_panel::draw_header()
 		ImGui::TextDisabled("reading...");
 	}
 
-	ImGui::SetNextItemWidth(220.0f);
+	ImGui::SetNextItemWidth(em(220.0f));
 	ImGui::BeginDisabled(busy);
 	if (ImGui::BeginCombo("##branches", head.c_str())) {
 		for (const git_branch& branch : m_model.branches()) {
@@ -221,7 +222,7 @@ void edt::git_panel::draw_header()
 		ImGui::EndCombo();
 	}
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(160.0f);
+	ImGui::SetNextItemWidth(em(160.0f));
 	ImGui::InputTextWithHint("##new_branch", "new branch", &m_new_branch);
 	ImGui::SameLine();
 	ImGui::BeginDisabled(m_new_branch.empty());

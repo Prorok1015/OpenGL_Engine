@@ -197,6 +197,11 @@ jobs:
           python3 tools/ci/check_ui_colors.py --self-test
           python3 tools/ci/check_ui_colors.py
 
+      - name: Check the editor UI has no pixel-constant sizes
+        run: |
+          python3 tools/ci/check_ui_sizes.py --self-test
+          python3 tools/ci/check_ui_sizes.py
+
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:
     name: Base ${{ needs.plan.outputs.base }}

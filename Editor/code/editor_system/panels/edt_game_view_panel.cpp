@@ -1,4 +1,5 @@
 #include "edt_game_view_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
@@ -96,7 +97,7 @@ namespace edt
 		}
 
 		const int current = m_selection.selected_index();
-		ImGui::SetNextItemWidth(220.f);
+		ImGui::SetNextItemWidth(em(220.f));
 		if (ImGui::BeginCombo("Camera", m_selection.cameras()[static_cast<std::size_t>(current)].name.c_str())) {
 			for (int i = 0; i < static_cast<int>(m_selection.cameras().size()); ++i) {
 				// Node names are not unique ("Camera" is common).

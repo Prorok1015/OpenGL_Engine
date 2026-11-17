@@ -1,4 +1,5 @@
 #include "edt_migration_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
@@ -36,7 +37,8 @@ namespace {
 	// The height left above a row of buttons.
 	float body_height()
 	{
-		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y, 60.0f);
+		return std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y,
+			edt::em(60.f));
 	}
 }
 
@@ -62,7 +64,7 @@ void edt::migration_panel::show_rollback_question(const std::string& id)
 
 void edt::migration_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(720.f, 520.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(720.f), em(520.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -115,7 +117,8 @@ void edt::migration_panel::draw_rollback_question()
 		coloured(colors().error, "This rollback would be refused: " + question->refused);
 	} else {
 		// Every path of the journal, however many: a long list scrolls inside its own region.
-		if (ImGui::BeginChild("##rollback_files", ImVec2(640.0f, 280.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+		if (ImGui::BeginChild("##rollback_files", ImVec2(em(640.0f), em(280.0f)), ImGuiChildFlags_Borders,
+				ImGuiWindowFlags_HorizontalScrollbar)) {
 			ImGui::TextUnformatted(question->text.c_str(), question->text.c_str() + question->text.size());
 		}
 		ImGui::EndChild();

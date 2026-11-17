@@ -2,6 +2,7 @@
 #include "edt_asset_picker.h"
 #include "edt_override_edit.h"
 #include "edt_reference.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
@@ -393,7 +394,7 @@ namespace
 			}
 			ImGui::EndPopup();
 		}
-		ImGui::SameLine(0.0f, 4.0f);
+		ImGui::SameLine(0.0f, edt::em(4.0f));
 	}
 
 	bool draw_object(const desc::type_schema& schema, json::value& object, const std::string& prefix, const context& ctx, int depth)
@@ -628,7 +629,7 @@ namespace
 		}
 		std::vector<char> buffer(std::max<std::size_t>(query.size() + 64, 256), '\0');
 		std::copy(query.begin(), query.end(), buffer.begin());
-		ImGui::SetNextItemWidth(360.0f);
+		ImGui::SetNextItemWidth(edt::em(360.0f));
 		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
 			query = buffer.data();
 		}
@@ -639,7 +640,7 @@ namespace
 		} else {
 			ImGui::TextDisabled("%zu files", page.total);
 		}
-		if (ImGui::BeginChild("##list", ImVec2(420.0f, 260.0f))) {
+		if (ImGui::BeginChild("##list", ImVec2(edt::em(420.0f), edt::em(260.0f)))) {
 			for (std::size_t i = 0; i < page.items.size(); ++i) {
 				const edt::asset_record& record = *page.items[i].record;
 				const std::string what = record.desc_type ? *record.desc_type : record.type;
@@ -953,7 +954,7 @@ namespace
 			ImGui::PushID(key.c_str());
 			std::vector<char> buffer(std::max<std::size_t>(key.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 			std::copy(key.begin(), key.end(), buffer.begin());
-			ImGui::SetNextItemWidth(140.0f);
+			ImGui::SetNextItemWidth(edt::em(140.0f));
 			const bool entered = ImGui::InputText("##key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
 			const ImGuiID row = ImGui::GetItemID();
 			if (ImGui::IsItemActivated()) {
@@ -1006,7 +1007,7 @@ namespace
 		std::string& fresh = state.new_keys[ImGui::GetID("new_key")];
 		std::vector<char> buffer(std::max<std::size_t>(fresh.size() + 64, edt::schema_ui::k_max_map_key + 1), '\0');
 		std::copy(fresh.begin(), fresh.end(), buffer.begin());
-		ImGui::SetNextItemWidth(140.0f);
+		ImGui::SetNextItemWidth(edt::em(140.0f));
 		const bool entered = ImGui::InputTextWithHint("##new_key", "new key", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
 		if (ImGui::IsItemEdited() || entered) {
 			fresh = buffer.data();

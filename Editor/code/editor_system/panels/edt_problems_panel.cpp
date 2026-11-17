@@ -1,4 +1,5 @@
 #include "edt_problems_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
@@ -201,7 +202,7 @@ void edt::problems_panel::on_render()
 	std::optional<std::size_t> menu_opened;
 	if (ImGui::BeginTable("##problems_rows", 3, flags)) {
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, 70.f);
+		ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, dpi_px(70.f));
 		ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_WidthStretch, 1.f);
 		ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch, 3.f);
 		ImGui::TableHeadersRow();

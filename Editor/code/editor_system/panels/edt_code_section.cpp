@@ -4,6 +4,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <utility>
 
 namespace edt
@@ -119,7 +120,7 @@ namespace edt
 
 	void code_section::render(const gui::theme_semantic_colors& colors)
 	{
-		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.f);
+		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, em(12.f));
 		const bool opened = ImGui::TreeNodeEx("code://##codetreeroot", ImGuiTreeNodeFlags_SpanFullWidth);
 		if (ImGui::BeginPopupContextItem("##codetreeroot_menu")) {
 			if (ImGui::MenuItem("New file...")) {
@@ -152,12 +153,12 @@ namespace edt
 		switch (m_dialog) {
 		case dialog_kind::new_file:
 			ImGui::Text("New file in code://%s", m_target.c_str());
-			ImGui::SetNextItemWidth(320.f);
+			ImGui::SetNextItemWidth(em(320.f));
 			ImGui::InputText("##name", &m_text);
 			break;
 		case dialog_kind::rename_file:
 			ImGui::Text("Rename code://%s", m_target.c_str());
-			ImGui::SetNextItemWidth(320.f);
+			ImGui::SetNextItemWidth(em(320.f));
 			ImGui::InputText("##name", &m_text);
 			break;
 		case dialog_kind::delete_file:

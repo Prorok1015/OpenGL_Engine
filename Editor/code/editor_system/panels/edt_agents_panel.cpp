@@ -2,6 +2,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 #include <algorithm>
 #include <cctype>
 #include <format>
@@ -21,7 +22,7 @@ namespace {
 	{
 		bool changed = false;
 		const char* shown = value ? cmd::to_string(*value) : "default";
-		ImGui::SetNextItemWidth(100.f);
+		ImGui::SetNextItemWidth(edt::em(100.f));
 		if (ImGui::BeginCombo(id, shown)) {
 			if (ImGui::Selectable("default", !value.has_value())) {
 				value.reset();
@@ -100,7 +101,7 @@ edt::agents_panel::agents_panel(agent_policy_model& model, agents_panel_services
 
 void edt::agents_panel::on_before_begin()
 {
-	ImGui::SetNextWindowSize(ImVec2(700.f, 640.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(700.f), em(640.f)), ImGuiCond_FirstUseEver);
 	if (m_focus) {
 		ImGui::SetNextWindowFocus();
 		m_focus = false;
@@ -228,7 +229,7 @@ void edt::agents_panel::draw_server()
 			: "The agent server did not start (is the port taken?).";
 		m_message_is_error = !took;
 	}
-	ImGui::SetNextItemWidth(120.f);
+	ImGui::SetNextItemWidth(em(120.f));
 	ImGui::InputInt("Port (0 = any free port)", &m_port_edit, 0, 0);
 	m_port_edit = std::clamp(m_port_edit, 0, 65535);
 	if (on) {
@@ -337,7 +338,7 @@ void edt::agents_panel::draw_policy()
 
 	if (ImGui::TreeNode("Single commands")) {
 		const char* current = label_of(m_command_category);
-		ImGui::SetNextItemWidth(160.f);
+		ImGui::SetNextItemWidth(em(160.f));
 		if (ImGui::BeginCombo("Category", current)) {
 			for (const cmd::agent_category category : settable_categories()) {
 				if (ImGui::Selectable(label_of(category), category == m_command_category)) m_command_category = category;
@@ -397,7 +398,7 @@ void edt::agents_panel::draw_vcs(policy_scope scope)
 			text = list.value->has_value() ? ((*list.value)->empty() ? std::string("none") : join_pattern_list(**list.value)) : std::string{};
 			m_list_loaded[index] = true;
 		}
-		ImGui::SetNextItemWidth(360.f);
+		ImGui::SetNextItemWidth(em(360.f));
 		if (ImGui::InputTextWithHint(list.label, "(default)", &text)) {
 			const std::string cleaned = trimmed(text);
 			if (cleaned.empty()) {
@@ -424,7 +425,7 @@ void edt::agents_panel::draw_vcs(policy_scope scope)
 	for (const flag_def& flag : flags) {
 		ImGui::PushID(flag.label);
 		const char* shown_value = !flag.value->has_value() ? "default (off)" : (**flag.value ? "on" : "off");
-		ImGui::SetNextItemWidth(120.f);
+		ImGui::SetNextItemWidth(em(120.f));
 		if (ImGui::BeginCombo(flag.label, shown_value)) {
 			if (ImGui::Selectable("default (off)", !flag.value->has_value())) m_model.set_vcs_flag(scope, flag.key, std::nullopt);
 			ImGui::BeginDisabled(scope == policy_scope::personal);
