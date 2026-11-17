@@ -20,6 +20,16 @@ struct instance_problems_fixture : test_util::scene_env
 		return load<scn::world_desc>(put("w.desc", text));
 	}
 
+	// Two files that refer to each other give descs that hold handles to one another: taken apart when the test is done, or the
+	// leak check of the sanitizer run reports the cycle (as scn_prefab_merge_tests does, #958).
+	void take_apart(const char* name)
+	{
+		const auto prefab = load<scn::prefab_desc>(tag_of(name));
+		if (!prefab) return;
+		prefab->get_root().children.clear();
+		prefab->get_root().components.clear();
+	}
+
 	std::vector<res::diagnostic> diagnostics_of_world(const scn::world_desc& world)
 	{
 		const std::vector<edt::instance_world> worlds{ { &world, "memory://t/w.desc" } };
@@ -69,6 +79,9 @@ BOOST_AUTO_TEST_CASE(APrefabThatInstantiatesItselfThroughAnother_IsOneErrorNamin
 	BOOST_REQUIRE(world);
 
 	const auto rows = diagnostics_of_world(*world);
+
+	take_apart("first.prefab.desc");
+	take_apart("second.prefab.desc");
 
 	const auto cycles = std::ranges::count_if(rows, [](const res::diagnostic& row) { return row.kind == res::diagnostic_kind::cycle; });
 	BOOST_TEST(cycles >= 1);
