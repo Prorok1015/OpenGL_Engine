@@ -6,6 +6,7 @@
 #include <snk/scene/scn_bone_desc.h>
 #include "edt_override_edit.h"
 #include "edt_ui_probe_imgui.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <string>
@@ -359,7 +360,7 @@ namespace edt
 
 	void scene_hierarchy_panel::draw_new_world_popup()
 	{
-		ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(ImVec2(em(280.f), 0), ImGuiCond_Always);
 		if (ImGui::BeginPopup("##new_world_popup")) {
 			ImGui::TextUnformatted("New world name:");
 			ImGui::SetNextItemWidth(-1.f);

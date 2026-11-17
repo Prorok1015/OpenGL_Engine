@@ -1,4 +1,5 @@
 #include "edt_world_systems_panel.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <string>
@@ -41,8 +42,8 @@ void edt::world_systems_panel::on_render()
 	if (ImGui::BeginTable("##world_systems_rows", 3, flags)) {
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("System");
-		ImGui::TableSetupColumn("Phase", ImGuiTableColumnFlags_WidthFixed, 110.f);
-		ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 120.f);
+		ImGui::TableSetupColumn("Phase", ImGuiTableColumnFlags_WidthFixed, em(110.f));
+		ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, em(120.f));
 		ImGui::TableHeadersRow();
 		const auto& systems = m_model.systems();
 		std::string pending_remove;

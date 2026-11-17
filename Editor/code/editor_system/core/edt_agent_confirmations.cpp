@@ -1,5 +1,6 @@
 #include "edt_agent_confirmations.h"
 #include "edt_forge_types.h"
+#include "edt_ui_metrics.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/gui/gui_theme.h>
 #include <boost/json/serialize.hpp>
@@ -575,10 +576,11 @@ namespace edt
 		shown.reserve(requests.size());
 
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + 12.f), ImGuiCond_Always,
+		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - em(12.f),
+			viewport->WorkPos.y + em(12.f)), ImGuiCond_Always,
 			ImVec2(1.f, 0.f));
 		// One width whatever the requests say: a window that grows and shrinks with its text moves the buttons sideways.
-		ImGui::SetNextWindowSizeConstraints(ImVec2(640.f, 0.f), ImVec2(640.f, 720.f));
+		ImGui::SetNextWindowSizeConstraints(ImVec2(em(640.f), 0.f), ImVec2(em(640.f), em(720.f)));
 		const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
 			| ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking;
 		if (ImGui::Begin("Agent request##agent_confirmations", nullptr, flags)) {
@@ -611,7 +613,7 @@ namespace edt
 					ImGui::EndChild();
 				}
 				// The arguments in full, as the registry bound them: what is approved is what is shown, however long.
-				if (ImGui::BeginChild("arguments", ImVec2(0.f, 140.f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+				if (ImGui::BeginChild("arguments", ImVec2(0.f, em(140.f)), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();

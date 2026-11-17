@@ -4,6 +4,7 @@
 #include "edt_ui_colors.h"
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_metrics.h"
 
 #include <string>
 
@@ -52,16 +53,16 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
     }
 
     // Set fixed button width and spacing
-    const float button_width = 120.0f;
+    const float button_width = em(120.0f);
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const float total_width = button_width * 2 + spacing;
     
     // Minimum window size should be slightly larger than buttons width
-    const float padding = 40.0f; // Additional padding
-    const ImVec2 min_size(total_width + padding, 450);
+    const float padding = em(40.0f); // Additional padding
+    const ImVec2 min_size(total_width + padding, em(450.f));
     
     ImGui::SetNextWindowSizeConstraints(min_size, ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::SetNextWindowSize(ImVec2(600, 450), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(em(600.f), em(450.f)), ImGuiCond_FirstUseEver);
     
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     if (ImGui::BeginPopupModal(window_title.c_str(), p_open, flags)) {
@@ -76,7 +77,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
 			return false;
 		}
         // Path navigation bar with better styling
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, em(ImVec2(8.f, 6.f)));
         
         // Back button
         if (ImGui::Button((icons.back + "##back").c_str())) {
@@ -91,10 +92,10 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         
         // Current path with background
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
         std::string path_str = current_path.string();
         // Reserve space for filter
-        float filter_width = 200.0f;
+        float filter_width = em(200.0f);
         float path_width = ImGui::GetContentRegionAvail().x - filter_width - ImGui::GetStyle().ItemSpacing.x;
         ImGui::PushItemWidth(path_width);
         ImGui::InputText("##path", &path_str, ImGuiInputTextFlags_ReadOnly);
@@ -105,16 +106,16 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         ImGui::SameLine();
         // Filter with icon
         ImGui::PushItemWidth(filter_width);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
         ImGui::TextUnformatted(icons.search.c_str());
         ImGui::SameLine();
         ImGui::InputTextWithHint("##filter", "Filter...", &filter);
         ImGui::PopStyleVar(2);
 
         // File list with better styling
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, em(4.f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
-        if (ImGui::BeginChild("Files", ImVec2(0, -80), true)) {
+        if (ImGui::BeginChild("Files", ImVec2(0, -em(80.f)), true)) {
             float item_height = ImGui::GetTextLineHeightWithSpacing() * 1.2f;
             
             // Directories first
@@ -188,8 +189,8 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
 
         // Selected path display with background
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, em(ImVec2(8.f, 6.f)));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
 		std::string selected_path_str = selected_path.string();
         ImGui::InputText("##selected", &selected_path_str, ImGuiInputTextFlags_ReadOnly);
         ImGui::PopStyleVar(2);
@@ -212,12 +213,12 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         }
 
         // Buttons
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + em(8.f));
 
         // Center buttons
         ImGui::SetCursorPosX((ImGui::GetWindowSize().x - total_width) * 0.5f);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em(4.f));
 
         // A button that cannot be pressed keeps the style's plain button colour, hovered or not.
         if (!can_accept) {
@@ -231,7 +232,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, shade(colors.success, 0.5f));
         }
 
-        if (ImGui::Button("OK", ImVec2(button_width, 30)) && can_accept) {
+        if (ImGui::Button("OK", ImVec2(button_width, em(30.f))) && can_accept) {
             result = true;
             *p_open = false;
             ImGui::CloseCurrentPopup();
@@ -243,7 +244,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_se
         ImGui::PushStyleColor(ImGuiCol_Button, shade(colors.error, 0.5f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, shade(colors.error, 0.6f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, shade(colors.error, 0.45f));
-        if (ImGui::Button("Cancel", ImVec2(button_width, 30))) {
+        if (ImGui::Button("Cancel", ImVec2(button_width, em(30.f)))) {
             selected_path.clear();
             *p_open = false;
             ImGui::CloseCurrentPopup();

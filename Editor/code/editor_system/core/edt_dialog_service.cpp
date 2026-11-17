@@ -2,6 +2,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
 #include "edt_file_dialog.h"
+#include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -134,7 +135,7 @@ public:
 			ImGui::Separator();
 			ImGui::Spacing();
 
-			const float bw = 120.f;
+			const float bw = edt::em(120.f);
 			const float total = bw * 3.f + ImGui::GetStyle().ItemSpacing.x * 2.f;
 			ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - total) * 0.5f);
 
@@ -234,14 +235,14 @@ public:
 		bool from_answer = false;
 		if (begin_modal(label, MODAL_FLAGS)) {
 			ImGui::TextUnformatted(m_prompt.prompt.c_str());
-			ImGui::SetNextItemWidth(480.f);
+			ImGui::SetNextItemWidth(edt::em(480.f));
 			ImGui::InputText("##sp", m_buffer, sizeof(m_buffer));
 
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 
-			const float bw = 110.f;
+			const float bw = edt::em(110.f);
 			const float avail = ImGui::GetContentRegionAvail().x;
 			ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
@@ -392,7 +393,7 @@ public:
 			ImGui::TextUnformatted(m_text.c_str());
 			ImGui::Spacing();
 			// An answer from outside (dialog_service::answer) is a click on OK.
-			if (ImGui::Button("OK", {120.f, 0.f}) || m_acknowledged) {
+			if (ImGui::Button("OK", {edt::em(120.f), 0.f}) || m_acknowledged) {
 				is_open = false;
 				ImGui::CloseCurrentPopup();
 			}
@@ -463,7 +464,7 @@ public:
 			ImGui::Spacing();
 			for (std::size_t i = 0; i < m_options.size(); ++i) {
 				if (i > 0) ImGui::SameLine();
-				if (ImGui::Button(m_options[i].c_str(), {140.f, 0.f})) picked = i;
+				if (ImGui::Button(m_options[i].c_str(), {edt::em(140.f), 0.f})) picked = i;
 			}
 			// Answered from outside (dialog_service::answer): the same as a click.
 			if (!picked) picked = m_answer;

@@ -11,6 +11,7 @@
 #include "edt_guizmo.hpp"
 #include "edt_editor_camera.h"
 #include "edt_ui_probe_imgui.h"
+#include "edt_ui_metrics.h"
 #include <imgui.h>
 #include <optional>
 #include <utility>
@@ -258,9 +259,9 @@ namespace edt
 			return;
 
 		// Draw orientation cube gizmo in the bottom-right corner of the scene image
-		constexpr float gizmo_size = 80.f;
-		float x = m_image_pos.x + m_viewport_size.x - gizmo_size - 8.f;
-		float y = m_image_pos.y + m_viewport_size.y - gizmo_size - 8.f;
+		const float gizmo_size = dpi_px(80.f);
+		float x = m_image_pos.x + m_viewport_size.x - gizmo_size - dpi_px(8.f);
+		float y = m_image_pos.y + m_viewport_size.y - gizmo_size - dpi_px(8.f);
 
 		edt::imgui::set_view_area(x, y, gizmo_size);
 		edt::imgui::set_draw_list(ImGui::GetWindowDrawList());
