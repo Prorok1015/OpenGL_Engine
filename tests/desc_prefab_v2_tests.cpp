@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_prefab_layer.h>
+#include <snk/scene/level/scn_override_record.h>
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/desc_node_id.h>
@@ -71,6 +72,15 @@ json::object random_node(splitmix64& rng, uint64_t& next_id, int depth)
 	if (rng.below(2) == 0) {
 		node["components"] = json::object{ { "stat", json::object{ { "__type", "stat_desc" }, { "hp", static_cast<int64_t>(rng.below(50)) } } } };
 	}
+	if (rng.below(3) == 0) {
+		json::object record;
+		record["target"] = json::array{ node.at("__id") };
+		record["component"] = "stat";
+		record["path"] = "/hp";
+		record["value"] = static_cast<int64_t>(rng.below(50));
+		record["op"] = "set";
+		node["overrides"] = json::array{ std::move(record) };
+	}
 	json::array children;
 	const std::size_t count = depth >= 2 ? 0 : rng.below(4);
 	for (std::size_t i = 0; i < count; ++i) children.push_back(random_node(rng, next_id, depth + 1));
@@ -90,7 +100,7 @@ void mutate(splitmix64& rng, scn::prefab_desc& edited, uint64_t& next_id)
 		std::vector<scn::prefab_desc::prefab_node*> nodes;
 		collect_nodes(edited.get_root(), nodes);
 		auto& node = *nodes[rng.below(nodes.size())];
-		switch (rng.below(7)) {
+		switch (rng.below(9)) {
 		case 0: if (&node != &edited.get_root()) node.name = "renamed" + std::to_string(rng.below(100)); break;
 		case 1: node.has_transform = true; node.position = glm::vec3(static_cast<float>(rng.below(20)), 0.f, 0.f); break;
 		case 2: node.components.erase("stat"); break;
@@ -109,6 +119,16 @@ void mutate(splitmix64& rng, scn::prefab_desc& edited, uint64_t& next_id)
 			node.children.push_back(std::move(added));
 			break;
 		}
+		case 6: {
+			scn::override_record record;
+			record.target = { node.node_id };
+			record.component = "stat";
+			record.path = "/hp";
+			record.value = static_cast<int64_t>(200 + rng.below(50));
+			node.overrides.push_back(std::move(record));
+			break;
+		}
+		case 7: node.has_transform = false; node.position = glm::vec3(0.f); break;
 		default:
 			if (node.children.size() > 1) std::swap(node.children.front(), node.children[rng.below(node.children.size())]);
 			break;
@@ -536,6 +556,43 @@ BOOST_AUTO_TEST_CASE(WriteLayer_AVariantOfFormatV1_IsReadAsBeforeAndWrittenAsALa
 	auto v2 = load<scn::prefab_desc>(put("v2.prefab.desc", json::serialize(body)));
 	BOOST_REQUIRE(v2);
 	BOOST_TEST(json::value(saved(*v2)) == json::value(saved(*v1)));
+}
+
+BOOST_AUTO_TEST_CASE(WriteLayer_TheGenericWritePath_KeepsFormatV2_AndRefusesWhatNoLayerSays)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000b1","name":"a","overrides":[{"target":["00000000000000b1"],"component":"stat","path":"/hp","value":5,"op":"set"}]},
+		{"__id":"00000000000000b2","name":"b"}]})");
+	auto variant = load<scn::prefab_desc>(put("variant.prefab.desc", R"({"__type":"prefab_desc","__version":4,
+		"__parent":"memory://t/base.prefab.desc","__layer":2,"__order":["00000000000000b2","00000000000000b1"],"children":[
+		{"__id":"00000000000000b2","name":"b_renamed"}]})"));
+	BOOST_REQUIRE(variant);
+
+	json::object body;
+	variant->serialize(body);
+	descs->reduce_to_parent(*variant, body);
+	BOOST_TEST(body.at("__layer").as_int64() == 2);
+	auto again = load<scn::prefab_desc>(put("again.prefab.desc", json::serialize(body)));
+	BOOST_REQUIRE(again);
+	json::object second;
+	again->serialize(second);
+	descs->reduce_to_parent(*again, second);
+	BOOST_TEST(json::serialize(second) == json::serialize(body));
+
+	scn::prefab_desc edited;
+	variant->copy_to(edited);
+	edited.set_parent(variant->get_parent());
+	edited.get_root().children[1].overrides.clear();
+	json::object refused;
+	edited.serialize(refused);
+	BOOST_CHECK_THROW(descs->reduce_to_parent(edited, refused), std::exception);
+}
+
+BOOST_AUTO_TEST_CASE(LayerV2_AWorldWithALayer_FailsTheLoad)
+{
+	put("base.world.desc", R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[]})");
+	BOOST_TEST(!load<scn::world_desc>(put("child.world.desc", R"({"__type":"world_desc","__version":4,
+		"__parent":"memory://t/base.world.desc","__layer":2})")));
 }
 
 BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)

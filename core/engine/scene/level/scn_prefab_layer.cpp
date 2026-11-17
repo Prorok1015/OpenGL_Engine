@@ -1,5 +1,6 @@
 #include <snk/scene/level/scn_prefab_layer.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_override_record.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_node_id.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <format>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace json = boost::json;
@@ -21,6 +23,24 @@ namespace scn {
 		bool is_node_key(std::string_view key)
 		{
 			return std::ranges::find(k_node_keys, key) != std::end(k_node_keys);
+		}
+
+		// The records of every node as the prefab holds them, before the canonical form serialize writes: a prefix test on the
+		// canonical lists would refuse an edit that only made canonicalize reorder or drop a record.
+		using records_by_node = std::unordered_map<uint64_t, json::array>;
+
+		void collect_records(const prefab_desc::prefab_node& node, records_by_node& out)
+		{
+			json::array records;
+			for (const auto& record : node.overrides) records.push_back(override_record_to_json(record));
+			out[node.node_id] = std::move(records);
+			for (const auto& child : node.children) collect_records(child, out);
+		}
+
+		uint64_t node_id_of(const json::object& node)
+		{
+			const auto* id = node.if_contains("__id");
+			return id && id->is_string() ? desc::parse_node_id(id->as_string()).value_or(0) : 0;
 		}
 
 		const json::array* array_of(const json::object& node, std::string_view key)
@@ -53,11 +73,17 @@ namespace scn {
 			return fields;
 		}
 
+		struct records_pair
+		{
+			const records_by_node& was;
+			const records_by_node& now;
+		};
+
 		bool layer_of_node(const json::object& inherited, const json::object& target, json::object& layer, std::string& why,
-			const std::string& where);
+			const std::string& where, const records_pair& records);
 
 		bool layer_children(const json::object& inherited, const json::object& target, json::object& layer, std::string& why,
-			const std::string& where)
+			const std::string& where, const records_pair& records)
 		{
 			const json::array empty;
 			const json::array* was = array_of(inherited, "children");
@@ -105,7 +131,7 @@ namespace scn {
 				} else if (*same != child) {
 					json::object entry;
 					entry["__id"] = *id;
-					if (!layer_of_node(same->as_object(), child.as_object(), entry, why, where + "/" + std::string{ id->as_string() })) return false;
+					if (!layer_of_node(same->as_object(), child.as_object(), entry, why, where + "/" + std::string{ id->as_string() }, records)) return false;
 					entries.push_back(std::move(entry));
 				}
 			}
@@ -115,7 +141,7 @@ namespace scn {
 		}
 
 		bool layer_of_node(const json::object& inherited, const json::object& target, json::object& layer, std::string& why,
-			const std::string& where)
+			const std::string& where, const records_pair& records)
 		{
 			for (const auto& member : target) {
 				if (!is_node_key(member.key()) && inherited.if_contains(member.key()) == nullptr) {
@@ -149,8 +175,10 @@ namespace scn {
 			if (!components.empty()) layer["components"] = std::move(components);
 
 			const json::array no_records;
-			const json::array& was_records = array_of(inherited, "overrides") ? *array_of(inherited, "overrides") : no_records;
-			const json::array& now_records = array_of(target, "overrides") ? *array_of(target, "overrides") : no_records;
+			const auto was_found = records.was.find(node_id_of(inherited));
+			const auto now_found = records.now.find(node_id_of(target));
+			const json::array& was_records = was_found != records.was.end() ? was_found->second : no_records;
+			const json::array& now_records = now_found != records.now.end() ? now_found->second : no_records;
 			if (now_records.size() < was_records.size() || !std::equal(was_records.begin(), was_records.end(), now_records.begin())) {
 				why = std::format("{}: the override records of the base cannot be taken out or changed in a layer", where);
 				return false;
@@ -159,12 +187,26 @@ namespace scn {
 				layer["overrides"] = json::array(now_records.begin() + static_cast<std::ptrdiff_t>(was_records.size()), now_records.end());
 			}
 
-			return layer_children(inherited, target, layer, why, where);
+			return layer_children(inherited, target, layer, why, where, records);
 		}
 	}
 
-	std::optional<json::object> make_prefab_layer(const json::object& inherited, const json::object& target, std::string& why)
+	std::optional<json::object> make_prefab_layer(desc::desc_system& descs, const prefab_desc& base, const prefab_desc& edited, std::string& why)
 	{
+		const auto stamped = [&] (const prefab_desc& prefab) {
+			json::object object;
+			prefab.serialize(object);
+			descs.stamp_tree(object);
+			return object;
+		};
+		const json::object inherited = stamped(base);
+		const json::object target = stamped(edited);
+		records_by_node was;
+		records_by_node now;
+		collect_records(base.get_root(), was);
+		collect_records(edited.get_root(), now);
+		const records_pair records{ was, now };
+
 		const auto* was_id = inherited.if_contains("__id");
 		const auto* now_id = target.if_contains("__id");
 		if ((was_id == nullptr) != (now_id == nullptr) || (was_id && *was_id != *now_id)) {
@@ -172,7 +214,7 @@ namespace scn {
 			return std::nullopt;
 		}
 		json::object layer;
-		if (!layer_of_node(inherited, target, layer, why, "")) return std::nullopt;
+		if (!layer_of_node(inherited, target, layer, why, "", records)) return std::nullopt;
 		layer.erase("__id");
 		return layer;
 	}
@@ -188,17 +230,12 @@ namespace scn {
 			descs.stamp_tree(object);
 			return object;
 		};
-		json::object inherited;
-		try {
-			parent->serialize(inherited);
-		} catch (const std::exception& e) {
-			return std::format("the base '{}' cannot be written as a file: {}", parent_tag.view(), e.what());
-		}
-		inherited = stamped(std::move(inherited));
+		const auto* base = dynamic_cast<const prefab_desc*>(parent.get());
+		if (!base) return std::format("the base '{}' is not a prefab", parent_tag.view());
 		const json::object target = stamped(body);
 
 		std::string why;
-		auto layer = make_prefab_layer(inherited, target, why);
+		auto layer = make_prefab_layer(descs, *base, prefab, why);
 		if (!layer) return why;
 
 		json::object file;

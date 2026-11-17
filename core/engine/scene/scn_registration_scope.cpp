@@ -3,6 +3,7 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_prefab_layer.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_anchor_desc.h>
 #include <snk/scene/scn_animated_node_desc.h>
@@ -100,6 +101,11 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 
 	scope.desc<material_desc>("material_desc");
 	scope.desc<prefab_desc>("prefab_desc");
+	// Every write of a prefab over its `__parent` goes through the layer writer (#972): it keeps format v2 or refuses.
+	desc_sys.set_layer_writer("prefab_desc", [](desc::desc_system& descs, res::resource_system& resources, const desc::desc_base& desc, json::object& body) -> std::string {
+		const auto* prefab = dynamic_cast<const prefab_desc*>(&desc);
+		return prefab ? write_prefab_layer(descs, resources, *prefab, body) : std::string{ "not a prefab" };
+	});
 	scope.desc<world_desc>(world_desc::__type);
 	scope.desc<level_desc>("level_desc");
 	scope.desc<scene_anchor_desc>("anchor_desc");
