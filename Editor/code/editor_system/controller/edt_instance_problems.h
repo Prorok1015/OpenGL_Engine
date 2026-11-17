@@ -7,18 +7,17 @@
 
 namespace edt
 {
-	// A world of the open level as the Problems rows see it: the desc and the file its rows name (its own file, or the level's).
+	// A world of the open level as the rows see it: the desc, the file its rows name and the pointer of the world inside that file
+	// ("" for a world with a file of its own, "/worlds/<i>" for one written inline in the level's file).
 	struct instance_world
 	{
 		const scn::world_desc* world = nullptr;
 		std::string file;
+		std::string pointer_prefix;
 	};
 
-	// What is wrong with the prefab instances of the open level (#150), as the diagnostics of one scope of the source "desc":
-	// - a record that removes a node or component, or adds a node, on an instance: the editor never makes one, so it cannot change it;
-	//   it stays in the file and is applied as written (a warning at the node);
-	// - a prefab that, directly or through others it instantiates, instantiates itself: "Prefab 'X' refers to itself through 'Y'"
-	//   (an error at the node of the level that starts the chain, once for each chain).
-	// A row's `json_path` is "/children/<k>/..." in the world's file, so locate_desc leads to the node.
+	// What is wrong with the prefab instances of the open level (#150), one row each: a `remove` or `add_node` record on an instance
+	// (a warning at the node; the editor never makes one), and a prefab the node instantiates that instantiates itself, said from the
+	// node's own prefab: "Prefab 'X' refers to itself" or "... through 'Y' (X -> Y -> X)". A row's `json_path` is the node's pointer in `file`.
 	std::vector<res::diagnostic> instance_diagnostics(std::span<const instance_world> worlds);
 }

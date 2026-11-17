@@ -2,17 +2,19 @@
 #include "edt_instance_overrides_view.h"
 #include "edt_override_edit.h"
 #include <snk/desc/desc_node_id.h>
+#include <snk/resource/res_system.h>
 #include <algorithm>
 #include <format>
 #include <map>
 #include <set>
 #include <string_view>
+#include <tuple>
 
 namespace
 {
 	using prefab_node = scn::prefab_desc::prefab_node;
 
-	std::string child_pointer(std::string pointer, std::size_t index)
+	std::string child_pointer(const std::string& pointer, std::size_t index)
 	{
 		return std::format("{}/children/{}", pointer, index);
 	}
@@ -22,51 +24,65 @@ namespace
 		return node.name.empty() ? desc::format_node_id(node.node_id) : node.name;
 	}
 
-	std::string join_chain(const std::vector<std::string>& chain, std::size_t from)
-	{
-		std::string text;
-		for (std::size_t i = from; i < chain.size(); ++i) {
-			if (!text.empty()) text += " -> ";
-			text += chain[i];
-		}
-		return text;
-	}
-
-	// Finds the prefabs that instantiate themselves below `prefab`; each chain is a text, found once.
+	// The prefabs that instantiate themselves below one prefab, walked from it alone: what a node says depends on its own prefab, not
+	// on what was walked for another node before it. One text per cycle, in the order the walk finds them.
 	class cycle_finder
 	{
 	public:
-		const std::vector<std::string>& cycles_below(const scn::prefab_desc& prefab)
+		const std::vector<std::string>& from(const scn::prefab_desc& start)
 		{
-			const std::string key{ prefab.get_tag().view() };
-			if (const auto known = m_known.find(key); known != m_known.end()) return known->second;
-			if (std::ranges::find(m_stack, key) != m_stack.end()) return m_none;
-			m_stack.push_back(key);
-			std::vector<std::string> found;
-			visit(prefab.get_root(), found);
-			m_stack.pop_back();
-			return m_known.emplace(key, std::move(found)).first->second;
+			const std::string key{ start.get_tag().view() };
+			if (const auto known = m_by_start.find(key); known != m_by_start.end()) return known->second;
+			m_stack.clear();
+			m_done.clear();
+			m_found.clear();
+			enter(start);
+			return m_by_start.emplace(key, std::move(m_found)).first->second;
 		}
 
 	private:
-		void visit(const prefab_node& node, std::vector<std::string>& found)
+		void enter(const scn::prefab_desc& prefab)
+		{
+			const std::string key{ prefab.get_tag().view() };
+			m_stack.push_back(key);
+			visit(prefab.get_root());
+			m_stack.pop_back();
+			m_done.insert(key);
+		}
+
+		void found_cycle(const std::string& target)
+		{
+			const auto at = std::ranges::find(m_stack, target);
+			if (at == m_stack.end()) return;
+			if (at + 1 == m_stack.end()) {
+				m_found.push_back(std::format("Prefab '{}' refers to itself", target));
+				return;
+			}
+			std::string chain;
+			for (auto it = at; it != m_stack.end(); ++it) chain += *it + " -> ";
+			m_found.push_back(std::format("Prefab '{}' refers to itself through '{}' ({}{})", target, m_stack.back(), chain, target));
+		}
+
+		void visit(const prefab_node& node)
 		{
 			if (const scn::prefab_desc* nested = edt::override_edit::referenced_prefab(node)) {
 				const std::string key{ nested->get_tag().view() };
-				if (const auto at = std::ranges::find(m_stack, key); at != m_stack.end()) {
-					const std::size_t from = static_cast<std::size_t>(at - m_stack.begin());
-					found.push_back(m_stack.size() - from == 1 ? std::format("Prefab '{}' refers to itself", key)
-						: std::format("Prefab '{}' refers to itself through '{}' ({} -> {})", key, m_stack.back(), join_chain(m_stack, from), key));
-				} else {
-					for (const std::string& text : cycles_below(*nested)) found.push_back(text);
-				}
+				if (std::ranges::find(m_stack, key) != m_stack.end()) found_cycle(key);
+				else if (!m_done.contains(key)) enter(*nested);
 			}
-			for (const prefab_node& child : node.children) visit(child, found);
+			// A reference to the prefab's own file is refused when it loads (#952): the handle holds the error and the tag it named.
+			for (const auto& entry : node.components) {
+				const auto& handle = entry.second.parent_desc;
+				if (!handle.is_valid() || !handle.has_error()) continue;
+				if (const res::tag named = res::refused_tag(handle); named.is_valid()) found_cycle(std::string{ named.view() });
+			}
+			for (const prefab_node& child : node.children) visit(child);
 		}
 
 		std::vector<std::string> m_stack;
-		std::map<std::string, std::vector<std::string>> m_known;
-		const std::vector<std::string> m_none;
+		std::set<std::string> m_done;
+		std::vector<std::string> m_found;
+		std::map<std::string, std::vector<std::string>> m_by_start;
 	};
 
 	struct collector
@@ -74,7 +90,7 @@ namespace
 		const std::string& file;
 		std::vector<res::diagnostic>& out;
 		cycle_finder& cycles;
-		std::set<std::string>& reported;
+		std::set<std::tuple<std::string, std::string, std::string>>& reported;
 
 		void walk(const prefab_node& node, const std::string& pointer)
 		{
@@ -85,8 +101,8 @@ namespace
 						shown_name(node), edt::describe_override_record(record)) });
 			}
 			if (const scn::prefab_desc* prefab = edt::override_edit::referenced_prefab(node)) {
-				for (const std::string& text : cycles.cycles_below(*prefab)) {
-					if (reported.insert(text).second) {
+				for (const std::string& text : cycles.from(*prefab)) {
+					if (reported.emplace(file, pointer, text).second) {
 						out.push_back({ res::diagnostic_severity::error, std::string(res::diagnostic_kind::cycle), file, pointer, text });
 					}
 				}
@@ -100,10 +116,10 @@ std::vector<res::diagnostic> edt::instance_diagnostics(std::span<const instance_
 {
 	std::vector<res::diagnostic> out;
 	cycle_finder cycles;
-	std::set<std::string> reported;
+	std::set<std::tuple<std::string, std::string, std::string>> reported;
 	for (const instance_world& entry : worlds) {
 		if (!entry.world) continue;
-		collector{ entry.file, out, cycles, reported }.walk(entry.world->get_root(), {});
+		collector{ entry.file, out, cycles, reported }.walk(entry.world->get_root(), entry.pointer_prefix);
 	}
 	return out;
 }

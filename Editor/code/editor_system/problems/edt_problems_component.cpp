@@ -12,6 +12,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <imgui.h>
 #include <algorithm>
+#include <format>
 #include <utility>
 
 namespace
@@ -86,7 +87,7 @@ void edt::problems_component::refresh_instances()
 	for (std::size_t i = 0; i < state.world_descs.size(); ++i) {
 		const res::tag file = state.world_tag(i);
 		const std::string file_name = file.is_valid() ? std::string(file.view()) : located.level;
-		worlds.push_back({ &state.world_descs[i], file_name });
+		worlds.push_back({ &state.world_descs[i], file_name, file.is_valid() ? std::string{} : std::format("/worlds/{}", i) });
 		located.worlds.push_back({ i < state.world_names.size() ? state.world_names[i] : std::string{}, &state.world_descs[i].get_root(), file_name });
 	}
 	const std::vector<res::diagnostic> items = instance_diagnostics(worlds);
