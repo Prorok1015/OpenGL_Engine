@@ -3,7 +3,7 @@
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <functional>
 #include <memory>
 #include <string>

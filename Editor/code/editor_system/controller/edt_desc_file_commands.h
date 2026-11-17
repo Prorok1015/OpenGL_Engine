@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/res_diagnostics.h>
 #include <boost/json/value.hpp>
 #include <cstddef>

@@ -3,7 +3,7 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>

@@ -4,10 +4,10 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_tag.h>
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_reference.h>
-#include <snk/resource/res_tag_json.h>
+#include <snk/model_codec/res_tag.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_reference.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_dynamic.h>

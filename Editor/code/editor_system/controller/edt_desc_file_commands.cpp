@@ -5,7 +5,7 @@
 #include "edt_forge_types.h"
 #include "edt_reference.h"
 #include "edt_tag_text.h"
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>

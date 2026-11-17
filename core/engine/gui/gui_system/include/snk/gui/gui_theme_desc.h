@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/snk_api.h>
 
 #include <boost/describe.hpp>

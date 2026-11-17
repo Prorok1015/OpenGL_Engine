@@ -2,7 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/common/snk_api.h>

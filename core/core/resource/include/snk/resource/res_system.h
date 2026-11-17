@@ -1,13 +1,13 @@
 #pragma once
 #include <snk/common/common.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/platform/plt_beneath.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resources/res_resource_base.h>

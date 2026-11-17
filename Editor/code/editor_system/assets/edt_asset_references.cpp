@@ -4,8 +4,8 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_reference.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <span>

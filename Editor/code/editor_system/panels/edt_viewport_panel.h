@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include <snk/ecs/ecs_entity.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 #include "edt_input_binding.h"
 #include "edt_transform_gizmo.hpp"

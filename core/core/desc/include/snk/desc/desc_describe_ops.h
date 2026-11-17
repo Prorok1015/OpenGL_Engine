@@ -9,9 +9,9 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <cstdint>
 #include <limits>

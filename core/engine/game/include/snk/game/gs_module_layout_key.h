@@ -34,7 +34,7 @@
 #include <snk/render/rnd_render_context.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resources/res_resource_handle.hpp>

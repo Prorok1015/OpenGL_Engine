@@ -2,7 +2,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>

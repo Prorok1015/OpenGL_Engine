@@ -11,7 +11,7 @@
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_json_body.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 // Large numeric data of a desc (mesh vertices and indices first) kept in a binary file next to it (EPIC-79, #1068).
 // Format, naming and write order: docs/epics/desc-driven/EPIC-79.md. What needs no resource_system is in

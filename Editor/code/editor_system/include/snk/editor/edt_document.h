@@ -1,7 +1,7 @@
 #pragma once
 #include "edt_api.h"
 #include <snk/command/cmd_types.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <optional>
 #include <string>

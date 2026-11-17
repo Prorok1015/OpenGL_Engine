@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_desc_file_commands.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_override_record.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <cstddef>

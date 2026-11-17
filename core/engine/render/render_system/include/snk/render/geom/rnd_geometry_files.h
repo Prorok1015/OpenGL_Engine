@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/render/geom/rnd_geometry_desc.h>
-#include <snk/render/geom/rnd_geometry_encode.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/rnd_geometry_encode.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/snk_api.h>
 #include <boost/json/object.hpp>
 #include <cstddef>

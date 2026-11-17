@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/common/ds/ds_type_id.hpp>

@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <string>
 #include <vector>
 

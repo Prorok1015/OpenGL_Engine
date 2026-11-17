@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag_json.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <boost/json/parse.hpp>
 #include <string_view>
 
