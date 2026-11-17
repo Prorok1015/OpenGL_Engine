@@ -29,6 +29,8 @@ namespace res
 		inline constexpr std::string_view unknown_component = "unknown_component";
 		// An edit of a variant layer (format v2) for something its base no longer has (#972): ignored, the rest is applied.
 		inline constexpr std::string_view stale_layer = "stale_layer";
+		// A node a variant layer removes and adds again under the same id (a move): it no longer follows edits of its base (#972).
+		inline constexpr std::string_view detached_from_base = "detached_from_base";
 		// A desc of one type where another is expected (a material file as a level, #615). The load itself succeeded.
 		inline constexpr std::string_view type_mismatch = "type_mismatch";
 		// A reference a desc may not make (res::reference_problem, #697): the field is left empty, nothing is loaded.

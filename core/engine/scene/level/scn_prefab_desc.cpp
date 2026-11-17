@@ -291,6 +291,7 @@ namespace scn {
 			const auto children_path = pointer_to(json_path, "children");
 			if (!children->is_array()) layer_error(children_path, "'children' must be an array");
 			std::size_t index = 0;
+			std::vector<std::uint64_t> removed;
 			for (const auto& element : children->as_array()) {
 				const auto path = children_path + "/" + std::to_string(index++);
 				if (!element.is_object()) layer_error(path, "a child entry must be an object");
@@ -308,7 +309,10 @@ namespace scn {
 				};
 				if (flag("__remove")) {
 					if (found == node.children.end()) stale_edit(path, "the base has no such node to remove");
-					else node.children.erase(found);
+					else {
+						removed.push_back(*id);
+						node.children.erase(found);
+					}
 					continue;
 				}
 				if (flag("__new")) {
@@ -318,6 +322,10 @@ namespace scn {
 					}
 					node.children.push_back(parse_node(desc_system, owner, entry, false, path));
 					node.children.back().node_id = *id;
+					if (std::ranges::find(removed, *id) != removed.end()) {
+						::res::report_load_warning(::res::diagnostic_kind::detached_from_base, path,
+							"the node was moved: it is a node of this file now and no longer follows its base");
+					}
 					continue;
 				}
 				if (found == node.children.end()) {
