@@ -3902,17 +3902,44 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 std::vector<std::filesystem::path> edt::config_files_to_guard(const std::vector<std::filesystem::path>& files)
 {
-	std::vector<std::filesystem::path> guarded;
-	const auto add = [&guarded](std::filesystem::path path) {
+	namespace fs = std::filesystem;
+	std::vector<fs::path> guarded;
+	const auto add = [&guarded](fs::path path) {
 		if (!path.empty() && std::find(guarded.begin(), guarded.end(), path) == guarded.end()) guarded.push_back(std::move(path));
 	};
-	for (const std::filesystem::path& file : files) {
+	// A checkout may repoint any link on the way, a folder link included, not only the first and the last: each one met
+	// while resolving the path is guarded, as written. A chain longer than this is no configuration a person wrote.
+	constexpr int k_max_links = 40;
+	for (const fs::path& file : files) {
 		if (file.empty()) continue;
 		std::error_code ec;
-		const std::filesystem::path written = std::filesystem::absolute(file, ec).lexically_normal();
+		fs::path current = fs::absolute(file, ec).lexically_normal();
 		if (ec) continue;
-		add(written);
-		const std::filesystem::path resolved = std::filesystem::weakly_canonical(written, ec);
+		add(current);
+		for (int links = 0; links < k_max_links; ++links) {
+			fs::path walked = current.root_path();
+			fs::path rest;
+			bool followed = false;
+			const fs::path relative = current.relative_path();
+			for (auto part = relative.begin(); part != relative.end(); ++part) {
+				if (followed) {
+					rest /= *part;
+					continue;
+				}
+				walked /= *part;
+				std::error_code link_ec;
+				if (!fs::is_symlink(walked, link_ec)) continue;
+				const fs::path target = fs::read_symlink(walked, link_ec);
+				if (link_ec) break;
+				add(walked);
+				walked = (target.is_absolute() ? target : walked.parent_path() / target);
+				followed = true;
+			}
+			if (!followed) break;
+			current = (walked / rest).lexically_normal();
+			add(current);
+		}
+		const fs::path resolved = fs::weakly_canonical(current, ec);
 		if (!ec) add(resolved);
 	}
 	return guarded;

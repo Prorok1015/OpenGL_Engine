@@ -342,8 +342,12 @@ BOOST_AUTO_TEST_CASE(ConfigFile_AnExtendsCycleOrSelfReferenceOrTooDeepChain_IsAn
 	}
 	dir.write("deep20.yaml", "deep_end: true\n");
 	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep0.yaml"));
-	// Sixteen files are allowed: the last five of the chain load.
-	BOOST_TEST(cfg::load_config_file(dir.path() / "deep16.yaml"));
+	// deep5..deep20 is sixteen files, the most a chain may have; deep4 makes seventeen.
+	BOOST_TEST(cfg::load_config_file(dir.path() / "deep5.yaml"));
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep4.yaml"));
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep5.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep0.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(self).size() == 1u);
 	dir.write("scalar.yaml", "extends: self.yaml\n");
 	BOOST_TEST(!cfg::load_config_file(dir.path() / "scalar.yaml"));
 }
@@ -398,6 +402,12 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	const std::vector<std::filesystem::path> chain{ std::filesystem::absolute(top).lexically_normal(),
 		(dir.path() / "mid/mid.yaml").lexically_normal(), (dir.path() / "base/base.yaml").lexically_normal() };
 	BOOST_TEST(cfg::loaded_config_files() == chain, boost::test_tools::per_element());
+	// The same list without loading, as the editor reads the default config's chain; a missing base ends its branch.
+	BOOST_TEST(cfg::config_files_of(top) == chain, boost::test_tools::per_element());
+	const auto lonely = dir.write("lonely.yaml", "extends:\n  - not_there.yaml\n");
+	const std::vector<std::filesystem::path> lonely_chain{ std::filesystem::absolute(lonely).lexically_normal(),
+		(dir.path() / "not_there.yaml").lexically_normal() };
+	BOOST_TEST(cfg::config_files_of(lonely) == lonely_chain, boost::test_tools::per_element());
 
 	// base value inherited through two levels of extends
 	BOOST_TEST(static_cast<int>(width) == 100);

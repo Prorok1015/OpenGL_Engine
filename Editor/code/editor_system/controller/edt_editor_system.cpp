@@ -149,7 +149,10 @@ namespace {
 	{
 		std::vector<std::filesystem::path> files = cfg::loaded_config_files();
 		if (const std::filesystem::path program = platform::current_executable(); !program.empty()) {
-			files.push_back(program.parent_path() / ".." / "config" / "editor.cfg");
+			// The next start without --config reads this one and its chain.
+			for (std::filesystem::path& file : cfg::config_files_of(program.parent_path() / ".." / "config" / "editor.cfg")) {
+				files.push_back(std::move(file));
+			}
 		}
 		return edt::config_files_to_guard(files);
 	}

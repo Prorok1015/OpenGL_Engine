@@ -208,6 +208,36 @@ std::vector<std::filesystem::path> cfg::loaded_config_files()
 	return loaded_config_chain;
 }
 
+std::vector<std::filesystem::path> cfg::config_files_of(const std::filesystem::path& file)
+{
+	std::vector<std::filesystem::path> files;
+	std::vector<std::filesystem::path> visiting;
+	const auto walk = [&files, &visiting](const auto& self, const std::filesystem::path& path) -> void {
+		const std::filesystem::path normal = std::filesystem::absolute(path).lexically_normal();
+		if (visiting.size() >= k_max_extends_depth || std::find(visiting.begin(), visiting.end(), normal) != visiting.end()) {
+			return;
+		}
+		files.push_back(normal);
+		YAML::Node config;
+		try {
+			config = load_yaml_file(normal);
+		} catch (const std::exception&) {
+			return;
+		}
+		const YAML::Node bases = config[EXTENDS_KEY];
+		if (!bases || !bases.IsSequence()) {
+			return;
+		}
+		visiting.push_back(normal);
+		for (const YAML::Node& base : bases) {
+			if (base.IsScalar()) self(self, normal.parent_path() / base.as<std::string>());
+		}
+		visiting.pop_back();
+	};
+	walk(walk, file);
+	return files;
+}
+
 std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
 	const std::filesystem::path& default_config)
 {

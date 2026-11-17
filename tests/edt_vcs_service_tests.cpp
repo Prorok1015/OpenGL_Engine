@@ -2955,6 +2955,8 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesABaseOfTheEditorsConfiguration_
 
 	const json::value refused = finish(service->start_checkout("base_off", cmd::origin_kind::agent));
 	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("editor's configuration file")
+		!= std::string::npos, json::serialize(refused));
 	BOOST_TEST(head_of(repo) == main_head);
 }
 
@@ -2985,7 +2987,44 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatPointsATrackedConfigurationLinkElsewhe
 
 	const json::value refused = finish(service->start_checkout("link_off", cmd::origin_kind::agent));
 	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("editor's configuration file")
+		!= std::string::npos, json::serialize(refused));
 	BOOST_TEST(head_of(repo) == main_head);
+}
+
+// #1090 (review): every link on the way is guarded, not only the first and the last: a link to a link, and a folder
+// link in the middle of the path, may each be pointed elsewhere by a branch.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatRepointsALinkInTheMiddleOfTheConfigurationsPath_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("editor_config_link_chain");
+	const fs::path project = repo / "game";
+	const fs::path folder = repo / "Editor" / "config";
+	write(project / "res" / "a.txt", "a\n");
+	write(folder / "sets" / "on" / "sandbox.cfg", "import:\n  decoder_sandbox: on\n");
+	write(folder / "sets" / "off" / "sandbox.cfg", "import:\n  decoder_sandbox: off\n");
+	fs::create_symlink("sets/on", folder / "current");
+	fs::create_symlink("current/sandbox.cfg", folder / "chosen.cfg");
+	fs::create_symlink("chosen.cfg", folder / "editor.cfg");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "the configuration through a chain of links and a folder link" });
+	const std::string main_head = head_of(repo);
+	git(repo, { "checkout", "-q", "-b", "folder_off" });
+	fs::remove(folder / "current");
+	fs::create_symlink("sets/off", folder / "current");
+	git(repo, { "add", "-A" });
+	git(repo, { "commit", "-q", "-m", "point the folder link at the sandbox off" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(project));
+	service->set_config_files(edt::config_files_to_guard({ folder / "editor.cfg" }));
+
+	const json::value refused = finish(service->start_checkout("folder_off", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == main_head);
+	const auto guarded = edt::config_files_to_guard({ folder / "editor.cfg" });
+	for (const fs::path link : { folder / "editor.cfg", folder / "chosen.cfg", folder / "current" }) {
+		BOOST_TEST((std::find(guarded.begin(), guarded.end(), fs::absolute(link).lexically_normal()) != guarded.end()), link);
+	}
 }
 
 // #1090: a link is guarded as itself and as what it resolves to; duplicates and empty entries go.
