@@ -883,6 +883,36 @@ BOOST_AUTO_TEST_CASE(a_tag_inside_a_structure_or_an_array_of_them_is_checked)
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 
+// EPIC-79 PR5 (#1068): a binary_ref field is a range of a mesh's binary file, written only by saving the mesh. MCP never
+// sets, clears or reaches into it, in a structure too; the other fields of the component stay editable.
+BOOST_AUTO_TEST_CASE(a_blob_field_is_never_changed_by_mcp)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.blob_part","kind":"struct",
+		"fields":[{"name":"data","kind":"binary_ref"}]})").as_object())));
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.blob","kind":"component",
+		"fields":[{"name":"vertices","kind":"binary_ref"},{"name":"note","kind":"string"},
+			{"name":"part","kind":"structure","ref_type":"probe.blob_part"}]})").as_object(), &descs->schemas())));
+	const std::string crate = ref({ "00000000000000a4" });
+	const std::string range = R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
+	const auto with_blob = call("component.add", R"({"ref":)" + crate + R"(,"key":"blob","type":"probe.blob","fields":{"vertices":)" + range + "}}");
+	BOOST_TEST(with_blob.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + R"(,"key":"blob","type":"probe.blob","fields":{"note":"a"}})").ok);
+	const auto before = scene.generation();
+
+	for (const std::string patch : { R"({"vertices":)" + range + "}", std::string(R"({"vertices":{"size":4}})"),
+			std::string(R"({"vertices":null})"), std::string(R"({"part":{"data":[1,2,3]}})") }) {
+		BOOST_TEST_CONTEXT(patch) {
+			const auto refused = call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":)" + patch + "}");
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_CHECK_MESSAGE(refused.error.find("written only by saving the mesh") != std::string::npos, refused.error);
+		}
+	}
+	BOOST_TEST(call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":{"part":{"data":[1]}}})").error.find("part/data")
+		!= std::string::npos);
+	BOOST_TEST(scene.generation() == before);
+	BOOST_CHECK(call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":{"note":"b"}})").ok);
+}
+
 namespace {
 
 // A component with a map of tags: every value is a reference, so each one follows #697.

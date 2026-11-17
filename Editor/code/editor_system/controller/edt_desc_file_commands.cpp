@@ -12,6 +12,7 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
@@ -639,12 +640,25 @@ namespace {
 
 	bool is_other_protocol(std::string_view protocol) { return edt::is_other_tag_protocol(protocol); }
 
-	// The custom fields that hold names, not tags (#604: action names and key names). Only the strict tag rule is off for
-	// them; the walk over every string still refuses one that names another protocol. A list, not a flag of the schema:
-	// desc::field_schema is built by module code too, and a new member there would change the module API's layout.
+	// The custom fields that hold names or numbers, not tags (#604: action names and key names; a geometry's attribute
+	// types and bounds). Only the strict tag rule is off for them; the walk over every string still refuses one that names
+	// another protocol. A list, not a flag of the schema: desc::field_schema is built by module code too, and a new member
+	// there would change the module API's layout.
 	bool holds_plain_text(std::string_view type, std::string_view field_key)
 	{
+		if (type == "geometry_desc") return field_key == "/layout" || field_key == "/bounds";
 		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
+	}
+
+	// Why the value of a binary_ref field is not one; empty when it is a range, or an array (the inline data of a file
+	// written before the binary file, EPIC-79).
+	std::string binary_ref_problem(const json::value& value)
+	{
+		if (value.is_array()) return {};
+		if (!value.is_object()) return "a blob field holds a range of the binary file {offset, size, sha256, layout}";
+		std::string error;
+		if (res::binary_range_from_json(value, error)) return {};
+		return "not a range of the binary file: " + error;
 	}
 
 	// A tag a file refers to: literally "res://" and then a path inside the project. Nothing else is rewritten or guessed.
@@ -737,6 +751,9 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 		}
 		if (!value.is_object()) return;
 		const json::object& object = value.as_object();
+		// The keys of this object's binary_ref fields: a range is checked whole above, its strings (a hash, a layout) are no
+		// tags and the old inline data is megabytes of numbers, so the walk does not go into it.
+		std::vector<std::string_view> blob_keys;
 		// No schema reads a prefab's component, an override record or a world's content: there the shape tells a reference.
 		if (agent && !pointer.empty() && edt::is_guid_reference(object)) {
 			check_reference(value, pointer);
@@ -818,10 +835,21 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 							fits = false;
 						}
 					}
+					for (const desc::field_schema& field : schema->fields) {
+						if (field.kind != desc::field_kind::binary_ref) continue;
+						const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
+						blob_keys.push_back(key);
+						if (const json::value* held = object.if_contains(key)) {
+							if (std::string problem = binary_ref_problem(*held); !problem.empty()) {
+								schema_error(pointer + "/" + res::json_pointer_token(key), std::move(problem));
+							}
+						}
+					}
 					if (fits) {
 						json::object patch;
 						for (const auto& member : object) {
-							if (!member.key().starts_with("__")) patch.emplace(member.key(), member.value());
+							const std::string_view key(member.key().data(), member.key().size());
+							if (!key.starts_with("__") && std::ranges::find(blob_keys, key) == blob_keys.end()) patch.emplace(member.key(), member.value());
 						}
 						const desc::override_failure bad = desc::check_override_object(*schema, patch, nullptr, &descs.schemas());
 						if (bad.status != desc::override_status::valid) {
@@ -881,8 +909,9 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 			add(std::string(res::diagnostic_kind::unknown_type), "/__type", "the file must be an object with a `__type`");
 		}
 		for (const auto& member : object) {
-			if (member.key().starts_with("__")) continue;
-			self(self, member.value(), pointer + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+			const std::string_view key(member.key().data(), member.key().size());
+			if (key.starts_with("__") || std::ranges::find(blob_keys, key) != blob_keys.end()) continue;
+			self(self, member.value(), pointer + "/" + res::json_pointer_token(key));
 		}
 	};
 

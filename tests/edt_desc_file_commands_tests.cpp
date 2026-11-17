@@ -1047,6 +1047,31 @@ BOOST_AUTO_TEST_CASE(TheActionNamesOfInputActions_AreNotTags_ButAnotherProtocolI
 	BOOST_TEST(created.ok);
 }
 
+// EPIC-79 PR5 (#1068): a binary_ref field holds a range of the binary file (or the arrays of an older file); a range that
+// does not read is an error, and its hash and layout are no tags.
+BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.blob_mesh",
+		"fields": [ { "name": "vertices", "kind": "binary_ref" }, { "name": "indices", "kind": "binary_ref" } ] })").as_object())));
+	const auto errors_of = [&](const std::string& text) {
+		std::vector<std::string> out;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(text), "res://meshes/m.desc").problems) {
+			if (item.severity == res::diagnostic_severity::error) out.push_back(item.json_path + ": " + item.reason);
+		}
+		return out;
+	};
+	// A hash or layout that would look like a tag elsewhere is not read as one.
+	const std::string range = R"({"offset":16,"size":12,"layout":"user://f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
+	const auto fine = errors_of(R"({"__type":"test.blob_mesh","vertices":)" + range + R"(,"indices":[0,1,2]})");
+	BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
+
+	const auto broken = errors_of(R"({"__type":"test.blob_mesh","vertices":{"offset":16,"size":12,"layout":"f32x3","sha256":"zz"},"indices":"res://x"})");
+	BOOST_REQUIRE_EQUAL(broken.size(), 2u);
+	BOOST_TEST(broken[0].find("/vertices") == 0u, broken[0]);
+	BOOST_TEST(broken[0].find("not a range of the binary file") != std::string::npos, broken[0]);
+	BOOST_TEST(broken[1].find("/indices") == 0u, broken[1]);
+}
+
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)
 {
 	const fs::path outside = dir.path() / "outside";

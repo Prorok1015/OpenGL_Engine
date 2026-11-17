@@ -373,6 +373,10 @@ namespace {
 		if (!schema) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
 		}
+		if (const std::string blob = edt::override_edit::binary_ref_in_patch(descs.schemas(), *schema, patch); !blob.empty()) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} is a blob field (binary_ref): it is written only by saving the mesh",
+				type, std::string_view(blob).substr(1)));
+		}
 		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
 		if (bad.status != desc::override_status::valid) {
 			const std::string expected = desc::override_expectation(*schema, bad, &descs.schemas());
