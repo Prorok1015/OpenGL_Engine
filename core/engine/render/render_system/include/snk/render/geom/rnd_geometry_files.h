@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace res { class resource_system; }
@@ -52,4 +53,8 @@ namespace rnd
 
 	// Whether a geometry desc holds its vertices as a JSON array (the form before EPIC-79).
 	SNK_API bool holds_geometry_arrays(const boost::json::object& desc);
+
+	// The bounds the loader builds from the data of `geometry` for a desc with ranges, which never stores them: one box of
+	// the uv of each triangle. A migration compares stored bounds with these before it lets them go (#1129).
+	SNK_API std::vector<std::pair<ds::bbox, std::uint32_t>> built_geometry_bounds(const geometry_desc& geometry);
 }

@@ -128,6 +128,15 @@ struct repo_fixture : test_util::scene_env
 		return json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 	}
 
+	// A geometry with its data in the binary file beside it (EPIC-79: core/res/shapes): its save is the geometry writer's,
+	// never the desc adapter's, which refuses it; desc_resave skips it the same way.
+	static bool holds_binary_geometry(const repo_file& file)
+	{
+		const json::value root = parse(file.bytes);
+		const json::value* vertices = root.is_object() ? root.as_object().if_contains("vertices") : nullptr;
+		return vertices && vertices->is_object();
+	}
+
 	// Every object with a string __type, anywhere in the tree.
 	void check_versions(const json::value& value)
 	{
@@ -163,6 +172,7 @@ BOOST_AUTO_TEST_CASE(EveryRepositoryDescLoads)
 BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
 {
 	for_each_desc([this](const res::tag& tag, const repo_file& file) {
+		if (holds_binary_geometry(file)) return;
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto saved = parse(adapter.serialize(tag, loaded));
@@ -172,7 +182,8 @@ BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
 
 BOOST_AUTO_TEST_CASE(SaveIsIdempotent)
 {
-	for_each_desc([this](const res::tag& tag, const repo_file&) {
+	for_each_desc([this](const res::tag& tag, const repo_file& file) {
+		if (holds_binary_geometry(file)) return;
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto first = adapter.serialize(tag, loaded);

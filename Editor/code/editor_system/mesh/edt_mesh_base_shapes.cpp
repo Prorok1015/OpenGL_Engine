@@ -1,8 +1,11 @@
 #include "edt_mesh_base_shapes.h"
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <array>
+#include <string_view>
 
 namespace edt::mesh
 {
@@ -50,22 +53,19 @@ namespace edt::mesh
 		return "res://shapes/" + std::string(shape.name) + ".geom.desc";
 	}
 
-	std::string base_shape_file_text(const base_shape& shape)
+	base_shape_pair base_shape_files(const base_shape& shape)
 	{
-		json::object body;
-		bake_of(shape).geometry.serialize(body);
+		static_assert(base_shape_file_version == rnd::geometry_binary_version, "a shape file is a desc with ranges");
+		const baked_mesh baked = bake_of(shape);
+		rnd::geometry_file_options options;
+		options.bounds = !baked.geometry.bounds.empty();
+		const rnd::geometry_files files = rnd::encode_geometry_files(res::tag{ base_shape_path(shape) }, baked.geometry, options);
+		ASSERT_MSG(static_cast<bool>(files), "a base shape is refused by the geometry writer: {}", files.error);
 
-		// The form of a repository desc (DescRepoRoundtripTests, desc_resave --check): the version right after the type, the
-		// file's own `bounds` kept, no `__parent`, the text of res::pretty_json_bytes.
-		json::object file;
-		for (auto& member : body) {
-			file.insert_or_assign(member.key(), std::move(member.value()));
-			if (member.key() == "__type") {
-				file.insert_or_assign("__version", base_shape_file_version);
-			}
-		}
-		const std::vector<std::byte> bytes = desc::pretty_json_bytes(json::value(std::move(file)));
-		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		// The form of a repository desc (DescRepoRoundtripTests, desc_resave --check): the text of res::pretty_json_bytes.
+		const std::string_view compact(reinterpret_cast<const char*>(files.desc.data()), files.desc.size());
+		const std::vector<std::byte> bytes = desc::pretty_json_bytes(json::parse(compact));
+		return { std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), files.binary };
 	}
 
 	material_range base_shape_range(const base_shape& shape)
