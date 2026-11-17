@@ -106,8 +106,10 @@ std::filesystem::path res::file_desc_binary_hash_cache::file_path()
 	return std::filesystem::path(prj::k_cache_dir_name) / k_file_name;
 }
 
-res::file_desc_binary_hash_cache::file_desc_binary_hash_cache(std::filesystem::path project_root, std::uint64_t file_limit)
+res::file_desc_binary_hash_cache::file_desc_binary_hash_cache(std::filesystem::path project_root, std::uint64_t file_limit,
+	std::size_t entry_limit)
 	: m_project_root(std::move(project_root))
+	, m_entry_limit(entry_limit)
 {
 	load(file_limit);
 }
@@ -155,8 +157,8 @@ void res::file_desc_binary_hash_cache::load(std::uint64_t file_limit)
 		return;
 	}
 	const json::array* list = entries->if_array();
-	if (list == nullptr || list->size() > max_entries) {
-		ignore(std::format("\"entries\" is not an array of at most {} entries", max_entries));
+	if (list == nullptr || list->size() > m_entry_limit) {
+		ignore(std::format("\"entries\" is not an array of at most {} entries", m_entry_limit));
 		return;
 	}
 	std::lock_guard lock(m_mutex);
@@ -193,7 +195,7 @@ void res::file_desc_binary_hash_cache::remember(const desc_binary_pair_key& key)
 		m_entries.erase(found->second);
 		m_by_binary.erase(found);
 	}
-	while (m_entries.size() >= max_entries) {
+	while (m_entries.size() >= m_entry_limit) {
 		m_by_binary.erase(m_entries.front().binary);
 		m_entries.pop_front();
 	}
