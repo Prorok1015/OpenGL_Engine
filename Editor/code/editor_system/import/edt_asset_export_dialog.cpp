@@ -1,4 +1,5 @@
 #include "edt_asset_export_dialog.h"
+#include "edt_ui_metrics.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/fs_paths.h>
@@ -101,7 +102,7 @@ bool edt::asset_export_dialog::render()
 
 	bool is_open = true;
 
-	ImGui::SetNextWindowSize(ImVec2(500.f, 400.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em(500.f), em(400.f)), ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal("Export to Project##edt_export", nullptr, ImGuiWindowFlags_None))
 	{
 		if (m_exporting)
@@ -170,7 +171,7 @@ void edt::asset_export_dialog::render_export_form()
 			buttons_height += ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(lines + 1);
 		}
 		float available = ImGui::GetContentRegionAvail().y - buttons_height;
-		ImGui::BeginChild("##file_list", ImVec2(0.f, std::max(available, 80.f)),
+		ImGui::BeginChild("##file_list", ImVec2(0.f, std::max(available, em(80.f))),
 			ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
 		for (const auto& [mem_tag, res_tag] : remap) {
 			const std::string rel(res_tag.relative());
@@ -192,7 +193,7 @@ void edt::asset_export_dialog::render_export_form()
 	ImGui::Separator();
 	ImGui::Spacing();
 
-	const float bw = 110.f;
+	const float bw = em(110.f);
 	const float avail = ImGui::GetContentRegionAvail().x;
 	ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
