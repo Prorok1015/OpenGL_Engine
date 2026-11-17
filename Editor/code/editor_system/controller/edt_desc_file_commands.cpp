@@ -980,7 +980,14 @@ edt::desc_file_read edt::read_desc_file(res::resource_system& resources, const d
 		out.missing = true;
 		// A new file lands in the top layer; it is the open level's only when it has the level's own name.
 		out.top_layer = true;
-		out.in_open_level = files.names_open_level(named.path).claim == level_claim::this_file;
+		const level_answer claim = files.names_open_level(named.path);
+		out.in_open_level = claim.claim == level_claim::this_file;
+		if (out.in_open_level) {
+			out.level_refusal = std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", named.path);
+		} else if (claim.claim == level_claim::unreadable_entry) {
+			out.level_refusal = unreadable_entry_text(claim);
+			out.level_unreadable = true;
+		}
 		return out;
 	}
 	out.top_layer = files.is_top_layer(found);

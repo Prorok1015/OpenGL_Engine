@@ -5,6 +5,7 @@
 #include "edt_document_creator.h"
 #include "edt_editor_layer.h"
 #include "edt_level_controller.h"
+#include "edt_prefab_variant_creator.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include <snk/common/logger/engine_log.h>
@@ -12,7 +13,9 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
+#include <boost/json.hpp>
 #include <filesystem>
+#include <format>
 #include <utility>
 
 edt::asset_open_component::asset_open_component(ports from)
@@ -45,6 +48,17 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);
 	});
+	document_creator::ports names{
+		[this] { return m_ports.services.descs(); },
+		[this] { return m_ports.services.writable_resources(); },
+		[this] { return m_ports.resources.get_resource_layers(); },
+		[this] { return m_ports.write_blocker(); } };
+	m_ports.browser.set_variant_creator(std::make_shared<prefab_variant_creator>(std::move(names), [this](const res::tag& tag) {
+			desc::desc_system* descs = m_ports.services.descs();
+			res::resource_system* resources = m_ports.services.resources();
+			return descs && resources ? open_level_claim(*resources, *descs, desc_layout(), tag) : std::string{};
+		}),
+		[this](const res::tag& tag) { m_ports.open_prefab(tag); });
 }
 
 bool edt::asset_open_component::open(const res::tag& tag, bool quiet)
