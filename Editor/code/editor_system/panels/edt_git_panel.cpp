@@ -3,6 +3,7 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/res_system.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
 #include <algorithm>
@@ -14,17 +15,7 @@
 #include <span>
 
 namespace {
-	const ImVec4 k_added{ 0.45f, 0.80f, 0.45f, 1.0f };
-	const ImVec4 k_removed{ 0.90f, 0.45f, 0.45f, 1.0f };
-	const ImVec4 k_hunk{ 0.45f, 0.70f, 0.95f, 1.0f };
-	const ImVec4 k_meta{ 0.65f, 0.65f, 0.65f, 1.0f };
-	const ImVec4 k_error{ 1.0f, 0.45f, 0.40f, 1.0f };
 	constexpr const char* k_pr_popup = "Create pull request";
-
-	const ImVec4 k_head_ref{ 0.95f, 0.75f, 0.30f, 1.0f };
-	const ImVec4 k_branch_ref{ 0.45f, 0.80f, 0.45f, 1.0f };
-	const ImVec4 k_remote_ref{ 0.45f, 0.70f, 0.95f, 1.0f };
-	const ImVec4 k_tag_ref{ 0.85f, 0.60f, 0.90f, 1.0f };
 
 	const ImU32 k_lane_colours[] = { IM_COL32(90, 160, 240, 255), IM_COL32(110, 200, 110, 255), IM_COL32(240, 170, 70, 255),
 		IM_COL32(220, 100, 200, 255), IM_COL32(80, 200, 200, 255), IM_COL32(230, 90, 90, 255), IM_COL32(170, 140, 240, 255),
@@ -35,16 +26,16 @@ namespace {
 		return k_lane_colours[lane % std::size(k_lane_colours)];
 	}
 
-	const ImVec4& ref_colour(edt::vcs::history_ref::kind kind)
+	const ImVec4& ref_colour(edt::vcs::history_ref::kind kind, const gui::theme_semantic_colors& colors)
 	{
 		using ref_kind = edt::vcs::history_ref::kind;
 		switch (kind) {
-		case ref_kind::head: return k_head_ref;
-		case ref_kind::remote: return k_remote_ref;
-		case ref_kind::tag: return k_tag_ref;
+		case ref_kind::head: return colors.warning;
+		case ref_kind::remote: return colors.info;
+		case ref_kind::tag: return colors.agent;
 		case ref_kind::branch: break;
 		}
-		return k_branch_ref;
+		return colors.success;
 	}
 
 	std::string change_label(const edt::git_change& change, char code)
@@ -55,7 +46,7 @@ namespace {
 
 	// At most k_shown_refs labels of at most k_ref_chars bytes each, then "+N": a commit many refs point at keeps its
 	// subject in view.
-	void draw_ref_labels(const std::vector<edt::vcs::history_ref>& refs)
+	void draw_ref_labels(const std::vector<edt::vcs::history_ref>& refs, const gui::theme_semantic_colors& colors)
 	{
 		constexpr std::size_t k_shown_refs = 3;
 		constexpr std::size_t k_ref_chars = 24;
@@ -65,9 +56,9 @@ namespace {
 				std::size_t cut = k_ref_chars;
 				// Never inside a UTF-8 sequence.
 				while (cut > 0 && (static_cast<unsigned char>(name[cut]) & 0xC0u) == 0x80u) --cut;
-				ImGui::TextColored(ref_colour(refs[i].type), "%.*s...", static_cast<int>(cut), name.c_str());
+				ImGui::TextColored(ref_colour(refs[i].type, colors), "%.*s...", static_cast<int>(cut), name.c_str());
 			} else {
-				ImGui::TextColored(ref_colour(refs[i].type), "%s", name.c_str());
+				ImGui::TextColored(ref_colour(refs[i].type, colors), "%s", name.c_str());
 			}
 			if (name.size() > k_ref_chars && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name.c_str());
 			ImGui::SameLine();
@@ -78,7 +69,8 @@ namespace {
 		}
 	}
 
-	void draw_diff_lines(const char* id, const std::vector<edt::git_diff_line>& lines)
+	void draw_diff_lines(const char* id, const std::vector<edt::git_diff_line>& lines,
+		const gui::theme_semantic_colors& colors)
 	{
 		using edt::git_diff_line;
 		if (ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
@@ -89,11 +81,11 @@ namespace {
 					const git_diff_line& line = lines[static_cast<std::size_t>(i)];
 					const ImVec4* color = nullptr;
 					switch (line.type) {
-					case git_diff_line::kind::added: color = &k_added; break;
-					case git_diff_line::kind::removed: color = &k_removed; break;
-					case git_diff_line::kind::hunk: color = &k_hunk; break;
+					case git_diff_line::kind::added: color = &colors.diff_added; break;
+					case git_diff_line::kind::removed: color = &colors.diff_removed; break;
+					case git_diff_line::kind::hunk: color = &colors.diff_hunk; break;
 					case git_diff_line::kind::meta:
-					case git_diff_line::kind::note: color = &k_meta; break;
+					case git_diff_line::kind::note: color = &colors.text_secondary; break;
 					case git_diff_line::kind::context: break;
 					}
 					if (color) ImGui::PushStyleColor(ImGuiCol_Text, *color);
@@ -140,7 +132,7 @@ void edt::git_panel::on_render()
 	}
 	draw_header();
 	if (!m_model.error().empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 		ImGui::TextWrapped("%s", m_model.error().c_str());
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
@@ -294,7 +286,7 @@ void edt::git_panel::draw_diff()
 		ImGui::SameLine();
 		ImGui::TextDisabled("(cut at 256 KiB)");
 	}
-	draw_diff_lines("##diff", m_model.diff());
+	draw_diff_lines("##diff", m_model.diff(), colors());
 }
 
 void edt::git_panel::draw_history()
@@ -309,7 +301,7 @@ void edt::git_panel::draw_history()
 	m_history.tick();
 	draw_history_filter();
 	if (!m_history.error().empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 		ImGui::TextWrapped("%s", m_history.error().c_str());
 		ImGui::PopStyleColor();
 	}
@@ -431,7 +423,7 @@ void edt::git_panel::draw_history_table(float height)
 			graph.advance(lanes, row);
 
 			ImGui::TableSetColumnIndex(1);
-			draw_ref_labels(commit.refs);
+			draw_ref_labels(commit.refs, colors());
 			ImGui::TextUnformatted(commit.subject.c_str());
 			ImGui::TableSetColumnIndex(2);
 			ImGui::TextUnformatted(commit.author.c_str());
@@ -484,7 +476,7 @@ void edt::git_panel::draw_history_details()
 		ImGui::TextDisabled("Select a file to see what the commit changed in it.");
 	} else {
 		if (m_history.diff_truncated()) ImGui::TextDisabled("(cut at 256 KiB)");
-		draw_diff_lines("##commit_diff", m_history_diff);
+		draw_diff_lines("##commit_diff", m_history_diff, colors());
 	}
 	ImGui::EndGroup();
 }
@@ -496,7 +488,7 @@ void edt::git_panel::draw_pr_target(bool running)
 	if (!target) {
 		ImGui::TextDisabled("The repository for this pull request is not read.");
 	} else if (!target->ok) {
-		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 		ImGui::PushTextWrapPos(0.0f);
 		ImGui::TextUnformatted(target->text.c_str());
 		ImGui::PopTextWrapPos();
@@ -506,7 +498,7 @@ void edt::git_panel::draw_pr_target(bool running)
 		ImGui::SameLine();
 		ImGui::TextUnformatted(target->text.c_str());
 		if (target->rewritten) {
-			ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::PushTextWrapPos(0.0f);
 			ImGui::TextUnformatted("The address of this remote is rewritten by the git config (url.<base>.insteadOf or pushurl):");
 			ImGui::TextUnformatted(std::format("written in the config: {}", target->written_url).c_str());
@@ -559,7 +551,7 @@ void edt::git_panel::draw_create_pr()
 		ImGui::TextDisabled("%s", problem->c_str());
 	}
 	if (!m_pr.error_text().empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, k_error);
+		ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 		ImGui::PushTextWrapPos(0.0f);
 		ImGui::TextUnformatted(std::format("{}: {}", m_pr.error_code(), m_pr.error_text()).c_str());
 		ImGui::PopTextWrapPos();

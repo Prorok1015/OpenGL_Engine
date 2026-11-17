@@ -12,6 +12,8 @@
 #include <string_view>
 #include <vector>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt
 {
 	enum class unsaved_choice { save, discard, cancel };
@@ -73,6 +75,9 @@ namespace edt
 		void set_registrar(implicit_registrar registrar) { m_registrar = std::move(registrar); }
 		// False until the registrar is set: asking for a dialog before that is a programming error.
 		bool can_show() const { return static_cast<bool>(m_registrar); }
+		// What the dialogs draw states with (#1136): editor_context's, taken back (null) by ~editor_context before they
+		// go. Null: the defaults.
+		void set_colors(const gui::theme_semantic_colors* colors) { m_colors = colors; }
 
 		// "Save / Discard / Cancel" prompt. Reports `cancel` also when the popup is closed without a choice.
 		dialog_id confirm_unsaved(std::function<void(unsaved_choice)> on_answer);
@@ -121,5 +126,6 @@ namespace edt
 		bool m_pump_registered = false;
 		// The registered callback holds a weak copy: it stops if the service is gone first.
 		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
+		const gui::theme_semantic_colors* m_colors = nullptr;
 	};
 }

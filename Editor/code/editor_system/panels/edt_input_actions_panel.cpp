@@ -1,5 +1,6 @@
 #include "edt_input_actions_panel.h"
 #include <snk/gui/gui_platform_backend.h>
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 
 namespace edt
@@ -82,7 +83,9 @@ namespace edt
 		} else {
 			ImGui::TextDisabled("Click a binding to change it");
 		}
-		if (!actions->user_file_saved()) ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "The player's bindings could not be saved");
+		if (!actions->user_file_saved()) {
+			ImGui::TextColored(colors().warning, "The player's bindings could not be saved");
+		}
 		ImGui::Separator();
 
 		constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
@@ -99,7 +102,7 @@ namespace edt
 				ImGui::TextUnformatted(row.name.c_str());
 				if (!row.shares_with.empty()) {
 					ImGui::SameLine();
-					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "!");
+					ImGui::TextColored(colors().warning, "!");
 					if (ImGui::IsItemHovered()) {
 						std::string others;
 						for (const std::string& other : row.shares_with) others += (others.empty() ? "" : ", ") + other;

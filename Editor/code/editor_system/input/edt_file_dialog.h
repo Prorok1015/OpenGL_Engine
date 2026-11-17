@@ -2,6 +2,8 @@
 #include <snk/editor/edt_api.h>
 #include <snk/common/common.h>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt {
 
 // Exported for editor_system and the tests only (this header is not installed): not part of the editor API.
@@ -21,7 +23,8 @@ public:
         select_mode = SELECT_MODE::FILES_ONLY;
     }
 
-    bool show(const char* title, bool* p_open);
+    // OK is drawn in `colors.success`, Cancel in `colors.error`.
+    bool show(const char* title, bool* p_open, const gui::theme_semantic_colors& colors);
     // The next show() closes the popup as a Cancel click does (and returns false), unless the user closed it in that
     // frame (OK, Cancel, Esc): then the user's action stands and closed_by_request() stays false.
     void request_close() { close_requested = true; }

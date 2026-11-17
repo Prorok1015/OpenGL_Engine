@@ -1,4 +1,5 @@
 #include "edt_world_systems_panel.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <string>
 #include <utility>
@@ -21,7 +22,7 @@ void edt::world_systems_panel::on_render()
 		ImGui::SameLine();
 		ImGui::TextDisabled("(locked while Play runs)");
 	}
-	if (!m_model.error().empty()) ImGui::TextColored({ 1.f, 0.3f, 0.3f, 1.f }, "%s", m_model.error().c_str());
+	if (!m_model.error().empty()) ImGui::TextColored(colors().error, "%s", m_model.error().c_str());
 
 	ImGui::BeginDisabled(locked || m_model.available().empty());
 	if (ImGui::BeginCombo("##add_system", "Add system...")) {
@@ -55,7 +56,7 @@ void edt::world_systems_panel::on_render()
 			if (system.known) {
 				ImGui::TextUnformatted(system.name.c_str());
 			} else {
-				ImGui::TextColored({ 1.f, 0.8f, 0.f, 1.f }, "%s (unknown)", system.name.c_str());
+				ImGui::TextColored(colors().warning, "%s (unknown)", system.name.c_str());
 			}
 			ImGui::TableSetColumnIndex(1);
 			ImGui::TextDisabled("%s", system.known ? system.phase.c_str() : "-");

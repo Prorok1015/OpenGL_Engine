@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt {
 	class editor_context;
 
@@ -35,9 +37,9 @@ namespace edt {
 	inline constexpr const char* loading_screen_window = "##loading_screen";
 	// "Loading <level>..." for the start level's tag.
 	std::string loading_screen_text(std::string_view level);
-	// One undecorated black window over the main viewport with `text` in its centre. It never comes to the front, so
-	// the implicit callbacks' modals (the load's progress, dialogs) stay over it.
-	void draw_loading_screen(std::string_view text);
+	// One undecorated window of the backdrop colour over the main viewport with `text` in its centre. It never comes
+	// to the front, so the implicit callbacks' modals (the load's progress, dialogs) stay over it.
+	void draw_loading_screen(std::string_view text, const gui::theme_semantic_colors& colors);
 
 	class editor_layer : public gui::layer_interface {
 	public:

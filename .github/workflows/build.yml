@@ -189,6 +189,14 @@ jobs:
           git fetch --no-tags --depth=1 origin "$base"
           python3 tools/ci/check_abi_changes.py --base "$base"
 
+      # #1136: the editor's panels take their colours from the theme (gui::theme_semantic_colors, the ImGui style); a
+      # literal colour in Editor/code would not follow a theme change. The exceptions and their reasons are in the
+      # script.
+      - name: Check the editor UI has no literal colours
+        run: |
+          python3 tools/ci/check_ui_colors.py --self-test
+          python3 tools/ci/check_ui_colors.py
+
   # Records in the run, by its name, the base the plan found: the next ready_for_review compares it with its own.
   base-marker:
     name: Base ${{ needs.plan.outputs.base }}

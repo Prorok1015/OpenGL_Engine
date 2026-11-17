@@ -12,13 +12,19 @@ namespace res {
 	class resource_system;
 }
 
+namespace gui {
+	struct theme_semantic_colors;
+}
+
 namespace edt {
 
 	class job_service;
 
 	class asset_export_dialog {
 	public:
-		asset_export_dialog(asset_exporter& exporter, job_service& jobs, res::resource_system& resources);
+		// `colors` (editor_context::colors()) must outlive the dialog.
+		asset_export_dialog(asset_exporter& exporter, job_service& jobs, res::resource_system& resources,
+			const gui::theme_semantic_colors& colors);
 		~asset_export_dialog();
 
 		// Set the import result to export
@@ -35,6 +41,7 @@ namespace edt {
 		void render_export_progress();
 
 		asset_exporter& m_exporter;
+		const gui::theme_semantic_colors& m_colors;
 
 		bool m_is_open = false;
 		bool m_needs_open = false;

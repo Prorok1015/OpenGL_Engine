@@ -4,6 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
 #include "edt_schema_inspector.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
@@ -93,10 +94,12 @@ namespace edt
 	namespace
 	{
 		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json,
-			schema_ui::map_edit_state& map_state, const picker::catalog* assets)
+			schema_ui::map_edit_state& map_state, const picker::catalog* assets,
+			const gui::theme_semantic_colors& colors)
 		{
 			schema_ui::context out{ registry, std::move(draw_json), {}, &map_state };
 			out.assets = assets;
+			out.colors = &colors;
 			return out;
 		}
 	}
@@ -106,7 +109,7 @@ namespace edt
 		const desc::schema_registry& registry = descs()->schemas();
 		auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr, colors());
 		const std::string parent_name = comp.parent_desc.is_valid() ? std::string{ comp.parent_desc.get_tag().view() } : std::string{};
 		return schema_ui::edit_component_marked(schema, registry, parent_json(key, comp), comp.overrides, parent_name, {},
 			[&](boost::json::value& shown, const schema_ui::field_origin& origin) {
@@ -123,7 +126,7 @@ namespace edt
 		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
 			return render_generic_json_value(label, value);
-		}, m_map_state, m_asset_source ? m_asset_source() : nullptr);
+		}, m_map_state, m_asset_source ? m_asset_source() : nullptr, colors());
 		if (!schema_ui::draw_fields(schema, after, ctx))
 			return false;
 		return schema_ui::apply_edit(scratch.overrides, schema, registry, base, before, after) > 0;
@@ -185,7 +188,7 @@ namespace edt
 			ImGui::TextUnformatted(node.name.c_str());
 		}
 		if (m_agent_marked && m_agent_marked(node.node_id)) {
-			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "Changed by an agent (not saved or accepted yet)");
+			ImGui::TextColored(colors().agent, "Changed by an agent (not saved or accepted yet)");
 		}
 		ImGui::Separator();
 
@@ -271,7 +274,7 @@ namespace edt
 		// The records of an instance node, its prefab and the stale ones (#149).
 		if (!m_readonly) {
 			const auto stale = m_view_cache ? m_view_cache->stale(node) : nullptr;
-			changed |= draw_instance_overrides(node, stale.get(), m_instance_hooks, m_instance_ui);
+			changed |= draw_instance_overrides(node, stale.get(), m_instance_hooks, m_instance_ui, colors());
 		}
 
 		ImGui::Separator();
