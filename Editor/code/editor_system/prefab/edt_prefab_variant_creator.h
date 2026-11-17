@@ -1,7 +1,7 @@
 #pragma once
 #include "edt_desc_file_commands.h"
 #include "edt_document_creator.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <functional>
 #include <optional>
 #include <string>

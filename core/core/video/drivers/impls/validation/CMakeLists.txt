@@ -9,4 +9,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_DRV_VALIDATION_SOURCES})
 # wraps the driver with; it includes rnd_validation_objects.h and rnd_validation_validator.h, so they are public too).
 snk_component_headers(${PROJECT_NAME} SDK_INTERNAL)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::drv_interface PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::common PUBLIC snk::drv_interface PRIVATE snk::engine_logger)
