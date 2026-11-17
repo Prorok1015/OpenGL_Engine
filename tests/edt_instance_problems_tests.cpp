@@ -3,6 +3,7 @@
 #include "edt_instance_problems.h"
 #include <snk/scene/level/scn_world_desc.h>
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <vector>
 
