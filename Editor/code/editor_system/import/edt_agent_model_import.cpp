@@ -3,6 +3,7 @@
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_desc_binary.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -122,12 +124,19 @@ namespace {
 		return bytes;
 	}
 
-	// Takes back the files a failed or cancelled export wrote: only those, only plain files.
+	// Takes back the files a failed or cancelled export wrote: only those, only plain files, newest first. A staged binary
+	// file (EPIC-79) stays while its desc does: a reader of that desc recovers from it.
 	void take_back(const std::vector<res::tag>& written, const fs::path& top)
 	{
+		constexpr std::string_view staged_suffix = ".bin.new";
 		for (auto tag = written.rbegin(); tag != written.rend(); ++tag) {
-			const fs::path file = top / from_utf8(std::string(tag->relative()));
+			const std::string relative(tag->relative());
+			const fs::path file = top / from_utf8(relative);
 			std::error_code ec;
+			if (relative.ends_with(staged_suffix)) {
+				const fs::path desc = top / from_utf8(relative.substr(0, relative.size() - staged_suffix.size()) + ".desc");
+				if (fs::symlink_status(desc, ec).type() != fs::file_type::not_found) continue;
+			}
 			if (fs::symlink_status(file, ec).type() == fs::file_type::regular) fs::remove(file, ec);
 		}
 	}
@@ -156,7 +165,8 @@ namespace {
 	void add_decoder_sandbox(json::object& result, const edt::decoder_sandbox_status& sandbox)
 	{
 		if (!sandbox.reported) return;
-		json::object reported{ { "fs", sandbox.fs ? "landlock" : "none" }, { "syscalls", sandbox.syscalls ? "seccomp" : "none" } };
+		json::object reported{ { "fs", sandbox.fs ? edt::k_decoder_sandbox_fs_name : std::string_view("none") },
+			{ "syscalls", sandbox.syscalls ? edt::k_decoder_sandbox_syscalls_name : std::string_view("none") } };
 		if (!sandbox.why.empty()) reported["why"] = sandbox.why;
 		if (const std::string warning = edt::decoder_sandbox_warning(sandbox); !warning.empty()) reported["warning"] = warning;
 		result["decoder_sandbox"] = std::move(reported);
@@ -245,14 +255,23 @@ namespace {
 			if (const std::string why = edt::asset_exporter::remap_problem(remap, in.plan.name, in.plan.folder); !why.empty()) {
 				throw std::runtime_error("the import cannot be exported: " + why);
 			}
+			// A geometry desc is written with its binary file and the staged one (EPIC-79): neither may be there either.
+			std::vector<res::tag> targets;
 			for (const auto& entry : remap) {
-				const std::string relative(entry.second.relative());
+				targets.push_back(entry.second);
+				if (entry.second.view().ends_with(".geom.desc")) {
+					if (const auto binary = res::desc_binary::binary_tag(entry.second)) targets.push_back(*binary);
+					if (const auto staged = res::desc_binary::staged_tag(entry.second)) targets.push_back(*staged);
+				}
+			}
+			for (const res::tag& target : targets) {
+				const std::string relative(target.relative());
 				switch (state_in_layers(in.layers, relative)) {
 				case edt::level_file_state::missing: break;
 				case edt::level_file_state::file:
-					throw std::runtime_error(std::format("'{}' exists: nothing was written", entry.second.view()));
+					throw std::runtime_error(std::format("'{}' exists: nothing was written", target.view()));
 				case edt::level_file_state::unsafe:
-					throw std::runtime_error(std::format("'{}' is not a plain file: nothing was written", entry.second.view()));
+					throw std::runtime_error(std::format("'{}' is not a plain file: nothing was written", target.view()));
 				}
 			}
 

@@ -6,6 +6,7 @@
 #include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_mount_table.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/res_reference.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
@@ -49,6 +50,7 @@ namespace res
 	struct SNK_API when_all_result : resource_entry {};
 
 	class resource_system;
+	class desc_binary_hash_cache;
 
 	namespace detail {
 		// res_desc_binary.cpp: reads a desc's binary file from the desc's own layer through the root's resolver.
@@ -123,6 +125,18 @@ namespace res
 		// as changed (signal_changed): evicted with what was built from it, so the next request reads the new roots, and
 		// its watchers reload; a handle held from before keeps what it has. False (logged) when it is not mounted.
 		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
+		// Whether a resolver serves `protocol` (mounted or registered). Any thread.
+		bool serves(std::string_view protocol) const;
+		// The file on the disk the resolver of `tag` opens for it now (vfs_resolver::disk_file_of): nullopt when it
+		// reads no files (a RAM or pack one), a store of it is queued, or every layer refuses the tag. Any thread.
+		std::optional<disk_file> disk_file_of(const tag& tag) const;
+		// The bytes of `tag` as its resolver serves them now, past the cache: the file of the layer that has it (or a
+		// queued store of it); `too_large` past `max_bytes`. Not on the main thread outside a task (it waits, #1086).
+		::platform::beneath::read_result read_now(const tag& tag, std::uint64_t max_bytes,
+			std::vector<std::byte>& out) const;
+		// The files below `folder` of `protocol` as its resolver sees them (vfs_resolver::files_under); nullopt when it
+		// cannot list them (not mounted, or it reads no files). Any thread.
+		std::optional<std::vector<tag>> files_under(std::string_view protocol, std::string_view folder) const;
 		// The file on the disk `tag` is read from now, when it holds exactly `bytes` (what a load of it got): nullopt
 		// when its resolver reads no files (a RAM or pack one), a store of it is queued, or there is no file. `differs`
 		// says why a file that is there is not taken (vfs_resolver::disk_file_holding). Any thread.
@@ -327,6 +341,14 @@ namespace res
 		// A require_sync of a tag with one of these extensions (lower case) logs a warning, once per tag: its adapter may
 		// block the main thread for seconds (the editor's models, parsed in the decoder process, #925). Kept by the root.
 		void warn_on_sync_require(std::vector<std::string> extensions);
+
+		// Pairs of a desc and its binary file whose hashes were checked unchanged (EPIC-79 section 7, #1126): a read of an
+		// unchanged pair skips SHA-256. Kept by the root, any thread; nullptr (the default) remembers nothing.
+		void set_desc_binary_hash_cache(std::shared_ptr<desc_binary_hash_cache> cache);
+		std::shared_ptr<desc_binary_hash_cache> desc_binary_hash_cache_ptr() const;
+		// false (an editor debug setting): a read of one root without a staged file skips SHA-256. Kept by the root.
+		void set_verify_desc_binary_hash(bool verify);
+		bool verify_desc_binary_hash() const;
 
 		data fetch_data(const tag& tag) const;
 
@@ -873,6 +895,10 @@ namespace res
 		mutable std::unordered_set<std::string> m_sync_warned;
 		// Root only (hold_changes). Last, so the members inline code reads keep their offsets.
 		std::unique_ptr<held_changes> m_held;
+		// Root only (set_desc_binary_hash_cache, set_verify_desc_binary_hash). After m_held for the same reason.
+		mutable std::mutex m_desc_binary_cache_mutex;
+		std::shared_ptr<desc_binary_hash_cache> m_desc_binary_cache;
+		std::atomic<bool> m_verify_desc_binary_hash{ true };
 	};
 
 	// The tag a handle with the tag `own` and `block` was asked for: for a handle of resource_system::refused, whose own

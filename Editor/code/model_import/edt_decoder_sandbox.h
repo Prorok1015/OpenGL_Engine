@@ -24,6 +24,16 @@ namespace edt {
 	// syscalls=seccomp|none[ why=<text>]". The editor takes only the first line: a later one may come from a model.
 	inline constexpr std::string_view k_decoder_sandbox_status_prefix = "snk-sandbox-status: ";
 
+	// What the status line calls the two parts of this system's sandbox: the file system isolation (Landlock; Windows
+	// #1054: the AppContainer) and the rest (seccomp; Windows: the child process policy, the mitigations and the job).
+#if defined(_WIN32)
+	inline constexpr std::string_view k_decoder_sandbox_fs_name = "appcontainer";
+	inline constexpr std::string_view k_decoder_sandbox_syscalls_name = "policy";
+#else
+	inline constexpr std::string_view k_decoder_sandbox_fs_name = "landlock";
+	inline constexpr std::string_view k_decoder_sandbox_syscalls_name = "seccomp";
+#endif
+
 	// What the child said of its OS sandbox (#1043) in its first stderr line, written before it read anything of the request:
 	// after the parse the child may be the model's, so nothing it says later counts.
 	struct decoder_sandbox_status

@@ -1,6 +1,7 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include "rnd_geometry_binary.h"
 #include <snk/desc/desc_system.h>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/common/eng_profiler.h>
 #include <cmath>
@@ -12,30 +13,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
-{
-	using namespace rnd::driver;
-	switch (type)
-	{
-	case SHADER_DATA_TYPE::FLOAT:    return "float";
-	case SHADER_DATA_TYPE::VEC2_F:   return "vec2";
-	case SHADER_DATA_TYPE::VEC3_F:   return "vec3";
-	case SHADER_DATA_TYPE::VEC4_F:   return "vec4";
-	case SHADER_DATA_TYPE::MAT3_F:   return "mat3";
-	case SHADER_DATA_TYPE::MAT4_F:   return "mat4";
-	case SHADER_DATA_TYPE::INT:      return "int";
-	case SHADER_DATA_TYPE::VEC2_I:   return "ivec2";
-	case SHADER_DATA_TYPE::VEC3_I:   return "ivec3";
-	case SHADER_DATA_TYPE::VEC4_I:   return "ivec4";
-	case SHADER_DATA_TYPE::BOOL:     return "bool";
-	case SHADER_DATA_TYPE::UNKNOWN:  break;
-	}
-	return "unknown";
-}
 
 void shader_data_type_from_string(const std::string_view& type, rnd::driver::SHADER_DATA_TYPE& out)
 {
@@ -71,23 +52,6 @@ rnd::driver::SHADER_DATA_TYPE shader_data_type_from_string(const std::string_vie
 }
 
 
-namespace rnd::driver {
-	void tag_invoke(json::value_from_tag, json::value& jv, const rnd::driver::BufferElement& c)
-	{
-		jv = shader_data_type_to_string(c.Type);
-	}
-
-	void tag_invoke(json::value_from_tag t, json::value& jv, const rnd::driver::BufferLayout& c)
-	{
-		json::object ly;
-		for (auto& elem : c) {
-			ly[elem.Name] = json::value_from(elem);
-		}
-		jv = ly;
-	}
-
-}
-
 namespace
 {
 	// From a file: a value that is no byte fails the load. It is never cut down to one (256 read as 0) and never
@@ -106,12 +70,6 @@ namespace
 
 namespace std
 {
-	void tag_invoke(json::value_from_tag, json::value& jv, const std::byte& c)
-	{
-		uint64_t val = 0ull + (unsigned char)c;
-		jv = val;
-	}
-
 	std::byte tag_invoke(json::value_to_tag<std::byte>, const json::value& jv)
 	{
 		return byte_of(jv);
@@ -119,14 +77,6 @@ namespace std
 }
 
 namespace ds {
-	void tag_invoke(json::value_from_tag, json::value& jv, const ds::bbox& c)
-	{
-		json::array arr;
-		arr.push_back({ {"x", c.min.x}, {"y", c.min.y}});
-		arr.push_back({ {"x", c.max.x}, {"y", c.max.y} });
-		jv = arr;
-	}
-
 	ds::bbox tag_invoke(json::value_to_tag<ds::bbox>, const json::value& jv)
 	{
 		const json::array* arr = jv.if_array();
@@ -197,13 +147,6 @@ namespace
 		return range;
 	}
 
-	bool is_float_type(rnd::driver::SHADER_DATA_TYPE type)
-	{
-		using rnd::driver::SHADER_DATA_TYPE;
-		return type == SHADER_DATA_TYPE::FLOAT || type == SHADER_DATA_TYPE::VEC2_F || type == SHADER_DATA_TYPE::VEC3_F
-			|| type == SHADER_DATA_TYPE::VEC4_F;
-	}
-
 	const rnd::driver::BufferElement* element_named(const rnd::driver::BufferLayout& layout, std::string_view name)
 	{
 		for (const auto& element : layout) {
@@ -212,11 +155,6 @@ namespace
 			}
 		}
 		return nullptr;
-	}
-
-	[[noreturn]] void refuse_data(const res::tag& file, std::string_view path, const std::string& reason)
-	{
-		throw res::load_error(res::diagnostic_kind::load, path, std::format("geometry '{}': {}: {}", file.view(), path, reason));
 	}
 
 	float float_at(const std::vector<std::byte>& vertices, std::size_t offset)
@@ -267,44 +205,29 @@ void rnd::detail::forget_binary(const geometry_desc& geometry)
 	reg.entries.erase(&geometry);
 }
 
+namespace
+{
+	// What geometry_data_problem refuses, thrown as the loader reports it.
+	void check_data(const res::tag& file, const rnd::geometry_desc& geometry, bool triangles)
+	{
+		if (const auto refused = rnd::detail::geometry_data_problem(file, rnd::geometry_view_of(geometry), triangles)) {
+			throw res::load_error(res::diagnostic_kind::load, refused->json_path, refused->message);
+		}
+	}
+}
+
 void rnd::detail::check_geometry_data(const res::tag& file, const geometry_desc& geometry)
 {
-	const std::size_t stride = geometry.layout.get_stride();
-	if (stride == 0) {
-		refuse_data(file, "/layout", "the vertex layout is empty");
-	}
-	if (geometry.vertices.size() % stride != 0) {
-		refuse_data(file, "/vertices", std::format("{} bytes are not a whole number of {}-byte vertices", geometry.vertices.size(), stride));
-	}
-	const std::size_t vertex_count = geometry.vertices.size() / stride;
-	if (geometry.indices.size() % 3 != 0) {
-		refuse_data(file, "/indices", std::format("{} indices are not whole triangles", geometry.indices.size()));
-	}
-	for (std::size_t i = 0; i < geometry.indices.size(); ++i) {
-		if (geometry.indices[i] >= vertex_count) {
-			refuse_data(file, "/indices", std::format("index {} is {}, past the {} vertices", i, geometry.indices[i], vertex_count));
-		}
-	}
+	check_data(file, geometry, true);
+}
 
-	const auto* position = element_named(geometry.layout, "position");
-	if (position == nullptr || !is_float_type(position->Type)) {
-		refuse_data(file, "/layout/position", "the layout has no float 'position'");
+void rnd::detail::check_geometry_arrays(const res::tag& file, const geometry_desc& geometry)
+{
+	// A desc without data (base_geometry.desc, a test's indices alone) has nothing the checks could hold against.
+	if (geometry.vertices.empty() || geometry.layout.get_stride() == 0) {
+		return;
 	}
-	// The CPU reads these two: positions for the scene, uv for the bounds.
-	for (const auto* element : { position, element_named(geometry.layout, "uv") }) {
-		if (element == nullptr || !is_float_type(element->Type)) {
-			continue;
-		}
-		const std::size_t components = element->Size / sizeof(float);
-		for (std::size_t v = 0; v < vertex_count; ++v) {
-			for (std::size_t c = 0; c < components; ++c) {
-				const float value = float_at(geometry.vertices, v * stride + element->Offset + c * sizeof(float));
-				if (!std::isfinite(value)) {
-					refuse_data(file, "/vertices", std::format("vertex {} has a '{}' that is not finite", v, element->Name));
-				}
-			}
-		}
-	}
+	check_data(file, geometry, false);
 }
 
 void rnd::detail::rebuild_bounds(geometry_desc& geometry)
@@ -372,8 +295,18 @@ rnd::geometry_desc::~geometry_desc()
 	detail::forget_binary(*this);
 }
 
-void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::object& resource)
+void rnd::geometry_desc::deserialize(desc::desc_system&, const json::object& resource)
 {
+	detail::read_geometry_json(*this, resource);
+}
+
+void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object& resource)
+{
+	auto& layout = geometry.layout;
+	auto& indices = geometry.indices;
+	auto& vertices = geometry.vertices;
+	auto& bounds = geometry.bounds;
+	auto& rtree = geometry.rtree;
 	auto& json_layout = resource.at("layout");
 	{
 		std::vector<rnd::driver::BufferElement> elements;
@@ -392,7 +325,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		if (ranges.indices) {
 			indices.clear();
 		} else if (!json_indices.as_array().empty()) {
-			indices = json::value_to<decltype(indices)>(json_indices);
+			indices = json::value_to<std::remove_cvref_t<decltype(indices)>>(json_indices);
 		}
 	}
 
@@ -417,15 +350,15 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		ranges.wants_bounds = resource.contains("bounds");
 		bounds.clear();
 		rtree = {};
-		detail::set_binary_ranges(*this, std::move(ranges));
+		detail::set_binary_ranges(geometry, std::move(ranges));
 		return;
 	}
-	detail::forget_binary(*this);
+	detail::forget_binary(geometry);
 
 	if (resource.contains("bounds"))
 	{
 		auto& json_bounds = resource.at("bounds");
-		bounds = json::value_to<decltype(bounds)>(json_bounds);
+		bounds = json::value_to<std::remove_cvref_t<decltype(bounds)>>(json_bounds);
 
 		PROFILE_SCOPE("geometry_desc rtree build");
 		for(auto& [key, val] : bounds)
@@ -439,7 +372,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 
 void rnd::geometry_desc::serialize(json::object& resource) const
 {
-	// Until the writer of the binary file (PR3a), a geometry read from one is never written as arrays nor as nothing.
+	// A geometry read from a binary file is never written as arrays nor as nothing: rnd::write_geometry_files writes it.
 	switch (detail::binary_state_of(*this)) {
 	case detail::geometry_binary_state::not_loaded:
 		throw std::runtime_error(std::format("geometry '{}': its binary data was not loaded (it was not read as a geometry), "
@@ -450,14 +383,6 @@ void rnd::geometry_desc::serialize(json::object& resource) const
 	case detail::geometry_binary_state::none:
 		break;
 	}
-	// Whatever the table says: a layout without vertices is a mesh whose data is elsewhere or lost, never written empty.
-	if (vertices.empty() && (layout.begin() != layout.end() || layout.get_stride() != 0)) {
-		throw std::runtime_error(std::format("geometry '{}' has a vertex layout but no vertices: an empty mesh is not written",
-			get_tag().view()));
-	}
-	resource["__type"] = "geometry_desc";
-	resource["layout"] = json::value_from(layout);
-	resource["indices"] = json::value_from(indices);
-	resource["vertices"] = json::value_from(vertices);
-	resource["bounds"] = json::value_from(bounds);
+	// Whatever the table says: a layout without vertices is never written empty (write_geometry_arrays throws).
+	write_geometry_arrays(get_tag(), geometry_view_of(*this), resource);
 }

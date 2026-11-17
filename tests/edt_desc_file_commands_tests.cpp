@@ -68,15 +68,20 @@ bool says_which_entry(std::string_view text)
 // engine:// served from `root` for one test; its resolver goes before the folder does.
 struct engine_mount_scope
 {
-	engine_mount_scope(res::resource_system& resources, const fs::path& root) : m_resources(resources)
+	engine_mount_scope(res::resource_system& resources, const fs::path& root)
+		: engine_mount_scope(resources, std::vector<fs::path>{ root })
+	{
+	}
+	// Lowest priority first, as a mount lists its roots.
+	engine_mount_scope(res::resource_system& resources, std::vector<fs::path> roots) : m_resources(resources)
 	{
 		if (!m_resources.mount_roots(res::tag::engine).empty()) {
-			m_resources.remount(res::tag::engine, { root });
+			m_resources.remount(res::tag::engine, std::move(roots));
 			return;
 		}
 		res::mount added;
 		added.protocol = res::tag::engine;
-		added.roots = { root };
+		added.roots = std::move(roots);
 		added.access = res::mount_access::read_only;
 		m_resources.add_mount(std::move(added));
 	}
@@ -353,6 +358,33 @@ BOOST_AUTO_TEST_CASE(Write_RefusesAMissingFile_AndOneOfALowerLayer)
 	BOOST_TEST(lower_only.code == cmd::codes::invalid_args);
 	BOOST_TEST(!fs::exists(res_root / "materials" / "engine.mat.desc"));
 	BOOST_TEST(read_file(lower / "materials" / "engine.mat.desc") == k_material);
+}
+
+// EPIC-77/EPIC-79 (#1068): a geometry keeps its data in a binary file beside the desc and an editable mesh is the editor's:
+// neither is written as a desc, by path or by type.
+BOOST_AUTO_TEST_CASE(MeshFiles_AreRefusedByCreateAndWrite_ByPathAndByType)
+{
+	const char* geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})";
+	const auto by_path = call("desc.create", desc_args("meshes/a.geom.desc", geometry));
+	BOOST_TEST(by_path.code == cmd::codes::invalid_args);
+	BOOST_TEST(by_path.error.find("binary file") != std::string::npos);
+	const auto in_capitals = call("desc.create", desc_args("meshes/A.GEOM.DESC", k_material));
+	BOOST_TEST(in_capitals.code == cmd::codes::invalid_args);
+	const auto by_type = call("desc.create", desc_args("meshes/a.desc", geometry));
+	BOOST_TEST(by_type.code == cmd::codes::invalid_args);
+	const auto poly = call("desc.create", desc_args("meshes/a.poly.desc", R"({"__type":"poly_mesh_desc"})"));
+	BOOST_TEST(poly.code == cmd::codes::invalid_args);
+	BOOST_TEST(poly.error.find("mesh tools") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "meshes"));
+
+	dir.write("res/meshes/old.geom.desc", geometry);
+	const std::string version = version_of("meshes/old.geom.desc");
+	const auto written = call("desc.write", write_args("meshes/old.geom.desc", version, geometry));
+	BOOST_TEST(written.code == cmd::codes::invalid_args);
+	BOOST_TEST(read_file(res_root / "meshes" / "old.geom.desc") == geometry);
+	const std::optional<std::string> question = commands.find("desc.write")->describe(call_of(write_args("meshes/old.geom.desc", version, geometry)));
+	BOOST_REQUIRE(question.has_value());
+	BOOST_TEST(question->find("This request will be refused") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(Write_WithAnotherVersion_IsStale_AndTheFileStays)
@@ -789,6 +821,44 @@ BOOST_AUTO_TEST_CASE(AWorldUnderAnotherProtocol_BlocksNoWriteToTheProject)
 	BOOST_TEST_MESSAGE(created.error);
 	BOOST_TEST(created.ok);
 	BOOST_TEST(fs::exists(res_root / "materials" / "n.mat.desc"));
+}
+
+// #1086: engine:// over two folders, the project's the top one: a file the agent makes there would shadow the level's
+// world read from the lower one, so it is the level's.
+BOOST_AUTO_TEST_CASE(AFileThatWouldShadowAnEngineWorldFromALowerFolder_IsTheLevels)
+{
+	fs::create_directories(res_root / "levels");
+	dir.write("engine_low/worlds/x.desc", R"({"__type":"world_desc"})");
+	const engine_mount_scope engine{ *rs, std::vector<fs::path>{ dir.path() / "engine_low", res_root } };
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto created = call("desc.create", desc_args("worlds/x.desc", R"({"__type":"world_desc"})"));
+	BOOST_TEST(created.code == cmd::codes::busy);
+	BOOST_TEST(created.error.find("is a name of the open level") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "worlds" / "x.desc"));
+}
+
+// #1086: an engine:// resolver that reads no files cannot tell which file an entry is: the entry is the level's.
+BOOST_AUTO_TEST_CASE(AnEngineWorldUnderAResolverThatReadsNoFiles_IsTheLevels)
+{
+	fs::create_directories(res_root / "levels");
+	make_material("materials/m.mat.desc");
+	const std::string version = version_of("materials/m.mat.desc");
+	const std::string before = read_file(res_root / "materials" / "m.mat.desc");
+	rs->unregistrate_resolver(res::tag::engine);
+	rs->registrate_resolver<test_util::ram_resolver>(res::tag::engine);
+	dir.write("res/levels/open.desc",
+		R"({"__type":"level_desc","name":"o","worlds":[{"path":"engine://worlds/x.desc"}]})");
+	open_level = { "levels/open.desc" };
+
+	const auto written = call("desc.write",
+		write_args("materials/m.mat.desc", version, R"({"__type":"material_desc","queue":"opaque"})"));
+	rs->unregistrate_resolver(res::tag::engine);
+	BOOST_TEST(written.code == cmd::codes::busy);
+	BOOST_TEST(written.error.find("belongs to the open level") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "m.mat.desc") == before);
 }
 
 // A guid no file holds, without a path: the resolver loads nothing by it, so no file is the level's through it.

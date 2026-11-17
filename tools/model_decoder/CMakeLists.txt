@@ -9,21 +9,25 @@ endif()
 
 # snk_model_decoder is what ships. snk_model_decoder_selftest is the same program built with the --self-test-* flags
 # (sleep, allocate, start a helper copy) for the process tests of the runner; it is never installed.
-# config_system is in snk_engine when it is shared: its headers only, or the binary carries a second registry (#874).
-snk_usage_only(_model_decoder_config snk::config_system)
+# Neither links snk_engine nor loads a DLL of the project (#1077, groundwork for win32k lockdown #1054): the decoder side of
+# the editor's import (snk_model_decoder_side, Editor/code/model_import) with the import core, snk_model_codec, common, the
+# logger, platform and assimp, all static. In a shared build every part of it is compiled as the engine's export side
+# (SNK_ENGINE_BUILD, PUBLIC from snk_model_decoder_side): SNK_API is never dllimport here. tools/ci/check_decoder_deps.sh
+# and check_windows_deps.sh --deny check the binary.
 foreach(_target snk_model_decoder snk_model_decoder_selftest)
 	add_executable(${_target} main.cpp decoder_sandbox.cpp)
-	target_link_libraries(${_target} PRIVATE snk::model_import snk::engine snk::engine_api ${_model_decoder_config} snk::sanitizers)
-	if(SNK_ENGINE_SHARED AND MSVC)
-		target_link_libraries(${_target} PRIVATE Boost::json)
-	endif()
-	if(WIN32 AND SNK_ENGINE_SHARED)
-		# Windows has no rpath: snk_engine.dll must sit next to the executable.
-		add_custom_command(TARGET ${_target} POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:${_target}> $<TARGET_FILE_DIR:${_target}>
-			COMMAND_EXPAND_LISTS)
+	target_link_libraries(${_target} PRIVATE snk::model_decoder_side snk::platform snk::engine_logger snk::sanitizers)
+	if(WIN32)
+		# The DLLs it loads from its own folder, by name (#1054): the editor copies exactly these with it when its
+		# AppContainer cannot read the folder it is in (a dev build). The C/C++ runtime beside it is copied too.
+		file(GENERATE OUTPUT "$<TARGET_FILE_DIR:${_target}>/${_target}.deps"
+			CONTENT "$<JOIN:$<PATH:GET_FILENAME,$<TARGET_RUNTIME_DLLS:${_target}>>,\n>\n")
 	endif()
 endforeach()
+if(WIN32)
+	# The --self-test-connect probe (#1054).
+	target_link_libraries(snk_model_decoder_selftest PRIVATE ws2_32)
+endif()
 target_compile_definitions(snk_model_decoder_selftest PRIVATE SNK_MODEL_DECODER_SELF_TEST=1)
 
 # Next to editor.exe in the editor package (component `editor`): the editor starts it from its own folder. A static
@@ -35,5 +39,8 @@ if(SNK_ENGINE_SHARED)
 	endif()
 	if(MSVC)
 		install(FILES $<TARGET_PDB_FILE:snk_model_decoder> DESTINATION bin OPTIONAL COMPONENT editor)
+	endif()
+	if(WIN32)
+		install(FILES "$<TARGET_FILE_DIR:snk_model_decoder>/snk_model_decoder.deps" DESTINATION bin COMPONENT editor)
 	endif()
 endif()

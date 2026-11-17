@@ -6,8 +6,10 @@
 # 0. The Debug package was built with the same configuration-independent targets files as the Release one (the
 #    debug archive only adds *-debug.cmake files, which pair with the Release package's snake_sdk_*Targets.cmake).
 # 1. The debug archive unpacks over the main one without replacing any of its files.
-# 2. The layout: the editor, snk_engine.dll and the Debug snk_engined.dll, PDBs, the MSVC runtime, the SDK.
-# 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh).
+# 2. The layout: the editor, the model decoder and the model import DLL beside them (#1108), snk_engine.dll and the Debug
+#    snk_engined.dll, PDBs, the MSVC runtime, the SDK.
+# 3. editor.exe and snk_engine.dll need no DLL outside the package but Windows' own (check_windows_deps.sh); the model
+#    decoder loads none of user32, gdi32, opengl32, snk_engine or the model import DLL (--deny, #1077).
 # 4. tests/package_consumer builds and runs against snk::engine and snk::engine_static, Debug and Release.
 # 5. The project template's game module builds against the package (Release, and DebugGame on the Release engine), and
 #    its shipping executable (preset `shipping`, #592): game.exe with the static engine, built only (tests/static_game
@@ -65,7 +67,8 @@ for f in snake_sdk_sharedTargets.cmake snake_sdk_staticTargets.cmake; do
 done
 
 # ---- 2. layout ----
-for f in bin/editor.exe bin/editor.pdb bin/snk_model_decoder.exe bin/snk_model_decoder.pdb bin/snk_engine.dll bin/snk_engine.pdb bin/snk_engined.dll bin/snk_engined.pdb \
+for f in bin/editor.exe bin/editor.pdb bin/snk_model_decoder.exe bin/snk_model_decoder.pdb \
+	bin/snk_model_import_assimp.dll bin/snk_model_import_assimp.pdb bin/snk_engine.dll bin/snk_engine.pdb bin/snk_engined.dll bin/snk_engined.pdb \
 	bin/snk_editor_api.dll bin/snk_editor_api.pdb bin/snk_editor_apid.dll bin/snk_editor_apid.pdb \
 	lib/snk/snk_editor_api.lib lib/snk/snk_editor_apid.lib include/snk/editor/edt_api.h \
 	bin/vcruntime140.dll bin/msvcp140.dll lib/snk/snk_engine.lib lib/snk/snk_engined.lib \
@@ -94,10 +97,25 @@ fi
 if find "${root}" -iname 'snk_model_decoder_selftest*' | grep -q .; then
 	echo "::error::the package holds the decoder's self-test build (snk_model_decoder_selftest)"; status=1
 fi
+# #1054: the editor copies the decoder with exactly the DLLs its .deps names (and the C/C++ runtime) when its AppContainer
+# cannot read bin/: every name there must be a file beside it.
+if [[ ! -f "${root}/bin/snk_model_decoder.deps" ]]; then
+	echo "::error::the package has no bin/snk_model_decoder.deps"; status=1
+else
+	while IFS= read -r dll || [[ -n "${dll}" ]]; do
+		dll="${dll%$'\r'}"
+		[[ -z "${dll}" ]] && continue
+		if [[ ! -f "${root}/bin/${dll}" ]]; then echo "::error::snk_model_decoder.deps names ${dll}, which is not in bin/"; status=1; fi
+	done < "${root}/bin/snk_model_decoder.deps"
+fi
 ls -l "${root}/bin"
 
 # ---- 3. dependencies ----
-bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_model_decoder.exe snk_engine.dll snk_editor_api.dll || status=1
+bash tools/ci/check_windows_deps.sh "${root}/bin" editor.exe snk_model_decoder.exe snk_model_import_assimp.dll snk_engine.dll \
+	snk_editor_api.dll || status=1
+# #1077: the decoder imports no window, GDI, GL, engine or model import DLL directly (not what those DLLs load: #1054).
+bash tools/ci/check_windows_deps.sh --deny user32.dll,gdi32.dll,opengl32.dll,snk_engine.dll,snk_engined.dll,snk_model_import_assimp.dll,snk_model_import_assimpd.dll \
+	"${root}/bin" snk_model_decoder.exe || status=1
 [[ $status -eq 0 ]] || exit 1
 
 # ---- 4. consumer, both engines, both configurations ----

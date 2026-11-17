@@ -13,6 +13,8 @@ target_link_libraries(platform_system PUBLIC snk::api PRIVATE snk::engine_logger
 # plt_beneath.cpp opens below a held folder handle (#414, #484): NtCreateFile.
 if(WIN32)
 	target_link_libraries(platform_system PRIVATE shell32 PRIVATE ntdll)
+	# The model decoder's AppContainer (#1054): DeriveAppContainerSidFromAppContainerName, CreateAppContainerProfile.
+	target_link_libraries(platform_system PRIVATE userenv)
 endif()
 if(WIN32)
 	target_link_libraries(platform_system PRIVATE advapi32)

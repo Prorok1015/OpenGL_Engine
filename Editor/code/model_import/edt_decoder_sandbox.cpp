@@ -23,8 +23,13 @@ edt::decoder_sandbox_status edt::expected_decoder_sandbox(sandbox_mode mode)
 	expected.syscalls = !(::prctl(PR_GET_SECCOMP, 0, 0, 0, 0) < 0 && errno == EINVAL);
 	if (!expected.fs) expected.why = "the kernel has no usable Landlock";
 	else if (!expected.syscalls) expected.why = "the kernel has no seccomp";
+#elif defined(_WIN32)
+	// AppContainers are on every Windows the editor runs on (#1054); a machine's policy can still stop one, which only
+	// the start shows.
+	expected.fs = true;
+	expected.syscalls = true;
 #else
-	expected.why = "this system has no sandbox for the decoder yet (Landlock and seccomp are Linux only)";
+	expected.why = "this system has no sandbox for the decoder yet";
 #endif
 	return expected;
 }

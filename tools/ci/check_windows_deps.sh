@@ -2,9 +2,13 @@
 # Fails when a binary of the Windows package needs a DLL that is neither in the package nor part of Windows (#223).
 #
 #   tools/ci/check_windows_deps.sh [--runtime-elsewhere] <bin dir> <file>...
+#   tools/ci/check_windows_deps.sh --deny <dll>[,<dll>...] <bin dir> <file>...
 #
 # --runtime-elsewhere: the binary is checked where it was built, not in a package (the shipping host `game`, #591,
 # has no package yet), so the MSVC runtime is reported and not required next to it. Everything else is checked alike.
+# --deny: only this: fails when a file imports (or delay-loads) one of the listed DLLs, compared without case. The model
+# decoder must import no window, GDI, GL or engine DLL directly (#1077). Only direct imports are seen: what an imported
+# system DLL loads in turn (shell32 -> user32) is not, so this is no proof for win32k lockdown (#1054).
 #
 # Reads the imports (and delay-load imports) with `dumpbin -dependents` (an MSVC developer shell). A dependency is
 # fine when it sits in <bin dir> next to the binary, or is on the explicit list of Windows DLLs below (API sets
@@ -13,9 +17,13 @@
 set -euo pipefail
 
 runtime_elsewhere=0
+deny=""
 if [[ "${1:-}" == --runtime-elsewhere ]]; then
 	runtime_elsewhere=1
 	shift
+elif [[ "${1:-}" == --deny ]]; then
+	deny="${2:?usage: check_windows_deps.sh --deny <dll>[,<dll>...] <bin dir> <file>...}"
+	shift 2
 fi
 bin="${1:?usage: check_windows_deps.sh [--runtime-elsewhere] <bin dir> <file>...}"
 shift
@@ -25,6 +33,8 @@ shift
 windows_dlls=" kernel32.dll user32.dll gdi32.dll shell32.dll advapi32.dll imm32.dll ws2_32.dll mswsock.dll ntdll.dll "
 # One space-separated line, so " name " matches a whole entry.
 windows_dlls=" $(echo ${windows_dlls}) "
+# The same for the denied DLLs, in lower case.
+denied=" $(echo "${deny,,}" | tr ',' ' ') "
 
 status=0
 for f in "$@"; do
@@ -45,6 +55,15 @@ for f in "$@"; do
 	fi
 	while IFS= read -r dep; do
 		lower="${dep,,}"
+		if [[ -n "$deny" ]]; then
+			if [[ "$denied" == *" ${lower} "* ]]; then
+				echo "::error::${f} imports ${dep}, which it must not load (tools/ci/check_windows_deps.sh --deny)"
+				status=1
+			else
+				echo "  ${dep}"
+			fi
+			continue
+		fi
 		if [[ -f "${bin}/${dep}" ]]; then
 			echo "  ${dep}: in the package"
 		elif [[ "$lower" =~ ^(vcruntime|msvcp|concrt|vccorlib|vcomp) || ( $runtime_elsewhere -eq 1 && "$lower" =~ ^ucrtbase ) ]]; then

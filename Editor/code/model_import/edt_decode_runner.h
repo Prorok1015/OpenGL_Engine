@@ -27,6 +27,12 @@ namespace edt {
 		sandbox_mode sandbox = sandbox_mode::best_effort;
 		// Appended to the child's command line; the process tests use snk_model_decoder's --self-test-* flags.
 		std::vector<std::string> extra_arguments;
+		// Windows (#1054): start the child in its AppContainer, policies and job (platform::process_confinement), with
+		// read and execute for the container on `confine_read_execute` (the folder of a copy of the decoder) besides
+		// read and write on its run folder. process_decoder sets it; ignored elsewhere.
+		bool confine = false;
+		std::vector<std::filesystem::path> confine_read_execute;
+		std::wstring container_name = L"snk.model_decoder";
 	};
 
 	// Reads the child's stderr lines in their order: only the first may be the status.
@@ -54,6 +60,10 @@ namespace edt {
 		bool sandbox_refused = false;
 		// The child process was started (it may still have failed, been killed or answered nothing usable).
 		bool started = false;
+		// The confinement could not be set up (`error` says why): nothing was started.
+		bool confinement_failed = false;
+		// The child's exit code; -1 when it did not end on its own.
+		int exit_code = -1;
 		decoder_sandbox_status sandbox;
 
 		bool ok() const { return bundle.has_value(); }

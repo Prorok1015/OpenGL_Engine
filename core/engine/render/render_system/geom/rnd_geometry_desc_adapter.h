@@ -17,10 +17,6 @@ namespace rnd
 	public:
 		static inline auto INFO = ::res::adapter_info::make<rnd::geometry_desc>({ "desc" });
 
-		// Hashes of the binary file checked at every load; over several roots or beside a staged file they always are.
-		// To be decided by measurement (EPIC-79 section 4, PR3a).
-		static constexpr bool verify_hash_on_load = true;
-
 		geometry_desc_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system);
 
 		// The parent, and the binary file when "vertices" or "indices" is a range: a change of it reloads the geometry.
@@ -32,6 +28,7 @@ namespace rnd
 			const ::res::res_deps& deps) const override;
 		std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag& tag,
 			const std::vector<std::byte>& raw_data) const override;
+		// Throws std::runtime_error: a geometry is written with its binary file by rnd::write_geometry_files (EPIC-79).
 		std::vector<std::byte> serialize(const ::res::tag& tag,
 			const std::shared_ptr<::res::resource_entry>& resource) const override;
 

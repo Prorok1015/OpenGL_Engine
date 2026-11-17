@@ -108,7 +108,10 @@ struct import_fixture : test_util::scene_env
 		const res::tag geometry{ "memory://" + stem + "/" + stem + ".geom.desc" };
 		const res::tag prefab{ "memory://" + stem + "/" + stem + ".prefab.desc" };
 		rs->store(texture, test_util::to_bytes("png bytes"));
-		rs->store(geometry, test_util::to_bytes(R"({"__type":"geometry_desc"})"));
+		// One triangle in JSON arrays, as the decoder answers: the export writes it with its binary file (EPIC-79).
+		std::string geometry_text = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[)";
+		for (int i = 0; i < 36; ++i) geometry_text += i == 0 ? "0" : ",0";
+		rs->store(geometry, test_util::to_bytes(geometry_text + "]}"));
 		rs->store(prefab, test_util::to_bytes(R"({"geometry":")" + std::string(geometry.view()) + R"("})"));
 		imported.all_tags = { texture, geometry, prefab };
 		imported.created_tags = imported.all_tags;
@@ -454,7 +457,7 @@ BOOST_AUTO_TEST_CASE(TheJobsResult_CarriesWhatTheDecoderSaidOfItsSandbox)
 	BOOST_REQUIRE(parked.contains("decoder_sandbox"));
 	const json::object& listed = parked.at("decoder_sandbox").as_object();
 	BOOST_CHECK_EQUAL(std::string(listed.at("fs").as_string()), "none");
-	BOOST_CHECK_EQUAL(std::string(listed.at("syscalls").as_string()), "seccomp");
+	BOOST_CHECK_EQUAL(std::string(listed.at("syscalls").as_string()), std::string(edt::k_decoder_sandbox_syscalls_name));
 	BOOST_CHECK_EQUAL(std::string(listed.at("why").as_string()), "the kernel has no usable Landlock");
 	BOOST_CHECK(std::string(listed.at("warning").as_string()).find("every file") != std::string::npos);
 
@@ -466,7 +469,7 @@ BOOST_AUTO_TEST_CASE(TheJobsResult_CarriesWhatTheDecoderSaidOfItsSandbox)
 	const json::object done = finished(started.job);
 	BOOST_REQUIRE(done.contains("decoder_sandbox"));
 	const json::object& imported = done.at("decoder_sandbox").as_object();
-	BOOST_CHECK_EQUAL(std::string(imported.at("fs").as_string()), "landlock");
+	BOOST_CHECK_EQUAL(std::string(imported.at("fs").as_string()), std::string(edt::k_decoder_sandbox_fs_name));
 	BOOST_CHECK(!imported.contains("warning"));
 	BOOST_CHECK(!imported.contains("why"));
 }
@@ -639,6 +642,7 @@ BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
 
 	BOOST_CHECK(fs::exists(res_root / "models" / "hero.prefab.desc"));
 	BOOST_CHECK(fs::exists(res_root / "models" / "hero.geom.desc"));
+	BOOST_CHECK(fs::exists(res_root / "models" / "hero.geom.bin"));
 	BOOST_CHECK_EQUAL(read_file(res_root / "models" / "textures" / "albedo.png"), "png bytes");
 	// The memory:// references of the prefab point at the project files now.
 	BOOST_CHECK(read_file(res_root / "models" / "hero.prefab.desc").find("res://models/hero.geom.desc") != std::string::npos);
@@ -800,6 +804,9 @@ BOOST_AUTO_TEST_CASE(Job_AWriteRefusedHalfWay_TakesBackWhatWasWritten)
 	BOOST_CHECK(info->status == edt::job_status::failed);
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "textures" / "albedo.png"));
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.geom.desc"));
+	// The binary file staged before the refused desc is taken back too.
+	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.geom.bin.new"));
+	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.geom.bin"));
 	BOOST_CHECK(!fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
 	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }

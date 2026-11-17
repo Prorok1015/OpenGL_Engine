@@ -14,6 +14,13 @@ namespace edt
 		return std::format("'{}' was updated from v{} to v{}: older versions of the editor will not open it", file, from, to);
 	}
 
+	// What a save says when it writes a mesh it found in JSON arrays as the desc and its binary file (EPIC-79, #1068).
+	inline std::string geometry_conversion_text(std::string_view file, std::string_view binary)
+	{
+		return std::format("'{}' was converted to the binary format (EPIC-79): its vertices and indices are in '{}' now; "
+			"older versions of the editor will not open it", file, binary);
+	}
+
 	// A line shown for a few seconds (the menu bar's save notice). Times come from the caller (tests pass their own).
 	class timed_notice
 	{

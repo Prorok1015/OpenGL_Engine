@@ -1,6 +1,11 @@
 #include "edt_mesh_io.h"
+#include "edt_version_notice.h"
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_diagnostics.h>
+#include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <cmath>
 #include <cstdio>
@@ -369,15 +374,40 @@ namespace edt::mesh
 		resource = poly_mesh_to_json(*this);
 	}
 
-	std::string write_geometry_json(const rnd::geometry_desc& geometry, const geometry_file_options& options)
+	bool file_holds_geometry_arrays(res::resource_system& system, const res::tag& file)
 	{
-		json::object object;
-		geometry.serialize(object);
-		object.erase("bounds");
-		if (options.write_parent) {
-			object["__parent"] = "res://base_geometry.desc";
+		if (!system.exists(file)) {
+			return false;
 		}
-		return json::serialize(object);
+		const auto current = system.fetch_data(file);
+		if (!current) {
+			return false;
+		}
+		const std::vector<std::byte>& bytes = current->get();
+		if (current->has_error()) {
+			return false;
+		}
+		boost::system::error_code ec;
+		const json::value parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
+		return !ec && parsed.is_object() && rnd::holds_geometry_arrays(parsed.as_object());
+	}
+
+	std::string write_mesh_geometry(res::resource_system& system, const res::tag& file, const rnd::geometry_desc& geometry,
+		const geometry_file_options& options)
+	{
+		rnd::geometry_file_options written;
+		if (options.write_parent) {
+			written.header["__parent"] = "res://base_geometry.desc";
+		}
+		const bool had_arrays = file_holds_geometry_arrays(system, file);
+		if (std::string problem = rnd::write_geometry_files(system, file, geometry, written); !problem.empty()) {
+			return problem;
+		}
+		if (had_arrays) {
+			const auto binary = res::desc_binary::binary_tag(file);
+			egLOG_WARN("Editor/Save", "{}", geometry_conversion_text(file.view(), binary ? binary->view() : std::string_view{}));
+		}
+		return {};
 	}
 
 	void register_mesh_descs(desc::desc_system& system)

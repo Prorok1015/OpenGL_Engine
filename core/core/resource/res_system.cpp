@@ -6,6 +6,7 @@
 #include <snk/project/prj_code.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_asset_id.h>
+#include <snk/resource/res_desc_binary_hash_cache.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -2649,6 +2650,64 @@ res::tag res::resource_system::engine_file(std::string_view relative) const
 	return tag{ engine_mounted ? tag::engine : tag::default_protocol(), relative };
 }
 
+bool res::resource_system::serves(std::string_view protocol) const
+{
+	return static_cast<bool>(root().resolver_for(protocol));
+}
+
+std::optional<res::disk_file> res::resource_system::disk_file_of(const tag& tag) const
+{
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->disk_file_of(tag);
+}
+
+platform::beneath::read_result res::resource_system::read_now(const tag& tag, std::uint64_t max_bytes,
+	std::vector<std::byte>& out) const
+{
+	ASSERT_MSG(!m_tasks.on_main() || ds::task_system::on_worker(), "read_now('{}') waits: not on the main thread",
+		tag.view());
+	out.clear();
+	platform::beneath::read_result result;
+	const resolver_lease found = root().resolver_for(tag.protocol());
+	if (!found) {
+		result.error = not_mounted_error(tag);
+		return result;
+	}
+	if (const auto* vfs = dynamic_cast<const vfs_resolver*>(found.operator->())) {
+		return vfs->read_beside(tag, tag, max_bytes, out);
+	}
+	const auto data = found->resolve(tag);
+	if (!data) {
+		result.error = std::format("'{}': its resolver gave nothing to read", tag.view());
+		return result;
+	}
+	data->wait();
+	if (data->has_error()) {
+		result.status = found->exists(tag) ? platform::beneath::read_status::failed
+			: platform::beneath::read_status::missing;
+		result.error = data->error_msg;
+		return result;
+	}
+	if (data->data.size() > max_bytes) {
+		result.status = platform::beneath::read_status::too_large;
+		return result;
+	}
+	out = data->data;
+	result.status = platform::beneath::read_status::ok;
+	return result;
+}
+
+std::optional<std::vector<res::tag>> res::resource_system::files_under(std::string_view protocol,
+	std::string_view folder) const
+{
+	const resolver_lease found = root().resolver_for(protocol);
+	const auto* vfs = found ? dynamic_cast<const vfs_resolver*>(found.operator->()) : nullptr;
+	if (!vfs) return std::nullopt;
+	return vfs->files_under(folder);
+}
+
 std::optional<res::disk_file> res::resource_system::disk_file_holding(const tag& tag,
 	const std::vector<std::byte>& bytes, std::string& differs) const
 {
@@ -3268,6 +3327,30 @@ void res::resource_system::warn_on_sync_require(std::vector<std::string> extensi
 	std::lock_guard lock(top.m_sync_warning_mutex);
 	top.m_slow_sync_extensions = std::unordered_set<std::string>(std::make_move_iterator(extensions.begin()), std::make_move_iterator(extensions.end()));
 	top.m_sync_warnings_on.store(!top.m_slow_sync_extensions.empty(), std::memory_order_release);
+}
+
+void res::resource_system::set_desc_binary_hash_cache(std::shared_ptr<desc_binary_hash_cache> cache)
+{
+	resource_system& top = root();
+	std::lock_guard lock(top.m_desc_binary_cache_mutex);
+	top.m_desc_binary_cache = std::move(cache);
+}
+
+std::shared_ptr<res::desc_binary_hash_cache> res::resource_system::desc_binary_hash_cache_ptr() const
+{
+	const resource_system& top = root();
+	std::lock_guard lock(top.m_desc_binary_cache_mutex);
+	return top.m_desc_binary_cache;
+}
+
+void res::resource_system::set_verify_desc_binary_hash(bool verify)
+{
+	root().m_verify_desc_binary_hash.store(verify, std::memory_order_relaxed);
+}
+
+bool res::resource_system::verify_desc_binary_hash() const
+{
+	return root().m_verify_desc_binary_hash.load(std::memory_order_relaxed);
 }
 
 res::tag res::resource_system::resolve_reference(const reference& ref) const

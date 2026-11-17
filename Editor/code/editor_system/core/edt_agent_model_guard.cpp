@@ -1,6 +1,8 @@
 #include "edt_agent_model_guard.h"
 #include <snk/resource/res_system.h>
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#if SNK_HAS_ASSIMP
+#include <snk/model_import/mdl_model_adapter.h>
+#endif
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
@@ -71,7 +73,13 @@ cmd::command_registry::agent_argument_check edt::make_agent_model_check(const re
 {
 	return [&resources](const cmd::command_desc& command, const cmd::call& request) -> std::optional<cmd::result> {
 		if (command.id == k_import_command) return std::nullopt;
-		std::vector<std::string> extensions = resources.registered_extensions(scn::model_importer_adapter::INFO);
+#if SNK_HAS_ASSIMP
+		std::vector<std::string> extensions = resources.registered_extensions(mdl::model_adapter::INFO);
+#else
+		// No model adapter without the importer: nothing would parse a model, nothing is refused.
+		std::vector<std::string> extensions;
+		static_cast<void>(resources);
+#endif
 		for (std::string& ext : extensions) {
 			std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		}

@@ -70,13 +70,22 @@ namespace res
 		// a file paired with another (a desc's binary file, #1068) never comes from a layer the other is not in.
 		::platform::beneath::read_result read_beside(const ::res::tag& anchor, const ::res::tag& tag, std::uint64_t max_bytes,
 			std::vector<std::byte>& out) const;
+		// The stamp of the file read_beside would read, without reading it; nullopt while a store of it is queued, when it
+		// was erased, or when it cannot be opened as read_beside opens it.
+		std::optional<::platform::beneath::file_stamp> stamp_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
 		// Whether the file of `tag` is in the layer read_beside would read it from; nothing is read.
 		bool exists_beside(const ::res::tag& anchor, const ::res::tag& tag) const;
-		// The file resolve() reads `tag` from now, when it holds exactly `bytes`: nullopt while a store of it is queued
-		// or it was erased (those bytes are no file), and when there is no regular file. `differs` says why a file that
-		// is there is not taken: another size, other bytes, or it cannot be read below its root (a link).
+		// The file resolve() opens for `tag` now: the highest layer that has it, the top one when none does (#1086).
+		// nullopt while a store of it is queued or it was erased (those bytes are no file), and when every layer refuses
+		// the tag.
+		std::optional<::res::disk_file> disk_file_of(const ::res::tag& tag) const;
+		// disk_file_of, when that is a regular file holding exactly `bytes`. `differs` says why a file that is there is
+		// not taken: another size, other bytes, or it cannot be read below its root (a link).
 		std::optional<::res::disk_file> disk_file_holding(const ::res::tag& tag, const std::vector<std::byte>& bytes,
 			std::string& differs) const;
+		// The files below `folder` (relative, '/'-separated) in every layer, as resolve() would find them: links are not
+		// followed, a queued store counts, an erased file does not. Sorted, each once.
+		std::vector<::res::tag> files_under(std::string_view folder) const;
 		// How many folders are mounted: with more than one, the layer of a file depends on which of them have it.
 		std::size_t root_count() const;
 		// Whether `anchor` resolves to the top layer of a writable mount: the layer a store of its pair writes to.

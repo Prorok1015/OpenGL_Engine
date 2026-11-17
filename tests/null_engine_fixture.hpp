@@ -25,7 +25,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_system.h>
 #if SNK_HAS_ASSIMP
-#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/model_import/mdl_model_adapter.h>
 #endif
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
@@ -163,9 +163,9 @@ struct null_engine_fixture
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));
 		rs.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(rs), std::ref(descs));
 #if SNK_HAS_ASSIMP
-		rs.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(descs), std::ref(rs));
+		rs.registrate_adapter<mdl::model_adapter>(mdl::model_adapter::INFO, std::ref(descs), std::ref(rs));
 		// Every case loads the same models again; only their parse is shared, each case writes them itself (#977).
-		scn::remember_model_imports(true);
+		mdl::remember_model_imports(true);
 #endif
 		auto& sfactory = storage.construct<ecs::system_factory>();
 
@@ -203,7 +203,7 @@ struct null_engine_fixture
 		set_render_validate(false);
 		auto& rs = storage.require<res::resource_system>();
 #if SNK_HAS_ASSIMP
-		rs.unregistrate_adapter(scn::model_importer_adapter::INFO);
+		rs.unregistrate_adapter(mdl::model_adapter::INFO);
 #endif
 		rs.unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 	}

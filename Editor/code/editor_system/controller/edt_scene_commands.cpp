@@ -40,7 +40,7 @@ namespace {
 	using prefab_node = scn::prefab_desc::prefab_node;
 	using mutable_location = edt::scene_ref::location<prefab_node>;
 
-	constexpr std::string_view inside_instance = "inside a prefab instance only component.set and transform.set work";
+	constexpr std::string_view inside_instance = "inside a prefab instance only component.set and transform.set work: nodes and components are added or removed in the prefab itself";
 
 	json::value parse_schema(std::string_view text)
 	{

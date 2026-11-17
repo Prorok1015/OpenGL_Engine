@@ -1,5 +1,6 @@
 #include "edt_prefab_document.h"
 #include "edt_code_commands.h"
+#include "edt_prefab_file_edit.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
@@ -173,23 +174,7 @@ std::string edt::prefab_document::working_form() const
 
 std::vector<std::byte> edt::prefab_document::working_bytes() const
 {
-	desc::desc_system* descs = m_services.descs();
-	if (!m_working || !descs) {
-		return {};
-	}
-	namespace json = boost::json;
-	json::object body;
-	m_working->serialize(body);
-	descs->reduce_to_parent(*m_working, body);
-	body["__type"] = std::string(scn::prefab_desc::__type);
-	// A __guid the file had stays until the project's migration takes it out; none is made up (the adapter does the same).
-	if (!m_working->get_guid().empty()) {
-		body["__guid"] = m_working->get_guid();
-	}
-	descs->stamp_tree(body);
-	json::value file{ std::move(body) };
-	descs->write_references_over(file, m_source_tag);
-	return descs->serialize_to_bytes(file);
+	return m_working ? prefab_file_bytes(m_services, *m_working, m_source_tag) : std::vector<std::byte>{};
 }
 
 void edt::prefab_document::sync_preview()

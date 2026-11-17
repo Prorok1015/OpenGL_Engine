@@ -11,3 +11,5 @@ snk_component_headers(${PROJECT_NAME})
 
 # rnd_material_desc.h (the material description the compiler takes) is built on the desc system, so it is a public dependency.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PUBLIC snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::drv_validation PRIVATE snk::config_system PRIVATE snk::engine_logger PRIVATE snk::command PRIVATE snk::image)
+# rnd_geometry_files.h includes rnd_geometry_encode.h, whose encoders live in snk_model_codec (#1077).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::model_codec)

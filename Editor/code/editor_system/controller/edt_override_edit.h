@@ -29,6 +29,13 @@ namespace edt::override_edit
 	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
 		const res::tag& file);
 
+	// A record of an instance that changes something the prefab no longer has, for a person: its number among `owner.overrides`
+	// and what is gone (a node or component: scn::find_stale_records; a field the component's schema no longer has).
+	struct stale_record {
+		std::size_t index = 0;
+		std::string what;
+	};
+
 	// A node of an instance as the hierarchy lists it: no children, `has_children` says whether it has some.
 	struct listed_node {
 		prefab_node node;
@@ -55,6 +62,10 @@ namespace edt::override_edit
 		void invalidate();
 		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
 		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
+		// The records of `owner` that find nothing to change in the prefab any more, kept like the others: the node and component
+		// level from scn::find_stale_records, then the field level: a `set` record whose pointer the schema of the component it
+		// sets (as the base content defines it) no longer has (desc::check_override_object: silent). A node that instantiates no prefab has none.
+		std::shared_ptr<const std::vector<stale_record>> stale(const prefab_node& owner);
 
 	private:
 		template<typename T>
@@ -63,7 +74,17 @@ namespace edt::override_edit
 			uint64_t owner_id;
 			std::vector<uint64_t> target;
 			std::shared_ptr<const T> value;
+			// What the owner's prefab was when the value was made (source_of): another one, and the value is made again.
+			// Weak: the cache must not keep a resource block alive (a block still held when the resource system goes is leaked).
+			std::weak_ptr<const void> source;
 		};
+
+		// The block the resource system holds for the prefab `owner` instantiates now: a changed prefab file is another block, while
+		// the handle the owner's component keeps stays the old one. Null when the owner instantiates nothing.
+		std::shared_ptr<const void> source_of(const prefab_node& owner) const;
+		template<typename T>
+		static const entry<T>* find_entry(std::vector<entry<T>>& entries, int world, uint64_t owner_id, std::span<const uint64_t> target,
+			const std::weak_ptr<const void>& source);
 
 		void sync_generation();
 		// The owners are nodes of the active world: its file is theirs (#993).
@@ -74,6 +95,7 @@ namespace edt::override_edit
 		uint64_t m_generation = 0;
 		std::vector<entry<std::optional<prefab_node>>> m_bases;
 		std::vector<entry<std::vector<listed_node>>> m_children;
+		std::vector<entry<std::vector<stale_record>>> m_stale;
 	};
 
 	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.
@@ -121,6 +143,16 @@ namespace edt::override_edit
 	void write_transform(
 		prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,
 		glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
+
+	// Moves the value of `record` into `prefab`, the file content the owner instantiates, the way the owner's record would have
+	// changed it: a `set` of a field of a node the file holds is written into that node (its transform, or the component's own
+	// values); a record below a node that instantiates another prefab, or on a component that node only gets from it, goes to that
+	// node as a record of its own (one level, never into the nested file). Returns the reason it cannot be done (empty: done):
+	// `remove` and `add_node` records, a node or component the file does not have. `prefab` is changed only when it works.
+	std::string fold_record(scn::prefab_desc& prefab, const scn::override_record& record);
+
+	// How many nodes of `worlds` instantiate the prefab `tag` (the level's own nodes, nested instances inside other prefabs excluded).
+	std::size_t count_instances(const std::vector<scn::world_desc>& worlds, const res::tag& tag);
 
 	bool has_record(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component);
 

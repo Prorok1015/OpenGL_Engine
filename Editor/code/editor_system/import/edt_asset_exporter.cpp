@@ -1,7 +1,11 @@
 #include "edt_asset_exporter.h"
 #include "edt_process_decoder.h"
 #include "edt_file_menu.h"
+#include "edt_mesh_io.h"
+#include "edt_version_notice.h"
 #include <snk/desc/desc_pretty_json.h>
+#include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/resource/res_desc_binary.h>
 #include <boost/json.hpp>
 #include <cstring>
 #include <format>
@@ -10,7 +14,7 @@
 namespace json = boost::json;
 
 namespace {
-	// Vertex and index arrays nobody edits by hand: one line, as the importer stores it (#559).
+	// Written with its binary file (EPIC-79), the desc on one line (#559).
 	bool is_geometry_desc(std::string_view path)
 	{
 		return path.ends_with(".geom.desc");
@@ -20,13 +24,6 @@ namespace {
 	std::string folder_prefix(std::string_view target_folder)
 	{
 		return target_folder.empty() ? std::string{} : std::string(target_folder) + "/";
-	}
-
-	std::vector<std::byte> bytes_of(const std::string& text)
-	{
-		std::vector<std::byte> bytes(text.size());
-		std::memcpy(bytes.data(), text.data(), text.size());
-		return bytes;
 	}
 }
 
@@ -138,6 +135,64 @@ std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag
 	return {};
 }
 
+std::string edt::asset_exporter::export_geometry(const res::tag& from, const res::tag& to, const json::object& desc,
+	std::vector<res::tag>* written, bool& wrote) const
+{
+	wrote = false;
+	rnd::geometry_file_options options;
+	options.topology = rnd::topology_of(desc);
+	if (options.topology != rnd::geometry_topology::triangles) {
+		// Lines and points have no binary file: their arrays go as they are, on one line (#559), as before EPIC-79.
+		const std::string text = json::serialize(desc);
+		std::vector<std::byte> bytes(text.size());
+		std::memcpy(bytes.data(), text.data(), text.size());
+		if (unchanged_on_disk(to, bytes)) {
+			return {};
+		}
+		if (!m_res.store_sync(to, bytes)) {
+			return std::format("'{}' could not be written (see the log)", to.view());
+		}
+		if (written) written->push_back(to);
+		wrote = true;
+		return {};
+	}
+
+	rnd::geometry_desc geometry;
+	if (std::string problem = rnd::read_geometry_file(m_res, from, desc, geometry); !problem.empty()) {
+		return std::format("'{}' could not be read: {}", from.view(), problem);
+	}
+	for (const auto& member : desc) {
+		options.header[member.key()] = member.value();
+	}
+	options.bounds = !geometry.bounds.empty();
+	// Refused data (an index past the vertices, a position that is not finite, ...) ends the export, naming the check.
+	const rnd::geometry_files files = rnd::encode_geometry_files(to, geometry, options);
+	if (!files) {
+		return std::format("'{}' cannot be written: {}", to.view(), files.error);
+	}
+	const res::tag binary = *res::desc_binary::binary_tag(to);
+	if (unchanged_on_disk(to, files.desc) && unchanged_on_disk(binary, files.binary)) {
+		return {};
+	}
+
+	// An old project's mesh in JSON arrays is converted at this save (owner decision, #1068).
+	const bool had_arrays = mesh::file_holds_geometry_arrays(m_res, to);
+	// A failed write names what it left (the staged file, or the desc with it), so whoever takes the export back takes
+	// exactly that; a desc never goes without the staged file it needs.
+	if (std::string problem = rnd::write_geometry_files(m_res, to, geometry, options, written); !problem.empty()) {
+		return problem;
+	}
+	if (had_arrays) {
+		egLOG_WARN("Editor/Save", "{}", geometry_conversion_text(to.view(), binary.view()));
+	}
+	if (written) {
+		written->push_back(to);
+		written->push_back(binary);
+	}
+	wrote = true;
+	return {};
+}
+
 bool edt::asset_exporter::unchanged_on_disk(const res::tag& tag, const std::vector<std::byte>& bytes) const
 {
 	if (!m_res.exists(tag)) return false;
@@ -239,6 +294,35 @@ bool edt::asset_exporter::export_to_project(
 		std::vector<std::byte> output_bytes;
 		std::string rel(mem_tag.relative());
 
+		if (is_geometry_desc(rel)) {
+			json::value val;
+			try {
+				json::parse_options opts;
+				opts.max_depth = 128;
+				val = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {}, opts);
+				remap_json_strings(val, remap);
+			} catch (const std::exception& e) {
+				return fail(std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what()));
+			}
+			if (!val.is_object()) {
+				return fail(std::format("'{}' is not a JSON object", mem_tag.view()));
+			}
+			bool wrote = false;
+			if (std::string problem = export_geometry(mem_tag, res_tag, val.as_object(), written, wrote); !problem.empty()) {
+				return fail(std::move(problem));
+			}
+			if (wrote) {
+				++files_written;
+			} else {
+				egLOG_INFO("edt/export", "Unchanged: {}", res_tag.view());
+			}
+			if (progress) progress->done.fetch_add(1);
+			++files_done;
+			if (on_file) on_file(files_done, static_cast<int>(ordered_tags.size()));
+			egLOG_INFO("edt/export", "Exported: {} → {} (with its binary file)", mem_tag.view(), res_tag.view());
+			continue;
+		}
+
 		// If it's a .desc file, parse JSON and remap memory:// references
 		if (rel.find(".desc") != std::string::npos) {
 			std::string json_str(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -247,7 +331,7 @@ bool edt::asset_exporter::export_to_project(
 				opts.max_depth = 128;
 				json::value val = json::parse(json_str, {}, opts);
 				remap_json_strings(val, remap);
-				output_bytes = is_geometry_desc(rel) ? bytes_of(json::serialize(val)) : desc::pretty_json_bytes(val);
+				output_bytes = desc::pretty_json_bytes(val);
 			} catch (const std::exception& e) {
 				// Written as they are, its memory:// references would point at nothing once the editor closes.
 				return fail(std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what()));

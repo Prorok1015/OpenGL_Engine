@@ -1,15 +1,31 @@
 #include "edt_file_dialog.h"
+#include <snk/gui/gui_ui_font.h>
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 
-#define ICON_FA_FOLDER     "[]"     // Folder
-#define ICON_FA_FILE       "-"      // File
-#define ICON_FA_SEARCH     "?"      // Search
-#define ICON_FA_ARROW_LEFT "<"      // Back arrow
+#include <string>
+
+namespace {
+    struct dialog_icons {
+        std::string folder;
+        std::string file;
+        std::string search;
+        std::string back;
+    };
+
+    dialog_icons icons_for_current_font()
+    {
+        if (gui::ui_font_has_icons()) {
+            return {gui::icon::folder, gui::icon::file, gui::icon::search, gui::icon::back};
+        }
+        return {"[]", "-", "?", "<"};
+    }
+}
 
 bool edt::file_dialog::show(const char* title, bool* p_open)
 {
     bool result = false;
+    const dialog_icons icons = icons_for_current_font();
     closed_by_request = false;
 
     // Create title with extension filter info
@@ -61,7 +77,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
         
         // Back button
-        if (ImGui::Button(ICON_FA_ARROW_LEFT "##back")) {
+        if (ImGui::Button((icons.back + "##back").c_str())) {
             if (current_path.has_parent_path()) {
                 current_path = current_path.parent_path();
             }
@@ -88,7 +104,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         // Filter with icon
         ImGui::PushItemWidth(filter_width);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-        ImGui::TextUnformatted(ICON_FA_SEARCH);
+        ImGui::TextUnformatted(icons.search.c_str());
         ImGui::SameLine();
         ImGui::InputTextWithHint("##filter", "Filter...", &filter);
         ImGui::PopStyleVar(2);
@@ -115,7 +131,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
 
                     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.3f, 0.7f, 0.5f));
                     bool is_selected = selected_path == entry.path();
-                    if (ImGui::Selectable((ICON_FA_FOLDER " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
+                    if (ImGui::Selectable((icons.folder + " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
                         selected_path = entry.path();
                     }
                     
@@ -161,7 +177,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
                         continue;
 
                     bool is_selected = selected_path == entry.path();
-                    if (ImGui::Selectable((ICON_FA_FILE " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
+                    if (ImGui::Selectable((icons.file + " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
                         selected_path = entry.path();
                     }
                 }
