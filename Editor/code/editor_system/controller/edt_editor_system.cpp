@@ -96,6 +96,7 @@
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_project.h>
+#include <snk/resource/res_desc_binary_hash_cache.h>
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/project_migration/pmg_assets.h>
@@ -175,6 +176,9 @@ namespace {
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
 	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
+	// A debug setting (EPIC-79 section 7): false skips SHA-256 of a geometry's binary file on a load from one root.
+	CFG_VAR_DEF_BOOL(cfg_verify_desc_binary_hash, "resource/verify_desc_binary_hash", true);
+	constexpr std::chrono::seconds k_desc_binary_cache_write_interval{ 5 };
 
 
 }
@@ -192,6 +196,12 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 
 edt::editor_system::~editor_system()
 {
+	if (m_desc_binary_cache) {
+		m_res.set_desc_binary_hash_cache(nullptr);
+		if (!m_desc_binary_cache_write.done()) m_desc_binary_cache_write.wait();
+		m_desc_binary_cache->flush();
+		m_desc_binary_cache.reset();
+	}
 	if (m_agent) m_agent->shutdown();
 	if (m_import) m_import->shutdown();
 	// The layer may outlive this system: no game layout drawn through it any more.
@@ -531,6 +541,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		asset_ports.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; };
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
+		m_desc_binary_cache = std::make_shared<res::file_desc_binary_hash_cache>(project.root);
+		m_res.set_desc_binary_hash_cache(m_desc_binary_cache);
+		m_desc_binary_cache_written = std::chrono::steady_clock::now();
+	}
+	const bool verify_desc_binary_hash = static_cast<bool>(cfg_verify_desc_binary_hash);
+	m_res.set_verify_desc_binary_hash(verify_desc_binary_hash);
+	if (!verify_desc_binary_hash) {
+		egLOG_WARN("resource/desc_binary", "resource/verify_desc_binary_hash is off (a debug setting): the SHA-256 of binary "
+			"files beside descs is not checked on a load from one root");
 	}
 	m_vcs->install(m_registrations);
 
@@ -609,6 +628,16 @@ void edt::editor_system::tick_asset_problems()
 	if (m_asset_component && m_context) {
 		m_asset_component->tick();
 	}
+}
+
+void edt::editor_system::tick_desc_binary_cache()
+{
+	if (!m_desc_binary_cache || !m_tasks || !m_desc_binary_cache_write.done() || !m_desc_binary_cache->dirty()) return;
+	const auto now = std::chrono::steady_clock::now();
+	if (now - m_desc_binary_cache_written < k_desc_binary_cache_write_interval) return;
+	m_desc_binary_cache_written = now;
+	m_desc_binary_cache_write = m_tasks->run(ds::lane::io, ds::task_desc{ "Write the checked binary files", "resource", false },
+		[cache = m_desc_binary_cache](ds::task_context&) { cache->flush(); });
 }
 
 void edt::editor_system::stop_live_build()

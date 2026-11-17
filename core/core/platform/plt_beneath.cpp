@@ -407,10 +407,40 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 }
 
 namespace {
+	std::int64_t nanoseconds_of(const struct timespec& time)
+	{
+		return static_cast<std::int64_t>(time.tv_sec) * 1'000'000'000 + static_cast<std::int64_t>(time.tv_nsec);
+	}
+
+	platform::beneath::file_stamp stamp_of(const struct stat& information)
+	{
+#if defined(__APPLE__)
+		const struct timespec& written = information.st_mtimespec;
+		const struct timespec& changed = information.st_ctimespec;
+#else
+		const struct timespec& written = information.st_mtim;
+		const struct timespec& changed = information.st_ctim;
+#endif
+		return { static_cast<std::uint64_t>(information.st_size), nanoseconds_of(written), nanoseconds_of(changed),
+			static_cast<std::uint64_t>(information.st_ino), static_cast<std::uint64_t>(information.st_dev) };
+	}
+
+	// The stamp taken at the open, if the same descriptor still shows it and `read_bytes` were read: else the file
+	// changed while it was read.
+	std::optional<platform::beneath::file_stamp> stamp_after_read(int file,
+		const std::optional<platform::beneath::file_stamp>& opened, std::uint64_t read_bytes)
+	{
+		struct stat information;
+		if (!opened || ::fstat(file, &information) != 0 || stamp_of(information) != *opened || read_bytes != opened->size) {
+			return std::nullopt;
+		}
+		return opened;
+	}
+
 	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
-	// `size_out` and `path_out` are set when the result is ok.
+	// `size_out`, `stamp_out` and `path_out` are set when the result is ok.
 	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, fd_holder& file_out,
-		std::uint64_t& size_out, fs::path& path_out)
+		std::uint64_t& size_out, std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
 	{
 		using namespace platform::beneath;
 		const auto parts = folder_parts(request.folder);
@@ -458,6 +488,7 @@ namespace {
 			return { read_status::too_large, {} };
 		}
 		size_out = static_cast<std::uint64_t>(information.st_size);
+		stamp_out = stamp_of(information);
 		path_out = reached / request.leaf;
 		return { read_status::ok, {} };
 	}
@@ -468,9 +499,15 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 	out.clear();
 	fd_holder file;
 	std::uint64_t size = 0;
+	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
+	}
+	if (request.stamp_only) {
+		read_result result{ read_status::ok, {} };
+		result.stamp = stamp;
+		return result;
 	}
 	out.resize(static_cast<std::size_t>(size));
 	std::size_t done = 0;
@@ -489,7 +526,9 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 		done += static_cast<std::size_t>(got);
 	}
 	out.resize(done);
-	return { read_status::ok, {} };
+	read_result result{ read_status::ok, {} };
+	result.stamp = stamp_after_read(file.get(), stamp, done);
+	return result;
 }
 
 platform::beneath::read_result platform::beneath::read_beneath_stream(const read_request& request,
@@ -497,8 +536,9 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 {
 	fd_holder file;
 	std::uint64_t size = 0;
+	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);
@@ -522,7 +562,9 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 			break;
 		}
 	}
-	return { read_status::ok, {} };
+	read_result result{ read_status::ok, {} };
+	result.stamp = stamp_after_read(file.get(), stamp, total);
+	return result;
 }
 
 #else
@@ -1035,10 +1077,45 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 }
 
 namespace {
+	// FILETIME and FILE_BASIC_INFO count 100 ns ticks since 1601-01-01.
+	std::int64_t unix_nanoseconds_of(std::int64_t ticks)
+	{
+		constexpr std::int64_t k_ticks_to_unix_epoch = 116'444'736'000'000'000;
+		return (ticks - k_ticks_to_unix_epoch) * 100;
+	}
+
+	// nullopt when the change time cannot be read: the read goes on without a stamp.
+	std::optional<platform::beneath::file_stamp> stamp_of(HANDLE file, const BY_HANDLE_FILE_INFORMATION& information)
+	{
+		FILE_BASIC_INFO basic{};
+		if (!::GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic))) {
+			return std::nullopt;
+		}
+		const std::int64_t written = static_cast<std::int64_t>(
+			(static_cast<std::uint64_t>(information.ftLastWriteTime.dwHighDateTime) << 32) | information.ftLastWriteTime.dwLowDateTime);
+		return platform::beneath::file_stamp{ (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow,
+			unix_nanoseconds_of(written), unix_nanoseconds_of(basic.ChangeTime.QuadPart),
+			(static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow,
+			static_cast<std::uint64_t>(information.dwVolumeSerialNumber) };
+	}
+
+	// The stamp taken at the open, if the same handle still shows it and `read_bytes` were read: else the file changed
+	// while it was read.
+	std::optional<platform::beneath::file_stamp> stamp_after_read(HANDLE file,
+		const std::optional<platform::beneath::file_stamp>& opened, std::uint64_t read_bytes)
+	{
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!opened || read_bytes != opened->size || !::GetFileInformationByHandle(file, &information)
+			|| stamp_of(file, information) != opened) {
+			return std::nullopt;
+		}
+		return opened;
+	}
+
 	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
-	// `size_out` and `path_out` are set when the result is ok.
+	// `size_out`, `stamp_out` and `path_out` are set when the result is ok.
 	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, handle_holder& file_out,
-		std::uint64_t& size_out, fs::path& path_out)
+		std::uint64_t& size_out, std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
 	{
 		using namespace platform::beneath;
 		const auto parts = folder_parts(request.folder);
@@ -1115,6 +1192,7 @@ namespace {
 			return { read_status::too_large, {} };
 		}
 		size_out = size;
+		stamp_out = stamp_of(file_out.get(), information);
 		path_out = path;
 		return { read_status::ok, {} };
 	}
@@ -1125,9 +1203,15 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 	out.clear();
 	handle_holder file;
 	std::uint64_t size = 0;
+	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
+	}
+	if (request.stamp_only) {
+		read_result result{ read_status::ok, {} };
+		result.stamp = stamp;
+		return result;
 	}
 	out.resize(static_cast<std::size_t>(size));
 	std::size_t done = 0;
@@ -1144,7 +1228,9 @@ platform::beneath::read_result platform::beneath::read_beneath(const read_reques
 		done += got;
 	}
 	out.resize(done);
-	return { read_status::ok, {} };
+	read_result result{ read_status::ok, {} };
+	result.stamp = stamp_after_read(file.get(), stamp, done);
+	return result;
 }
 
 platform::beneath::read_result platform::beneath::read_beneath_stream(const read_request& request,
@@ -1152,8 +1238,9 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 {
 	handle_holder file;
 	std::uint64_t size = 0;
+	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);
@@ -1174,7 +1261,9 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 			break;
 		}
 	}
-	return { read_status::ok, {} };
+	read_result result{ read_status::ok, {} };
+	result.stamp = stamp_after_read(file.get(), stamp, total);
+	return result;
 }
 
 #endif

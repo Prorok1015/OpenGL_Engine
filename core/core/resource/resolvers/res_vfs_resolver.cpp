@@ -7,6 +7,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <cctype>
 #include <format>
+#include <limits>
 #include <random>
 #include <set>
 #include <shared_mutex>
@@ -779,6 +780,35 @@ platform::beneath::read_result res::vfs_resolver::read_beside(const tag& anchor,
 	request.leaf = relative.filename();
 	request.max_bytes = max_bytes;
 	return platform::beneath::read_beneath(request, out);
+}
+
+std::optional<platform::beneath::file_stamp> res::vfs_resolver::stamp_beside(const tag& anchor, const tag& tag) const
+{
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_erased.contains(tag) || m_pending_writes.contains(tag)) {
+			return std::nullopt;
+		}
+	}
+	std::string error;
+	auto layer = beside_layer(anchor, error);
+	if (!layer.has_value()) {
+		return std::nullopt;
+	}
+	const auto path = safe_path(*layer, tag);
+	if (!path.has_value()) {
+		return std::nullopt;
+	}
+	const fs::path relative = path->lexically_relative(*layer);
+	platform::beneath::read_request request;
+	request.root = std::move(*layer);
+	request.folder = relative.parent_path();
+	request.leaf = relative.filename();
+	request.max_bytes = std::numeric_limits<std::uint64_t>::max();
+	request.stamp_only = true;
+	std::vector<std::byte> unused;
+	const platform::beneath::read_result result = platform::beneath::read_beneath(request, unused);
+	return result.status == platform::beneath::read_status::ok ? result.stamp : std::nullopt;
 }
 
 bool res::vfs_resolver::exists_beside(const tag& anchor, const tag& tag) const

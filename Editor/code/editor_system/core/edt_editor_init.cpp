@@ -60,7 +60,10 @@ namespace components {
 			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_repository_watcher();
 		});
 		stages.add_stage("editor_assets", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
-			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_asset_problems();
+			if (!c.storage.has_value<edt::editor_system>()) return;
+			auto& editor = c.storage.require<edt::editor_system>();
+			editor.tick_asset_problems();
+			editor.tick_desc_binary_cache();
 		});
 		auto redirector = std::make_shared<edt::camera_redirector>();
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
