@@ -56,8 +56,31 @@ std::optional<gui::theme_style> gui::theme_style_of(const theme_desc& preset, st
 		problem = "font is empty";
 		return std::nullopt;
 	}
+	const std::pair<const char*, const glm::vec3*> semantic_colors[] = {
+		{ "error", &preset.error }, { "warning", &preset.warning }, { "success", &preset.success },
+		{ "info", &preset.info }, { "text_secondary", &preset.text_secondary }, { "agent", &preset.agent },
+		{ "diff_added", &preset.diff_added }, { "diff_removed", &preset.diff_removed },
+		{ "diff_hunk", &preset.diff_hunk }, { "backdrop", &preset.backdrop },
+	};
+	for (const auto& [name, color] : semantic_colors) {
+		if (!unit_color(*color)) {
+			problem = std::format("color {} is not three numbers in 0..1", name);
+			return std::nullopt;
+		}
+	}
 	theme_style style;
 	style.font_px = preset.font_size;
+	theme_semantic_colors& s = style.palette.semantic;
+	s.error = color_of(preset.error);
+	s.warning = color_of(preset.warning);
+	s.success = color_of(preset.success);
+	s.info = color_of(preset.info);
+	s.text_secondary = color_of(preset.text_secondary);
+	s.agent = color_of(preset.agent);
+	s.diff_added = color_of(preset.diff_added);
+	s.diff_removed = color_of(preset.diff_removed);
+	s.diff_hunk = color_of(preset.diff_hunk);
+	s.backdrop = color_of(preset.backdrop);
 	style.imgui_dark = preset.base == theme_base::imgui_dark;
 	if (style.imgui_dark) {
 		return style;
@@ -248,6 +271,7 @@ bool gui::theme_service::start(const theme_desc& preset, std::string& problem)
 	const font_key key{ m_text_font_tag, m_style.font_px, m_wants_icons };
 	if (m_applied_fonts && *m_applied_fonts == key) {
 		m_stage = stage::idle;
+		m_applied = m_style;
 		m_apply(theme{ m_style, {}, {}, {}, false });
 		return true;
 	}
@@ -293,6 +317,7 @@ void gui::theme_service::poll_fonts()
 	drop_loads();
 	m_stage = stage::idle;
 	m_applied_fonts = font_key{ m_text_font_tag, m_style.font_px, m_wants_icons };
+	m_applied = m_style;
 	m_apply(theme{ m_style, std::move(text), std::move(fallback), std::move(icons), true });
 }
 

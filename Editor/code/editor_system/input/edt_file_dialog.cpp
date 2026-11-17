@@ -1,5 +1,7 @@
 #include "edt_file_dialog.h"
+#include <snk/gui/gui_theme.h>
 #include <snk/gui/gui_ui_font.h>
+#include "edt_ui_colors.h"
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 
@@ -22,7 +24,7 @@ namespace {
     }
 }
 
-bool edt::file_dialog::show(const char* title, bool* p_open)
+bool edt::file_dialog::show(const char* title, bool* p_open, const gui::theme_semantic_colors& colors)
 {
     bool result = false;
     const dialog_icons icons = icons_for_current_font();
@@ -129,7 +131,6 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
                     if (!filter.empty() && lower_filename.find(lower_filter) == std::string::npos)
                         continue;
 
-                    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.3f, 0.7f, 0.5f));
                     bool is_selected = selected_path == entry.path();
                     if (ImGui::Selectable((icons.folder + " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
                         selected_path = entry.path();
@@ -140,8 +141,6 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
                         current_path = entry.path();
                         selected_path.clear(); // Clear selected path when entering directory
                     }
-                    
-                    ImGui::PopStyleColor();
                 }
             }
 
@@ -220,15 +219,16 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
 
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
 
-        // If button is not active, make it gray
+        // A button that cannot be pressed keeps the style's plain button colour, hovered or not.
         if (!can_accept) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            const ImVec4 plain = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+            ImGui::PushStyleColor(ImGuiCol_Button, plain);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, plain);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, plain);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.4f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.45f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, shade(colors.success, 0.6f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, shade(colors.success, 0.75f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, shade(colors.success, 0.5f));
         }
 
         if (ImGui::Button("OK", ImVec2(button_width, 30)) && can_accept) {
@@ -240,9 +240,9 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         
         ImGui::SameLine();
         
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, shade(colors.error, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, shade(colors.error, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, shade(colors.error, 0.45f));
         if (ImGui::Button("Cancel", ImVec2(button_width, 30))) {
             selected_path.clear();
             *p_open = false;

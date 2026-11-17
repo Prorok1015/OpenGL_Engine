@@ -697,7 +697,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	// The start level of --game (#518). Also off once its load's implicit callback is gone, so the screen never outlives it.
 	editor_layer->set_loading_screen(
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
-		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label())); });
+		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label()), m_context->colors()); });
 	// The Input Actions panel waiting for a key is a modal too: Ctrl+S and the rest must not fire under the player's key (#470).
 	editor_layer->set_modal_probe([this] {
 		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
@@ -725,7 +725,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		m_file_menu->draw_status();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
-				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", held->c_str());
+				ImGui::TextColored(m_context->colors().warning, "%s", held->c_str());
 			}
 		}
 		m_live->draw_status();

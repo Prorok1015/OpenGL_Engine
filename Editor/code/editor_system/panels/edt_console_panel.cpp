@@ -1,4 +1,5 @@
 #include "edt_console_panel.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
 
@@ -59,9 +60,9 @@ namespace edt
 
 			ImVec4 color;
 			switch (entry.level) {
-				case log_level::info:    color = {1.f, 1.f, 1.f, 1.f}; break;
-				case log_level::warning: color = {1.f, 0.8f, 0.f, 1.f}; break;
-				case log_level::error:   color = {1.f, 0.3f, 0.3f, 1.f}; break;
+				case log_level::info:    color = ImGui::GetStyleColorVec4(ImGuiCol_Text); break;
+				case log_level::warning: color = colors().warning; break;
+				case log_level::error:   color = colors().error; break;
 			}
 			ImGui::TextColored(color, "%s", entry.message.c_str());
 		}

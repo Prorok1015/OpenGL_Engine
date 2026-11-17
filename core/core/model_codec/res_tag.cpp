@@ -1,6 +1,6 @@
-#include <snk/resource/res_tag_json.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 
 const res::tag res::tag::null{};
 

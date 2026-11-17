@@ -2,6 +2,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
+#include <snk/gui/gui_theme.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <imgui.h>
 #include <utility>
@@ -128,7 +129,7 @@ namespace edt
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
 		// The letterbox bars of a game are black, not the editor's window colour.
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 1.f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, colors().backdrop);
 		const bool shown = ImGui::Begin("##game_mode_view", nullptr, flags);
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar(3);

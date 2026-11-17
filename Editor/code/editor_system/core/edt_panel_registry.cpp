@@ -41,6 +41,7 @@ edt::registration edt::panel_registry::add_entry(panel_desc desc, callback_gate*
 	}
 
 	desc.panel->set_open(desc.open_by_default);
+	desc.panel->set_colors(m_colors);
 	auto added = std::make_shared<entry>();
 	added->key = m_next_key++;
 	added->desc = std::move(desc);
@@ -52,7 +53,21 @@ edt::registration edt::panel_registry::add_entry(panel_desc desc, callback_gate*
 
 void edt::panel_registry::remove(std::uint64_t key)
 {
-	std::erase_if(m_entries, [key](const std::shared_ptr<entry>& e) { return e->key == key; });
+	std::erase_if(m_entries, [key](const std::shared_ptr<entry>& e) {
+		if (e->key != key) {
+			return false;
+		}
+		e->desc.panel->set_colors(nullptr);
+		return true;
+	});
+}
+
+void edt::panel_registry::set_colors(const gui::theme_semantic_colors* colors)
+{
+	m_colors = colors;
+	for (const std::shared_ptr<entry>& e : m_entries) {
+		e->desc.panel->set_colors(colors);
+	}
 }
 
 bool edt::panel_registry::contains(std::string_view id) const

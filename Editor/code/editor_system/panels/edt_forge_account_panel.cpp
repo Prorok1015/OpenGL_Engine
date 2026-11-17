@@ -1,4 +1,5 @@
 #include "edt_forge_account_panel.h"
+#include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 // imgui_internal.h only forward-declares ImStb::STB_TexteditState; the undo stack is read and wiped here, as imgui_widgets.cpp includes it.
@@ -12,8 +13,6 @@ namespace ImStb
 #include <utility>
 
 namespace {
-	const ImVec4 k_error{ 1.0f, 0.45f, 0.40f, 1.0f };
-	const ImVec4 k_ok{ 0.45f, 0.80f, 0.45f, 1.0f };
 
 	void wipe_vector(ImVector<char>& vector)
 	{
@@ -145,7 +144,7 @@ void edt::forge_account_panel::on_render()
 
 	if (!m_model.message().empty()) {
 		ImGui::Separator();
-		ImGui::PushStyleColor(ImGuiCol_Text, m_model.message_is_error() ? k_error : k_ok);
+		ImGui::PushStyleColor(ImGuiCol_Text, m_model.message_is_error() ? colors().error : colors().success);
 		ImGui::PushTextWrapPos(0.0f);
 		ImGui::TextUnformatted(m_model.message().c_str());
 		ImGui::PopTextWrapPos();

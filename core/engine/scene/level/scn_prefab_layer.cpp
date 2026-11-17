@@ -182,9 +182,14 @@ namespace scn {
 			// An edit of a record the base has (the editor puts a changed value in the slot of the same field) is a record added
 			// after it: the canonical form keeps the later one of a field. A record the target no longer has, with no later one for
 			// its field, cannot be said by a layer.
-			const auto same_field = [] (const json::value& one, const json::value& other) {
+			const auto is_assignment = [] (const json::object& record) {
+				const auto* op = record.if_contains("op");
+				return !op || (op->is_string() && op->as_string() == "set");
+			};
+			const auto same_field = [&] (const json::value& one, const json::value& other) {
 				const json::object& a = one.as_object();
 				const json::object& b = other.as_object();
+				if (!is_assignment(a) || !is_assignment(b)) return false;
 				for (const std::string_view key : { "target", "op", "component", "path" }) {
 					const auto* left = a.if_contains(key);
 					const auto* right = b.if_contains(key);

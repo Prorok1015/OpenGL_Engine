@@ -2,6 +2,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
 #include "edt_file_dialog.h"
+#include <snk/gui/gui_theme.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <snk/common/logger/engine_log.h>
@@ -23,7 +24,7 @@ struct edt::dialog_service::request
 	// Answers from `answer` when it covers this dialog; true if it did.
 	virtual bool answer_automatically(const dialog_auto_answer& answer) = 0;
 	// Draws one frame; true while the dialog stays open.
-	virtual bool draw() = 0;
+	virtual bool draw(const gui::theme_semantic_colors& colors) = 0;
 
 	// What the dialog is, for dialog_service::list().
 	virtual const char* kind() const = 0;
@@ -122,7 +123,7 @@ public:
 		return false;
 	}
 
-	bool draw() override
+	bool draw(const gui::theme_semantic_colors& /*colors*/) override
 	{
 		const std::string label = popup_label("Unsaved Changes");
 
@@ -224,7 +225,7 @@ public:
 		return answer.cancel_all;
 	}
 
-	bool draw() override
+	bool draw(const gui::theme_semantic_colors& /*colors*/) override
 	{
 		const std::string label = popup_label(m_prompt.title.c_str());
 
@@ -326,13 +327,13 @@ public:
 		return answer.cancel_all;
 	}
 
-	bool draw() override
+	bool draw(const gui::theme_semantic_colors& colors) override
 	{
 		bool is_open = true;
 		// Answered from outside (dialog_service::answer): the dialog closes itself inside its popup, as on OK or Cancel.
 		if (m_answer) m_dialog.request_close();
 		// Whatever the user did in this frame (OK, Cancel, Esc) wins over the answer.
-		if (m_dialog.show(m_options.title.c_str(), &is_open)) {
+		if (m_dialog.show(m_options.title.c_str(), &is_open, colors)) {
 			if (m_on_pick) m_on_pick(m_dialog.get_selected_path());
 			return false;
 		}
@@ -382,7 +383,7 @@ public:
 	// Nothing to answer: any auto answer simply acknowledges it.
 	bool answer_automatically(const edt::dialog_auto_answer&) override { return true; }
 
-	bool draw() override
+	bool draw(const gui::theme_semantic_colors& /*colors*/) override
 	{
 		const std::string label = popup_label(level_title());
 
@@ -450,7 +451,7 @@ public:
 		return true;
 	}
 
-	bool draw() override
+	bool draw(const gui::theme_semantic_colors& /*colors*/) override
 	{
 		const std::string label = popup_label(m_title.c_str());
 
@@ -655,7 +656,8 @@ bool edt::dialog_service::update()
 	bool open = false;
 	if (!answered) {
 		front.drawn = true;
-		open = front.draw();
+		static const gui::theme_semantic_colors defaults;
+		open = front.draw(m_colors ? *m_colors : defaults);
 	}
 	if (!open) {
 		const auto done = std::find_if(m_queue.begin(), m_queue.end(),
