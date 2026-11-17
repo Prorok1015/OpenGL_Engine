@@ -2,7 +2,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <array>
 #include <string_view>

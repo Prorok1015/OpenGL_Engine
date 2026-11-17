@@ -7,7 +7,7 @@
 #include <snk/gui/gui_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/gui/gui_theme.h>
 #include <cfloat>
 #include <imgui.h>

@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 #include <snk/resource/res_path_sanitize.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace res
 {

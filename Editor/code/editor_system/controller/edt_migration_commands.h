@@ -3,7 +3,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
 #include <snk/project_migration/pmg_apply.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>

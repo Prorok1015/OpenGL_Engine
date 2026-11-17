@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/ecs/ecs_system.h>
 #include <vector>
 #include <snk/common/snk_api.h>

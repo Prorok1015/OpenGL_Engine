@@ -7,7 +7,7 @@
 #include <snk/mcp/mcp_host.h>
 #include <snk/editor/edt_document.h>
 #include <snk/mcp/mcp_stdio.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/command/cmd_types.h>
 #include <snk/common/logger/engine_log_sinks.h>

@@ -4,7 +4,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_registration.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_start_level.h>

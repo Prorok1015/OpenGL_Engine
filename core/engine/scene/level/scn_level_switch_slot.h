@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_scene_switch.h>

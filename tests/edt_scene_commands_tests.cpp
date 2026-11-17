@@ -17,7 +17,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_level_desc.h>

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <format>
 #include <sstream>
 

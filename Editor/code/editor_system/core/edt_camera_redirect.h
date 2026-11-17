@@ -5,7 +5,7 @@
 #include <vector>
 #include <entt/fwd.hpp>
 #include <snk/scene/level/scn_context_manager.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace edt
 {

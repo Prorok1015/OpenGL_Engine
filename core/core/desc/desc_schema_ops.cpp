@@ -3,7 +3,7 @@
 #include <snk/desc/desc_json_ops.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>

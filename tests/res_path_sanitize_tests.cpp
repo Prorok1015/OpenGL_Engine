@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/resource/res_path_sanitize.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include "test_temp_dir.hpp"
 
 BOOST_AUTO_TEST_SUITE(ResPathSanitizeTests)

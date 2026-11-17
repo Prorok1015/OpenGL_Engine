@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/gui/gui_theme_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/resource/resources/res_resource_text.h>
 

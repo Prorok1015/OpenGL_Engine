@@ -15,11 +15,11 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_pretty_json.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 
 namespace fs = std::filesystem;
 namespace json = boost::json;

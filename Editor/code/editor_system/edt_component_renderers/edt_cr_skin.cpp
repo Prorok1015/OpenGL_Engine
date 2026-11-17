@@ -2,8 +2,8 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_skinning_desc.h>
 #include <snk/scene/scn_bone_desc.h>
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_reference.h>
 #include <imgui.h>
 #include <optional>
 #include <string>

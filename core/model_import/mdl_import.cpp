@@ -10,13 +10,13 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_pretty_json.h>
-#include <snk/render/geom/rnd_geometry_encode.h>
+#include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_image_format.h>
 #include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_path_sanitize.h>
-#include <snk/resource/res_tag_json.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/res_tag_json.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/scene/scn_import_vertex_layout.h>
 
 #include <glm/gtc/quaternion.hpp>

@@ -2,8 +2,8 @@
 #include <boost/json.hpp>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/render/rnd_state_helper.h>
-#include <snk/resource/res_tag_json.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/res_tag_json.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 
 namespace json = boost::json;
 

@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/snk_api.h>
 
 namespace scn {

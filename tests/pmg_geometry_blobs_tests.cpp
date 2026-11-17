@@ -7,7 +7,7 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/render/rnd_render_service_init.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>

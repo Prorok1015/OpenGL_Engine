@@ -4,7 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/snk_api.h>
 

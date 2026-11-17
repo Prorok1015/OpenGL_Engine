@@ -3,7 +3,7 @@
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/driver/rnd_render_mode.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <array>
 #include <format>
 #include <string>

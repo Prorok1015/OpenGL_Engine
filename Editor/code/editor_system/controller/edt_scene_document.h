@@ -4,7 +4,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_document.h>
 #include "edt_document_history.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <cstdint>
 #include <functional>

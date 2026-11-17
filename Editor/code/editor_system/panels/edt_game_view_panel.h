@@ -2,7 +2,7 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <entt/fwd.hpp>
 #include <snk/editor/edt_panel_base.h>
 #include "edt_game_view_logic.h"

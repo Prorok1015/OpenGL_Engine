@@ -2,7 +2,7 @@
 #include <format>
 #include <snk/desc/desc_schema_ops.h>
 #include "edt_reference.h"
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
