@@ -52,8 +52,9 @@ namespace edt {
 	bool write_bundle(const std::filesystem::path& file, const decode_bundle& bundle, std::string& error);
 
 	// Who may have made the folder the bundle lies in. The other process's run folder may itself be a link or a junction
-	// it made (#1099): it is entered below what holds it, never through a link. A folder of this process is taken as
-	// it resolves (a confined decoder may not open what holds its run folder).
+	// it made (#1099): it is entered below what holds it, never through a link, so a bundle whose own folder is a link
+	// is refused even when the link is harmless (a symlinked TMPDIR as the bundle's direct folder). A folder of this
+	// process is taken as it resolves (a confined decoder may not open what holds its run folder).
 	enum class bundle_folder { written_by_peer, own };
 
 	// Reads the file under `limits`. Nothing is returned for a file that is truncated, has bytes after the end, a

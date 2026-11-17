@@ -58,5 +58,12 @@ add_library(snk_model_import_core STATIC mdl_assimp_io.cpp mdl_assimp_io.h mdl_i
 add_library(snk::model_import_core ALIAS snk_model_import_core)
 target_include_directories(snk_model_import_core PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 	PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# The decoder links no engine but reads declarations of resource, desc, render and scene (types and inline code only, the
+# code it calls is in snk_model_codec): their include directories, not their libraries (#1161).
+target_include_directories(snk_model_import_core PUBLIC
+	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/core/resource/include>"
+	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/core/desc/include>"
+	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/engine/render/render_system/include>"
+	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/engine/scene/include>")
 target_link_libraries(snk_model_import_core PUBLIC snk::model_codec PUBLIC snk::common PRIVATE snk::engine_logger PRIVATE assimp
 	PRIVATE $<BUILD_LOCAL_INTERFACE:snk::sanitizers>)

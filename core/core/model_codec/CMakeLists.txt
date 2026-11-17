@@ -15,13 +15,7 @@ add_library(snk_model_codec STATIC
 add_library(snk::model_codec ALIAS snk_model_codec)
 set_property(TARGET snk_model_codec PROPERTY EXPORT_NAME model_codec)
 
-# The headers stay with the components that declare them: the include directories of those components, without their
-# code (only the headers named in the sources and the header-only ones the import includes are used from them).
-target_include_directories(snk_model_codec PUBLIC
-	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/core/resource/include>"
-	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/core/desc/include>"
-	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/engine/render/render_system/include>"
-	"$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/engine/scene/include>")
+snk_component_headers(snk_model_codec)
 
 # drv_interface: BufferLayout (header-only) of the geometry.
 target_link_libraries(snk_model_codec PUBLIC snk::common PUBLIC snk::drv_interface PUBLIC Boost::json PRIVATE snk::engine_logger)
