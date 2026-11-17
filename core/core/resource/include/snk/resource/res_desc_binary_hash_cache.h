@@ -54,14 +54,16 @@ namespace res
 		// Relative to the project root.
 		static std::filesystem::path file_path();
 
-		explicit file_desc_binary_hash_cache(std::filesystem::path project_root, std::uint64_t file_limit = max_file_bytes);
+		// The limits are for tests; the editor uses the defaults.
+		explicit file_desc_binary_hash_cache(std::filesystem::path project_root, std::uint64_t file_limit = max_file_bytes,
+			std::size_t entry_limit = max_entries);
 		// Flushes; never throws.
 		~file_desc_binary_hash_cache() override;
 		file_desc_binary_hash_cache(const file_desc_binary_hash_cache&) = delete;
 		file_desc_binary_hash_cache& operator=(const file_desc_binary_hash_cache&) = delete;
 
 		bool verified(const desc_binary_pair_key& key) const override;
-		// A binary file keeps one entry, its latest; past max_entries the oldest go.
+		// A binary file keeps one entry, its latest; past the entry limit the oldest go.
 		void remember(const desc_binary_pair_key& key) override;
 
 		// Writes the file when something changed since the last write, without following a link. False (logged) when
@@ -74,6 +76,7 @@ namespace res
 		void load(std::uint64_t file_limit);
 
 		std::filesystem::path m_project_root;
+		std::size_t m_entry_limit = max_entries;
 		mutable std::mutex m_mutex;
 		// Oldest first.
 		std::list<desc_binary_pair_key> m_entries;

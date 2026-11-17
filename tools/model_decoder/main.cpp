@@ -171,6 +171,12 @@ struct arguments
 	// Plant a link in the run folder that points at this folder (a symlink; Windows: a junction): the editor must remove
 	// the run folder without going through it (#1054). Exit 5: planted, 0: refused.
 	fs::path self_test_link_out;
+	// Turn the run folder itself into a link to this folder (Windows: a junction, after emptying it), then exit 0 so
+	// the editor goes on to read and remove it: neither may go through the link (#1099).
+	fs::path self_test_link_self;
+	// Hard-link this file (outside the run folder) into the run folder: a link would give it the file's contents and a
+	// way to write them (#1099). Exit 5: linked, 0: refused.
+	fs::path self_test_hardlink;
 	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork.
 	std::string self_test_call;
 	fs::path self_test_path;
@@ -241,6 +247,10 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 			parsed.self_test_extra_thread = true;
 		} else if (arg == "--self-test-link-out" && has_value) {
 			parsed.self_test_link_out = args[++i];
+		} else if (arg == "--self-test-link-self" && has_value) {
+			parsed.self_test_link_self = args[++i];
+		} else if (arg == "--self-test-hardlink" && has_value) {
+			parsed.self_test_hardlink = args[++i];
 		} else if (arg == "--self-test-call" && has_value) {
 			parsed.self_test_call = args[++i].string();
 		} else if (arg == "--self-test-path" && has_value) {
@@ -254,7 +264,7 @@ std::optional<arguments> parse_arguments(const std::vector<fs::path>& args)
 	if (parsed.self_test_sleep_ms != 0 || parsed.self_test_alloc_bytes != 0 || !parsed.self_test_spawn_pid_file.empty()
 		|| !parsed.self_test_open.empty() || parsed.self_test_connect || parsed.self_test_exec || parsed.self_test_sandbox_report
 		|| parsed.self_test_signal || parsed.self_test_extra_thread || !parsed.self_test_link_out.empty()
-		|| !parsed.self_test_call.empty()) {
+		|| !parsed.self_test_call.empty() || !parsed.self_test_link_self.empty() || !parsed.self_test_hardlink.empty()) {
 		return parsed;
 	}
 #endif
@@ -315,11 +325,10 @@ boost::json::object failure_manifest(const char* kind, const std::string& error)
 
 #if defined(SNK_MODEL_DECODER_SELF_TEST) && defined(_WIN32)
 // A junction ./escape -> `target` (a mount point reparse point, which any user may set on an empty folder of theirs).
-bool plant_junction(const fs::path& target)
+bool make_junction(const wchar_t* folder_name, const fs::path& target)
 {
-	if (!CreateDirectoryW(L"escape", nullptr)) return false;
-	const HANDLE folder = CreateFileW(L"escape", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	const HANDLE folder = CreateFileW(folder_name, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+		OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (folder == INVALID_HANDLE_VALUE) return false;
 	const std::wstring substitute = L"\\??\\" + fs::absolute(target).wstring();
 	const auto name_bytes = static_cast<WORD>(substitute.size() * sizeof(wchar_t));
@@ -341,6 +350,29 @@ bool plant_junction(const fs::path& target)
 	CloseHandle(folder);
 	SetLastError(error);
 	return set != FALSE;
+}
+
+bool plant_junction(const fs::path& target)
+{
+	return CreateDirectoryW(L"escape", nullptr) && make_junction(L"escape", target);
+}
+
+// The run folder (this process's working directory) emptied and made a junction to `target`.
+bool turn_run_folder_into_junction(const fs::path& target)
+{
+	std::error_code ec;
+	for (fs::directory_iterator it{ fs::current_path(), ec }, end; !ec && it != end; it.increment(ec)) {
+		std::error_code ignored;
+		fs::remove_all(it->path(), ignored);
+	}
+	const fs::path folder = fs::current_path(ec);
+	if (ec || !make_junction(L".", target)) return false;
+	// Written by the folder's full path, which now leads through the junction into `target` (a name relative to the
+	// working directory would be opened from its handle, not through the junction): the test sees the folder became one.
+	const HANDLE marker = CreateFileW((folder / "link_made").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+		nullptr);
+	if (marker != INVALID_HANDLE_VALUE) CloseHandle(marker);
+	return true;
 }
 #endif
 
@@ -424,6 +456,11 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 	if (!args.self_test_link_out.empty()) {
 		return ::symlink(args.self_test_link_out.c_str(), "escape") == 0 ? 5 : refused(errno);
 	}
+	if (!args.self_test_hardlink.empty()) {
+		if (::link(args.self_test_hardlink.c_str(), "escape_link") == 0) return 5;
+		// Landlock refuses a link between hierarchies it does not both allow with EXDEV.
+		return errno == EXDEV ? 0 : refused(errno);
+	}
 	if (args.self_test_signal) {
 		const pid_t parent = ::getppid();
 		const int directory = ::open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -467,6 +504,17 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 	if (!args.self_test_link_out.empty()) {
 		return plant_junction(args.self_test_link_out) ? 5 : refused(GetLastError());
 	}
+	if (!args.self_test_link_self.empty()) {
+		if (turn_run_folder_into_junction(args.self_test_link_self)) {
+			std::fputs("link-self: made\n", stderr);
+		} else {
+			std::fprintf(stderr, "link-self: refused: %lu\n", GetLastError());
+		}
+		return 0;
+	}
+	if (!args.self_test_hardlink.empty()) {
+		return CreateHardLinkW(L"escape_link", args.self_test_hardlink.c_str(), nullptr) ? 5 : refused(GetLastError());
+	}
 	if (args.self_test_connect) {
 		WSADATA wsa{};
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 6;
@@ -500,9 +548,12 @@ int self_test_probe(const arguments& args, const decoder_sandbox::status& applie
 		startup.cb = sizeof(startup);
 		PROCESS_INFORMATION started{};
 		if (!CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &started)) {
-			// cmd.exe is there: a start that fails is the child process policy or the job refusing it, whatever the code.
-			std::fprintf(stderr, "start refused: %lu\n", GetLastError());
-			return 0;
+			const DWORD error = GetLastError();
+			std::fprintf(stderr, "start refused: %lu\n", error);
+			// The child process policy refuses with ERROR_CHILD_PROCESS_BLOCKED (367, missing from older SDKs) or access
+			// denied; the job's limit of one process with a quota error.
+			constexpr DWORD k_child_process_blocked = 367;
+			return error == k_child_process_blocked || error == ERROR_ACCESS_DENIED || error == ERROR_NOT_ENOUGH_QUOTA ? 0 : 6;
 		}
 		WaitForSingleObject(started.hProcess, INFINITE);
 		CloseHandle(started.hThread);
@@ -569,12 +620,12 @@ int main(int argc, char** argv)
 #if defined(SNK_MODEL_DECODER_SELF_TEST)
 	if (!args->self_test_open.empty() || args->self_test_connect || args->self_test_exec || args->self_test_sandbox_report
 		|| args->self_test_signal || args->self_test_extra_thread || !args->self_test_link_out.empty()
-		|| !args->self_test_call.empty()) {
+		|| !args->self_test_call.empty() || !args->self_test_link_self.empty() || !args->self_test_hardlink.empty()) {
 		return self_test_probe(*args, sandbox);
 	}
 #endif
 
-	auto request_bundle = edt::read_bundle(args->request);
+	auto request_bundle = edt::read_bundle(args->request, {}, edt::bundle_folder::own);
 	if (!request_bundle.ok()) {
 		return fail("request: " + request_bundle.error);
 	}
