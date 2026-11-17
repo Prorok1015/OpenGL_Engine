@@ -61,8 +61,8 @@ import sys
 from pathlib import Path
 
 DEFAULT_PINS = 'tools/ci/vtable_pins.json'
-KEY_HEADER = 'core/engine/game_system/include/snk/game/gs_module_layout_key.h'
-LAYOUT_HEADER = 'core/engine/game_system/include/snk/game/gs_module_layout.h'
+KEY_HEADER = 'core/engine/game/include/snk/game/gs_module_layout_key.h'
+LAYOUT_HEADER = 'core/engine/game/include/snk/game/gs_module_layout.h'
 EDITOR_KEY_HEADER = 'Editor/code/editor_system/include/snk/editor/edt_editor_layout_key.h'
 EDITOR_LAYOUT_HEADER = 'Editor/code/editor_system/include/snk/editor/edt_editor_layout.h'
 TOOL = 'check_vtable_pins'

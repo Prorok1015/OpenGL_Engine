@@ -55,7 +55,7 @@ add_subdirectory("gui/backends/interface")
 add_subdirectory("gui/backends/opengl")
 add_subdirectory("gui/gui_system")
 add_subdirectory("render/render_system")
-add_subdirectory("game_system")
+add_subdirectory("game")
 add_subdirectory("scene")
 add_subdirectory("image")
 
