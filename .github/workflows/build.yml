@@ -189,6 +189,12 @@ jobs:
           git fetch --no-tags --depth=1 origin "$base"
           python3 tools/ci/check_abi_changes.py --base "$base"
 
+      # #1161: core/core < core/engine < core/model_import < the rest; no include or link of a lower layer reaches a higher one.
+      - name: Check the layers of includes and links
+        run: |
+          python3 tools/ci/check_layers.py --self-test
+          python3 tools/ci/check_layers.py --repo .
+
       # #1136: the editor's panels take their colours from the theme (gui::theme_semantic_colors, the ImGui style); a
       # literal colour in Editor/code would not follow a theme change. The exceptions and their reasons are in the
       # script.
