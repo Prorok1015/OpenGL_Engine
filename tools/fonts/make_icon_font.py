@@ -53,6 +53,10 @@ ICONS = {
 	"info": "info",
 	"error": "circle-x",
 	"hierarchy": "list-tree",
+	"bone": "bone",
+	"package": "package",
+	"skybox": "cloud-sun",
+	"animation": "film",
 }
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]

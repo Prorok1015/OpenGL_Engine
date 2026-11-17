@@ -8,12 +8,36 @@
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
+#include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <string>
 #include <algorithm>
 #include <cctype>
 #include <format>
 #include <cstring>
+
+namespace
+{
+	// What a node's name starts with to tell its type: an icon when the font has the icons, else the text of the
+	// classic theme.
+	struct type_mark {
+		std::string icon;
+		const char* text;
+		const char* get() const { return gui::ui_font_has_icons() ? icon.c_str() : text; }
+	};
+
+	std::string spaced(const char* icon)
+	{
+		return std::string{ icon } + " ";
+	}
+
+	const type_mark k_camera_mark{ spaced(gui::icon::camera), "[C] " };
+	const type_mark k_light_mark{ spaced(gui::icon::sun), "[L] " };
+	const type_mark k_mesh_mark{ spaced(gui::icon::model), "[M] " };
+	const type_mark k_skybox_mark{ spaced(gui::icon::skybox), "[S] " };
+	const type_mark k_prefab_mark{ spaced(gui::icon::package), "[P] " };
+	const type_mark k_bone_mark{ spaced(gui::icon::bone), "[B] " };
+}
 
 namespace edt
 {
@@ -157,11 +181,11 @@ namespace edt
 
 	const char* scene_hierarchy_panel::get_type_prefix(const scn::prefab_desc::prefab_node& node) const
 	{
-		if (node.components.count(std::string(scn::camera_desc::__type)))             return "[C] ";
-		if (node.components.count(std::string(scn::directional_light_desc::__type)))  return "[L] ";
-		if (node.components.count(std::string(scn::mesh_node_desc::__type)))          return "[M] ";
-		if (node.components.count(std::string(scn::skybox_desc::__type)))             return "[S] ";
-		if (get_referenced_prefab(node))                                              return "[P] ";
+		if (node.components.count(std::string(scn::camera_desc::__type)))             return k_camera_mark.get();
+		if (node.components.count(std::string(scn::directional_light_desc::__type)))  return k_light_mark.get();
+		if (node.components.count(std::string(scn::mesh_node_desc::__type)))          return k_mesh_mark.get();
+		if (node.components.count(std::string(scn::skybox_desc::__type)))             return k_skybox_mark.get();
+		if (get_referenced_prefab(node))                                              return k_prefab_mark.get();
 		return "";
 	}
 
@@ -224,10 +248,10 @@ namespace edt
 			if (m_selected_readonly && m_selected_owner == &owner && m_selected_target == target)
 				flags |= ImGuiTreeNodeFlags_Selected;
 
-			std::string prefix;
-			if (child.components.count(std::string(scn::mesh_node_desc::__type)))   prefix = "[M] ";
-			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = "[B] ";
-			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
+			const char* prefix = "";
+			if (child.components.count(std::string(scn::mesh_node_desc::__type)))   prefix = k_mesh_mark.get();
+			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = k_bone_mark.get();
+			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = k_camera_mark.get();
 
 			ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
 			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
