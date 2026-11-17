@@ -59,6 +59,9 @@ namespace edt
 		play_preflight_publisher& play_preflight() { return m_play_preflight; }
 		// The unknown systems of the worlds' plans as problems (#549); refreshed on every change of the level.
 		void refresh_world();
+		// The prefab instances of the open level (#150): overrides the editor never makes, and prefabs that instantiate themselves,
+		// as the scope "instances" of the source "desc"; refreshed with the world rows.
+		void refresh_instances();
 		// Bindings two actions share are problems of the source "input" (the frame hook; only when the actions changed).
 		void follow_input_actions(const gs::input_actions& actions);
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file opened when an
