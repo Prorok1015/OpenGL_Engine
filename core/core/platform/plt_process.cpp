@@ -47,6 +47,51 @@ extern char** environ;
 
 namespace fs = std::filesystem;
 
+struct platform::app_container::state
+{
+	std::wstring name;
+	std::string error;
+#ifdef _WIN32
+	PSID sid = nullptr;
+#endif
+};
+
+platform::app_container::app_container(std::unique_ptr<state> held) : m_state(std::move(held)) {}
+
+platform::app_container::~app_container()
+{
+#ifdef _WIN32
+	if (m_state->sid != nullptr) {
+		// A profile's SID is the caller's to free with FreeSid, as is a derived one.
+		FreeSid(m_state->sid);
+	}
+#endif
+}
+
+bool platform::app_container::ok() const
+{
+	return m_state->error.empty();
+}
+
+const std::string& platform::app_container::error() const
+{
+	return m_state->error;
+}
+
+const std::wstring& platform::app_container::name() const
+{
+	return m_state->name;
+}
+
+void* platform::app_container::sid() const
+{
+#ifdef _WIN32
+	return ok() ? m_state->sid : nullptr;
+#else
+	return nullptr;
+#endif
+}
+
 std::wstring platform::quote_windows_arg(std::wstring_view arg)
 {
 	if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) {
@@ -294,41 +339,21 @@ namespace
 		return result;
 	}
 
-	class container_sid
+	// An entry of `acl` of its own (not inherited) that allows `sid` at least `access` on the object and, with
+	// `inherited_by_all`, on everything below it too.
+	bool holds_grant(PACL acl, PSID sid, DWORD access, bool inherited_by_all)
 	{
-	public:
-		container_sid() = default;
-		~container_sid()
-		{
-			if (m_sid != nullptr) FreeSid(m_sid);
+		constexpr BYTE k_all = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+		for (DWORD index = 0; acl != nullptr && index < acl->AceCount; ++index) {
+			void* entry = nullptr;
+			if (!GetAce(acl, index, &entry)) continue;
+			const auto* header = static_cast<const ACE_HEADER*>(entry);
+			if (header->AceType != ACCESS_ALLOWED_ACE_TYPE || (header->AceFlags & (INHERITED_ACE | INHERIT_ONLY_ACE)) != 0) continue;
+			if (inherited_by_all && (header->AceFlags & k_all) != k_all) continue;
+			auto* allowed = static_cast<ACCESS_ALLOWED_ACE*>(entry);
+			if ((allowed->Mask & access) == access && EqualSid(&allowed->SidStart, sid)) return true;
 		}
-		container_sid(const container_sid&) = delete;
-		container_sid& operator=(const container_sid&) = delete;
-
-		PSID get() const { return m_sid; }
-		PSID* out() { return &m_sid; }
-
-	private:
-		PSID m_sid = nullptr;
-	};
-
-	// The SID is derived from the name alone: no profile (registry, %LOCALAPPDATA%\Packages) unless a start needs one.
-	std::string derive_container(const std::wstring& name, container_sid& sid)
-	{
-		if (name.empty()) return "the AppContainer has no name";
-		const HRESULT derived = DeriveAppContainerSidFromAppContainerName(name.c_str(), sid.out());
-		if (FAILED(derived)) {
-			return std::format("cannot derive the SID of the AppContainer: {}", system_text(static_cast<DWORD>(HRESULT_CODE(derived))));
-		}
-		return {};
-	}
-
-	bool create_container_profile(const std::wstring& name)
-	{
-		PSID created = nullptr;
-		const HRESULT made = CreateAppContainerProfile(name.c_str(), name.c_str(), L"snk model decoder (#1054)", nullptr, 0, &created);
-		if (created != nullptr) FreeSid(created);
-		return SUCCEEDED(made) || made == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
+		return false;
 	}
 
 	// Adds the container to the access list of `path` (and, for a folder, of what it holds): read and write, or read and
@@ -343,6 +368,9 @@ namespace
 		const scope_exit free_descriptor{ [descriptor] { LocalFree(descriptor); } };
 		std::error_code ec;
 		const bool folder = fs::is_directory(path, ec);
+		constexpr DWORD k_read_execute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+		// The decoder's copy is granted on every start: an entry already there is not added again (#1099).
+		if (!write && holds_grant(current, sid, k_read_execute, folder)) return {};
 		std::array<EXPLICIT_ACCESS_W, 2> entries{};
 		for (EXPLICIT_ACCESS_W& entry : entries) {
 			entry.grfAccessMode = GRANT_ACCESS;
@@ -350,8 +378,7 @@ namespace
 			entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
 			entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
 		}
-		entries[0].grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD)
-			: (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+		entries[0].grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD) : k_read_execute;
 		entries[0].grfInheritance = folder ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
 		// The read below a held folder (platform::beneath) opens each folder for traversal; on a file the same bit is
 		// execute, so it goes to folders only.
@@ -411,6 +438,28 @@ fs::path platform::current_executable()
 	return {};
 }
 
+std::shared_ptr<const platform::app_container> platform::app_container::ensure(std::wstring name)
+{
+	auto held = std::make_unique<state>();
+	held->name = std::move(name);
+	if (held->name.empty()) {
+		held->error = "the AppContainer has no name";
+	} else {
+		HRESULT made = CreateAppContainerProfile(held->name.c_str(), held->name.c_str(), L"snk model decoder (#1054)", nullptr, 0,
+			&held->sid);
+		if (made == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
+			held->sid = nullptr;
+			made = DeriveAppContainerSidFromAppContainerName(held->name.c_str(), &held->sid);
+		}
+		if (FAILED(made)) {
+			held->sid = nullptr;
+			held->error = std::format("cannot make the AppContainer profile '{}': {}", utf8_of(fs::path(held->name)),
+				system_text(static_cast<DWORD>(HRESULT_CODE(made))));
+		}
+	}
+	return std::shared_ptr<const app_container>(new app_container(std::move(held)));
+}
+
 platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
 {
 	std::wstring command_line = quote_windows_arg(program.native());
@@ -467,14 +516,16 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 
 	const process_confinement* confinement = options.confinement ? &*options.confinement : nullptr;
-	container_sid sid;
+	PSID sid = nullptr;
 	if (confinement != nullptr) {
-		if (std::string why = derive_container(confinement->container_name, sid); !why.empty()) return confinement_failure(std::move(why));
+		if (!confinement->container) return confinement_failure("there is no AppContainer to start in");
+		if (!confinement->container->ok()) return confinement_failure(confinement->container->error());
+		sid = static_cast<PSID>(confinement->container->sid());
 		for (const fs::path& folder : confinement->read_write) {
-			if (std::string why = grant_container(folder, sid.get(), true); !why.empty()) return confinement_failure(std::move(why));
+			if (std::string why = grant_container(folder, sid, true); !why.empty()) return confinement_failure(std::move(why));
 		}
 		for (const fs::path& folder : confinement->read_execute) {
-			if (std::string why = grant_container(folder, sid.get(), false); !why.empty()) return confinement_failure(std::move(why));
+			if (std::string why = grant_container(folder, sid, false); !why.empty()) return confinement_failure(std::move(why));
 		}
 	}
 
@@ -500,7 +551,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	DWORD64 mitigations = k_confined_mitigations;
 	DWORD child_processes = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
 	if (confinement != nullptr) {
-		capabilities.AppContainerSid = sid.get();
+		capabilities.AppContainerSid = sid;
 		if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities),
 				nullptr, nullptr)
 			|| !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations, sizeof(mitigations),
@@ -558,10 +609,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 			options.environment ? environment.data() : nullptr,
 			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process);
 	};
-	bool started = start() != FALSE;
-	// Some systems start a container only once its profile exists: made then, once, and left (#1054).
-	if (!started && confinement != nullptr && create_container_profile(confinement->container_name)) started = start() != FALSE;
-	if (!started) {
+	if (start() == FALSE) {
 		process_result failed = system_failure(confinement != nullptr ? "cannot start confined" : "cannot start", program);
 		failed.confinement_failed = confinement != nullptr;
 		return failed;
@@ -702,6 +750,14 @@ fs::path platform::current_executable()
 	std::error_code ec;
 	const fs::path path = fs::read_symlink("/proc/self/exe", ec);
 	return ec ? fs::path{} : path;
+}
+
+std::shared_ptr<const platform::app_container> platform::app_container::ensure(std::wstring name)
+{
+	auto held = std::make_unique<state>();
+	held->name = std::move(name);
+	held->error = "this system has no AppContainer";
+	return std::shared_ptr<const app_container>(new app_container(std::move(held)));
 }
 
 platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
