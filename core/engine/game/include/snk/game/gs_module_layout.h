@@ -40,7 +40,7 @@ namespace gs
 
 		// Raised when a layout the list cannot see changes for module code: in the window of 4.0 (#758) a reorder of a
 		// type modules read inline, or a type of the list changes. Each value is told in docs/abi (HISTORY.md, changes/).
-		inline constexpr std::uint64_t layout_revision = 15;
+		inline constexpr std::uint64_t layout_revision = 16;
 
 		// Numbers the key mixes in as they are, in order: the interfaces' ABI revisions and the third-party versions.
 		template<std::uint64_t... Values>
