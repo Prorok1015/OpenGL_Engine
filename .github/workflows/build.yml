@@ -870,6 +870,12 @@ jobs:
           python3 tools/ci/check_ascii_headers.py --self-test
           python3 tools/ci/check_ascii_headers.py --repo .
 
+      # #1161: core/core < core/engine < core/model_import < the rest; no include or link of a lower layer reaches a higher one.
+      - name: Check the layers of includes and links
+        run: |
+          python3 tools/ci/check_layers.py --self-test
+          python3 tools/ci/check_layers.py --repo .
+
       # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
       # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
       # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
