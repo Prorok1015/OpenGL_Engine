@@ -70,4 +70,4 @@ aibranch layout_revision = 15 (после #1073). Запись каждого и
 
 ## Nightly
 Nightly 16.11 вечер: run 43949595575 на 5ebea38 (после #1117) — полностью зелёный (Windows package, SDK, TSan).
-Последний зелёный: run 43778265307 (16.11). Напоминание trig_01SYFRYmJWG8GYZ8gDi8tUfa на 17.11 00:04Z; запуск: gh workflow run nightly.yml --ref aibranch -R Prorok1015/OpenGL_Engine (если есть новые коммиты).
+Последний зелёный: run 43949595575 (16.11 вечер, 5ebea38). 17.11 00:05Z запущен run 43984683618 (005fe925). Напоминание trig_014Q3Ae4qb26EnL35JH4zMef на 18.11 00:04Z; запуск: gh workflow run nightly.yml --ref aibranch -R Prorok1015/OpenGL_Engine (если есть новые коммиты).
