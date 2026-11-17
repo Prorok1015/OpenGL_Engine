@@ -3,9 +3,12 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -97,6 +100,15 @@ std::string prj::migration::plan_text(const migration_plan& plan)
 		for (const std::string& reference : file.references_to_copies) {
 			text += std::format("- {}: {}\n", file.path, reference);
 		}
+	}
+	const bool blobs = std::ranges::find(plan.project_steps, "engine.geometry_blobs", &planned_project_step::id)
+		!= plan.project_steps.end();
+	bool geometry = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (!blobs || !file.geometry_arrays) continue;
+		if (!std::exchange(geometry, true)) text += "Geometry from JSON arrays to a binary file beside its desc:\n";
+		const std::optional<res::tag> binary = res::desc_binary::binary_tag(res::tag{ file.path });
+		text += std::format("- {} -> {}\n", file.path, binary ? binary->view() : std::string_view{});
 	}
 	const std::vector<skipped_file> skipped = skipped_by(plan);
 	if (!skipped.empty()) {

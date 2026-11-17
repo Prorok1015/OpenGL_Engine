@@ -1,6 +1,6 @@
 # История ABI игровых модулей
 
-Записи, которые до #1056 копились в комментариях кода: над `SNK_MODULE_API_VERSION` (`core/core/application/include/snk/application/app_module_entry.h`) и у `gs::detail::layout_revision` (`core/engine/game_system/include/snk/game/gs_module_layout.h`). Тексты перенесены как были, на английском.
+Записи, которые до #1056 копились в комментариях кода: над `SNK_MODULE_API_VERSION` (`core/core/application/include/snk/application/app_module_entry.h`) и у `gs::detail::layout_revision` (`core/engine/game/include/snk/game/gs_module_layout.h`). Тексты перенесены как были, на английском.
 
 Новые записи сюда не дописываются: каждое изменение кладёт свой файл в [`changes/`](changes/README.md). Когда окно 4.0 закроется (или к релизу), записи из `changes/` переносятся сюда под заголовком версии, а файлы удаляются.
 

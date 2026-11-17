@@ -333,7 +333,11 @@ BOOST_AUTO_TEST_CASE(ItemPostedFromAMainCallbackWaitsForTheBudget)
 
 BOOST_AUTO_TEST_CASE(ThrowingMainItemDoesNotStopTheDrain)
 {
-	ds::task_system tasks(manual_config());
+	// A clock that stands still: the budget never runs out, however long the throw and its log take (#1162).
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	ds::task_system tasks(config);
 	int ran = 0;
 	tasks.post_main([] { throw std::runtime_error("bad item"); });
 	tasks.post_main([&] { ++ran; });

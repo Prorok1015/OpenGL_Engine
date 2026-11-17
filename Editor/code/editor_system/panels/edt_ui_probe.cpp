@@ -20,6 +20,11 @@ std::string edt::ui_probe::format_hidden(std::string_view area, std::string_view
 	return std::format("item {} '{}' hidden", area, name);
 }
 
+std::string edt::ui_probe::format_ambiguous(std::string_view area, std::string_view name)
+{
+	return std::format("item {} '{}' ambiguous", area, name);
+}
+
 edt::ui_probe::item& edt::ui_probe::entry_of(std::string_view area, std::string_view name)
 {
 	item& entry = m_items[std::format("{}/{}", area, name)];
@@ -43,22 +48,31 @@ void edt::ui_probe::write(item& entry, std::string line)
 	}
 }
 
-void edt::ui_probe::report(std::string_view area, std::string_view name, float min_x, float min_y, float max_x, float max_y)
+void edt::ui_probe::take(item& entry, std::string line)
 {
-	item& entry = entry_of(area, name);
+	if (!m_open_passes.contains(entry.area)) {
+		entry.seen = true;
+		write(entry, std::move(line));
+		return;
+	}
+	entry.pending = entry.seen ? format_ambiguous(entry.area, entry.name) : std::move(line);
 	entry.seen = true;
-	write(entry, format(area, name, min_x, min_y, max_x, max_y));
+}
+
+void edt::ui_probe::report(
+	std::string_view area, std::string_view name, float min_x, float min_y, float max_x, float max_y)
+{
+	take(entry_of(area, name), format(area, name, min_x, min_y, max_x, max_y));
 }
 
 void edt::ui_probe::report_hidden(std::string_view area, std::string_view name)
 {
-	item& entry = entry_of(area, name);
-	entry.seen = true;
-	write(entry, format_hidden(area, name));
+	take(entry_of(area, name), format_hidden(area, name));
 }
 
 void edt::ui_probe::begin_pass(std::string_view area)
 {
+	m_open_passes.emplace(area);
 	for (auto& [key, entry] : m_items) {
 		if (entry.area == area) {
 			entry.seen = false;
@@ -68,9 +82,29 @@ void edt::ui_probe::begin_pass(std::string_view area)
 
 void edt::ui_probe::end_pass(std::string_view area)
 {
+	m_open_passes.erase(std::string(area));
 	for (auto& [key, entry] : m_items) {
-		if (entry.area == area && !entry.seen) {
-			write(entry, format_hidden(entry.area, entry.name));
+		if (entry.area == area) {
+			write(entry, entry.seen ? std::move(entry.pending) : format_hidden(entry.area, entry.name));
+			entry.pending.clear();
 		}
+	}
+}
+
+edt::ui_probe::scoped_pass::scoped_pass(ui_probe* probe, std::initializer_list<std::string_view> areas)
+	: m_probe(probe)
+	, m_areas(areas)
+{
+	if (!m_probe) return;
+	for (const std::string_view area : m_areas) {
+		m_probe->begin_pass(area);
+	}
+}
+
+edt::ui_probe::scoped_pass::~scoped_pass()
+{
+	if (!m_probe) return;
+	for (const std::string_view area : m_areas) {
+		m_probe->end_pass(area);
 	}
 }

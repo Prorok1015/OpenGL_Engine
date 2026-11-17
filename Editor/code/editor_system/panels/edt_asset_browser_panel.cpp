@@ -3,6 +3,7 @@
 #include "edt_prefab_variant_creator.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include "edt_ui_probe_imgui.h"
 #include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <algorithm>
@@ -56,10 +57,7 @@ namespace edt
 
 	void asset_browser_panel::on_hidden()
 	{
-		if (m_ui_probe) {
-			m_ui_probe->begin_pass("asset_browser");
-			m_ui_probe->end_pass("asset_browser");
-		}
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search"});
 	}
 
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
@@ -292,6 +290,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
+		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search"});
 		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;
@@ -321,6 +320,7 @@ namespace edt
 		ImGui::SetNextItemWidth(-1.f);
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
+		edt::probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
 
 		ImGui::Separator();
 

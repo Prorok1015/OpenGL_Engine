@@ -4,6 +4,13 @@
 # asset is added through its desc: the editor logs "Added 'base_material' to scene".
 sleep 1
 shot headless_out/drag_drop/00_start.png
+# Filtered to the asset and scrolled down (the search keeps every folder, and in a theme with taller rows they push
+# the file out of the 1920x1080 list), so its row is in sight whatever the theme.
+click_item asset_browser_search search
+type base_material
+sleep 1
+scroll_item asset_browser bench
+sleep 1
 drag_item asset_browser base_material.desc 960 400
 sleep 3
 shot headless_out/drag_drop/01_after_drop.png

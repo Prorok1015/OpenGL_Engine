@@ -25,7 +25,7 @@ namespace fs = std::filesystem;
 // Each header with the exported class whose special members it must not define inline.
 const std::vector<std::pair<std::string, std::string>> k_headers = {
 	{ "core/engine/scene/include/snk/scene/scn_scene_layer.h", "scene_layer" },
-	{ "core/engine/game_system/include/snk/game/gs_input_actions.h", "input_actions" },
+	{ "core/engine/game/include/snk/game/gs_input_actions.h", "input_actions" },
 	{ "core/core/common/include/snk/common/ds/ds_store.hpp", "app_data_storage" },
 };
 

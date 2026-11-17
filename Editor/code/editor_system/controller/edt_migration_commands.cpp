@@ -200,8 +200,9 @@ namespace {
 		std::vector<std::pair<std::string, std::string>> files;
 		files.reserve(plan.scan.files.size());
 		for (const pmg::scanned_file& file : plan.scan.files) {
-			std::string facts = std::format("{}|{}|{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
-				file.resource_path, file.resource_unreadable, file.reference_fixes, file.outdated_references);
+			std::string facts = std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", pmg::to_string(file.kind), file.reason, file.has_resource, file.root_guid,
+				file.resource_path, file.resource_unreadable, file.reference_fixes, file.outdated_references, file.geometry_arrays,
+				file.geometry_left);
 			for (const std::string& type : file.unknown_types) facts += "|" + type;
 			files.emplace_back(file.path, std::move(facts));
 		}

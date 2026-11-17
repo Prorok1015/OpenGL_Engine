@@ -105,7 +105,7 @@ OpenGL_Engine/
 │   │   ├── render/                 # Render pipeline, shaders, geometry, textures
 │   │   ├── scene/                  # Scene graph, cameras, lights, animation
 │   │   ├── gui/                    # ImGui integration (backends + layer system)
-│   │   ├── game_system/            # Game loop, frame timing
+│   │   ├── game/                   # Module layer: game modules, layout key, input actions, frame stages
 │   │   ├── input/                  # High-level input mapping
 │   │   └── image/                  # Image loading (stb_image)
 │   │
