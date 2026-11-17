@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <vector>
 
 namespace gui
@@ -14,6 +15,11 @@ namespace gui
 		ImFont* font = ImGui::GetFont();
 		return font && font->FindGlyphNoFallback(icon::first) != nullptr;
 	}
+
+	// The faces add_faces_to puts in the atlas, in this order: io.Fonts->Fonts[int(face)] (#1136). Each index is there
+	// whatever bytes there are, so the editor can pick a face by index.
+	enum class ui_face { text, bold, mono };
+	inline constexpr int ui_face_count = 3;
 
 	// The UI font: a TTF kept as bytes (the atlas does not own them) plus the glyph ranges built for it.
 	// Both must outlive the atlas, and rebuild_fonts adds the font again, so the object lives as long as the backend.
@@ -58,6 +64,11 @@ namespace gui
 		// lacks (the Cyrillic of a Latin-only font). Before the first add_to.
 		void set_fallback_bytes(std::vector<std::byte> bytes) { m_fallback_bytes = std::move(bytes); }
 
+		// The heading and the monospaced faces; before the first add_faces_to. Without usable bytes the text font
+		// takes that index.
+		void set_bold_bytes(std::vector<std::byte> bytes) { m_bold_bytes = std::move(bytes); }
+		void set_mono_bytes(std::vector<std::byte> bytes) { m_mono_bytes = std::move(bytes); }
+
 		bool has_bytes() const { return !m_bytes.empty(); }
 		bool usable() const { return looks_like_font(m_bytes); }
 		bool has_icons() const { return looks_like_font(m_icon_bytes); }
@@ -73,6 +84,33 @@ namespace gui
 			}
 			if (font && has_icons()) {
 				merge_icons(atlas, size_px);
+			}
+			return font;
+		}
+
+		// add_to, then the bold and the mono faces at the indices of ui_face, each with the text font (and the
+		// fallback font) merged after it for the glyphs it lacks, and the icons. Returns the text font.
+		ImFont* add_faces_to(ImFontAtlas& atlas, float size_px)
+		{
+			ImFont* font = add_to(atlas, size_px);
+			for (std::vector<std::byte>* face : { &m_bold_bytes, &m_mono_bytes }) {
+				if (!font || !looks_like_font(*face)) {
+					add_to(atlas, size_px);
+					continue;
+				}
+				if (!add_face(atlas, *face, size_px, false)) {
+					add_to(atlas, size_px);
+					continue;
+				}
+				if (usable()) {
+					add_face(atlas, m_bytes, size_px, true);
+				}
+				if (usable() && looks_like_font(m_fallback_bytes)) {
+					merge_fallback(atlas, size_px);
+				}
+				if (has_icons()) {
+					merge_icons(atlas, size_px);
+				}
 			}
 			return font;
 		}
@@ -169,6 +207,18 @@ namespace gui
 			return atlas.AddFontDefault(&cfg);
 		}
 
+		ImFont* add_face(ImFontAtlas& atlas, std::vector<std::byte>& bytes, float size_px, bool merge)
+		{
+			if (m_ranges.empty()) {
+				build_glyph_ranges(atlas, m_ranges);
+			}
+			ImFontConfig cfg;
+			cfg.MergeMode = merge;
+			cfg.FontDataOwnedByAtlas = false;
+			const int size = static_cast<int>(bytes.size());
+			return atlas.AddFontFromMemoryTTF(bytes.data(), size, size_px, &cfg, m_ranges.Data);
+		}
+
 		void merge_fallback(ImFontAtlas& atlas, float size_px)
 		{
 			if (m_ranges.empty()) {
@@ -197,6 +247,8 @@ namespace gui
 		std::vector<std::byte> m_bytes;
 		std::vector<std::byte> m_fallback_bytes;
 		std::vector<std::byte> m_icon_bytes;
+		std::vector<std::byte> m_bold_bytes;
+		std::vector<std::byte> m_mono_bytes;
 		ImVector<ImWchar> m_ranges;
 	};
 }
