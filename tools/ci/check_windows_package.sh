@@ -97,6 +97,17 @@ fi
 if find "${root}" -iname 'snk_model_decoder_selftest*' | grep -q .; then
 	echo "::error::the package holds the decoder's self-test build (snk_model_decoder_selftest)"; status=1
 fi
+# #1054: the editor copies the decoder with exactly the DLLs its .deps names (and the C/C++ runtime) when its AppContainer
+# cannot read bin/: every name there must be a file beside it.
+if [[ ! -f "${root}/bin/snk_model_decoder.deps" ]]; then
+	echo "::error::the package has no bin/snk_model_decoder.deps"; status=1
+else
+	while IFS= read -r dll || [[ -n "${dll}" ]]; do
+		dll="${dll%$'\r'}"
+		[[ -z "${dll}" ]] && continue
+		if [[ ! -f "${root}/bin/${dll}" ]]; then echo "::error::snk_model_decoder.deps names ${dll}, which is not in bin/"; status=1; fi
+	done < "${root}/bin/snk_model_decoder.deps"
+fi
 ls -l "${root}/bin"
 
 # ---- 3. dependencies ----

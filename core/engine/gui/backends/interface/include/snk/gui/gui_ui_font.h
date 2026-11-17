@@ -54,15 +54,23 @@ namespace gui
 		// Before the first add_to.
 		void set_icon_bytes(std::vector<std::byte> bytes) { m_icon_bytes = std::move(bytes); }
 
+		// A font merged after the UI font: ImGui keeps a glyph the first font has, so this one only fills what that one
+		// lacks (the Cyrillic of a Latin-only font). Before the first add_to.
+		void set_fallback_bytes(std::vector<std::byte> bytes) { m_fallback_bytes = std::move(bytes); }
+
 		bool has_bytes() const { return !m_bytes.empty(); }
 		bool usable() const { return looks_like_font(m_bytes); }
 		bool has_icons() const { return looks_like_font(m_icon_bytes); }
 		const ImVector<ImWchar>& ranges() const { return m_ranges; }
 
-		// Adds the UI font (or the built-in one when there is no usable font) at `size_px`, with the icons merged in.
+		// Adds the UI font (or the built-in one when there is no usable font) at `size_px`, with the fallback font and
+		// the icons merged in.
 		ImFont* add_to(ImFontAtlas& atlas, float size_px)
 		{
 			ImFont* font = add_text_font(atlas, size_px);
+			if (font && usable() && looks_like_font(m_fallback_bytes)) {
+				merge_fallback(atlas, size_px);
+			}
 			if (font && has_icons()) {
 				merge_icons(atlas, size_px);
 			}
@@ -161,6 +169,18 @@ namespace gui
 			return atlas.AddFontDefault(&cfg);
 		}
 
+		void merge_fallback(ImFontAtlas& atlas, float size_px)
+		{
+			if (m_ranges.empty()) {
+				build_glyph_ranges(atlas, m_ranges);
+			}
+			ImFontConfig cfg;
+			cfg.MergeMode = true;
+			cfg.FontDataOwnedByAtlas = false;
+			const int size = static_cast<int>(m_fallback_bytes.size());
+			atlas.AddFontFromMemoryTTF(m_fallback_bytes.data(), size, size_px, &cfg, m_ranges.Data);
+		}
+
 		void merge_icons(ImFontAtlas& atlas, float size_px)
 		{
 			// The atlas keeps the pointer to the ranges.
@@ -175,6 +195,7 @@ namespace gui
 		}
 
 		std::vector<std::byte> m_bytes;
+		std::vector<std::byte> m_fallback_bytes;
 		std::vector<std::byte> m_icon_bytes;
 		ImVector<ImWchar> m_ranges;
 	};

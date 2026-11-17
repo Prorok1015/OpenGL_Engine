@@ -27,7 +27,7 @@ struct folder_guard
 	~folder_guard()
 	{
 		std::error_code ec;
-		fs::remove_all(path, ec);
+		core::res::remove_tree_without_following(path, ec);
 	}
 };
 
@@ -46,9 +46,15 @@ std::vector<std::string> clean_environment(const fs::path& folder)
 		}
 	};
 #if defined(_WIN32)
-	(void)folder;
 	keep("SystemRoot");
 	keep("PATH");
+	// CreateProcessW rewrites these for an AppContainer and fails (ERROR_ENVVAR_NOT_FOUND) without them (#1054).
+	keep("LOCALAPPDATA");
+	keep("APPDATA");
+	keep("USERPROFILE");
+	// The one place a confined child may write (#1054); unconfined, still the run folder that is removed after it.
+	env.push_back("TEMP=" + utf8_text(folder));
+	env.push_back("TMP=" + utf8_text(folder));
 #else
 	// A dev build finds its shared engine through these; nothing else of the editor's environment reaches the child.
 	keep("LD_LIBRARY_PATH");
@@ -125,6 +131,11 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	options.environment = clean_environment(folder);
 	options.low_priority = true;
 	options.memory_limit_bytes = m_config.memory_limit_bytes;
+#if defined(_WIN32)
+	if (m_config.confine) {
+		options.confinement = platform::process_confinement{ m_config.container_name, { folder }, m_config.confine_read_execute };
+	}
+#endif
 	decode_log_budget budget;
 	// The child's own line when it refuses to run without its sandbox: the reason of the failure (its first 256 bytes).
 	std::mutex refusal_mutex;
@@ -165,6 +176,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 		outcome.sandbox = sandbox_status.status();
 	}
 	outcome.started = result.error.empty();
+	outcome.exit_code = result.exit_code;
 
 	if (timed_out.load()) {
 		outcome.timed_out = true;
@@ -177,6 +189,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 		return outcome;
 	}
 	if (!result.error.empty()) {
+		outcome.confinement_failed = result.confinement_failed;
 		outcome.error = "the decoder could not run: " + result.error;
 		return outcome;
 	}
@@ -211,10 +224,10 @@ bool edt::sandbox_status_reader::line(std::string_view text)
 		return true;
 	};
 	decoder_sandbox_status read;
-	if (take("fs=landlock")) read.fs = true;
-	else if (!take("fs=none")) return true;
-	if (take(" syscalls=seccomp")) read.syscalls = true;
-	else if (!take(" syscalls=none")) return true;
+	if (take("fs=") && take(k_decoder_sandbox_fs_name)) read.fs = true;
+	else if (!take("none")) return true;
+	if (take(" syscalls=") && take(k_decoder_sandbox_syscalls_name)) read.syscalls = true;
+	else if (!take("none")) return true;
 	if (take(" why=")) read.why = text_escape::escaped_text(text, 256);
 	else if (!text.empty()) return true;
 	read.reported = true;
