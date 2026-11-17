@@ -970,6 +970,44 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_is_checked_by_the_schema_of_its_type)
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 
+// EPIC-79 (#1068, review of #1173): an inline geometry or editable mesh, or any desc holding a binary_ref, is refused in a
+// scene edit wherever it sits: mesh data is written by the editor with its binary file.
+BOOST_AUTO_TEST_CASE(an_inline_mesh_is_refused_in_every_scene_edit)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	const std::string geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[0,0,0,0]})";
+	const auto refused = [](const cmd::result& result, std::string_view at) {
+		BOOST_TEST(result.code == cmd::codes::invalid_args);
+		BOOST_CHECK_MESSAGE(result.error.find("mesh data is written by the editor") != std::string::npos, result.error);
+		BOOST_CHECK_MESSAGE(result.error.find(at) != std::string::npos, result.error);
+	};
+
+	refused(call("component.add", R"({"ref":)" + crate + R"(,"key":"mesh","type":"mesh_node_desc","fields":{"geometry":)" + geometry + "}}"),
+		"geometry");
+	refused(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"name":"Probe","components":{"mesh":{"type":"mesh_node_desc",
+		"fields":{"geometry":)" + geometry + "}}}}"), "geometry");
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto before = scene.generation();
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"geometry":)" + geometry + "}}"), "geometry");
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"poly_mesh_desc"}}})"),
+		"material");
+	// Inside an inline desc of another type too.
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"mesh_node_desc","geometry":)"
+		+ geometry + "}}}"), "material/geometry");
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.blob_mesh",
+		"fields":[{"name":"vertices","kind":"binary_ref"}]})").as_object())));
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"probe.blob_mesh"}}})"),
+		"probe.blob_mesh");
+
+	// A partial patch without __type takes the type of the inline desc the component already holds.
+	auto& node = *const_cast<prefab_node*>(child(root(), 0xa4));
+	node.components.at("mesh").overrides["geometry"] = json::parse(geometry);
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"geometry":{"vertices":[1,1,1,1]}}})"), "geometry");
+	BOOST_TEST(node.components.at("mesh").overrides.at("geometry").as_object().at("vertices").as_array().at(0).as_int64() == 0);
+	BOOST_TEST(scene.generation() == before);
+}
+
 // #740: a partial patch of an inline material may leave out its __type: the type comes from the component as the patch
 // leaves it, and the material's references are checked by that schema. Over a tag there is no type to take.
 BOOST_AUTO_TEST_CASE(a_partial_patch_of_an_inline_desc_takes_its_type_from_the_component)
