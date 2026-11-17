@@ -3,6 +3,7 @@
 #include "edt_path_text.h"
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <array>
 #include <cmath>
@@ -104,7 +105,7 @@ void edt::build_settings_panel::on_render()
 
 void edt::build_settings_panel::draw_live()
 {
-	if (!ImGui::CollapsingHeader("Live", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Live", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	const build_settings& settings = m_model.settings();
 	if (m_live_enabled && m_set_live_enabled) {
 		const std::string unavailable = m_live_unavailable ? m_live_unavailable() : std::string{};
@@ -132,7 +133,7 @@ void edt::build_settings_panel::draw_live()
 
 void edt::build_settings_panel::draw_presets()
 {
-	if (!ImGui::CollapsingHeader("Presets", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Presets", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	ImGui::TextDisabled("%s", relative(m_model.user_presets_file()).c_str());
 
 	const build_settings& settings = m_model.settings();
@@ -295,7 +296,7 @@ void edt::build_settings_panel::draw_defines()
 
 void edt::build_settings_panel::draw_module()
 {
-	if (!ImGui::CollapsingHeader("Module", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Module", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	const build_settings& settings = m_model.settings();
 	bool reload_after = settings.reload_after_build;
 	if (ImGui::Checkbox("Reload the module after a successful build", &reload_after)) m_model.set_reload_after_build(reload_after);
