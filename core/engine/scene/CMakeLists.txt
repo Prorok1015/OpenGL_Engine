@@ -16,7 +16,7 @@ snk_component_headers(${PROJECT_NAME})
 # layer violation (scene must not depend on gui). Removed (EPIC-49 US-49-9). gui takes the rendered
 # scene texture from the renderer via the existing extractor/frame_context seam, not the reverse.
 # PUBLIC render: scn_material_desc.h names the material description that lives in render (#236).
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PUBLIC snk::render PRIVATE snk::resource_system PRIVATE snk::input_system PRIVATE snk::ecs PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PUBLIC snk::render PUBLIC snk::resource_system PUBLIC snk::input_system PUBLIC snk::ecs PRIVATE snk::engine_logger)
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::desc_system)
 # scene/hot_reload (scn_context_manager.cpp) and the project's start level (scn_start_level.cpp, #591).
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::config_system PRIVATE snk::project)

@@ -7,7 +7,7 @@ file(GLOB_RECURSE SE_ECS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 target_sources(${PROJECT_NAME} PRIVATE ${SE_ECS_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::common)
 
 add_subdirectory(${THIRD_PARTY_PATH}/entt entt)
 
