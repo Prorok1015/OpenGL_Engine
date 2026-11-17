@@ -7,6 +7,17 @@ shot @OUT@/1_overview.png
 click 88 149
 sleep 1
 shot @OUT@/2_selection.png
+# The Console in front of the Problems tab it shares (#1136: its lines are in the mono face): View > Console closes it
+# and opens it again, and a tab that comes back into its dock node is the one shown. By name: needs editor/ui_probe.
+click_item menu View
+sleep 1
+click_item menu Console
+sleep 1
+click_item menu View
+sleep 1
+click_item menu Console
+sleep 2
+shot @OUT@/2b_console.png
 # File menu
 click 19 10
 sleep 1

@@ -1319,12 +1319,14 @@ jobs:
             sed "s|@OUT@|$out|g" tools/headless/theme_tour.actions > "$out/tour.actions"
             tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions "$out/tour.actions" --size 1920x1080 \
               --shot "$out/final.png" \
-              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc "$@"
+              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true "$@"
             tools/headless/check_smoke.sh "$out/final.png" "$out/editor.log" 200x200+860+450 0
           }
           for variant in classic dark_neutral dark_contrast light; do
             shoot "$variant" gui/theme "engine://themes/${variant}.desc"
           done
+          # EXPERIMENT (#1136, remove after the owner's choice): dark_neutral with JetBrains Mono as the mono face.
+          shoot dark_neutral_jbmono gui/theme engine://themes/dark_neutral_jbmono.desc
           # #1130: the scripts that click by name (editor/ui_probe) also work in a theme other than classic.
           probe_run() {
             local name="$1" actions="$2"
