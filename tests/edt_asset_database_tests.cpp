@@ -712,6 +712,8 @@ BOOST_AUTO_TEST_CASE(a_bad_cache_is_dropped_whole)
 		{ "a bad id", record_edit([](boost::json::object& r) { r["id"] = "nope"; }) },
 		{ "a bad file id", record_edit([](boost::json::object& r) { r["file_id"] = boost::json::array{ 1, 2 }; }) },
 		{ "a missing check time", record_edit([](boost::json::object& r) { r.erase("content_checked_at"); }) },
+		{ "a binary file beside a file that is no desc", record_edit([](boost::json::object& r) { r["binary_beside"] = true; }) },
+		{ "a binary header that is no bool", record_edit([](boost::json::object& r) { r["binary_header"] = 1; }) },
 		{ "a path twice", [](boost::json::object& root) {
 			boost::json::array& records = root.at("records").as_array();
 			records.push_back(records.at(0));
@@ -2185,5 +2187,27 @@ BOOST_AUTO_TEST_CASE(files_under_a_linked_folder_get_no_id)
 	BOOST_TEST(db->pending_ids() == 0u);
 }
 #endif
+
+// #1129: a desc's binary file without its desc gets no ID once its header says it is one; a file only named so (a glTF
+// model's buffer) is an ordinary asset.
+BOOST_AUTO_TEST_CASE(a_binary_file_without_its_desc_gets_no_id_unless_it_lacks_the_header)
+{
+	open();
+	write(upper(), "mesh.geom.bin", std::string{ "SNKB" } + std::string("\x01\0\0\0", 4) + "data");
+	apply(own_change("mesh.geom.bin", res::change_kind::created));
+	write(upper(), "scene.gltf.bin", "glTF buffer bytes");
+	apply(own_change("scene.gltf.bin", res::change_kind::created));
+	settle();
+	settle();
+
+	BOOST_TEST(record("mesh.geom.bin").binary_header);
+	BOOST_TEST(edt::is_orphan_binary(record("mesh.geom.bin")));
+	BOOST_TEST(!record("mesh.geom.bin").id.has_value());
+	BOOST_TEST(!fs::exists(upper() / "mesh.geom.bin.resource"));
+
+	BOOST_TEST(!edt::is_orphan_binary(record("scene.gltf.bin")));
+	BOOST_TEST(meta_id("scene.gltf.bin").has_value());
+	BOOST_TEST(db->pending_ids() == 0u);
+}
 
 BOOST_AUTO_TEST_SUITE_END()

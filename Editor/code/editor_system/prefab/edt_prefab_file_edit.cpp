@@ -2,21 +2,29 @@
 #include "edt_override_edit.h"
 #include "edt_prefab_document.h"
 #include <snk/desc/desc_system.h>
+#include <snk/scene/level/scn_prefab_layer.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <format>
 
-std::vector<std::byte> edt::prefab_file_bytes(editor_services& services, const scn::prefab_desc& prefab, const res::tag& tag)
+std::vector<std::byte> edt::prefab_file_bytes(editor_services& services, const scn::prefab_desc& prefab, const res::tag& tag,
+	std::string* why)
 {
 	desc::desc_system* descs = services.descs();
-	if (!descs) {
+	res::resource_system* resources = services.resources();
+	if (!descs || !resources) {
 		return {};
 	}
 	namespace json = boost::json;
 	json::object body;
 	prefab.serialize(body);
-	descs->reduce_to_parent(prefab, body);
+	if (prefab.get_parent().is_valid()) {
+		if (std::string reason = scn::write_prefab_layer(*descs, *resources, prefab, body); !reason.empty()) {
+			if (why) *why = std::move(reason);
+			return {};
+		}
+	}
 	body["__type"] = std::string(scn::prefab_desc::__type);
 	// A __guid the file had stays until the project's migration takes it out; none is made up (the adapter does the same).
 	if (!prefab.get_guid().empty()) {
@@ -63,9 +71,10 @@ std::string edt::edit_prefab_file(editor_services& services, const desc_file_lay
 	if (std::string error = change(edited); !error.empty()) {
 		return error;
 	}
-	const std::vector<std::byte> bytes = prefab_file_bytes(services, edited, tag);
+	std::string why;
+	const std::vector<std::byte> bytes = prefab_file_bytes(services, edited, tag, &why);
 	if (bytes.empty()) {
-		return std::format("{} could not be turned into a file: nothing was written", tag.view());
+		return std::format("{} could not be turned into a file: {}. Nothing was written.", tag.view(), why.empty() ? "no file form" : why);
 	}
 	if (bytes.size() > k_desc_file_limit) {
 		return std::format("{} would be {} bytes: a prefab holds at most {}", tag.view(), bytes.size(), k_desc_file_limit);

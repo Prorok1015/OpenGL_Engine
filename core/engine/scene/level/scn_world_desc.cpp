@@ -1,5 +1,6 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_diagnostics.h>
 #include <string_view>
 
 namespace
@@ -69,6 +70,11 @@ namespace
 
 void scn::world_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
+	if (data.contains("__layer")) {
+		throw ::res::load_error(::res::diagnostic_kind::schema, "/__layer",
+			"the layer format ('__layer') is for prefabs; a world over a '__parent' is written whole or as a v1 overlay");
+	}
+
 	if (data.contains("name")) {
 		name = json::value_to<std::string>(data.at("name"));
 	}

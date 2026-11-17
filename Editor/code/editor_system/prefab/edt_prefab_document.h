@@ -61,6 +61,10 @@ namespace edt
 		// a lower layer or changed on disk since it was read, and when the file cannot be checked; on success the preview's
 		// source is signalled as changed (the levels that use the prefab reload it) and the working copy is the save point.
 		save_result save() override;
+		// The file written whole, without `__parent`: a variant whose edits no layer over its base can say (the last Apply was refused
+		// with `layer_refused()`). A person's choice only; the file then stops following its base.
+		save_result save_without_base();
+		bool layer_refused() const { return m_layer_refused; }
 		// Why Apply is off right now (empty: it can be pressed): Play, a file of a lower layer, a project that may not be written.
 		std::string apply_blocker() const;
 		bool edits_locked() const override { return m_locked && m_locked(); }
@@ -109,6 +113,7 @@ namespace edt
 		void inject_camera(entt::registry& reg);
 		// The bytes the working copy would be written as (the adapter's form: header, references, pretty JSON).
 		std::vector<std::byte> working_bytes() const;
+		save_result save_with(bool without_base);
 		// The same state as a string for the dirty test; no references are resolved, no file is read.
 		std::string working_form() const;
 		void take_from(const scn::prefab_desc& source);
@@ -138,6 +143,7 @@ namespace edt
 		std::string m_set_name;
 		bool m_open = false;
 		bool m_dirty = false;
+		bool m_layer_refused = false;
 		editor_camera_state m_camera_state;
 
 		static constexpr std::string_view k_working_tag = "memory://editor/__prefab_working";

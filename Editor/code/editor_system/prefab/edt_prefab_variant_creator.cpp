@@ -2,6 +2,7 @@
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <format>
 
@@ -54,8 +55,13 @@ edt::document_creation edt::prefab_variant_creator::create(const res::tag& base,
 	const std::string relative = folder.empty() ? std::format("{}{}", name, file_suffix) : std::format("{}/{}{}", folder, name, file_suffix);
 	const std::string prefab_type{ "prefab_desc" };
 	const json::value content = json::object{
-		{ "__type", prefab_type }, { "__version", descs->current_version(prefab_type) }, { "__parent", std::string{ base.view() } } };
+		{ "__type", prefab_type }, { "__version", descs->current_version(prefab_type) }, { "__parent", std::string{ base.view() } }, { "__layer", 2 } };
 	const res::tag tag = res::tag::make(relative);
+	const auto base_prefab = resources->require_sync<scn::prefab_desc>(base);
+	if (!base_prefab.is_ready() || base_prefab.has_error()) return { {}, std::format("'{}' does not load as a prefab", base.view()) };
+	if (m_claim) {
+		if (std::string claimed = m_claim(tag); !claimed.empty()) return { {}, std::move(claimed) };
+	}
 	if (const res::file_operation made = resources->create_sync(tag, desc::pretty_json_bytes(content)); !made.ok) return { {}, made.error };
 	return { tag, {} };
 }
@@ -86,4 +92,13 @@ std::optional<res::tag> edt::prefab_variant_form::submit()
 	}
 	m_error.clear();
 	return made.tag;
+}
+
+std::string edt::open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag)
+{
+	const desc_file_read probe = read_desc_file(resources, descs, layout, tag);
+	if (probe.in_open_level) {
+		return std::format("'{}' is a name of the open level (its file or one of its worlds): choose another name", tag.view());
+	}
+	return {};
 }

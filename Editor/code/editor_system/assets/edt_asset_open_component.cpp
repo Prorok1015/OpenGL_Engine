@@ -53,7 +53,11 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 		[this] { return m_ports.services.writable_resources(); },
 		[this] { return m_ports.resources.get_resource_layers(); },
 		[this] { return m_ports.write_blocker(); } };
-	m_ports.browser.set_variant_creator(std::make_shared<prefab_variant_creator>(std::move(names)),
+	m_ports.browser.set_variant_creator(std::make_shared<prefab_variant_creator>(std::move(names), [this](const res::tag& tag) {
+			desc::desc_system* descs = m_ports.services.descs();
+			res::resource_system* resources = m_ports.services.resources();
+			return descs && resources ? open_level_claim(*resources, *descs, desc_layout(), tag) : std::string{};
+		}),
 		[this](const res::tag& tag) { m_ports.open_prefab(tag); });
 }
 

@@ -9,10 +9,13 @@
 #include "edt_world_controller.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
+#include <memory>
+#include <optional>
 #include <utility>
 
 namespace
@@ -46,10 +49,34 @@ void edt::problems_component::wire(problems_panel& panel)
 			return out;
 		}
 		for (problem_action& action : assets->problem_actions(item)) {
-			out.emplace_back(action.label, [label = action.label, run = std::move(action.run)] {
-				if (const asset_fix_result result = run(); !result.ok) {
-					egLOG_WARN("assets", "{}: {}", label, result.error);
-				}
+			std::string label = action.label;
+			out.emplace_back(std::move(label), [this, item, action = std::move(action), layers = assets->database().layers()] {
+				const fix_question ask = [this](const problem_action& asked, std::function<void(bool)> answer) {
+					dialog_service& dialogs = m_ports.context.dialogs();
+					if (!dialogs.can_show()) {
+						return false;
+					}
+					dialogs.choose(asked.label, asked.confirm, { asked.label, "Cancel" },
+						[answer = std::move(answer)](std::optional<std::size_t> picked) { answer(picked && *picked == 0); });
+					return true;
+				};
+				// The answer may come after a project switch: the fix is found again only in the project it was asked for.
+				auto again = [this, item, label = action.label, layers, alive = std::weak_ptr<int>(m_alive)]() -> std::optional<problem_action> {
+					if (alive.expired()) {
+						return std::nullopt;
+					}
+					asset_component* now = m_ports.assets();
+					if (!now || now->database().layers() != layers) {
+						return std::nullopt;
+					}
+					for (problem_action& found : now->problem_actions(item)) {
+						if (found.label == label) {
+							return std::move(found);
+						}
+					}
+					return std::nullopt;
+				};
+				run_person_fix(action, ask, std::move(again));
 			});
 		}
 		return out;

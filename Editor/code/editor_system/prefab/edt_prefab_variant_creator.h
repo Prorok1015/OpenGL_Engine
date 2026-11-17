@@ -1,6 +1,8 @@
 #pragma once
+#include "edt_desc_file_commands.h"
 #include "edt_document_creator.h"
 #include <snk/resource/res_tag.h>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,7 +17,9 @@ namespace edt
 	class prefab_variant_creator
 	{
 	public:
-		explicit prefab_variant_creator(document_creator::ports wired) : m_ports(std::move(wired)), m_names(m_ports) {}
+		// `claim`: why a file of that tag may not be made (empty: it may), asked right before the write: the name of the open level, #966.
+		explicit prefab_variant_creator(document_creator::ports wired, std::function<std::string(const res::tag&)> claim = {})
+			: m_ports(std::move(wired)), m_names(m_ports), m_claim(std::move(claim)) {}
 
 		// "res://a/b/hero.prefab.desc" -> "hero_variant"; a taken name gets a number ("hero_variant2", ...). Empty when `base` is no prefab file.
 		std::string suggested_name(const res::tag& base) const;
@@ -23,7 +27,9 @@ namespace edt
 		// Why `stem` cannot be the name of a variant of `base` (the file is `<stem>.prefab.desc` in the base's folder): empty when it can.
 		std::string check(const res::tag& base, std::string_view stem) const;
 
-		// Writes `{"__type": "prefab_desc", "__version", "__parent": <base>}` and nothing else. `stem` empty: the suggested name.
+		// Writes `{"__type": "prefab_desc", "__version", "__parent": <base>, "__layer": 2}` and nothing else (a layer that changes nothing). `stem`
+		// empty: the suggested name. Refused: while the project may not be written, for a base that does not load as a prefab, for a name the open
+		// level has, for a name taken in any layer.
 		document_creation create(const res::tag& base, std::string_view stem) const;
 
 		static constexpr std::string_view file_suffix = ".prefab.desc";
@@ -34,7 +40,11 @@ namespace edt
 
 		document_creator::ports m_ports;
 		document_creator m_names;
+		std::function<std::string(const res::tag&)> m_claim;
 	};
+
+	// The reason a new file `tag` is not the project's to make because the open level has that name (its file or one of its worlds), else empty (#966).
+	std::string open_level_claim(res::resource_system& resources, const desc::desc_system& descs, const desc_file_layout& layout, const res::tag& tag);
 
 	// What the "Create Variant" window of the asset browser holds between frames, without ImGui: the base, the name (the suggested one
 	// at first) and what is wrong with it.

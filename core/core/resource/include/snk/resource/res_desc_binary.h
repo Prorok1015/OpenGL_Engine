@@ -217,11 +217,34 @@ namespace res
 		SNK_API file_operation commit_pending(resource_system& system, const save_lock& lock, const tag& desc,
 			const desc_binary_written& written);
 
-		// After a save that failed at its commit, under that save's lock: puts `previous_desc` back (nullopt: removes the desc
-		// while it still holds `written_desc`), and only then the staged file while it still holds `written.file`.
+		// The desc a save is about to replace, as read under that save's lock before the new one is written (#1093).
+		struct previous_desc
+		{
+			enum class origin : std::uint8_t
+			{
+				// No desc: the save makes a new one.
+				none,
+				// In the layer a store writes to: taken back by writing `bytes` again.
+				top_layer,
+				// In a lower layer only: taken back by removing the new one, so the lower one shows again.
+				lower_layer,
+				// There, but reading it failed: nothing to take back with (`error` says why).
+				unreadable,
+			};
+			origin from = origin::none;
+			std::vector<std::byte> bytes;
+			std::string error;
+		};
+
+		// Reads the desc `desc` before step 2 of a save, under that save's lock.
+		SNK_API previous_desc read_previous_desc(resource_system& system, const save_lock& lock, const tag& desc);
+
+		// After a save that failed at its commit, under that save's lock: puts the previous desc back (top layer), or removes
+		// the new desc while it still holds `written_desc` (none, lower layer), and only then the staged file while it still
+		// holds `written.file`. A previous desc that could not be read is no reason to remove the new one: refused (WARN),
+		// the new desc and the staged file stay.
 		SNK_API file_operation take_back(resource_system& system, const save_lock& lock, const tag& desc,
-			const desc_binary_written& written, const std::vector<std::byte>& written_desc,
-			const std::optional<std::vector<std::byte>>& previous_desc);
+			const desc_binary_written& written, const std::vector<std::byte>& written_desc, const previous_desc& previous);
 
 		// Step 2 of save(): stores the desc with `ranges`; false stops the save before the commit.
 		using desc_writer = std::function<bool(std::span<const binary_range> ranges)>;

@@ -171,6 +171,24 @@ void desc::desc_system::unregister_desc(std::string_view type_name)
 	}
 	std::erase(m_component_type_names, name);
 	m_schemas.remove(type_name);
+	m_layer_writers.erase(name);
+}
+
+void desc::desc_system::set_layer_writer(std::string_view type_name, layer_writer writer)
+{
+	std::unique_lock lock(m_registry_mutex);
+	m_layer_writers[std::string{ type_name }] = std::make_shared<const layer_writer>(std::move(writer));
+}
+
+std::shared_ptr<const desc::desc_system::layer_writer> desc::desc_system::find_layer_writer(std::string_view type_name) const
+{
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (const auto it = m_layer_writers.find(std::string{ type_name }); it != m_layer_writers.end()) {
+			return it->second;
+		}
+	}
+	return m_parent ? m_parent->find_layer_writer(type_name) : nullptr;
 }
 
 const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
@@ -449,6 +467,12 @@ void desc::desc_system::reduce_to_parent(const desc::desc_base& desc, json::obje
 {
 	const res::tag& parent_tag = desc.get_parent();
 	if (!parent_tag.is_valid() || desc.get_type().empty()) {
+		return;
+	}
+	if (const auto writer = find_layer_writer(desc.get_type())) {
+		if (std::string why = (*writer)(*this, m_res_system, desc, body); !why.empty()) {
+			throw std::runtime_error(std::format("'{}' cannot be written over its '__parent' '{}': {}", desc.get_tag().view(), parent_tag.view(), why));
+		}
 		return;
 	}
 	const auto file_form = [&](const json::object& own) {

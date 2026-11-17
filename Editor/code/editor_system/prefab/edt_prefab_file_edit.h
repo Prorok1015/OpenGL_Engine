@@ -15,7 +15,8 @@ namespace edt
 
 	// The bytes `prefab` is written to the file `tag` as (the adapter's form: header, references, only its own layer when it has a
 	// __parent, pretty JSON). Empty when the descriptions are not available.
-	std::vector<std::byte> prefab_file_bytes(editor_services& services, const scn::prefab_desc& prefab, const res::tag& tag);
+	std::vector<std::byte> prefab_file_bytes(editor_services& services, const scn::prefab_desc& prefab, const res::tag& tag,
+		std::string* why = nullptr);
 
 	// Changes the prefab file `tag` without opening it in the prefab editor: reads the file fresh, lets `change` edit a copy (it returns
 	// the reason it cannot, empty when it did), writes the result and tells the levels that use the prefab. Refuses, writing nothing,

@@ -427,7 +427,7 @@ namespace
 
 	bool is_engine_key(std::string_view key)
 	{
-		return key == "__type" || key == "__version" || key == "__guid" || key == "__id";
+		return key == "__type" || key == "__version" || key == "__guid" || key == "__id" || key == "__layer" || key == "__order";
 	}
 
 	// Why `written` loses what derives from a parent in `migrated`: an object with __parent whose saved form names

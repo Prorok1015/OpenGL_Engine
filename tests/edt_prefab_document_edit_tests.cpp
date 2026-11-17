@@ -538,7 +538,58 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndTheEdit)
 	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
 	BOOST_TEST(file.find("__parent") != std::string::npos);
 	BOOST_TEST(file.find("arm2") != std::string::npos);
-	// #972: the file must not hold the child's stat (`"hp"`), it equals the parent's; seen on Windows MSVC, put the check back with the fix.
+	BOOST_TEST(file.find("\"hp\"") == std::string::npos);
+	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatChangesAValueTheBaseAlreadyOverrides_WritesAnAddedRecord_AndReadsBackTheNewValue)
+{
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})");
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		auto& records = prefab.get_root().children[0].overrides;
+		records[0].value = 7;
+		return true;
+	}));
+
+	BOOST_TEST_REQUIRE(document->save().saved);
+
+	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
+	BOOST_TEST(file.find("7") != std::string::npos);
+	document->revert();
+	BOOST_REQUIRE(!document->working()->get_root().children[0].overrides.empty());
+	BOOST_TEST(document->working()->get_root().children[0].overrides.back().value.as_int64() == 7);
+}
+
+BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatTakesOutAnInheritedRecord_IsRefused_AndSaveWithoutBaseWritesItWhole)
+{
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	const std::string variant = R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
+	write(res_root, "prefabs/v.prefab.desc", variant);
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		prefab.get_root().children[0].overrides.clear();
+		return true;
+	}));
+
+	const edt::save_result refused = document->save();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(document->layer_refused());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc") == variant);
+
+	BOOST_TEST_REQUIRE(document->save_without_base().saved);
+	BOOST_TEST(!document->is_dirty());
+	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
+	BOOST_TEST(file.find("__parent") == std::string::npos);
+	BOOST_TEST(file.find("\"arm\"") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(Edit_OfTheRootTransform_MovesTheRootOfThePreview_AndRevertPutsItBack)
@@ -1011,6 +1062,39 @@ BOOST_AUTO_TEST_CASE(CreateVariant_WritesOnlyTheParent_NextToTheBase)
 	BOOST_TEST(file.find("res://prefabs/a.prefab.desc") != std::string::npos);
 	BOOST_TEST(file.find("prefab_desc") != std::string::npos);
 	BOOST_TEST(file.find("children") == std::string::npos);
+	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_OfABaseThatDoesNotLoad_IsRefusedWritingNothing)
+{
+	const auto made = variant_creator().create(res::tag::make("prefabs/missing.prefab.desc"), "x");
+
+	BOOST_TEST(!made.ok());
+	BOOST_TEST(made.error.find("does not load as a prefab") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "prefabs" / "x.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_ANameTheClaimRefuses_WritesNothing)
+{
+	const edt::prefab_variant_creator creator(
+		edt::document_creator::ports{
+			[this] { return descs.get(); }, [this] { return rs.get(); },
+			[this] { return std::vector<fs::path>{ lower, res_root }; }, [] { return std::optional<std::string>{}; } },
+		[](const res::tag&) { return std::string{ "a name of the open level" }; });
+
+	const auto made = creator.create(res::tag::make("prefabs/a.prefab.desc"), "x");
+
+	BOOST_TEST(made.error == "a name of the open level");
+	BOOST_TEST(!fs::exists(res_root / "prefabs" / "x.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(OpenLevelClaim_NamesTheOpenLevelsFile_AndNothingElse)
+{
+	edt::desc_file_layout level_layout = layout();
+	level_layout.open_level_files = [] { return std::vector<std::string>{ "levels/lv.desc" }; };
+
+	BOOST_TEST(!edt::open_level_claim(*rs, *descs, level_layout, res::tag::make("levels/lv.desc")).empty());
+	BOOST_TEST(edt::open_level_claim(*rs, *descs, level_layout, res::tag::make("prefabs/other.prefab.desc")).empty());
 }
 
 BOOST_AUTO_TEST_CASE(CreateVariant_ATakenName_GetsANumber_AndANamedOneThatIsTakenIsRefused)
