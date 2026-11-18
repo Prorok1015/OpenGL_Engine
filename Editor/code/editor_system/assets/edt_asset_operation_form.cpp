@@ -127,6 +127,7 @@ void edt::asset_operation_form::open(asset_operation what, const res::tag& asset
 	m_error.clear();
 	m_run = asset_run{};
 	m_undone = false;
+	m_undo_dropped = false;
 	m_undo_error.clear();
 	const std::string relative = relative_of(asset);
 	const std::size_t slash = relative.find_last_of('/');
@@ -352,6 +353,7 @@ bool edt::asset_operation_form::undo()
 	const asset_fix_result result = m_ports.undo(m_run.report.operation_id);
 	if (!result.ok) {
 		m_undo_error = shown(result.error);
+		m_undo_dropped = !result.keep;
 		return false;
 	}
 	m_undone = true;

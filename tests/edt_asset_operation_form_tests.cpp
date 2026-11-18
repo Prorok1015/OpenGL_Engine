@@ -209,7 +209,7 @@ struct form_fixture
 	std::set<std::string> open_files;
 	std::optional<std::string> blocked;
 	edt::asset_ops operations{ make_operations() };
-	edt::asset_history history{ journal.path(), [this] { return db->next_history_serial(); } };
+	edt::asset_history history{ journal.path(), fs::path{}, [this] { return db->next_history_serial(); } };
 	edt::asset_command_sources sources;
 	edt::problem_list problems;
 	edt::asset_problem_publisher publisher;
@@ -463,7 +463,12 @@ BOOST_AUTO_TEST_CASE(AnUndoThatIsRefused_ShowsItsTextInTheReport_AndTheFilesStay
 	BOOST_TEST(!form.undo());
 	BOOST_TEST(!form.undo_error().empty());
 	BOOST_TEST(!form.undone());
+	BOOST_TEST(form.can_undo(), "the history keeps the entry: the button stays to try again");
 	BOOST_TEST((snapshot() == after_edit), "nothing was touched");
+	BOOST_TEST(!form.undo());
+	BOOST_TEST(!form.undo());
+	BOOST_TEST(!form.can_undo(), "dropped from the history after the third failure");
+	BOOST_TEST(contains(form.undo_error(), "dropped from the history"));
 
 	form.open(edt::asset_operation::rename, res::tag::make("lonely.desc"));
 	form.set_input("alone.desc");

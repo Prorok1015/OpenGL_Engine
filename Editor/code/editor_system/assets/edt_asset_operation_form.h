@@ -85,7 +85,8 @@ namespace edt
 		// The report of the operation done: what moved, what was rewritten (with pointers), what could not be, warnings, what is broken.
 		std::vector<std::string> report_lines() const;
 		std::string report_title() const;
-		bool can_undo() const { return m_stage == stage::reported && !m_undone && !m_run.report.operation_id.empty(); }
+		// Stays on after a refused undo while the history keeps the entry (it is dropped after a few failures).
+		bool can_undo() const { return m_stage == stage::reported && !m_undone && !m_undo_dropped && !m_run.report.operation_id.empty(); }
 		bool undo();
 		bool undone() const { return m_undone; }
 		const std::string& undo_error() const { return m_undo_error; }
@@ -104,6 +105,7 @@ namespace edt
 		std::string m_error;
 		asset_run m_run;
 		bool m_undone = false;
+		bool m_undo_dropped = false;
 		std::string m_undo_error;
 	};
 }
