@@ -383,6 +383,11 @@ jobs:
             cat unit_tests_rest.log unit_tests_vcs.log > unit_tests.log 2>/dev/null || true
           fi
           [ -s unit_tests.log ] || exit 0
+          # The failed checks too: a long log buries them far above the end that a log viewer or tool shows.
+          if grep -qE '(fatal )?error: in "' unit_tests.log; then
+            echo "Failed checks:"
+            grep -E '(fatal )?error: in "' unit_tests.log | head -n 40 || true
+          fi
           for what in suite case; do
             echo "Slowest test ${what}s:"
             sed -nE "s/.*Leaving test ${what} \"([^\"]+)\"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p" unit_tests.log \
@@ -1336,7 +1341,7 @@ jobs:
             sed "s|@OUT@|$out|g" tools/headless/theme_tour.actions > "$out/tour.actions"
             tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions "$out/tour.actions" --size 1920x1080 \
               --shot "$out/final.png" \
-              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc "$@"
+              -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/ui_probe true "$@"
             tools/headless/check_smoke.sh "$out/final.png" "$out/editor.log" 200x200+860+450 0
           }
           for variant in classic dark_neutral dark_contrast light; do

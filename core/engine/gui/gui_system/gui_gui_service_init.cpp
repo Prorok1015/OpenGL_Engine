@@ -114,7 +114,8 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 		auto& themes = data.construct<::gui::theme_service>(resources, default_theme,
 			[gl_backend_ptr](::gui::theme_service::theme theme) {
 				gl_backend_ptr->set_theme(theme.style, std::move(theme.text_font), std::move(theme.fallback_font),
-					std::move(theme.icon_font), theme.fonts_changed);
+					std::move(theme.icon_font), std::move(theme.bold_font), std::move(theme.mono_font),
+					theme.fonts_changed);
 			});
 		themes.select(theme_set_by_config() ? res::tag{ *cfg_gui_theme } : default_theme);
 		gui_sys.push_layer(std::make_shared<::gui::theme_service::layer>(themes));

@@ -32,6 +32,8 @@
     "border_size" : 1.0,
     "tab_overline" : 2.0,
     "font" : "engine://fonts/NotoSans-Regular.ttf",
+    "font_bold" : "engine://fonts/NotoSans-Regular.ttf",
+    "font_mono" : "engine://fonts/NotoSans-Regular.ttf",
     "font_size" : 13.0,
     "icons" : false
 }
