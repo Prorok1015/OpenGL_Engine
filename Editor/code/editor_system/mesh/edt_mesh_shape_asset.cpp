@@ -157,7 +157,7 @@ namespace edt::mesh
 			return out;
 		}
 		out.generator = source.generator;
-		const shape_asset_result again = build_shape_asset(*source.generator);
+		const shape_asset_result again = build_shape_asset(*source.generator, res::tag{ "res://shape.geom.desc" });
 		if (!again.files) {
 			out.state = shape_source::unreadable;
 			out.error = again.error;
