@@ -135,6 +135,16 @@ BOOST_AUTO_TEST_CASE(Parse_ReadsModifiersAndKeyInAnyCase)
 	BOOST_CHECK(chord("Alt+Delete").alt);
 }
 
+BOOST_AUTO_TEST_CASE(Parse_AcceptsThreeModifiers_AndPrintsThemInOrder)
+{
+	const auto s = chord("alt+ctrl+s");
+	BOOST_CHECK(s.ctrl && !s.shift && s.alt);
+	BOOST_CHECK_EQUAL(s.key, "S");
+	BOOST_CHECK_EQUAL(s.to_string(), "Ctrl+Alt+S");
+	const auto all = chord("Ctrl+Shift+Alt+S");
+	BOOST_CHECK(all.ctrl && all.shift && all.alt);
+}
+
 BOOST_AUTO_TEST_CASE(Parse_AcceptsPunctuationKeysAndRoundTrips)
 {
 	for (const char* key : { "`", "[", "]", "\\", "'", ",", ".", "/", ";", "=", "-" }) {
