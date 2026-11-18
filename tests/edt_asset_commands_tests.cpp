@@ -741,7 +741,7 @@ BOOST_AUTO_TEST_CASE(AJournalThatIsNotInTheEditorsOwnList_IsNeverRestoredNorUndo
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	const std::string id = text_of(result.value.at("operation"));
 	BOOST_TEST(fs::is_regular_file(list_file()));
-	BOOST_TEST(!list_file().generic_string().starts_with(layer.path().generic_string()));
+	BOOST_TEST(!list_file().generic_string().starts_with(layer.path().generic_string() + "/"));
 
 	// A journal that came with the project's cache folder: well formed, naming the project's folder, but nobody listed it.
 	std::ifstream real(journal.path() / id / "journal.json", std::ios::binary);
