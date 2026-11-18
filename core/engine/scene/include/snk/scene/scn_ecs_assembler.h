@@ -5,7 +5,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <entt/fwd.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <string>

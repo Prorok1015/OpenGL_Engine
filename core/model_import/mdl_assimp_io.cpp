@@ -14,7 +14,7 @@ Assimp::IOStream* mdl::detail::source_io::Open(const char* file, const char* mod
 	const opened_file opened = m_files.open(file);
 	if (!opened.bytes) {
 		if (!opened.reason.empty()) {
-			egLOG_WARN("import", "model '{}' refers to '{}', which is not read: {}", m_display_name, file, opened.reason);
+			egLOG_WARN("import", "model '{}' refers to '{}', which is not read: {}", logged(m_display_name), logged(file), opened.reason);
 		}
 		return nullptr;
 	}

@@ -7,7 +7,7 @@
 #include <vector>
 #include <boost/json/object.hpp>
 #include <snk/common/snk_api.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 
 namespace json = boost::json;
 

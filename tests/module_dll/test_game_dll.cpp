@@ -15,7 +15,7 @@
 #include <snk/game/gs_module_layout_key.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_animation.h>
 #include <snk/scene/level/scn_prefab_spawn.h>
 #include <snk/scene/level/scn_scene_switch.h>

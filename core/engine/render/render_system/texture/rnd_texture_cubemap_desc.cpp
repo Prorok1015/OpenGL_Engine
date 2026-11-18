@@ -1,6 +1,6 @@
 #include "rnd_texture_cubemap_desc.h"
 #include <snk/desc/desc_system.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 
 void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boost::json::object& resource)
 {

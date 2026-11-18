@@ -7,7 +7,7 @@
 // include <boost/json.hpp> themselves.
 #include <boost/json/fwd.hpp>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_base.h>
 #include <cstdint>
 

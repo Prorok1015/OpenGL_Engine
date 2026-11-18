@@ -3,6 +3,8 @@
 #include "test_temp_dir.hpp"
 #include "edt_prefab_document.h"
 #include "edt_prefab_file_edit.h"
+#include "edt_prefab_variant_creator.h"
+#include "edt_desc_problems.h"
 #include "edt_override_edit.h"
 #include "edt_instance_overrides_view.h"
 #include "edt_inspector_target.h"
@@ -100,6 +102,15 @@ struct prefab_edit_fixture : test_util::scene_env
 	{
 		std::ifstream in(root / std::string(name), std::ios::binary);
 		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	edt::prefab_variant_creator variant_creator(std::optional<std::string> blocked = std::nullopt)
+	{
+		return edt::prefab_variant_creator(edt::document_creator::ports{
+			[this] { return descs.get(); },
+			[this] { return rs.get(); },
+			[this] { return std::vector<fs::path>{ lower, res_root }; },
+			[blocked] { return blocked; } });
 	}
 
 	bool rename_arm(const std::string& name)
@@ -1038,6 +1049,154 @@ BOOST_AUTO_TEST_CASE(FoldRecord_TheSameFieldTwice_IsOneRecordOfTheInstanceNodeWi
 	const auto& inst = edited.get_root().children.at(0);
 	BOOST_REQUIRE(inst.overrides.size() == 1u);
 	BOOST_TEST(inst.overrides[0].value.to_number<int>() == 11);
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_WritesOnlyTheParent_NextToTheBase)
+{
+	const auto made = variant_creator().create(res::tag::make("prefabs/a.prefab.desc"), "");
+
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(made.tag.view() == "res://prefabs/a_variant.prefab.desc");
+	const std::string file = text_of(res_root, "prefabs/a_variant.prefab.desc");
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("res://prefabs/a.prefab.desc") != std::string::npos);
+	BOOST_TEST(file.find("prefab_desc") != std::string::npos);
+	BOOST_TEST(file.find("children") == std::string::npos);
+	BOOST_TEST(file.find("\"__layer\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_OfABaseThatDoesNotLoad_IsRefusedWritingNothing)
+{
+	const auto made = variant_creator().create(res::tag::make("prefabs/missing.prefab.desc"), "x");
+
+	BOOST_TEST(!made.ok());
+	BOOST_TEST(made.error.find("does not load as a prefab") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "prefabs" / "x.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_ANameTheClaimRefuses_WritesNothing)
+{
+	const edt::prefab_variant_creator creator(
+		edt::document_creator::ports{
+			[this] { return descs.get(); }, [this] { return rs.get(); },
+			[this] { return std::vector<fs::path>{ lower, res_root }; }, [] { return std::optional<std::string>{}; } },
+		[](const res::tag&) { return std::string{ "a name of the open level" }; });
+
+	const auto made = creator.create(res::tag::make("prefabs/a.prefab.desc"), "x");
+
+	BOOST_TEST(made.error == "a name of the open level");
+	BOOST_TEST(!fs::exists(res_root / "prefabs" / "x.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(OpenLevelClaim_NamesTheOpenLevelsFile_AndNothingElse)
+{
+	edt::desc_file_layout level_layout = layout();
+	level_layout.open_level_files = [] { return std::vector<std::string>{ "levels/lv.desc" }; };
+
+	BOOST_TEST(!edt::open_level_claim(*rs, *descs, level_layout, res::tag::make("levels/lv.desc")).empty());
+	BOOST_TEST(edt::open_level_claim(*rs, *descs, level_layout, res::tag::make("prefabs/other.prefab.desc")).empty());
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_ATakenName_GetsANumber_AndANamedOneThatIsTakenIsRefused)
+{
+	const auto creator = variant_creator();
+	BOOST_REQUIRE(creator.create(res::tag::make("prefabs/a.prefab.desc"), "").ok());
+
+	BOOST_TEST(creator.suggested_name(res::tag::make("prefabs/a.prefab.desc")) == "a_variant2");
+	const auto again = creator.create(res::tag::make("prefabs/a.prefab.desc"), "a_variant");
+	BOOST_TEST(!again.ok());
+	BOOST_TEST(again.error.find("already exists") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(CreateVariant_OfSomethingThatIsNoPrefab_OrWhileTheProjectIsLocked_IsRefusedWritingNothing)
+{
+	BOOST_TEST(!variant_creator().create(res::tag::make("prefabs/a.desc"), "x").ok());
+	const auto locked = variant_creator(std::string{ "a migration runs" }).create(res::tag::make("prefabs/a.prefab.desc"), "x");
+	BOOST_TEST(locked.error == "a migration runs");
+	BOOST_TEST(!fs::exists(res_root / "prefabs" / "x.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AVariantOfAVariantOfAVariant_LoadsWithTheContentOfTheBase)
+{
+	const auto creator = variant_creator();
+	const auto second = creator.create(res::tag::make("prefabs/a.prefab.desc"), "b");
+	BOOST_REQUIRE_MESSAGE(second.ok(), second.error);
+	const auto third = creator.create(second.tag, "c");
+	BOOST_REQUIRE_MESSAGE(third.ok(), third.error);
+	const auto fourth = creator.create(third.tag, "d");
+	BOOST_REQUIRE_MESSAGE(fourth.ok(), fourth.error);
+
+	auto last = require_loaded<scn::prefab_desc>(fourth.tag);
+	pump();
+
+	BOOST_REQUIRE(last.is_ready());
+	const auto& root = last->get_root();
+	BOOST_REQUIRE(root.children.size() == 1u);
+	BOOST_TEST(root.children[0].name == "arm");
+}
+
+BOOST_AUTO_TEST_CASE(AVariantThatNamesItselfAsItsParent_ReadsAsTheOwnerWantsIt_InProblems)
+{
+	write(res_root, "prefabs/loop.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/loop.prefab.desc"})");
+	const res::tag loop = res::tag::make("prefabs/loop.prefab.desc");
+	auto handle = rs->require_sync<scn::prefab_desc>(loop);
+	pump();
+
+	const auto items = edt::diagnostics_of(handle);
+
+	BOOST_REQUIRE(!items.empty());
+	const auto cycle = std::ranges::find(items, std::string(res::diagnostic_kind::cycle), &res::diagnostic::kind);
+	BOOST_REQUIRE(cycle != items.end());
+	const edt::problem row = edt::desc_problem_publisher::to_problem(*cycle);
+	BOOST_TEST(row.message.find("Prefab 'res://prefabs/loop.prefab.desc' refers to itself through") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyingAVariant_WritesOnlyItsOwnLayer_NotTheBasesContent)
+{
+	const auto made = variant_creator().create(res::tag::make("prefabs/a.prefab.desc"), "v");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	document->open(made.tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("renamed"));
+
+	const auto saved = document->save();
+
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	const std::string file = text_of(res_root, "prefabs/v.prefab.desc");
+	BOOST_TEST(file.find("__parent") != std::string::npos);
+	BOOST_TEST(file.find("renamed") != std::string::npos);
+	BOOST_TEST(file.find("\"hp\"") == std::string::npos, "the variant file holds: " << file);
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("renamed") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheVariantForm_StartsWithTheSuggestedName_AndSubmitCreatesIt)
+{
+	const auto creator = variant_creator();
+	edt::prefab_variant_form form(creator);
+
+	form.open(res::tag::make("prefabs/a.prefab.desc"));
+
+	BOOST_TEST(form.name() == "a_variant");
+	BOOST_TEST(form.can_submit());
+	const auto made = form.submit();
+	BOOST_REQUIRE(made.has_value());
+	BOOST_TEST(made->view() == "res://prefabs/a_variant.prefab.desc");
+	BOOST_TEST(fs::exists(res_root / "prefabs" / "a_variant.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheVariantForm_ATakenName_ShowsWhyAndWritesNothingOverTheFile)
+{
+	write(res_root, "prefabs/taken.prefab.desc", "kept");
+	const auto creator = variant_creator();
+	edt::prefab_variant_form form(creator);
+	form.open(res::tag::make("prefabs/a.prefab.desc"));
+
+	form.set_name("taken");
+
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(form.problem().find("already exists") != std::string::npos);
+	BOOST_TEST(!form.submit().has_value());
+	BOOST_TEST(text_of(res_root, "prefabs/taken.prefab.desc") == "kept");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

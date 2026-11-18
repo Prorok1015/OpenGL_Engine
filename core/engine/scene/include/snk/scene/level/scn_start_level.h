@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/snk_api.h>
 #include <chrono>
 #include <cstddef>

@@ -5,11 +5,15 @@
 #include "edt_prefab_close.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_panel.h"
+#include "edt_prefab_variant_creator.h"
 #include "edt_scene_document.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/command/cmd_types.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <boost/json.hpp>
 #include <algorithm>
 #include <format>
 #include <memory>
@@ -94,6 +98,53 @@ void edt::prefab_editor_component::install(std::vector<registration>& out)
 	}));
 	out.push_back(m_ports.context.panels().add({
 		.id = m_panel->get_id(), .title = m_panel->get_title(), .slot = dock_slot::floating, .open_by_default = false, .panel = m_panel }));
+	out.push_back(m_ports.context.actions().add({ .id = "prefab.create_variant", .label = "Create Prefab Variant",
+		.disabled_reason = [this] { return m_ports.desc_layout ? std::string{} : std::string{ "no project is open" }; },
+		.execute_call = [this](const cmd::call& call) { return create_variant(call); },
+		.args_schema = boost::json::parse(R"json({
+			"type": "object",
+			"properties": { "base": { "type": "string" }, "name": { "type": "string" } },
+			"required": ["base"],
+			"additionalProperties": false
+		})json"),
+		.result_schema = boost::json::parse(R"json({
+			"type": "object",
+			"properties": { "tag": { "type": "string" } },
+			"required": ["tag"],
+			"additionalProperties": false
+		})json"),
+		.enabled = [this] { return static_cast<bool>(m_ports.desc_layout); },
+		.category = cmd::agent_category::scene_edit }));
+}
+
+cmd::result edt::prefab_editor_component::create_variant(const cmd::call& call)
+{
+	const boost::json::object& args = call.args.as_object();
+	if (!m_ports.desc_layout) return cmd::result::failure(cmd::codes::failed, "no project is open");
+	const desc_file_layout files = m_ports.desc_layout();
+	prefab_variant_creator creator({
+		.descs = [this] { return m_ports.services.descs(); },
+		.resources = [this] { return m_ports.services.writable_resources(); },
+		.layers = files.layers,
+		.blocker = files.write_blocker },
+		[this, files, agent = call.from.kind != cmd::origin_kind::ui](const res::tag& tag) {
+			desc::desc_system* descs = m_ports.services.descs();
+			res::resource_system* resources = m_ports.services.resources();
+			return descs && resources ? open_level_claim(*resources, *descs, files, tag, agent) : std::string{};
+		});
+	const res::tag base{ std::string(args.at("base").as_string()) };
+	std::string stem;
+	if (const boost::json::value* given = args.if_contains("name"); given && given->is_string()) stem = std::string(given->as_string());
+	const document_creation made = creator.create(base, stem);
+	if (!made.ok()) return cmd::result::failure(made.busy ? cmd::codes::busy : cmd::codes::invalid_args, made.error);
+	// An agent makes the file; a person's call is the one that gets the window (an agent must not open an editor for a person).
+	if (call.from.kind == cmd::origin_kind::ui) open(made.tag);
+	if (call.from.kind == cmd::origin_kind::agent) {
+		m_ports.context.events().agent_action.emit(agent_action_info{ "prefab.create_variant", std::string(made.tag.view()), 0, call.from.session });
+	}
+	boost::json::object out;
+	out["tag"] = std::string(made.tag.view());
+	return cmd::result::success(std::move(out));
 }
 
 void edt::prefab_editor_component::open(const res::tag& tag)

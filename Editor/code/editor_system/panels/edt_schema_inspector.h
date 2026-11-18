@@ -35,7 +35,7 @@ namespace edt::schema_ui
 		group,    // structure with a known nested schema
 		list,     // array
 		map,      // map: a row per key (rename, remove), "+ Add" asks for the key
-		label,    // node_ref, entity: shown, not edited
+		label,    // node_ref, entity, binary_ref: shown, not edited
 		json,     // custom, or a value the schema cannot draw: the generic JSON editor
 	};
 
@@ -101,6 +101,10 @@ namespace edt::schema_ui
 	// Why the text of a tag field names nothing (#631): it has no protocol ("materials/a.mat.desc"). Empty for an empty
 	// text and for a text with a protocol, mounted or not.
 	std::string tag_text_problem(std::string_view text);
+
+	// What a binary_ref field shows: "1024 bytes, f32x8, sha256 0123456789ab" (the first 12 hex digits), "inline, N values"
+	// for the array of a file written before the binary file, "not a range" for anything else.
+	std::string binary_ref_summary(const boost::json::value& value);
 
 	// A value of `kind` that is "nothing yet" (0, "", [0,0,0], first enum item, ...); null for custom and entity.
 	boost::json::value zero_value(const desc::field_schema& field, const desc::schema_registry& registry);

@@ -17,7 +17,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_level_desc.h>
@@ -883,6 +883,31 @@ BOOST_AUTO_TEST_CASE(a_tag_inside_a_structure_or_an_array_of_them_is_checked)
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
 }
 
+// EPIC-79 PR5 (#1068): a binary_ref field is a range of a mesh's binary file, written only by saving the mesh. MCP never
+// sets or clears it; the other fields of the component stay editable. No structure holds one (the schema refuses it).
+BOOST_AUTO_TEST_CASE(a_blob_field_is_never_changed_by_mcp)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.blob","kind":"component",
+		"fields":[{"name":"vertices","kind":"binary_ref"},{"name":"note","kind":"string"}]})").as_object(), &descs->schemas())));
+	const std::string crate = ref({ "00000000000000a4" });
+	const std::string range = R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})";
+	const auto with_blob = call("component.add", R"({"ref":)" + crate + R"(,"key":"blob","type":"probe.blob","fields":{"vertices":)" + range + "}}");
+	BOOST_TEST(with_blob.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate + R"(,"key":"blob","type":"probe.blob","fields":{"note":"a"}})").ok);
+	const auto before = scene.generation();
+
+	for (const std::string& patch : { R"({"vertices":)" + range + "}", std::string(R"({"vertices":{"size":4}})"),
+			std::string(R"({"vertices":null})") }) {
+		BOOST_TEST_CONTEXT(patch) {
+			const auto refused = call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":)" + patch + "}");
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_CHECK_MESSAGE(refused.error.find("written only by saving the mesh") != std::string::npos, refused.error);
+		}
+	}
+	BOOST_TEST(scene.generation() == before);
+	BOOST_CHECK(call("component.set", R"({"ref":)" + crate + R"(,"key":"blob","patch":{"note":"b"}})").ok);
+}
+
 namespace {
 
 // A component with a map of tags: every value is a reference, so each one follows #697.
@@ -943,6 +968,44 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_is_checked_by_the_schema_of_its_type)
 
 	const auto fine = material(R"({"__type":"material_desc","__parent":"res://base_material.desc","samplers":["res://t.png",null]})");
 	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
+}
+
+// EPIC-79 (#1068, review of #1173): an inline geometry or editable mesh, or any desc holding a binary_ref, is refused in a
+// scene edit wherever it sits: mesh data is written by the editor with its binary file.
+BOOST_AUTO_TEST_CASE(an_inline_mesh_is_refused_in_every_scene_edit)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	const std::string geometry = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[0,0,0,0]})";
+	const auto refused = [](const cmd::result& result, std::string_view at) {
+		BOOST_TEST(result.code == cmd::codes::invalid_args);
+		BOOST_CHECK_MESSAGE(result.error.find("mesh data is written by the editor") != std::string::npos, result.error);
+		BOOST_CHECK_MESSAGE(result.error.find(at) != std::string::npos, result.error);
+	};
+
+	refused(call("component.add", R"({"ref":)" + crate + R"(,"key":"mesh","type":"mesh_node_desc","fields":{"geometry":)" + geometry + "}}"),
+		"geometry");
+	refused(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"name":"Probe","components":{"mesh":{"type":"mesh_node_desc",
+		"fields":{"geometry":)" + geometry + "}}}}"), "geometry");
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto before = scene.generation();
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"geometry":)" + geometry + "}}"), "geometry");
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"poly_mesh_desc"}}})"),
+		"material");
+	// Inside an inline desc of another type too.
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"mesh_node_desc","geometry":)"
+		+ geometry + "}}}"), "material/geometry");
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({"name":"probe.blob_mesh",
+		"fields":[{"name":"vertices","kind":"binary_ref"}]})").as_object())));
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"probe.blob_mesh"}}})"),
+		"probe.blob_mesh");
+
+	// A partial patch without __type takes the type of the inline desc the component already holds.
+	auto& node = *const_cast<prefab_node*>(child(root(), 0xa4));
+	node.components.at("mesh").overrides["geometry"] = json::parse(geometry);
+	refused(call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"geometry":{"vertices":[1,1,1,1]}}})"), "geometry");
+	BOOST_TEST(node.components.at("mesh").overrides.at("geometry").as_object().at("vertices").as_array().at(0).as_int64() == 0);
+	BOOST_TEST(scene.generation() == before);
 }
 
 // #740: a partial patch of an inline material may leave out its __type: the type comes from the component as the patch

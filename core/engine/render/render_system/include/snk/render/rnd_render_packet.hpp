@@ -17,7 +17,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/mem_allocator.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace rnd {
 	// What a camera clears in its target before its first pass draws: the colour and the depth, only the depth

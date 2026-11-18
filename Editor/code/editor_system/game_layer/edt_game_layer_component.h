@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_module_swap_gate.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <functional>
 

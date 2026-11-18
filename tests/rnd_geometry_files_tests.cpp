@@ -7,7 +7,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
-#include <snk/render/geom/rnd_geometry_encode.h>
+#include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_desc_binary.h>

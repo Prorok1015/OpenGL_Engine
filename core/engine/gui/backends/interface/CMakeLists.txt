@@ -8,3 +8,5 @@ add_library(snk::gui_backend_interface ALIAS gui_backend_interface)
 snk_component_headers(gui_backend_interface)
 # imgui headers come from the reusable `imgui` target (EPIC-41 US-41-6).
 target_link_libraries(gui_backend_interface INTERFACE imgui)
+# gui_backend_interface.h names the driver's types.
+target_link_libraries(gui_backend_interface INTERFACE snk::drv_interface)

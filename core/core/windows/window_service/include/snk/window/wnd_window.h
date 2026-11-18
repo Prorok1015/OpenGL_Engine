@@ -7,7 +7,7 @@
 #include <string_view>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/common/snk_api.h>
-#include <snk/window/wnd_gl_surface.h>
+#include <snk/driver/rnd_gl_surface.h>
 
 namespace wnd
 {
@@ -72,7 +72,7 @@ namespace wnd
 		virtual const glm::ivec2& get_size() const = 0;
 		virtual float get_content_scale() const = 0;
 		// GL context of this window; nullptr when it has none (null window, graphics_api::none).
-		virtual gl_surface* gl_surface_ptr() const { return nullptr; }
+		virtual rnd::driver::gl_surface* gl_surface_ptr() const { return nullptr; }
 
 		float aspect_ratio() const { if (is_minimize_mode()) return 0.f; return (float)get_size().x / (float)get_size().y; }
 		bool is_minimize_mode() const { return get_size() == glm::zero<glm::ivec2>(); }

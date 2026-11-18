@@ -6,11 +6,11 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/level/scn_node_index.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>

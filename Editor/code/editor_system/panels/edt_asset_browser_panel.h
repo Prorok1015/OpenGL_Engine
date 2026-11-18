@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <string>
 #include <vector>
 
@@ -15,6 +15,8 @@ namespace edt
 	class code_section;
 	class document_creator;
 	class document_create_form;
+	class prefab_variant_creator;
+	class prefab_variant_form;
 
 	class asset_browser_panel : public panel_base
 	{
@@ -45,6 +47,9 @@ namespace edt
 		}
 
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
+		// "Create Variant" in the context menu of a `*.prefab.desc` file (#151): a window with the suggested name (Enter creates, Esc cancels);
+		// `on_created` gets the new file. Null: no item.
+		void set_variant_creator(std::shared_ptr<prefab_variant_creator> creator, std::function<void(const res::tag&)> on_created);
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
 		}
@@ -85,10 +90,15 @@ namespace edt
 		// The labels were built with icon glyphs; a theme that loads or drops the icon font rebuilds them.
 		bool m_labels_have_icons = false;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
+		std::shared_ptr<prefab_variant_creator> m_variant_creator;
+		std::unique_ptr<prefab_variant_form> m_variant_form;
+		std::function<void(const res::tag&)> m_on_variant_created;
+		bool m_variant_requested = false;
 
 		// The menu item of one folder (`folder` is relative to res://): asks for the window to open at the end of the frame.
 		void draw_create_menu_item(const std::filesystem::path& folder);
 		void draw_create_window();
+		void draw_variant_window();
 
 		std::shared_ptr<document_creator> m_creator;
 		std::unique_ptr<document_create_form> m_create_form;

@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/project_migration/pmg_project_steps.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <optional>
 #include <string_view>
 

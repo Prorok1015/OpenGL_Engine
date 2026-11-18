@@ -4,7 +4,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #if SNK_HAS_ASSIMP
 #include <snk/model_import/mdl_model_adapter.h>
 #endif

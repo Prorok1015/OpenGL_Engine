@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include "test_temp_dir.hpp"
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_path_sanitize.h>

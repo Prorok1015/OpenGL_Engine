@@ -5,7 +5,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>

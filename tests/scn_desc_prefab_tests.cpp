@@ -8,7 +8,7 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/scene/scn_bone_desc.h>
 #include <snk/scene/scn_skinning_desc.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace json = boost::json;

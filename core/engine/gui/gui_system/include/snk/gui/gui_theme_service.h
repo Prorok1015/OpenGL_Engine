@@ -2,7 +2,7 @@
 #include <snk/gui/gui_layer_interface.h>
 #include <snk/gui/gui_theme.h>
 #include <snk/gui/gui_theme_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_binary.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/common/snk_api.h>

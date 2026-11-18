@@ -2,7 +2,7 @@
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/rnd_bindings.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 #include <cstddef>
 #include <cstdint>

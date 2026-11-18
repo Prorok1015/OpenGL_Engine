@@ -10,11 +10,11 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>

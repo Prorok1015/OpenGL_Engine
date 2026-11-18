@@ -3,7 +3,7 @@
 #include "test_temp_dir.hpp"
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/editor/edt_editor_services.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>

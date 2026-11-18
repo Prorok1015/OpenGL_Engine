@@ -7,7 +7,7 @@
 #include <snk/render/rnd_image_compare.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_binary.h>
 
 #include <boost/json/object.hpp>

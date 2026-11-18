@@ -1,9 +1,9 @@
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_geometry_holds.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <string>
 #include <string_view>
 

@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/render/rnd_render_pass_interface.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace rnd {
 class SNK_API composition_pass : public render_pass_interface {

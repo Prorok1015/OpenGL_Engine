@@ -5,7 +5,7 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_desc_binary_hash_cache.h>
 #include <algorithm>
 #include <atomic>
