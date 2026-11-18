@@ -1,10 +1,12 @@
 #pragma once
 #include <snk/project_migration/pmg_apply.h>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 // The command line of a migration (EPIC-58 4.3, S6, #757): `editor --headless --project <dir> --migrate [--dry-run]
 // [--report <file>] [--force]` and `--migrate-rollback <id>`. The editor's main runs these with the game layer of the
@@ -32,6 +34,13 @@ namespace prj::migration
 		std::filesystem::path report;
 	};
 
+	struct prune_command
+	{
+		std::size_t keep = 0;
+		// Print what would be deleted, delete nothing.
+		bool dry_run = false;
+	};
+
 	struct command_context
 	{
 		std::filesystem::path root;
@@ -44,6 +53,8 @@ namespace prj::migration
 		std::function<std::string()> make_id;
 		std::function<void(std::string_view)> print;
 		std::function<std::optional<std::string>(const std::filesystem::path& file, std::string_view text)> write_report;
+		// By default core::res::remove_tree_without_following (--migrate-prune).
+		std::function<bool(const std::filesystem::path& folder, std::error_code& ec)> remove_tree;
 	};
 
 	// The exit code of a migration that ended with `status`.
@@ -62,4 +73,9 @@ namespace prj::migration
 
 	int run_migrate(const migrate_command& command, const command_context& context);
 	int run_migrate_rollback(std::string_view id, const command_context& context);
+	// `--migrate-prune --keep <N> [--dry-run]` (#767): deletes the folders of finished migrations (ok, partial,
+	// rolled_back) below .snk/migrations but the newest N by `created`. An unfinished one (in_progress, rollback_failed),
+	// one of another status and one whose journal cannot be trusted stay and are not counted; the last are named. The
+	// folders to delete are printed before anything is deleted. k_exit_refused when one could not be deleted.
+	int run_migrate_prune(const prune_command& command, const command_context& context);
 }

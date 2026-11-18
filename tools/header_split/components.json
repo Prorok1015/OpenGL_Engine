@@ -52,8 +52,8 @@
    "public": [
     "rnd_buffer_interface.h",
     "rnd_buffer_layout.h",
+    "rnd_driver_gl_surface.h",
     "rnd_driver_interface.h",
-    "rnd_gl_surface.h",
     "rnd_shader_interface.h",
     "rnd_ssbo_buffer_interface.h",
     "rnd_swapchain_interface.h",

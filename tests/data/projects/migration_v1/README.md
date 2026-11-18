@@ -11,7 +11,7 @@
 | `res/worlds/w_v3.desc` | `world_desc` v3: камера v1 в узле и override с **частичной** позой камеры | устаревший; шаг 3→4 предупреждает о потере (S1 #751) |
 | `res/prefabs/p_v1..p_v3.prefab.desc` | `prefab_desc` v1, v2, v3 | устаревшие |
 | `res/cameras/cam_v1.desc` | `camera_desc` v1 вне узла | устаревший; шаг 1→2 отбрасывает позу (предупреждение) |
-| `res/module/unknown.desc` | тип `migration_fixture_module_desc`, не зарегистрирован | `unknown_type` (S2 #752, S9b #764); сейчас проходит молча как v1 |
+| `res/module/unknown.desc` | тип `migration_fixture_module_desc`, не зарегистрирован | скан: `unknown_type`, файл не переписывается, команда — код 4 (S2 #752, S6 #757); тип модуля мигрирует, только пока модуль загружен (S9b #764, `app_module_dll_tests`). Загрузка во время работы пропускает v1 незарегистрированного типа молча (#1226) |
 | `res/newer.desc` | `world_desc` v99 | `newer` |
 | `res/broken.desc` | битый JSON | `broken` |
 | `res/textures/plain.png` | PNG 1×1 без `.resource` | `missing_resource` (S2, после формата `.resource` S57-1 #755) |

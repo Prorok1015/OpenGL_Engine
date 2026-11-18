@@ -11,6 +11,7 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
+#include <deque>
 #include <array>
 #include <cctype>
 #include <atomic>
@@ -3898,4 +3899,53 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	};
 	keep(out, commands.add(std::move(push)));
 	return out;
+}
+
+std::vector<std::filesystem::path> edt::config_files_to_guard(const std::vector<std::filesystem::path>& files)
+{
+	namespace fs = std::filesystem;
+	std::vector<fs::path> guarded;
+	const auto add = [&guarded](fs::path path) {
+		if (!path.empty() && std::find(guarded.begin(), guarded.end(), path) == guarded.end()) guarded.push_back(std::move(path));
+	};
+	// A checkout may repoint any link on the way, a folder link included, not only the first and the last: each one met
+	// while resolving the path is guarded, as written. The path is resolved one component at a time, the way the system
+	// does: a link's target is walked component by component too, and ".." leaves the folder actually reached, never a
+	// lexical one (a target "current/../x" goes through the link current). A chain longer than this is no
+	// configuration a person wrote, and the system refuses it too.
+	constexpr int k_max_links = 40;
+	for (const fs::path& file : files) {
+		if (file.empty()) continue;
+		std::error_code ec;
+		const fs::path written = fs::absolute(file, ec).lexically_normal();
+		if (ec) continue;
+		add(written);
+		const fs::path written_relative = written.relative_path();
+		std::deque<fs::path> pending(written_relative.begin(), written_relative.end());
+		fs::path walked = written.root_path();
+		int links = 0;
+		while (!pending.empty() && links <= k_max_links) {
+			const fs::path part = std::move(pending.front());
+			pending.pop_front();
+			if (part.empty() || part == ".") continue;
+			if (part == "..") {
+				walked = walked.parent_path();
+				continue;
+			}
+			walked /= part;
+			std::error_code link_ec;
+			if (!fs::is_symlink(walked, link_ec)) continue;
+			const fs::path target = fs::read_symlink(walked, link_ec);
+			if (link_ec) break;
+			add(walked);
+			++links;
+			const fs::path relative = target.relative_path();
+			pending.insert(pending.begin(), relative.begin(), relative.end());
+			walked = target.is_absolute() ? target.root_path() : walked.parent_path();
+		}
+		if (pending.empty()) add(walked);
+		const fs::path resolved = fs::weakly_canonical(written, ec);
+		if (!ec) add(resolved);
+	}
+	return guarded;
 }

@@ -5,12 +5,16 @@
 #include <snk/project_migration/pmg_command.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/project/prj_json_text.h>
+#include <boost/json.hpp>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -52,7 +56,7 @@ struct command_fixture : test_util::scene_env
 
 	pmg::command_context context()
 	{
-		pmg::command_context context{ copy.root(), *descs, *rs, &steps, write, [] { return std::string{ "test-migration" }; }, {}, {} };
+		pmg::command_context context{ copy.root(), *descs, *rs, &steps, write, [] { return std::string{ "test-migration" }; }, {}, {}, {} };
 		context.print = [this](std::string_view text) { printed += std::string(text) + "\n"; };
 		return context;
 	}
@@ -303,6 +307,178 @@ BOOST_AUTO_TEST_CASE(AReportThatCannotBeWritten_IsCode2_UnlessTheMigrationFailed
 	pmg::command_context failing_too = context();
 	failing_too.write_report = refuse_report;
 	BOOST_TEST(pmg::run_migrate(command, failing_too) == pmg::k_exit_rolled_back, printed);
+}
+
+// #767: report.md and report.json carry the size of the backup; --migrate-prune --keep 0 deletes a real migration.
+BOOST_AUTO_TEST_CASE(AMigration_ReportsItsBackupSize_AndPruneDeletesItsFolder)
+{
+	leave_only_what_migrates();
+	BOOST_REQUIRE(migrate(false, false) == pmg::k_exit_done);
+	const fs::path folder = copy.root() / ".snk/migrations/test-migration";
+	const std::string md = read_text(folder / "report.md");
+	BOOST_TEST(md.find(" files).") != std::string::npos, md);
+	const boost::json::value journal = boost::json::parse(read_text(folder / "report.json"));
+	const boost::json::value* bytes = journal.as_object().if_contains("backup_bytes");
+	BOOST_REQUIRE(bytes);
+	BOOST_TEST(bytes->to_number<std::uint64_t>() == pmg::size_of_tree(folder / "backup").bytes);
+	BOOST_TEST(bytes->to_number<std::uint64_t>() > 0u);
+
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_prune({ 0, false }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(!fs::exists(folder));
+}
+
+BOOST_AUTO_TEST_CASE(SizeText_CountsInBinaryUnits)
+{
+	BOOST_TEST(pmg::size_text(0) == "0 B");
+	BOOST_TEST(pmg::size_text(1023) == "1023 B");
+	BOOST_TEST(pmg::size_text(1024) == "1.0 KiB");
+	BOOST_TEST(pmg::size_text(1536) == "1.5 KiB");
+	BOOST_TEST(pmg::size_text(1024u * 1024 - 1) == "1.0 MiB");
+	BOOST_TEST(pmg::size_text(5u * 1024 * 1024) == "5.0 MiB");
+	BOOST_TEST(pmg::size_text(std::uintmax_t{ 3 } * 1024 * 1024 * 1024 * 1024) == "3072.0 GiB");
+}
+
+namespace {
+
+void write_journal(const fs::path& root, const std::string& id, const std::string& status, const std::string& created)
+{
+	std::string json = std::format(R"({{"id":"{}","status":"{}")", id, status);
+	if (!created.empty()) json += std::format(R"(,"created":"{}")", created);
+	write_text(root / ".snk/migrations" / id / "report.json", json + "}");
+	write_text(root / ".snk/migrations" / id / "backup/res/a.desc", "{}");
+}
+
+}
+
+// The newest by `created`, not by id, stay; unfinished ones and journals that cannot be trusted stay and do not count.
+BOOST_AUTO_TEST_CASE(Prune_KeepsTheNewestFinished_AndNeverAnUnfinishedOrUntrustedOne)
+{
+	const fs::path root = copy.root();
+	write_journal(root, "a-newest", "ok", "2026-03-01T00:00:00Z");
+	write_journal(root, "b-oldest", "partial", "2026-01-01T00:00:00Z");
+	write_journal(root, "c-middle", "rolled_back", "2026-02-01T00:00:00Z");
+	write_journal(root, "d-stuck", "rollback_failed", "2025-01-01T00:00:00Z");
+	write_journal(root, "e-running", "in_progress", "2025-01-01T00:00:00Z");
+	write_journal(root, "f-no-time", "ok", "");
+	write_journal(root, "g-bad-time", "ok", "yesterday");
+	write_journal(root, "h-odd", "frozen", "2024-01-01T00:00:00Z");
+	write_text(root / ".snk/migrations/i-broken/report.json", "{ not json");
+	fs::create_directories(root / ".snk/migrations/j-empty");
+
+	const auto before = snapshot(root);
+	BOOST_TEST(pmg::run_migrate_prune({ 1, true }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST((snapshot(root) == before));
+	BOOST_TEST(printed.find("would delete 2 of 3") != std::string::npos, printed);
+	BOOST_TEST(printed.find("b-oldest") < printed.find("c-middle"), printed);
+	for (const char* named : { "f-no-time", "g-bad-time", "h-odd", "i-broken", "j-empty" }) {
+		BOOST_TEST(printed.find(named) != std::string::npos, named << "\n" << printed);
+	}
+
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_prune({ 1, false }, context()) == pmg::k_exit_done, printed);
+	for (const char* gone : { "b-oldest", "c-middle" }) {
+		BOOST_TEST(!fs::exists(root / ".snk/migrations" / gone), gone);
+	}
+	for (const char* kept : { "a-newest", "d-stuck", "e-running", "f-no-time", "g-bad-time", "h-odd", "i-broken", "j-empty" }) {
+		BOOST_TEST(fs::exists(root / ".snk/migrations" / kept), kept);
+	}
+
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_prune({ 1, false }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(printed.find("nothing to prune") != std::string::npos, printed);
+}
+
+// A link in .snk/migrations is not a migration folder: neither it nor what it points at is deleted.
+BOOST_AUTO_TEST_CASE(Prune_NeverFollowsALink)
+{
+	test_util::fixture_copy outside{ "migration_v1" };
+	write_journal(outside.root(), "elsewhere", "ok", "2026-01-01T00:00:00Z");
+	fs::create_directories(copy.root() / ".snk/migrations");
+	const fs::path link = copy.root() / ".snk/migrations/linked";
+	std::error_code ec;
+	fs::create_directory_symlink(outside.root() / ".snk/migrations/elsewhere", link, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symlink here: " << ec.message());
+		return;
+	}
+	BOOST_TEST(pmg::run_migrate_prune({ 0, false }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(fs::is_symlink(fs::symlink_status(link)));
+	BOOST_TEST(fs::exists(outside.root() / ".snk/migrations/elsewhere/report.json"));
+}
+
+// .snk or .snk/migrations a link: the journals behind it are not the project's, nothing there is deleted.
+BOOST_AUTO_TEST_CASE(Prune_DeletesNothingBehindALinkedSnkOrMigrationsFolder)
+{
+	for (const char* linked : { ".snk", ".snk/migrations" }) {
+		BOOST_TEST_INFO("linked: " << linked);
+		test_util::fixture_copy project{ "migration_v1" };
+		test_util::fixture_copy outside{ "migration_v1" };
+		write_journal(outside.root(), "old", "ok", "2026-01-01T00:00:00Z");
+		write_journal(outside.root(), "new", "ok", "2026-02-01T00:00:00Z");
+		const fs::path target = std::string_view{ linked } == ".snk" ? outside.root() / ".snk" : outside.root() / ".snk/migrations";
+		const fs::path link = project.root() / linked;
+		fs::create_directories(link.parent_path());
+		std::error_code ec;
+		fs::create_directory_symlink(target, link, ec);
+		if (ec) {
+			BOOST_TEST_MESSAGE("no symlink here: " << ec.message());
+			return;
+		}
+		pmg::command_context in_project = context();
+		in_project.root = project.root();
+		pmg::run_migrate_prune({ 0, false }, in_project);
+		BOOST_TEST(fs::exists(outside.root() / ".snk/migrations/old/report.json"), printed);
+		BOOST_TEST(fs::exists(outside.root() / ".snk/migrations/new/report.json"), printed);
+	}
+}
+
+// Review of #1232: a `created` out of range is no time, it is kept and named; the same `created` orders ids by their
+// numbers.
+BOOST_AUTO_TEST_CASE(Prune_ACreatedOutOfRangeIsKept_TheSameCreatedOrdersIdsByNumber)
+{
+	const fs::path root = copy.root();
+	write_journal(root, "real", "ok", "2026-01-01T00:00:00Z");
+	for (const char* bad : { "9999-99-99T99:99:99Z", "2026-02-30T00:00:00Z", "2026-01-01T24:00:00Z", "2026-13-01T00:00:00Z" }) {
+		write_journal(root, std::string{ "bad-" } + bad[5] + bad[6] + bad[8] + bad[9] + bad[11], "ok", bad);
+	}
+	write_journal(root, "20260301T000000Z-1.0.0-2", "ok", "2026-03-01T00:00:00Z");
+	write_journal(root, "20260301T000000Z-1.0.0-10", "ok", "2026-03-01T00:00:00Z");
+
+	BOOST_TEST(pmg::run_migrate_prune({ 1, false }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(fs::exists(root / ".snk/migrations/20260301T000000Z-1.0.0-10"), printed);
+	BOOST_TEST(!fs::exists(root / ".snk/migrations/20260301T000000Z-1.0.0-2"), printed);
+	BOOST_TEST(!fs::exists(root / ".snk/migrations/real"), printed);
+	std::size_t bad_kept = 0;
+	for (const auto& entry : fs::directory_iterator(root / ".snk/migrations")) {
+		if (entry.path().filename().string().starts_with("bad-")) {
+			++bad_kept;
+			BOOST_TEST(printed.find(entry.path().filename().string()) != std::string::npos, printed);
+		}
+	}
+	BOOST_TEST(bad_kept == 4u);
+}
+
+// A folder that cannot be deleted is named; the others still go, and the run says it did not finish.
+BOOST_AUTO_TEST_CASE(Prune_AFolderThatCannotBeDeleted_IsNamed_TheOthersGo)
+{
+	const fs::path root = copy.root();
+	write_journal(root, "a", "ok", "2026-01-01T00:00:00Z");
+	write_journal(root, "b", "ok", "2026-01-02T00:00:00Z");
+	write_journal(root, "c", "ok", "2026-01-03T00:00:00Z");
+	pmg::command_context failing = context();
+	failing.remove_tree = [](const fs::path& folder, std::error_code& ec) {
+		if (folder.filename() == "a") {
+			ec = std::make_error_code(std::errc::permission_denied);
+			return false;
+		}
+		return fs::remove_all(folder, ec) != static_cast<std::uintmax_t>(-1) && !ec;
+	};
+	BOOST_TEST(pmg::run_migrate_prune({ 1, false }, failing) == pmg::k_exit_refused, printed);
+	BOOST_TEST(fs::exists(root / ".snk/migrations/a"));
+	BOOST_TEST(!fs::exists(root / ".snk/migrations/b"));
+	BOOST_TEST(fs::exists(root / ".snk/migrations/c"));
+	BOOST_TEST(printed.find("migration a not deleted") != std::string::npos, printed);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

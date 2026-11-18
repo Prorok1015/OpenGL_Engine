@@ -1,4 +1,5 @@
 #include "edt_console_panel.h"
+#include "edt_ui_fonts.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include <algorithm>
@@ -53,18 +54,21 @@ namespace edt
 			logs_copy = m_logs;
 		}
 		ImGui::BeginChild("log_scroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-		for (const auto& entry : logs_copy) {
-			if (entry.level == log_level::info    && !m_show_info)     continue;
-			if (entry.level == log_level::warning && !m_show_warnings) continue;
-			if (entry.level == log_level::error   && !m_show_errors)   continue;
+		{
+			const font_scope mono(ui_font::mono);
+			for (const auto& entry : logs_copy) {
+				if (entry.level == log_level::info    && !m_show_info)     continue;
+				if (entry.level == log_level::warning && !m_show_warnings) continue;
+				if (entry.level == log_level::error   && !m_show_errors)   continue;
 
-			ImVec4 color;
-			switch (entry.level) {
-				case log_level::info:    color = ImGui::GetStyleColorVec4(ImGuiCol_Text); break;
-				case log_level::warning: color = colors().warning; break;
-				case log_level::error:   color = colors().error; break;
+				ImVec4 color;
+				switch (entry.level) {
+					case log_level::info:    color = ImGui::GetStyleColorVec4(ImGuiCol_Text); break;
+					case log_level::warning: color = colors().warning; break;
+					case log_level::error:   color = colors().error; break;
+				}
+				ImGui::TextColored(color, "%s", entry.message.c_str());
 			}
-			ImGui::TextColored(color, "%s", entry.message.c_str());
 		}
 		if (m_auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
 			ImGui::SetScrollHereY(1.f);

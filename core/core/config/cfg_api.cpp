@@ -21,6 +21,9 @@ namespace po = boost::program_options;
 bool is_initialized = false;
 namespace {
 	std::filesystem::path loaded_config_file;
+	std::vector<std::filesystem::path> loaded_config_chain;
+	// Deeper is a mistake, not a configuration: a chain of links that leads back to itself under other names ends here.
+	constexpr std::size_t k_max_extends_depth = 16;
 }
 
 constexpr auto EXTENDS_KEY = "extends";
@@ -150,17 +153,34 @@ YAML::Node load_yaml_file(const std::filesystem::path& file)
 	return YAML::Load(in);
 }
 
-void load_config_file_with_extends(std::filesystem::path file_path)
+// `visiting` holds the files of the chain above this one: a file that extends one of them, itself included, is a cycle.
+// `read` gets every file loaded, the top one first, each as written (a link stays a link, #1090).
+void load_config_file_with_extends(const std::filesystem::path& file_path, std::vector<std::filesystem::path>& visiting,
+	std::vector<std::filesystem::path>* read)
 {
-	YAML::Node config = load_yaml_file(std::filesystem::absolute(file_path));
-	if (config[EXTENDS_KEY]) {
-		// TODO: add assert if its not a sequence
-		for (auto it = config[EXTENDS_KEY].begin(); it != config[EXTENDS_KEY].end(); ++it) {
-			auto file = file_path.parent_path() / it->as<std::string>();
-			load_config_file_with_extends(file);
+	const std::filesystem::path file = std::filesystem::absolute(file_path).lexically_normal();
+	if (std::find(visiting.begin(), visiting.end(), file) != visiting.end()) {
+		throw std::runtime_error("'" + fs_paths::utf8_of(file) + "' extends itself through its extends chain");
+	}
+	if (visiting.size() >= k_max_extends_depth) {
+		throw std::runtime_error("the extends chain of '" + fs_paths::utf8_of(visiting.front()) + "' is deeper than "
+			+ std::to_string(k_max_extends_depth) + " files");
+	}
+	YAML::Node config = load_yaml_file(file);
+	if (read != nullptr) {
+		read->push_back(file);
+	}
+	visiting.push_back(file);
+	if (const YAML::Node bases = config[EXTENDS_KEY]) {
+		if (!bases.IsSequence()) {
+			throw std::runtime_error("'extends' in '" + fs_paths::utf8_of(file) + "' is not a list of files");
+		}
+		for (const YAML::Node& base : bases) {
+			load_config_file_with_extends(file.parent_path() / base.as<std::string>(), visiting, read);
 		}
 	}
-	
+	visiting.pop_back();
+
 	config.remove(EXTENDS_KEY);
 	load_map(file_path.parent_path(), "", config);
 }
@@ -174,12 +194,51 @@ void cfg::initialize_configs(std::filesystem::path init_file)
 	is_initialized = true;
 
 	loaded_config_file = std::filesystem::absolute(init_file).lexically_normal();
-	load_config_file_with_extends(init_file);
+	std::vector<std::filesystem::path> visiting;
+	load_config_file_with_extends(init_file, visiting, &loaded_config_chain);
 }
 
 std::filesystem::path cfg::loaded_config_path()
 {
 	return loaded_config_file;
+}
+
+std::vector<std::filesystem::path> cfg::loaded_config_files()
+{
+	return loaded_config_chain;
+}
+
+std::vector<std::filesystem::path> cfg::config_files_of(const std::filesystem::path& file)
+{
+	std::vector<std::filesystem::path> files;
+	std::vector<std::filesystem::path> visiting;
+	const auto walk = [&files, &visiting](const auto& self, const std::filesystem::path& path) -> void {
+		std::error_code ec;
+		const std::filesystem::path normal = std::filesystem::absolute(path, ec).lexically_normal();
+		if (ec || visiting.size() >= k_max_extends_depth || std::find(visiting.begin(), visiting.end(), normal) != visiting.end()) {
+			return;
+		}
+		files.push_back(normal);
+		// Whatever is there, a link checked out as text or a file that is no config, ends this branch, never the caller.
+		YAML::Node bases;
+		try {
+			const YAML::Node config = load_yaml_file(normal);
+			if (!config.IsMap()) return;
+			bases = config[EXTENDS_KEY];
+		} catch (const std::exception&) {
+			return;
+		}
+		if (!bases || !bases.IsSequence()) {
+			return;
+		}
+		visiting.push_back(normal);
+		for (const YAML::Node& base : bases) {
+			if (base.IsScalar()) self(self, normal.parent_path() / base.as<std::string>());
+		}
+		visiting.pop_back();
+	};
+	walk(walk, file);
+	return files;
 }
 
 std::optional<std::filesystem::path> cfg::config_to_load(const std::optional<std::filesystem::path>& explicit_config,
@@ -240,7 +299,8 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"it also ends the editor (unsaved changes are dropped)")
 		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
 			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
-			"Missing or broken: every agent request is denied")
+			"The file is chosen by whoever launches the editor: do not pass a file from the project's repository, "
+			"otherwise the permission comes from the repository. Missing or broken: every agent request is denied")
 		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
 			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
 			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)")
@@ -248,11 +308,14 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"0 done or nothing to do, 1 a migration is needed (--dry-run), 2 refused, 4 files left as they are (unknown type, "
 			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish, -1 (255) an "
 			"unexpected error")
-		("dry-run", "with --migrate: print the plan, write nothing")
+		("dry-run", "with --migrate: print the plan, write nothing; with --migrate-prune: print what would be deleted")
 		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
 		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")
 		("migrate-rollback", po::value<std::string>(), "editor only, with --headless: put the project back as it was before "
 			"migration <id> (.snk/migrations/<id>) and exit")
+		("migrate-prune", "editor only, with --headless: delete the folders of finished migrations in .snk/migrations "
+			"but the newest --keep <N> (by when they ran) and exit; unfinished ones and unreadable journals stay")
+		("keep", po::value<int>(), "with --migrate-prune: how many finished migrations stay")
 		("open-migration", "editor only: once the project is open, open the Project Migration window with its plan (what "
 			"Migrate... of the engine version question restarts the editor with); ignored with --headless");
 	
@@ -314,21 +377,32 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 	}
 	const bool migrate = vm.count("migrate") > 0;
 	const bool rollback = vm.count("migrate-rollback") > 0;
-	if (!migrate && (vm.count("dry-run") || vm.count("force") || vm.count("report"))) {
-		throw std::invalid_argument("--dry-run, --force and --report go with --migrate");
+	const bool prune = vm.count("migrate-prune") > 0;
+	if (!migrate && (vm.count("force") || vm.count("report"))) {
+		throw std::invalid_argument("--force and --report go with --migrate");
 	}
-	if (migrate && rollback) {
-		throw std::invalid_argument("--migrate and --migrate-rollback are separate runs");
+	if (!migrate && !prune && vm.count("dry-run")) {
+		throw std::invalid_argument("--dry-run goes with --migrate or --migrate-prune");
 	}
-	if (migrate || rollback) {
+	if (prune != (vm.count("keep") > 0)) {
+		throw std::invalid_argument("--migrate-prune takes --keep <N>, and --keep goes with --migrate-prune");
+	}
+	if (prune && vm["keep"].as<int>() < 0) {
+		throw std::invalid_argument("--keep <N> is a count of migrations, not a negative number");
+	}
+	if (int(migrate) + int(rollback) + int(prune) > 1) {
+		throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune are separate runs");
+	}
+	if (migrate || rollback || prune) {
 		if (!vm.count("headless")) {
-			throw std::invalid_argument("--migrate and --migrate-rollback run with --headless (from the editor's window: S8 of EPIC-58)");
+			throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune run with --headless (from the editor's window: S8 of EPIC-58)");
 		}
 		if (vm.count("mcp-stdio") || vm.count("game")) {
-			throw std::invalid_argument("--migrate and --migrate-rollback take neither --mcp-stdio nor --game");
+			throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune take neither --mcp-stdio nor --game");
 		}
-		set_registered("migration/command", migrate ? "migrate" : "rollback");
+		set_registered("migration/command", migrate ? "migrate" : rollback ? "rollback" : "prune");
 		if (rollback) set_registered("migration/rollback_id", vm["migrate-rollback"].as<std::string>());
+		if (prune) set_registered("migration/keep", std::to_string(vm["keep"].as<int>()));
 		if (vm.count("dry-run")) set_registered("migration/dry_run", "true");
 		if (vm.count("force")) set_registered("migration/force", "true");
 		if (vm.count("report")) set_registered("migration/report", vm["report"].as<std::string>());
@@ -361,9 +435,10 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 bool cfg::load_config_file(const std::filesystem::path& file)
 {
 	try {
-		load_config_file_with_extends(file);
+		std::vector<std::filesystem::path> visiting;
+		load_config_file_with_extends(file, visiting, nullptr);
 		return true;
-	} catch (const YAML::Exception& e) {
+	} catch (const std::exception& e) {
 		egLOG_ERROR("config", "cannot load '{}': {}", fs_paths::utf8_of(file), e.what());
 		return false;
 	}

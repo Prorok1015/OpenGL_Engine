@@ -2,6 +2,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <algorithm>
 #include <cctype>
@@ -212,7 +213,7 @@ void edt::agents_panel::draw_review_popup()
 
 void edt::agents_panel::draw_server()
 {
-	if (!ImGui::CollapsingHeader("Server", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Server", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	agent_server* server = m_services.server ? m_services.server() : nullptr;
 	if (server == nullptr) {
 		ImGui::TextDisabled("There is no agent server in this editor.");
@@ -252,7 +253,7 @@ void edt::agents_panel::draw_server()
 
 void edt::agents_panel::draw_sessions()
 {
-	if (!ImGui::CollapsingHeader("Connected agents", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Connected agents", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	agent_server* server = m_services.server ? m_services.server() : nullptr;
 	if (server == nullptr) return;
 	const std::vector<agent_session_info> sessions = server->sessions();
@@ -290,7 +291,7 @@ void edt::agents_panel::draw_sessions()
 
 void edt::agents_panel::draw_policy()
 {
-	if (!ImGui::CollapsingHeader("Policy", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	if (!bold_header("Policy", ImGuiTreeNodeFlags_DefaultOpen)) return;
 	int scope_index = m_scope == policy_scope::project ? 0 : 1;
 	ImGui::RadioButton("Project (agent_policy.json, committed)", &scope_index, 0);
 	ImGui::SameLine();

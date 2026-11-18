@@ -17,6 +17,7 @@
 #include <string>
 #include <boost/json/array.hpp>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -26,6 +27,7 @@
 namespace
 {
 	constexpr std::string_view k_type = "world_snapshot";
+	// The format capture_world writes. A change of it raises this with a migration step registered for k_type.
 	constexpr std::int64_t k_version = 1;
 	// Restored in the first pass with the entity: node_index must know every path before any other component lands.
 	constexpr std::string_view k_node_id = "scn.node_id";
@@ -156,6 +158,53 @@ scn::entity_writer::components scn::entity_writer::write(const entt::registry& r
 	return out;
 }
 
+namespace
+{
+	// Set by capture_world with a desc system: every typed object inside carries its version.
+	constexpr std::string_view k_typed_versions = "typed_versions";
+
+	// A typed object without __version gets the current one of its type: the desc reader would take it for version 1.
+	void stamp_unversioned(const desc::desc_system& descs, json::value& value)
+	{
+		if (json::object* object = value.if_object()) {
+			if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
+				(*object)["__version"] = descs.current_version(type->as_string());
+			}
+			for (auto& member : *object) {
+				stamp_unversioned(descs, member.value());
+			}
+		} else if (json::array* array = value.if_array()) {
+			// Numeric payloads (geometry) can be long and hold no typed object.
+			if (!array->empty() && array->front().is_number()) return;
+			for (json::value& element : *array) {
+				stamp_unversioned(descs, element);
+			}
+		}
+	}
+}
+
+json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
+	snapshot_report& report)
+{
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	json::object out = capture_world(world, catalog, report);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+	descs.stamp_tree(out["ctx"]);
+	descs.stamp_tree(out["entities"]);
+	out[k_typed_versions] = true;
+	return out;
+}
+
 json::object scn::capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report)
 {
 	const entt::registry& reg = world.state();
@@ -225,12 +274,43 @@ json::object scn::capture_world(const world_context& world, const component_cata
 	return out;
 }
 
-bool scn::restore_world(world_context& world, const json::object& snapshot, const component_catalog& catalog,
+bool scn::restore_world(world_context& world, const json::object& given, const component_catalog& catalog,
 	const desc::read_context& context, snapshot_report& report)
 {
-	const json::value* type = snapshot.if_contains("__type");
+	const json::value* given_type = given.if_contains("__type");
+	if (!given_type || !given_type->is_string() || given_type->as_string() != k_type) {
+		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
+		return false;
+	}
+	// EPIC-58 section 7.2: with the world's desc system a snapshot whose typed objects carry their versions goes through
+	// its steps whole, so an older one is brought up and a newer one refused, the root or an object inside alike. One
+	// without them (the deprecated capture_world) was written in the current format: its unversioned typed objects take
+	// the current versions, and only an older root goes through the steps, as before #766. Without a desc system only
+	// the version capture_world writes is read.
+	std::optional<json::object> upgraded;
+	const json::value* typed_versions = given.if_contains(k_typed_versions);
+	const bool stamped = typed_versions && typed_versions->is_bool() && typed_versions->as_bool();
+	const json::value* given_version = given.if_contains("__version");
+	const bool current_root = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
+	if (context.system && !stamped) {
+		upgraded.emplace(given);
+		if (json::value* ctx = upgraded->if_contains("ctx")) stamp_unversioned(*context.system, *ctx);
+		if (json::value* entities = upgraded->if_contains("entities")) stamp_unversioned(*context.system, *entities);
+	}
+	if (context.system && (stamped || !current_root)) {
+		if (!upgraded) upgraded.emplace(given);
+		if (const std::string problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name())); !problem.empty()) {
+			egLOG_ERROR("scene", "{}", problem);
+			return false;
+		}
+	} else if (!context.system && !current_root) {
+		egLOG_ERROR("scene", "world '{}': '{}' is version {}, not the version {} this engine reads", world.get_name(), k_type,
+			json::serialize(*given_version), k_version);
+		return false;
+	}
+	const json::object& snapshot = upgraded ? *upgraded : given;
 	const json::value* entities_value = snapshot.if_contains("entities");
-	if (!type || !type->is_string() || type->as_string() != k_type || !entities_value || !entities_value->is_array()) {
+	if (!entities_value || !entities_value->is_array()) {
 		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
 		return false;
 	}
@@ -405,4 +485,12 @@ void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& val
 		if (!fits) ++report.partial[type->name];
 		board.restore(std::string_view{ *key }, type->id, type->type_name, std::move(restored));
 	}
+}
+
+std::string scn::world_snapshot_version_problem(const desc::desc_system& descs)
+{
+	const int steps = descs.current_version(k_type);
+	if (steps == k_version) return {};
+	return std::format("'{}' is written at version {}, but its migration steps lead to version {}: raise the version with its step",
+		k_type, k_version, steps);
 }

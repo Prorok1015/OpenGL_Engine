@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
 #include <memory>
 #include <string>
@@ -1320,6 +1321,54 @@ BOOST_AUTO_TEST_CASE(StackCommands_ALongPauseKeepsAtMostTheLimit_AndAppliesThemW
 	mode(ecs::run_mode::play);
 	frame(map);
 	BOOST_TEST(router.stack("level").size() == before + inp::input_router::command_limit);
+}
+
+// #766: the player's file from a newer build is not read and never written over. The project's bindings play, a change
+// stays in memory and says it was not saved, and the file keeps its bytes.
+BOOST_AUTO_TEST_CASE(ANewerFileOfTheBindings_IsNeverWrittenOver)
+{
+	const auto tag = put("actions.desc", ACTIONS_SPACE);
+	const auto folder = std::filesystem::temp_directory_path() / ("snk_gs_user_newer_" + std::to_string(reinterpret_cast<std::uintptr_t>(&tag)));
+	std::filesystem::remove_all(folder);
+	std::filesystem::path file;
+	{
+		gs::input_actions first(*rs);
+		first.set_desc_system(descs.get());
+		first.set_user_folder(folder);
+		first.update(tag.view(), "Game");
+		pump();
+		first.update(tag.view(), "Game");
+		BOOST_REQUIRE(first.rebind("Jump", 0, KB::K).ok());
+		for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+			file = entry.path();
+		}
+	}
+	BOOST_REQUIRE(!file.empty());
+	const std::string newer = R"({"__type":"user_input_bindings","__version":2,"actions":[{"name":"Jump","bindings":[{"key":"Q"}]}],"later":true})";
+	std::ofstream(file, std::ios::binary | std::ios::trunc) << newer;
+	const auto read_file = [&file] {
+		std::ifstream in(file, std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+
+	gs::input_actions actions(*rs);
+	actions.set_desc_system(descs.get());
+	actions.set_user_folder(folder);
+	actions.update(tag.view(), "Game");
+	pump();
+	actions.update(tag.view(), "Game");
+	BOOST_REQUIRE(actions.map());
+	BOOST_TEST(actions.user_file_kept());
+	const inp::action_id jump = actions.map()->id("Jump");
+	BOOST_TEST((actions.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::SPACE }));
+
+	const gs::rebind_outcome outcome = actions.rebind("Jump", 0, KB::K);
+	BOOST_TEST(outcome.ok());
+	BOOST_TEST(!outcome.saved);
+	BOOST_TEST((actions.map()->find(jump)->bindings == std::vector<inp::action_binding>{ KB::K }));
+	actions.reset_all_bindings();
+	BOOST_TEST(read_file() == newer);
+	std::filesystem::remove_all(folder);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
