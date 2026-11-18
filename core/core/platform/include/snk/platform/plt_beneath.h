@@ -27,6 +27,12 @@ namespace platform::beneath {
 	enum class read_stage : int { before_walk, folders_held };
 
 	using write_hook = std::function<void(write_stage, const std::filesystem::path& tmp_path)>;
+	// Takes the next piece of a file being written; false: it could not be written, stop.
+	using chunk_sink = std::function<bool(std::span<const std::byte>)>;
+	// Hands the whole content to `sink` in pieces, in order. false: the content could not be produced (or `sink` refused a
+	// piece): the temp file is removed and the target stays as it was. It may check the content once it is complete and
+	// answer false then, so nothing is flushed or moved into place.
+	using chunk_source = std::function<bool(const chunk_sink& sink)>;
 
 	// The root a resolver writes under. POSIX: its descriptor, opened on the first write (the root may not exist when it
 	// is mounted) and opened again when the folder at the root's path is no longer the one it holds (removed, or renamed
@@ -60,6 +66,8 @@ namespace platform::beneath {
 		std::filesystem::path leaf;
 		std::filesystem::path tmp_leaf;
 		std::span<const std::byte> data;
+		// Not null: the content comes from it in pieces (a file too big to hold whole) and `data` is not used.
+		const chunk_source* stream = nullptr;
 		// fsync of the file before the rename and of the folder after it (#417).
 		bool durable = true;
 		// false: the temp file is moved to the target only if nothing is there yet (a new file that must not replace one

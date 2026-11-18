@@ -292,7 +292,12 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 		return errno_text("cannot create", request.tmp_path);
 	}
 	temp_guard guard{ folder.get(), request.tmp_leaf };
-	if (!write_all(file.get(), request.data)) {
+	if (request.stream) {
+		const chunk_sink sink = [&file](std::span<const std::byte> piece) { return write_all(file.get(), piece); };
+		if (!(*request.stream)(sink)) {
+			return errno_text("writing failed for", request.tmp_path);
+		}
+	} else if (!write_all(file.get(), request.data)) {
 		return errno_text("writing failed for", request.tmp_path);
 	}
 	if (request.durable && ::fsync(file.get()) != 0) {
@@ -949,14 +954,24 @@ std::string platform::beneath::write_beneath(pinned_root& root, const write_requ
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the temp file was not created below the root", request.tmp_path);
 	}
-	std::size_t done = 0;
-	while (done < request.data.size()) {
-		const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(request.data.size() - done, 1u << 30));
-		DWORD wrote = 0;
-		if (!::WriteFile(file.get(), request.data.data() + done, chunk, &wrote, nullptr) || wrote == 0) {
+	const auto write_piece = [&file](std::span<const std::byte> piece) {
+		std::size_t done = 0;
+		while (done < piece.size()) {
+			const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(piece.size() - done, 1u << 30));
+			DWORD wrote = 0;
+			if (!::WriteFile(file.get(), piece.data() + done, chunk, &wrote, nullptr) || wrote == 0) {
+				return false;
+			}
+			done += wrote;
+		}
+		return true;
+	};
+	if (request.stream) {
+		if (!(*request.stream)(write_piece)) {
 			return last_error_text("writing failed for", request.tmp_path);
 		}
-		done += wrote;
+	} else if (!write_piece(request.data)) {
+		return last_error_text("writing failed for", request.tmp_path);
 	}
 	if (request.durable && !::FlushFileBuffers(file.get())) {
 		return last_error_text("cannot flush", request.tmp_path);
