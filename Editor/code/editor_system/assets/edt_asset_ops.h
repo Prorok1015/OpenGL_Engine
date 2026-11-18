@@ -158,7 +158,8 @@ namespace edt
 		// `from` below `root` was replaced: `hash` the original, `after_hash` the new text, `original` (below the journal
 		// folder) holds the original bytes.
 		rewrite,
-		// `from` below `root` was removed after a copy to `to` below the journal folder; `hash` is its content.
+		// `from` below `root` was removed into `to` below the journal folder (renamed there, or, across volumes, copied and then
+		// removed); `hash` is its content. Not done: `from` is there. Done: `from` is gone and `to` has `hash`.
 		stash,
 	};
 
@@ -249,8 +250,13 @@ namespace edt
 		// own change (asset_database::report_self_change), not a delete and a create that somebody else made.
 		std::function<void(std::span<const res::file_change>)> report_self_change;
 		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"), before it is written to the journal; a
-		// non-empty answer fails it.
+		// non-empty answer fails it. An undo calls it with "unstash:<from>" before it brings a removed file back; the copy that
+		// replaces a rename (see force_copy) calls it with "stash_copied:<from>" / "unstash_copied:<from>" once the copy is read
+		// and checked, before it is flushed and put in place.
 		std::function<std::string(std::string_view)> fail_step;
+		// Tests: asked with "stash:<from>" (a delete moving the file into the journal) and "unstash:<from>" (an undo moving it back);
+		// true makes the rename fail the way a move to another volume does, so the file is copied, flushed and checked instead.
+		std::function<bool(std::string_view)> force_copy;
 	};
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).

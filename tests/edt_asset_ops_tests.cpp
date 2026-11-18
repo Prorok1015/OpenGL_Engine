@@ -29,6 +29,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 // Rename, move and delete of one asset (#775, EPIC-57 section 6.4): the plan, the references that follow, the journal that
 // takes everything back.
@@ -50,6 +53,20 @@ std::string meta_text(std::string_view guid)
 	meta.guid = *res::asset_id_from_text(guid);
 	meta.importer = "test";
 	return res::write_asset_meta(meta);
+}
+
+// POSIX inode and device of a file, {0, 0} where the platform gives none: the same pair before and after a move means the file was
+// renamed, not copied.
+std::pair<std::uint64_t, std::uint64_t> identity_of(const fs::path& path)
+{
+#if !defined(_WIN32)
+	struct stat info;
+	if (::stat(path.c_str(), &info) != 0) return { 0u, 0u };
+	return { static_cast<std::uint64_t>(info.st_ino), static_cast<std::uint64_t>(info.st_dev) };
+#else
+	(void)path;
+	return { 0u, 0u };
+#endif
 }
 
 // A file in the layout the project writes, which is the only one the rewriter edits.
@@ -153,6 +170,7 @@ struct ops_fixture
 			self_changes.insert(self_changes.end(), changes.begin(), changes.end());
 			if (forward_self_changes && db) db->report_self_change(changes);
 		};
+		ports.force_copy = [this](std::string_view) { return copy_instead_of_rename; };
 		ports.fail_step = [this](std::string_view step) -> std::string {
 			steps.emplace_back(step);
 			if (on_step) on_step(step);
@@ -225,6 +243,7 @@ struct ops_fixture
 	std::string fail_at;
 	std::string throw_at;
 	bool throw_in_hold = false;
+	bool copy_instead_of_rename = false;
 	std::function<void(std::string_view)> on_step;
 	std::vector<std::string> steps;
 	int holds = 0;
@@ -239,6 +258,32 @@ struct ops_fixture
 	}
 };
 
+}
+
+// A delete, an undo that fails (before a rename, or after a copy was checked), the kept file still there, and the same undo again.
+static void check_failed_undo(ops_fixture& f, bool copying)
+{
+	f.open();
+	const auto before = f.snapshot();
+	f.copy_instead_of_rename = copying;
+	const edt::operation_report report = f.run(ops_fixture::request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const fs::path kept = f.journal.path() / report.operation_id / "files" / "lonely.desc";
+
+	f.fail_at = copying ? "unstash_copied:lonely.desc" : "unstash:lonely.desc";
+	const edt::undo_report failed = f.ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(failed.failures.size() == 1u);
+	BOOST_TEST(fs::is_regular_file(kept), "the kept file is the only copy, and it is still there");
+	BOOST_TEST(!f.has("lonely.desc"));
+	for (const auto& entry : f.snapshot()) {
+		BOOST_TEST(entry.first.find(".tmp") == std::string::npos, "no temp file is left: " + entry.first);
+	}
+
+	f.fail_at.clear();
+	const edt::undo_report again = f.ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST((f.snapshot() == before));
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtAssetOpsTests, ops_fixture)
@@ -992,6 +1037,112 @@ BOOST_AUTO_TEST_CASE(EveryStepIsInTheJournalOnTheDisk_BeforeItsActionIsDone)
 		return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 	}());
 	BOOST_TEST(last.at("steps").as_array().size() == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteAndItsUndo_MoveTheFileByRename_NoSecondCopyIsMade)
+{
+	open();
+	const auto before = snapshot();
+	const std::string bytes = text_of("lonely.desc");
+	const auto identity = identity_of(layer.path() / "lonely.desc");
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+
+	const fs::path kept = journal.path() / report.operation_id / "files" / "lonely.desc";
+	BOOST_TEST(!has("lonely.desc"));
+	BOOST_REQUIRE(fs::is_regular_file(kept));
+	BOOST_TEST(fs::file_size(kept) == bytes.size());
+	const auto kept_identity = identity_of(kept);
+	if (identity.first != 0u && kept_identity.second == identity.second) {
+		BOOST_TEST(kept_identity.first == identity.first, "the file itself is in the journal, not a copy of it");
+	}
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(!fs::exists(kept), "the journal holds no second copy after the undo");
+	if (identity.first != 0u && kept_identity.second == identity.second) {
+		BOOST_TEST(identity_of(layer.path() / "lonely.desc").first == identity.first);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WhereARenameCannotBeMade_ADeleteAndItsUndo_CopyFlushAndCheckTheFile)
+{
+	open();
+	const auto before = snapshot();
+	copy_instead_of_rename = true;
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(!has("lonely.desc"));
+	const fs::path kept = journal.path() / report.operation_id / "files" / "lonely.desc";
+	BOOST_REQUIRE(fs::is_regular_file(kept));
+	BOOST_TEST((fs::file_size(kept) == before.at("lonely.desc").size()));
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((snapshot() == before), "no temp file is left beside the restored file");
+	BOOST_TEST(!fs::exists(kept), "the kept copy goes once the restored file is whole");
+}
+
+BOOST_AUTO_TEST_CASE(ACopyThatFailsBeforeItIsInPlace_LeavesTheOriginal_AndTheDeleteIsTakenBack)
+{
+	open();
+	const auto before = snapshot();
+	copy_instead_of_rename = true;
+	fail_at = "stash_copied:lonely.desc";
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_TEST(report.error.find("injected failure") != std::string::npos);
+	BOOST_TEST(report.rollback_failures.empty());
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(!fs::exists(journal.path() / report.operation_id / "files" / "lonely.desc"), "a partial copy is never left at the kept name");
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoThatFailsBeforeAMove_LeavesTheKeptFile_AndCanBeTriedAgain)
+{
+	check_failed_undo(*this, false);
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoThatFailsAfterTheCopyWasChecked_LeavesTheKeptFile_AndCanBeTriedAgain)
+{
+	check_failed_undo(*this, true);
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteWhoseSourceIsThereAgainBesideItsKeptCopy_IsFinishedByTheUndo_OrRefusedWhenTheSourceDiffers)
+{
+	open();
+	const auto before = snapshot();
+	copy_instead_of_rename = true;
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_REQUIRE(fs::is_regular_file(journal.path() / report.operation_id / "files" / "lonely.desc"));
+
+	write("lonely.desc", before.at("lonely.desc"));
+	write("lonely.desc.resource", before.at("lonely.desc.resource"));
+	const edt::undo_report finished = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(finished.ok, finished.error);
+	BOOST_TEST(finished.restored.empty());
+	BOOST_TEST((snapshot() == before));
+
+	write("lonely.desc", "somebody else's edit");
+	const edt::undo_report refused = ops().undo(report.journal);
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(refused.changed_since.size() == 1u);
+	BOOST_TEST(text_of("lonely.desc") == "somebody else's edit");
+}
+
+BOOST_AUTO_TEST_CASE(AMoveStepWhoseSourceAndTargetAreBothThere_IsRefusedNotGuessed)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report moved = run(request(edt::asset_operation::move, "lonely.desc", "env"));
+	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+	write("lonely.desc", before.at("lonely.desc"));
+	write("lonely.desc.resource", before.at("lonely.desc.resource"));
+
+	const edt::undo_report refused = ops().undo(moved.journal);
+	BOOST_TEST(!refused.ok);
+	BOOST_TEST(!refused.changed_since.empty());
 }
 
 BOOST_AUTO_TEST_CASE(ADeleteOfADescWithItsBinaryFile_StashesBothInChunks_AndUndoPutsThemBack)
