@@ -1,4 +1,5 @@
 #include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_migrations.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <format>
@@ -52,9 +53,6 @@ namespace desc
 		void check_keys(const json::object& object, std::initializer_list<std::string_view> allowed, const std::string& path)
 		{
 			for (const auto& member : object) {
-				if (member.key() == "migrations") {
-					fail(path, "'migrations' is not supported yet (declarative migrations of runtime schemas come later)");
-				}
 				if (std::ranges::find(allowed, std::string_view{ member.key() }) == allowed.end()) {
 					fail(path, std::format("unknown key '{}'", std::string_view{ member.key() }));
 				}
@@ -600,7 +598,7 @@ namespace desc
 
 	type_schema parse_type_schema(const json::object& object, const schema_registry* resolve)
 	{
-		check_keys(object, { "name", "version", "kind", "is_component", "is_document", "fields" }, "type");
+		check_keys(object, { "name", "version", "kind", "is_component", "is_document", "fields", "migrations" }, "type");
 
 		type_schema schema;
 		schema.name = read_string(object, "name", "type", true);
@@ -615,6 +613,16 @@ namespace desc
 				fail(path, "'version' must be a positive integer");
 			}
 			schema.version = static_cast<int>(version->as_int64());
+		}
+		// The steps are registered with the schema (desc_system::register_schema), not kept in it; checked here so a
+		// schema file that cannot register fails where it is read.
+		if (const json::value* migrations = find_value(object, "migrations")) {
+			if (!migrations->is_array()) {
+				fail(path, "'migrations' must be an array");
+			}
+			if (std::string problem = schema_migrations_problem(migrations->as_array(), schema.version); !problem.empty()) {
+				fail(path, problem);
+			}
 		}
 
 		const std::string kind_text = read_string(object, "kind", path, false, "desc");

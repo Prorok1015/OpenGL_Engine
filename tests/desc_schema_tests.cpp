@@ -469,7 +469,7 @@ BOOST_AUTO_TEST_CASE(MalformedSchemasThrow)
 	fails(R"({ "fields": [] })");
 	fails(R"({ "name": "t" })");
 	fails(R"({ "name": "t", "fields": [], "typo": 1 })");
-	fails(R"({ "name": "t", "fields": [], "migrations": [] })");
+	fails(R"({ "name": "t", "version": 2, "fields": [], "migrations": [] })");
 	fails(R"({ "name": "t", "version": 0, "fields": [] })");
 	fails(R"({ "name": "t", "kind": "widget", "fields": [] })");
 	fails(R"({ "name": "t", "fields": [ { "name": "a", "kind": "float" } ] })");
@@ -488,14 +488,20 @@ BOOST_AUTO_TEST_CASE(MalformedSchemasThrow)
 	BOOST_CHECK_THROW(desc::parse_enum_schema(parse(R"({ "name": "e", "items": { "a": "x" } })")), std::runtime_error);
 }
 
-BOOST_AUTO_TEST_CASE(MigrationsKeyIsReportedAsNotSupportedYet)
+// EPIC-58 S9a (#763): the steps are checked where the schema is read, so a file that cannot register fails there.
+BOOST_AUTO_TEST_CASE(MigrationsKey_IsCheckedWhereTheSchemaIsRead)
 {
+	BOOST_CHECK_NO_THROW(desc::parse_type_schema(parse(
+		R"({ "name": "t", "version": 2, "fields": [], "migrations": [ { "from": 1, "remove": ["/a"] } ] })")));
 	try {
-		desc::parse_type_schema(parse(R"({ "name": "t", "fields": [], "migrations": [] })"));
+		desc::parse_type_schema(parse(R"({ "name": "t", "version": 3, "fields": [], "migrations": [ { "from": 1, "remove": ["/a"] } ] })"));
 		BOOST_FAIL("expected an exception");
 	} catch (const std::runtime_error& error) {
-		BOOST_CHECK(std::string_view{ error.what() }.find("not supported yet") != std::string_view::npos);
+		BOOST_CHECK(std::string_view{ error.what() }.find("lead to version 2") != std::string_view::npos);
 	}
+	BOOST_CHECK_THROW(desc::parse_type_schema(parse(R"({ "name": "t", "fields": [], "migrations": {} })")), std::runtime_error);
+	BOOST_CHECK_THROW(desc::parse_type_schema(parse(
+		R"({ "name": "t", "fields": [ { "name": "a", "kind": "f32", "migrations": [] } ] })")), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(KindNamesRoundTrip)
