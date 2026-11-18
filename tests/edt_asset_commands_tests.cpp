@@ -557,6 +557,7 @@ BOOST_AUTO_TEST_CASE(TheAgentPolicyAnswerOfAHeadlessRun_LetsRenameRun_AndRecords
 	open();
 	policy.set_headless(true);
 	policy_dir.write("answers.json", R"({"commands":{"asset.delete":"allow","asset.rename":"allow"}})");
+	fs::create_directories(layer.path() / ".git");
 	policy.set_preanswers_file(policy_dir.path() / "answers.json", layer.path());
 	BOOST_REQUIRE_MESSAGE(policy.preanswers_error().empty(), policy.preanswers_error());
 	ask_a_person();
