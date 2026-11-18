@@ -26,6 +26,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <boost/json/parse.hpp>
 #include <imgui.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -36,6 +37,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // The person's import as the editor runs it (#987, #1044): import_component over a real editor_context, with the decoder's
@@ -189,6 +191,17 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 		return listed->size();
 	}
 
+	// Windows lists a removed file until the last handle on it closes (the resolver's watcher may hold one a moment).
+	bool no_files_of_this_run_within(std::chrono::milliseconds limit)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + limit;
+		while (files_of_this_run() != 0u) {
+			if (std::chrono::steady_clock::now() >= deadline) return false;
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		return true;
+	}
+
 	std::vector<std::string> dialog_texts() const
 	{
 		std::vector<std::string> out;
@@ -271,7 +284,7 @@ BOOST_AUTO_TEST_CASE(AnImportCancelledWithEsc_ThenAShutdown_LeavesNothingOfThisR
 	component->shutdown();
 	test_util::pump(tasks);
 	BOOST_TEST(imports == 0);
-	BOOST_TEST(files_of_this_run() == 0u);
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 }
 
 BOOST_AUTO_TEST_CASE(TheFolderOfAnImportCancelledWithEsc_GoesOnceItsJobStopped)
