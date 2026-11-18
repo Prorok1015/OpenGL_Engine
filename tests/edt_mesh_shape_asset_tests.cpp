@@ -175,7 +175,7 @@ BOOST_AUTO_TEST_CASE(TheSmallestShapes_AreWholeMeshes)
 			BOOST_TEST(files.indices > 0u);
 			BOOST_TEST(files.indices % 3 == 0u);
 			std::string error;
-			const std::optional<material_range> range = geometry_file_range(files.geometry, error);
+			const std::optional<material_range> range = poly_text_range(files.poly, error);
 			BOOST_REQUIRE_MESSAGE(range.has_value(), error);
 			BOOST_TEST(range->vx_end == files.vertices);
 			BOOST_TEST(range->ind_end == files.indices);
@@ -183,11 +183,13 @@ BOOST_AUTO_TEST_CASE(TheSmallestShapes_AreWholeMeshes)
 	}
 }
 
-BOOST_AUTO_TEST_CASE(AGeometryFileThatIsNotOurs_HasNoRange_AndAScaleNeedsPositiveComponents)
+BOOST_AUTO_TEST_CASE(APolyFileThatIsNoMesh_HasNoRange_AndAScaleNeedsPositiveComponents)
 {
 	std::string error;
-	BOOST_TEST(!geometry_file_range("[]", error).has_value());
-	BOOST_TEST(!geometry_file_range(R"({"vertices":[1,2,3],"indices":[0]})", error).has_value());
+	BOOST_TEST(!poly_text_range("[]", error).has_value());
+	BOOST_TEST(!poly_text_range("{", error).has_value());
+	BOOST_TEST(!poly_text_range(R"({"__type":"poly_mesh_desc","vertices":5})", error).has_value());
+	BOOST_TEST(!error.empty());
 	BOOST_TEST(shape_scale_problem({ 1.f, 2.f, 3.f }).empty());
 	BOOST_TEST(!shape_scale_problem({ 1.f, 0.f, 3.f }).empty());
 	BOOST_TEST(!shape_scale_problem({ -1.f, 1.f, 1.f }).empty());
@@ -476,7 +478,7 @@ BOOST_AUTO_TEST_CASE(Add_MakesANodeWithTheRangeOfTheGeometryFile_AndItsSize)
 	BOOST_TEST(!created.contains("scale"));
 }
 
-BOOST_AUTO_TEST_CASE(Add_RefusesAMissingShape_ABadPath_AFlippedScale_AndAFileThatIsNoGeometry)
+BOOST_AUTO_TEST_CASE(Add_RefusesAMissingShape_ABadPath_AFlippedScale_AMissingGeometry_AndAPolyThatIsNoMesh)
 {
 	const json::value parent = json::parse(R"({"context":"w0","path":[]})");
 	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/none.poly.desc" }, { "parent", parent } }).code == cmd::codes::not_found);
@@ -485,7 +487,10 @@ BOOST_AUTO_TEST_CASE(Add_RefusesAMissingShape_ABadPath_AFlippedScale_AndAFileTha
 	for (const json::value& scale : { json::value(json::array{ 1.0, -1.0, 1.0 }), json::value(json::array{ 0.0, 1.0, 1.0 }), json::value(json::array{ 1.0, 1.0 }) }) {
 		BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent }, { "scale", scale } }).code == cmd::codes::invalid_args);
 	}
+	fs::remove(res_root / "shapes" / "ball.geom.desc");
+	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } }).code == cmd::codes::not_found);
 	write_file(res_root / "shapes" / "ball.geom.desc", "{}");
+	write_file(res_root / "shapes" / "ball.poly.desc", "{}");
 	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } }).code == cmd::codes::failed);
 	BOOST_TEST(created.empty());
 }

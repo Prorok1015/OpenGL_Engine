@@ -55,10 +55,10 @@ namespace edt::mesh
 	// `geometry_file`: the <name>.geom.desc tag the geometry will be written as.
 	shape_asset_result build_shape_asset(const shape_params& params, const res::tag& geometry_file);
 
-	// The range of vertices and indices of a geometry desc written by build_shape_asset (the layout of the bake, one mesh), as its
-	// ranges say (the sizes of the vertex and index chunks; arrays are counted too): what a mesh node that draws the whole file
-	// holds. `error` says why a desc is not one.
-	std::optional<material_range> geometry_file_range(std::string_view text, std::string& error);
+	// The range of vertices and indices the bake of a poly file's mesh has, which is what a mesh node that draws the whole geometry
+	// of that shape holds (the geometry is written from the same bake: the pair desc + .geom.bin is read only by the engine's loader).
+	// `error` says why a poly file has none: it is no poly file, or its mesh bakes to no triangles or to several materials.
+	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error);
 
 	// Empty when `scale` is a size for a shape node: every component finite and greater than 0 (a negative one turns the mesh inside out).
 	std::string shape_scale_problem(const glm::vec3& scale);

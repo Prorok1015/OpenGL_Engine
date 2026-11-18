@@ -243,11 +243,14 @@ namespace edt::mesh
 					if (std::string problem = shape_scale_problem(value); !problem.empty()) return refuse(cmd::codes::invalid_args, std::move(problem));
 					scale = value;
 				}
+				const desc_file_read poly = look_at(paths->poly);
+				if (poly.missing) return refuse(cmd::codes::not_found, std::format("no file 'res://{}': shape.create makes the shape", paths->poly));
+				if (!poly.error.empty()) return refuse(cmd::codes::failed, poly.error);
 				const desc_file_read geometry = look_at(paths->geometry);
-				if (geometry.missing) return refuse(cmd::codes::not_found, std::format("no file 'res://{}': shape.create makes the shape", paths->geometry));
+				if (geometry.missing) return refuse(cmd::codes::not_found, std::format("no file 'res://{}': the shape has no geometry yet", paths->geometry));
 				if (!geometry.error.empty()) return refuse(cmd::codes::failed, geometry.error);
-				const std::optional<material_range> range = geometry_file_range(text_of(geometry.bytes), error);
-				if (!range) return refuse(cmd::codes::failed, std::format("'res://{}': {}", paths->geometry, error));
+				const std::optional<material_range> range = poly_text_range(text_of(poly.bytes), error);
+				if (!range) return refuse(cmd::codes::failed, std::format("'res://{}': {}", paths->poly, error));
 
 				json::object fields{ { "geometry", "res://" + paths->geometry }, { "vx_begin", 0 }, { "vx_end", range->vx_end },
 					{ "ind_begin", 0 }, { "ind_end", range->ind_end } };

@@ -43,45 +43,27 @@ namespace edt::mesh
 		return std::visit(counter{}, params);
 	}
 
-	std::optional<material_range> geometry_file_range(std::string_view text, std::string& error)
+	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error)
 	{
-		constexpr std::size_t vertex_bytes = 14 * sizeof(float);
 		boost::system::error_code parse_error;
-		const json::value parsed = json::parse(text, parse_error);
-		const json::object* object = parse_error ? nullptr : parsed.if_object();
-		const json::value* vertices = object ? object->if_contains("vertices") : nullptr;
-		const json::value* indices = object ? object->if_contains("indices") : nullptr;
-		if (!vertices || !indices) {
-			error = "the file is not a geometry desc";
+		const json::value parsed = json::parse(poly_text, parse_error);
+		if (parse_error || !parsed.is_object()) {
+			error = "the file is not a JSON object";
 			return std::nullopt;
 		}
-		// A desc with ranges (EPIC-79) says the size in bytes of each chunk of its binary file, a desc with arrays holds the values.
-		const auto count_of = [](const json::value& chunk, std::size_t unit) -> std::optional<std::size_t> {
-			if (chunk.is_array()) return chunk.get_array().size() / unit;
-			const json::object* ranges = chunk.if_object();
-			const json::value* size = ranges ? ranges->if_contains("size") : nullptr;
-			// A whole number JSON gives as signed unless it is past the signed range.
-			std::uint64_t bytes = 0;
-			if (size && size->is_uint64()) bytes = size->get_uint64();
-			else if (size && size->is_int64() && size->get_int64() >= 0) bytes = static_cast<std::uint64_t>(size->get_int64());
-			else return std::nullopt;
-			return static_cast<std::size_t>(bytes / unit);
-		};
-		const bool vertex_fit = vertices->is_array() ? vertices->get_array().size() % vertex_bytes == 0 : true;
-		const std::optional<std::size_t> vertex_count = count_of(*vertices, vertex_bytes);
-		const std::optional<std::size_t> index_count = count_of(*indices, indices->is_array() ? 1 : sizeof(std::uint32_t));
-		if (!vertex_count || !index_count) {
-			error = "the file is not a geometry desc";
+		poly_mesh_desc source;
+		try {
+			poly_mesh_from_json(parsed.get_object(), source);
+		} catch (const std::exception& failure) {
+			error = failure.what();
 			return std::nullopt;
 		}
-		if (!vertex_fit || *vertex_count == 0 || *index_count == 0) {
-			error = "the vertices are not in the layout of the shapes (position, normal, uv, tangent, bitangent)";
+		const baked_mesh baked = bake(source.mesh);
+		if (baked.ranges.size() != 1) {
+			error = baked.ranges.empty() ? "the mesh has no triangles" : "the mesh has several materials: one node draws one of them";
 			return std::nullopt;
 		}
-		material_range range;
-		range.vx_end = static_cast<std::uint32_t>(*vertex_count);
-		range.ind_end = static_cast<std::uint32_t>(*index_count);
-		return range;
+		return baked.ranges.front();
 	}
 
 	std::string shape_scale_problem(const glm::vec3& scale)
