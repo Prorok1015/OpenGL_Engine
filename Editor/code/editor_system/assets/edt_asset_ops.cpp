@@ -14,6 +14,7 @@
 #include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -1116,6 +1117,46 @@ std::vector<fs::path> edt::asset_ops::changeable_roots() const
 	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
 	if (manifest) roots.push_back(manifest->root);
 	return roots;
+}
+
+std::string edt::asset_ops::without_host_paths(std::string text) const
+{
+	// A bare folder is replaced where it is a whole name, not the start of a longer one.
+	const auto replace_all = [&text](const std::string& from, std::string_view with, bool whole_name) {
+		if (from.empty()) return;
+		const auto name_char = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '_' || ch == '-'; };
+		for (std::size_t at = text.find(from); at != std::string::npos; ) {
+			const std::size_t end = at + from.size();
+			if (whole_name && end < text.size() && name_char(text[end])) {
+				at = text.find(from, end);
+				continue;
+			}
+			text.replace(at, from.size(), with);
+			at = text.find(from, at + with.size());
+		}
+	};
+	// `root/x` becomes `prefix` + `x`, a bare `root` becomes `bare`.
+	const auto hide = [&](const fs::path& root, std::string_view prefix, std::string_view bare) {
+		if (root.empty()) return;
+		for (const std::string& form : { utf8(root), fs_paths::utf8_of(root) }) {
+			replace_all(form + "/", prefix, false);
+			replace_all(form, bare, true);
+		}
+	};
+	// The longest first: the journal folder lies inside the project.
+	hide(m_ports.journal_root, "cache://asset_ops/", "cache://asset_ops");
+	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+	if (db) {
+		const std::vector<fs::path>& layers = db->layers();
+		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+			if (is_engine_layer(layers, layer, m_ports.engine_base)) hide(layers[layer], "<engine>/", "<engine>");
+			else hide(layers[layer], "res://", "res://");
+		}
+	}
+	if (manifest) hide(manifest->root, "<project>/", "<project>");
+	hide(m_ports.engine_base, "<engine>/", "<engine>");
+	return text;
 }
 
 edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const

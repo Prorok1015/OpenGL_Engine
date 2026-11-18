@@ -275,6 +275,12 @@ namespace edt
 		// skipped, the ones before it are put back. The journal is not trusted: its folder must be journal_root/<id>, its roots
 		// the project's own (top) layer or the manifest's folder, its names ones the project lists, a rewrite of a desc or the manifest.
 		undo_report undo(const operation_journal& journal) const;
+		// The folders an operation may have changed files in: the project's own (top) layer and the manifest's. The only roots a
+		// journal may name (the history checks the journals it reads against them).
+		std::vector<std::filesystem::path> changeable_roots() const;
+		// `text` with the host's folders written as the project knows them (a layer is "res://", the journal folder
+		// "cache://asset_ops", the manifest's folder "<project>", the engine's "<engine>"): what an agent is told of an error.
+		std::string without_host_paths(std::string text) const;
 
 	private:
 		std::optional<refusal> plan_one(plan_item& item) const;
@@ -283,8 +289,6 @@ namespace edt
 		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;
 		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
 		void roll_back(operation_report& report) const;
-		// The folders an operation may have changed files in: the project's own (top) layer and the manifest's.
-		std::vector<std::filesystem::path> changeable_roots() const;
 
 		asset_ops_ports m_ports;
 	};

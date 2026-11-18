@@ -11,10 +11,12 @@
 namespace cmd { class command_registry; }
 
 // asset.rename, asset.move, asset.delete (EPIC-57 section 6.4, #775): the MCP face of asset_ops. Each is category scene_edit
-// with risk confirm, so an agent's call is a question to a person every time (a project policy file may lift that for one command
-// by name, as for desc.write); `force` of asset.delete leaves references broken and is never done on an agent's word alone: the
-// call must carry the ticket a person approved, and the question lists what would break. A person's call (origin ui, or a test) is
-// not asked: the asset browser (PR 3) runs the same commands.
+// with risk confirm, so an agent's call is a question to a person; a policy file may lift it for asset.rename and asset.move by
+// name (as for desc.write), never for asset.delete: that one is done only on the ticket a person approved for this very call
+// (`force` too, and the question lists what would break). The plan of a question is recorded with a fingerprint
+// (describe_before_allowed_invoke), and an agent's run builds the plan again: no record (a question that said "will be refused"
+// leaves none) is `denied`, another plan is `stale` (`plan_changed`), and nothing is done. A person's call (origin ui, or a test)
+// is not asked: the asset browser (PR 3) runs the same commands.
 namespace edt
 {
 	class editor_events;

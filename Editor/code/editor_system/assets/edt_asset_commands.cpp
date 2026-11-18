@@ -2,11 +2,15 @@
 #include "edt_forge_types.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <map>
 #include <memory>
@@ -14,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -23,6 +28,9 @@ namespace
 	// Lines of one list in a question or an error: the rest is counted.
 	constexpr std::size_t k_listed_places = 12;
 	constexpr std::size_t k_listed_files = 8;
+	// The plans a person was asked about and that have not run yet, by caller and ticket.
+	constexpr std::size_t k_max_shown = 32;
+	constexpr auto k_shown_lifetime = cmd::command_registry::confirmation_lifetime;
 
 	json::value parse_schema(std::string_view text, std::string_view what)
 	{
@@ -77,6 +85,82 @@ namespace
 		return out;
 	}
 
+	// Whether the question about `plan` is one a person can approve: a plan that will be refused is never offered as a question, so
+	// a ticket of it cannot be approved and later spent on what the files have become since.
+	bool plan_runs(const edt::operation_plan& plan, bool force)
+	{
+		if (plan.refused || plan.items.size() != 1) return false;
+		const edt::plan_item& item = plan.items.front();
+		if (item.request.operation != edt::asset_operation::remove) return true;
+		return force || (!item.scan_problem && !item.needs_force);
+	}
+
+	void add_part(std::string& out, std::string_view part)
+	{
+		out += std::format("{}:", part.size());
+		out += part;
+		out += ';';
+	}
+
+	void add_usages(std::string& out, const std::vector<edt::asset_usage>& usages)
+	{
+		add_part(out, std::to_string(usages.size()));
+		for (const edt::asset_usage& usage : usages) {
+			add_part(out, usage.file);
+			add_part(out, usage.json_pointer);
+			add_part(out, edt::usage_kind_name(usage.kind));
+			add_part(out, usage.by_guid ? "guid" : "path");
+		}
+	}
+
+	// Everything of the plan a person's answer is about, and what the run would write: the files and their hashes, the references
+	// and the text each rewritten file becomes, what stays broken, the warnings, `force`. A run that finds another plan than the
+	// one a person approved does not run.
+	std::string plan_fingerprint(const edt::operation_plan& plan, bool force)
+	{
+		std::string text;
+		add_part(text, force ? "force" : "plain");
+		add_part(text, std::to_string(plan.items.size()));
+		for (const edt::plan_item& item : plan.items) {
+			add_part(text, edt::asset_operation_name(item.request.operation));
+			add_part(text, item.request.asset.view());
+			add_part(text, item.request.to);
+			add_part(text, item.target.view());
+			add_part(text, fs_paths::generic_utf8_of(item.root));
+			add_part(text, std::to_string(item.moves.size()));
+			for (const edt::planned_move& move : item.moves) {
+				add_part(text, move.from);
+				add_part(text, move.to);
+				add_part(text, move.hash);
+			}
+			add_usages(text, item.referrers);
+			add_part(text, std::to_string(item.rewrites.size()));
+			for (const edt::planned_rewrite& rewrite : item.rewrites) {
+				add_part(text, rewrite.file);
+				add_part(text, fs_paths::generic_utf8_of(rewrite.root));
+				add_part(text, rewrite.relative);
+				add_part(text, rewrite.before_hash);
+				add_part(text, rewrite.after_text);
+				add_part(text, std::to_string(rewrite.pointers.size()));
+				for (const std::string& pointer : rewrite.pointers) add_part(text, pointer);
+			}
+			add_part(text, std::to_string(item.could_not_rewrite.size()));
+			for (const edt::rewrite_failure& failure : item.could_not_rewrite) {
+				add_part(text, failure.file);
+				add_part(text, failure.code);
+				add_part(text, failure.reason);
+			}
+			add_usages(text, item.broken_references);
+			add_part(text, std::to_string(item.warnings.size()));
+			for (const std::string& warning : item.warnings) add_part(text, warning);
+			add_part(text, item.scan_problem ? edt::refusal_code_name(item.scan_problem->code) : "");
+			add_part(text, item.needs_force ? "needs_force" : "");
+		}
+		res::content_hasher hasher;
+		hasher.update(std::as_bytes(std::span<const char>(text.data(), text.size())));
+		return hasher.text();
+	}
+
 	struct request_args
 	{
 		edt::asset_request request;
@@ -92,7 +176,7 @@ namespace
 		{
 		}
 
-		cmd::result run(edt::asset_operation operation, const cmd::call& call) const
+		cmd::result run(edt::asset_operation operation, const cmd::call& call)
 		{
 			if (call.from.kind == cmd::origin_kind::game) {
 				return cmd::result::failure(cmd::codes::denied, "a running game does not change the project's assets");
@@ -105,27 +189,33 @@ namespace
 			}
 			const request_args args = parse(operation, call);
 			if (!args.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, args.error);
-			// What `force` leaves broken is decided by a person for this very call: the ticket the registry hands on only after the
-			// person approved it. A policy that lets the call through without asking does not make an agent's force a yes.
-			if (args.force && call.from.kind == cmd::origin_kind::agent && call.confirmation.empty()) {
+			// A delete, and what `force` leaves broken, are decided by a person for this very call: the ticket the registry hands on only
+			// after the person approved it. A policy that lets the call through without asking (`allow`) does not stand in for that.
+			if (call.from.kind == cmd::origin_kind::agent && operation == edt::asset_operation::remove && call.confirmation.empty()) {
 				return cmd::result::failure(cmd::codes::denied,
-					"`force` leaves references broken and is done only after a person confirmed this very call; it was not asked");
+					"asset.delete is done only after a person confirmed this very call, and a policy that allows it does not replace that; it was not asked");
 			}
 
 			const edt::operation_plan plan = operations->plan(std::span<const edt::asset_request>(&args.request, 1));
-			if (plan.refused) return refused(*plan.refused);
+			if (plan.refused) return refused(*operations, *plan.refused);
+			// A plan that is not one `plan_runs` offers is refused by execute below, whatever was asked, so it needs no question behind it.
+			if (call.from.kind == cmd::origin_kind::agent && plan_runs(plan, args.force)) {
+				if (std::optional<cmd::result> why = check_shown(call, plan, args.force)) return std::move(*why);
+			}
 			const edt::operation_report report = operations->execute(plan, edt::execute_options{ args.force });
-			if (report.refused) return refused(*report.refused);
+			if (report.refused) return refused(*operations, *report.refused);
 			if (!report.ok) {
-				std::string error = std::format("the operation failed and was taken back: {}", report.error);
-				if (!report.rollback_failures.empty()) {
-					error += std::format("; {} step(s) could not be taken back, the project is half done there: {}", report.rollback_failures.size(),
-						report.rollback_failures.front());
+				const std::string reason = operations->without_host_paths(report.error);
+				std::string error = std::format("the operation failed and was taken back: {}", reason);
+				std::vector<std::string> stuck_steps;
+				for (const std::string& step : report.rollback_failures) stuck_steps.push_back(operations->without_host_paths(step));
+				if (!stuck_steps.empty()) {
+					error += std::format("; {} step(s) could not be taken back, the project is half done there: {}", stuck_steps.size(), stuck_steps.front());
 				}
 				cmd::result out = cmd::result::failure(cmd::codes::failed, std::move(error));
 				json::array stuck;
-				for (const std::string& step : report.rollback_failures) stuck.push_back(json::string(step));
-				out.value = json::object{ { "code", "operation_failed" }, { "reason", report.error }, { "rollback_failures", std::move(stuck) } };
+				for (const std::string& step : stuck_steps) stuck.push_back(json::string(step));
+				out.value = json::object{ { "code", "operation_failed" }, { "reason", reason }, { "rollback_failures", std::move(stuck) } };
 				return out;
 			}
 
@@ -136,10 +226,13 @@ namespace
 			if (m_sources.events && call.from.kind == cmd::origin_kind::agent) {
 				m_sources.events->agent_action.emit(edt::agent_action_info{ "asset." + std::string(edt::asset_operation_name(operation)), target, 0, call.from.session });
 			}
-			return cmd::result::success(edt::operation_report_json(report));
+			edt::operation_report shown = report;
+			for (std::string& warning : shown.warnings) warning = operations->without_host_paths(std::move(warning));
+			for (edt::rewrite_failure& failure : shown.could_not_rewrite) failure.reason = operations->without_host_paths(std::move(failure.reason));
+			return cmd::result::success(edt::operation_report_json(shown));
 		}
 
-		std::optional<std::string> describe(edt::asset_operation operation, const cmd::call& call) const
+		std::optional<std::string> describe(edt::asset_operation operation, const cmd::call& call)
 		{
 			const auto refused_text = [](std::string_view why) {
 				return std::optional<std::string>("This request will be refused: " + edt::forge::escaped_text(why, 1024));
@@ -151,17 +244,73 @@ namespace
 			const request_args args = parse(operation, call);
 			if (!args.error.empty()) return refused_text(args.error);
 			const edt::operation_plan plan = operations->plan(std::span<const edt::asset_request>(&args.request, 1));
+			// Only a plan that can run is remembered: the ticket of a question that says "will be refused" has nothing to spend.
+			if (call.from.kind == cmd::origin_kind::agent && plan_runs(plan, args.force)) {
+				remember(key_of(call.from), call.confirmation, plan_fingerprint(plan, args.force));
+			}
 			return edt::operation_question(plan, args.force);
 		}
 
 	private:
+		struct shown_plan
+		{
+			std::string key;
+			std::string ticket;
+			std::string fingerprint;
+			std::chrono::steady_clock::time_point at;
+		};
+
+		static std::string key_of(const cmd::origin& from)
+		{
+			return std::format("{}|{}", static_cast<int>(from.kind), from.session);
+		}
+
+		void remember(std::string key, std::string ticket, std::string fingerprint)
+		{
+			const auto at = std::chrono::steady_clock::now();
+			std::erase_if(m_shown, [&](const shown_plan& entry) { return at - entry.at > k_shown_lifetime || (entry.key == key && entry.ticket == ticket); });
+			if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
+			m_shown.push_back(shown_plan{ std::move(key), std::move(ticket), std::move(fingerprint), at });
+		}
+
+		// The fingerprint of what a person was asked under this ticket (empty ticket: what was described for a call the policy let
+		// through); each is spent by one run.
+		std::optional<std::string> take_shown(const std::string& key, const std::string& ticket)
+		{
+			const auto at = std::chrono::steady_clock::now();
+			std::erase_if(m_shown, [&](const shown_plan& entry) { return at - entry.at > k_shown_lifetime; });
+			const auto found = std::ranges::find_if(m_shown, [&](const shown_plan& entry) { return entry.key == key && entry.ticket == ticket; });
+			if (found == m_shown.end()) return std::nullopt;
+			std::string fingerprint = std::move(found->fingerprint);
+			m_shown.erase(found);
+			return fingerprint;
+		}
+
+		// An agent's run is bound to the plan its question showed: the plan is made again now and must be that one.
+		std::optional<cmd::result> check_shown(const cmd::call& call, const edt::operation_plan& plan, bool force)
+		{
+			const std::optional<std::string> shown = take_shown(key_of(call.from), call.confirmation);
+			if (!shown) {
+				return cmd::result::failure(cmd::codes::denied, "the plan was not shown to a person; ask again");
+			}
+			if (*shown != plan_fingerprint(plan, force)) {
+				cmd::result out = cmd::result::failure(cmd::codes::stale, "the plan changed since the person was asked (the files or what refers to them), so nothing was done; ask again");
+				out.value = json::object{ { "code", "plan_changed" }, { "reason", "the plan is not the one the person approved" } };
+				return out;
+			}
+			return std::nullopt;
+		}
+
 		std::optional<std::string> write_blocked() const
 		{
 			return m_sources.write_blocker ? m_sources.write_blocker() : std::nullopt;
 		}
 
-		static cmd::result refused(const edt::refusal& why)
+		static cmd::result refused(const edt::asset_ops& operations, edt::refusal why)
 		{
+			why.reason = operations.without_host_paths(std::move(why.reason));
+			for (edt::rewrite_failure& failure : why.unrewritable) failure.reason = operations.without_host_paths(std::move(failure.reason));
+			for (std::string& file : why.skipped) file = operations.without_host_paths(std::move(file));
 			std::string error = std::format("[{}] {}", edt::refusal_code_name(why.code), why.reason);
 			if (!why.referrers.empty()) error += std::format(" ({})", place_list(why.referrers, k_listed_places));
 			if (!why.skipped.empty()) {
@@ -221,6 +370,7 @@ namespace
 		}
 
 		edt::asset_command_sources m_sources;
+		std::vector<shown_plan> m_shown;
 	};
 }
 
@@ -411,10 +561,13 @@ std::vector<edt::registration> edt::register_asset_commands(cmd::command_registr
 		desc.destructive = destructive;
 		desc.invoke = [impl, operation](const cmd::call& call) { return impl->run(operation, call); };
 		desc.describe = [impl, operation](const cmd::call& call) { return impl->describe(operation, call); };
+		// The plan a person is asked about is recorded on every path that runs it (an `allow` of the policy too), and the run
+		// is held to it.
+		desc.describe_before_allowed_invoke = true;
 		if (registration added = commands.add(std::move(desc)); added.active()) out.push_back(std::move(added));
 	};
 
-	add("asset.rename", "Rename one asset of the project's res/ folder (a person confirms each time). Its .resource (and for a desc its binary file) go with it; "
+	add("asset.rename", "Rename one asset of the project's res/ folder (a person is asked each time unless a policy file allows `asset.rename`). Its .resource (and for a desc its binary file) go with it; "
 			"references that name it by guid stay, references by path are rewritten in the files that hold them. The answer is a report: what moved, "
 			"which files were rewritten, what could not be, and an `operation` id. Refused with `busy` while the asset database reads the files or "
 			"a file that refers to the asset is open with unsaved changes; `unrewritable_references` (`failed`, nothing was changed) lists the referrers that cannot be rewritten (a lower layer's file, a guid that is another asset's, a file not laid out as the editor writes it) in the value's `unrewritable`; the refusal's value has a machine `code`",
@@ -423,13 +576,13 @@ std::vector<edt::registration> edt::register_asset_commands(cmd::command_registr
 			"to":{"type":"string","minLength":1,"description":"the new file name, without a folder"}},
 			"required":["path","to"],"additionalProperties":false})json",
 		asset_operation::rename, false);
-	add("asset.move", "Move one asset of the project's res/ folder into another folder of it (a person confirms each time); the references follow as in asset.rename",
+	add("asset.move", "Move one asset of the project's res/ folder into another folder of it (a person is asked each time unless a policy file allows `asset.move`); the references follow as in asset.rename",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"the asset, res://materials/a.mat.desc or materials/a.mat.desc"},
 			"to":{"type":"string","description":"the folder below res:// that exists in the project's own folder; an empty string is the root"}},
 			"required":["path","to"],"additionalProperties":false})json",
 		asset_operation::move, false);
-	add("asset.delete", "Delete one asset of the project's res/ folder (a person confirms each time); its files go to the editor's journal folder and a person "
+	add("asset.delete", "Delete one asset of the project's res/ folder (a person is asked each time, always: a policy `allow` does not lift it, the call is then denied); its files go to the editor's journal folder and a person "
 			"can put them back with Edit > Undo Asset Action. Refused with `needs_input` and the list of the places that refer to it unless `force` is true; "
 			"`force` leaves those references broken, and a person confirms that apart, being shown them",
 		R"json({"type":"object","properties":{

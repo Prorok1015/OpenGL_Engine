@@ -4,6 +4,7 @@
 #include "edt_asset_history.h"
 #include "edt_asset_ops.h"
 #include "edt_asset_usages.h"
+#include "edt_data_protocol.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
@@ -48,19 +49,17 @@ edt::asset_component::asset_component(ports from)
 	};
 	const std::filesystem::path ops_engine_base = res::resource_system::configured_engine_base();
 	ops.engine_base = ops_engine_base;
-	ops.journal_root = project.cache_dir() / "asset_ops";
+	const std::filesystem::path journal_root = project.cache_dir() / "asset_ops";
+	ops.journal_root = journal_root;
 	ops.is_open_with_unsaved_changes = m_ports.is_open_with_unsaved_changes;
 	ops.hold_changes = [this]() -> std::shared_ptr<void> { return std::make_shared<res::change_hold>(m_ports.resources.hold_changes()); };
 	ops.report_self_change = [this](std::span<const res::file_change> changes) { m_database->report_self_change(changes); };
 	m_ops = std::make_unique<asset_ops>(std::move(ops));
 
-	m_history = std::make_unique<asset_history>(project.cache_dir() / "asset_ops", [this] { return m_database->next_history_serial(); });
-	std::vector<std::filesystem::path> roots;
-	for (std::size_t layer = 0; layer < m_database->layers().size(); ++layer) {
-		if (!is_engine_layer(m_database->layers(), layer, ops_engine_base)) roots.push_back(m_database->layers()[layer]);
-	}
-	roots.push_back(project.manifest_file.parent_path());
-	m_history->restore(roots);
+	// Which journals are the editor's own is kept in the person's data, not in the project's cache folder.
+	m_history = std::make_unique<asset_history>(journal_root,
+		asset_history_file(m_ports.resources.mount_roots("edt"), default_user_data_dir(), journal_root), [this] { return m_database->next_history_serial(); });
+	m_history->restore(m_ops->changeable_roots());
 }
 
 edt::asset_component::~asset_component() = default;
