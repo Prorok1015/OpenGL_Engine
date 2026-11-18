@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <snk/common/snk_api.h>
 
@@ -192,6 +193,12 @@ namespace desc
 		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
+
+		// The schema with its declarative "migrations" (desc_migrations.h, EPIC-58 §3.5): the steps are registered first,
+		// so its version is where they lead, and unregister_desc takes them away with the schema. Refused (logged,
+		// nullptr) when the steps are malformed or do not lead to the schema's version, or when the type has steps
+		// registered in C++ already. An empty array is the overload above.
+		const type_schema* register_schema(type_schema schema, const json::array& migrations);
 
 		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
 		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
@@ -401,5 +408,8 @@ namespace desc
 		mutable std::shared_mutex m_registry_mutex;
 		std::unordered_map<std::string, std::shared_ptr<const layer_writer>> m_layer_writers;
 		std::shared_ptr<const layer_writer> find_layer_writer(std::string_view type_name) const;
+		// Types whose steps came with their schema (register_schema with migrations): unregister_desc removes them too.
+		// Last, as members are only appended to this engine-created type (module ABI).
+		std::unordered_set<std::string> m_schema_migration_types;
 	};
 }

@@ -124,6 +124,10 @@ namespace gs
 		// schema that cannot be bound.
 		bool register_component(desc::type_schema schema);
 
+		// The same with the schema's declarative "migrations" (EPIC-58 §3.5): steps of the module's own type, removed with
+		// its layer. Also refused when they are malformed, do not lead to the schema's version, or the type has C++ steps.
+		bool register_component(desc::type_schema schema, const json::array& migrations);
+
 		// Marks a desc type of the layer (registered with layer.descs().register_desc<T>; a component is always refused) as a data
 		// document the editor opens and edits from its schema (module API 3.17, EPIC-56, scenario F33): `desc::desc_system::
 		// mark_document` of the layer's desc system. A type that has a custom field with a json_codec is marked through
