@@ -30,7 +30,8 @@ shift
 [[ $# -gt 0 ]] || { echo "usage: check_windows_deps.sh [--runtime-elsewhere] <bin dir> <file>..."; exit 2; }
 # Exactly what editor.exe and snk_engine.dll import today (dumpbin, #223): a new import fails until it is added here.
 # opengl32.dll is not imported: GLFW and glad load it at run time.
-# userenv.dll: the AppContainer profile calls of the decoder sandbox in plt_process (#1134, #1178).
+# userenv.dll: the decoder sandbox's AppContainer profile calls (plt_app_container.cpp, #1134, #1178); the editor side
+# only: a game host is checked with --deny userenv.dll (#1179).
 windows_dlls=" kernel32.dll user32.dll gdi32.dll shell32.dll advapi32.dll imm32.dll ws2_32.dll mswsock.dll ntdll.dll userenv.dll "
 # One space-separated line, so " name " matches a whole entry.
 windows_dlls=" $(echo ${windows_dlls}) "

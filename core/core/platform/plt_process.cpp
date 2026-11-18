@@ -1,4 +1,5 @@
 #include <snk/platform/plt_process.h>
+#include "plt_app_container_state.h"
 #include <snk/common/logger/engine_log.h>
 #include <array>
 #include <chrono>
@@ -24,7 +25,6 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <sddl.h>
-#include <userenv.h>
 #else
 #include <cerrno>
 #include <csignal>
@@ -46,15 +46,6 @@ extern char** environ;
 #endif
 
 namespace fs = std::filesystem;
-
-struct platform::app_container::state
-{
-	std::wstring name;
-	std::string error;
-#ifdef _WIN32
-	PSID sid = nullptr;
-#endif
-};
 
 platform::app_container::app_container(std::unique_ptr<state> held) : m_state(std::move(held)) {}
 
@@ -438,28 +429,6 @@ fs::path platform::current_executable()
 	return {};
 }
 
-std::shared_ptr<const platform::app_container> platform::app_container::ensure(std::wstring name)
-{
-	auto held = std::make_unique<state>();
-	held->name = std::move(name);
-	if (held->name.empty()) {
-		held->error = "the AppContainer has no name";
-	} else {
-		HRESULT made = CreateAppContainerProfile(held->name.c_str(), held->name.c_str(), L"snk model decoder (#1054)", nullptr, 0,
-			&held->sid);
-		if (made == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
-			held->sid = nullptr;
-			made = DeriveAppContainerSidFromAppContainerName(held->name.c_str(), &held->sid);
-		}
-		if (FAILED(made)) {
-			held->sid = nullptr;
-			held->error = std::format("cannot make the AppContainer profile '{}': {}", utf8_of(fs::path(held->name)),
-				system_text(static_cast<DWORD>(HRESULT_CODE(made))));
-		}
-	}
-	return std::shared_ptr<const app_container>(new app_container(std::move(held)));
-}
-
 platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
 {
 	std::wstring command_line = quote_windows_arg(program.native());
@@ -750,14 +719,6 @@ fs::path platform::current_executable()
 	std::error_code ec;
 	const fs::path path = fs::read_symlink("/proc/self/exe", ec);
 	return ec ? fs::path{} : path;
-}
-
-std::shared_ptr<const platform::app_container> platform::app_container::ensure(std::wstring name)
-{
-	auto held = std::make_unique<state>();
-	held->name = std::move(name);
-	held->error = "this system has no AppContainer";
-	return std::shared_ptr<const app_container>(new app_container(std::move(held)));
 }
 
 platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
