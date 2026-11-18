@@ -26,6 +26,7 @@ namespace edt
 	class prefab_document;
 	class prefab_editor_panel;
 	class scene_document;
+	struct save_all_ask;
 
 	// The prefab editor, whole: its window, its document's close question and Apply/Revert, and the Inspector's hand-over
 	// between the level and one node of the prefab's working copy. editor_system creates it, registers the window and asks it
@@ -65,6 +66,10 @@ namespace edt
 		prefab_document* dirty() const;
 		// Applies the prefab with unapplied edits; false (with the reason shown) when it was not applied.
 		bool apply_dirty();
+		// The question of the dirty prefab Save All (controller/edt_save_all.h) could not apply: a file that changed on disk
+		// (Reload / Overwrite / Cancel) or a variant whose edits need its base dropped (Save without base / Cancel).
+		// `resolved(true)` once it was reloaded or written, `resolved(false)` after Cancel, a failure or when that prefab is not open.
+		void resolve_unsaved(const save_all_ask& ask, std::function<void(bool resolved)> resolved);
 		// Closes the window and the document without asking, the Inspector first: it holds a pointer into the working copy.
 		void close();
 		// Ends the wait for a prefab being opened and leaves the window as it was: a prefab that was open stays open.

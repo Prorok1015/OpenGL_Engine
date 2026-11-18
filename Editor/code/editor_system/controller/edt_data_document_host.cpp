@@ -337,6 +337,24 @@ std::vector<edt::document_id> edt::data_document_host::dirty() const
 	return out;
 }
 
+void edt::data_document_host::resolve_unsaved(document_id id, std::function<void(bool resolved)> resolved)
+{
+	const auto found = m_windows.find(id);
+	if (found == m_windows.end()) {
+		if (resolved) resolved(false);
+		return;
+	}
+	if (in_conflict(id)) {
+		ask_conflict(id, std::move(resolved));
+		return;
+	}
+	if (found->second.data->needs_version_confirmation()) {
+		ask_version(id, false, std::move(resolved));
+		return;
+	}
+	if (resolved) resolved(false);
+}
+
 bool edt::data_document_host::save_all()
 {
 	for (const document_id id : dirty()) {

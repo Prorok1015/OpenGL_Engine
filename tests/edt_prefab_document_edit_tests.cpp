@@ -10,6 +10,9 @@
 #include "edt_inspector_target.h"
 #include "edt_scene_document.h"
 #include "edt_prefab_close.h"
+#include "edt_prefab_save_all.h"
+#include "edt_save_all.h"
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
@@ -20,11 +23,13 @@
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // #147 (EPIC-25 US-25-2): the prefab document keeps a working copy that edit() changes, Apply (save()) writes over the
@@ -135,6 +140,36 @@ struct prefab_edit_fixture : test_util::scene_env
 	bool preview_has_node_named(const std::string& name)
 	{
 		return registry_has_node_named(document->get_registry(), name);
+	}
+
+	// An edited prefab whose file changed on disk (the watch ran): Apply refuses it.
+	void make_conflicted()
+	{
+		document->open(tag);
+		BOOST_REQUIRE(document->is_open());
+		BOOST_REQUIRE(rename_arm("arm2"));
+		write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+		rs->signal_changed(tag);
+		pump();
+		BOOST_REQUIRE(document->changed_on_disk());
+	}
+
+	// The question of Save All about `document`, answered with the dialog's choice `index` (-1: the dialog was not asked).
+	// Returns what `done` said: 1 resolved, 0 not, -1 never called.
+	int ask_and_answer(edt::save_all_question question, int index)
+	{
+		edt::dialog_service dialogs;
+		dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+		const auto alive = std::make_shared<int>(0);
+		const edt::prefab_question_ports ports{ dialogs, [this] { return document.get(); }, alive };
+		int outcome = -1;
+		edt::ask_prefab_question(ports, *document, question, [&outcome](bool resolved) { outcome = resolved ? 1 : 0; });
+		const auto shown = dialogs.list();
+		BOOST_REQUIRE(shown.size() == 1u);
+		BOOST_TEST(shown[0].kind == "choice");
+		BOOST_TEST(outcome == -1);
+		BOOST_REQUIRE(dialogs.answer(shown[0].id, boost::json::object{ { "index", index } }).ok);
+		return outcome;
 	}
 
 	test_util::temp_dir dir{ "edt_prefab_edit" };
@@ -1197,6 +1232,60 @@ BOOST_AUTO_TEST_CASE(TheVariantForm_ATakenName_ShowsWhyAndWritesNothingOverTheFi
 	BOOST_TEST(form.problem().find("already exists") != std::string::npos);
 	BOOST_TEST(!form.submit().has_value());
 	BOOST_TEST(text_of(res_root, "prefabs/taken.prefab.desc") == "kept");
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_ChangedOnDiskPrefab_AsksOverwriteOrReload)
+{
+	make_conflicted();
+	BOOST_TEST(!document->save().saved);
+	BOOST_TEST((edt::save_all_question_of(*document) == edt::save_all_question::disk_changed));
+
+	BOOST_TEST(ask_and_answer(edt::save_all_question::disk_changed, 1) == 1);
+
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("arm2") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_ChangedOnDiskPrefab_ReloadTakesTheFile_CancelChangesNothing)
+{
+	make_conflicted();
+	const std::string outside = text_of(res_root, "prefabs/a.prefab.desc");
+
+	BOOST_TEST(ask_and_answer(edt::save_all_question::disk_changed, 2) == 0);
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(arm_name() == "arm2");
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == outside);
+
+	BOOST_TEST(ask_and_answer(edt::save_all_question::disk_changed, 0) == 1);
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(arm_name() == "outside");
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_AVariantThatNeedsItsBaseDropped_IsAskedAndSavesWholeOnlyOnAYes)
+{
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	const std::string variant = R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
+	write(res_root, "prefabs/v.prefab.desc", variant);
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
+		prefab.get_root().children[0].overrides.clear();
+		return true;
+	}));
+	BOOST_REQUIRE(!document->save().saved);
+	BOOST_TEST((edt::save_all_question_of(*document) == edt::save_all_question::base_layer));
+
+	BOOST_TEST(ask_and_answer(edt::save_all_question::base_layer, 1) == 0);
+	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc") == variant);
+	BOOST_TEST(document->is_dirty());
+
+	BOOST_TEST(ask_and_answer(edt::save_all_question::base_layer, 0) == 1);
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc").find("__parent") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
