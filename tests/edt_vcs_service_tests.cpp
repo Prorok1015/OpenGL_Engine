@@ -3024,7 +3024,7 @@ BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatRepointsALinkInTheMiddleOfTheConfigura
 		!= std::string::npos, json::serialize(refused));
 	BOOST_TEST(head_of(repo) == main_head);
 	const auto guarded = edt::config_files_to_guard({ folder / "editor.cfg" });
-	for (const fs::path link : { folder / "editor.cfg", folder / "chosen.cfg", folder / "current" }) {
+	for (const fs::path& link : { folder / "editor.cfg", folder / "chosen.cfg", folder / "current" }) {
 		BOOST_TEST((std::find(guarded.begin(), guarded.end(), fs::absolute(link).lexically_normal()) != guarded.end()), link);
 	}
 }
