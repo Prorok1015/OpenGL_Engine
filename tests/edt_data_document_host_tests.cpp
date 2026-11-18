@@ -1008,7 +1008,7 @@ BOOST_AUTO_TEST_CASE(SaveAll_ARefusalOfOneDocumentKeepsTheOthersSaved)
 	BOOST_TEST(!first.is_dirty());
 	BOOST_TEST(!second.is_dirty());
 	BOOST_TEST(scene.is_dirty());
-	BOOST_TEST(edt::save_all_summary(report).find("Not saved") != std::string::npos);
+	BOOST_TEST(edt::save_all_summary(report).find("not saved") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(SaveAll_AnUntitledLevelIsLeftOut_ABusyOneIsNamedWithItsReason)

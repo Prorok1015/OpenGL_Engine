@@ -1,4 +1,4 @@
-# Save Level As (Ctrl+Shift+S): the File menu items shifted, a click would hit Save instead.
+# Save Level As (no chord since #1183: Ctrl+Shift+S is Save All, which does nothing on a clean level; open File > Save Level As... with a click first): the File menu items shifted, a click would hit Save instead.
 sleep 18
 key ctrl+shift+s
 sleep 2

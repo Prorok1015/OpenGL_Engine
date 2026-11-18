@@ -552,7 +552,7 @@ void edt::file_menu::register_actions()
 		.activate = [this] { quick_save(); },
 		.category = cmd::agent_category::scene_edit });
 
-	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
+	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File",
 		.execute_call = [this, restricted, file_state, level_write_busy](const cmd::call& request) {
 			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");

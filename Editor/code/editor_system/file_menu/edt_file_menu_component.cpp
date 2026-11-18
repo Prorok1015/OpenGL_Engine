@@ -225,15 +225,55 @@ void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
 	m_menu->attach_window_close(windows);
 }
 
+void edt::file_menu_component::focus_unsaved(document_id id)
+{
+	document_manager& documents = m_ports.context.documents();
+	const document* open = documents.find(id);
+	if (!open) return;
+	if (open->kind() == "data") {
+		// Opening what is open moves the focus to its window.
+		m_ports.asset_open.data_documents().open(open->source(), false);
+		return;
+	}
+	if (open->kind() == "prefab") m_ports.prefab.show();
+	documents.set_active(id);
+}
+
+void edt::file_menu_component::draw_unsaved_list(const std::vector<unsaved_group>& groups)
+{
+	const gui::theme_semantic_colors& colors = m_ports.context.colors();
+	for (const unsaved_group& group : groups) {
+		ImGui::TextColored(colors.text_secondary, "%s", group.heading.c_str());
+		ImGui::Indent();
+		for (const unsaved_row& row : group.rows) {
+			ImGui::PushID(static_cast<int>(row.id));
+			if (ImGui::Selectable(row.title.c_str())) focus_unsaved(row.id);
+			ImGui::PopID();
+		}
+		ImGui::Unindent();
+	}
+}
+
 void edt::file_menu_component::draw_unsaved_indicator()
 {
+	constexpr const char* popup_id = "unsaved_documents";
 	document_manager& documents = m_ports.context.documents();
 	const std::size_t count = count_unsaved(documents);
 	if (count == 0) return;
 	ImGui::TextColored(m_ports.context.colors().warning, "Unsaved (%zu)", count);
-	if (ImGui::IsItemHovered()) {
-		const std::string text = unsaved_text(list_unsaved(documents)) + "\n\nFile > Save All (" + std::string(k_save_all_shortcut) + ") writes them.";
+	if (ImGui::IsItemClicked()) ImGui::OpenPopup(popup_id);
+	if (ImGui::IsItemHovered() && !ImGui::IsPopupOpen(popup_id)) {
+		const std::string text = unsaved_text(list_unsaved(documents)) + "\n\nClick for the list. File > Save All (" + std::string(k_save_all_shortcut) + ") writes them.";
 		ImGui::SetTooltip("%s", text.c_str());
+	}
+	if (ImGui::BeginPopup(popup_id)) {
+		draw_unsaved_list(unsaved_groups(list_unsaved(documents)));
+		ImGui::Separator();
+		if (ImGui::Button("Save All")) {
+			ImGui::CloseCurrentPopup();
+			m_menu->save_all();
+		}
+		ImGui::EndPopup();
 	}
 }
 

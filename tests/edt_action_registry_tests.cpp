@@ -599,8 +599,8 @@ BOOST_AUTO_TEST_CASE(FileMenu_KeepsItsOrderSeparatorsAndShortcutText)
 	for (std::size_t i = 0; i < items.size(); ++i) {
 		BOOST_TEST_CONTEXT(items[i].label) {
 			BOOST_CHECK_EQUAL(items[i].separator_before, separators[i]);
-			const std::string expected = items[i].label == "Save Level" ? "Ctrl+S"
-				: items[i].label == "Save Level As..." ? "Ctrl+Shift+S" : "";
+			// Save Level As has no chord: Ctrl+Shift+S is Save All (#1183).
+			const std::string expected = items[i].label == "Save Level" ? "Ctrl+S" : "";
 			BOOST_CHECK_EQUAL(items[i].shortcut_text, expected);
 			BOOST_CHECK(items[i].enabled);
 		}
@@ -656,15 +656,18 @@ BOOST_AUTO_TEST_CASE(FileMenu_SaveItemOnAnUntitledLevelOpensSaveAs)
 	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
 }
 
-BOOST_AUTO_TEST_CASE(FileMenu_CtrlShiftSDispatchesSaveAsEvenForATitledLevel)
+BOOST_AUTO_TEST_CASE(FileMenu_SaveLevelAs_HasNoChord_TheMenuItemStillAsksForAPath)
 {
 	file_menu_fixture f;
 	edt::dialog_auto_answer answer;
 	answer.save_as_path = "levels/b.desc";
 	f.dialogs.set_auto_answer(answer);
 
-	BOOST_CHECK_EQUAL(file_item_with_shortcut(f.actions, "Ctrl+Shift+S"), "file.save_as");
-	BOOST_CHECK(f.actions.dispatch(chord("Ctrl+Shift+S")));
+	// Ctrl+Shift+S belongs to Save All, which this fixture does not offer (no hook): nothing runs on it.
+	BOOST_CHECK(file_item_with_shortcut(f.actions, "Ctrl+Shift+S").empty());
+	BOOST_CHECK(!f.actions.dispatch(chord("Ctrl+Shift+S")));
+	BOOST_CHECK(f.calls.empty());
+	BOOST_CHECK(f.actions.activate("file.save_as"));
 	f.gui.drain();
 	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
 }

@@ -15,7 +15,7 @@ namespace edt
 	class document_manager;
 
 	// The chord of File > Save All. The one place to change it.
-	inline constexpr std::string_view k_save_all_shortcut = "Ctrl+Alt+S";
+	inline constexpr std::string_view k_save_all_shortcut = "Ctrl+Shift+S";
 
 	// Save All (#1183, EPIC-59): the documents with unsaved changes, what one write of all of them did, and the questions
 	// that follow it. No ImGui and no dialog in here: the File menu and the agent's action run it with their own answers.
@@ -32,8 +32,6 @@ namespace edt
 	std::vector<unsaved_item> list_unsaved(document_manager& documents);
 	// How many there are, without building the list (the menu bar asks at every frame).
 	std::size_t count_unsaved(document_manager& documents);
-	// The list as text for a tooltip: the titles under a heading per kind.
-	std::string unsaved_text(const std::vector<unsaved_item>& items);
 
 	// What a document that could not be written needs from the person.
 	enum class save_all_question : std::uint8_t
@@ -68,6 +66,9 @@ namespace edt
 		bool needs_attention() const { return !failed.empty() || !asked.empty() || !skipped.empty(); }
 	};
 
+	// What is still unsaved after a Save All (failed, waiting for an answer, left out), each row with its reason.
+	std::vector<unsaved_group> unsaved_groups(const save_all_report& report);
+
 	// What Save All needs to write the level, which the document does not do by itself.
 	struct save_all_scene_ports
 	{
@@ -78,6 +79,30 @@ namespace edt
 		// Overwrites the saved level, true if written.
 		std::function<bool()> quick_save;
 	};
+
+	// One row of the unsaved list: a document and, after a Save All, what is wrong with it (empty: nothing to add).
+	struct unsaved_row
+	{
+		document_id id = 0;
+		std::string title;
+		std::string note;
+	};
+
+	// The rows of one kind of document under its heading.
+	struct unsaved_group
+	{
+		std::string kind;
+		std::string heading;
+		std::vector<unsaved_row> rows;
+	};
+
+	// The one list the menu bar's popup, its tooltip and the message after a Save All show: grouped by kind (level, prefab, data,
+	// the rest), in the order the documents came in.
+	std::vector<unsaved_group> unsaved_groups(const std::vector<unsaved_item>& items);
+	// `heading`, then every group's heading with its rows under it.
+	std::string unsaved_groups_text(const std::vector<unsaved_group>& groups, std::string_view heading);
+	// The dirty documents as text (tooltip).
+	std::string unsaved_text(const std::vector<unsaved_item>& items);
 
 	// What a document that refused to be saved waits for (nullopt: nothing, the refusal is a failure). Looks at data and prefab documents.
 	std::optional<save_all_question> save_all_question_of(const document& open);

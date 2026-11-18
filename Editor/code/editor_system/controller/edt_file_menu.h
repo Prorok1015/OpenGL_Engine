@@ -112,11 +112,11 @@ namespace edt
 
 		void new_level();
 		void open_level();
-		// Save As: always asks for a path (Ctrl+Shift+S).
+		// Save As: always asks for a path (File > Save Level As..., no chord: Ctrl+Shift+S is Save All).
 		void save_level();
 		// Save: overwrites the saved level, asks for a path if it has none yet (Ctrl+S).
 		void quick_save();
-		// Save All (Ctrl+Alt+S): writes what can be written, then asks about each document that changed on disk (or needs a yes)
+		// Save All (Ctrl+Shift+S): writes what can be written, then asks about each document that changed on disk (or needs a yes)
 		// one after the other, then tells the person what was saved and what was not. The questions of Exit, New and Open
 		// still stop at the first refusal (save_other_documents).
 		void save_all();

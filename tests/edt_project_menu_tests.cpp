@@ -457,11 +457,11 @@ BOOST_AUTO_TEST_CASE(SaveAll_WhenNothingIsDirty_IsDisabledAndWritesNothing)
 	BOOST_TEST(save_all_runs == 0);
 }
 
-BOOST_AUTO_TEST_CASE(SaveAll_HasItsChord_RightAfterSaveLevelAs)
+BOOST_AUTO_TEST_CASE(SaveAll_HasTheChordOfSaveAs_RightAfterSaveLevelAs_WhichHasNone)
 {
 	const auto parsed = edt::shortcut::parse(edt::k_save_all_shortcut);
 	BOOST_REQUIRE(parsed.has_value());
-	BOOST_TEST((parsed->ctrl && parsed->alt && !parsed->shift));
+	BOOST_TEST((parsed->ctrl && parsed->shift && !parsed->alt));
 	BOOST_TEST(parsed->key == "S");
 
 	dirty = true;
@@ -469,11 +469,52 @@ BOOST_AUTO_TEST_CASE(SaveAll_HasItsChord_RightAfterSaveLevelAs)
 	BOOST_TEST(save_all_runs == 1);
 
 	std::vector<std::string> ids;
-	for (const auto& item : actions.items("File")) ids.push_back(item.id);
+	for (const auto& item : actions.items("File")) {
+		ids.push_back(item.id);
+		if (item.id == "file.save_as") {
+			BOOST_TEST(item.shortcut_text.empty());
+		}
+		if (item.id == "file.save_all") {
+			BOOST_TEST(item.shortcut_text == "Ctrl+Shift+S");
+		}
+	}
 	const auto save_as = std::ranges::find(ids, std::string{ "file.save_as" });
 	BOOST_REQUIRE(save_as != ids.end());
 	BOOST_REQUIRE(std::next(save_as) != ids.end());
 	BOOST_TEST(*std::next(save_as) == "file.save_all");
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_TheUnsavedList_IsGroupedByKindWithItsReasons_AndIsTheMessageAfterTheRun)
+{
+	const std::vector<edt::unsaved_item> dirty_now{ item_of(3, "data", "b"), item_of(1, "scene", "level"), item_of(2, "data", "a") };
+	const std::vector<edt::unsaved_group> groups = edt::unsaved_groups(dirty_now);
+	BOOST_REQUIRE(groups.size() == 2u);
+	BOOST_TEST(groups[0].kind == "scene");
+	BOOST_TEST(groups[0].heading == "Level");
+	BOOST_REQUIRE(groups[1].rows.size() == 2u);
+	BOOST_TEST(groups[1].rows[0].title == "b");
+	BOOST_TEST(groups[1].rows[1].id == 2u);
+	BOOST_TEST(groups[1].rows[0].note.empty());
+
+	edt::save_all_report report;
+	report.saved = { item_of(1, "scene", "level") };
+	report.failed = { { item_of(4, "data", "c"), "no space" } };
+	report.asked = { { item_of(5, "prefab", "p"), edt::save_all_question::disk_changed } };
+	report.skipped = { { item_of(6, "scene", "untitled"), "untitled: use Save Level As" } };
+	const std::vector<edt::unsaved_group> left = edt::unsaved_groups(report);
+	BOOST_REQUIRE(left.size() == 3u);
+	BOOST_TEST(left[0].kind == "scene");
+	BOOST_TEST(left[1].kind == "prefab");
+	BOOST_TEST(left[2].kind == "data");
+	BOOST_TEST(left[2].rows[0].note == "not saved: no space");
+	BOOST_TEST(left[1].rows[0].note == "still unsaved: changed on disk");
+
+	const std::string summary = edt::save_all_summary(report);
+	BOOST_TEST(summary.find("Still unsaved:") != std::string::npos);
+	BOOST_TEST(summary.find("Prefab\n  p: still unsaved: changed on disk") != std::string::npos);
+	BOOST_TEST(summary.find("Data\n  c: not saved: no space") != std::string::npos);
+	BOOST_TEST(summary.find("untitled: use Save Level As") != std::string::npos);
+	BOOST_TEST(edt::unsaved_groups_text(groups, "Unsaved:") == "Unsaved:\nLevel\n  level\nData\n  b\n  a");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

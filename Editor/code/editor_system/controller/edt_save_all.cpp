@@ -5,6 +5,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <algorithm>
 #include <format>
+#include <iterator>
 #include <utility>
 
 namespace json = boost::json;
@@ -39,6 +40,29 @@ namespace {
 		report.saved.push_back(std::move(item));
 	}
 
+	int kind_rank(std::string_view kind)
+	{
+		if (kind == "scene") return 0;
+		if (kind == "prefab") return 1;
+		if (kind == "data") return 2;
+		return 3;
+	}
+
+	void add_row(std::vector<edt::unsaved_group>& groups, const edt::unsaved_item& item, std::string note)
+	{
+		auto found = std::ranges::find_if(groups, [&item](const edt::unsaved_group& group) { return group.kind == item.kind; });
+		if (found == groups.end()) {
+			groups.push_back({ item.kind, std::string(kind_heading(item.kind)), {} });
+			found = std::prev(groups.end());
+		}
+		found->rows.push_back({ item.id, item.title, std::move(note) });
+	}
+
+	void order_groups(std::vector<edt::unsaved_group>& groups)
+	{
+		std::ranges::stable_sort(groups, [](const edt::unsaved_group& a, const edt::unsaved_group& b) { return kind_rank(a.kind) < kind_rank(b.kind); });
+	}
+
 	json::object item_json(const edt::unsaved_item& item)
 	{
 		return json::object{ { "id", static_cast<std::uint64_t>(item.id) }, { "kind", item.kind }, { "title", item.title } };
@@ -61,11 +85,6 @@ namespace {
 		text += std::format("\n{}:", heading);
 		for (const std::string& line : lines) text += "\n  " + line;
 		text += "\n";
-	}
-
-	std::string line_of(const edt::unsaved_item& item, std::string_view why)
-	{
-		return std::format("'{}' ({}): {}", item.title, kind_heading(item.kind), why);
 	}
 
 	struct resolve_state
@@ -127,20 +146,40 @@ std::size_t edt::count_unsaved(document_manager& documents)
 	return count;
 }
 
-std::string edt::unsaved_text(const std::vector<unsaved_item>& items)
+std::vector<edt::unsaved_group> edt::unsaved_groups(const std::vector<unsaved_item>& items)
 {
-	std::string text = "Unsaved documents:";
-	std::vector<std::string_view> kinds;
-	for (const unsaved_item& item : items) {
-		if (std::ranges::find(kinds, std::string_view{ item.kind }) == kinds.end()) kinds.push_back(item.kind);
-	}
-	for (const std::string_view kind : kinds) {
-		text += std::format("\n{}", kind_heading(kind));
-		for (const unsaved_item& item : items) {
-			if (item.kind == kind) text += "\n  " + item.title;
+	std::vector<unsaved_group> groups;
+	for (const unsaved_item& item : items) add_row(groups, item, {});
+	order_groups(groups);
+	return groups;
+}
+
+std::vector<edt::unsaved_group> edt::unsaved_groups(const save_all_report& report)
+{
+	std::vector<unsaved_group> groups;
+	for (const save_all_note& note : report.failed) add_row(groups, note.item, "not saved: " + note.text);
+	for (const save_all_ask& ask : report.asked) add_row(groups, ask.item, std::format("still unsaved: {}", save_all_question_text(ask.question)));
+	for (const save_all_note& note : report.skipped) add_row(groups, note.item, "left out: " + note.text);
+	order_groups(groups);
+	return groups;
+}
+
+std::string edt::unsaved_groups_text(const std::vector<unsaved_group>& groups, std::string_view heading)
+{
+	std::string text(heading);
+	for (const unsaved_group& group : groups) {
+		text += "\n" + group.heading;
+		for (const unsaved_row& row : group.rows) {
+			text += "\n  " + row.title;
+			if (!row.note.empty()) text += ": " + row.note;
 		}
 	}
 	return text;
+}
+
+std::string edt::unsaved_text(const std::vector<unsaved_item>& items)
+{
+	return unsaved_groups_text(unsaved_groups(items), "Unsaved documents:");
 }
 
 edt::save_all_report edt::save_all_write(document_manager& documents, const save_all_scene_ports& scene)
@@ -222,19 +261,10 @@ std::string edt::save_all_summary(const save_all_report& report)
 	const std::size_t total = report.saved.size() + report.failed.size() + report.asked.size() + report.skipped.size() + report.settled.size();
 	std::string text = std::format("Save All: saved {} of {} documents, failed {}.", report.saved.size(), total, report.failed.size());
 
+	const std::vector<unsaved_group> left = unsaved_groups(report);
+	if (!left.empty()) text += "\n\n" + unsaved_groups_text(left, "Still unsaved:");
+
 	std::vector<std::string> lines;
-	for (const save_all_note& note : report.failed) lines.push_back(line_of(note.item, note.text));
-	list_lines(text, "Not saved", lines);
-
-	lines.clear();
-	for (const save_all_ask& ask : report.asked) lines.push_back(line_of(ask.item, save_all_question_text(ask.question)));
-	list_lines(text, "Still unsaved (nothing was changed)", lines);
-
-	lines.clear();
-	for (const save_all_note& note : report.skipped) lines.push_back(line_of(note.item, note.text));
-	list_lines(text, "Left out", lines);
-
-	lines.clear();
 	for (const unsaved_item& item : report.settled) lines.push_back(std::format("'{}' ({})", item.title, kind_heading(item.kind)));
 	list_lines(text, "Settled by your answer (reloaded or overwritten)", lines);
 	return text;
