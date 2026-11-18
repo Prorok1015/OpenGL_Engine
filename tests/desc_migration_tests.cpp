@@ -213,6 +213,9 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_ThatCannotLeadToItsVersion_AreRefused)
 	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b","/c":"/b"}}])")) == nullptr));
 	// A chain depends on the order of the keys; header keys at any depth; array indexes and malformed pointers.
 	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b","/b":"/c"}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b/c","/b":"/d"}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"set_default":{"/a":1,"/a/b":2}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/a/b"],"set_default":{"/a":{}}}])")) == nullptr));
 	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/weapon/__version"]}])")) == nullptr));
 	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"set_default":{"/items/0/hp":1}}])")) == nullptr));
 	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/items/-"]}])")) == nullptr));

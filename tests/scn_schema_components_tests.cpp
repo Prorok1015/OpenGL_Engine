@@ -10,6 +10,7 @@
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/scene/scn_schema_components.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <format>
@@ -977,6 +978,30 @@ BOOST_AUTO_TEST_CASE(a_schema_with_migrations_registers_its_steps_and_drops_them
 	BOOST_TEST(nothing_registered("mod.migrated"));
 	BOOST_TEST(layer->descs().current_version("mod.migrated") == 2);
 	layer->descs().unregister_migrations("mod.migrated");
+}
+
+// EPIC-58 #763: an override is warned about only when it reaches no field; a field key need not start with '/'.
+BOOST_AUTO_TEST_CASE(an_override_path_is_matched_to_the_field_keys_of_the_schema)
+{
+	const auto field = [](const char* name, const char* key) {
+		desc::field_schema result;
+		result.name = name;
+		result.key = key;
+		return result;
+	};
+	desc::type_schema schema;
+	schema.name = "mod.keys";
+	schema.fields = { field("hp", "hp"), field("pos", "/pos"), field("armor", "/stats/armor"), field("odd", "a/b~c") };
+
+	BOOST_TEST(scn::override_names_a_field(schema, "/hp"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/pos"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/pos/1"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/stats"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/stats/armor"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/a~1b~0c"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/health"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/hpx"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/stats/armour"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

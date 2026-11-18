@@ -222,6 +222,26 @@ std::vector<desc::detail::schema_migration> desc::detail::parse_schema_migration
 				fail(std::format("{}: rename onto {}, which another rename of the step moves away; put them in two steps", where, target));
 			}
 		}
+		// A pointer of the step inside another one (/a and /a/b) makes the outcome depend on which runs first.
+		std::vector<std::pair<std::string_view, std::vector<std::string>>> pointers;
+		const auto add_pointer = [&pointers](std::string_view pointer) { pointers.emplace_back(pointer, field_tokens(pointer)); };
+		for (const auto& [source, target] : step.renames) {
+			add_pointer(source);
+			add_pointer(target);
+		}
+		for (const auto& pointer : step.removals) {
+			add_pointer(pointer);
+		}
+		for (const auto& entry : step.defaults) {
+			add_pointer(entry.first);
+		}
+		for (const auto& [outer, outer_tokens] : pointers) {
+			for (const auto& [inner, inner_tokens] : pointers) {
+				if (outer_tokens.size() < inner_tokens.size() && std::equal(outer_tokens.begin(), outer_tokens.end(), inner_tokens.begin())) {
+					fail(std::format("{}: {} lies inside {}, which the same step also moves; put them in two steps", where, inner, outer));
+				}
+			}
+		}
 		if (step.renames.empty() && step.removals.empty() && step.defaults.empty()) {
 			fail(std::format("{}: no rename, remove or set_default", where));
 		}

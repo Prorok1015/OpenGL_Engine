@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <mutex>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -1111,14 +1112,38 @@ namespace {
 		return true;
 	}
 
-	// Whether `path` is a field of `schema`, inside one (an element of a vector) or above some (an object of nested fields).
-	bool names_a_field(const desc::type_schema& schema, std::string_view path)
+	// A field key as the JSON pointer an override names it by: a key without a leading '/' is one plain key.
+	std::string pointer_of_key(std::string_view key)
 	{
-		return std::ranges::any_of(schema.fields, [path](const desc::field_schema& field) {
-			const std::string_view key = field.key;
-			return key == path || (path.starts_with(key) && path.size() > key.size() && path[key.size()] == '/')
-				|| (key.starts_with(path) && key.size() > path.size() && key[path.size()] == '/');
-		});
+		if (key.starts_with('/')) {
+			return std::string{ key };
+		}
+		std::string pointer = "/";
+		for (const char c : key) {
+			if (c == '~') {
+				pointer += "~0";
+			} else if (c == '/') {
+				pointer += "~1";
+			} else {
+				pointer += c;
+			}
+		}
+		return pointer;
+	}
+
+	// One warning per (type, path): an instance spawned again and again with the same edit says it once.
+	void warn_override_off_the_fields(std::string_view type, std::string_view path)
+	{
+		static std::mutex mutex;
+		static std::unordered_set<std::string> warned;
+		std::string key = std::format("{}\n{}", type, path);
+		{
+			std::lock_guard lock(mutex);
+			if (!warned.insert(std::move(key)).second) {
+				return;
+			}
+		}
+		egLOG_WARN("desc", "override of '{}' at '{}': the component has no such field (moved by a migration?), the edit does nothing", type, path);
 	}
 
 	// serialize(parent) with the component's own overrides merged in, then the edits in order. With the component's
@@ -1139,9 +1164,8 @@ namespace {
 				}
 				desc::json_deep_merge(holder.as_object(), mergeable);
 			} else {
-				if (schema && !names_a_field(*schema, edit.path)) {
-					egLOG_WARN("desc", "override of '{}' at '{}': the component has no such field (moved by a migration?), the edit does nothing",
-						schema->name, edit.path);
+				if (schema && !scn::override_names_a_field(*schema, edit.path)) {
+					warn_override_off_the_fields(schema->name, edit.path);
 				}
 				if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
 					egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
@@ -1223,6 +1247,15 @@ namespace {
 json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent)
 {
 	return compose_json(cnode, parent);
+}
+
+bool scn::override_names_a_field(const desc::type_schema& schema, std::string_view path)
+{
+	return std::ranges::any_of(schema.fields, [path](const desc::field_schema& field) {
+		const std::string key = pointer_of_key(field.key);
+		return key == path || (path.starts_with(key) && path.size() > key.size() && path[key.size()] == '/')
+			|| (key.starts_with(path) && key.size() > path.size() && key[path.size()] == '/');
+	});
 }
 
 bool scn::expand_instance(
