@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <memory>
 #include <sstream>
@@ -192,6 +193,42 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialWrittenFromMemory_IsNotMigratedA
 	pump();
 	BOOST_REQUIRE(older->material.get_sync());
 	BOOST_TEST((older->material.get_sync()->queue == scn::pass_queue::OPAQUE));
+}
+
+namespace {
+
+// A parent desc of a module built before #1236: its inline material is written as such a module's to_json wrote it,
+// without __version.
+struct old_module_sky final : desc::desc_base
+{
+	json::object material;
+	void deserialize(desc::desc_system&, const json::object& in) override { material = in.at("material").as_object(); }
+	void serialize(json::object& out) const override { out["material"] = material; }
+};
+
+}
+
+// The prefab instance's component is composed from serialize(parent), memory of this process: an inline desc there
+// without __version is of the current format, so the read does not run a step over it as version 1.
+BOOST_AUTO_TEST_CASE(SkyboxDesc_AComposedComponentOfAnOldModule_IsNotMigratedAgain)
+{
+	const int version = descs->current_version("material_desc");
+	descs->register_migration("material_desc", version, [](json::object& o) { o["queue"] = "opaque"; });
+	old_module_sky parent;
+	parent.material = parse(k_inline_material);
+	scn::prefab_desc::prefab_comp_node cnode;
+	cnode.type_name = "skybox_desc";
+
+	const json::object composed = scn::compose_component_json(cnode, &parent, *descs);
+	BOOST_TEST(composed.at("material").as_object().at("__version").as_int64() == version + 1);
+	auto sky = make_skybox(*this, "composed.desc");
+	sky->deserialize(*descs, composed);
+	pump();
+	BOOST_REQUIRE(sky->material.get_sync());
+	BOOST_TEST((sky->material.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+
+	// Without the desc system the parent's JSON is left as it is.
+	BOOST_TEST(!scn::compose_component_json(cnode, &parent).at("material").as_object().contains("__version"));
 }
 
 BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialNeedsASkyboxWithATag)

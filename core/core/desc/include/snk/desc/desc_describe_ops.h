@@ -84,9 +84,6 @@ namespace desc
 				if (const auto instance = handle.get_sync()) {
 					json::object inline_desc;
 					instance->serialize(inline_desc);
-					if (!instance->get_type().empty()) {
-						inline_desc["__type"] = std::string{ instance->get_type() };
-					}
 					desc::desc_system::stamp_inline_version(inline_desc, *instance);
 					return json::value(std::move(inline_desc));
 				}
