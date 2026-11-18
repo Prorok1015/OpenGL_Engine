@@ -6,7 +6,7 @@
 #include <boost/json/value.hpp>
 #include <snk/common/snk_api.h>
 
-// Field moves of a migration step (EPIC-58 §3.5, DESC_SCHEMA §2.6), for C++ steps and for the "migrations" of a runtime
+// Field moves of a migration step (EPIC-58 section 3.5, DESC_SCHEMA section 2.6), for C++ steps and for the "migrations" of a runtime
 // schema alike. A pointer is a JSON pointer from the root of the desc object ("/hp", "/stats/hp"); the header keys
 // (__type, __version, __guid) are not a field and are refused. A malformed pointer throws std::invalid_argument.
 namespace desc::migrations

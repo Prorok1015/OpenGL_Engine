@@ -124,7 +124,7 @@ namespace gs
 		// schema that cannot be bound.
 		bool register_component(desc::type_schema schema);
 
-		// The same with the schema's declarative "migrations" (EPIC-58 §3.5): steps of the module's own type, removed with
+		// The same with the schema's declarative "migrations" (EPIC-58 section 3.5): steps of the module's own type, removed with
 		// its layer. Also refused when they are malformed, do not lead to the schema's version, or the type has C++ steps.
 		bool register_component(desc::type_schema schema, const json::array& migrations);
 

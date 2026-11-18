@@ -194,7 +194,7 @@ namespace desc
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
 
-		// The schema with its declarative "migrations" (desc_migrations.h, EPIC-58 §3.5): the steps are registered first,
+		// The schema with its declarative "migrations" (desc_migrations.h, EPIC-58 section 3.5): the steps are registered first,
 		// so its version is where they lead, and unregister_desc takes them away with the schema. Refused (logged,
 		// nullptr) when the steps are malformed or do not lead to the schema's version, or when the type has steps
 		// registered in C++ already. An empty array is the overload above.
