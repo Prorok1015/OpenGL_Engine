@@ -20,6 +20,7 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/platform/plt_process.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
 #include <format>
@@ -80,32 +81,37 @@ void edt::import_component::build()
 				if (const auto alive = notice.lock()) alive->seen(status);
 			});
 		};
-		m_decoder = std::make_shared<process_decoder>(resources, m_ports.desc, std::move(decoder_config), std::move(on_sandbox));
+		if (m_ports.decoder) {
+			m_steps = m_ports.decoder();
+		} else {
+			m_decoder = std::make_shared<process_decoder>(resources, m_ports.desc, std::move(decoder_config), std::move(on_sandbox));
+			m_steps = steps_of(m_decoder);
+		}
 	}
 	// A model a desc refers to (a level's res://x.glb) goes through the same decoder, never through assimp in this
 	// process (#925); a load without it fails with the reason, in Problems with the rest of the level's.
-	if (const std::string why = m_decoder->unavailable_reason(); !why.empty()) {
+	if (const std::string why = m_steps.unavailable_reason ? m_steps.unavailable_reason() : std::string{}; !why.empty()) {
 		egLOG_WARN("Editor/Import", "{}: .glb/.gltf/.obj/.fbx models will not load", why);
 	}
 	resources.registrate_adapter<decoded_model_adapter>(mdl::model_adapter::INFO, std::ref(m_ports.desc), std::ref(resources),
-		decoded_model_adapter::steps_of(m_decoder));
+		m_steps);
 	m_adapter_registered = true;
 	resources.warn_on_sync_require(mdl::model_adapter::INFO.extensions);
-	// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk.
-	std::string earlier_imports = "__imports/";
-	erase_import_folder(earlier_imports);
-	import_options.import = [decoder = m_decoder.get()](const import_source& source, ds::task_context* task) {
-		return decoder->import(source, task);
+	// Imports of earlier runs that ended before their folders were erased (a crash, a kill): memory:// is on the disk and
+	// shared by every editor on the project, so only the folders of runs that ended go.
+	erase_imports_of_ended_runs(resources, platform::current_process_id());
+	import_options.import = [steps = m_steps](const import_source& source, ds::task_context* task) {
+		return steps.import(source, task);
 	};
-	import_options.scan = [decoder = m_decoder.get()](const import_source& source, ds::task_context* task) {
-		return decoder->scan(source, task);
+	import_options.scan = [steps = m_steps](const import_source& source, ds::task_context* task) {
+		return steps.scan(source, task);
 	};
 	import_options.sandbox_status = [notice = std::weak_ptr(m_sandbox_notice)] {
 		const auto alive = notice.lock();
 		return alive ? alive->current() : decoder_sandbox_status{};
 	};
-	import_options.unavailable_reason = [decoder = m_decoder.get()] {
-		const std::string why = decoder->unavailable_reason();
+	import_options.unavailable_reason = [steps = m_steps] {
+		const std::string why = steps.unavailable_reason ? steps.unavailable_reason() : std::string{};
 		return why.empty() ? why : "model import for agents is not available: " + why;
 	};
 #endif
@@ -136,7 +142,12 @@ void edt::import_component::shutdown()
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_adapter_registered) m_ports.resources.unregistrate_adapter(mdl::model_adapter::INFO);
-	erase_import_folder(m_import_folder);
+	if (m_importing) {
+		// The job may still store into m_import_folder: it ends before the folder is erased.
+		m_ports.context.jobs().cancel(m_job);
+		m_ports.tasks.wait_idle(m_lifetime);
+	}
+	finish_import();
 	erase_import_folder(m_dialog_folder);
 #endif
 }
@@ -194,6 +205,11 @@ std::optional<std::string> edt::import_component::agent_import_blocker() const
 void edt::import_component::start_import(const std::filesystem::path& absolute_path)
 {
 	if (m_importing) return;
+	if (m_dialog_open) {
+		m_ports.context.dialogs().message(message_level::info,
+			"An import is waiting in the editor's export dialog: export it or close the dialog first.");
+		return;
+	}
 	if (agent_import_running()) {
 		m_ports.context.dialogs().message(message_level::info, "An import asked for by an agent is running: wait for it, or cancel it in the job list.");
 		return;
@@ -212,11 +228,11 @@ void edt::import_component::start_import(const std::filesystem::path& absolute_p
 	m_failure.clear();
 	// The name of a file someone else may have made: shown in the popup, the job list and the log only escaped.
 	m_name = text_escape::escaped_text(fs_paths::utf8_of(absolute_path.filename()), 256);
-	m_import_folder = person_import_folder(absolute_path, ++m_serial);
+	m_import_folder = person_import_folder(absolute_path, platform::current_process_id(), ++m_serial);
 	// The model is parsed in the decoder process (#987), never here: the job reads the file and waits for the decoder.
 	m_job = m_ports.context.jobs().start(ds::lane::compute,
 		{ "Import " + m_name, "import" }, m_lifetime,
-		[decoder = steps_of(m_decoder), &resources = m_ports.resources, absolute_path,
+		[decoder = m_steps, &resources = m_ports.resources, absolute_path,
 			folder = m_import_folder](ds::task_context& ctx) -> import_intermediate {
 			return person_model_import(absolute_path, folder, decoder, resources, ctx);
 		},
@@ -302,7 +318,8 @@ bool edt::import_component::poll_progress()
 		erase_import_folder(folder);
 		egLOG("Editor/Import", "Import of '{}' failed: {}", name, text_escape::escaped_text(intermediate.error, 1024));
 		context.problems().set(k_import_problem_source, import_failure_problems(name, intermediate.error));
-		context.dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", name, intermediate.error));
+		context.dialogs().message(message_level::error,
+			std::format("Import of '{}' failed: {}", name, text_escape::escaped_text(intermediate.error, 1024)));
 		return false;
 	}
 
