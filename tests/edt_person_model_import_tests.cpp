@@ -237,8 +237,10 @@ BOOST_AUTO_TEST_CASE(TheSweepAtStartup_ErasesOnlyTheImportsOfRunsThatEnded)
 	const res::tag ended_other{ std::format("memory://__imports/{}/7/crate/materials/m.mat.desc", ended_run) };
 	const res::tag current{ std::format("memory://__imports/{}/1/robot/robot.geom.desc", this_run) };
 	const res::tag not_a_run{ "memory://__imports/notes/robot.geom.desc" };
+	// The layout before the run folders: "__imports/<serial>/<stem>/", erased even when a process has that number (pid 1).
+	const res::tag earlier_layout{ "memory://__imports/1/robot/robot.geom.desc" };
 	const res::tag other{ "memory://__models/res/levels/robot.glb/robot.prefab.desc" };
-	for (const res::tag& tag : { ended, ended_other, current, not_a_run, other }) {
+	for (const res::tag& tag : { ended, ended_other, current, not_a_run, earlier_layout, other }) {
 		BOOST_REQUIRE(resources->store_sync(tag, std::vector<std::byte>(4, std::byte{ 1 })));
 	}
 	edt::erase_imports_of_ended_runs(*resources, this_run);
@@ -246,6 +248,7 @@ BOOST_AUTO_TEST_CASE(TheSweepAtStartup_ErasesOnlyTheImportsOfRunsThatEnded)
 	BOOST_TEST(!resources->exists(ended_other));
 	BOOST_TEST(resources->exists(current), "this run's imports are not an earlier run's");
 	BOOST_TEST(resources->exists(not_a_run), "a folder that names no process is left alone");
+	BOOST_TEST(!resources->exists(earlier_layout));
 	BOOST_TEST(resources->exists(other), "only the imports' folder is swept");
 }
 

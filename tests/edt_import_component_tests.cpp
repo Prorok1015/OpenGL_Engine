@@ -148,6 +148,33 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 		test_util::pump(tasks);
 	}
 
+	// A frame in which no job runs: the import stays queued. `escape` presses Esc in it.
+	void frame_without_jobs(bool escape)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		if (escape) io.AddKeyEvent(ImGuiKey_Escape, true);
+		ImGui::NewFrame();
+		layer->process_implicit();
+		ImGui::EndFrame();
+		if (escape) io.AddKeyEvent(ImGuiKey_Escape, false);
+	}
+
+	// Esc in the "Importing" popup while the job is still queued.
+	void cancel_with_escape()
+	{
+		frame_without_jobs(false);
+		frame_without_jobs(true);
+		BOOST_REQUIRE_MESSAGE(!component->person_import_running(), "Esc reached the popup and cancelled the import");
+	}
+
+	// What a cancelled job could still store after the cancel (it is cooperative).
+	res::tag store_late_file()
+	{
+		const res::tag late{ std::format("memory://{}1/robot/late.bin", run_folder()) };
+		BOOST_REQUIRE(rs().store_sync(late, std::vector<std::byte>(4, std::byte{ 1 })));
+		return late;
+	}
+
 	void frames_until(const std::function<bool()>& done)
 	{
 		for (int i = 0; i < 20 && !done(); ++i) frame();
@@ -232,6 +259,31 @@ BOOST_AUTO_TEST_CASE(AShutdownWhileTheImportRuns_StopsTheJobFirst_AndLeavesNothi
 	BOOST_TEST(imports == 0);
 	BOOST_TEST(files_of_this_run() == 0u);
 	BOOST_TEST(context->jobs().running_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnImportCancelledWithEsc_ThenAShutdown_LeavesNothingOfThisRunInMemory)
+{
+	make_component();
+	component->start_import(model);
+	cancel_with_escape();
+	store_late_file();
+
+	component->shutdown();
+	test_util::pump(tasks);
+	BOOST_TEST(imports == 0);
+	BOOST_TEST(files_of_this_run() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheFolderOfAnImportCancelledWithEsc_GoesOnceItsJobStopped)
+{
+	make_component();
+	component->start_import(model);
+	cancel_with_escape();
+	store_late_file();
+
+	frames_until([this] { return files_of_this_run() == 0u; });
+	BOOST_TEST(files_of_this_run() == 0u);
+	BOOST_TEST(imports == 0);
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_NamesTheModelAndTheSideFile_OnlyEscaped_InTheLogProblemsAndTheDialog)

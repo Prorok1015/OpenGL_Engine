@@ -4,6 +4,8 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <utility>
+#include <vector>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -53,8 +55,8 @@ namespace edt
 		import_component& operator=(const import_component&) = delete;
 
 		// First in ~editor_system, before the jobs are cancelled: the adapter of models goes from the resource system (a load still
-		// running keeps it, and with it the decoder, alive until it ends), the person's import job is cancelled and waited for,
-		// and then the memory:// folders of imports are erased. Idempotent.
+		// running keeps it, and with it the decoder, alive until it ends), the person's import jobs are cancelled and waited for,
+		// and then this run's memory:// folder of imports is erased. Idempotent.
 		void shutdown();
 
 		agent_model_import* agent_import() { return m_agent_import.get(); }
@@ -76,6 +78,9 @@ namespace edt
 		bool poll_progress();
 		void finish_import();
 		void erase_import_folder(std::string& folder);
+		void defer_erase_until_stopped(std::uint64_t job, std::string folder);
+		// Implicit callback: true while a cancelled job still runs.
+		bool erase_folders_of_stopped_jobs();
 		std::optional<std::string> agent_import_blocker() const;
 #endif
 
@@ -110,6 +115,8 @@ namespace edt
 		// finish_import whatever the outcome (a cancelled job never reports), the second when the dialog closes.
 		std::string m_import_folder;
 		std::string m_dialog_folder;
+		// Folders of cancelled jobs: a cancel is cooperative, so each goes only once its job stopped writing into it.
+		std::vector<std::pair<std::uint64_t, std::string>> m_cancelled;
 		std::uint64_t m_serial = 0;
 		// Owner of the job callbacks; after the state they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };

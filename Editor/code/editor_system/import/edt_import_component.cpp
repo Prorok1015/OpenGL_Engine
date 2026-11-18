@@ -142,13 +142,14 @@ void edt::import_component::shutdown()
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_adapter_registered) m_ports.resources.unregistrate_adapter(mdl::model_adapter::INFO);
-	if (m_importing) {
-		// The job may still store into m_import_folder: it ends before the folder is erased.
-		m_ports.context.jobs().cancel(m_job);
-		m_ports.tasks.wait_idle(m_lifetime);
-	}
+	if (m_importing) m_ports.context.jobs().cancel(m_job);
+	// Jobs cancelled earlier (Esc) may still store into their folders too: every one ends before anything is erased.
+	m_ports.tasks.wait_idle(m_lifetime);
 	finish_import();
-	erase_import_folder(m_dialog_folder);
+	m_cancelled.clear();
+	m_dialog_folder.clear();
+	std::string this_run = person_run_folder(platform::current_process_id());
+	erase_import_folder(this_run);
 #endif
 }
 
@@ -275,6 +276,7 @@ bool edt::import_component::poll_progress()
 				context.jobs().cancel(m_job);
 				// A cancel reports nothing: the rows of the last import would read as this one's.
 				context.problems().clear(k_import_problem_source);
+				defer_erase_until_stopped(m_job, std::exchange(m_import_folder, std::string{}));
 				finish_import();
 				ImGui::CloseCurrentPopup();
 				ImGui::EndPopup();
@@ -339,6 +341,24 @@ bool edt::import_component::poll_progress()
 	context.problems().set(k_import_problem_source, import_failure_problems(name, "the imported model could not be finalized"));
 	erase_import_folder(folder);
 	return false;
+}
+
+void edt::import_component::defer_erase_until_stopped(std::uint64_t job, std::string folder)
+{
+	if (folder.empty()) return;
+	const bool sweeping = !m_cancelled.empty();
+	m_cancelled.emplace_back(job, std::move(folder));
+	if (!sweeping) m_ports.layer.register_implicit("edt/import_model/cancelled", [this] { return erase_folders_of_stopped_jobs(); });
+}
+
+bool edt::import_component::erase_folders_of_stopped_jobs()
+{
+	std::erase_if(m_cancelled, [this](std::pair<std::uint64_t, std::string>& cancelled) {
+		if (m_ports.context.jobs().is_running(cancelled.first)) return false;
+		erase_import_folder(cancelled.second);
+		return true;
+	});
+	return !m_cancelled.empty();
 }
 
 void edt::import_component::erase_import_folder(std::string& folder)
