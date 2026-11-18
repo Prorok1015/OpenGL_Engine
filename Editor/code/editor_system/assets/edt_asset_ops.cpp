@@ -331,7 +331,7 @@ namespace
 
 	bool is_canonical_root(const std::string& root)
 	{
-		if (root.empty() || canonical_root(path_of(root)) != root) return false;
+		if (root.empty() || root.find('\\') != std::string::npos || canonical_root(path_of(root)) != root) return false;
 		return std::ranges::none_of(path_of(root), [](const fs::path& part) { return part == ".."; });
 	}
 
