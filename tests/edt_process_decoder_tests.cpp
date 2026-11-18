@@ -422,7 +422,7 @@ BOOST_AUTO_TEST_CASE(AScanAnswer_ThatAsksForTooManyFiles_OrComesWithResources_Is
 	BOOST_CHECK_MESSAGE(edt::accept_scan_answer(scan_answer(many), problem).has_value(), problem);
 	many.push_back({ "one_more.png", edt::model_file_kind::texture });
 	BOOST_CHECK(!edt::accept_scan_answer(scan_answer(many), problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("more files than it may") != std::string::npos, problem);
+	BOOST_CHECK_MESSAGE(problem.find("more than 256 files (decoder answer)") != std::string::npos, problem);
 
 	auto with_blob = scan_answer({});
 	with_blob.blobs.push_back({ "memory://m/x.desc", { std::byte{ 1 } } });
@@ -1347,7 +1347,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatIsSlow_FailsTheImportWithoutStoringAnything)
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder that sleeps was not stopped");
 	} catch (const std::runtime_error& e) {
-		BOOST_CHECK_MESSAGE(std::string(e.what()).find("too long") != std::string::npos, e.what());
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("decoding the model exceeds 1 s (decoder time)") != std::string::npos, e.what());
 	}
 }
 
