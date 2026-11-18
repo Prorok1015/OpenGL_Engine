@@ -83,7 +83,6 @@ void edt::asset_component::install(std::vector<registration>& out)
 	for (auto& command : register_asset_usage_commands(m_ports.context.actions().commands(), std::move(usage_sources))) {
 		out.push_back(std::move(command));
 	}
-	asset_command_sources command_sources;
 	for (auto& command : register_asset_commands(m_ports.context.actions().commands(), command_sources())) {
 		out.push_back(std::move(command));
 	}
