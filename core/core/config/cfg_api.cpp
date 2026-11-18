@@ -308,11 +308,14 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"0 done or nothing to do, 1 a migration is needed (--dry-run), 2 refused, 4 files left as they are (unknown type, "
 			"newer, or invalid with --force), 5 failed and rolled back, 6 failed and the rollback did not finish, -1 (255) an "
 			"unexpected error")
-		("dry-run", "with --migrate: print the plan, write nothing")
+		("dry-run", "with --migrate: print the plan, write nothing; with --migrate-prune: print what would be deleted")
 		("force", "with --migrate: leave invalid files as they are instead of refusing the migration")
 		("report", po::value<std::string>(), "with --migrate: also write the report (or the plan) to this file, outside the project")
 		("migrate-rollback", po::value<std::string>(), "editor only, with --headless: put the project back as it was before "
 			"migration <id> (.snk/migrations/<id>) and exit")
+		("migrate-prune", "editor only, with --headless: delete the folders of finished migrations in .snk/migrations "
+			"but the newest --keep <N> (by when they ran) and exit; unfinished ones and unreadable journals stay")
+		("keep", po::value<int>(), "with --migrate-prune: how many finished migrations stay")
 		("open-migration", "editor only: once the project is open, open the Project Migration window with its plan (what "
 			"Migrate... of the engine version question restarts the editor with); ignored with --headless");
 	
@@ -374,21 +377,32 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 	}
 	const bool migrate = vm.count("migrate") > 0;
 	const bool rollback = vm.count("migrate-rollback") > 0;
-	if (!migrate && (vm.count("dry-run") || vm.count("force") || vm.count("report"))) {
-		throw std::invalid_argument("--dry-run, --force and --report go with --migrate");
+	const bool prune = vm.count("migrate-prune") > 0;
+	if (!migrate && (vm.count("force") || vm.count("report"))) {
+		throw std::invalid_argument("--force and --report go with --migrate");
 	}
-	if (migrate && rollback) {
-		throw std::invalid_argument("--migrate and --migrate-rollback are separate runs");
+	if (!migrate && !prune && vm.count("dry-run")) {
+		throw std::invalid_argument("--dry-run goes with --migrate or --migrate-prune");
 	}
-	if (migrate || rollback) {
+	if (prune != (vm.count("keep") > 0)) {
+		throw std::invalid_argument("--migrate-prune takes --keep <N>, and --keep goes with --migrate-prune");
+	}
+	if (prune && vm["keep"].as<int>() < 0) {
+		throw std::invalid_argument("--keep <N> is a count of migrations, not a negative number");
+	}
+	if (int(migrate) + int(rollback) + int(prune) > 1) {
+		throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune are separate runs");
+	}
+	if (migrate || rollback || prune) {
 		if (!vm.count("headless")) {
-			throw std::invalid_argument("--migrate and --migrate-rollback run with --headless (from the editor's window: S8 of EPIC-58)");
+			throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune run with --headless (from the editor's window: S8 of EPIC-58)");
 		}
 		if (vm.count("mcp-stdio") || vm.count("game")) {
-			throw std::invalid_argument("--migrate and --migrate-rollback take neither --mcp-stdio nor --game");
+			throw std::invalid_argument("--migrate, --migrate-rollback and --migrate-prune take neither --mcp-stdio nor --game");
 		}
-		set_registered("migration/command", migrate ? "migrate" : "rollback");
+		set_registered("migration/command", migrate ? "migrate" : rollback ? "rollback" : "prune");
 		if (rollback) set_registered("migration/rollback_id", vm["migrate-rollback"].as<std::string>());
+		if (prune) set_registered("migration/keep", std::to_string(vm["keep"].as<int>()));
 		if (vm.count("dry-run")) set_registered("migration/dry_run", "true");
 		if (vm.count("force")) set_registered("migration/force", "true");
 		if (vm.count("report")) set_registered("migration/report", vm["report"].as<std::string>());
