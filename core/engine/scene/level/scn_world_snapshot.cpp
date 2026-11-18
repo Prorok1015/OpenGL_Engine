@@ -162,6 +162,25 @@ namespace
 {
 	// Set by capture_world with a desc system: every typed object inside carries its version.
 	constexpr std::string_view k_typed_versions = "typed_versions";
+
+	// A typed object without __version gets the current one of its type: the desc reader would take it for version 1.
+	void stamp_unversioned(const desc::desc_system& descs, json::value& value)
+	{
+		if (json::object* object = value.if_object()) {
+			if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
+				(*object)["__version"] = descs.current_version(type->as_string());
+			}
+			for (auto& member : *object) {
+				stamp_unversioned(descs, member.value());
+			}
+		} else if (json::array* array = value.if_array()) {
+			// Numeric payloads (geometry) can be long and hold no typed object.
+			if (!array->empty() && array->front().is_number()) return;
+			for (json::value& element : *array) {
+				stamp_unversioned(descs, element);
+			}
+		}
+	}
 }
 
 json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
@@ -265,14 +284,21 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 	}
 	// EPIC-58 section 7.2: with the world's desc system a snapshot whose typed objects carry their versions goes through
 	// its steps whole, so an older one is brought up and a newer one refused, the root or an object inside alike. One
-	// without them (the deprecated capture_world) goes through only when its root is older, as before #766; without a
-	// desc system only the version capture_world writes is read.
+	// without them (the deprecated capture_world) was written in the current format: its unversioned typed objects take
+	// the current versions, and only an older root goes through the steps, as before #766. Without a desc system only
+	// the version capture_world writes is read.
 	std::optional<json::object> upgraded;
 	const json::value* typed_versions = given.if_contains(k_typed_versions);
+	const bool stamped = typed_versions && typed_versions->is_bool() && typed_versions->as_bool();
 	const json::value* given_version = given.if_contains("__version");
 	const bool current_root = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
-	if (context.system && ((typed_versions && typed_versions->is_bool() && typed_versions->as_bool()) || !current_root)) {
+	if (context.system && !stamped) {
 		upgraded.emplace(given);
+		if (json::value* ctx = upgraded->if_contains("ctx")) stamp_unversioned(*context.system, *ctx);
+		if (json::value* entities = upgraded->if_contains("entities")) stamp_unversioned(*context.system, *entities);
+	}
+	if (context.system && (stamped || !current_root)) {
+		if (!upgraded) upgraded.emplace(given);
 		if (const std::string problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name())); !problem.empty()) {
 			egLOG_ERROR("scene", "{}", problem);
 			return false;

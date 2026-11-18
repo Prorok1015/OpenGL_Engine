@@ -69,8 +69,8 @@ namespace scn
 	// between frames.
 	SNK_API json::object capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
 		snapshot_report& report);
-	// Without the versions inside: restore_world brings up only an older root, as before #766 (a typed object without
-	// __version would read as version 1 and go through every step again).
+	// Without the versions inside: restore_world gives its unversioned typed objects the current versions of the restoring
+	// desc system and brings up only an older root, as before #766; a step added between capture and restore is missed.
 	[[deprecated("capture_world with the desc system; remove at the next major of SNK_MODULE_API_VERSION")]]
 	SNK_API json::object capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report);
 
