@@ -38,7 +38,7 @@ functions: snake_case (get_position(), update_transform())
 classes: snake_case (rare, prefer structs for data)
 constants: UPPER_CASE or snake_case (depends on scope)
 private_members: snake_case with m_ prefix (m_position, m_worlds)
-enums: ENUM_VALUE (UPPER_CASE for options)
+enums: enum class with snake_case values (image_flip::vertical, desc_binary_save_step::none); UPPER_CASE is for macros
 template_params: T, U, or CamelCase (Allocator, Traits)
 
 [COMPONENT_NAMING]
