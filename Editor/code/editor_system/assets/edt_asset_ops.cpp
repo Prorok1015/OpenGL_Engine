@@ -1085,6 +1085,8 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		}
 		const std::vector<fs::path> allowed = changeable_roots();
 		const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+		const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+		const fs::path top = db && db->top_layer() < db->layers().size() ? db->layers()[db->top_layer()] : fs::path{};
 		std::vector<fs::path> roots;
 		roots.reserve(journal.steps.size());
 		for (const journal_step& step : journal.steps) {
@@ -1093,8 +1095,12 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 				report.error = std::format("the journal is refused: '{}' is not the project's own folder or the manifest's", step.root);
 				return report;
 			}
-			if (step.kind == journal_step_kind::rewrite && !step.from.ends_with(".desc") && !(manifest && step.from == manifest->file)) {
-				report.error = std::format("the journal is refused: '{}' is neither a desc nor the manifest", step.from);
+			// The manifest's folder is for the manifest alone; the project's own layer takes descs (and the manifest, where they share a folder).
+			const bool manifest_file = manifest && step.from == manifest->file;
+			const bool in_top = !top.empty() && same_folder(top, path_of(step.root));
+			const bool allowed_here = step.kind == journal_step_kind::rewrite ? (manifest_file || (in_top && step.from.ends_with(".desc"))) : in_top;
+			if (!allowed_here) {
+				report.error = std::format("the journal is refused: '{}' is not something an operation changes in '{}'", step.from, step.root);
 				return report;
 			}
 			roots.push_back(*found);

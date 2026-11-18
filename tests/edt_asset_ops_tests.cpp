@@ -136,6 +136,11 @@ struct ops_fixture
 		ports.assets = [this]() -> const edt::asset_database* { return db.get(); };
 		ports.engine_base = engine.path();
 		ports.journal_root = journal.path();
+		if (!manifest_dir.empty()) {
+			ports.manifest = [this]() -> std::optional<edt::asset_ops_manifest> {
+				return edt::asset_ops_manifest{ manifest_dir, std::string(prj::k_manifest_file_name), {} };
+			};
+		}
 		ports.is_open_with_unsaved_changes = [this](const res::tag& tag) { return open_files.contains(std::string(tag.view())); };
 		ports.hold_changes = [this]() -> std::shared_ptr<void> {
 			if (throw_in_hold) throw std::runtime_error("hold refused");
@@ -210,6 +215,7 @@ struct ops_fixture
 	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
 	std::set<std::string> open_files;
+	fs::path manifest_dir;
 	std::string fail_at;
 	std::string throw_at;
 	bool throw_in_hold = false;
@@ -769,6 +775,27 @@ BOOST_AUTO_TEST_CASE(AJournalWithTheRootOfALowerOrTheEngineLayer_IsRefused_Thoug
 		BOOST_TEST(undone.restored.empty());
 	}
 	BOOST_TEST((snapshot() == after));
+}
+
+BOOST_AUTO_TEST_CASE(TheManifestsFolder_IsOpenToARewriteOfTheManifestAlone)
+{
+	open();
+	manifest_dir = foreign.path();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+	const fs::path victim = foreign.write("levels/main.desc", "not the project's");
+	for (const edt::journal_step_kind kind : { edt::journal_step_kind::move, edt::journal_step_kind::rewrite }) {
+		edt::operation_journal bad = report.journal;
+		const auto step = std::ranges::find(bad.steps, kind, &edt::journal_step::kind);
+		BOOST_REQUIRE(step != bad.steps.end());
+		step->root = foreign.path().generic_string();
+		const edt::undo_report undone = ops().undo(bad);
+		BOOST_TEST(!undone.ok);
+		BOOST_TEST(undone.restored.empty());
+	}
+	BOOST_TEST((snapshot() == after));
+	BOOST_TEST(fs::is_regular_file(victim));
 }
 
 BOOST_AUTO_TEST_CASE(AnUndoAfterACrashBetweenSteps_PutsBackWhatHappened_AndSkipsTheStepThatDidNot)
