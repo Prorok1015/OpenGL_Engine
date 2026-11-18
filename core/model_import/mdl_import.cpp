@@ -39,6 +39,8 @@ namespace {
 
 constexpr std::string_view k_log = "import";
 
+using mdl::detail::logged;
+
 void checkpoint(const mdl::import_options& options)
 {
 	if (options.task) options.task->throw_if_stopped();
@@ -152,8 +154,8 @@ scn::import_layout::vertex_attributes kept_attributes_of(const aiScene* scene, u
 // The texture types the import reads, and those it lists in the log.
 constexpr aiTextureType k_read_types[] = { aiTextureType_DIFFUSE, aiTextureType_BASE_COLOR, aiTextureType_SPECULAR, aiTextureType_NORMALS };
 
-struct logged_type { aiTextureType type; std::string_view name; };
-constexpr logged_type k_logged_types[] = { { aiTextureType_DIFFUSE, "diffuse" }, { aiTextureType_SPECULAR, "specular" },
+struct texture_kind { aiTextureType type; std::string_view name; };
+constexpr texture_kind k_logged_types[] = { { aiTextureType_DIFFUSE, "diffuse" }, { aiTextureType_SPECULAR, "specular" },
 	{ aiTextureType_HEIGHT, "height" }, { aiTextureType_NORMALS, "normals" }, { aiTextureType_BASE_COLOR, "base color" } };
 
 std::vector<std::byte> json_bytes(const json::object& object)
@@ -330,11 +332,11 @@ private:
 		if (m_out.missing_textures.size() >= mdl::k_max_missing_textures) {
 			if (m_out.missing_textures_not_listed++ == 0) {
 				egLOG_WARN(k_log, "model '{}': more than {} textures were not loaded: the rest is not listed",
-					m_options.display_name, mdl::k_max_missing_textures);
+					logged(m_options.display_name), mdl::k_max_missing_textures);
 			}
 			return;
 		}
-		egLOG_WARN(k_log, "model '{}': texture '{}' {}: no sampler for it", m_options.display_name, listed, why);
+		egLOG_WARN(k_log, "model '{}': texture '{}' {}: no sampler for it", logged(m_options.display_name), logged(listed), why);
 		m_out.missing_textures.push_back(std::move(listed));
 	}
 
@@ -451,12 +453,12 @@ private:
 
 	json::value process_material(aiMaterial* material)
 	{
-		for (const logged_type& logged : k_logged_types) {
-			if (material->GetTextureCount(logged.type) > 0) {
+		for (const texture_kind& logged_type : k_logged_types) {
+			if (material->GetTextureCount(logged_type.type) > 0) {
 				aiString str;
-				material->GetTexture(logged.type, 0, &str);
-				egLOG_DEBUG(k_log, "model '{}': {} texture: {} ({} in all)", m_options.display_name, logged.name, str.C_Str(),
-					material->GetTextureCount(logged.type));
+				material->GetTexture(logged_type.type, 0, &str);
+				egLOG_DEBUG(k_log, "model '{}': {} texture: {} ({} in all)", logged(m_options.display_name), logged_type.name, logged(str.C_Str()),
+					material->GetTextureCount(logged_type.type));
 			}
 		}
 
@@ -536,7 +538,7 @@ private:
 		}
 		if (dropped_lines + dropped_points + dropped_other > 0) {
 			egLOG_WARN(k_log, "model '{}': mesh '{}': dropped {} line(s) and {} point(s){}: the geometry holds {} only",
-				m_options.display_name, mesh->mName.C_Str(), dropped_lines, dropped_points,
+				logged(m_options.display_name), logged(mesh->mName.C_Str()), dropped_lines, dropped_points,
 				dropped_other > 0 ? std::format(" and {} other face(s)", dropped_other) : std::string{},
 				rnd::topology_name(m_topology));
 		}
@@ -547,7 +549,7 @@ private:
 		// Every vertex in the geometry's layout (#1100): what this mesh lacks takes the default of scn::import_layout.
 		const scn::import_layout::vertex_attributes layout = scn::import_layout::attributes_of(m_geometry.layout);
 		if (layout.normal && !mesh->HasNormals()) {
-			egLOG_WARN(k_log, "model '{}': mesh '{}' has no normals: written as (0, 0, 1)", m_options.display_name, mesh->mName.C_Str());
+			egLOG_WARN(k_log, "model '{}': mesh '{}' has no normals: written as (0, 0, 1)", logged(m_options.display_name), logged(mesh->mName.C_Str()));
 		}
 		for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
 			scn::import_layout::vertex_values vertex;
@@ -748,7 +750,7 @@ private:
 			jsgeometry["__type"] = "geometry_desc";
 			jsgeometry["__parent"] = "res://base_geometry.desc";
 			if (has_meshes) {
-				egLOG_WARN(k_log, "model '{}': geometry '{}' stays in JSON arrays: not triangles ({})", m_options.display_name,
+				egLOG_WARN(k_log, "model '{}': geometry '{}' stays in JSON arrays: not triangles ({})", logged(m_options.display_name),
 					geom_tag.view(), rnd::topology_name(m_topology));
 				jsgeometry[rnd::geometry_topology_key] = rnd::topology_name(m_topology);
 			}
@@ -773,6 +775,46 @@ private:
 	std::unordered_set<std::string> m_missing_seen;
 };
 
+// The size of `scene` without recursion: a model file chooses how deep its tree is.
+mdl::scene_size size_of(const aiScene& scene)
+{
+	mdl::scene_size size;
+	size.meshes = scene.mNumMeshes;
+	for (unsigned int m = 0; m < scene.mNumMeshes; ++m) {
+		const aiMesh* mesh = scene.mMeshes[m];
+		size.vertices += mesh->mNumVertices;
+		for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
+			size.indices += mesh->mFaces[f].mNumIndices;
+		}
+	}
+	std::vector<std::pair<const aiNode*, std::uint64_t>> pending;
+	if (scene.mRootNode) pending.emplace_back(scene.mRootNode, 1);
+	while (!pending.empty()) {
+		const auto [node, depth] = pending.back();
+		pending.pop_back();
+		++size.nodes;
+		size.depth = std::max(size.depth, depth);
+		for (unsigned int c = 0; c < node->mNumChildren; ++c) {
+			pending.emplace_back(node->mChildren[c], depth + 1);
+		}
+	}
+	return size;
+}
+
+}
+
+std::string mdl::scene_size_problem(const scene_size& size)
+{
+	if (size.nodes > k_max_scene_nodes) return std::format("too many nodes: {} (limit {})", size.nodes, k_max_scene_nodes);
+	if (size.depth > k_max_scene_depth) {
+		return std::format("the node tree is too deep: {} levels (limit {})", size.depth, k_max_scene_depth);
+	}
+	if (size.meshes > k_max_scene_meshes) return std::format("too many meshes: {} (limit {})", size.meshes, k_max_scene_meshes);
+	if (size.vertices > k_max_scene_vertices) {
+		return std::format("too many vertices: {} (limit {})", size.vertices, k_max_scene_vertices);
+	}
+	if (size.indices > k_max_scene_indices) return std::format("too many indices: {} (limit {})", size.indices, k_max_scene_indices);
+	return {};
 }
 
 mdl::import_result mdl::import_model(std::string_view model_name, file_source& files, import_sink& sink, const import_options& options)
@@ -795,6 +837,11 @@ mdl::import_result mdl::import_model(std::string_view model_name, file_source& f
 	if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
 		out.failed = failure::parse;
 		out.error = importer.GetErrorString();
+		return out;
+	}
+	if (std::string problem = scene_size_problem(size_of(*scene)); !problem.empty()) {
+		out.failed = failure::too_large;
+		out.error = std::move(problem);
 		return out;
 	}
 

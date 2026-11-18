@@ -1,6 +1,7 @@
 #include "edt_model_import_core.h"
 #include "edt_model_file_source.h"
 
+#include <snk/common/text_escape.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_pretty_json.h>
@@ -147,14 +148,14 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 		std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
 		if (!in) {
 			im.error = std::format("Failed to open file: {}", abs_path.string());
-			egLOG_ERROR("edt/import", "{}", im.error);
+			egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 			return im;
 		}
 
 		const auto file_size = static_cast<std::uintmax_t>(in.tellg());
 		if (file_size > k_max_person_source_bytes) {
 			im.error = std::format("The model file is too big: {} bytes, the limit is {}", file_size, k_max_person_source_bytes);
-			egLOG_ERROR("edt/import", "{}", im.error);
+			egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 			return im;
 		}
 		in.seekg(0);
@@ -165,7 +166,7 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 			const std::size_t part = (std::min)(chunk, file_data.size() - done);
 			if (!in.read(reinterpret_cast<char*>(file_data.data() + done), static_cast<std::streamsize>(part))) {
 				im.error = std::format("Failed to read file: {}", abs_path.string());
-				egLOG_ERROR("edt/import", "{}", im.error);
+				egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 				return im;
 			}
 		}
@@ -195,11 +196,15 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 		return im;
 	case mdl::failure::parse:
 		im.error = std::format("ASSIMP error: {}", imported.error);
-		egLOG_ERROR("edt/import", "{}", im.error);
+		egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 		return im;
 	case mdl::failure::geometry:
 		im.error = std::format("the geometry of the model is refused: {}", imported.error);
-		egLOG_ERROR("edt/import", "{}", im.error);
+		egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
+		return im;
+	case mdl::failure::too_large:
+		im.error = std::format("the model is too large: {}", imported.error);
+		egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 		return im;
 	}
 	checkpoint(ctx);

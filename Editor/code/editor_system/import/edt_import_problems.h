@@ -42,4 +42,16 @@ namespace edt {
 		return out;
 	}
 
+	// The one row of an import that failed (#1119): it replaces what the last import reported. `model_name` is already
+	// escaped; `reason` can quote the model file or the decoder, so it is escaped here.
+	inline std::vector<problem> import_failure_problems(std::string_view model_name, std::string_view reason)
+	{
+		problem item;
+		item.severity = problem_severity::error;
+		item.message = std::format("'{}': the import failed: {}", model_name, text_escape::escaped_text(reason, 1024));
+		std::vector<problem> out;
+		out.push_back(std::move(item));
+		return out;
+	}
+
 } // namespace edt
