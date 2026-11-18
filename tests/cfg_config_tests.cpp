@@ -115,6 +115,28 @@ BOOST_AUTO_TEST_CASE(Cli_TrustProjectSetsItsVariableAndAConfigFileCannot)
 	BOOST_TEST(!static_cast<bool>(trust));
 }
 
+// #767: --migrate-prune runs alone, headless, with --keep <N>; --dry-run goes with it, --force and --report do not.
+BOOST_AUTO_TEST_CASE(Cli_MigratePruneTakesKeepAndDryRunOnly)
+{
+	// Stand in for the editor's variables of the same names for the length of the test.
+	cfg::variable<std::string> command{ "migration/command", "" };
+	cfg::variable<int> keep{ "migration/keep", 0 };
+	cfg::variable<bool> dry_run{ "migration/dry_run", false };
+	BOOST_TEST(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--dry-run" }) == 1);
+	BOOST_TEST(*command == "prune");
+	BOOST_TEST(static_cast<int>(keep) == 3);
+	BOOST_TEST(static_cast<bool>(dry_run));
+
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--keep", "3" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep=-1" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--migrate-prune", "--keep", "3" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--force" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--migrate" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--migrate-rollback", "x" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--dry-run" }), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(Cli_NonInteractiveSetsItsVariableInBothForms)
 {
 	for (const std::string& flag : { std::string{ "--non-interactive" }, std::string{ "-n" } }) {

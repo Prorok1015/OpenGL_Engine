@@ -33,6 +33,7 @@ namespace
 	CFG_VAR_DEF_BOOL(cfg_migration_dry_run, "migration/dry_run", false);
 	CFG_VAR_DEF_BOOL(cfg_migration_force, "migration/force", false);
 	CFG_VAR_DEF_STRING(cfg_migration_report, "migration/report", "");
+	CFG_VAR_DEF_INT(cfg_migration_keep, "migration/keep", 0);
 	// --trust-project (#921): the project's modules load and build without the person's answer, for this run only.
 	// Rewritten from the command line by the core; a config file cannot set it.
 	CFG_VAR_DEF_BOOL(cfg_trust_project, "project/trust", false);
@@ -54,6 +55,12 @@ namespace
 		const prj::migration::command_context context{ project.root, descs, resources, &steps, {}, {}, {}, {} };
 		if (*cfg_migration_command == "rollback") {
 			return prj::migration::run_migrate_rollback(*cfg_migration_rollback_id, context);
+		}
+		if (*cfg_migration_command == "prune") {
+			prj::migration::prune_command command;
+			command.keep = static_cast<std::size_t>(static_cast<int>(cfg_migration_keep));
+			command.dry_run = cfg_migration_dry_run;
+			return prj::migration::run_migrate_prune(command, context);
 		}
 		prj::migration::migrate_command command;
 		command.dry_run = cfg_migration_dry_run;
@@ -190,7 +197,10 @@ int main(int argc, char* argv[])
 		const core::project_modules_report modules = project_host.load_all();
 		if (migration) {
 			// Without a module it needs, its types would read as unknown_type and the migration as partial (4): refused.
-			if (!modules.untrusted.empty()) {
+			// A prune reads no type, only the journals.
+			if (*cfg_migration_command == "prune") {
+				result = run_migration_command(app_storage);
+			} else if (!modules.untrusted.empty()) {
 				egLOG_ERROR("project/migrate", "refused: project modules are not trusted: pass --trust-project "
 					"(not loaded: {})", cfg::format_list(modules.untrusted));
 				result = prj::migration::k_exit_refused;

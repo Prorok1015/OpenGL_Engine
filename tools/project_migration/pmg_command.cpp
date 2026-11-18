@@ -4,6 +4,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_shipping_dirs.h>
 #include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -11,7 +12,9 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
@@ -203,4 +206,48 @@ int prj::migration::run_migrate_rollback(std::string_view id, const command_cont
 	}
 	print(context, std::format("migration {} rolled back", journal_path_text(id)));
 	return k_exit_done;
+}
+
+int prj::migration::run_migrate_prune(const prune_command& command, const command_context& context)
+{
+	std::vector<migration_folder> finished;
+	for (migration_folder& folder : migration_folders(context.root)) {
+		if (!folder.problem.empty()) {
+			print_error(context, std::format("migration {} is kept: {}", journal_path_text(folder.id), folder.problem));
+			continue;
+		}
+		const bool is_finished = folder.status == to_string(migration_status::ok) || folder.status == to_string(migration_status::partial)
+			|| folder.status == to_string(migration_status::rolled_back);
+		if (is_finished) finished.push_back(std::move(folder));
+		else if (folder.status != to_string(migration_status::in_progress) && folder.status != to_string(migration_status::rollback_failed)) {
+			print_error(context, std::format("migration {} is kept: its status {} is not known", journal_path_text(folder.id),
+				journal_path_text(folder.status)));
+		}
+	}
+	std::ranges::sort(finished, [](const migration_folder& a, const migration_folder& b) {
+		return std::tie(a.created, a.id) < std::tie(b.created, b.id);
+	});
+	const std::size_t doomed = finished.size() > command.keep ? finished.size() - command.keep : 0;
+	if (doomed == 0) {
+		print(context, std::format("nothing to prune: {} finished migration(s), --keep {}", finished.size(), command.keep));
+		return k_exit_done;
+	}
+	std::string list = std::format("{} {} of {} finished migration(s), the oldest:", command.dry_run ? "would delete" : "deleting", doomed,
+		finished.size());
+	for (std::size_t i = 0; i < doomed; ++i) {
+		list += std::format("\n  {} ({}, {})", journal_path_text(finished[i].id), finished[i].created, finished[i].status);
+	}
+	print(context, list);
+	if (command.dry_run) return k_exit_done;
+
+	int code = k_exit_done;
+	for (std::size_t i = 0; i < doomed; ++i) {
+		const fs::path folder = context.root / fs_paths::path_from_utf8(std::format(".snk/migrations/{}", finished[i].id));
+		std::error_code ec;
+		if (!core::res::remove_tree_without_following(folder, ec)) {
+			print_error(context, std::format("migration {} not deleted: {}", journal_path_text(finished[i].id), ec.message()));
+			code = k_exit_refused;
+		}
+	}
+	return code;
 }

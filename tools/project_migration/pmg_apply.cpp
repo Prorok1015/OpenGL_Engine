@@ -16,6 +16,7 @@
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -139,13 +140,16 @@ namespace
 		out["project_steps"] = std::move(project_steps);
 		out["project_notes"] = std::move(project_notes);
 		if (!report.error.empty()) out["error"] = report.error;
+		if (report.backup_files > 0) out["backup_bytes"] = report.backup_bytes;
 		return out;
 	}
 
 	std::string report_markdown(const migration_report& report)
 	{
-		std::string md = std::format("# Migration {}\n\nStatus: **{}**. Engine {} -> {}. Backup: `{}`.\n", report.id, to_string(report.status),
-			report.engine_before, report.engine_after, report.backup);
+		const std::string size = report.backup_files > 0
+			? std::format(" ({} in {} files)", size_text(report.backup_bytes), report.backup_files) : std::string{};
+		std::string md = std::format("# Migration {}\n\nStatus: **{}**. Engine {} -> {}. Backup: `{}`{}.\n", report.id, to_string(report.status),
+			report.engine_before, report.engine_after, report.backup, size);
 		if (!report.error.empty()) {
 		const std::string_view label = report.status == migration_status::rollback_failed ? "Rollback failed" : "Rolled back";
 		md += std::format("\n{}: {}\n", label, report.error);
@@ -1197,6 +1201,11 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		}
 	}
 
+	if (!report.backup.empty()) {
+		const tree_size backup = size_of_tree(context.root / fs_paths::path_from_utf8(report.backup));
+		report.backup_bytes = backup.bytes;
+		report.backup_files = backup.files;
+	}
 	try {
 		apply.journal();
 	} catch (const std::exception& e) {
@@ -1204,6 +1213,35 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 	}
 	apply.write_report_md();
 	return outcome;
+}
+
+prj::migration::tree_size prj::migration::size_of_tree(const fs::path& folder)
+{
+	tree_size size;
+	std::error_code ec;
+	if (!fs::is_directory(fs::symlink_status(folder, ec))) return size;
+	for (fs::recursive_directory_iterator it(folder, fs::directory_options::none, ec), end; !ec && it != end; it.increment(ec)) {
+		std::error_code entry_error;
+		if (!fs::is_regular_file(it->symlink_status(entry_error))) continue;
+		const std::uintmax_t bytes = it->file_size(entry_error);
+		if (entry_error) continue;
+		size.bytes += bytes;
+		++size.files;
+	}
+	return size;
+}
+
+std::string prj::migration::size_text(std::uintmax_t bytes)
+{
+	if (bytes < 1024) return std::format("{} B", bytes);
+	constexpr std::array<std::string_view, 3> units{ "KiB", "MiB", "GiB" };
+	double value = static_cast<double>(bytes) / 1024.0;
+	std::size_t unit = 0;
+	while (value >= 1024.0 && unit + 1 < units.size()) {
+		value /= 1024.0;
+		++unit;
+	}
+	return std::format("{:.1f} {}", value, units[unit]);
 }
 
 std::string prj::migration::journal_hash(std::string_view bytes)
@@ -1233,6 +1271,53 @@ std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& r
 	}
 	std::ranges::sort(ids);
 	return ids;
+}
+
+std::vector<prj::migration::migration_folder> prj::migration::migration_folders(const fs::path& root)
+{
+	const auto is_utc_stamp = [](std::string_view text) {
+		constexpr std::string_view pattern = "dddd-dd-ddTdd:dd:ddZ";
+		if (text.size() != pattern.size()) return false;
+		for (std::size_t i = 0; i < pattern.size(); ++i) {
+			if (pattern[i] == 'd' ? (text[i] < '0' || text[i] > '9') : text[i] != pattern[i]) return false;
+		}
+		return true;
+	};
+	std::vector<migration_folder> folders;
+	std::error_code ec;
+	const fs::path dir = root / fs_paths::path_from_utf8(k_migrations_dir);
+	for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+		std::error_code status_error;
+		if (!fs::is_directory(it->symlink_status(status_error))) continue;
+		migration_folder& folder = folders.emplace_back();
+		folder.id = fs_paths::utf8_of(it->path().filename());
+		const prj::project_file_text text = prj::read_project_file(root, fs_paths::path_from_utf8(std::format("{}/{}/report.json", k_migrations_dir, folder.id)));
+		if (!text.exists) {
+			folder.problem = "it has no report.json";
+			continue;
+		}
+		if (!text.error.empty()) {
+			folder.problem = std::format("its report.json cannot be read: {}", text.error);
+			continue;
+		}
+		boost::system::error_code error;
+		const json::value journal = json::parse(text.text, error, {}, parse_options());
+		if (error || !journal.is_object()) {
+			folder.problem = "its report.json is not a JSON object";
+			continue;
+		}
+		const json::value* status = journal.as_object().if_contains("status");
+		if (status && status->is_string()) folder.status = std::string(status->as_string());
+		const json::value* created = journal.as_object().if_contains("created");
+		if (created && created->is_string()) folder.created = std::string(created->as_string());
+		if (folder.status.empty()) {
+			folder.problem = "its report.json has no status";
+		} else if (!is_utc_stamp(folder.created)) {
+			folder.problem = "its report.json has no created time of the form 2026-01-31T12:00:00Z";
+		}
+	}
+	std::ranges::sort(folders, {}, &migration_folder::id);
+	return folders;
 }
 
 std::string prj::migration::journal_path_text(std::string_view path)
