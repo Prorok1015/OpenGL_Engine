@@ -32,7 +32,6 @@
    "dest": "snk/window",
    "public": [
     "wnd_coordinates.h",
-    "wnd_gl_surface.h",
     "wnd_null_window_system.h",
     "wnd_window.h",
     "wnd_window_event_listener_interface.h",
@@ -54,6 +53,7 @@
     "rnd_buffer_interface.h",
     "rnd_buffer_layout.h",
     "rnd_driver_interface.h",
+    "rnd_gl_surface.h",
     "rnd_shader_interface.h",
     "rnd_ssbo_buffer_interface.h",
     "rnd_swapchain_interface.h",

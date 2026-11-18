@@ -257,6 +257,8 @@ bool edt::import_component::poll_progress()
 			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
 				context.jobs().cancel(m_job);
+				// A cancel reports nothing: the rows of the last import would read as this one's.
+				context.problems().clear(k_import_problem_source);
 				finish_import();
 				ImGui::CloseCurrentPopup();
 				ImGui::EndPopup();
@@ -281,7 +283,10 @@ bool edt::import_component::poll_progress()
 
 	if (!m_result) {
 		if (!m_failure.empty()) {
-			egLOG("Editor/Import", "Async import failed: {}", m_failure);
+			egLOG("Editor/Import", "Async import failed: {}", text_escape::escaped_text(m_failure, 1024));
+			context.problems().set(k_import_problem_source, import_failure_problems(m_name, m_failure));
+		} else {
+			context.problems().clear(k_import_problem_source);
 		}
 		finish_import();
 		return false;
@@ -295,15 +300,17 @@ bool edt::import_component::poll_progress()
 
 	if (!intermediate.error.empty()) {
 		erase_import_folder(folder);
-		egLOG("Editor/Import", "Import of '{}' failed: {}", name, intermediate.error);
+		egLOG("Editor/Import", "Import of '{}' failed: {}", name, text_escape::escaped_text(intermediate.error, 1024));
+		context.problems().set(k_import_problem_source, import_failure_problems(name, intermediate.error));
 		context.dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", name, intermediate.error));
 		return false;
 	}
 
-	// A new import replaces what the last one reported.
-	context.problems().set(k_import_problem_source, import_problems(intermediate, name));
+	// Every outcome replaces what the last import reported.
+	std::vector<problem> rows = import_problems(intermediate, name);
 	auto result = m_importer->finalize_on_main(std::move(intermediate));
 	if (result.prefab) {
+		context.problems().set(k_import_problem_source, std::move(rows));
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
 		m_dialog_folder = std::move(folder);
 		m_export_dialog->open(std::move(result));
@@ -312,6 +319,7 @@ bool edt::import_component::poll_progress()
 	}
 
 	egLOG("Editor/Import", "Failed to finalize import");
+	context.problems().set(k_import_problem_source, import_failure_problems(name, "the imported model could not be finalized"));
 	erase_import_folder(folder);
 	return false;
 }

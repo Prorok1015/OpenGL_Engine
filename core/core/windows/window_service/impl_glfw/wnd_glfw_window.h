@@ -7,7 +7,7 @@ struct GLFWcursor;
 
 namespace wnd
 {
-	class glfw_window final : public window, public gl_surface
+	class glfw_window final : public window, public rnd::driver::gl_surface
 	{
 	public:
 		explicit glfw_window(context ctx_);
@@ -25,7 +25,7 @@ namespace wnd
 		glm::ivec2 get_backbuffer_size() const override;
 		const glm::ivec2& get_size() const override { return m_size; }
 		float get_content_scale() const override;
-		gl_surface* gl_surface_ptr() const override;
+		rnd::driver::gl_surface* gl_surface_ptr() const override;
 
 		void make_current() override;
 		void swap_buffers() override;

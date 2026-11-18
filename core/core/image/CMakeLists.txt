@@ -3,7 +3,7 @@ project(image)
 add_library(${PROJECT_NAME} STATIC)
 add_library(snk::image ALIAS ${PROJECT_NAME})
 
-target_sources(${PROJECT_NAME} PRIVATE "image.cpp")
+target_sources(${PROJECT_NAME} PRIVATE "img_image.cpp")
 snk_component_headers(${PROJECT_NAME})
 
 add_subdirectory(${THIRD_PARTY_PATH}/stb_image stb_image)

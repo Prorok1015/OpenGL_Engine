@@ -2,11 +2,19 @@
 #include <snk/model_import/mdl_import.h>
 #include <assimp/IOStream.hpp>
 #include <assimp/IOSystem.hpp>
+#include <snk/common/text_escape.h>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace mdl::detail
 {
+	// Text of the model file (and the name the log gives the model) as a log line shows it (#1119).
+	inline std::string logged(std::string_view text)
+	{
+		return text_escape::escaped_text(text, 256);
+	}
+
 	// Assimp reads the model and the files it names through a file_source. Not exported: assimp stays inside this library.
 	class source_io final : public Assimp::IOSystem
 	{

@@ -127,6 +127,12 @@ namespace edt::override_edit
 	std::vector<std::string> whole_values(const desc::desc_system& descs, const desc::type_schema& schema,
 		const boost::json::value& base, const boost::json::value& edited);
 
+	// The pointer of the first binary_ref field (a range of a mesh's binary file, EPIC-79) that `patch`, a JSON Merge Patch
+	// of a component of `schema`, sets, clears or reaches into, through nested objects and structures; empty when none.
+	// Such a field is written only by saving the mesh: an edit that touches it is refused whole.
+	std::string binary_ref_in_patch(const desc::schema_registry& schemas, const desc::type_schema& schema,
+		const boost::json::object& patch);
+
 	// `layer` merged onto `into` as a __parent chain and the Inspector's composed view merge a desc's layers: objects key by
 	// key, but a value whole_values names (a {guid, path} reference, or any object over one) replaces what is there.
 	void merge_layer(const desc::schema_registry& schemas, const desc::type_schema& schema, boost::json::object& into,

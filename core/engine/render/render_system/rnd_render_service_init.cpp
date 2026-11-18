@@ -26,8 +26,38 @@
 #include "passes/rnd_skybox_pass.h"
 #include "passes/rnd_debug_pass.h"
 #include <snk/render/shader/rnd_material_compiler.h>
+#include <utility>
 
 namespace {
+	// What the Inspector, validate_desc_tree and MCP read of a geometry desc (EPIC-79 PR5). Built by hand: geometry_desc
+	// reads and writes its JSON itself (read_geometry_json, serialize) and its members are not that form, so it has no
+	// Boost.Describe of them. "vertices" and "indices" are ranges of the binary file, or arrays in an older file.
+	desc::type_schema geometry_schema(int version)
+	{
+		desc::type_schema schema;
+		schema.name = "geometry_desc";
+		schema.id = desc::schema_id(schema.name);
+		schema.version = version;
+		schema.kind = desc::schema_kind::desc;
+		const auto add = [&schema](std::string name, desc::field_kind kind, std::string tooltip) -> desc::field_schema& {
+			desc::field_schema& field = schema.fields.emplace_back();
+			field.key = "/" + name;
+			field.name = std::move(name);
+			field.kind = kind;
+			field.tooltip = std::move(tooltip);
+			return field;
+		};
+		add("layout", desc::field_kind::custom, "Vertex attributes by name: {\"position\": \"vec3\", \"uv\": \"vec2\"}").read_only = true;
+		add("indices", desc::field_kind::binary_ref, "u32 indices: a range of the binary file beside the desc");
+		add("vertices", desc::field_kind::binary_ref, "Interleaved vertex bytes: a range of the binary file beside the desc");
+		add("bounds", desc::field_kind::custom, "Built again from the data when loaded").editor_hidden = true;
+		desc::field_schema& topology = add("topology", desc::field_kind::string, "lines or points; a desc without it holds triangles");
+		topology.optional = true;
+		topology.read_only = true;
+		topology.default_value = boost::json::value(std::string_view{});
+		return schema;
+	}
+
 	// "gl" (default) or "null". A window without a GL surface selects null regardless.
 	// Unknown values warn and fall through to the surface check.
 	CFG_VAR_DEF_STRING(cfg_render_backend, "render/backend", "gl");
@@ -81,6 +111,7 @@ void engine::render::register_render_descs(desc::desc_system& desc_sys)
 	// refuses such a file instead of reading ranges as arrays. Arrays stay valid, so the step changes nothing.
 	desc_sys.register_migration("geometry_desc", 1, "nothing: arrays stay valid, version 2 may also hold binary ranges",
 		[](json::object&, desc::migration_context&) {});
+	desc_sys.register_schema(geometry_schema(desc_sys.current_version("geometry_desc")));
 	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
 	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
@@ -101,7 +132,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
 	const auto window = window_system.get_active_window();
-	wnd::gl_surface* surface = window ? window->gl_surface_ptr() : nullptr;
+	rnd::driver::gl_surface* surface = window ? window->gl_surface_ptr() : nullptr;
 	const std::string& backend = *cfg_render_backend;
 	if (backend != "gl" && backend != "null") {
 		egLOG_WARN("render", "Unknown render/backend '{}', expected 'gl' or 'null'", backend);

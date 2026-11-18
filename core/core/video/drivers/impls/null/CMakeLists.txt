@@ -10,4 +10,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_DRV_NULL_SOURCES})
 # through the SOURCE_DIR property.
 snk_component_headers(${PROJECT_NAME} SDK_INTERNAL)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::drv_interface PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::common PUBLIC snk::drv_interface PRIVATE snk::engine_logger)
