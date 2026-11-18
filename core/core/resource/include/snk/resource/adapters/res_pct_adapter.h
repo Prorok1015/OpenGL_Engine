@@ -47,7 +47,7 @@ namespace res
 
 		pct_adapter();
 
-		// The memory stb_image::Image lets its decoder hold for a picture of this header and file size (decode_budget).
+		// The memory img::image lets its decoder hold for a picture of this header and file size (decode_budget).
 		static std::size_t decode_budget_bytes(int width, int height, int channels, std::size_t encoded_bytes);
 		// The most the decoder held at once in this thread's last decode, refused or not.
 		static std::size_t last_decode_peak_bytes();

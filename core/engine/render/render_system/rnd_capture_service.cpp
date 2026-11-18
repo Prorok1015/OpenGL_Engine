@@ -13,7 +13,7 @@
 
 #include <snk/common/logger/engine_log.h>
 #include <snk/driver/rnd_texture_interface.h>
-#include <snk/image/image.h>
+#include <snk/image/img_image.h>
 
 namespace {
 	constexpr int pixel_bytes = 4;
@@ -215,6 +215,6 @@ std::vector<std::byte> rnd::capture_service::encode_png(const captured_image& im
 			rgb[i * 3 + c] = static_cast<unsigned char>(image.rgba[i * pixel_bytes + c]);
 		}
 	}
-	stb_image::Image::write_to_memory(stb_image::Image::ImageType::PNG, rgb.data(), image.size.x, image.size.y, 3, png);
+	img::image::write_to_memory(img::image_type::png, rgb.data(), image.size.x, image.size.y, 3, png);
 	return png;
 }
