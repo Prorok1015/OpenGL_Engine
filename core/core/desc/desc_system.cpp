@@ -50,6 +50,18 @@ namespace
 	{
 		return steps && !steps->empty() ? steps->rbegin()->first + 1 : 1;
 	}
+
+	// A type no layer knows has version 1 for the steps: a higher one is no newer format but a module that is not
+	// loaded (or a misspelt name), and "newer" would send the reader to update the engine (#1226).
+	std::optional<std::string> unregistered_type_problem(const desc::desc_system& descs, std::string_view source,
+		std::string_view type, int version)
+	{
+		if (descs.is_registered(type) || descs.find_schema(type)) {
+			return std::nullopt;
+		}
+		return std::format("{}: '{}' is not a registered desc type (version {}): is the module that registers it loaded?",
+			source, type, version);
+	}
 }
 
 desc::migration_context::migration_context(std::string_view type, int from_version, std::string_view file,
@@ -146,6 +158,9 @@ void desc::desc_system::migrate_typed(json::object& obj, const std::string& type
 	const int current = version_after(steps.get());
 	const int version = static_cast<int>(parsed);
 	if (version > current) {
+		if (auto problem = unregistered_type_problem(*this, context, type, version)) {
+			throw std::runtime_error(std::move(*problem));
+		}
 		throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
 	}
 	if (version < current) {
@@ -317,6 +332,9 @@ std::string desc::desc_system::upgrade_in_memory(json::object& document, std::st
 	}
 	const int supported = current_version(name);
 	if (version > supported) {
+		if (auto problem = unregistered_type_problem(*this, source, name, version)) {
+			return std::move(*problem);
+		}
 		return std::format("{}: '{}' is version {}, newer than the version {} this engine reads", source, name, version, supported);
 	}
 	// Every time, not only for an older root: a typed object inside may be older or newer than this engine reads.
