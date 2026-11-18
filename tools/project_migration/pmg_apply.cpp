@@ -1237,7 +1237,8 @@ std::string prj::migration::size_text(std::uintmax_t bytes)
 	constexpr std::array<std::string_view, 3> units{ "KiB", "MiB", "GiB" };
 	double value = static_cast<double>(bytes) / 1024.0;
 	std::size_t unit = 0;
-	while (value >= 1024.0 && unit + 1 < units.size()) {
+	// 1023.95 and up would print as "1024.0" of this unit.
+	while (value >= 1023.95 && unit + 1 < units.size()) {
 		value /= 1024.0;
 		++unit;
 	}
@@ -1275,13 +1276,21 @@ std::vector<std::string> prj::migration::unfinished_migrations(const fs::path& r
 
 std::vector<prj::migration::migration_folder> prj::migration::migration_folders(const fs::path& root)
 {
+	// A hand-edited 9999-99-99T99:99:99Z would sort as the newest and push a real migration out of --keep.
 	const auto is_utc_stamp = [](std::string_view text) {
 		constexpr std::string_view pattern = "dddd-dd-ddTdd:dd:ddZ";
 		if (text.size() != pattern.size()) return false;
 		for (std::size_t i = 0; i < pattern.size(); ++i) {
 			if (pattern[i] == 'd' ? (text[i] < '0' || text[i] > '9') : text[i] != pattern[i]) return false;
 		}
-		return true;
+		const auto number = [text](std::size_t at, std::size_t digits) {
+			unsigned value = 0;
+			for (std::size_t i = at; i < at + digits; ++i) value = value * 10 + static_cast<unsigned>(text[i] - '0');
+			return value;
+		};
+		const std::chrono::year_month_day date{ std::chrono::year{ static_cast<int>(number(0, 4)) }, std::chrono::month{ number(5, 2) },
+			std::chrono::day{ number(8, 2) } };
+		return date.ok() && number(11, 2) < 24 && number(14, 2) < 60 && number(17, 2) < 60;
 	};
 	std::vector<migration_folder> folders;
 	std::error_code ec;

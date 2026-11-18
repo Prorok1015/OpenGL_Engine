@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 // The command line of a migration (EPIC-58 4.3, S6, #757): `editor --headless --project <dir> --migrate [--dry-run]
 // [--report <file>] [--force]` and `--migrate-rollback <id>`. The editor's main runs these with the game layer of the
@@ -52,6 +53,8 @@ namespace prj::migration
 		std::function<std::string()> make_id;
 		std::function<void(std::string_view)> print;
 		std::function<std::optional<std::string>(const std::filesystem::path& file, std::string_view text)> write_report;
+		// By default core::res::remove_tree_without_following (--migrate-prune).
+		std::function<bool(const std::filesystem::path& folder, std::error_code& ec)> remove_tree;
 	};
 
 	// The exit code of a migration that ended with `status`.

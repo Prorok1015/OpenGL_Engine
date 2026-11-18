@@ -154,6 +154,8 @@ int main(int argc, char* argv[])
 
 	// A migration runs without the editor: nothing of it starts, so nothing of it writes into the project (S6).
 	const bool migration = !cfg_migration_command->empty();
+	// Reads only the journals: no code of the project is loaded for it.
+	const bool prune = *cfg_migration_command == "prune";
 
 	app::modules::module_loader module_loader;
 	module_loader.add_module(std::make_unique<core::core_module>());
@@ -194,11 +196,10 @@ int main(int argc, char* argv[])
 		};
 		// In the storage, so the editor can reload a module from a new build (#435).
 		auto& project_host = app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules));
-		const core::project_modules_report modules = project_host.load_all();
+		const core::project_modules_report modules = prune ? core::project_modules_report{} : project_host.load_all();
 		if (migration) {
 			// Without a module it needs, its types would read as unknown_type and the migration as partial (4): refused.
-			// A prune reads no type, only the journals.
-			if (*cfg_migration_command == "prune") {
+			if (prune) {
 				result = run_migration_command(app_storage);
 			} else if (!modules.untrusted.empty()) {
 				egLOG_ERROR("project/migrate", "refused: project modules are not trusted: pass --trust-project "

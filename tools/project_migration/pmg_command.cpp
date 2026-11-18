@@ -12,7 +12,6 @@
 #include <optional>
 #include <string>
 #include <system_error>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -48,6 +47,37 @@ namespace
 		const fs::path outer = fs::weakly_canonical(fs::absolute(folder, ec), ec);
 		auto mismatch = std::mismatch(outer.begin(), outer.end(), inner.begin(), inner.end());
 		return mismatch.first == outer.end();
+	}
+
+	// Runs of digits compare as numbers, so "<time>-10" comes after "<time>-2".
+	bool ids_in_order(std::string_view a, std::string_view b)
+	{
+		const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+		std::size_t i = 0;
+		std::size_t j = 0;
+		while (i < a.size() && j < b.size()) {
+			if (is_digit(a[i]) && is_digit(b[j])) {
+				std::size_t a_end = i;
+				std::size_t b_end = j;
+				while (a_end < a.size() && is_digit(a[a_end])) ++a_end;
+				while (b_end < b.size() && is_digit(b[b_end])) ++b_end;
+				std::string_view a_run = a.substr(i, a_end - i);
+				std::string_view b_run = b.substr(j, b_end - j);
+				const auto strip = [](std::string_view run) { return run.substr(std::min(run.find_first_not_of('0'), run.size())); };
+				const std::string_view a_digits = strip(a_run);
+				const std::string_view b_digits = strip(b_run);
+				if (a_digits.size() != b_digits.size()) return a_digits.size() < b_digits.size();
+				if (a_digits != b_digits) return a_digits < b_digits;
+				if (a_run.size() != b_run.size()) return a_run.size() < b_run.size();
+				i = a_end;
+				j = b_end;
+			} else {
+				if (a[i] != b[j]) return a[i] < b[j];
+				++i;
+				++j;
+			}
+		}
+		return a.size() - i < b.size() - j;
 	}
 
 	std::optional<std::string> write_report(const command_context& context, const fs::path& file, std::string_view text)
@@ -225,7 +255,8 @@ int prj::migration::run_migrate_prune(const prune_command& command, const comman
 		}
 	}
 	std::ranges::sort(finished, [](const migration_folder& a, const migration_folder& b) {
-		return std::tie(a.created, a.id) < std::tie(b.created, b.id);
+		if (a.created != b.created) return a.created < b.created;
+		return ids_in_order(a.id, b.id);
 	});
 	const std::size_t doomed = finished.size() > command.keep ? finished.size() - command.keep : 0;
 	if (doomed == 0) {
@@ -244,7 +275,8 @@ int prj::migration::run_migrate_prune(const prune_command& command, const comman
 	for (std::size_t i = 0; i < doomed; ++i) {
 		const fs::path folder = context.root / fs_paths::path_from_utf8(std::format(".snk/migrations/{}", finished[i].id));
 		std::error_code ec;
-		if (!core::res::remove_tree_without_following(folder, ec)) {
+		const bool removed = context.remove_tree ? context.remove_tree(folder, ec) : core::res::remove_tree_without_following(folder, ec);
+		if (!removed) {
 			print_error(context, std::format("migration {} not deleted: {}", journal_path_text(finished[i].id), ec.message()));
 			code = k_exit_refused;
 		}
