@@ -239,12 +239,29 @@ namespace desc
 		// a malformed or newer-than-supported __version, or when a migration step is missing.
 		void migrate_tree(json::object& root, std::string_view context) const;
 
+		// A user's document read into memory rather than the project's (player settings, a world snapshot; EPIC-58 section
+		// 7.2): brought up to current_version of its __type by the registered steps, the file itself left as it is; typed
+		// objects inside too, whatever the root's version. Returns what is wrong, or empty: no __type, a malformed
+		// __version, one newer than this engine reads (of the root or an object inside), a step that failed.
+		// `source` (the file, or the world) is named in the text, with the version and the one supported.
+		std::string upgrade_in_memory(json::object& document, std::string_view source) const;
+
 		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
 		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
 
 		// Writes the current __version into an object that has a string __type, and moves the header keys
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
 		void stamp_header(json::object& obj) const;
+
+		// The JSON of `desc` written in place of its memory:// tag (desc_ref_traits<res_handle<T>>::to_json, #1236) gets
+		// "__type" and the current "__version" of the type from the desc_system that made `desc`: read back, a typed
+		// object without __version is version 1 and would go through every step of its type again. Nothing without one.
+		static void stamp_inline_version(json::object& inline_desc, const desc_base& desc);
+
+		// Gives every typed object under `value` that has no "__version" the current one of its type; one that has a
+		// version keeps it (#1236). For JSON of this process's memory (serialize of a loaded desc): an inline desc a module
+		// built before #1236 wrote without a version is of the current format, not version 1. Never for file data.
+		void stamp_unversioned(json::value& value) const;
 
 		// stamp_header for every typed object under `value` (the files embed typed descs, and a memory://
 		// copy of them goes through the adapter - and its migrations - again).

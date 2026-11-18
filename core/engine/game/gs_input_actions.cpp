@@ -93,6 +93,7 @@ void gs::input_actions::drop()
 	++m_revision;
 	m_user = {};
 	m_user_file.clear();
+	m_user_file_kept = false;
 	m_project_name.clear();
 	m_changed = false;
 	m_built = false;
@@ -120,12 +121,23 @@ void gs::input_actions::set_user_folder(std::filesystem::path folder)
 	load_user();
 }
 
+void gs::input_actions::set_desc_system(const desc::desc_system* descs)
+{
+	m_descs = descs;
+}
+
+bool gs::input_actions::user_file_kept() const
+{
+	return m_user_file_kept;
+}
+
 void gs::input_actions::load_user()
 {
 	m_user_file.clear();
+	m_user_file_kept = false;
 	if (m_user_folder.empty() || m_project_name.empty()) return;
 	m_user_file = m_user_folder / (file_stem(m_project_name) + ".json");
-	m_user = load_user_bindings(m_user_file);
+	m_user = load_user_bindings(m_user_file, m_descs, m_user_file_kept);
 	if (m_project) rebuild_effective();
 }
 
@@ -153,6 +165,11 @@ void gs::input_actions::rebuild_effective()
 
 void gs::input_actions::save_user()
 {
+	// A newer build's file, or one that did not read, is the player's all the same: this build never writes over it.
+	if (m_user_file_kept) {
+		m_saved = false;
+		return;
+	}
 	m_saved = m_user_file.empty() || save_user_bindings(m_user_file, m_user);
 }
 

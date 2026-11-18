@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <format>
 #include <iterator>
 #include <limits>
@@ -211,67 +212,191 @@ namespace
 		return {};
 	}
 
-	// Copies the file `request` reads to `target` (which must not exist) in chunks, never holding it whole: its hash comes
-	// back in `hash`. A failed copy leaves nothing at `target`.
-	std::string stream_copy(const platform::beneath::read_request& request, const fs::path& target, std::string& hash)
-	{
-		std::error_code ec;
-		if (fs::symlink_status(target, ec).type() != fs::file_type::not_found) return std::format("{} is there already", utf8(target));
-		std::ofstream out(target, std::ios::binary | std::ios::trunc);
-		if (!out) return std::format("cannot write {}", utf8(target));
-		res::content_hasher hasher;
-		bool write_failed = false;
-		const platform::beneath::read_result result = platform::beneath::read_beneath_stream(request, [&](std::span<const std::byte> chunk) {
-			hasher.update(chunk);
-			out.write(reinterpret_cast<const char*>(chunk.data()), static_cast<std::streamsize>(chunk.size()));
-			write_failed = !out;
-			return !write_failed;
-		});
-		out.flush();
-		const bool flushed = static_cast<bool>(out);
-		out.close();
-		std::string error = read_error(result);
-		if (error.empty() && (write_failed || !flushed)) error = std::format("cannot write {}", utf8(target));
-		if (!error.empty()) {
-			fs::remove(target, ec);
-			return error;
-		}
-		hash = hasher.text();
-		return {};
-	}
-
 	std::string in_journal(const std::string& id, std::string_view relative)
 	{
 		return std::format("{}/{}", id, relative);
 	}
 
-	// The file of the project goes into the journal folder (below `journal_root`), in chunks.
-	std::string stash_file(const fs::path& root, const std::string& relative, const fs::path& journal_root, const std::string& journal_relative, std::string& hash)
+	// What a test may take over (asset_ops_ports::fail_step, force_copy); both empty in production.
+	struct move_seams
+	{
+		std::function<std::string(std::string_view)> fail;
+		std::function<bool(std::string_view)> force_copy;
+		std::function<std::string(std::string_view)> rename_error;
+	};
+
+	move_seams seams_of(const edt::asset_ops_ports& ports)
+	{
+		return move_seams{ ports.fail_step, ports.force_copy, ports.rename_error };
+	}
+
+	struct rename_outcome
+	{
+		std::string error;
+		// Only the move between two volumes: the one failure a copy may take over from.
+		bool across_volumes = false;
+	};
+
+	std::string injected_failure(const move_seams& seams, const std::string& label)
+	{
+		return seams.fail ? seams.fail(label) : std::string{};
+	}
+
+	bool copy_forced(const move_seams& seams, const std::string& label)
+	{
+		return seams.force_copy && seams.force_copy(label);
+	}
+
+	fs::path without_trailing_separator(const fs::path& path)
+	{
+		fs::path out = path.lexically_normal();
+		if (!out.empty() && !out.has_filename()) out = out.parent_path();
+		return out;
+	}
+
+	// The deepest folder both lie in, by name; empty when they share none (another drive).
+	fs::path common_folder(const fs::path& first, const fs::path& second)
+	{
+		const fs::path left = without_trailing_separator(first);
+		const fs::path right = without_trailing_separator(second);
+		fs::path common;
+		auto l = left.begin();
+		auto r = right.begin();
+		for (; l != left.end() && r != right.end() && *l == *r; ++l, ++r) common /= *l;
+		return common;
+	}
+
+	fs::path relative_to(const fs::path& folder, const fs::path& common)
+	{
+		fs::path out = without_trailing_separator(folder).lexically_relative(common);
+		if (out == ".") out.clear();
+		return out;
+	}
+
+	// A rename from one root to another: both lie in a folder the move is made from, and every folder below it is opened
+	// without following a link, as a rename inside one root is. An error when it cannot be made, the file staying where it
+	// was; `across_volumes` says the cause was another volume (or another drive: no shared folder), which is not a refusal.
+	rename_outcome rename_between(const fs::path& from_root, const std::string& from, const fs::path& to_root, const std::string& to)
+	{
+		const fs::path common = common_folder(from_root, to_root);
+		if (common.empty()) return rename_outcome{ "the two folders share no parent folder", true };
+		const fs::path source = (relative_to(from_root, common) / path_of(from)).lexically_normal();
+		const fs::path target = (relative_to(to_root, common) / path_of(to)).lexically_normal();
+		platform::beneath::pinned_root pinned{ common };
+		platform::beneath::rename_request request;
+		request.from_folder = source.parent_path();
+		request.from_leaf = source.filename();
+		request.to_folder = target.parent_path();
+		request.to_leaf = target.filename();
+		rename_outcome outcome;
+		request.across_volumes = &outcome.across_volumes;
+		outcome.error = platform::beneath::rename_beneath(pinned, request);
+		return outcome;
+	}
+
+	// Copies a file from one root to another in chunks (never held whole), flushed to the disk and moved into place only when
+	// every byte was read and its hash is `hash`: nothing is at `to` before that, and a failure leaves no temp file. The step
+	// `before_commit` of the seams fails it after the check.
+	std::string copy_verified(const fs::path& from_root, const std::string& from, const fs::path& to_root, const std::string& to,
+		const std::string& hash, const std::string& before_commit, const move_seams& seams, const std::string& mismatch)
+	{
+		std::string problem;
+		const platform::beneath::chunk_source source = [&](const platform::beneath::chunk_sink& sink) {
+			res::content_hasher hasher;
+			bool sink_failed = false;
+			const platform::beneath::read_result result = platform::beneath::read_beneath_stream(
+				read_request_of(from_root, from, (std::numeric_limits<std::uint64_t>::max)()), [&](std::span<const std::byte> chunk) {
+					hasher.update(chunk);
+					sink_failed = !sink(chunk);
+					return !sink_failed;
+				});
+			problem = read_error(result);
+			if (!problem.empty() || sink_failed) return false;
+			if (hasher.text() != hash) {
+				problem = mismatch;
+				return false;
+			}
+			problem = injected_failure(seams, before_commit);
+			return problem.empty();
+		};
+		const fs::path target = path_of(to);
+		platform::beneath::pinned_root pinned{ to_root };
+		platform::beneath::write_request request;
+		request.folder = target.parent_path();
+		request.leaf = target.filename();
+		request.tmp_leaf = temp_leaf_for(request.leaf);
+		request.stream = &source;
+		request.replace = false;
+		request.tmp_path = to_root / request.folder / request.tmp_leaf;
+		const std::string error = platform::beneath::write_beneath(pinned, request);
+		if (error.empty()) return {};
+		return problem.empty() ? error : problem;
+	}
+
+	// The file of the project goes into the journal folder (below `journal_root`): moved by a rename, which copies nothing and
+	// is atomic, or, only where the two lie on different volumes, copied, flushed and checked before the original is removed.
+	// Any other reason the rename cannot be made (a link in the way, an escape, a denied access) refuses the step and leaves
+	// the file where it is: a copy must not go where the rename was not allowed. At no moment is there no complete copy.
+	std::string stash_file(const fs::path& root, const std::string& relative, const fs::path& journal_root, const std::string& journal_relative,
+		const std::string& hash, const move_seams& seams)
 	{
 		const fs::path target = path_of(journal_relative);
 		if (std::string error = plain_folders_below(journal_root, target.parent_path()); !error.empty()) return error;
-		return stream_copy(read_request_of(root, relative, (std::numeric_limits<std::uint64_t>::max)()), journal_root / target, hash);
+		const std::string changed = std::format("'{}' changed while it was removed", relative);
+		if (!copy_forced(seams, "stash:" + relative)) {
+			rename_outcome moved{ seams.rename_error ? seams.rename_error("stash:" + relative) : std::string{}, false };
+			if (moved.error.empty()) moved = rename_between(root, relative, journal_root, journal_relative);
+			if (moved.error.empty()) {
+				std::string error;
+				const std::string now = hash_file(journal_root, journal_relative, error);
+				if (error.empty() && now == hash) return {};
+				if (error.empty()) error = changed;
+				if (const rename_outcome back = rename_between(journal_root, journal_relative, root, relative); !back.error.empty()) {
+					error += std::format(" and could not be put back: {}", back.error);
+				}
+				return error;
+			}
+			if (!moved.across_volumes) return std::format("'{}' cannot be moved into the journal: {}", relative, moved.error);
+			egLOG_INFO("asset_ops", "'{}' is copied into the journal, not moved: {}", relative, moved.error);
+		}
+		if (std::string error = copy_verified(root, relative, journal_root, journal_relative, hash, "stash_copied:" + relative, seams, changed); !error.empty()) {
+			return error;
+		}
+		return remove_file(root, relative);
 	}
 
-	// The kept copy comes back to `relative` below `root`: written beside it under a temporary name, checked against `hash`,
-	// then moved in without replacing anything.
-	std::string restore_file(const fs::path& journal_root, const std::string& journal_relative, const fs::path& root, const std::string& relative, const std::string& hash)
+	// The kept file comes back to `relative` below `root`, without replacing anything: moved by a rename, or, only where the two
+	// lie on different volumes, copied beside it under a temporary name, flushed, checked against `hash` and moved in; any other
+	// reason the rename cannot be made fails the step. A file that came back by rename is checked too, and goes back to the journal
+	// when it is not `hash`. The kept file is removed only once the restored one is complete, so a failure leaves the kept one.
+	std::string restore_file(const fs::path& journal_root, const std::string& journal_relative, const fs::path& root, const std::string& relative,
+		const std::string& hash, const move_seams& seams)
 	{
+		if (std::string error = injected_failure(seams, "unstash:" + relative); !error.empty()) return error;
 		const fs::path target = path_of(relative);
 		if (std::string error = plain_folders_below(root, target.parent_path()); !error.empty()) return error;
-		const std::string temporary = join(parent_of(relative), utf8(temp_leaf_for(target.filename())));
-		std::string copied;
-		if (std::string error = stream_copy(read_request_of(journal_root, journal_relative, (std::numeric_limits<std::uint64_t>::max)()), root / path_of(temporary), copied); !error.empty()) {
+		if (!copy_forced(seams, "unstash:" + relative)) {
+			rename_outcome moved{ seams.rename_error ? seams.rename_error("unstash:" + relative) : std::string{}, false };
+			if (moved.error.empty()) moved = rename_between(journal_root, journal_relative, root, relative);
+			if (moved.error.empty()) {
+				std::string error;
+				const std::string now = hash_file(root, relative, error);
+				if (error.empty() && now == hash) return {};
+				if (error.empty()) error = "the kept copy is not the file that was removed";
+				if (const rename_outcome back = rename_between(root, relative, journal_root, journal_relative); !back.error.empty()) {
+					error += std::format(" and could not be put back into the journal: {}", back.error);
+				}
+				return error;
+			}
+			if (!moved.across_volumes) return std::format("'{}' cannot be moved back from the journal: {}", relative, moved.error);
+			egLOG_INFO("asset_ops", "'{}' is copied back from the journal, not moved: {}", relative, moved.error);
+		}
+		if (std::string error = copy_verified(journal_root, journal_relative, root, relative, hash, "unstash_copied:" + relative, seams,
+			"the kept copy is not the file that was removed"); !error.empty()) {
 			return error;
 		}
-		std::error_code ec;
-		if (copied != hash) {
-			fs::remove(root / path_of(temporary), ec);
-			return "the kept copy is not the file that was removed";
-		}
-		if (std::string error = move_file(root, temporary, relative); !error.empty()) {
-			fs::remove(root / path_of(temporary), ec);
-			return error;
+		if (const std::string kept = remove_file(journal_root, journal_relative); !kept.empty()) {
+			egLOG_WARN("asset_ops", "the kept copy of '{}' stays in the journal: {}", relative, kept);
 		}
 		return {};
 	}
@@ -337,7 +462,7 @@ namespace
 
 	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as it was
 	// before the step is left alone. Empty: done.
-	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id)
+	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, const move_seams& seams)
 	{
 		std::vector<std::byte> bytes;
 		switch (step.kind) {
@@ -356,7 +481,7 @@ namespace
 		}
 		case edt::journal_step_kind::stash:
 			if (exists_on_disk(root, step.from)) return {};
-			return restore_file(journal_root, in_journal(id, step.to), root, step.from, step.hash);
+			return restore_file(journal_root, in_journal(id, step.to), root, step.from, step.hash, seams);
 		}
 		return {};
 	}
@@ -942,7 +1067,7 @@ void edt::asset_ops::roll_back(operation_report& report) const
 	for (auto step = journal.steps.rbegin(); step != journal.steps.rend(); ++step) {
 		std::string undone;
 		try {
-			undone = undo_step(*step, path_of(step->root), m_ports.journal_root, journal.id);
+			undone = undo_step(*step, path_of(step->root), m_ports.journal_root, journal.id, seams_of(m_ports));
 		} catch (const std::exception& error) {
 			undone = error.what();
 		} catch (...) {
@@ -1056,6 +1181,7 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
 	const std::string root = canonical_root(item.root);
 	const auto injected = [this](const std::string& label) { return m_ports.fail_step ? m_ports.fail_step(label) : std::string{}; };
+	const move_seams seams = seams_of(m_ports);
 	// The step is in the journal on the disk before what it describes is done: a crash in between leaves a journal that
 	// says what may have happened, and undo_step takes a step that did not happen for done.
 	const auto record = [&](journal_step step) -> std::string {
@@ -1068,10 +1194,7 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 			if (removing) {
 				if (std::string error = injected("stash:" + move.from); !error.empty()) return error;
 				if (std::string error = record(journal_step{ journal_step_kind::stash, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;
-				std::string copied;
-				if (std::string error = stash_file(item.root, move.from, journal_root, in_journal(journal.id, move.to), copied); !error.empty()) return error;
-				if (copied != move.hash) return std::format("'{}' changed while it was removed", move.from);
-				if (std::string error = remove_file(item.root, move.from); !error.empty()) return error;
+				if (std::string error = stash_file(item.root, move.from, journal_root, in_journal(journal.id, move.to), move.hash, seams); !error.empty()) return error;
 			} else {
 				if (std::string error = injected("move:" + move.from); !error.empty()) return error;
 				if (std::string error = record(journal_step{ journal_step_kind::move, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;
@@ -1245,7 +1368,7 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		for (std::size_t i = journal.steps.size(); i-- > 0;) {
 			const journal_step& step = journal.steps[i];
 			if (states[i] == step_state::not_done) continue;
-			if (std::string error = undo_step(step, roots[i], journal_root, journal.id); !error.empty()) {
+			if (std::string error = undo_step(step, roots[i], journal_root, journal.id, seams_of(m_ports)); !error.empty()) {
 				report.failures.push_back(std::format("{}: {}", step_label(step), error));
 				egLOG_WARN("asset_ops", "'{}' could not be put back: {}", step_label(step), error);
 				continue;

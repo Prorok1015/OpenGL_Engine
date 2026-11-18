@@ -2,6 +2,8 @@
 #include <snk/project_migration/pmg_project_steps.h>
 #include <snk/project_migration/pmg_scan.h>
 #include <boost/json/object.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -62,7 +64,21 @@ namespace prj::migration
 		std::string backup;
 		// Why the migration was rolled back.
 		std::string error;
+		// The size of the backup once the migration ended (#767): what report.md shows and --migrate-prune frees.
+		std::uintmax_t backup_bytes = 0;
+		std::size_t backup_files = 0;
 	};
+
+	// The regular files below `folder` and their bytes, found without following a link; what cannot be read counts as
+	// nothing.
+	struct tree_size
+	{
+		std::uintmax_t bytes = 0;
+		std::size_t files = 0;
+	};
+	tree_size size_of_tree(const std::filesystem::path& folder);
+	// "512 B", "12.3 KiB", "4.0 MiB", "1.2 GiB".
+	std::string size_text(std::uintmax_t bytes);
 
 	// Writes `text` to <root>/<relative> inside the project; the error, nullopt on success. prj::write_project_file by default.
 	using project_writer = std::function<std::optional<std::string>(const std::filesystem::path& root, const std::filesystem::path& relative,
@@ -135,6 +151,19 @@ namespace prj::migration
 	// Ids of the migrations a person has to look at: the journal still says in_progress (the process stopped in the
 	// middle) or rollback_failed.
 	std::vector<std::string> unfinished_migrations(const std::filesystem::path& root);
+
+	// A folder below .snk/migrations and what its report.json says (#767). `problem` names why the journal cannot be
+	// trusted (it cannot be read, has no status, or no `created` of the form 2026-01-31T12:00:00Z); what could be read
+	// is still filled in.
+	struct migration_folder
+	{
+		std::string id;
+		std::string status;
+		std::string created;
+		std::string problem;
+	};
+	// Real folders only, a link is not one; sorted by id.
+	std::vector<migration_folder> migration_folders(const std::filesystem::path& root);
 
 	struct rollback_context
 	{
