@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -6,7 +7,7 @@
 #include <string_view>
 
 // Every limit of the editor's model import (#1044), in one place. A refusal names the limit it hit and its step:
-// "<what> exceeds <limit> (<step>)", or "... more than <count> ... (<step>)" for a count.
+// "<what> exceeds <limit> (<step>)", or "... more than <count> ... (<step>)" for a count, or a time: "<what> exceeds 2 min (decoder time)".
 //
 // step           | limit                              | value            | what it limits                                    | enforced in
 // source         | k_max_person_source_bytes          | 256 MiB          | the model file a person (or a level) imports      | edt_person_model_import, edt_model_import_core, edt_decoded_model_adapter
@@ -29,6 +30,10 @@
 // bundle         | largest_bundle_bytes()             | ~518 MiB         | the bundle file; the decoder's --max-output-bytes | edt_decode_bundle (read_bundle), edt_decode_runner
 // decoder memory | k_default_decoder_memory_mb        | 2 GiB            | the decoder process; cfg 256..8192 MiB            | edt_process_decoder (decoder_memory_limit), edt_decode_runner
 // decoder log    | k_max_decoder_log_lines / _bytes   | 200 lines, 64 KiB| the decoder's stderr in the editor's log          | edt_decode_runner (decode_log_budget)
+// decoder time   | k_person_parse_time_limit          | 120 s            | each decoder step of a person's import            | edt_person_model_import; edt_process_decoder, edt_model_import_core (refusals)
+// decoder time   | k_agent_parse_time_limit           | 60 s             | each decoder step of an agent's import (default)  | editor_system/import/edt_agent_model_import (parse_time_limit)
+// decoder time   | k_referenced_model_time_limit      | 10 s             | each decoder step of a model a level refers to    | edt_decoded_model_adapter (k_deadline)
+// decoder time   | k_decoder_run_time_limit           | 2 min            | one run of the decoder process; killed past it    | edt_decode_runner (timeout), edt_process_decoder (run)
 
 namespace edt {
 
@@ -37,6 +42,7 @@ namespace edt {
 	inline constexpr std::string_view k_step_decoder_answer = "decoder answer";
 	inline constexpr std::string_view k_step_bundle = "bundle";
 	inline constexpr std::string_view k_step_decoder_log = "decoder log";
+	inline constexpr std::string_view k_step_decoder_time = "decoder time";
 
 	inline constexpr std::uintmax_t k_max_person_source_bytes = 256ull * 1024ull * 1024ull;
 	inline constexpr std::uintmax_t k_max_agent_source_bytes = 64ull * 1024ull * 1024ull;
@@ -67,6 +73,14 @@ namespace edt {
 	inline constexpr std::size_t k_max_decoder_log_lines = 200;
 	inline constexpr std::size_t k_max_decoder_log_bytes = 64 * 1024;
 
+	// How long each decoder step (listing the files, importing) may take: an agent's import, and the one a person starts
+	// (larger models, nobody waiting on a deadline of their own).
+	inline constexpr std::chrono::seconds k_agent_parse_time_limit{ 60 };
+	inline constexpr std::chrono::seconds k_person_parse_time_limit{ 120 };
+	// Shorter than an agent's import: a level waits for its models.
+	inline constexpr std::chrono::seconds k_referenced_model_time_limit{ 10 };
+	inline constexpr std::chrono::minutes k_decoder_run_time_limit{ 2 };
+
 	// A size limit as a refusal names it: "128 MiB", "64 KiB", "2 GiB"; "100 bytes" when it is no whole unit.
 	inline std::string limit_text(std::uint64_t bytes)
 	{
@@ -77,6 +91,22 @@ namespace edt {
 		if (bytes != 0 && bytes % mib == 0) return std::format("{} MiB", bytes / mib);
 		if (bytes != 0 && bytes % kib == 0) return std::format("{} KiB", bytes / kib);
 		return std::format("{} bytes", bytes);
+	}
+
+	// A time limit as a refusal names it: "2 min", "10 s"; "1500 ms" when it is no whole second.
+	inline std::string duration_text(std::chrono::milliseconds time)
+	{
+		const auto ms = time.count();
+		if (ms != 0 && ms % 60000 == 0) return std::format("{} min", ms / 60000);
+		if (ms != 0 && ms % 1000 == 0) return std::format("{} s", ms / 1000);
+		return std::format("{} ms", ms);
+	}
+
+	// "<what> exceeds <limit> (decoder time)"; a zero `limit` (a deadline set without its limit) names no number.
+	inline std::string time_limit_refusal(std::string_view what, std::chrono::milliseconds limit)
+	{
+		if (limit <= std::chrono::milliseconds::zero()) return std::format("{} exceeds its time limit ({})", what, k_step_decoder_time);
+		return std::format("{} exceeds {} ({})", what, duration_text(limit), k_step_decoder_time);
 	}
 
 } // namespace edt

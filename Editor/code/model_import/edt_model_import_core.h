@@ -20,11 +20,6 @@
 // model_importer runs over the resource system in the editor's own tests. Links no engine code but snk_model_codec.
 namespace edt {
 
-	// How long each decoder step (listing the files, importing) may take: an agent's import, and the one a person starts
-	// (larger models, nobody waiting on a deadline of their own).
-	inline constexpr std::chrono::seconds k_agent_parse_time_limit{ 60 };
-	inline constexpr std::chrono::seconds k_person_parse_time_limit{ 120 };
-
 	// What an import reads. `preloaded`: the bytes of the model file, already read. `allowed`: set for an agent's
 	// import, the files the model may read besides it (what a person was shown). `provided`: set in the decoder process
 	// (#1043), the files the editor read for it; nothing else is read, and `allowed` is not used.
@@ -36,6 +31,8 @@ namespace edt {
 		model_file_limits                     limits;
 		// Zero: no limit. Assimp is told to stop when it passes, and the import fails with a message.
 		std::chrono::steady_clock::time_point deadline{};
+		// Zero: not known. The limit `deadline` was set from, which a refusal past it names (time_limit_refusal).
+		std::chrono::milliseconds time_limit{};
 		// Empty: the model's folder. The folder side files may come from (model_file_access's boundary).
 		std::filesystem::path boundary;
 		// Empty: "<stem>/". The memory:// folder the import's resources go to, ending in '/'.

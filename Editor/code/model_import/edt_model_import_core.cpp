@@ -49,7 +49,7 @@ edt::model_file_scan edt::scan_model_files(const import_source& source, ds::task
 	model_file_source files(source.path, *source.preloaded, &access);
 	const mdl::referenced_files found = mdl::list_referenced_files(source.path.string(), files, read_options(source, ctx));
 	if (found.failed == mdl::failure::timed_out) {
-		scan.error = found.error;
+		scan.error = time_limit_refusal("reading the model", source.time_limit);
 		return scan;
 	}
 	if (found.failed != mdl::failure::none) {
@@ -64,7 +64,7 @@ edt::model_file_scan edt::scan_model_files(const import_source& source, ds::task
 		}
 		checkpoint(ctx);
 		if (mdl::past_deadline(source.deadline)) {
-			scan.error = "the model took too long to read";
+			scan.error = time_limit_refusal("reading the model", source.time_limit);
 			return scan;
 		}
 		try {
@@ -92,7 +92,7 @@ edt::scan_requests edt::list_model_requests(const import_source& source, ds::tas
 	model_file_source files(source.path, *source.preloaded, &access);
 	const mdl::referenced_files found = mdl::list_referenced_files(source.path.string(), files, read_options(source, ctx));
 	if (found.failed == mdl::failure::timed_out) {
-		out.error = found.error;
+		out.error = time_limit_refusal("reading the model", source.time_limit);
 		return out;
 	}
 	const auto& requested = access.requested();
@@ -112,7 +112,7 @@ edt::scan_requests edt::list_model_requests(const import_source& source, ds::tas
 		}
 		checkpoint(ctx);
 		if (mdl::past_deadline(source.deadline)) {
-			out.error = "the model took too long to read";
+			out.error = time_limit_refusal("reading the model", source.time_limit);
 			return out;
 		}
 	}
@@ -192,7 +192,7 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 	case mdl::failure::none:
 		break;
 	case mdl::failure::timed_out:
-		im.error = imported.error;
+		im.error = time_limit_refusal("importing the model", source.time_limit);
 		return im;
 	case mdl::failure::parse:
 		im.error = std::format("ASSIMP error: {}", imported.error);

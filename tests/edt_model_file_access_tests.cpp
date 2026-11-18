@@ -165,6 +165,9 @@ BOOST_AUTO_TEST_CASE(TheSideFileLimits_Are64FilesOf64MiBAnd128MiBTogether_NamedI
 	BOOST_CHECK_EQUAL(edt::limit_text(2ull * 1024 * 1024 * 1024), "2 GiB");
 	BOOST_CHECK_EQUAL(edt::limit_text(1025), "1025 bytes");
 	BOOST_CHECK_EQUAL(edt::limit_text(0), "0 bytes");
+	BOOST_CHECK_EQUAL(edt::duration_text(edt::k_decoder_run_time_limit), "2 min");
+	BOOST_CHECK_EQUAL(edt::duration_text(edt::k_referenced_model_time_limit), "10 s");
+	BOOST_CHECK_EQUAL(edt::duration_text(std::chrono::milliseconds(1500)), "1500 ms");
 }
 
 BOOST_AUTO_TEST_CASE(ManyAliasesOfOneBigFile_CannotMakeTheImportReadItAgainAndAgain)

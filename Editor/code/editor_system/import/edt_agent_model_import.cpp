@@ -151,7 +151,7 @@ namespace {
 		std::shared_ptr<edt::agent_import_scans> scans;
 		std::string scan_key;
 		std::string session;
-		std::chrono::seconds time_limit{ 60 };
+		std::chrono::seconds time_limit{ edt::k_agent_parse_time_limit };
 		// A person is asked a second time, about the files the model refers to, before any of them is read.
 		bool ask_about_files = true;
 		edt::model_file_limits limits;
@@ -222,6 +222,7 @@ namespace {
 		source.preloaded = &source_bytes;
 		source.limits = in.limits;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
+		source.time_limit = in.time_limit;
 		std::vector<edt::referenced_file> files = in.plan.files;
 		if (!in.plan.scanned) {
 			const edt::model_file_scan found = in.scan(source, &ctx);
@@ -231,6 +232,7 @@ namespace {
 		}
 		source.allowed = &files;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
+		source.time_limit = in.time_limit;
 
 		edt::import_intermediate imported = in.import(source, &ctx);
 		const std::vector<res::tag> memory_copies = imported.created_tags;

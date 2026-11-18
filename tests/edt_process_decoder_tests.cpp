@@ -940,12 +940,13 @@ BOOST_AUTO_TEST_CASE(TheBudget_CountsOverEveryRound)
 BOOST_AUTO_TEST_CASE(ADeadlineThatHasPassed_RunsNoRound)
 {
 	source.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+	source.time_limit = edt::k_person_parse_time_limit;
 	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
 		++calls;
 		return asking({});
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 0);
-	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("reading the model exceeds 2 min (decoder time)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ADeadlineThatPassesDuringARound_StopsTheScanBeforeTheNext)
@@ -957,7 +958,8 @@ BOOST_AUTO_TEST_CASE(ADeadlineThatPassesDuringARound_StopsTheScanBeforeTheNext)
 		return asking({ "a.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 1);
-	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+	// No time_limit with the deadline: the refusal names no number.
+	BOOST_CHECK_MESSAGE(scan.error.find("reading the model exceeds its time limit (decoder time)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ASideFileTheRuleRefuses_IsMissingToTheChild_WithOneWarning)

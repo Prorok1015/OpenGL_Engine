@@ -172,6 +172,8 @@ BOOST_AUTO_TEST_CASE(TheDecoderGetsTheContentRootAndItsOwnTimeLimit_AndItsAnswer
 	BOOST_TEST((scanned->allowed == nullptr));
 	BOOST_TEST((scanned->deadline > scanned_at && scanned->deadline <= scanned_at + edt::decoded_model_adapter::k_deadline));
 	BOOST_TEST((edt::decoded_model_adapter::k_deadline == std::chrono::seconds(10)));
+	BOOST_TEST((scanned->time_limit == edt::decoded_model_adapter::k_deadline));
+	BOOST_TEST((imported->time_limit == edt::decoded_model_adapter::k_deadline));
 	BOOST_TEST(imported->boundary == scanned->boundary);
 	BOOST_TEST(imported->memory_folder == scanned->memory_folder);
 	BOOST_REQUIRE_EQUAL(imported_allowed.size(), 1u);
@@ -277,12 +279,12 @@ BOOST_AUTO_TEST_CASE(WhatTheDecoderRefusesOrFailsOn_FailsTheLoadNamingTheModel)
 	{
 		edt::decoded_model_adapter::decoder_steps steps = answering();
 		steps.import = [](const edt::import_source&, ds::task_context*) -> edt::import_intermediate {
-			throw std::runtime_error("the model took too long to decode");
+			throw std::runtime_error(edt::time_limit_refusal("decoding the model", edt::decoded_model_adapter::k_deadline));
 		};
 		const edt::decoded_model_adapter adapter(*descs, *rs, std::move(steps));
 		const std::string error = error_of(adapter, k_model, bytes());
 		BOOST_TEST(error.find("res://models/m.obj") != std::string::npos);
-		BOOST_TEST(error.find("took too long") != std::string::npos);
+		BOOST_TEST(error.find("decoding the model exceeds 10 s (decoder time)") != std::string::npos);
 	}
 	{
 		edt::decoded_model_adapter::decoder_steps steps = answering();

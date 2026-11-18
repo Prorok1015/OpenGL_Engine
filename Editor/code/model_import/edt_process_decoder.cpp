@@ -126,7 +126,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 {
 	const bool has_deadline = source.deadline != std::chrono::steady_clock::time_point{};
 	const auto past_deadline = [&] { return has_deadline && std::chrono::steady_clock::now() >= source.deadline; };
-	constexpr const char* k_too_long = "the model took too long to read";
+	const std::string too_long = time_limit_refusal("reading the model", source.time_limit);
 
 	// One access for every round: what the model may read, and how much, is counted over the whole scan.
 	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
@@ -136,7 +136,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 	std::map<fs::path, std::shared_ptr<const std::vector<std::byte>>> side_bytes;
 	std::map<fs::path, std::size_t> side_names;
 	for (int round_index = 0;; ++round_index) {
-		if (past_deadline()) return failed_scan(k_too_long);
+		if (past_deadline()) return failed_scan(too_long);
 		scan_requests answer = run_round(provided);
 		if (!answer.error.empty()) return failed_scan(std::move(answer.error));
 
@@ -156,7 +156,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
 				continue;
 			}
-			if (past_deadline()) return failed_scan(k_too_long);
+			if (past_deadline()) return failed_scan(too_long);
 			try {
 				// A texture changes nothing in the parse: the editor only reads and hashes it for the import.
 				if (wanted.kind == model_file_kind::texture) {
@@ -799,12 +799,15 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 {
 	if (source.preloaded == nullptr) throw std::runtime_error("the decoder needs the bytes of the model");
 	decode_runner_config config = m_config;
+	config.time_limit = m_config.timeout;
 	if (source.deadline != std::chrono::steady_clock::time_point{}) {
 		// The scan's rounds and the editor's reads share the one deadline: no round gets time of its own.
 		const auto left = std::chrono::ceil<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
-		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error("the model took too long to decode");
+		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error(time_limit_refusal("decoding the model", source.time_limit));
+		if (left < m_config.timeout) config.time_limit = source.time_limit;
 		config.timeout = std::min(left, m_config.timeout);
 	}
+	const std::chrono::milliseconds time_limit = config.time_limit;
 	config.sandbox = effective_sandbox_mode(m_config.sandbox, source.sandbox);
 	const sandbox_mode mode = config.sandbox;
 	decode_outcome outcome = launch(std::move(config), request, files, source, task != nullptr ? task->stop : std::stop_token{});
@@ -819,7 +822,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 		if (m_on_sandbox) m_on_sandbox(outcome.sandbox);
 	}
 	if (outcome.cancelled) throw ds::task_cancelled{};
-	if (outcome.timed_out) throw std::runtime_error("the model took too long to decode");
+	if (outcome.timed_out) throw std::runtime_error(time_limit_refusal("decoding the model", time_limit));
 	if (outcome.sandbox_refused) {
 		// Outside `required` the child refuses only when a sandbox the system has failed to set up: a defect, so the person
 		// is told how to go on without it.

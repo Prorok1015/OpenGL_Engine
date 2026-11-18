@@ -95,6 +95,7 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 	try {
 		ctx.throw_if_stopped();
 		source.deadline = std::chrono::steady_clock::now() + k_person_parse_time_limit;
+		source.time_limit = k_person_parse_time_limit;
 		found = decoder.scan(source, &ctx);
 	} catch (const std::exception& e) {
 		return failed(listing, e.what());
@@ -113,6 +114,7 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 	import_intermediate imported;
 	try {
 		source.deadline = std::chrono::steady_clock::now() + k_person_parse_time_limit;
+		source.time_limit = k_person_parse_time_limit;
 		imported = decoder.import(source, &ctx);
 	} catch (const std::exception& e) {
 		return failed(importing, e.what());

@@ -32,8 +32,7 @@ namespace edt {
 	public:
 		using decoder_steps = edt::decoder_steps;
 
-		// Shorter than an agent's import: a level waits for its models.
-		static constexpr std::chrono::seconds k_deadline{ 10 };
+		static constexpr std::chrono::seconds k_deadline{ k_referenced_model_time_limit };
 
 		decoded_model_adapter(desc::desc_system& descs, res::resource_system& resources, decoder_steps decoder);
 		// The steps of `decoder`, which the adapter keeps alive (a load can outlive the editor_system that made it).

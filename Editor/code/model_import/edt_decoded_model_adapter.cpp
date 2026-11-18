@@ -131,6 +131,7 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 	if (!imported) {
 		const std::vector<res::tag> made_before = forget(source.memory_folder);
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
+		source.time_limit = k_deadline;
 		const model_file_scan found = step([&] { return m_decoder.scan(source, nullptr); });
 		if (!found.ok()) throw refuse(found.error);
 		source.allowed = &found.files;
@@ -139,6 +140,7 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 			throw refuse(std::format("'{}', left in memory:// by an earlier load of the model, cannot be removed", left->view()));
 		}
 		source.deadline = std::chrono::steady_clock::now() + k_deadline;
+		source.time_limit = k_deadline;
 		imported = step([&] { return m_decoder.import(source, nullptr); });
 		if (!imported->error.empty()) throw refuse(imported->error);
 		// Only an import whose every resource has its digest is reused: a hit compares the bytes in memory:// with them.

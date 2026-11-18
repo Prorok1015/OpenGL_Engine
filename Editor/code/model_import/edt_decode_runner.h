@@ -22,7 +22,9 @@ namespace edt {
 		// snk_model_decoder; empty: the one next to the running program.
 		std::filesystem::path decoder;
 		// The child is killed when it runs longer. Also the deadline the child gets for its parse.
-		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
+		std::chrono::milliseconds timeout{ k_decoder_run_time_limit };
+		// Zero: `timeout`. The limit `timeout` comes from (it may be the time an import has left), as a refusal names it.
+		std::chrono::milliseconds time_limit{};
 		std::uint64_t memory_limit_bytes = k_default_decoder_memory_mb * 1024ull * 1024ull;
 		bundle_limits answer_limits;
 		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
