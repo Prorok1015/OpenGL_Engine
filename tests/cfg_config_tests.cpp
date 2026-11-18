@@ -327,6 +327,31 @@ BOOST_AUTO_TEST_CASE(ConfigView_ReadsRegisteredVariablesAsText)
 	BOOST_TEST(!view.has("cfgtest/view_missing"));
 }
 
+// #1090: a chain that comes back to one of its files, the file itself included, or goes deeper than 16 files is an
+// error that names the file, not a stack overflow.
+BOOST_AUTO_TEST_CASE(ConfigFile_AnExtendsCycleOrSelfReferenceOrTooDeepChain_IsAnError_NotACrash)
+{
+	test_util::temp_dir dir("cfg_extends_cycle");
+	const auto self = dir.write("self.yaml", "extends:\n  - self.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(self));
+	dir.write("a.yaml", "extends:\n  - b.yaml\n");
+	const auto b = dir.write("b.yaml", "extends:\n  - ./sub/../a.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(b));
+	for (int i = 0; i < 20; ++i) {
+		dir.write("deep" + std::to_string(i) + ".yaml", "extends:\n  - deep" + std::to_string(i + 1) + ".yaml\n");
+	}
+	dir.write("deep20.yaml", "deep_end: true\n");
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep0.yaml"));
+	// deep5..deep20 is sixteen files, the most a chain may have; deep4 makes seventeen.
+	BOOST_TEST(cfg::load_config_file(dir.path() / "deep5.yaml"));
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep4.yaml"));
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep5.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep0.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(self).size() == 1u);
+	dir.write("scalar.yaml", "extends: self.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "scalar.yaml"));
+}
+
 BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningFile)
 {
 	test_util::temp_dir dir("cfg_files");
@@ -373,6 +398,16 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	// Through the command line, as the editor gets it: -c is --config (#382).
 	BOOST_TEST(run_cli({ "-c", top.string() }) == 1);
 	BOOST_TEST(cfg::loaded_config_path() == std::filesystem::absolute(top).lexically_normal());
+	// #1090: every file of the chain, the top one first, as the editor guards them.
+	const std::vector<std::filesystem::path> chain{ std::filesystem::absolute(top).lexically_normal(),
+		(dir.path() / "mid/mid.yaml").lexically_normal(), (dir.path() / "base/base.yaml").lexically_normal() };
+	BOOST_TEST(cfg::loaded_config_files() == chain, boost::test_tools::per_element());
+	// The same list without loading, as the editor reads the default config's chain; a missing base ends its branch.
+	BOOST_TEST(cfg::config_files_of(top) == chain, boost::test_tools::per_element());
+	const auto lonely = dir.write("lonely.yaml", "extends:\n  - not_there.yaml\n");
+	const std::vector<std::filesystem::path> lonely_chain{ std::filesystem::absolute(lonely).lexically_normal(),
+		(dir.path() / "not_there.yaml").lexically_normal() };
+	BOOST_TEST(cfg::config_files_of(lonely) == lonely_chain, boost::test_tools::per_element());
 
 	// base value inherited through two levels of extends
 	BOOST_TEST(static_cast<int>(width) == 100);

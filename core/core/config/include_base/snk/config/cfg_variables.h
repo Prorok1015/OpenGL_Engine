@@ -32,9 +32,18 @@ namespace cfg {
 	// The absolute path of the file initialize_configs loaded (--config); empty when none was. The editor passes it on
 	// when it restarts itself into another project (EPIC-42 #158).
 	SNK_API std::filesystem::path loaded_config_path();
+	// Every file initialize_configs read: loaded_config_path first, then its `extends` chain depth first, each absolute
+	// as written (a link is listed as the link, not its target). The editor guards them all against an agent's checkout
+	// or pull (#1090). Empty when none was read.
+	SNK_API std::vector<std::filesystem::path> loaded_config_files();
+	// The files a config `file` would read, itself first, then its `extends` chain, as loaded_config_files lists them,
+	// without loading any: a file that cannot be read ends its branch, a cycle or a chain deeper than 16 files stops.
+	// The editor guards the default config's chain this way when --config chose another file (#1090).
+	SNK_API std::vector<std::filesystem::path> config_files_of(const std::filesystem::path& file);
 
 	// Loads a config file with its `extends` chain (a later file replaces what an earlier one set, lists included),
-	// without the once-per-process guard of initialize_configs. False when a file is missing or is not valid yaml.
+	// without the once-per-process guard of initialize_configs. False when a file is missing or is not valid yaml, or
+	// the chain extends a file of itself or is deeper than 16 files (initialize_configs throws then).
 	SNK_API bool load_config_file(const std::filesystem::path& file);
 
 	// Loads yaml text the way a config file is loaded (without `extends`, and without the once-per-process guard of
