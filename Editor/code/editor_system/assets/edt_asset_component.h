@@ -1,6 +1,8 @@
 #pragma once
+#include "edt_asset_commands.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
+#include "edt_asset_operation_form.h"
 #include "edt_asset_picker.h"
 #include "edt_asset_problems.h"
 #include <snk/editor/edt_registration.h>
@@ -14,7 +16,7 @@
 #include <vector>
 
 namespace desc { class desc_system; }
-namespace prj { struct project_context; }
+namespace prj { struct manifest; struct project_context; }
 namespace res { class resource_system; }
 
 namespace edt
@@ -24,6 +26,11 @@ namespace edt
 	class asset_ops;
 	class editor_context;
 	struct problem;
+
+	// Reads the manifest file as it is on the disk and takes the two references asset_ops rewrites, start_scene and input_actions,
+	// into `data`; the rest of `data` (modules, content roots, ...) stays as it was loaded, as a running project depends on it.
+	// Returns why it could not (a file that is gone, too big or not a manifest); `data` is not changed then.
+	std::string refresh_manifest_references(const std::filesystem::path& manifest_file, prj::manifest& data);
 
 	// The asset database of an open project and what hangs on it, whole: the database that follows res:// (#760), the catalog
 	// the reference pickers choose from, resource_system's asset index over it (#770), the Problems source "assets" with the
@@ -50,6 +57,10 @@ namespace edt
 			std::function<std::optional<std::string>()> write_blocker{};
 			// A file with unsaved edits in an open document, or the open level: an operation on it or on a file that refers to it is refused (#775).
 			std::function<bool(const res::tag&)> is_open_with_unsaved_changes{};
+			// The manifest inside `project`, which the editor may change (the project context lives in the app data storage): after an
+			// operation or its undo rewrote the manifest file, start_scene and input_actions are read from it again (#775). Main thread
+			// only, as the operations are; null: the copy stays as it was loaded.
+			prj::manifest* manifest_data = nullptr;
 		};
 
 		explicit asset_component(ports from);
@@ -78,8 +89,15 @@ namespace edt
 		// One undo for the person: the newest of the database's fixes (Problems) and the file operations, by the order they were done in.
 		std::optional<std::string> next_undo_label() const;
 		asset_fix_result undo_last();
+		// Takes back the operation `operation_id` if it is the newest one (the report window's Undo): refused otherwise.
+		asset_fix_result undo_operation(const std::string& operation_id);
+		// The asset browser's Rename, Move and Delete windows run through these: the commands' own path as a person's call.
+		asset_operation_ports operation_ports();
 
 	private:
+		asset_command_sources command_sources();
+		// Reads start_scene and input_actions of the manifest file again into `manifest_data`.
+		void refresh_manifest();
 		// The newest undo is an operation's, not a fix's.
 		bool next_undo_is_operation() const;
 

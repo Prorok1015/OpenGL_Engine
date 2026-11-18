@@ -9,10 +9,17 @@
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_problem_list.h>
+#include <snk/project/prj_manifest.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/res_system.h>
+#include <cstdint>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <span>
+#include <system_error>
 #include <utility>
 
 namespace
@@ -78,14 +85,10 @@ void edt::asset_component::install(std::vector<registration>& out)
 		out.push_back(std::move(command));
 	}
 	asset_command_sources command_sources;
-	command_sources.operations = [this]() -> const asset_ops* { return m_ops.get(); };
-	command_sources.write_blocker = m_ports.write_blocker;
-	command_sources.asset_index_wait = [this] { return asset_index_wait(m_index.get()); };
-	command_sources.done = [this](const operation_report& report) { m_history->record(report.journal); };
-	command_sources.events = &m_ports.context.events();
-	for (auto& command : register_asset_commands(m_ports.context.actions().commands(), std::move(command_sources))) {
+	for (auto& command : register_asset_commands(m_ports.context.actions().commands(), command_sources())) {
 		out.push_back(std::move(command));
 	}
+	m_ports.browser.set_asset_operations(operation_ports());
 	m_ports.browser.set_usages(
 		[this, manifest_file, manifest_references, index = std::make_shared<usage_index>()](const res::tag& asset) -> std::optional<usage_report> {
 			const std::vector<manifest_reference> manifest = manifest_references();
@@ -94,6 +97,53 @@ void edt::asset_component::install(std::vector<registration>& out)
 		[this, manifest_references] {
 			return usage_stamp{ m_database->revision(), m_ports.game_layer_generation(), manifest_references() };
 		});
+}
+
+edt::asset_command_sources edt::asset_component::command_sources()
+{
+	asset_command_sources sources;
+	sources.operations = [this]() -> const asset_ops* { return m_ops.get(); };
+	sources.write_blocker = m_ports.write_blocker;
+	sources.asset_index_wait = [this] { return asset_index_wait(m_index.get()); };
+	sources.done = [this](const operation_report& report) {
+		m_history->record(report.journal);
+		refresh_manifest();
+	};
+	sources.events = &m_ports.context.events();
+	return sources;
+}
+
+edt::asset_operation_ports edt::asset_component::operation_ports()
+{
+	asset_operation_ports out;
+	out.plan = [this](const asset_request& request) { return m_ops->plan(std::span<const asset_request>(&request, 1)); };
+	out.run = [this](const asset_request& request, bool force) { return run_asset_operation(command_sources(), request, force); };
+	out.undo = [this](const std::string& operation_id) { return undo_operation(operation_id); };
+	return out;
+}
+
+std::string edt::refresh_manifest_references(const std::filesystem::path& manifest_file, prj::manifest& data)
+{
+	constexpr std::uintmax_t max_bytes = std::uintmax_t{ 1 } << 20;
+	std::error_code ec;
+	const std::uintmax_t size = std::filesystem::file_size(manifest_file, ec);
+	if (ec) return std::format("the manifest cannot be read: {}", ec.message());
+	if (size > max_bytes) return "the manifest is too big to be read again";
+	std::ifstream in(manifest_file, std::ios::binary);
+	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	if (in.bad()) return "the manifest cannot be read";
+	prj::manifest_result parsed = prj::parse_manifest(text);
+	if (!parsed.data) return std::format("the manifest is not valid: {}", parsed.error ? prj::to_string(*parsed.error) : std::string("unknown"));
+	data.start_scene = std::move(parsed.data->start_scene);
+	data.input_actions = std::move(parsed.data->input_actions);
+	return {};
+}
+
+void edt::asset_component::refresh_manifest()
+{
+	if (!m_ports.manifest_data) return;
+	const std::string why = refresh_manifest_references(m_ports.project.manifest_file, *m_ports.manifest_data);
+	if (!why.empty()) egLOG_WARN("asset", "the project's start scene and input actions were not read again: {}", why);
 }
 
 void edt::asset_component::tick()
@@ -125,5 +175,20 @@ edt::asset_fix_result edt::asset_component::undo_last()
 	if (const std::optional<std::string> blocked = m_ports.write_blocker ? m_ports.write_blocker() : std::nullopt) {
 		return asset_fix_result{ false, *blocked, true };
 	}
-	return m_history->undo_last(*m_ops);
+	const asset_fix_result result = m_history->undo_last(*m_ops);
+	if (result.ok) refresh_manifest();
+	return result;
+}
+
+edt::asset_fix_result edt::asset_component::undo_operation(const std::string& operation_id)
+{
+	if (const std::optional<std::string> blocked = m_ports.write_blocker ? m_ports.write_blocker() : std::nullopt) {
+		return asset_fix_result{ false, *blocked, true };
+	}
+	if (m_history->next_operation_id() != std::optional<std::string>(operation_id) || !next_undo_is_operation()) {
+		return asset_fix_result{ false, "something was done after this operation: take that back first (Edit > Undo)", true };
+	}
+	const asset_fix_result result = m_history->undo_last(*m_ops);
+	if (result.ok) refresh_manifest();
+	return result;
 }
