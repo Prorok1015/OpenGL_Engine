@@ -6,7 +6,7 @@ add_library(snk::drv_opengl ALIAS drv_opengl)
 file(GLOB_RECURSE SE_DRV_GL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_DRV_GL_SOURCES})
 # Public header: include/snk/driver_gl/rnd_gl_swapchain.h (the swapchain render's backend selection creates;
-# it includes only the driver interface, rnd_gl_surface.h among it, no GL). Everything else (rnd_gl_*, open_gl_specific.h)
+# it includes only the driver interface, rnd_driver_gl_surface.h among it, no GL). Everything else (rnd_gl_*, open_gl_specific.h)
 # is internal: the source dir is private to the target (#109).
 snk_component_headers(${PROJECT_NAME} SDK_INTERNAL)
 
