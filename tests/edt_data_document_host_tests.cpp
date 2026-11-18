@@ -6,6 +6,7 @@
 #include "edt_data_document_host.h"
 #include "edt_document_creator.h"
 #include "edt_data_document_panel.h"
+#include "edt_save_all.h"
 #include "edt_data_document_view.h"
 #include "edt_scene_document.h"
 #include <snk/desc/desc_schema.h>
@@ -29,7 +30,9 @@
 #include <imgui_internal.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <optional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -959,6 +962,161 @@ BOOST_AUTO_TEST_CASE(AnEditInTheMiddleOfADrag_IsRecordedWhenAnotherWindowTakesTh
 	BOOST_TEST(data.history().size() == 1u);
 	BOOST_TEST(context->documents().active() == &second);
 	BOOST_TEST(static_cast<edt::data_document&>(second).history().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_ListsTheUnsavedDocumentsByKind)
+{
+	open_config("a.desc");
+	edt::document& second = open_config("b.desc");
+	scene.level_name = "my level";
+	scene.commit("dirty", edt::commit_mode::state_only);
+	make_dirty(second);
+
+	const std::vector<edt::unsaved_item> items = edt::list_unsaved(context->documents());
+
+	BOOST_REQUIRE(items.size() == 2u);
+	BOOST_TEST(items[0].kind == "scene");
+	BOOST_TEST(items[0].title == "my level");
+	BOOST_TEST(items[1].kind == "data");
+	BOOST_TEST(items[1].id == second.id());
+	BOOST_TEST(edt::count_unsaved(context->documents()) == 2u);
+	const std::string text = edt::unsaved_text(items);
+	BOOST_TEST(text.find("Level") != std::string::npos);
+	BOOST_TEST(text.find("my level") != std::string::npos);
+	BOOST_TEST(text.find("Data") != std::string::npos);
+	BOOST_TEST(text.find("a.desc") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_ARefusalOfOneDocumentKeepsTheOthersSaved)
+{
+	edt::document& first = open_config("a.desc");
+	make_dirty(first);
+	scene.commit("dirty", edt::commit_mode::state_only);
+	edt::document& second = open_config("b.desc");
+	make_dirty(second);
+	edt::save_all_scene_ports ports;
+	ports.level_path = [] { return std::string{ "levels/x.desc" }; };
+	ports.quick_save = [] { return false; };
+
+	const edt::save_all_report report = edt::save_all_write(context->documents(), ports);
+
+	BOOST_REQUIRE(report.failed.size() == 1u);
+	BOOST_TEST(report.failed[0].item.kind == "scene");
+	BOOST_TEST(report.failed[0].text.find("could not be written") != std::string::npos);
+	BOOST_TEST(report.saved.size() == 2u);
+	BOOST_TEST(report.asked.empty());
+	BOOST_TEST(!first.is_dirty());
+	BOOST_TEST(!second.is_dirty());
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(edt::save_all_summary(report).find("Not saved") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_AnUntitledLevelIsLeftOut_ABusyOneIsNamedWithItsReason)
+{
+	scene.commit("dirty", edt::commit_mode::state_only);
+	edt::save_all_scene_ports ports;
+	ports.level_path = [] { return std::string{}; };
+	ports.quick_save = [] { return true; };
+
+	const edt::save_all_report untitled = edt::save_all_write(context->documents(), ports);
+	BOOST_REQUIRE(untitled.skipped.size() == 1u);
+	BOOST_TEST(untitled.skipped[0].text == "untitled: use Save Level As");
+	BOOST_TEST(untitled.failed.empty());
+
+	ports.level_path = [] { return std::string{ "levels/x.desc" }; };
+	ports.write_blocker = [] { return std::optional<std::string>{ "a level is loading" }; };
+	const edt::save_all_report busy = edt::save_all_write(context->documents(), ports);
+	BOOST_REQUIRE(busy.failed.size() == 1u);
+	BOOST_TEST(busy.failed[0].text == "a level is loading");
+	BOOST_TEST(busy.saved.empty());
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_AConflictedDocumentIsAskedAfterTheOthersAreWritten)
+{
+	edt::document& conflicted = open_config("a.desc");
+	edt::document& other = open_config("b.desc");
+	make_dirty(conflicted);
+	make_dirty(other);
+	put("a.desc", R"({"__type":"test.config","speed":4.0})");
+
+	const edt::save_all_report written = edt::save_all_write(context->documents(), {});
+
+	BOOST_REQUIRE(written.saved.size() == 1u);
+	BOOST_TEST(written.saved[0].id == other.id());
+	BOOST_REQUIRE(written.asked.size() == 1u);
+	BOOST_TEST(written.asked[0].item.id == conflicted.id());
+	BOOST_TEST((written.asked[0].question == edt::save_all_question::disk_changed));
+	BOOST_TEST(!other.is_dirty());
+	BOOST_TEST(conflicted.is_dirty());
+	BOOST_TEST(context->dialogs().pending() == 0u);
+
+	bool finished = false;
+	edt::save_all_report after;
+	edt::save_all_resolve(written,
+		[this](const edt::save_all_ask& ask, std::function<void(bool)> resolved) { host->resolve_unsaved(ask.item.id, std::move(resolved)); },
+		[&](edt::save_all_report report) {
+			finished = true;
+			after = std::move(report);
+		});
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_TEST(!finished);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 1 } }).ok);
+
+	BOOST_TEST(finished);
+	BOOST_TEST(after.settled.size() == 1u);
+	BOOST_TEST(after.asked.empty());
+	BOOST_TEST(!conflicted.is_dirty());
+	BOOST_TEST(read_text("a.desc").find("5.0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_ACancelledQuestion_LeavesTheDocumentUnsavedAndTheFileAsItIs)
+{
+	edt::document& conflicted = open_config("a.desc");
+	make_dirty(conflicted);
+	put("a.desc", R"({"__type":"test.config","speed":4.0})");
+	const edt::save_all_report written = edt::save_all_write(context->documents(), {});
+	BOOST_REQUIRE(written.asked.size() == 1u);
+
+	edt::save_all_report after;
+	edt::save_all_resolve(written,
+		[this](const edt::save_all_ask& ask, std::function<void(bool)> resolved) { host->resolve_unsaved(ask.item.id, std::move(resolved)); },
+		[&](edt::save_all_report report) { after = std::move(report); });
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 2 } }).ok);
+
+	BOOST_TEST(after.settled.empty());
+	BOOST_TEST(after.asked.size() == 1u);
+	BOOST_TEST(conflicted.is_dirty());
+	BOOST_TEST(read_text("a.desc").find("4.0") != std::string::npos);
+	const std::string summary = edt::save_all_summary(after);
+	BOOST_TEST(summary.find("Still unsaved") != std::string::npos);
+	BOOST_TEST(summary.find("changed on disk") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_AMigratedFile_AsksTheVersionAfterTheOthersAreWritten)
+{
+	register_rename(storage.require<desc::desc_system>());
+	const res::tag tag = put("old.desc", k_old_config);
+	host->open(tag, false);
+	edt::document* old = context->documents().find_by_source(tag);
+	BOOST_REQUIRE(old != nullptr);
+	edt::document& plain = open_config("b.desc");
+	make_dirty(*old);
+	make_dirty(plain);
+
+	const edt::save_all_report written = edt::save_all_write(context->documents(), {});
+
+	BOOST_REQUIRE(written.asked.size() == 1u);
+	BOOST_TEST((written.asked[0].question == edt::save_all_question::version));
+	BOOST_TEST(written.saved.size() == 1u);
+	BOOST_TEST(!plain.is_dirty());
+
+	edt::save_all_resolve(written,
+		[this](const edt::save_all_ask& ask, std::function<void(bool)> resolved) { host->resolve_unsaved(ask.item.id, std::move(resolved)); },
+		[](edt::save_all_report) {});
+	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
+	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
