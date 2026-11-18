@@ -147,7 +147,7 @@ struct commands_fixture : test_util::scene_env
 };
 
 const std::vector<const char*> all_commands = { "scene.node.create", "scene.node.delete", "scene.node.duplicate",
-	"scene.node.reparent", "scene.node.rename", "component.add", "component.remove", "component.set", "transform.set" };
+	"scene.node.reparent", "scene.node.rename", "component.add", "component.remove", "component.set", "transform.set", "shape.add_base", "shape.update_nodes" };
 
 }
 
@@ -601,6 +601,105 @@ BOOST_AUTO_TEST_CASE(a_create_with_one_bad_component_creates_nothing)
 	BOOST_TEST(created.code == cmd::codes::invalid_args);
 	BOOST_TEST(root().children.size() == 3u);
 	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(shape_add_base_creates_a_node_with_the_mesh_of_a_ready_made_shape_and_its_scale)
+{
+	const auto created = call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"box","scale":[2.0,3.0,4.0]})");
+	BOOST_REQUIRE_MESSAGE(created.ok, created.error);
+	const auto& path = created.value.at("ref").as_object().at("path").as_array();
+	BOOST_REQUIRE(path.size() == 1u);
+	const prefab_node* node = child(root(), *desc::parse_node_id(std::string_view(path[0].as_string())));
+	BOOST_REQUIRE(node != nullptr);
+	BOOST_TEST(node->name == "box");
+	BOOST_TEST(node->has_transform);
+	BOOST_TEST(node->scale == glm::vec3(2.f, 3.f, 4.f));
+	const json::object& mesh = node->components.at("mesh").overrides;
+	BOOST_TEST(node->components.at("mesh").type_name == "mesh_node_desc");
+	BOOST_TEST(std::string(mesh.at("geometry").as_string()) == "res://shapes/box.geom.desc");
+	BOOST_TEST(mesh.at("vx_begin").to_number<int>() == 0);
+	BOOST_TEST(mesh.at("vx_end").to_number<int>() == 24);
+	BOOST_TEST(mesh.at("ind_end").to_number<int>() == 36);
+	BOOST_TEST(last_record().label == "Add shape");
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(root().children.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(shape_add_base_refuses_an_unknown_shape_a_bad_scale_and_a_bad_parent_and_changes_nothing)
+{
+	const auto before = scene.generation();
+	const auto unknown = call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"torus"})");
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_TEST(unknown.error.find("capsule_m") != std::string::npos);
+	BOOST_TEST(call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"box","scale":[1.0,2.0]})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("shape.add_base", R"({"parent":)" + ref({ "00000000000000ff" }) + R"(,"shape":"box"})").code == cmd::codes::not_found);
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(root().children.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(shape_add_base_refuses_a_scale_that_turns_the_mesh_inside_out)
+{
+	for (const char* scale : { "[1.0,-1.0,1.0]", "[0.0,1.0,1.0]" }) {
+		BOOST_TEST_CONTEXT(scale) {
+			BOOST_TEST(call("shape.add_base", R"({"parent":)" + ref({}) + R"(,"shape":"box","scale":)" + scale + "}").code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_TEST(root().children.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(create_takes_a_transform_for_the_node)
+{
+	const auto created = call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"name":"Placed","position":[1.0,2.0,3.0],"scale":[2.0,2.0,2.0]})");
+	BOOST_REQUIRE_MESSAGE(created.ok, created.error);
+	const auto& path = created.value.at("ref").as_object().at("path").as_array();
+	const prefab_node* node = child(root(), *desc::parse_node_id(std::string_view(path[0].as_string())));
+	BOOST_REQUIRE(node != nullptr);
+	BOOST_TEST(node->has_transform);
+	BOOST_TEST(node->position == glm::vec3(1.f, 2.f, 3.f));
+	BOOST_TEST(node->scale == glm::vec3(2.f));
+	BOOST_TEST(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"position":[1.0]})").code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(shape_update_nodes_gives_the_nodes_that_draw_a_geometry_its_new_range_in_one_edit)
+{
+	const auto mesh = [&](const char* geometry, int vx_end, int ind_end) {
+		return call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"components":{"mesh":{"type":"mesh_node_desc","fields":{"geometry":")" + geometry
+			+ R"(","vx_begin":0,"vx_end":)" + std::to_string(vx_end) + R"(,"ind_begin":0,"ind_end":)" + std::to_string(ind_end) + "}}}}");
+	};
+	BOOST_REQUIRE(mesh("res://shapes/x.geom.desc", 24, 36).ok);
+	BOOST_REQUIRE(mesh("res://shapes/x.geom.desc", 24, 36).ok);
+	BOOST_REQUIRE(mesh("res://shapes/other.geom.desc", 24, 36).ok);
+	const auto records_before = scene.history().can_undo();
+	BOOST_TEST(records_before);
+	const auto generation = scene.generation();
+
+	const std::string range = R"({"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":100,"ind_begin":0,"ind_end":200})";
+	const auto updated = call("shape.update_nodes", range);
+	BOOST_REQUIRE_MESSAGE(updated.ok, updated.error);
+	BOOST_TEST(updated.value.at("updated").to_number<int>() == 2);
+	BOOST_TEST(scene.generation() == generation + 1);
+	BOOST_TEST(last_record().label == "Rebuild shape");
+
+	int moved = 0;
+	int untouched = 0;
+	for (const auto& node : root().children) {
+		const auto found = node.components.find("mesh");
+		if (found == node.components.end()) continue;
+		const bool is_x = std::string(found->second.overrides.at("geometry").as_string()) == "res://shapes/x.geom.desc";
+		const int vx_end = found->second.overrides.at("vx_end").to_number<int>();
+		(is_x ? moved : untouched) += (is_x ? vx_end == 100 : vx_end == 24) ? 1 : 0;
+	}
+	BOOST_TEST(moved == 2);
+	BOOST_TEST(untouched == 1);
+
+	const auto again = call("shape.update_nodes", range);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST(again.value.at("updated").to_number<int>() == 0);
+	BOOST_TEST(scene.generation() == generation + 1);
+
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(root().children[3].components.at("mesh").overrides.at("vx_end").to_number<int>() == 24);
+	BOOST_TEST(call("shape.update_nodes", R"({"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":-1,"ind_begin":0,"ind_end":1})").code == cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(copies_get_free_names_and_moves_stay_in_their_world)

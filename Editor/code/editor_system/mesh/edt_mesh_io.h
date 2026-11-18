@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace res { class resource_system; }
 
@@ -44,6 +45,10 @@ namespace edt::mesh
 	};
 
 	// Throw res::load_error on a value that is not what the format says. Free of a desc_system, for tests and tools.
+	json::object shape_params_to_json(const shape_params& params);
+	// `error` says why when the result is empty: an unknown kind, a field of another type, a value out of range.
+	std::optional<shape_params> shape_params_from_json(std::string_view kind, const json::object& params, std::string& error);
+
 	void poly_mesh_from_json(const json::object& resource, poly_mesh_desc& out, const poly_read_limits& limits = {});
 	json::object poly_mesh_to_json(const poly_mesh_desc& source);
 
