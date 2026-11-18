@@ -97,6 +97,8 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 	decode_request sent = request;
 	const auto timeout_ms = static_cast<std::uint64_t>(m_config.timeout.count());
 	if (sent.deadline_ms == 0 || sent.deadline_ms > timeout_ms) sent.deadline_ms = timeout_ms;
+	const std::chrono::milliseconds time_limit = m_config.time_limit > std::chrono::milliseconds::zero() ? m_config.time_limit : m_config.timeout;
+	sent.time_limit_ms = static_cast<std::uint64_t>(time_limit.count());
 	sent.memory_limit_bytes = m_config.memory_limit_bytes;
 
 	decode_bundle request_bundle;
@@ -180,7 +182,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 
 	if (timed_out.load()) {
 		outcome.timed_out = true;
-		outcome.error = "the decoder did not finish in time and was stopped";
+		outcome.error = time_limit_refusal("the decoder's run", time_limit) + "; it was stopped";
 		return outcome;
 	}
 	if (result.cancelled) {
@@ -278,7 +280,7 @@ bool edt::decode_log_budget::take(std::size_t bytes)
 	if (m_done) return false;
 	if (++m_lines > k_max_lines || (m_bytes += bytes) > k_max_bytes) {
 		m_done = true;
-		egLOG_WARN("edt/decoder", "the decoder's output is cut here: more than {} lines or {} KiB; the rest is dropped", k_max_lines, k_max_bytes / 1024);
+		egLOG_WARN("edt/decoder", "the decoder's output is cut here: it exceeds {} lines or {} ({}); the rest is dropped", k_max_lines, limit_text(k_max_bytes), k_step_decoder_log);
 		return false;
 	}
 	return true;

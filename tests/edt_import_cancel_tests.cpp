@@ -95,7 +95,7 @@ BOOST_AUTO_TEST_CASE(Import_OfAFileBeyondThePersonLimit_FailsBeforeReadingIt)
 
 	edt::model_importer importer(*descs, *rs);
 	const edt::import_intermediate result = importer.import_background(source_of(huge), nullptr);
-	BOOST_CHECK(result.error.find("too big") != std::string::npos);
+	BOOST_CHECK_MESSAGE(result.error.find("exceeds 256 MiB (source)") != std::string::npos, result.error);
 	BOOST_CHECK(result.all_tags.empty());
 }
 

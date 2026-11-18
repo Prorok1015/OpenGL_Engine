@@ -351,6 +351,7 @@ boost::json::object edt::to_json(const decode_request& request)
 	limits["max_files"] = u64_to(request.limits.max_files);
 	out["limits"] = std::move(limits);
 	out["deadline_ms"] = u64_to(request.deadline_ms);
+	out["time_limit_ms"] = u64_to(request.time_limit_ms);
 	out["memory_limit_bytes"] = u64_to(request.memory_limit_bytes);
 	out["boundary"] = path_text(request.boundary);
 	out["memory_folder"] = request.memory_folder;
@@ -407,6 +408,11 @@ std::optional<edt::decode_request> edt::decode_request_from_json(const boost::js
 	if (!deadline || !memory) return std::nullopt;
 	request.deadline_ms = *deadline;
 	request.memory_limit_bytes = *memory;
+	if (const json::value* time_limit = object.if_contains("time_limit_ms")) {
+		const auto limit = u64_from(time_limit);
+		if (!limit) return std::nullopt;
+		request.time_limit_ms = *limit;
+	}
 
 	const auto boundary = string_from(object.if_contains("boundary"));
 	const auto memory_folder = string_from(object.if_contains("memory_folder"));

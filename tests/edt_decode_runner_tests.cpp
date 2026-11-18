@@ -153,6 +153,7 @@ BOOST_AUTO_TEST_CASE(AChildThatRunsTooLong_IsKilledAtTheDeadline_AndTheFolderIsG
 	const auto outcome = runner.run(request_for("x.obj", edt::decode_request::mode_kind::scan), bytes_of("x"), {}, {});
 	BOOST_CHECK(!outcome.ok());
 	BOOST_CHECK(outcome.timed_out);
+	BOOST_CHECK_MESSAGE(outcome.error.find("exceeds 400 ms (decoder time)") != std::string::npos, outcome.error);
 	BOOST_CHECK_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(30));
 	BOOST_CHECK(scratch_is_empty());
 }
