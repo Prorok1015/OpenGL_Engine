@@ -42,6 +42,8 @@ namespace json = boost::json;
 constexpr std::string_view k_sky_guid = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
 constexpr std::string_view k_other_guid = "5b1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
 constexpr std::string_view k_lonely_guid = "6c2e3f40-5b6c-4d7e-8f80-1b2c3d4e5f60";
+constexpr std::string_view k_rock_guid = "7d3f4051-6c7d-4e8f-9091-2c3d4e5f6071";
+constexpr std::string_view k_rock_bin_guid = "8e405162-7d8e-4f90-a1a2-3d4e5f607182";
 
 std::string meta_text(std::string_view guid)
 {
@@ -289,6 +291,38 @@ BOOST_AUTO_TEST_CASE(AMoveAndADelete_AreEntriesOfTheHistoryToo_UndoneNewestFirst
 	BOOST_TEST(!history.undo_last(operations).ok, "nothing is left to undo");
 }
 
+BOOST_AUTO_TEST_CASE(TheLabelOfAPairsOperation_NamesTheDesc_NeverTheBinaryFileOrAFileOfTheJournalFolder)
+{
+	write("meshes/rock.mesh.desc", canonical(R"({ "__type": "mesh_desc" })"));
+	write("meshes/rock.mesh.desc.resource", meta_text(k_rock_guid));
+	write("meshes/rock.mesh.bin", std::string("SNKB\x01\x00\x00\x00 geometry", 17));
+	write("meshes/rock.mesh.bin.resource", meta_text(k_rock_bin_guid));
+	open();
+
+	const cmd::result renamed = call("asset.rename", json::object{ { "path", "meshes/rock.mesh.desc" }, { "to", "stone.mesh.desc" } });
+	BOOST_REQUIRE_MESSAGE(renamed.ok, renamed.error);
+	BOOST_TEST(has("meshes/stone.mesh.bin"));
+	BOOST_TEST((history.next_label() == std::optional<std::string>("Rename rock.mesh.desc")));
+	settle();
+
+	const cmd::result removed = call("asset.delete", json::object{ { "path", "meshes/stone.mesh.desc" } });
+	BOOST_REQUIRE_MESSAGE(removed.ok, removed.error);
+	BOOST_TEST(!has("meshes/stone.mesh.bin"));
+	BOOST_TEST((history.next_label() == std::optional<std::string>("Delete stone.mesh.desc")));
+
+	edt::operation_journal journal;
+	journal.operation = edt::asset_operation::move;
+	const auto step = [](edt::journal_step_kind kind, std::string from) { return edt::journal_step{ kind, "/p", std::move(from), {}, {}, {}, {} }; };
+	journal.steps = { step(edt::journal_step_kind::rewrite, "levels/main.desc"), step(edt::journal_step_kind::move, "meshes/a.mesh.bin.resource"),
+		step(edt::journal_step_kind::move, "meshes/a.mesh.bin"), step(edt::journal_step_kind::move, "meshes/a.mesh.desc.resource"),
+		step(edt::journal_step_kind::move, "meshes/a.mesh.desc") };
+	BOOST_TEST(edt::asset_operation_label(journal) == "Move a.mesh.desc");
+	journal.steps = { step(edt::journal_step_kind::move, "pics/a.png.resource"), step(edt::journal_step_kind::move, "pics/a.png") };
+	BOOST_TEST(edt::asset_operation_label(journal) == "Move a.png");
+	journal.steps = { step(edt::journal_step_kind::move, "a.mesh.bin") };
+	BOOST_TEST(edt::asset_operation_label(journal) == "Move a.mesh.bin", "nothing else to name: the file that was moved");
+}
+
 BOOST_AUTO_TEST_CASE(ADeleteOfAFileThatIsReferredTo_IsRefusedWithTheirList_AndNothingChanges)
 {
 	open();
@@ -481,10 +515,11 @@ BOOST_AUTO_TEST_CASE(AQuestionThatSaysItWillBeRefused_HasNothingToSpend_Whatever
 	commands.set_policy_gate(nullptr);
 }
 
-BOOST_AUTO_TEST_CASE(APolicyThatAllowsDelete_IsNotAYes_ButOneThatAllowsRenameIs_WithTheSamePlanCheck)
+BOOST_AUTO_TEST_CASE(AProjectPolicyThatAllowsRenameOrMove_IsNotAYes_TheyAreAskedAbout_AndDeleteStillNeedsAPerson)
 {
 	open();
-	policy_dir.write("no_project_policy.json", R"({"commands":{"asset.delete":"allow","asset.rename":"allow"}})");
+	policy_dir.write("no_project_policy.json", R"({"commands":{"asset.delete":"allow","asset.rename":"allow","asset.move":"allow"}})");
+	policy_dir.write("no_personal_policy.json", R"({"commands":{"asset.rename":"allow","asset.move":"allow"}})");
 	policy.set_approval_allowed(true);
 	policy.refresh();
 	BOOST_REQUIRE(!policy.approve_project_layer(policy.project()).has_value());
@@ -496,9 +531,51 @@ BOOST_AUTO_TEST_CASE(APolicyThatAllowsDelete_IsNotAYes_ButOneThatAllowsRenameIs_
 	BOOST_TEST(deleted.error.find("confirmed") != std::string::npos);
 	BOOST_TEST((snapshot() == before));
 
+	cmd::call move = agent_call(json::object{ { "path", "lonely.desc" }, { "to", "env" } });
+	const cmd::result move_asked = commands.invoke("asset.move", move);
+	BOOST_REQUIRE(move_asked.code == cmd::codes::confirmation_required);
+	BOOST_TEST((snapshot() == before));
+
+	cmd::call request = agent_call(json::object{ { "path", "lonely.desc" }, { "to", "alone.desc" } });
+	const cmd::result asked = commands.invoke("asset.rename", request);
+	BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(history.size() == 0u);
+
+	const std::string ticket(asked.value.at("ticket").as_string());
+	BOOST_REQUIRE(commands.approve(ticket));
+	request.confirmation = ticket;
+	const cmd::result done = commands.invoke("asset.rename", request);
+	BOOST_REQUIRE_MESSAGE(done.ok, done.error);
+	BOOST_TEST(has("alone.desc"));
+	BOOST_TEST(history.size() == 1u);
+	commands.set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(TheAgentPolicyAnswerOfAHeadlessRun_LetsRenameRun_AndRecordsIt_ButNeverDelete)
+{
+	open();
+	policy.set_headless(true);
+	policy_dir.write("answers.json", R"({"commands":{"asset.delete":"allow","asset.rename":"allow"}})");
+	policy.set_preanswers_file(policy_dir.path() / "answers.json", layer.path());
+	BOOST_REQUIRE_MESSAGE(policy.preanswers_error().empty(), policy.preanswers_error());
+	ask_a_person();
+	gate->set_can_ask(false);
+	const auto before = snapshot();
+
+	const cmd::result deleted = commands.invoke("asset.delete", agent_call(json::object{ { "path", "lonely.desc" } }));
+	BOOST_TEST(deleted.code == cmd::codes::denied);
+	BOOST_TEST(deleted.error.find("confirmed") != std::string::npos);
+	BOOST_TEST((snapshot() == before));
+
+	const cmd::result moved = commands.invoke("asset.move", agent_call(json::object{ { "path", "lonely.desc" }, { "to", "env" } }));
+	BOOST_TEST(moved.code == cmd::codes::denied, "the file does not answer for asset.move");
+	BOOST_TEST((snapshot() == before));
+
 	const cmd::result renamed = commands.invoke("asset.rename", agent_call(json::object{ { "path", "lonely.desc" }, { "to", "alone.desc" } }));
 	BOOST_TEST(renamed.ok, renamed.error);
 	BOOST_TEST(has("alone.desc"));
+	BOOST_TEST(history.size() == 1u);
 	commands.set_policy_gate(nullptr);
 }
 

@@ -1943,6 +1943,23 @@ BOOST_AUTO_TEST_CASE(AnAllowOfAnyLayer_ForTheCategoryOrTheCommand_StaysAsk)
 	BOOST_TEST((edt::effective_mode(plain, category_allow, {}).mode == policy_mode::ask));
 }
 
+// #775: the project's file comes from the repository, so an allow there for asset.rename / asset.move stays a question.
+BOOST_AUTO_TEST_CASE(AnAllowOfALayer_ForAssetRenameOrMove_StaysAsk)
+{
+	for (const char* id : { "asset.rename", "asset.move" }) {
+		const cmd::command_desc command = command_of(id, agent_category::scene_edit, cmd::danger::confirm);
+		const auto command_allow = layer_with(id, policy_mode::allow);
+		const auto category_allow = layer_with(agent_category::scene_edit, policy_mode::allow);
+		BOOST_TEST((edt::effective_mode(command, command_allow, {}).mode == policy_mode::ask), id);
+		BOOST_TEST((edt::effective_mode(command, category_allow, {}).mode == policy_mode::ask), id);
+		BOOST_TEST((edt::effective_mode(command, {}, command_allow).mode == policy_mode::ask), id);
+		BOOST_TEST((edt::effective_mode(command, layer_with(id, policy_mode::deny), {}).mode == policy_mode::deny), id);
+	}
+	// desc.write keeps the lift by its own entry.
+	const cmd::command_desc other = command_of("desc.write", agent_category::scene_edit, cmd::danger::confirm);
+	BOOST_TEST((edt::effective_mode(other, layer_with("desc.write", policy_mode::allow), {}).mode == policy_mode::allow));
+}
+
 // An allow of the category changes nothing, so it is no loosening that waits for a person's approval.
 BOOST_AUTO_TEST_CASE(AnAllowOfTheCategory_IsNoLoosening)
 {

@@ -11,9 +11,11 @@
 namespace cmd { class command_registry; }
 
 // asset.rename, asset.move, asset.delete (EPIC-57 section 6.4, #775): the MCP face of asset_ops. Each is category scene_edit
-// with risk confirm, so an agent's call is a question to a person; a policy file may lift it for asset.rename and asset.move by
-// name (as for desc.write), never for asset.delete: that one is done only on the ticket a person approved for this very call
-// (`force` too, and the question lists what would break). The plan of a question is recorded with a fingerprint
+// with risk confirm, so an agent's call is a question to a person. A policy file does not lift it: the project's file comes from
+// the repository, so an `allow` of it, or of the personal file, for asset.rename and asset.move is still a question
+// (`needs_consent_each_call`, as for project.migrate); only a person's answer, or the --agent-policy file of a headless run, lets one
+// run. asset.delete is done only on the ticket a person approved for this very call (`force` too, and the question lists what would
+// break). The plan of a question is recorded with a fingerprint
 // (describe_before_allowed_invoke), and an agent's run builds the plan again: no record (a question that said "will be refused"
 // leaves none) is `denied`, another plan is `stale` (`plan_changed`), and nothing is done. A person's call (origin ui, or a test)
 // is not asked: the asset browser (PR 3) runs the same commands.

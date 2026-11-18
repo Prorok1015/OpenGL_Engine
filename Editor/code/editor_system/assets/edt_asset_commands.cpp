@@ -567,7 +567,7 @@ std::vector<edt::registration> edt::register_asset_commands(cmd::command_registr
 		if (registration added = commands.add(std::move(desc)); added.active()) out.push_back(std::move(added));
 	};
 
-	add("asset.rename", "Rename one asset of the project's res/ folder (a person is asked each time unless a policy file allows `asset.rename`). Its .resource (and for a desc its binary file) go with it; "
+	add("asset.rename", "Rename one asset of the project's res/ folder (a person is asked each time: an `allow` of the project's or the personal policy file is still a question; only the --agent-policy answer of a headless run says yes in advance). Its .resource (and for a desc its binary file) go with it; "
 			"references that name it by guid stay, references by path are rewritten in the files that hold them. The answer is a report: what moved, "
 			"which files were rewritten, what could not be, and an `operation` id. Refused with `busy` while the asset database reads the files or "
 			"a file that refers to the asset is open with unsaved changes; `unrewritable_references` (`failed`, nothing was changed) lists the referrers that cannot be rewritten (a lower layer's file, a guid that is another asset's, a file not laid out as the editor writes it) in the value's `unrewritable`; the refusal's value has a machine `code`",
@@ -576,7 +576,7 @@ std::vector<edt::registration> edt::register_asset_commands(cmd::command_registr
 			"to":{"type":"string","minLength":1,"description":"the new file name, without a folder"}},
 			"required":["path","to"],"additionalProperties":false})json",
 		asset_operation::rename, false);
-	add("asset.move", "Move one asset of the project's res/ folder into another folder of it (a person is asked each time unless a policy file allows `asset.move`); the references follow as in asset.rename",
+	add("asset.move", "Move one asset of the project's res/ folder into another folder of it (a person is asked each time: an `allow` of a policy file is still a question, as for asset.rename); the references follow as in asset.rename",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"the asset, res://materials/a.mat.desc or materials/a.mat.desc"},
 			"to":{"type":"string","description":"the folder below res:// that exists in the project's own folder; an empty string is the root"}},
