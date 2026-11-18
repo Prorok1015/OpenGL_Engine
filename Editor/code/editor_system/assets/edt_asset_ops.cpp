@@ -7,12 +7,14 @@
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/platform/plt_beneath.h>
+#include <snk/project/prj_manifest.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -159,6 +161,24 @@ namespace
 	{
 		std::error_code ec;
 		return fs::symlink_status(root / path_of(relative), ec).type() != fs::file_type::not_found;
+	}
+
+	// Like exists_on_disk, but where the project's names ignore letter case (`fold`) a file that differs from `relative` in case
+	// only is the same file, whatever the disk under the folder says.
+	bool exists_named(const fs::path& root, const std::string& relative, bool fold)
+	{
+		if (exists_on_disk(root, relative)) return true;
+		if (!fold) return false;
+		const fs::path path = path_of(relative);
+		const std::string wanted = res::asset_name_key(utf8(path.filename()), true);
+		std::error_code ec;
+		fs::directory_iterator it(root / path.parent_path(), fs::directory_options::skip_permission_denied, ec);
+		if (ec) return false;
+		for (const fs::directory_iterator end; it != end; it.increment(ec)) {
+			if (ec) return false;
+			if (res::asset_name_key(utf8(it->path().filename()), true) == wanted) return true;
+		}
+		return false;
 	}
 
 	bool is_regular(const fs::path& root, const std::string& relative)
@@ -335,6 +355,55 @@ namespace
 		return {};
 	}
 
+	enum class step_state : std::uint8_t
+	{
+		// Recorded ahead and never done (a crash between the record and the action): the files are as before the step.
+		not_done,
+		// Done, and the files are as the step left them.
+		done,
+		// Something else changed them since: `file` names it.
+		changed,
+	};
+
+	step_state state_of_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, std::string& file)
+	{
+		std::string error;
+		switch (step.kind) {
+		case edt::journal_step_kind::move: {
+			const bool from_there = exists_on_disk(root, step.from);
+			if (!exists_on_disk(root, step.to)) {
+				if (from_there && hash_file(root, step.from, error) == step.hash && error.empty()) return step_state::not_done;
+				file = from_there ? step.from : step.to;
+				return step_state::changed;
+			}
+			if (from_there || hash_file(root, step.to, error) != step.hash || !error.empty()) {
+				file = step.to;
+				return step_state::changed;
+			}
+			return step_state::done;
+		}
+		case edt::journal_step_kind::rewrite: {
+			const std::string now = hash_file(root, step.from, error);
+			if (error.empty() && now == step.hash) return step_state::not_done;
+			if (error.empty() && now == step.after_hash) return step_state::done;
+			file = step.from;
+			return step_state::changed;
+		}
+		case edt::journal_step_kind::stash:
+			if (exists_on_disk(root, step.from)) {
+				if (hash_file(root, step.from, error) == step.hash && error.empty()) return step_state::not_done;
+				file = step.from;
+				return step_state::changed;
+			}
+			if (hash_file(journal_root, in_journal(id, step.to), error) != step.hash || !error.empty()) {
+				file = step.to;
+				return step_state::changed;
+			}
+			return step_state::done;
+		}
+		return step_state::changed;
+	}
+
 	std::string persist(const edt::operation_journal& journal, const fs::path& journal_root)
 	{
 		const std::string text = json::serialize(edt::journal_to_json(journal));
@@ -427,19 +496,27 @@ std::string edt::journal_problem(const operation_journal& journal)
 	if (!is_safe_id(journal.id)) return "the id is not one plain name";
 	for (const journal_step& step : journal.steps) {
 		if (step.root.empty()) return "a step has no root";
-		const bool from_ok = is_safe_relative(step.from);
+		const fs::path root = path_of(step.root);
+		// A name the project lists, as a live operation checks it: the .resource and binary files of a pair are named as they are.
+		const auto listed = [&](const std::string& relative) { return is_safe_relative(relative) && destination_problem(relative, root, false).empty(); };
 		switch (step.kind) {
 		case journal_step_kind::move:
-			if (!from_ok || !is_safe_relative(step.to) || !step.original.empty()) return std::format("the move of '{}' has a path that is not below its root", step.from);
-			break;
-		case journal_step_kind::rewrite:
-			if (!from_ok || !step.to.empty() || !step.original.starts_with("originals/") || !is_safe_relative(step.original)) {
-				return std::format("the rewrite of '{}' has a path that is not below its root or the journal folder", step.from);
+			if (!listed(step.from) || !listed(step.to) || !step.original.empty()) {
+				return std::format("the move of '{}' is not between two names of the project's files", step.from);
 			}
 			break;
+		case journal_step_kind::rewrite: {
+			// An operation rewrites descs and the project manifest only.
+			const bool manifest = step.from == prj::k_manifest_file_name;
+			const bool desc = step.from.ends_with(".desc") && listed(step.from);
+			if ((!manifest && !desc) || !step.to.empty() || !step.original.starts_with("originals/") || !is_safe_relative(step.original)) {
+				return std::format("the rewrite of '{}' is not of a desc or the manifest, or has a path that is not below its root or the journal folder", step.from);
+			}
+			break;
+		}
 		case journal_step_kind::stash:
-			if (!from_ok || !step.to.starts_with("files/") || !is_safe_relative(step.to) || !step.original.empty()) {
-				return std::format("the removal of '{}' has a path that is not below its root or the journal folder", step.from);
+			if (!listed(step.from) || step.to != join("files", step.from) || !step.original.empty()) {
+				return std::format("the removal of '{}' is not of a file of the project, or its copy is not where it is kept", step.from);
 			}
 			break;
 		}
@@ -577,6 +654,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 	}
 
 	std::string dest;
+	std::string move_folder;
 	if (!removing) {
 		if (request.operation == asset_operation::rename) {
 			if (request.to.empty() || request.to.find_first_of("/\\") != std::string::npos) {
@@ -590,15 +668,20 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 			while (folder.ends_with('/')) folder.remove_suffix(1);
 			if (folder.find('\\') != std::string_view::npos) return stop(refusal_code::bad_name, "a folder is written with '/'");
 			dest = join(folder, record->path.name());
-			if (!folder.empty() && !fs::is_directory(item.root / path_of(std::string(folder)))) {
-				return stop(refusal_code::no_such_folder, std::format("'res://{}' is not a folder of the project's own folder", folder));
-			}
+			move_folder = std::string(folder);
 		}
 		if (const std::string problem = res::portable_path_problem(dest); !problem.empty()) {
 			return stop(refusal_code::unportable_path, std::format("'{}': {}", dest, problem));
 		}
 		if (const std::string problem = destination_problem(dest, item.root, request.operation == asset_operation::rename); !problem.empty()) {
 			return stop(refusal_code::bad_name, std::format("'{}': {}", dest, problem));
+		}
+		// Only a folder name that passed the checks above is looked at on the disk, and never through a link.
+		if (!move_folder.empty()) {
+			std::error_code ec;
+			if (fs::symlink_status(item.root / path_of(move_folder), ec).type() != fs::file_type::directory) {
+				return stop(refusal_code::no_such_folder, std::format("'res://{}' is not a folder of the project's own folder", move_folder));
+			}
 		}
 		if (dest == source) return stop(refusal_code::no_change, "the file is there already under that name");
 		if (db->case_insensitive() && res::asset_name_key(dest, true) == res::asset_name_key(source, true)) {
@@ -609,7 +692,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 			return stop(refusal_code::target_exists, std::format("'{}' is taken", item.target.view()));
 		}
 		// A .resource left at the new name would be taken by the new file, whether or not the old one had one.
-		if (exists_on_disk(item.root, dest + meta_suffix)) {
+		if (exists_named(item.root, dest + meta_suffix, db->case_insensitive())) {
 			return stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(dest + meta_suffix).view()));
 		}
 	}
@@ -668,7 +751,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 		std::vector<std::string> strays{ std::string(dest_binary->relative()), std::string(dest_binary->relative()) + meta_suffix };
 		if (dest_staged) strays.emplace_back(dest_staged->relative());
 		for (const std::string& stray : strays) {
-			if (exists_on_disk(item.root, stray)) return stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(stray).view()));
+			if (exists_named(item.root, stray, db->case_insensitive())) return stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(stray).view()));
 		}
 	}
 	for (pair_file& pair : pairs) {
@@ -1028,13 +1111,52 @@ std::vector<fs::path> edt::asset_ops::changeable_roots() const
 	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
 	if (db) {
 		const std::vector<fs::path>& layers = db->layers();
-		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
-			if (!is_engine_layer(layers, layer, m_ports.engine_base)) roots.push_back(layers[layer]);
-		}
+		const std::size_t top = db->top_layer();
+		if (top < layers.size() && !is_engine_layer(layers, top, m_ports.engine_base)) roots.push_back(layers[top]);
 	}
 	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
 	if (manifest) roots.push_back(manifest->root);
 	return roots;
+}
+
+std::string edt::asset_ops::without_host_paths(std::string text) const
+{
+	// A bare folder is replaced where it is a whole name, not the start of a longer one.
+	const auto replace_all = [&text](const std::string& from, std::string_view with, bool whole_name) {
+		if (from.empty()) return;
+		const auto name_char = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '_' || ch == '-'; };
+		for (std::size_t at = text.find(from); at != std::string::npos; ) {
+			const std::size_t end = at + from.size();
+			if (whole_name && end < text.size() && name_char(text[end])) {
+				at = text.find(from, end);
+				continue;
+			}
+			text.replace(at, from.size(), with);
+			at = text.find(from, at + with.size());
+		}
+	};
+	// `root/x` becomes `prefix` + `x`, a bare `root` becomes `bare`.
+	const auto hide = [&](const fs::path& root, std::string_view prefix, std::string_view bare) {
+		if (root.empty()) return;
+		for (const std::string& form : { utf8(root), fs_paths::utf8_of(root) }) {
+			replace_all(form + "/", prefix, false);
+			replace_all(form, bare, true);
+		}
+	};
+	// The longest first: the journal folder lies inside the project.
+	hide(m_ports.journal_root, "cache://asset_ops/", "cache://asset_ops");
+	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+	if (db) {
+		const std::vector<fs::path>& layers = db->layers();
+		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+			if (is_engine_layer(layers, layer, m_ports.engine_base)) hide(layers[layer], "<engine>/", "<engine>");
+			else hide(layers[layer], "res://", "res://");
+		}
+	}
+	if (manifest) hide(manifest->root, "<project>/", "<project>");
+	hide(m_ports.engine_base, "<engine>/", "<engine>");
+	return text;
 }
 
 edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
@@ -1052,43 +1174,59 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 			return report;
 		}
 		const std::vector<fs::path> allowed = changeable_roots();
+		const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+		const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+		const fs::path top = db && db->top_layer() < db->layers().size() ? db->layers()[db->top_layer()] : fs::path{};
 		std::vector<fs::path> roots;
 		roots.reserve(journal.steps.size());
 		for (const journal_step& step : journal.steps) {
 			const auto found = std::ranges::find_if(allowed, [&](const fs::path& candidate) { return same_folder(candidate, path_of(step.root)); });
 			if (found == allowed.end()) {
-				report.error = std::format("the journal is refused: '{}' is not a folder of this project", step.root);
+				report.error = std::format("the journal is refused: '{}' is not the project's own folder or the manifest's", step.root);
+				return report;
+			}
+			// The manifest's folder is for the manifest alone; the project's own layer takes descs (and the manifest, where they share a folder).
+			const bool manifest_file = manifest && step.from == manifest->file;
+			const bool in_top = !top.empty() && same_folder(top, path_of(step.root));
+			const bool allowed_here = step.kind == journal_step_kind::rewrite ? (manifest_file || (in_top && step.from.ends_with(".desc"))) : in_top;
+			if (!allowed_here) {
+				report.error = std::format("the journal is refused: '{}' is not something an operation changes in '{}'", step.from, step.root);
 				return report;
 			}
 			roots.push_back(*found);
 		}
 
+		// A crash can leave the last step recorded and not done: that step is not a change, it is skipped.
+		std::vector<step_state> states(journal.steps.size(), step_state::done);
 		for (std::size_t i = 0; i < journal.steps.size(); ++i) {
-			const journal_step& step = journal.steps[i];
-			const fs::path& root = roots[i];
-			std::string error;
-			switch (step.kind) {
-			case journal_step_kind::move:
-				if (hash_file(root, step.to, error) != step.hash || !error.empty() || exists_on_disk(root, step.from)) report.changed_since.push_back(step.to);
-				break;
-			case journal_step_kind::rewrite:
-				if (hash_file(root, step.from, error) != step.after_hash || !error.empty()) report.changed_since.push_back(step.from);
-				break;
-			case journal_step_kind::stash:
-				if (exists_on_disk(root, step.from)) report.changed_since.push_back(step.from);
-				if (hash_file(journal_root, in_journal(journal.id, step.to), error) != step.hash || !error.empty()) report.changed_since.push_back(step.to);
-				break;
-			}
+			std::string file;
+			states[i] = state_of_step(journal.steps[i], roots[i], journal_root, journal.id, file);
+			if (states[i] == step_state::changed) report.changed_since.push_back(file);
 		}
 		if (!report.changed_since.empty()) {
 			report.error = "files changed since the operation, so nothing was put back";
 			return report;
+		}
+		if (m_ports.is_open_with_unsaved_changes) {
+			for (std::size_t i = 0; i < journal.steps.size(); ++i) {
+				const journal_step& step = journal.steps[i];
+				if (states[i] == step_state::not_done || (step.kind == journal_step_kind::rewrite && !step.from.ends_with(".desc"))) continue;
+				for (const std::string* file : { &step.from, &step.to }) {
+					if (step.kind != journal_step_kind::move && file == &step.to) continue;
+					if (m_ports.is_open_with_unsaved_changes(res::tag::make(*file))) report.open_with_unsaved_changes.push_back(*file);
+				}
+			}
+			if (!report.open_with_unsaved_changes.empty()) {
+				report.error = "files are open with unsaved changes, so nothing was put back";
+				return report;
+			}
 		}
 
 		const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
 		std::vector<journal_step> put_back;
 		for (std::size_t i = journal.steps.size(); i-- > 0;) {
 			const journal_step& step = journal.steps[i];
+			if (states[i] == step_state::not_done) continue;
 			if (std::string error = undo_step(step, roots[i], journal_root, journal.id); !error.empty()) {
 				report.failures.push_back(std::format("{}: {}", step_label(step), error));
 				egLOG_WARN("asset_ops", "'{}' could not be put back: {}", step_label(step), error);

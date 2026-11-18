@@ -84,7 +84,7 @@ bool has_string(const json::array& items, std::string_view key, std::string_view
 
 struct commands_fixture
 {
-	commands_fixture() : layer("asset_cmd"), engine("asset_cmd_engine"), journal("asset_cmd_journal"), policy_dir("asset_cmd_policy")
+	commands_fixture() : layer("asset_cmd"), engine("asset_cmd_engine"), journal("asset_cmd_journal"), policy_dir("asset_cmd_policy"), user_data("asset_cmd_user")
 	{
 		write("sky.desc", canonical(R"({ "__type": "material_desc" })"));
 		write("sky.desc.resource", meta_text(k_sky_guid));
@@ -176,19 +176,28 @@ struct commands_fixture
 		return out;
 	}
 
-	std::vector<fs::path> roots() const { return { engine.path(), layer.path() }; }
+	// The editor's own list of its journals: in the person's data, not in the project.
+	fs::path list_file() const { return edt::asset_history_file({}, user_data.path(), journal.path()); }
+
+	edt::asset_history make_history(std::uint64_t first_serial = 0)
+	{
+		return edt::asset_history{ journal.path(), list_file(), [n = first_serial]() mutable { return ++n; } };
+	}
+
+	std::vector<fs::path> roots() const { return { layer.path() }; }
 
 	test_util::temp_dir layer;
 	test_util::temp_dir engine;
 	test_util::temp_dir journal;
 	test_util::temp_dir policy_dir;
+	test_util::temp_dir user_data;
 	ds::task_system tasks{ test_util::manual_tasks() };
 	edt::editor_events events;
 	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
 	std::set<std::string> open_files;
 	edt::asset_ops operations{ make_operations() };
-	edt::asset_history history{ journal.path(), [this] { return db->next_history_serial(); } };
+	edt::asset_history history{ journal.path(), list_file(), [this] { return db->next_history_serial(); } };
 	edt::agent_policy policy{ policy_dir.path() / "no_project_policy.json", policy_dir.path() / "no_personal_policy.json" };
 	std::shared_ptr<edt::agent_policy_gate> gate;
 	cmd::command_registry commands;
@@ -398,6 +407,120 @@ BOOST_AUTO_TEST_CASE(AnAgentsForce_ThatNoPersonConfirmed_IsRefusedWhateverThePol
 	BOOST_TEST(!has("sky.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(AnAgentsRename_RunsOnlyWhileThePlanIsTheOneThePersonApproved)
+{
+	open();
+	ask_a_person();
+	cmd::call request = agent_call(json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	const cmd::result asked = commands.invoke("asset.rename", request);
+	BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+	const std::string ticket(asked.value.at("ticket").as_string());
+	BOOST_REQUIRE(commands.approve(ticket));
+
+	// A file that would be rewritten is another file now: what the person was shown is not what would be done.
+	std::string changed = file_text("levels/main.desc");
+	const std::size_t at = changed.find("res://other.desc");
+	BOOST_REQUIRE(at != std::string::npos);
+	changed.replace(at, std::string_view("res://other.desc").size(), "res://lonely.desc");
+	write("levels/main.desc", changed);
+	const auto after_edit = snapshot();
+
+	request.confirmation = ticket;
+	const cmd::result stale = commands.invoke("asset.rename", request);
+	BOOST_REQUIRE(!stale.ok);
+	BOOST_TEST(stale.code == cmd::codes::stale);
+	BOOST_TEST(text_of(stale.value.at("code")) == "plan_changed");
+	BOOST_TEST((snapshot() == after_edit), "nothing was done");
+	BOOST_TEST(history.size() == 0u);
+
+	// Asked again, the question is about the plan as it is, and that one runs.
+	cmd::call again = agent_call(json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	const cmd::result asked_again = commands.invoke("asset.rename", again);
+	BOOST_REQUIRE(asked_again.code == cmd::codes::confirmation_required);
+	const std::string second(asked_again.value.at("ticket").as_string());
+	BOOST_REQUIRE(commands.approve(second));
+	again.confirmation = second;
+	const cmd::result done = commands.invoke("asset.rename", again);
+	BOOST_REQUIRE_MESSAGE(done.ok, done.error);
+	BOOST_TEST(has("clouds.desc"));
+	commands.set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AQuestionThatSaysItWillBeRefused_HasNothingToSpend_WhateverTheFilesBecome)
+{
+	open();
+	ask_a_person();
+	cmd::call request = agent_call(json::object{ { "path", "ghost.desc" } });
+	const cmd::result asked = commands.invoke("asset.delete", request);
+	BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+	const std::string ticket(asked.value.at("ticket").as_string());
+	const auto pending = commands.confirmation_of(ticket);
+	BOOST_REQUIRE(pending.has_value());
+	BOOST_TEST(pending->detail.find("This request will be refused") != std::string::npos);
+	BOOST_REQUIRE(commands.approve(ticket));
+
+	write("ghost.desc", canonical(R"({ "__type": "material_desc" })"));
+	write("ghost.desc.resource", meta_text("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"));
+	open();
+	request.confirmation = ticket;
+	const cmd::result result = commands.invoke("asset.delete", request);
+	BOOST_TEST(!result.ok);
+	BOOST_TEST(result.code == cmd::codes::denied);
+	BOOST_TEST(has("ghost.desc"), "the approved 'refused' question did not delete what appeared since");
+	BOOST_TEST(history.size() == 0u);
+
+	// A delete of something that refers to others needs `force`: the question without it is a refusal, not an approvable plan.
+	cmd::call referred = agent_call(json::object{ { "path", "sky.desc" } });
+	const cmd::result referred_asked = commands.invoke("asset.delete", referred);
+	BOOST_REQUIRE(referred_asked.code == cmd::codes::confirmation_required);
+	const std::string referred_ticket(referred_asked.value.at("ticket").as_string());
+	BOOST_REQUIRE(commands.approve(referred_ticket));
+	referred.confirmation = referred_ticket;
+	BOOST_TEST(commands.invoke("asset.delete", referred).code == cmd::codes::needs_input, "refused for its referrers, whatever was approved");
+	BOOST_TEST(has("sky.desc"));
+	commands.set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(APolicyThatAllowsDelete_IsNotAYes_ButOneThatAllowsRenameIs_WithTheSamePlanCheck)
+{
+	open();
+	policy_dir.write("no_project_policy.json", R"({"commands":{"asset.delete":"allow","asset.rename":"allow"}})");
+	policy.set_approval_allowed(true);
+	policy.refresh();
+	BOOST_REQUIRE(!policy.approve_project_layer(policy.project()).has_value());
+	ask_a_person();
+	const auto before = snapshot();
+
+	const cmd::result deleted = commands.invoke("asset.delete", agent_call(json::object{ { "path", "lonely.desc" } }));
+	BOOST_TEST(deleted.code == cmd::codes::denied);
+	BOOST_TEST(deleted.error.find("confirmed") != std::string::npos);
+	BOOST_TEST((snapshot() == before));
+
+	const cmd::result renamed = commands.invoke("asset.rename", agent_call(json::object{ { "path", "lonely.desc" }, { "to", "alone.desc" } }));
+	BOOST_TEST(renamed.ok, renamed.error);
+	BOOST_TEST(has("alone.desc"));
+	commands.set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCallWithNoQuestionBehindIt_IsNotRun)
+{
+	open();
+	const auto before = snapshot();
+	// No gate: nothing described the plan to anyone.
+	const cmd::result result = commands.invoke("asset.rename", agent_call(json::object{ { "path", "lonely.desc" }, { "to", "alone.desc" } }));
+	BOOST_TEST(result.code == cmd::codes::denied);
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(WhatAnAgentIsTold_NamesNoFolderOfTheHost)
+{
+	open();
+	const std::string text = std::format("cannot make {}/levels/x: no, in {}/abc and {}/e.desc, also {}", fs_paths::generic_utf8_of(layer.path()),
+		fs_paths::generic_utf8_of(journal.path()), fs_paths::generic_utf8_of(engine.path()), fs_paths::generic_utf8_of(layer.path()));
+	const std::string told = operations.without_host_paths(text);
+	BOOST_TEST(told == "cannot make res://levels/x: no, in cache://asset_ops/abc and <engine>/e.desc, also res://");
+}
+
 BOOST_AUTO_TEST_CASE(TheGuards_AnswerBusyOrFailed_AndNothingMoves)
 {
 	open();
@@ -484,23 +607,70 @@ BOOST_AUTO_TEST_CASE(AnUndoThroughTheHistory_PutsEverythingBack_AndDeletesTheJou
 	BOOST_TEST(history.size() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(AnUndoThatFindsAFileChanged_SaysWhichOnes_ForgetsTheEntry_AndKeepsTheJournalOnDisk)
+BOOST_AUTO_TEST_CASE(AnUndoThatFindsAFileChanged_SaysWhichOnes_KeepsTheEntry_AndWorksAgainOnceItIsFixed)
+{
+	open();
+	const auto before = snapshot();
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	const std::string id = text_of(result.value.at("operation"));
+	const std::string original = file_text("levels/main.desc");
+	write("levels/main.desc", canonical(R"({ "__type": "level_desc", "edited": true })"));
+	const auto after_edit = snapshot();
+
+	const edt::asset_fix_result undone = history.undo_last(operations);
+	BOOST_TEST(!undone.ok);
+	BOOST_TEST(undone.keep, "the entry stays for another try");
+	BOOST_TEST(undone.error.find("Rename sky.desc") != std::string::npos);
+	BOOST_TEST(undone.error.find("levels/main.desc") != std::string::npos);
+	BOOST_TEST((snapshot() == after_edit), "nothing was touched");
+	BOOST_TEST(history.size() == 1u);
+	BOOST_TEST(fs::is_regular_file(journal.path() / id / "journal.json"));
+
+	write("levels/main.desc", original);
+	const edt::asset_fix_result again = history.undo_last(operations);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(history.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoThatKeepsFailing_IsDroppedAfterThreeTries_AndItsJournalIsSetAside)
 {
 	open();
 	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	const std::string id = text_of(result.value.at("operation"));
 	write("levels/main.desc", canonical(R"({ "__type": "level_desc", "edited": true })"));
-	const auto after_edit = snapshot();
-
-	const edt::asset_fix_result undone = history.undo_last(operations);
-	BOOST_TEST(!undone.ok);
-	BOOST_TEST(undone.error.find("Rename sky.desc") != std::string::npos);
-	BOOST_TEST(undone.error.find("levels/main.desc") != std::string::npos);
-	BOOST_TEST((snapshot() == after_edit), "nothing was touched");
+	for (std::size_t attempt = 1; attempt < edt::asset_history::max_undo_attempts; ++attempt) {
+		const edt::asset_fix_result kept = history.undo_last(operations);
+		BOOST_TEST(!kept.ok);
+		BOOST_TEST(kept.keep);
+		BOOST_TEST(history.size() == 1u);
+	}
+	const edt::asset_fix_result dropped = history.undo_last(operations);
+	BOOST_TEST(!dropped.ok);
+	BOOST_TEST(!dropped.keep);
 	BOOST_TEST(history.size() == 0u);
 	BOOST_TEST(fs::is_regular_file(journal.path() / id / "journal.dropped.json"));
-	BOOST_TEST(!fs::exists(journal.path() / id / "journal.json"), "a restart does not bring a refused entry back");
+	BOOST_TEST(!fs::exists(journal.path() / id / "journal.json"), "a restart does not bring a dropped entry back");
+	edt::asset_history restarted = make_history();
+	BOOST_TEST(restarted.restore(roots()) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfAFileThatIsOpenWithUnsavedChanges_KeepsTheEntry_AndWorksWhenItIsSaved)
+{
+	open();
+	const auto before = snapshot();
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	open_files = { "res://clouds.desc" };
+	const edt::asset_fix_result blocked = history.undo_last(operations);
+	BOOST_TEST(!blocked.ok);
+	BOOST_TEST(blocked.keep);
+	BOOST_TEST(history.size() == 1u);
+	open_files.clear();
+	BOOST_TEST(history.undo_last(operations).ok);
+	BOOST_TEST((snapshot() == before));
 }
 
 BOOST_AUTO_TEST_CASE(AfterARestart_TheHistoryIsRebuiltFromTheJournals_AndADeleteComesBack)
@@ -512,13 +682,9 @@ BOOST_AUTO_TEST_CASE(AfterARestart_TheHistoryIsRebuiltFromTheJournals_AndADelete
 	settle();
 	const cmd::result removed = call("asset.delete", json::object{ { "path", "lonely.desc" } });
 	BOOST_REQUIRE_MESSAGE(removed.ok, removed.error);
-	const auto now = fs::file_time_type::clock::now();
-	fs::last_write_time(journal.path() / text_of(renamed.value.at("operation")) / "journal.json", now - std::chrono::hours(2));
-	fs::last_write_time(journal.path() / text_of(removed.value.at("operation")) / "journal.json", now - std::chrono::hours(1));
 
-	std::uint64_t serial = 100;
-	edt::asset_history restarted{ journal.path(), [&serial] { return ++serial; } };
-	BOOST_TEST(restarted.restore(roots()) == 2u);
+	edt::asset_history restarted = make_history(100);
+	BOOST_TEST(restarted.restore(operations.changeable_roots()) == 2u);
 	BOOST_TEST((restarted.next_label() == std::optional<std::string>("Delete lonely.desc")));
 	BOOST_TEST((restarted.next_operation_id() == std::optional<std::string>(text_of(removed.value.at("operation")))));
 	BOOST_TEST((restarted.next_serial() == std::optional<std::uint64_t>(102u)), "numbered oldest first");
@@ -532,35 +698,98 @@ BOOST_AUTO_TEST_CASE(AfterARestart_TheHistoryIsRebuiltFromTheJournals_AndADelete
 	BOOST_TEST((snapshot() == before));
 }
 
-BOOST_AUTO_TEST_CASE(TheRebuild_KeepsTheNewestTwenty_AndLeavesWhatIsNotAJournalOfTheProject)
+BOOST_AUTO_TEST_CASE(TheRebuild_KeepsTheNewestTwenty_AndLeavesWhatTheEditorDidNotList)
 {
-	const auto now = fs::file_time_type::clock::now();
-	const auto made = [&](const std::string& id, std::vector<edt::journal_step> steps, int hours_ago) {
+	open();
+	const auto made = [&](const std::string& id, std::vector<edt::journal_step> steps) {
 		edt::operation_journal entry;
 		entry.id = id;
 		entry.operation = edt::asset_operation::rename;
 		entry.directory = fs_paths::generic_utf8_of(journal.path() / id);
 		entry.steps = std::move(steps);
-		const fs::path file = journal.write(id + "/journal.json", json::serialize(edt::journal_to_json(entry)));
-		fs::last_write_time(file, now - std::chrono::hours(hours_ago));
+		journal.write(id + "/journal.json", json::serialize(edt::journal_to_json(entry)));
+		return entry;
 	};
 	const std::string root = fs_paths::generic_utf8_of(layer.path());
 	for (int i = 0; i < 22; ++i) {
-		made(std::format("op{:02}", i), { edt::journal_step{ edt::journal_step_kind::move, root, "a.desc", "b.desc", "h", "", "" } }, 100 - i);
+		history.record(made(std::format("op{:02}", i), { edt::journal_step{ edt::journal_step_kind::move, root, "a.desc", "b.desc", "h", "", "" } }));
 	}
-	made("empty", {}, 1);
-	made("elsewhere", { edt::journal_step{ edt::journal_step_kind::move, "/somewhere/else", "a.desc", "b.desc", "h", "", "" } }, 1);
+	history.record(made("empty", {}));
+	history.record(made("elsewhere", { edt::journal_step{ edt::journal_step_kind::move, "/somewhere/else", "a.desc", "b.desc", "h", "", "" } }));
+	history.record(made("engine", { edt::journal_step{ edt::journal_step_kind::move, fs_paths::generic_utf8_of(engine.path()), "a.desc", "b.desc", "h", "", "" } }));
 	journal.write("garbage/journal.json", "this is not json");
 	journal.write("plain_file.txt", "x");
+	made("unlisted", { edt::journal_step{ edt::journal_step_kind::move, root, "a.desc", "b.desc", "h", "", "" } });
 
-	edt::asset_history restarted{ journal.path(), [n = std::uint64_t{ 0 }]() mutable { return ++n; } };
-	BOOST_TEST(restarted.restore(roots()) == edt::asset_history::max_entries);
+	edt::asset_history restarted = make_history();
+	// The list holds the newest twenty records: op05..op21 and the three after them; of those the empty journal and the ones that
+	// name a folder that is not the project's own are no entries. `unlisted` and the old ones never were.
+	BOOST_TEST(restarted.restore(operations.changeable_roots()) == 17u);
 	BOOST_TEST((restarted.next_operation_id() == std::optional<std::string>("op21")));
 	BOOST_TEST((restarted.next_label() == std::optional<std::string>("Rename a.desc")));
 	BOOST_TEST(fs::is_regular_file(journal.path() / "op00" / "journal.json"), "older ones are left on the disk");
+	BOOST_TEST(fs::is_regular_file(journal.path() / "unlisted" / "journal.json"));
 
-	edt::asset_history none{ journal.path() / "nowhere", [] { return std::uint64_t{ 1 }; } };
+	edt::asset_history none{ journal.path() / "nowhere", {}, [] { return std::uint64_t{ 1 }; } };
 	BOOST_TEST(none.restore(roots()) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AJournalThatIsNotInTheEditorsOwnList_IsNeverRestoredNorUndone)
+{
+	open();
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	const std::string id = text_of(result.value.at("operation"));
+	BOOST_TEST(fs::is_regular_file(list_file()));
+	BOOST_TEST(!list_file().generic_string().starts_with(layer.path().generic_string()));
+
+	// A journal that came with the project's cache folder: well formed, naming the project's folder, but nobody listed it.
+	std::ifstream real(journal.path() / id / "journal.json", std::ios::binary);
+	json::value forged = json::parse(std::string(std::istreambuf_iterator<char>(real), std::istreambuf_iterator<char>()));
+	real.close();
+	forged.as_object()["id"] = "forged01";
+	forged.as_object()["directory"] = fs_paths::generic_utf8_of(journal.path() / "forged01");
+	journal.write("forged01/journal.json", json::serialize(forged));
+
+	edt::asset_history restarted = make_history();
+	BOOST_TEST(restarted.restore(roots()) == 1u, "only the listed journal");
+	BOOST_TEST((restarted.next_operation_id() == std::optional<std::string>(id)));
+
+	fs::remove(list_file());
+	edt::asset_history without_list = make_history();
+	BOOST_TEST(without_list.restore(roots()) == 0u, "no list: no journal is trusted");
+	BOOST_TEST(!without_list.undo_last(operations).ok);
+}
+
+BOOST_AUTO_TEST_CASE(AListedJournalThatWasChangedSince_IsIgnored_AndTheLabelIsTheLists)
+{
+	open();
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	const std::string id = text_of(result.value.at("operation"));
+
+	{
+		std::ifstream in(list_file(), std::ios::binary);
+		json::value listed = json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+		listed.as_object()["entries"].as_array()[0].as_object()["label"] = "Tidy the materials";
+		in.close();
+		std::ofstream(list_file(), std::ios::binary | std::ios::trunc) << json::serialize(listed);
+	}
+	edt::asset_history restarted = make_history();
+	BOOST_REQUIRE(restarted.restore(roots()) == 1u);
+	BOOST_TEST((restarted.next_label() == std::optional<std::string>("Tidy the materials")), "the label is the editor's list's, not the journal's");
+
+	const fs::path journal_file = journal.path() / id / "journal.json";
+	std::string text;
+	{
+		std::ifstream in(journal_file, std::ios::binary);
+		text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	}
+	json::value changed = json::parse(text);
+	changed.as_object()["steps"].as_array()[0].as_object()["hash"] = "fnv1a64:0000000000000000";
+	std::ofstream(journal_file, std::ios::binary | std::ios::trunc) << json::serialize(changed);
+	edt::asset_history tampered = make_history();
+	BOOST_TEST(tampered.restore(roots()) == 0u, "the journal is not what the editor listed");
 }
 
 BOOST_AUTO_TEST_CASE(TheHistoryIsKeptToTwentyEntries_AndAnOperationIsNewerThanTheFixesBeforeIt)

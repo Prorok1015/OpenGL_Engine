@@ -12,10 +12,12 @@
 namespace cmd { class command_registry; }
 
 // asset.rename, asset.move, asset.delete (EPIC-57 section 6.4, #775): the MCP face of asset_ops. Each is category scene_edit
-// with risk confirm, so an agent's call is a question to a person every time (a project policy file may lift that for one command
-// by name, as for desc.write); `force` of asset.delete leaves references broken and is never done on an agent's word alone: the
-// call must carry the ticket a person approved, and the question lists what would break. A person's call (origin ui, or a test) is
-// not asked: the asset browser (PR 3) runs the same commands.
+// with risk confirm, so an agent's call is a question to a person; a policy file may lift it for asset.rename and asset.move by
+// name (as for desc.write), never for asset.delete: that one is done only on the ticket a person approved for this very call
+// (`force` too, and the question lists what would break). The plan of a question is recorded with a fingerprint
+// (describe_before_allowed_invoke), and an agent's run builds the plan again: no record (a question that said "will be refused"
+// leaves none) is `denied`, another plan is `stale` (`plan_changed`), and nothing is done. A person's call (origin ui, or a test)
+// is not asked: the asset browser (PR 3) runs the same commands.
 namespace edt
 {
 	class editor_events;
@@ -44,6 +46,9 @@ namespace edt
 		refused,
 		// A step failed and what was done was taken back (or not: `report.rollback_failures`): `message`.
 		failed,
+		// An agent's run: no question was shown for it, or the plan is not the one a person approved.
+		denied,
+		stale,
 	};
 
 	struct asset_run
@@ -55,10 +60,13 @@ namespace edt
 		operation_report report;
 	};
 
-	// The one path of an operation that is not asked about: the guards, plan, execute and `sources.done` (the history takes the
-	// journal). The commands wrap it with their own checks (origin, arguments, the agent's ticket); the asset browser runs it as a
-	// person's call, having asked for `force` apart.
-	asset_run run_asset_operation(const asset_command_sources& sources, const asset_request& request, bool force);
+	// Asked after the plan is made and not refused, before it is executed: a state (denied, stale) stops the run.
+	using asset_plan_check = std::function<std::optional<asset_run>(const operation_plan&)>;
+
+	// The one path of an operation: the guards, plan, `before_execute`, execute and `sources.done` (the history takes the journal).
+	// The commands wrap it with their own checks (origin, arguments, the agent's ticket, the plan a person was shown) and keep the
+	// answer path-free; the asset browser runs it as a person's call, having asked for `force` apart, and shows `message`/`report` whole.
+	asset_run run_asset_operation(const asset_command_sources& sources, const asset_request& request, bool force, const asset_plan_check& before_execute = {});
 
 	[[nodiscard]] std::vector<registration> register_asset_commands(cmd::command_registry& commands, asset_command_sources sources);
 

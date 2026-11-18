@@ -83,7 +83,7 @@ namespace edt
 		std::vector<problem_action> problem_actions(const problem& row);
 		std::optional<std::string> problem_file(const problem& row) const { return m_problems->file_of(row); }
 		// Rename, move and delete of one asset (#775) and the history of the operations done: they were rebuilt at construction
-		// from cache://asset_ops/ (the newest asset_history::max_entries).
+		// from the editor's own list in the person's data and the journals in cache://asset_ops/ (the newest asset_history::max_entries).
 		asset_ops& operations() { return *m_ops; }
 		asset_history& history() { return *m_history; }
 		// One undo for the person: the newest of the database's fixes (Problems) and the file operations, by the order they were done in.

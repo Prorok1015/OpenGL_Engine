@@ -6,6 +6,7 @@
 #include "edt_asset_ops.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/project/prj_manifest.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_pretty_json.h>
 #include <boost/json.hpp>
@@ -136,6 +137,11 @@ struct ops_fixture
 		ports.assets = [this]() -> const edt::asset_database* { return db.get(); };
 		ports.engine_base = engine.path();
 		ports.journal_root = journal.path();
+		if (!manifest_dir.empty()) {
+			ports.manifest = [this]() -> std::optional<edt::asset_ops_manifest> {
+				return edt::asset_ops_manifest{ manifest_dir, std::string(prj::k_manifest_file_name), {} };
+			};
+		}
 		ports.is_open_with_unsaved_changes = [this](const res::tag& tag) { return open_files.contains(std::string(tag.view())); };
 		ports.hold_changes = [this]() -> std::shared_ptr<void> {
 			if (throw_in_hold) throw std::runtime_error("hold refused");
@@ -214,6 +220,7 @@ struct ops_fixture
 	edt::job_service jobs{ tasks, &events };
 	std::unique_ptr<edt::asset_database> db;
 	std::set<std::string> open_files;
+	fs::path manifest_dir;
 	std::string fail_at;
 	std::string throw_at;
 	bool throw_in_hold = false;
@@ -734,6 +741,157 @@ BOOST_AUTO_TEST_CASE(AJournalWithAnAbsoluteOrDotDotPath_IsRefusedWhenRead_AndWhe
 	BOOST_TEST(!ops().undo(original_path).ok);
 	BOOST_TEST((snapshot() == after));
 	BOOST_TEST(edt::journal_problem(report.journal).empty(), "the journal of an operation is fine");
+}
+
+BOOST_AUTO_TEST_CASE(AJournalStepOnANameTheProjectDoesNotList_OrARewriteOfNoDescOrManifest_IsRefused)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(edt::journal_problem(report.journal).empty());
+
+	for (const std::string_view name : { ".git/config", ".hidden.desc", "a/.tmp/x.desc" }) {
+		for (const bool in_from : { true, false }) {
+			edt::operation_journal bad = report.journal;
+			(in_from ? bad.steps.front().from : bad.steps.front().to) = std::string(name);
+			BOOST_TEST(!edt::journal_problem(bad).empty(), name);
+			BOOST_TEST(!ops().undo(bad).ok, name);
+		}
+	}
+
+	edt::operation_journal rewrite_of_a_text = report.journal;
+	const auto rewrite = std::ranges::find(rewrite_of_a_text.steps, edt::journal_step_kind::rewrite, &edt::journal_step::kind);
+	BOOST_REQUIRE(rewrite != rewrite_of_a_text.steps.end());
+	rewrite->from = "levels/notes.txt";
+	BOOST_TEST(!edt::journal_problem(rewrite_of_a_text).empty(), "a rewrite touches descs and the manifest only");
+	rewrite->from = std::string(prj::k_manifest_file_name);
+	BOOST_TEST(edt::journal_problem(rewrite_of_a_text).empty(), "the manifest may be rewritten");
+
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(removal.ok, removal.error);
+	edt::operation_journal stash = removal.journal;
+	BOOST_REQUIRE(!stash.steps.empty());
+	stash.steps.front().to = "files/other.desc";
+	BOOST_TEST(!edt::journal_problem(stash).empty(), "a removed file is kept where its own path says");
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithTheRootOfALowerOrTheEngineLayer_IsRefused_ThoughItIsALayerOfTheProject)
+{
+	open(false, edt::platform_case_insensitive, true);
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+	for (const fs::path& foreign_layer : { lower.path(), engine.path() }) {
+		edt::operation_journal bad = report.journal;
+		for (edt::journal_step& step : bad.steps) step.root = foreign_layer.generic_string();
+		const edt::undo_report undone = ops().undo(bad);
+		BOOST_TEST(!undone.ok);
+		BOOST_TEST(undone.restored.empty());
+	}
+	BOOST_TEST((snapshot() == after));
+}
+
+BOOST_AUTO_TEST_CASE(TheManifestsFolder_IsOpenToARewriteOfTheManifestAlone)
+{
+	open();
+	manifest_dir = foreign.path();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+	const fs::path victim = foreign.write("levels/main.desc", "not the project's");
+	for (const edt::journal_step_kind kind : { edt::journal_step_kind::move, edt::journal_step_kind::rewrite }) {
+		edt::operation_journal bad = report.journal;
+		const auto step = std::ranges::find(bad.steps, kind, &edt::journal_step::kind);
+		BOOST_REQUIRE(step != bad.steps.end());
+		step->root = foreign.path().generic_string();
+		const edt::undo_report undone = ops().undo(bad);
+		BOOST_TEST(!undone.ok);
+		BOOST_TEST(undone.restored.empty());
+	}
+	BOOST_TEST((snapshot() == after));
+	BOOST_TEST(fs::is_regular_file(victim));
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoAfterACrashBetweenSteps_PutsBackWhatHappened_AndSkipsTheStepThatDidNot)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_REQUIRE(report.journal.steps.size() == 4u);
+	BOOST_REQUIRE(report.journal.steps.back().kind == edt::journal_step_kind::rewrite);
+
+	write(report.journal.steps.back().from, before.at(report.journal.steps.back().from));
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.restored.size() == 3u, "the step that did not happen is not reported as restored");
+	BOOST_TEST((snapshot() == before));
+
+	const edt::undo_report again = ops().undo(report.journal);
+	BOOST_TEST(again.ok, "undoing a journal whose steps are all as before is not a failure: " + again.error);
+	BOOST_TEST(again.restored.empty());
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfAStepRecordedBeforeAnyActionWasDone_AndOfADeleteThatCopiedButNeverRemoved_Works)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(removal.ok, removal.error);
+	BOOST_REQUIRE(removal.journal.steps.size() == 2u);
+	for (const edt::journal_step& step : removal.journal.steps) write(step.from, before.at(step.from));
+	const edt::undo_report undone = ops().undo(removal.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.restored.empty());
+	BOOST_TEST((snapshot() == before));
+
+	const edt::operation_report moved = run(request(edt::asset_operation::move, "lonely.desc", "env"));
+	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+	fs::rename(layer.path() / "env/lonely.desc.resource", layer.path() / "lonely.desc.resource");
+	fs::rename(layer.path() / "env/lonely.desc", layer.path() / "lonely.desc");
+	const edt::undo_report nothing_done = ops().undo(moved.journal);
+	BOOST_REQUIRE_MESSAGE(nothing_done.ok, nothing_done.error);
+	BOOST_TEST(nothing_done.restored.empty());
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfAFileThatIsOpenWithUnsavedChanges_IsRefused_AndTouchesNothing)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = snapshot();
+	open_files = { "res://clouds.desc" };
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_TEST(!undone.ok);
+	BOOST_TEST(!undone.open_with_unsaved_changes.empty());
+	BOOST_TEST((snapshot() == after));
+	open_files.clear();
+	BOOST_TEST(ops().undo(report.journal).ok);
+}
+
+BOOST_AUTO_TEST_CASE(AFolderThatIsNotAProjectName_OrIsAFile_IsRefusedWithoutTouchingTheDisk)
+{
+	open();
+	for (const std::string_view folder : { "../outside", "a/../../b", "env/../..", "levels/main.desc" }) {
+		const edt::operation_plan planned = plan(request(edt::asset_operation::move, "sky.desc", folder));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), folder);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::unportable_path || planned.refused->code == edt::refusal_code::bad_name
+			|| planned.refused->code == edt::refusal_code::no_such_folder), folder);
+	}
+	const edt::operation_plan file_as_folder = plan(request(edt::asset_operation::move, "sky.desc", "levels/main.desc"));
+	BOOST_REQUIRE(file_as_folder.refused.has_value());
+	BOOST_TEST((file_as_folder.refused->code == edt::refusal_code::no_such_folder));
+}
+
+BOOST_AUTO_TEST_CASE(AnOrphanResourceThatDiffersInCaseOnly_Refuses_WhereNamesIgnoreCase)
+{
+	open(false, true);
+	write("Clouds.desc.resource", meta_text(k_lonely_guid));
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::target_exists));
 }
 
 BOOST_AUTO_TEST_CASE(APortThatThrows_RollsEverythingBack_AndTheReportSaysWhy)
