@@ -1,5 +1,5 @@
 #include <snk/resource/adapters/res_pct_adapter.h>
-#include <snk/image/image.h>
+#include <snk/image/img_image.h>
 #include <snk/common/logger/engine_log.h>
 #include <cstddef>
 #include <cstdint>
@@ -69,17 +69,17 @@ std::vector<std::byte> res::raw_image_adapter::serialize(const res::tag& tag, co
 
 res::pct_adapter::pct_adapter()
 {
-	stb_image::Image::set_image_flip(stb_image::Image::ImageFlip::VERTICAL);
+	img::image::set_flip(img::image_flip::vertical);
 }
 
 std::size_t res::pct_adapter::decode_budget_bytes(int width, int height, int channels, std::size_t encoded_bytes)
 {
-	return stb_image::decode_budget::for_image(width, height, channels, encoded_bytes);
+	return img::decode_budget::for_image(width, height, channels, encoded_bytes);
 }
 
 std::size_t res::pct_adapter::last_decode_peak_bytes()
 {
-	return stb_image::decode_budget::peak_bytes();
+	return img::decode_budget::peak_bytes();
 }
 
 std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag, const std::vector<std::byte>& data) const
@@ -92,7 +92,7 @@ std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag
 	int width = 0;
 	int height = 0;
 	int channels = 0;
-	if (!stb_image::Image::info_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()), width, height, channels)) {
+	if (!img::image::info_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()), width, height, channels)) {
 		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is not a decodable image");
 	}
 	const bool fits = width > 0 && height > 0 && channels > 0 && width <= max_side && height <= max_side
@@ -102,14 +102,14 @@ std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag
 			+ " with " + std::to_string(channels) + " channels: too large to decode (at most " + std::to_string(max_side)
 			+ " a side and " + std::to_string(max_decoded_bytes / (1024 * 1024)) + " MiB of pixels)");
 	}
-	const stb_image::Image img = stb_image::Image::read_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
-	if (!img.data()) {
+	const img::image picture = img::image::read_from_memory(reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
+	if (!picture.data()) {
 		throw std::runtime_error("picture '" + std::string{ tag.view() } + "' is not a decodable image");
 	}
-	glm::ivec2 size(img.width(), img.height());
-	auto raw_data = new unsigned char[img.size()];
-	std::memcpy(raw_data, img.data(), img.size());
-	return std::make_shared<res::picture_resource>(tag, size, img.channels_count(), raw_data);
+	glm::ivec2 size(picture.width(), picture.height());
+	auto raw_data = new unsigned char[picture.size()];
+	std::memcpy(raw_data, picture.data(), picture.size());
+	return std::make_shared<res::picture_resource>(tag, size, picture.channels(), raw_data);
 }
 
 std::vector<std::byte> res::pct_adapter::serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const
@@ -120,6 +120,6 @@ std::vector<std::byte> res::pct_adapter::serialize(const res::tag& tag, const st
 		return {};
 	}
 	std::vector<std::byte> out_data;
-	stb_image::Image::write_to_memory(stb_image::Image::ImageType::JPG, pic_res->data(), pic_res->size().x, pic_res->size().y, pic_res->channels(), out_data);
+	img::image::write_to_memory(img::image_type::jpg, pic_res->data(), pic_res->size().x, pic_res->size().y, pic_res->channels(), out_data);
 	return out_data;
 }

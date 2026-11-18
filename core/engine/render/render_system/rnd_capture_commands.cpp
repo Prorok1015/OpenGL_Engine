@@ -3,7 +3,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/command/cmd_types.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/image/image.h>
+#include <snk/image/img_image.h>
 #include <snk/render/rnd_image_compare.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
@@ -346,7 +346,7 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 		int width = 0;
 		int height = 0;
 		int channels = 0;
-		if (!stb_image::Image::info_from_memory(encoded, encoded_length, width, height, channels) || width <= 0 || height <= 0) {
+		if (!img::image::info_from_memory(encoded, encoded_length, width, height, channels) || width <= 0 || height <= 0) {
 			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has no readable picture header", reference));
 		}
 		if (std::string problem = reference_size_problem(reference, width, height, pixel_limit); !problem.empty()) {
@@ -363,17 +363,17 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 				id, size.x, size.y, reference, width, height));
 		}
 
-		const stb_image::Image picture = stb_image::Image::read_from_memory(encoded, encoded_length);
+		const img::image picture = img::image::read_from_memory(encoded, encoded_length);
 		if (picture.data() == nullptr || picture.width() != width || picture.height() != height) {
 			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' cannot be decoded", reference));
 		}
 		// stb's vertical flip is global (pct_adapter turns it on); the decode records the one it ran with.
-		const bool bottom_up = picture.flipped() == stb_image::Image::ImageFlip::VERTICAL;
+		const bool bottom_up = picture.flipped() == img::image_flip::vertical;
 		const std::vector<std::byte> expected = to_rgba8_top_down(
 			std::span<const std::byte>(reinterpret_cast<const std::byte*>(picture.data()), picture.size()),
-			width, height, picture.channels_count(), bottom_up);
+			width, height, picture.channels(), bottom_up);
 		if (expected.empty()) {
-			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has {} channels", reference, picture.channels_count()));
+			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has {} channels", reference, picture.channels()));
 		}
 		const std::optional<image_diff> diff = compare_rgb_of_rgba8({ size.x, size.y, captured.image.rgba }, { size.x, size.y, expected }, *fuzz);
 		if (!diff) {
