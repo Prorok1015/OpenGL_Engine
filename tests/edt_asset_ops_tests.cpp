@@ -11,6 +11,7 @@
 #include <snk/resource/res_pretty_json.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -774,6 +775,53 @@ BOOST_AUTO_TEST_CASE(AJournalWithTheRootOfALowerOrTheEngineLayer_IsRefused_Thoug
 		BOOST_TEST(!undone.ok);
 		BOOST_TEST(undone.restored.empty());
 	}
+	BOOST_TEST((snapshot() == after));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWhoseRootIsAnAliasOfTheProjectsFolder_IsRefused_AndNoForgedStepWritesIntoItsOwnFolders)
+{
+	write(std::string(prj::k_manifest_file_name), "{}");
+	open();
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(removal.ok, removal.error);
+	BOOST_REQUIRE(!removal.journal.steps.empty());
+	const std::string canonical = removal.journal.steps.front().root;
+	const std::string id = removal.journal.id;
+	journal.write(id + "/files/code/evil.cpp", "evil");
+	const auto after = snapshot();
+
+	std::vector<std::string> roots{ canonical + "/nosuch/..", canonical + "/nosuch/../", canonical + "/", canonical + "/./", canonical + "//",
+		canonical + "/env/..", canonical + "/../" + layer.path().filename().generic_string(), canonical, canonical + "\\" };
+	std::string upper = canonical;
+	std::ranges::transform(upper, upper.begin(), [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+	roots.push_back(upper);
+	std::error_code link_error;
+	fs::create_directory_symlink(layer.path(), foreign.path() / "alias", link_error);
+	if (!link_error) roots.push_back((foreign.path() / "alias").generic_string());
+
+	for (const std::string& root : roots) {
+		edt::operation_journal forged = removal.journal;
+		forged.steps.clear();
+		forged.steps.push_back(edt::journal_step{ edt::journal_step_kind::stash, root, "code/evil.cpp", "files/code/evil.cpp", {}, {}, {} });
+		const edt::undo_report undone = ops().undo(forged);
+		BOOST_TEST(!undone.ok, root);
+		BOOST_TEST(!undone.error.empty(), root);
+		BOOST_TEST(undone.restored.empty(), root);
+		BOOST_TEST(!has("code/evil.cpp"), root);
+		BOOST_TEST(!has("build/evil.cpp"), root);
+		BOOST_TEST((snapshot() == after), root);
+		if (root != canonical && root != upper && !(!link_error && root == (foreign.path() / "alias").generic_string())) {
+			BOOST_TEST(!edt::journal_problem(forged).empty(), root);
+			std::string reason;
+			BOOST_TEST(!edt::journal_from_json(edt::journal_to_json(forged), reason).has_value(), root);
+			BOOST_TEST(!reason.empty(), root);
+		}
+	}
+
+	edt::operation_journal in_second = removal.journal;
+	in_second.steps.push_back(edt::journal_step{ edt::journal_step_kind::stash, canonical + "/nosuch/..", "code/evil.cpp", "files/code/evil.cpp", {}, {}, {} });
+	BOOST_TEST(!ops().undo(in_second).ok, "every step's root is checked, not the first alone");
+	BOOST_TEST(!has("code/evil.cpp"));
 	BOOST_TEST((snapshot() == after));
 }
 

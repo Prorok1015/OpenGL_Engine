@@ -318,13 +318,19 @@ namespace
 		return res::portable_path_problem(path).empty();
 	}
 
-	bool same_folder(const fs::path& a, const fs::path& b)
+	// The one spelling a root has in a journal: normalized, generic separators, no trailing slash. A journal's root is compared
+	// to a root the ports name byte for byte in this spelling, so an alias of it (`..`, a link, another case) is another root.
+	std::string canonical_root(const fs::path& root)
 	{
-		std::error_code ec;
-		const fs::path left = fs::weakly_canonical(a, ec);
-		const fs::path right = ec ? fs::path{} : fs::weakly_canonical(b, ec);
-		if (ec) return a.lexically_normal() == b.lexically_normal();
-		return left == right;
+		std::string text = utf8(root.lexically_normal());
+		while (text.size() > 1 && text.back() == '/' && !text.ends_with(":/")) text.pop_back();
+		return text;
+	}
+
+	bool is_canonical_root(const std::string& root)
+	{
+		if (root.empty() || canonical_root(path_of(root)) != root) return false;
+		return std::ranges::none_of(path_of(root), [](const fs::path& part) { return part == ".."; });
 	}
 
 	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as it was
@@ -437,6 +443,34 @@ namespace
 		}
 		return {};
 	}
+
+	// What a step may do under the root it is read against: names the project lists, as a live operation checks them.
+	std::string step_problem(const edt::journal_step& step, const fs::path& root)
+	{
+		const auto listed = [&](const std::string& relative) { return is_safe_relative(relative) && destination_problem(relative, root, false).empty(); };
+		switch (step.kind) {
+		case edt::journal_step_kind::move:
+			if (!listed(step.from) || !listed(step.to) || !step.original.empty()) {
+				return std::format("the move of '{}' is not between two names of the project's files", step.from);
+			}
+			break;
+		case edt::journal_step_kind::rewrite: {
+			// An operation rewrites descs and the project manifest only.
+			const bool manifest = step.from == prj::k_manifest_file_name;
+			const bool desc = step.from.ends_with(".desc") && listed(step.from);
+			if ((!manifest && !desc) || !step.to.empty() || !step.original.starts_with("originals/") || !is_safe_relative(step.original)) {
+				return std::format("the rewrite of '{}' is not of a desc or the manifest, or has a path that is not below its root or the journal folder", step.from);
+			}
+			break;
+		}
+		case edt::journal_step_kind::stash:
+			if (!listed(step.from) || step.to != join("files", step.from) || !step.original.empty()) {
+				return std::format("the removal of '{}' is not of a file of the project, or its copy is not where it is kept", step.from);
+			}
+			break;
+		}
+		return {};
+	}
 }
 
 std::string_view edt::asset_operation_name(asset_operation operation)
@@ -494,30 +528,8 @@ std::string edt::journal_problem(const operation_journal& journal)
 	if (!is_safe_id(journal.id)) return "the id is not one plain name";
 	for (const journal_step& step : journal.steps) {
 		if (step.root.empty()) return "a step has no root";
-		const fs::path root = path_of(step.root);
-		// A name the project lists, as a live operation checks it: the .resource and binary files of a pair are named as they are.
-		const auto listed = [&](const std::string& relative) { return is_safe_relative(relative) && destination_problem(relative, root, false).empty(); };
-		switch (step.kind) {
-		case journal_step_kind::move:
-			if (!listed(step.from) || !listed(step.to) || !step.original.empty()) {
-				return std::format("the move of '{}' is not between two names of the project's files", step.from);
-			}
-			break;
-		case journal_step_kind::rewrite: {
-			// An operation rewrites descs and the project manifest only.
-			const bool manifest = step.from == prj::k_manifest_file_name;
-			const bool desc = step.from.ends_with(".desc") && listed(step.from);
-			if ((!manifest && !desc) || !step.to.empty() || !step.original.starts_with("originals/") || !is_safe_relative(step.original)) {
-				return std::format("the rewrite of '{}' is not of a desc or the manifest, or has a path that is not below its root or the journal folder", step.from);
-			}
-			break;
-		}
-		case journal_step_kind::stash:
-			if (!listed(step.from) || step.to != join("files", step.from) || !step.original.empty()) {
-				return std::format("the removal of '{}' is not of a file of the project, or its copy is not where it is kept", step.from);
-			}
-			break;
-		}
+		if (!is_canonical_root(step.root)) return std::format("the root '{}' is not written plainly (normalized, no '..', no trailing slash)", step.root);
+		if (std::string problem = step_problem(step, path_of(step.root)); !problem.empty()) return problem;
 	}
 	return {};
 }
@@ -993,7 +1005,7 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	originals.clear();
 
 	const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
-	const std::string root = utf8(item.root);
+	const std::string root = canonical_root(item.root);
 	const auto injected = [this](const std::string& label) { return m_ports.fail_step ? m_ports.fail_step(label) : std::string{}; };
 	// The step is in the journal on the disk before what it describes is done: a crash in between leaves a journal that
 	// says what may have happened, and undo_step takes a step that did not happen for done.
@@ -1025,7 +1037,7 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 			if (hash_file(rewrite.root, rewrite.relative, read_problem) != rewrite.before_hash || !read_problem.empty()) {
 				return std::format("'{}' changed meanwhile, so it was not rewritten", rewrite.file);
 			}
-			if (std::string error = record(journal_step{ journal_step_kind::rewrite, utf8(rewrite.root), rewrite.relative, {}, rewrite.before_hash,
+			if (std::string error = record(journal_step{ journal_step_kind::rewrite, canonical_root(rewrite.root), rewrite.relative, {}, rewrite.before_hash,
 				hash_of(rewrite.after_text), original_names[i] }); !error.empty()) return error;
 			const std::span<const std::byte> bytes = std::as_bytes(std::span<const char>(rewrite.after_text.data(), rewrite.after_text.size()));
 			if (std::string error = write_file(rewrite.root, rewrite.relative, bytes, true); !error.empty()) return error;
@@ -1086,18 +1098,24 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		const std::vector<fs::path> allowed = changeable_roots();
 		const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
 		const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
-		const fs::path top = db && db->top_layer() < db->layers().size() ? db->layers()[db->top_layer()] : fs::path{};
+		const std::string top = db && db->top_layer() < db->layers().size() ? canonical_root(db->layers()[db->top_layer()]) : std::string{};
 		std::vector<fs::path> roots;
 		roots.reserve(journal.steps.size());
 		for (const journal_step& step : journal.steps) {
-			const auto found = std::ranges::find_if(allowed, [&](const fs::path& candidate) { return same_folder(candidate, path_of(step.root)); });
+			// The root is one the ports name, spelled exactly as they do: an alias of it is not accepted, and what the step may do is
+			// judged against that root, not against the string the journal carries.
+			const auto found = std::ranges::find_if(allowed, [&](const fs::path& candidate) { return canonical_root(candidate) == step.root; });
 			if (found == allowed.end()) {
 				report.error = std::format("the journal is refused: '{}' is not the project's own folder or the manifest's", step.root);
 				return report;
 			}
+			if (const std::string problem = step_problem(step, *found); !problem.empty()) {
+				report.error = std::format("the journal is refused: {}", problem);
+				return report;
+			}
 			// The manifest's folder is for the manifest alone; the project's own layer takes descs (and the manifest, where they share a folder).
 			const bool manifest_file = manifest && step.from == manifest->file;
-			const bool in_top = !top.empty() && same_folder(top, path_of(step.root));
+			const bool in_top = !top.empty() && top == step.root;
 			const bool allowed_here = step.kind == journal_step_kind::rewrite ? (manifest_file || (in_top && step.from.ends_with(".desc"))) : in_top;
 			if (!allowed_here) {
 				report.error = std::format("the journal is refused: '{}' is not something an operation changes in '{}'", step.from, step.root);
