@@ -1115,7 +1115,7 @@ BOOST_AUTO_TEST_CASE(a_file_of_a_module_type_migrates_only_while_the_module_is_l
 	std::string printed;
 	int run = 0;
 	const auto migrate = [&](desc::desc_system& with) {
-		pmg::command_context context{ copy.root(), with, *rs, &steps, write, [&run] { return std::format("test-migration-{}", ++run); }, {}, {} };
+		pmg::command_context context{ copy.root(), with, *rs, &steps, write, [&run] { return std::format("test-migration-{}", ++run); }, {}, {}, {} };
 		context.print = [&printed](std::string_view text) { printed += std::string(text) + "\n"; };
 		return pmg::run_migrate(pmg::migrate_command{}, context);
 	};
