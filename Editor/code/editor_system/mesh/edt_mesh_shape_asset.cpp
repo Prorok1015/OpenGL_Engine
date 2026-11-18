@@ -60,8 +60,12 @@ namespace edt::mesh
 			if (chunk.is_array()) return chunk.get_array().size() / unit;
 			const json::object* ranges = chunk.if_object();
 			const json::value* size = ranges ? ranges->if_contains("size") : nullptr;
-			if (!size || !size->is_uint64()) return std::nullopt;
-			return static_cast<std::size_t>(size->get_uint64() / unit);
+			// A whole number JSON gives as signed unless it is past the signed range.
+			std::uint64_t bytes = 0;
+			if (size && size->is_uint64()) bytes = size->get_uint64();
+			else if (size && size->is_int64() && size->get_int64() >= 0) bytes = static_cast<std::uint64_t>(size->get_int64());
+			else return std::nullopt;
+			return static_cast<std::size_t>(bytes / unit);
 		};
 		const bool vertex_fit = vertices->is_array() ? vertices->get_array().size() % vertex_bytes == 0 : true;
 		const std::optional<std::size_t> vertex_count = count_of(*vertices, vertex_bytes);
@@ -157,7 +161,7 @@ namespace edt::mesh
 			return out;
 		}
 		out.generator = source.generator;
-		const shape_asset_result again = build_shape_asset(*source.generator, res::tag{ "res://shape.geom.desc" });
+		const shape_asset_result again = build_shape_asset(*source.generator, res::tag{ std::string("res://") + "check.geom.desc" });
 		if (!again.files) {
 			out.state = shape_source::unreadable;
 			out.error = again.error;

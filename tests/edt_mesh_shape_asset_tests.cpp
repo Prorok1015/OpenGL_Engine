@@ -40,6 +40,12 @@ void write_file(const fs::path& path, const std::string& text)
 	out << text;
 }
 
+// The desc the writer puts on disk is compact JSON and the one build_shape_asset returns is the repository's pretty form: the same data.
+bool same_json(const std::string& left, const std::string& right)
+{
+	return json::parse(left) == json::parse(right);
+}
+
 std::string version_of_text(const std::string& text)
 {
 	const auto* first = reinterpret_cast<const std::byte*>(text.data());
@@ -246,7 +252,7 @@ BOOST_AUTO_TEST_CASE(Create_WritesTheTwoFiles_InTheFormOfTheRepositoryDescs)
 	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
 	const shape_asset_files expected = built(small_sphere);
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == expected.poly);
-	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == expected.geometry);
+	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), expected.geometry));
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.bin") == std::string(reinterpret_cast<const char*>(expected.binary.data()), expected.binary.size()));
 	BOOST_TEST(std::string(made.value.at("poly").as_string()) == "res://shapes/ball.poly.desc");
 	BOOST_TEST(std::string(made.value.at("geometry").as_string()) == "res://shapes/ball.geom.desc");
@@ -310,13 +316,13 @@ BOOST_AUTO_TEST_CASE(Rebuild_WritesNewParametersIntoBothFiles_AndKeepsTheStoredO
 	BOOST_REQUIRE_MESSAGE(bigger.ok, bigger.error);
 	const shape_asset_files expected = built(sphere_params{ 1.0f, 12, 6 });
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == expected.poly);
-	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == expected.geometry);
+	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), expected.geometry));
 	BOOST_TEST(std::string(bigger.value.at("version").as_string()) == version_of_text(expected.poly));
 
 	json::object other_kind = rebuild_args("shapes/ball.poly.desc", std::string(bigger.value.at("version").as_string()));
 	other_kind["kind"] = "box";
 	BOOST_REQUIRE(call("shape.rebuild", other_kind).ok);
-	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == built(box_params{}).geometry);
+	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), built(box_params{}).geometry));
 	BOOST_TEST(actions.back().command == "shape.rebuild");
 }
 
@@ -376,7 +382,7 @@ BOOST_AUTO_TEST_CASE(Rebuild_MakesAGeometryFileThatIsGone_AndTheQuestionNamesThe
 	BOOST_TEST(text->find("Rebuild the shape") == 0u);
 
 	BOOST_REQUIRE(call("shape.rebuild", rebuild_args("shapes/ball.poly.desc", version)).ok);
-	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == built(small_sphere).geometry);
+	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), built(small_sphere).geometry));
 
 	question.args = rebuild_args("shapes/none.poly.desc", version);
 	const std::optional<std::string> refused = rebuild->describe(question);
