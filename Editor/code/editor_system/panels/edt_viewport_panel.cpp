@@ -2,7 +2,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_node_index.h>

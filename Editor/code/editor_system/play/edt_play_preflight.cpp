@@ -6,7 +6,7 @@
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <boost/json.hpp>
 #include <algorithm>

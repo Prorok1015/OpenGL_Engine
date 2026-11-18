@@ -205,7 +205,12 @@ namespace {
 		const json::value* type = type_of_inline(*inline_desc, merged);
 		if (!type) return reference_object_refusal(value, scope, owner_protocol);
 		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
-		const desc::type_schema* schema = descs.find_schema(std::string_view(type->as_string()));
+		const std::string_view type_name(type->as_string());
+		const desc::type_schema* schema = descs.find_schema(type_name);
+		// Mesh data is written by the editor with its binary file (EPIC-79), never through a scene edit.
+		const bool mesh = type_name == "geometry_desc" || type_name == "poly_mesh_desc"
+			|| (schema && std::ranges::any_of(schema->fields, [](const desc::field_schema& field) { return field.kind == desc::field_kind::binary_ref; }));
+		if (mesh) return reference_issue{ {}, std::format("an inline '{}': mesh data is written by the editor, refer to a mesh file", type_name) };
 		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
 		if (const json::value* parent = inline_desc->if_contains("__parent")) {
 			if (auto issue = reference_of(descs, scope, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
@@ -372,6 +377,10 @@ namespace {
 		const desc::type_schema* schema = descs.find_schema(type);
 		if (!schema) {
 			return failure(cmd::codes::invalid_args, std::format("'{}' has no schema: its fields cannot be checked", type));
+		}
+		if (const std::string blob = edt::override_edit::binary_ref_in_patch(descs.schemas(), *schema, patch); !blob.empty()) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' refuses: {} is a blob field (binary_ref): it is written only by saving the mesh",
+				type, std::string_view(blob).substr(1)));
 		}
 		const desc::override_failure bad = desc::check_override_object(*schema, patch, &edited, &descs.schemas());
 		if (bad.status != desc::override_status::valid) {

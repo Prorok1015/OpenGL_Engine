@@ -1,5 +1,5 @@
 #include "edt_asset_picker.h"
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <algorithm>
 #include <cctype>
 #include <format>

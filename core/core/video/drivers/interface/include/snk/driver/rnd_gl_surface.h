@@ -1,10 +1,10 @@
 #pragma once
 #include <snk/common/snk_api.h>
 
-namespace wnd
+namespace rnd::driver
 {
-	// What a GL driver needs from a window: its context, buffer swap and symbol lookup.
-	// No backend types here, so the driver never links the windowing library.
+	// What the GL driver needs from a window: its context, buffer swap and symbol lookup. The driver declares it and a
+	// window implements it, so the driver never depends on the windowing library (#1161).
 	class SNK_API gl_surface
 	{
 	public:

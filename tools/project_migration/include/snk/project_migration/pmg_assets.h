@@ -1,6 +1,6 @@
 #pragma once
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_tag.h>
 #include <filesystem>
 #include <map>
 #include <optional>

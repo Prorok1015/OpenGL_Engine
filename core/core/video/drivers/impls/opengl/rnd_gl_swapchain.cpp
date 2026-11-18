@@ -6,7 +6,7 @@
 
 namespace {
 	// GLADloadproc is a bare function pointer, so the surface travels through a global during the load.
-	wnd::gl_surface* s_loading_surface = nullptr;
+	rnd::driver::gl_surface* s_loading_surface = nullptr;
 
 	void* load_gl_proc(const char* name)
 	{
@@ -28,7 +28,7 @@ void APIENTRY DebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
 	}
 }
 
-rnd::driver::gl::swapchain::swapchain(wnd::gl_surface& surface)
+rnd::driver::gl::swapchain::swapchain(rnd::driver::gl_surface& surface)
 	: m_surface(surface)
 {
 	m_surface.make_current();

@@ -16,7 +16,6 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -363,7 +362,7 @@ BOOST_AUTO_TEST_CASE(ABinaryGeometryLoaded_IsNotWrittenBackAsArrays)
 
 BOOST_AUTO_TEST_CASE(ALayoutWithoutVertices_IsNeverWritten_WhateverTheTableSays)
 {
-	// Arrays only: the side table has nothing for it.
+	// Arrays only: no binary state.
 	rnd::geometry_desc geometry;
 	geometry.layout = rnd::driver::BufferLayout{ { rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" } };
 	geometry.indices = { 0, 1, 2 };
@@ -375,9 +374,9 @@ BOOST_AUTO_TEST_CASE(ALayoutWithoutVertices_IsNeverWritten_WhateverTheTableSays)
 	BOOST_CHECK_NO_THROW(empty.serialize(written));
 }
 
-BOOST_AUTO_TEST_CASE(ANewGeometry_DoesNotInheritAStateLeftAtItsAddress)
+BOOST_AUTO_TEST_CASE(TheBinaryState_IsAMember_CopiedByCopyAndAssignment)
 {
-	// Ranges with no layout: the recorded state is the only thing the object holds (nothing allocated to leak).
+	// Ranges with no layout: the recorded state is all the geometry holds.
 	const auto positions = positions_of(1);
 	const auto indices = indices_of(1);
 	const std::array<res::binary_chunk, 2> chunks{ res::binary_chunk{ std::as_bytes(std::span(positions)), "f32x3" },
@@ -387,16 +386,30 @@ BOOST_AUTO_TEST_CASE(ANewGeometry_DoesNotInheritAStateLeftAtItsAddress)
 	BOOST_REQUIRE_MESSAGE(res::desc_binary::encode(chunks, ranges, error).has_value(), error);
 	const boost::json::object text = boost::json::parse(desc_text(ranges, "{}")).as_object();
 
-	alignas(rnd::geometry_desc) std::byte storage_bytes[sizeof(rnd::geometry_desc)];
-	auto* stale = new (storage_bytes) rnd::geometry_desc();
-	stale->deserialize(storage.require<desc::desc_system>(), text);
-	boost::json::object written;
-	BOOST_REQUIRE_THROW(stale->serialize(written), std::runtime_error);
+	rnd::geometry_desc source;
+	source.deserialize(storage.require<desc::desc_system>(), text);
+	BOOST_TEST((source.binary.state == rnd::detail::geometry_binary_state::not_loaded));
+	BOOST_REQUIRE(source.binary.ranges.vertices.has_value());
+	BOOST_TEST(source.binary.ranges.vertices->sha256 == ranges[0].sha256);
 
-	// Its destructor never runs (a module-side destruction that skipped ours): a new geometry takes the address.
-	auto* geometry = new (storage_bytes) rnd::geometry_desc();
-	BOOST_CHECK_NO_THROW(geometry->serialize(written));
-	std::destroy_at(geometry);
+	const rnd::geometry_desc copied = source;
+	BOOST_TEST((copied.binary.state == rnd::detail::geometry_binary_state::not_loaded));
+	BOOST_REQUIRE(copied.binary.ranges.indices.has_value());
+	BOOST_TEST(copied.binary.ranges.indices->offset == ranges[1].offset);
+	boost::json::object written;
+	BOOST_CHECK_THROW(copied.serialize(written), std::runtime_error);
+
+	rnd::geometry_desc assigned;
+	BOOST_CHECK_NO_THROW(assigned.serialize(written));
+	assigned = source;
+	BOOST_TEST((assigned.binary.state == rnd::detail::geometry_binary_state::not_loaded));
+	BOOST_CHECK_THROW(assigned.serialize(written), std::runtime_error);
+
+	// Arrays read over it drop the state: the geometry is written as arrays again.
+	assigned.deserialize(storage.require<desc::desc_system>(),
+		boost::json::parse(R"({"layout":{},"vertices":[],"indices":[]})").as_object());
+	BOOST_TEST((assigned.binary.state == rnd::detail::geometry_binary_state::none));
+	BOOST_TEST((source.binary.state == rnd::detail::geometry_binary_state::not_loaded));
 }
 
 BOOST_AUTO_TEST_CASE(AChildOfABinaryGeometry_IsWrittenWhole_KeepingItsParent)

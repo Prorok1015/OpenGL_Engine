@@ -1575,4 +1575,22 @@ BOOST_AUTO_TEST_CASE(ThePickerButton_IsNotThereWithoutACatalog_AndDoesNothingBef
 	BOOST_CHECK(!early.targets.contains("/texture#pick/textures/a.png"));
 }
 
+BOOST_AUTO_TEST_CASE(ABinaryRef_IsAReadOnlyLabel_ThatSumsTheRangeUp)
+{
+	desc::field_schema field;
+	field.name = "vertices";
+	field.key = "/vertices";
+	field.kind = desc::field_kind::binary_ref;
+	const ui::widget_spec spec = ui::describe_widget(field, true, true);
+	BOOST_CHECK(spec.kind == ui::widget::label);
+	BOOST_CHECK(spec.disabled);
+
+	const json::value range = json::parse(R"({ "offset": 16, "size": 1024, "layout": "f32x8",
+		"sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" })");
+	BOOST_TEST(ui::binary_ref_summary(range) == "1024 bytes, f32x8, sha256 0123456789ab");
+	BOOST_TEST(ui::binary_ref_summary(json::parse("[1, 2, 3]")) == "inline, 3 values");
+	BOOST_TEST(ui::binary_ref_summary(json::parse(R"({ "offset": 1 })")) == "not a range");
+	BOOST_TEST(ui::zero_value(field, desc::schema_registry{}).is_null());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

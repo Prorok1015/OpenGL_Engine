@@ -9,7 +9,7 @@
 #include <snk/render/rnd_image_compare.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>

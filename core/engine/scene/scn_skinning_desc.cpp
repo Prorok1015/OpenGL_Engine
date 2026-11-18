@@ -1,6 +1,6 @@
 #include <snk/scene/scn_skinning_desc.h>
 #include <snk/scene/scn_model.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 void scn::skinning_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {

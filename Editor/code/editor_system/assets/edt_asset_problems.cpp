@@ -1,8 +1,8 @@
 #include "edt_asset_problems.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_tag.h>
 #include <algorithm>
 #include <format>
 #include <map>

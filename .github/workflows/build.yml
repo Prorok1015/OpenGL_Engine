@@ -189,6 +189,12 @@ jobs:
           git fetch --no-tags --depth=1 origin "$base"
           python3 tools/ci/check_abi_changes.py --base "$base"
 
+      # #1161: core/core < core/engine < core/model_import < the rest; no include or link of a lower layer reaches a higher one.
+      - name: Check the layers of includes and links
+        run: |
+          python3 tools/ci/check_layers.py --self-test
+          python3 tools/ci/check_layers.py --repo .
+
       # #1136: the editor's panels take their colours from the theme (gui::theme_semantic_colors, the ImGui style); a
       # literal colour in Editor/code would not follow a theme change. The exceptions and their reasons are in the
       # script.
@@ -969,8 +975,19 @@ jobs:
         working-directory: build/ci-linux-coverage
         run: |
           set +e
-          ./unit_tests
-          echo "UNIT_TESTS_EXIT=$?" >> "$GITHUB_ENV"
+          ./unit_tests --log_level=test_suite 2>&1 | tee unit_tests.log
+          echo "UNIT_TESTS_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      # Where the budget goes: also after a failure or a timeout (the log holds the suites that finished) (#1207).
+      - name: Slowest test suites
+        if: always()
+        continue-on-error: true
+        working-directory: build/ci-linux-coverage
+        run: |
+          [ -f unit_tests.log ] || exit 0
+          sed -nE 's/.*Leaving test suite "([^"]+)"; testing time: ([0-9]+)(us|ms|s)\b.*/\1 \2 \3/p' unit_tests.log \
+            | awk '$1 != "Master" { t = $2; if ($3 == "us") t /= 1e6; else if ($3 == "ms") t /= 1e3; printf "%9.1f s  %s\n", t, $1 }' \
+            | sort -rn | head -n 10
 
       - name: Generate coverage report
         continue-on-error: true  # report tooling may flake; says nothing about the code

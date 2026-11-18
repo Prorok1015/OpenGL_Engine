@@ -2,7 +2,7 @@
 #include <snk/project/prj_manifest.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_desc_binary.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cstddef>

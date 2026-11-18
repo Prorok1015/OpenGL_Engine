@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resolvers/res_file_watcher.h>
 #include <snk/resource/resolvers/res_write_policy.h>

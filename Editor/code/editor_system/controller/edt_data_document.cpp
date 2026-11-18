@@ -10,7 +10,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <boost/json/parse.hpp>
 #include <algorithm>

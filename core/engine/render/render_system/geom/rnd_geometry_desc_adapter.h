@@ -3,7 +3,7 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace desc { class desc_system; }
 

@@ -3,7 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_base.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <mutex>
 #include <string>

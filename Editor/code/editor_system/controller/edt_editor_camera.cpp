@@ -1,5 +1,5 @@
 #include "edt_editor_camera.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/common/eng_transform_3d.hpp>

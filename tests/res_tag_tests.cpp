@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/resource/res_model_reference.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <optional>
 #include <string_view>
 #include <unordered_set>

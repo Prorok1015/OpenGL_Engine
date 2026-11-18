@@ -16,7 +16,7 @@
 #include <snk/input/inp_input_router.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_prefab_spawn.h>

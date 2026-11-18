@@ -1,7 +1,8 @@
 #pragma once
 #include "mdl_api.h"
 #include <snk/common/ds/ds_task_system.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/object.hpp>
 #include <chrono>
 #include <cstddef>
@@ -19,6 +20,34 @@ namespace mdl
 	// this many bytes (on a code point), so the answer of the decoder stays small (edt_decode_codec takes the same limits).
 	inline constexpr std::size_t k_max_missing_textures = 256;
 	inline constexpr std::size_t k_max_missing_texture_name_bytes = 1024;
+
+	// What a model may hold (#1119): a scene past any of these is refused with failure::too_large before anything is written.
+	inline constexpr std::uint64_t k_max_scene_nodes = 65536;
+	// A desc is parsed with at most 128 JSON levels (max_depth in core/core/resource/res_json_body.cpp and
+	// core/core/desc/desc_system.cpp). A prefab node adds about two (its object and its children array) plus its
+	// components, so a deeper tree could be written but not read back. The root is level 1.
+	inline constexpr std::uint64_t k_max_scene_depth = 48;
+	inline constexpr std::uint64_t k_max_scene_meshes = 65536;
+	// The geometry file's limit alone would refuse a big model only after the whole geometry was built in memory, and
+	// vertices of position only (12 bytes, the smallest scn::import_layout) fit it far past this count.
+	inline constexpr std::uint64_t k_max_scene_vertices = 16'777'216;
+	// Face indices of every mesh; each is a u32 in the geometry's binary file.
+	inline constexpr std::uint64_t k_max_scene_indices = 48ull * 1024 * 1024;
+	static_assert(k_max_scene_indices * sizeof(std::uint32_t) <= res::desc_binary::max_file_bytes);
+	static_assert(k_max_scene_vertices * 3 * sizeof(float) <= res::desc_binary::max_file_bytes);
+
+	// A parsed scene as the limits above count it.
+	struct scene_size
+	{
+		std::uint64_t nodes = 0;    // the root included
+		std::uint64_t depth = 0;    // of the deepest node
+		std::uint64_t meshes = 0;
+		std::uint64_t vertices = 0;
+		std::uint64_t indices = 0;
+	};
+
+	// Empty: `size` is within every limit. Else the first limit it passes, with the count: "too many nodes: 70112 (limit 65536)".
+	SNK_MODEL_IMPORT_API std::string scene_size_problem(const scene_size& size);
 
 	// A file the model names, opened for assimp.
 	struct opened_file
@@ -104,6 +133,7 @@ namespace mdl
 		timed_out, // past import_options::deadline
 		parse,     // assimp could not read the model; `error` is what it said
 		geometry,  // the geometry would be refused by the loader; `error` names the check
+		too_large, // past a k_max_scene_* limit; `error` names it and the count
 	};
 
 	struct import_result

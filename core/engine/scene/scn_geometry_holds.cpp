@@ -1,6 +1,6 @@
 #include <snk/scene/scn_geometry_holds.h>
 #include <snk/scene/scn_model.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
 #include <entt/entity/registry.hpp>

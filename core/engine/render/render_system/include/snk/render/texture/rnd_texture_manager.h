@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/desc/desc_system.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_texture_interface.h>

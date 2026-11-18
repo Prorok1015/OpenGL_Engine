@@ -1,6 +1,6 @@
 #include <snk/scene/scn_bone_desc.h>
 #include <snk/scene/scn_model.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 
 void scn::bone_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {

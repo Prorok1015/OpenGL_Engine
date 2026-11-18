@@ -2,7 +2,7 @@
 #include "edt_desc_location.h"
 #include <snk/editor/edt_problem_list.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <functional>
 #include <map>

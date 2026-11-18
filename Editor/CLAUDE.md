@@ -31,6 +31,8 @@ Editor/
     ├── prefab/                       # the prefab editor, whole (#1004): nothing of it lives in edt_editor_system.*
     │   ├── edt_prefab_document.h/.cpp # prefab_document: the prefab editor's document (working copy, Apply/Revert), owns the preview:<tag> set
     │   ├── edt_prefab_editor_component.h/.cpp # prefab_editor_component (#1004): the window, the close question, Apply/Revert callbacks and the Inspector hand-over; `editor_system` only creates it, calls `install()` where the window goes in the View menu and asks `dirty()/apply_dirty()/close()/open()`
+    │   ├── edt_prefab_file_edit.h/.cpp # prefab_file_bytes (the adapter's form a prefab is written as) and edit_prefab_file / apply_override_records: change a prefab file without opening it ("Apply to Prefab" of an instance, #150)
+    │   ├── edt_prefab_variant_creator.h/.cpp # prefab_variant_creator (#151): `<name>.prefab.desc` next to its base holding only `__parent` and `"__layer": 2` (a layer that changes nothing, #972); refused for a base that does not load as a prefab, a name taken in any layer, a name of the open level (`open_level_claim`, #966) and while the project may not be written; the action `prefab.create_variant {base, name?}` (prefab_editor_component::install) and the asset browser's "Create Variant" run it, the variant opens in the prefab editor only for a person's call (an agent's call makes the file and raises `agent_action`)
     │   ├── edt_prefab_close.h/.cpp    # the close question and the toolbar state, testable without ImGui
     │   ├── edt_inspector_target.h/.cpp # whose selection the Inspector shows (the level's or one prefab node) and where its edits go
     │   └── edt_prefab_editor_panel.h/.cpp # the window: toolbar, node tree, viewport
@@ -388,7 +390,7 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 
 Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/model_import`, #1108); a game and the tools load them through `mdl::model_adapter`, the editor through the decoder process (`edt::decoded_model_adapter`) (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
 - Outputs `prefab_desc` (not legacy prototype)
-- Geometry stored at `memory://path/name.geom.desc` (separate resource)
+- Geometry stored at `memory://path/name.geom.desc` (separate resource); triangle data in `name.geom.bin` beside it (EPIC-79), lines/points as JSON arrays
 - Mesh nodes → `mesh_node_desc` components referencing geometry by tag
 - Skinning → `skinning_desc` + bone weights registered with `rnd::skinning_manager`
 - Bone nodes → `bone_desc` components with offset matrix + global index
@@ -396,7 +398,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are read by `mdl::import_model` (`core/
 
 Import in editor: File menu → `dialog_service::pick_file` → `import_component::start_import` → async import → export dialog → auto-add to scene.
 
-**JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` (vertex and index arrays) stays on one line. A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
+**JSON style of imported assets** (#559): the importer stores `.prefab.desc`, `.mat.desc` and `.txm.desc` in `memory://` through `desc::pretty_json_bytes` (`snk/desc/desc_pretty_json.h`: the one text style of the project, the same `desc_system::serialize_to_bytes` gives a saved level: four spaces, `\n`, one at the end), and `asset_exporter::export_to_project` writes them into the project the same way after the `memory://` → `res://` remap; `.geom.desc` stays on one line and its triangle data goes to `.geom.bin` (`rnd::write_geometry_files`). A file that already holds exactly the bytes the export would write is not written again (`unchanged_on_disk`: no file-watcher event, no git change, not in `written`), so importing an unchanged model again changes nothing. Covered by `EdtImportExportFormatTests`.
 
 ## File Dialog
 
@@ -479,4 +481,5 @@ Nothing is written into the folder a process was started from (the current folde
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`
 - **`get_field_desc<T>` with inline objects** requires `__type` field present in the JSON object
 - **`children` is a JSON array of named nodes (v2)** — iterate via `as_array()`; a v1 object is only valid before `migrate_tree`
+- **MCP never writes mesh data** (EPIC-79): `desc.create`/`desc.write` refuse `*.geom.desc`/`*.poly.desc` and `geometry_desc`/`poly_mesh_desc` content, inline ones nested anywhere included; `component.set`/`component.add`/`scene.node.create` refuse an inline mesh desc in a reference field and a patch that touches a `binary_ref` field (read-only in the Inspector). Mesh data comes from import/export and the mesh save only
 - **No C functions** — prefer `std::format_to_n` over `snprintf`/`strncpy`, C++ alternatives over C stdlib

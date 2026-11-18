@@ -1,7 +1,7 @@
 #pragma once
 #include "edt_asset_database.h"
 #include <snk/desc/desc_schema.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <cstddef>
 #include <cstdint>

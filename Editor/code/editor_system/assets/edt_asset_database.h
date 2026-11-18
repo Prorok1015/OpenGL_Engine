@@ -2,11 +2,11 @@
 #include "edt_asset_references.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_stamp.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
