@@ -2,7 +2,7 @@
 #include "test_scene_env.hpp"
 #include <snk/ecs/ecs_system.h>
 #include <snk/ecs/ecs_system_registry.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_node_index.h>

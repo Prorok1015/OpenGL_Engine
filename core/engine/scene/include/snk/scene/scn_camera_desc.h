@@ -4,7 +4,7 @@
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 #include <boost/describe.hpp>
 #include <glm/glm.hpp>

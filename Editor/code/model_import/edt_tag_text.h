@@ -4,7 +4,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 
 namespace edt {
 

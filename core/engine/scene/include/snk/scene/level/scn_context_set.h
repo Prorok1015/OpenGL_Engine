@@ -12,7 +12,7 @@
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>

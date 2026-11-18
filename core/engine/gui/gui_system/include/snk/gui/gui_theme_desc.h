@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/snk_api.h>
 
 #include <boost/describe.hpp>
@@ -52,6 +52,8 @@ namespace desc {
 		f("border_size").range(0, 4, 1),
 		f("tab_overline").range(0, 8, 1),
 		f("font").tooltip("TTF/OTF of the UI from engine://, res:// or this file's own protocol"),
+		f("font_bold").tooltip("TTF/OTF of headings, same sources as font; one that cannot be used is the UI font"),
+		f("font_mono").tooltip("Monospaced TTF/OTF of logs, diffs and code, same sources as font"),
 		f("font_size").range(8, 48, 1).tooltip("Pixels before the monitor's scale"),
 		f("icons").tooltip("Merge the editor's icon font into the UI font"));
 }
@@ -97,12 +99,15 @@ namespace gui
 		float border_size = 1.f;
 		float tab_overline = 2.f;
 		res::tag font{ "engine://fonts/NotoSans-Regular.ttf" };
+		res::tag font_bold{ "engine://fonts/NotoSans-Bold.ttf" };
+		res::tag font_mono{ "engine://fonts/NotoSansMono-Regular.ttf" };
 		float font_size = 14.f;
 		bool icons = true;
 
 		BOOST_DESCRIBE_CLASS(theme_desc, (), (base, light, window, panel, frame, frame_hover, border, text, text_dim,
 			accent, accent_hover, selection, error, warning, success, info, text_secondary, agent, diff_added,
 			diff_removed, diff_hunk, backdrop, rounding, scrollbar_rounding, window_padding, frame_padding,
-			item_spacing, scrollbar_size, border_size, tab_overline, font, font_size, icons), (), ())
+			item_spacing, scrollbar_size, border_size, tab_overline, font, font_bold, font_mono, font_size, icons),
+			(), ())
 	};
 }

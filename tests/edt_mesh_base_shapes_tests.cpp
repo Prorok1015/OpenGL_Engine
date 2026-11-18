@@ -4,7 +4,7 @@
 #include "edt_mesh_base_shapes.h"
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>

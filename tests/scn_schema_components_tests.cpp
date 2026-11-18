@@ -10,6 +10,7 @@
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/scene/scn_schema_components.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <format>
@@ -949,6 +950,58 @@ BOOST_AUTO_TEST_CASE(a_hot_reload_to_another_layout_keeps_the_fields_both_have)
 	// A field v2 dropped is reported as removed (the value is not lost silently), not as one that no longer fits.
 	BOOST_TEST(restored.removed_fields.count("mod.health") == 1u);
 	BOOST_TEST(restored.partial.count("mod.health") == 0u);
+}
+
+// EPIC-58 S9a (#763): a component schema's declarative steps register with it and go with its registration.
+BOOST_AUTO_TEST_CASE(a_schema_with_migrations_registers_its_steps_and_drops_them_with_it)
+{
+	constexpr const char* text = R"json({ "name": "mod.migrated", "version": 2, "kind": "component",
+		"fields": [ { "name": "hp", "kind": "f32" } ] })json";
+	const auto steps = [](const char* text_of_steps) { return boost::json::parse(text_of_steps).as_array(); };
+
+	auto migrated = scn::register_schema_component(mgr, *layer, schema_from(text), steps(R"([{"from":1,"rename":{"/health":"/hp"}}])"));
+	BOOST_REQUIRE(static_cast<bool>(migrated));
+	BOOST_TEST(layer->descs().current_version("mod.migrated") == 2);
+	BOOST_TEST(layer->descs().migration_summary("mod.migrated", 1) == "rename /health -> /hp");
+	migrated.reset();
+	BOOST_TEST(nothing_registered("mod.migrated"));
+	BOOST_TEST(layer->descs().current_version("mod.migrated") == 1);
+
+	// Steps with a gap: refused, nothing left behind.
+	BOOST_TEST(!scn::register_schema_component(mgr, *layer, schema_from(text), steps(R"([{"from":2,"remove":["/x"]}])")));
+	BOOST_TEST(nothing_registered("mod.migrated"));
+	BOOST_TEST(layer->descs().current_version("mod.migrated") == 1);
+
+	// Steps of the type in C++ already: refused, and those steps stay.
+	layer->descs().register_migration("mod.migrated", 1, [](boost::json::object&) {});
+	BOOST_TEST(!scn::register_schema_component(mgr, *layer, schema_from(text), steps(R"([{"from":1,"remove":["/x"]}])")));
+	BOOST_TEST(nothing_registered("mod.migrated"));
+	BOOST_TEST(layer->descs().current_version("mod.migrated") == 2);
+	layer->descs().unregister_migrations("mod.migrated");
+}
+
+// EPIC-58 #763: an override is warned about only when it reaches no field; a field key need not start with '/'.
+BOOST_AUTO_TEST_CASE(an_override_path_is_matched_to_the_field_keys_of_the_schema)
+{
+	const auto field = [](const char* name, const char* key) {
+		desc::field_schema result;
+		result.name = name;
+		result.key = key;
+		return result;
+	};
+	desc::type_schema schema;
+	schema.name = "mod.keys";
+	schema.fields = { field("hp", "hp"), field("pos", "/pos"), field("armor", "/stats/armor"), field("odd", "a/b~c") };
+
+	BOOST_TEST(scn::override_names_a_field(schema, "/hp"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/pos"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/pos/1"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/stats"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/stats/armor"));
+	BOOST_TEST(scn::override_names_a_field(schema, "/a~1b~0c"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/health"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/hpx"));
+	BOOST_TEST(!scn::override_names_a_field(schema, "/stats/armour"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

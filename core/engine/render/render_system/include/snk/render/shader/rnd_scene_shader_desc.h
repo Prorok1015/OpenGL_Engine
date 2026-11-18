@@ -8,7 +8,7 @@
 #include <snk/common/common.h>
 #include <snk/common/snk_api.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/texture/rnd_texture_id.h>
 

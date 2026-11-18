@@ -2,7 +2,7 @@
 #include <snk/gui/gui_layer_interface.h>
 #include <snk/gui/gui_theme.h>
 #include <snk/gui/gui_theme_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_binary.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/common/snk_api.h>
@@ -24,7 +24,7 @@ namespace gui
 	// Loads a theme preset and its fonts through the resource system without waiting on the main thread, then hands
 	// the result to `apply` (the GL backend rebuilds its atlas and style at the next frame). A preset that cannot be
 	// used is a WARN and the fallback preset is loaded instead; a font that cannot be used is a WARN and the UI font
-	// (Noto) takes its place, so nothing a preset says can stop the editor.
+	// (Noto) takes its place (the text font for bold and mono), so nothing a preset says can stop the editor.
 	class SNK_API theme_service
 	{
 	public:
@@ -34,6 +34,9 @@ namespace gui
 			// The UI font, merged after a text font of the person's for the glyphs that one lacks; empty otherwise.
 			std::vector<std::byte> fallback_font;
 			std::vector<std::byte> icon_font;
+			// Empty: the text font stands in (gui::ui_face keeps their indices).
+			std::vector<std::byte> bold_font;
+			std::vector<std::byte> mono_font;
 			// False: the fonts are the ones applied last (only colors or sizes changed), the bytes are empty and the
 			// atlas stays as it is.
 			bool fonts_changed = true;
@@ -81,6 +84,8 @@ namespace gui
 
 		struct font_key {
 			res::tag text;
+			res::tag bold;
+			res::tag mono;
 			float px = 0.f;
 			bool icons = false;
 			bool operator==(const font_key&) const = default;
@@ -94,6 +99,10 @@ namespace gui
 		bool readable(const res::tag& tag, const std::vector<std::string>& sources) const;
 		static std::string sources_text(const std::vector<std::string>& sources);
 		res::res_handle<res::binary_resource> request_font(const res::tag& tag);
+		// A bold or mono face to read; an empty tag when the text font stands in for it.
+		res::tag face_tag(const res::tag& tag, std::string_view field) const;
+		std::vector<std::byte> face_bytes(const res::res_handle<res::binary_resource>& handle, const res::tag& tag,
+			std::string_view field) const;
 
 		res::resource_system& m_resources;
 		res::tag m_fallback;
@@ -108,8 +117,12 @@ namespace gui
 		res::res_handle<theme_desc> m_preset;
 		theme_style m_style;
 		res::tag m_text_font_tag;
+		res::tag m_bold_font_tag;
+		res::tag m_mono_font_tag;
 		bool m_wants_icons = false;
 		res::res_handle<res::binary_resource> m_text_font;
+		res::res_handle<res::binary_resource> m_bold_font;
+		res::res_handle<res::binary_resource> m_mono_font;
 		res::res_handle<res::binary_resource> m_fallback_font;
 		res::res_handle<res::binary_resource> m_icons;
 		std::optional<font_key> m_applied_fonts;

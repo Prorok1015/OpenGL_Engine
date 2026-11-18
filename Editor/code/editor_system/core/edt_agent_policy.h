@@ -63,10 +63,19 @@ namespace edt
 		return policy_mode::deny;
 	}
 
-	// A layer's `allow` for a call judged by `category` is held to `ask` (project_migrate, see default_mode).
-	constexpr bool needs_consent_each_call(const cmd::command_desc& command, cmd::agent_category category)
+	// asset.rename and asset.move (#775): they rewrite files across the project, so the project's policy file, which comes from the
+	// repository, does not answer for them either. Only a person's answer or, headless, the --agent-policy file runs them.
+	inline bool is_asset_rename_or_move(const cmd::command_desc& command)
 	{
-		return command.category == cmd::agent_category::project_migrate || category == cmd::agent_category::project_migrate;
+		return command.id == "asset.rename" || command.id == "asset.move";
+	}
+
+	// A layer's `allow` for a call judged by `category` is held to `ask` (project_migrate, see default_mode; asset.rename and
+	// asset.move).
+	inline bool needs_consent_each_call(const cmd::command_desc& command, cmd::agent_category category)
+	{
+		return command.category == cmd::agent_category::project_migrate || category == cmd::agent_category::project_migrate
+			|| is_asset_rename_or_move(command);
 	}
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command);

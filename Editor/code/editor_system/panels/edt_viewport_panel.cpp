@@ -2,7 +2,8 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/gui/gui_ui_font.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_node_index.h>
@@ -13,7 +14,9 @@
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
 #include <imgui.h>
+#include <format>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace edt
@@ -164,11 +167,15 @@ namespace edt
 	{
 		// Highlight the active gizmo operation button
 		const char* labels[] = {"T", "R", "S"};
+		const char* icons[] = {gui::icon::move, gui::icon::rotate, gui::icon::scale};
+		const bool with_icons = gui::ui_font_has_icons();
 		for (int i = 0; i < 3; ++i) {
 			bool active = (m_gizmo_op == i);
 			if (active)
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-			if (ImGui::Button(labels[i]))
+			// The same ID with or without the icon; the probe keeps the letter as the name.
+			const std::string button = std::format("{}###{}", with_icons ? icons[i] : labels[i], labels[i]);
+			if (ImGui::Button(button.c_str()))
 				m_gizmo_op = i;
 			probe_last_item(m_ui_probe.get(), "viewport_toolbar", labels[i]);
 			if (active)
@@ -259,9 +266,9 @@ namespace edt
 			return;
 
 		// Draw orientation cube gizmo in the bottom-right corner of the scene image
-		const float gizmo_size = dpi_px(80.f);
-		float x = m_image_pos.x + m_viewport_size.x - gizmo_size - dpi_px(8.f);
-		float y = m_image_pos.y + m_viewport_size.y - gizmo_size - dpi_px(8.f);
+		const float gizmo_size = em(80.f);
+		float x = m_image_pos.x + m_viewport_size.x - gizmo_size - em(8.f);
+		float y = m_image_pos.y + m_viewport_size.y - gizmo_size - em(8.f);
 
 		edt::imgui::set_view_area(x, y, gizmo_size);
 		edt::imgui::set_draw_list(ImGui::GetWindowDrawList());

@@ -1,9 +1,10 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_json_ops.h>
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_reference.h>
-#include <snk/resource/res_tag_json.h>
+#include "desc_schema_migrations.h"
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_reference.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/engine_assert.h>
 #include <algorithm>
@@ -172,6 +173,10 @@ void desc::desc_system::unregister_desc(std::string_view type_name)
 	std::erase(m_component_type_names, name);
 	m_schemas.remove(type_name);
 	m_layer_writers.erase(name);
+	if (m_schema_migration_types.erase(name) > 0) {
+		lock.unlock();
+		unregister_migrations(name);
+	}
 }
 
 void desc::desc_system::set_layer_writer(std::string_view type_name, layer_writer writer)
@@ -197,8 +202,13 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
 		return nullptr;
 	}
-	ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
-		schema.name, schema.version, current_version(schema.name));
+	// Refused in every build: a schema registered at a version its steps do not lead to would stamp files with a version
+	// no step brings older ones to.
+	if (const int current = current_version(schema.name); schema.version != current) {
+		egLOG_ERROR("desc/error", "Schema '{}' not registered: it is version {}, but its migration steps lead to version {}",
+			schema.name, schema.version, current);
+		return nullptr;
+	}
 	ASSERT_MSG(find_schema(schema.name) == nullptr, "Schema '{}' is already registered!", schema.name);
 	if (schema.is_document) {
 		std::string problem;
@@ -237,6 +247,56 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 	std::unique_lock lock(m_registry_mutex);
 	if (factory_map.try_emplace(stored->name, std::move(shared)).second && stored->is_component) {
 		m_component_type_names.push_back(stored->name);
+	}
+	return stored;
+}
+
+const desc::type_schema* desc::desc_system::register_schema(type_schema schema, const json::array& migrations)
+{
+	if (migrations.empty()) {
+		return register_schema(std::move(schema));
+	}
+	const std::string name = schema.name;
+	if (owned_by_parent(name)) {
+		egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", name);
+		return nullptr;
+	}
+	std::vector<detail::schema_migration> steps;
+	try {
+		steps = detail::parse_schema_migrations(migrations, schema.version);
+	} catch (const std::runtime_error& error) {
+		egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", name, error.what());
+		return nullptr;
+	}
+	{
+		std::shared_lock lock(m_registry_mutex);
+		if (m_migrations.contains(name)) {
+			egLOG_ERROR("desc/error", "Schema '{}' not registered: its type has migration steps registered in C++ already", name);
+			return nullptr;
+		}
+	}
+	for (detail::schema_migration& step : steps) {
+		const int from = step.from;
+		std::string summary = detail::summary_of(step);
+		register_migration(name, from, summary, [step = std::move(step), name, summary](json::object& object, migration_context&) {
+			try {
+				detail::apply(step, object);
+			} catch (const std::exception& error) {
+				throw std::runtime_error(std::format("'{}' step from version {} ({}): {}", name, step.from, summary, error.what()));
+			}
+		});
+	}
+	{
+		std::unique_lock lock(m_registry_mutex);
+		m_schema_migration_types.insert(name);
+	}
+	const type_schema* stored = register_schema(std::move(schema));
+	if (!stored) {
+		{
+			std::unique_lock lock(m_registry_mutex);
+			m_schema_migration_types.erase(name);
+		}
+		unregister_migrations(name);
 	}
 	return stored;
 }

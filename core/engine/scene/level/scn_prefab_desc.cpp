@@ -6,16 +6,17 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/level/scn_node_index.h>
-#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_reference.h>
+#include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_json_storage.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <mutex>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -1111,8 +1112,44 @@ namespace {
 		return true;
 	}
 
-	// serialize(parent) with the component's own overrides merged in, then the edits in order.
-	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent)
+	// A field key as the JSON pointer an override names it by: a key without a leading '/' is one plain key.
+	std::string pointer_of_key(std::string_view key)
+	{
+		if (key.starts_with('/')) {
+			return std::string{ key };
+		}
+		std::string pointer = "/";
+		for (const char c : key) {
+			if (c == '~') {
+				pointer += "~0";
+			} else if (c == '/') {
+				pointer += "~1";
+			} else {
+				pointer += c;
+			}
+		}
+		return pointer;
+	}
+
+	// One warning per (type, path): an instance spawned again and again with the same edit says it once.
+	void warn_override_off_the_fields(std::string_view type, std::string_view path)
+	{
+		static std::mutex mutex;
+		static std::unordered_set<std::string> warned;
+		std::string key = std::format("{}\n{}", type, path);
+		{
+			std::lock_guard lock(mutex);
+			if (!warned.insert(std::move(key)).second) {
+				return;
+			}
+		}
+		egLOG_WARN("desc", "override of '{}' at '{}': the component has no such field (moved by a migration?), the edit does nothing", type, path);
+	}
+
+	// serialize(parent) with the component's own overrides merged in, then the edits in order. With the component's
+	// `schema`, an edit at no field of it is reported: the read would drop it quietly, e.g. after a migration moved the
+	// field (EPIC-58 #763).
+	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent, const desc::type_schema* schema = nullptr)
 	{
 		json::object effective;
 		if (parent) parent->serialize(effective);
@@ -1126,8 +1163,13 @@ namespace {
 					if (!member.key().starts_with("__")) mergeable.insert_or_assign(member.key(), member.value());
 				}
 				desc::json_deep_merge(holder.as_object(), mergeable);
-			} else if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
-				egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
+			} else {
+				if (schema && !scn::override_names_a_field(*schema, edit.path)) {
+					warn_override_off_the_fields(schema->name, edit.path);
+				}
+				if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
+					egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
+				}
 			}
 		}
 		return std::move(holder.as_object());
@@ -1205,6 +1247,15 @@ namespace {
 json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent)
 {
 	return compose_json(cnode, parent);
+}
+
+bool scn::override_names_a_field(const desc::type_schema& schema, std::string_view path)
+{
+	return std::ranges::any_of(schema.fields, [path](const desc::field_schema& field) {
+		const std::string key = pointer_of_key(field.key);
+		return key == path || (path.starts_with(key) && path.size() > key.size() && path[key.size()] == '/')
+			|| (key.starts_with(path) && key.size() > path.size() && key[path.size()] == '/');
+	});
 }
 
 bool scn::expand_instance(
@@ -1423,7 +1474,7 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 		}
 		std::string type = cnode.type_name;
 		if (type.empty() && parent) type = std::string{ parent->get_type() };
-		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get()), comp_name);
+		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get(), assembler.get_desc_system().find_schema(type)), comp_name);
 	}
 
 	// A fresh spawn has no children yet; on a reload the live ones go away unless a node claims them.

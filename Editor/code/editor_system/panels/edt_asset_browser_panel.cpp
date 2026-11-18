@@ -1,5 +1,6 @@
 #include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
+#include "edt_prefab_variant_creator.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
 #include "edt_ui_probe_imgui.h"
@@ -156,6 +157,62 @@ namespace edt
 		ImGui::EndPopup();
 	}
 
+	void asset_browser_panel::set_variant_creator(std::shared_ptr<prefab_variant_creator> creator, std::function<void(const res::tag&)> on_created)
+	{
+		m_variant_creator = std::move(creator);
+		m_variant_form = m_variant_creator ? std::make_unique<prefab_variant_form>(*m_variant_creator) : nullptr;
+		m_on_variant_created = std::move(on_created);
+	}
+
+	void asset_browser_panel::draw_variant_window()
+	{
+		if (!m_variant_form) {
+			return;
+		}
+		constexpr const char* title = "Create Prefab Variant";
+		if (m_variant_requested) {
+			ImGui::OpenPopup(title);
+			m_variant_requested = false;
+		}
+		if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			return;
+		}
+		prefab_variant_form& form = *m_variant_form;
+		ImGui::TextDisabled("Base: %s", std::string(form.base().view()).c_str());
+		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
+		std::copy(form.name().begin(), form.name().end(), buffer.begin());
+		if (ImGui::IsWindowAppearing()) {
+			ImGui::SetKeyboardFocusHere();
+		}
+		const bool entered = ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (buffer.data() != form.name()) {
+			form.set_name(buffer.data());
+		}
+		ImGui::TextDisabled(".prefab.desc is added; the file lands next to the base");
+		for (const std::string* text : { &form.problem(), &form.error() }) {
+			if (text->empty()) continue;
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
+			ImGui::TextWrapped("%s", text->c_str());
+			ImGui::PopStyleColor();
+		}
+		ImGui::BeginDisabled(!form.can_submit());
+		const bool clicked = ImGui::Button("Create");
+		ImGui::EndDisabled();
+		if ((clicked || entered) && form.can_submit()) {
+			if (const std::optional<res::tag> made = form.submit()) {
+				ImGui::CloseCurrentPopup();
+				if (m_on_variant_created) {
+					m_on_variant_created(*made);
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+
 	void asset_browser_panel::set_code_section(std::shared_ptr<code_section> section)
 	{
 		m_code_section = std::move(section);
@@ -252,9 +309,9 @@ namespace edt
 			for (const auto& part : m_current_rel) {
 				if (part == ".") continue;
 				cursor /= part;
-				ImGui::SameLine(0.f, dpi_px(2.f));
+				ImGui::SameLine(0.f, em(2.f));
 				ImGui::TextDisabled(">");
-				ImGui::SameLine(0.f, dpi_px(2.f));
+				ImGui::SameLine(0.f, em(2.f));
 				const std::string seg = fs_paths::utf8_of(part);
 				if (ImGui::SmallButton(seg.c_str()))
 					navigate_to(cursor);
@@ -271,10 +328,10 @@ namespace edt
 
 		// ── two columns: tree | files ─────────────────────────────────────────
 		ImGui::Columns(2, "ab_cols", true);
-		ImGui::SetColumnWidth(0, dpi_px(160.f));
+		ImGui::SetColumnWidth(0, em(160.f));
 
 		// Left: directory tree
-		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, dpi_px(12.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, em(12.f));
 		if (ImGui::TreeNodeEx("res://##directorytreeroot", ImGuiTreeNodeFlags_DefaultOpen |
 		                                ImGuiTreeNodeFlags_SpanFullWidth))
 		{
@@ -366,6 +423,10 @@ namespace edt
 						if (ImGui::MenuItem("Copy relative path")) {
 							ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
 						}
+						if (m_variant_form && e.src.relative.generic_string().ends_with(".prefab.desc") && ImGui::MenuItem("Create Variant")) {
+							m_variant_form->open(res::tag::make(e.src.relative.generic_string()));
+							m_variant_requested = true;
+						}
 						ImGui::EndPopup();
 					}
 				}
@@ -390,6 +451,7 @@ namespace edt
 		ImGui::Columns(1);
 
 		draw_create_window();
+		draw_variant_window();
 	}
 }
 

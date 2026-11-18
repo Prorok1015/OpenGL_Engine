@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <memory>
+#include <utility>
 #include <string_view>
 #include <vector>
 
@@ -253,6 +254,57 @@ BOOST_AUTO_TEST_CASE(TheIconsMergeIntoTheUiFont_WhichKeepsItsCyrillic)
 	BOOST_TEST(added->FindGlyphNoFallback('A') != nullptr);
 	BOOST_TEST(added->FindGlyphNoFallback(gui::icon::first) != nullptr);
 	BOOST_TEST(added->FindGlyphNoFallback(gui::icon::last) != nullptr);
+}
+
+// #1136: the editor picks a face by its index in the atlas.
+BOOST_AUTO_TEST_CASE(TheFaces_AreTextBoldMono_InThatOrder_EachWithCyrillicAndIcons)
+{
+	const std::filesystem::path fonts = std::filesystem::path{ SNK_CORE_RES_DIR } / "fonts";
+	gui::ui_font font;
+	const std::vector<std::byte> text = read_bytes(fonts / "NotoSans-Regular.ttf");
+	const std::vector<std::byte> bold = read_bytes(fonts / "NotoSans-Bold.ttf");
+	const std::vector<std::byte> mono = read_bytes(fonts / "NotoSansMono-Regular.ttf");
+	font.set_bytes(text);
+	font.set_bold_bytes(bold);
+	font.set_mono_bytes(mono);
+	font.set_icon_bytes(read_bytes(fonts / "lucide-icons.ttf"));
+
+	ImFontAtlas atlas;
+	ImFont* added = font.add_faces_to(atlas, 14.f);
+	BOOST_REQUIRE(added != nullptr);
+	BOOST_REQUIRE(atlas.Build());
+
+	BOOST_REQUIRE(atlas.Fonts.Size == gui::ui_face_count);
+	BOOST_TEST(atlas.Fonts[int(gui::ui_face::text)] == added);
+	const std::pair<gui::ui_face, const std::vector<std::byte>*> faces[] = {
+		{ gui::ui_face::text, &text }, { gui::ui_face::bold, &bold }, { gui::ui_face::mono, &mono } };
+	for (const auto& [face, bytes] : faces) {
+		BOOST_TEST_CONTEXT(int(face)) {
+			ImFont* f = atlas.Fonts[int(face)];
+			BOOST_TEST(f->ConfigData->FontDataSize == static_cast<int>(bytes->size()));
+			BOOST_TEST(f->FindGlyphNoFallback(0x0416) != nullptr); // Ж
+			BOOST_TEST(f->FindGlyphNoFallback(gui::icon::first) != nullptr);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WithoutBoldOrMonoBytes_TheTextFontTakesTheirIndices)
+{
+	const std::filesystem::path fonts = std::filesystem::path{ SNK_CORE_RES_DIR } / "fonts";
+	gui::ui_font font;
+	const std::vector<std::byte> text = read_bytes(fonts / "NotoSans-Regular.ttf");
+	font.set_bytes(text);
+	font.set_mono_bytes(bytes_of({ 1, 2, 3, 4 }));
+
+	ImFontAtlas atlas;
+	BOOST_REQUIRE(font.add_faces_to(atlas, 13.f) != nullptr);
+	BOOST_REQUIRE(atlas.Build());
+
+	BOOST_REQUIRE(atlas.Fonts.Size == gui::ui_face_count);
+	for (ImFont* f : atlas.Fonts) {
+		BOOST_TEST(f->ConfigData->FontDataSize == static_cast<int>(text.size()));
+		BOOST_TEST(f->FindGlyphNoFallback(0x044F) != nullptr); // я
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -205,6 +205,8 @@ void gui::theme_service::drop_loads()
 	m_text_font = {};
 	m_fallback_font = {};
 	m_icons = {};
+	m_bold_font = {};
+	m_mono_font = {};
 }
 
 std::string gui::theme_service::sources_text(const std::vector<std::string>& sources)
@@ -267,18 +269,22 @@ bool gui::theme_service::start(const theme_desc& preset, std::string& problem)
 			m_text_font_tag.view(), sources_text(m_font_sources), m_ui_font.view());
 		m_text_font_tag = m_ui_font;
 	}
+	m_bold_font_tag = face_tag(preset.font_bold, "font_bold");
+	m_mono_font_tag = face_tag(preset.font_mono, "font_mono");
 
-	const font_key key{ m_text_font_tag, m_style.font_px, m_wants_icons };
+	const font_key key{ m_text_font_tag, m_bold_font_tag, m_mono_font_tag, m_style.font_px, m_wants_icons };
 	if (m_applied_fonts && *m_applied_fonts == key) {
 		m_stage = stage::idle;
 		m_applied = m_style;
-		m_apply(theme{ m_style, {}, {}, {}, false });
+		m_apply(theme{ m_style, {}, {}, {}, {}, {}, false });
 		return true;
 	}
 	m_text_font = request_font(m_text_font_tag);
 	// Glyphs a font of the person's lacks (Cyrillic, say) come from the UI font, merged after it.
 	m_fallback_font = m_text_font_tag == m_ui_font ? res::res_handle<res::binary_resource>{} : request_font(m_ui_font);
 	m_icons = m_wants_icons ? request_font(m_icon_font) : res::res_handle<res::binary_resource>{};
+	m_bold_font = m_bold_font_tag.is_valid() ? request_font(m_bold_font_tag) : res::res_handle<res::binary_resource>{};
+	m_mono_font = m_mono_font_tag.is_valid() ? request_font(m_mono_font_tag) : res::res_handle<res::binary_resource>{};
 	m_stage = stage::fonts;
 	return true;
 }
@@ -288,7 +294,8 @@ void gui::theme_service::poll_fonts()
 	const auto settled = [](const res::res_handle<res::binary_resource>& h) {
 		return !h.is_valid() || h.is_ready() || h.has_error();
 	};
-	if (!settled(m_text_font) || !settled(m_fallback_font) || !settled(m_icons)) {
+	if (!settled(m_text_font) || !settled(m_fallback_font) || !settled(m_icons) || !settled(m_bold_font)
+		|| !settled(m_mono_font)) {
 		return;
 	}
 
@@ -314,11 +321,14 @@ void gui::theme_service::poll_fonts()
 		egLOG_WARN("gui", "theme '{}': icon font '{}' cannot be used, the UI shows text placeholders",
 			m_selected.view(), m_icon_font.view());
 	}
+	std::vector<std::byte> bold = face_bytes(m_bold_font, m_bold_font_tag, "font_bold");
+	std::vector<std::byte> mono = face_bytes(m_mono_font, m_mono_font_tag, "font_mono");
 	drop_loads();
 	m_stage = stage::idle;
-	m_applied_fonts = font_key{ m_text_font_tag, m_style.font_px, m_wants_icons };
+	m_applied_fonts = font_key{ m_text_font_tag, m_bold_font_tag, m_mono_font_tag, m_style.font_px, m_wants_icons };
 	m_applied = m_style;
-	m_apply(theme{ m_style, std::move(text), std::move(fallback), std::move(icons), true });
+	m_apply(theme{ m_style, std::move(text), std::move(fallback), std::move(icons), std::move(bold), std::move(mono),
+		true });
 }
 
 void gui::theme_service::give_up(std::string_view why)
@@ -331,6 +341,35 @@ void gui::theme_service::give_up(std::string_view why)
 	}
 	egLOG_WARN("gui", "theme '{}' cannot be used ({}), using '{}'", m_selected.view(), why, m_fallback.view());
 	select(m_fallback);
+}
+
+res::tag gui::theme_service::face_tag(const res::tag& tag, std::string_view field) const
+{
+	// The text font is that face already: nothing more to read.
+	if (!tag.is_valid() || tag == m_text_font_tag) {
+		return {};
+	}
+	if (!readable(tag, m_font_sources)) {
+		egLOG_WARN("gui", "theme '{}': {} '{}' is not read from there ({} only), using the text font",
+			m_selected.view(), field, tag.view(), sources_text(m_font_sources));
+		return {};
+	}
+	return tag;
+}
+
+std::vector<std::byte> gui::theme_service::face_bytes(const res::res_handle<res::binary_resource>& handle,
+	const res::tag& tag, std::string_view field) const
+{
+	if (!tag.is_valid()) {
+		return {};
+	}
+	const std::shared_ptr<res::binary_resource> font = handle.is_ready() ? handle.get() : nullptr;
+	if (!font || !ui_font::looks_like_font(font->bytes())) {
+		egLOG_WARN("gui", "theme '{}': {} '{}' is not a usable TTF/OTF, using the text font", m_selected.view(),
+			field, tag.view());
+		return {};
+	}
+	return font->bytes();
 }
 
 res::res_handle<res::binary_resource> gui::theme_service::request_font(const res::tag& tag)

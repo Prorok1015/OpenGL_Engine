@@ -2,7 +2,7 @@
 #include "edt_mesh_bake.h"
 #include "edt_mesh_shapes.h"
 #include <snk/render/geom/rnd_geometry_desc.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstddef>
 #include <optional>
 #include <string>

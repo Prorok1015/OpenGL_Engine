@@ -33,7 +33,7 @@ void gui::gl::gl_imgui_backend::init()
     }
     // Apply OS DPI scale so the UI looks correct on high-DPI monitors
     if (m_dpi_scale > 1.f || m_ui_font.usable() || m_ui_font.has_icons()) {
-        m_ui_font.add_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
+        m_ui_font.add_faces_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
     }
     if (m_dpi_scale > 1.f) {
         ImGui::GetStyle().ScaleAllSizes(m_dpi_scale);
@@ -50,7 +50,8 @@ void gui::gl::gl_imgui_backend::init()
 }
 
 void gui::gl::gl_imgui_backend::set_theme(const gui::theme_style& style, std::vector<std::byte> text_font,
-    std::vector<std::byte> fallback_font, std::vector<std::byte> icon_font, bool fonts_changed)
+    std::vector<std::byte> fallback_font, std::vector<std::byte> icon_font, std::vector<std::byte> bold_font,
+    std::vector<std::byte> mono_font, bool fonts_changed)
 {
     if (!m_initialized) {
         m_style = style;
@@ -58,6 +59,8 @@ void gui::gl::gl_imgui_backend::set_theme(const gui::theme_style& style, std::ve
             m_ui_font.set_bytes(std::move(text_font));
             m_ui_font.set_fallback_bytes(std::move(fallback_font));
             m_ui_font.set_icon_bytes(std::move(icon_font));
+            m_ui_font.set_bold_bytes(std::move(bold_font));
+            m_ui_font.set_mono_bytes(std::move(mono_font));
         }
         return;
     }
@@ -67,7 +70,7 @@ void gui::gl::gl_imgui_backend::set_theme(const gui::theme_style& style, std::ve
         return;
     }
     m_pending_theme = std::make_unique<pending_theme>(pending_theme{ style, std::move(text_font),
-        std::move(fallback_font), std::move(icon_font), fonts_changed });
+        std::move(fallback_font), std::move(icon_font), std::move(bold_font), std::move(mono_font), fonts_changed });
 }
 
 void gui::gl::gl_imgui_backend::apply_pending_theme()
@@ -85,7 +88,9 @@ void gui::gl::gl_imgui_backend::apply_pending_theme()
         m_ui_font.set_bytes(std::move(theme->text_font));
         m_ui_font.set_fallback_bytes(std::move(theme->fallback_font));
         m_ui_font.set_icon_bytes(std::move(theme->icon_font));
-        m_ui_font.add_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
+        m_ui_font.set_bold_bytes(std::move(theme->bold_font));
+        m_ui_font.set_mono_bytes(std::move(theme->mono_font));
+        m_ui_font.add_faces_to(*io.Fonts, floorf(m_style.font_px * m_dpi_scale));
     }
 
     gui::apply_theme(m_style, *m_base_style);
@@ -103,7 +108,7 @@ void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
     ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplOpenGL3_DestroyFontsTexture();
     io.Fonts->Clear();
-    m_ui_font.add_to(*io.Fonts, floorf(m_style.font_px * scale));
+    m_ui_font.add_faces_to(*io.Fonts, floorf(m_style.font_px * scale));
     // ImGui_ImplOpenGL3_NewFrame recreates the texture from the new atlas.
 
     ImGui::GetStyle() = *m_base_style;

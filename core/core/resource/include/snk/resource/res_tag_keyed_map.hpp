@@ -1,5 +1,5 @@
 #pragma once
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/ds/ds_type_id.hpp>
 #include <functional>
 #include <unordered_map>

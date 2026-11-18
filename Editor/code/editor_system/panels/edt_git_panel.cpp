@@ -6,6 +6,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <algorithm>
 #include <cfloat>
@@ -75,6 +76,7 @@ namespace {
 	{
 		using edt::git_diff_line;
 		if (ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+			const edt::font_scope mono(edt::ui_font::mono);
 			ImGuiListClipper clipper;
 			clipper.Begin(static_cast<int>(lines.size()));
 			while (clipper.Step()) {
@@ -441,7 +443,10 @@ void edt::git_panel::draw_history_details()
 {
 	ImGui::Separator();
 	const std::string& hash = m_history.selected_commit();
-	ImGui::TextUnformatted(hash.c_str());
+	{
+		const font_scope mono(ui_font::mono);
+		ImGui::TextUnformatted(hash.c_str());
+	}
 	ImGui::SameLine();
 	if (ImGui::SmallButton("Copy")) ImGui::SetClipboardText(hash.c_str());
 	if (const auto row = m_history.selected_row()) {

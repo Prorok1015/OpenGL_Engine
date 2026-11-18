@@ -2,11 +2,11 @@
 #include "edt_asset_references.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_file_change.h>
 #include <snk/resource/res_stamp.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -297,6 +297,12 @@ namespace edt
 		// walk runs (or before the first one), the batch waits and is applied after the walk's result: the return is
 		// then empty and on_batch is called when it is applied.
 		asset_batch apply_changes(std::span<const res::file_change> changes);
+		// A file operation of the editor's own (asset_ops, #775) that is done on the disk: `changes` (renamed with old_tag, deleted,
+		// created, modified) are applied at once as self changes, as a fix of Problems is, so the move is paired by guid within
+		// this one batch and the records are right before the watcher reports the same files (it then finds nothing new: a
+		// created file that has a record already, a deleted one that has none). Like apply_changes: empty when the batch waits
+		// behind a walk.
+		asset_batch report_self_change(std::span<const res::file_change> changes);
 		// Called after each batch with what it did, and after each walk but the first with what it changed (S57-7 puts
 		// the resource_system's own handling after it).
 		void set_on_batch(std::function<void(const asset_batch&)> on_batch) { m_on_batch = std::move(on_batch); }
@@ -369,6 +375,11 @@ namespace edt
 		void set_before_remove_for_tests(std::function<void()> hook) { m_before_remove = std::move(hook); }
 
 		static constexpr std::size_t max_history = 32;
+		// A number for the project history (asset_component) that grows with every fix pushed here and with every file
+		// operation it records, so the two lists are undone in the order they were made.
+		std::uint64_t next_history_serial() { return ++m_history_serial; }
+		// The serial of the fix undo_last() would take back.
+		std::optional<std::uint64_t> next_undo_serial() const;
 		// The label of the fix undo_last() would take back; none when there is nothing to undo.
 		std::optional<std::string> next_undo_label() const;
 		// Takes back the last fix and forgets it. Refused (and forgotten) when its file changed since the fix.
@@ -379,6 +390,7 @@ namespace edt
 		{
 			std::string label;
 			std::function<asset_fix_result()> undo;
+			std::uint64_t serial = 0;
 		};
 
 		void push_history(std::string label, std::function<asset_fix_result()> undo);
@@ -506,6 +518,7 @@ namespace edt
 		res::resource_system* m_resources = nullptr;
 		std::function<void(const asset_batch&)> m_on_batch;
 		std::vector<history_entry> m_history;
+		std::uint64_t m_history_serial = 0;
 		// Records (by path text) whose .resource the next look-up reads whatever its stamp: a fix rewrote it, possibly
 		// within one tick of a coarse clock.
 		std::set<std::string> m_force_meta;

@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/resource/resolvers/res_control_block.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>

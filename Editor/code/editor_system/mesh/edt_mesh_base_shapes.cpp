@@ -2,7 +2,7 @@
 #include "edt_mesh_shape_asset.h"
 #include <snk/common/engine_assert.h>
 #include <snk/render/geom/rnd_geometry_files.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <array>
 #include <string_view>
 

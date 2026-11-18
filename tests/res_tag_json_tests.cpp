@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/resource/res_tag.h>
-#include <snk/resource/res_tag_json.h>
+#include <snk/model_codec/res_tag.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <unordered_map>
 
 namespace json = boost::json;

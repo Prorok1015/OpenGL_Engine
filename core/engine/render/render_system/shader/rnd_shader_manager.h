@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
 

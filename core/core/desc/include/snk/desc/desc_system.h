@@ -4,10 +4,10 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_tag.h>
-#include <snk/resource/res_asset_id.h>
-#include <snk/resource/res_reference.h>
-#include <snk/resource/res_tag_json.h>
+#include <snk/model_codec/res_tag.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_reference.h>
+#include <snk/model_codec/res_tag_json.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_dynamic.h>
@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <snk/common/snk_api.h>
 
@@ -186,12 +187,18 @@ namespace desc
 
 		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
-		// current_version(name). Migrations registered later move the stored schema's version along, so the order
-		// does not matter.
+		// current_version(name), or the schema is refused (logged, nullptr) in every build. Migrations registered later
+		// move the stored schema's version along.
 		// A schema whose type has no factory yet gets one that creates dynamic_desc objects; a component schema is
 		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema);
+
+		// The schema with its declarative "migrations" (desc_migrations.h, EPIC-58 section 3.5): the steps are registered first,
+		// so its version is where they lead, and unregister_desc takes them away with the schema. Refused (logged,
+		// nullptr) when the steps are malformed or do not lead to the schema's version, or when the type has steps
+		// registered in C++ already. An empty array is the overload above.
+		const type_schema* register_schema(type_schema schema, const json::array& migrations);
 
 		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
 		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
@@ -401,5 +408,8 @@ namespace desc
 		mutable std::shared_mutex m_registry_mutex;
 		std::unordered_map<std::string, std::shared_ptr<const layer_writer>> m_layer_writers;
 		std::shared_ptr<const layer_writer> find_layer_writer(std::string_view type_name) const;
+		// Types whose steps came with their schema (register_schema with migrations): unregister_desc removes them too.
+		// Last, as members are only appended to this engine-created type (module ABI).
+		std::unordered_set<std::string> m_schema_migration_types;
 	};
 }

@@ -5,7 +5,7 @@
 #include <vector>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include "edt_registry_token.h"
 
 // GL- and ImGui-free part of the Game view: which game cameras exist, which one is picked, and the

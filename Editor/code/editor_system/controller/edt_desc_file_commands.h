@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/res_diagnostics.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
@@ -87,6 +87,10 @@ namespace edt
 		// the top layer). `missing`: there is no such file in any layer.
 		bool located = false;
 		bool missing = false;
+		// For a file nobody has: why the open level makes its name not the project's to take (the name is the level's, or an entry of its
+		// `worlds` cannot be read, so it cannot be told); `level_unreadable` marks the second.
+		std::string level_refusal;
+		bool level_unreadable = false;
 		// code_version_of(bytes) when the bytes were read, whether or not they parse.
 		std::string version;
 	};

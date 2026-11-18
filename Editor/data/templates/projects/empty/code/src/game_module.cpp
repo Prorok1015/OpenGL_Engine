@@ -6,7 +6,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <functional>
 #include <memory>

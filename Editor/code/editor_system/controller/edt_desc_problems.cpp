@@ -12,6 +12,24 @@ namespace {
 			&& a.message == b.message && a.notes == b.notes;
 	}
 
+	// A cycle in the `__parent` chain of a file (a variant of a variant of itself) or in the dependencies of a load, said the way the
+	// owner wants it: "Prefab 'X' refers to itself through 'Y'". Any other reason stays as the engine worded it.
+	std::string reason_of(const res::diagnostic& item)
+	{
+		if (item.kind != res::diagnostic_kind::cycle) return item.reason;
+		const std::string what = item.resource.ends_with(".prefab.desc") ? "Prefab" : "Desc";
+		constexpr std::string_view chain = "dependency cycle: ";
+		if (item.reason.starts_with(chain)) {
+			return std::format("{} '{}' refers to itself through '{}'", what, item.resource, item.reason.substr(chain.size()));
+		}
+		constexpr std::string_view direct = "'__parent' cycle through '";
+		if (const std::size_t at = item.reason.find(direct); at != std::string::npos && item.reason.ends_with('\'')) {
+			const std::size_t from = at + direct.size();
+			return std::format("{} '{}' refers to itself through '{}'", what, item.resource, item.reason.substr(from, item.reason.size() - from - 1));
+		}
+		return item.reason;
+	}
+
 	std::size_t dropped_count(const std::string& reason)
 	{
 		std::size_t count = 0;
@@ -29,7 +47,7 @@ edt::problem edt::desc_problem_publisher::to_problem(const res::diagnostic& item
 		out.file = tag.protocol() == res::tag::default_protocol() ? std::string(tag.relative()) : item.resource;
 	}
 	out.code = item.kind;
-	out.message = item.reason;
+	out.message = reason_of(item);
 	if (!item.json_path.empty()) out.notes.push_back(item.json_path);
 	return out;
 }

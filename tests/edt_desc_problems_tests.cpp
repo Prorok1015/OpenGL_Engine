@@ -3,7 +3,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_problem_list.h>
 #include <snk/resource/res_diagnostics.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <string>
 #include <utility>

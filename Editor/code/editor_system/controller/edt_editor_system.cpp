@@ -3,6 +3,7 @@
 #include "edt_level_load_component.h"
 #include "edt_asset_component.h"
 #include "edt_asset_open_component.h"
+#include "edt_asset_ops.h"
 #include "edt_asset_database.h"
 #include "edt_asset_index.h"
 #include "edt_asset_picker.h"
@@ -143,24 +144,19 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
-	// The configuration files the editor read its settings from (--config, else the one beside the executable): an agent's
-	// checkout or pull must not change them, import/decoder_sandbox is a person's (#1076).
+	// The configuration files the editor read its settings from (--config, else the one beside the executable, with its
+	// whole extends chain, #1090), and the one beside the executable: an agent's checkout or pull must not change them,
+	// import/decoder_sandbox is a person's (#1076). Links are guarded as links and as their targets.
 	std::vector<std::filesystem::path> editor_config_files()
 	{
-		std::vector<std::filesystem::path> files;
-		const auto add = [&files](const std::filesystem::path& file) {
-			if (file.empty()) return;
-			std::error_code ec;
-			std::filesystem::path absolute = std::filesystem::weakly_canonical(file, ec);
-			if (ec) absolute = std::filesystem::absolute(file, ec);
-			if (ec || absolute.empty()) return;
-			if (std::find(files.begin(), files.end(), absolute) == files.end()) files.push_back(std::move(absolute));
-		};
-		add(cfg::loaded_config_path());
+		std::vector<std::filesystem::path> files = cfg::loaded_config_files();
 		if (const std::filesystem::path program = platform::current_executable(); !program.empty()) {
-			add(program.parent_path() / ".." / "config" / "editor.cfg");
+			// The next start without --config reads this one and its chain.
+			for (std::filesystem::path& file : cfg::config_files_of(program.parent_path() / ".." / "config" / "editor.cfg")) {
+				files.push_back(std::move(file));
+			}
 		}
-		return files;
+		return edt::config_files_to_guard(files);
 	}
 
 
@@ -365,6 +361,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Prefab editor (EPIC-25, #1004): after wire_selection, whose Inspector hand-over its selection listener follows.
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc(),
+		[this] { return m_asset_open->desc_layout(); },
 		[this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); } });
 
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
@@ -556,6 +553,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		asset_ports.descs = [this]() -> const desc::desc_system* { return m_services.descs(); };
 		asset_ports.game_layer_generation = [this] { return m_game_layer ? m_game_layer->generation() : std::uint64_t{ 0 }; };
+		asset_ports.write_blocker = [this] { return project_write_blocker(); };
+		asset_ports.is_open_with_unsaved_changes = [this](const res::tag& tag) {
+			const res::tag& editor_copy = m_state.editor_tag;
+			return edt::is_open_with_unsaved_changes(m_context->documents().find_by_source(tag), m_context->documents().scene(),
+				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
+		};
 		m_asset_component = std::make_unique<asset_component>(std::move(asset_ports));
 		m_asset_component->install(m_registrations);
 		m_desc_binary_cache = std::make_shared<res::file_desc_binary_hash_cache>(project.root);

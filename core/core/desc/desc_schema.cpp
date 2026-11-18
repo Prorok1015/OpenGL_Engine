@@ -1,4 +1,5 @@
 #include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_migrations.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <format>
@@ -16,7 +17,7 @@ namespace desc
 			"bool", "i32", "u32", "i64", "u64", "f32", "f64",
 			"vec2", "vec3", "vec4", "quat", "color",
 			"string", "enumeration", "res_tag", "desc_ref", "node_ref", "entity",
-			"structure", "array", "custom", "map",
+			"structure", "array", "custom", "map", "binary_ref",
 		};
 		constexpr std::string_view write_policy_names[] = { "always", "if_valid", "if_not_default", "null_if_empty", "never" };
 		constexpr std::string_view schema_kind_names[] = { "desc", "component", "struct" };
@@ -52,9 +53,6 @@ namespace desc
 		void check_keys(const json::object& object, std::initializer_list<std::string_view> allowed, const std::string& path)
 		{
 			for (const auto& member : object) {
-				if (member.key() == "migrations") {
-					fail(path, "'migrations' is not supported yet (declarative migrations of runtime schemas come later)");
-				}
 				if (std::ranges::find(allowed, std::string_view{ member.key() }) == allowed.end()) {
 					fail(path, std::format("unknown key '{}'", std::string_view{ member.key() }));
 				}
@@ -234,6 +232,9 @@ namespace desc
 			case field_kind::entity:
 				// Entities are runtime ids of one registry: a number would name whatever entity has it.
 				fail(path, "an entity field has no default but null");
+			case field_kind::binary_ref:
+				// A range only means something in the binary file its desc was saved with.
+				fail(path, "a binary_ref field has no default but null");
 			case field_kind::array: {
 				if (!value.is_array()) {
 					fail(path, "default must be an array");
@@ -301,6 +302,9 @@ namespace desc
 				if (field.kind == field_kind::map && (field.element == field_kind::array || field.element == field_kind::map)) {
 					fail(where, "the values of a map are not containers: 'element' must not be array or map");
 				}
+				if (field.element == field_kind::binary_ref) {
+					fail(where, "'element' must not be binary_ref: a range of the binary file is a field of its own");
+				}
 			} else if (element) {
 				fail(where, "'element' is only valid for array and map fields");
 			}
@@ -324,6 +328,9 @@ namespace desc
 
 			if (field.optional && field.kind == field_kind::custom && field.default_value.is_null()) {
 				fail(where, "a custom field cannot be optional without a 'default': a null would have nothing to reset it to");
+			}
+			if (field.optional && field.kind == field_kind::binary_ref) {
+				fail(where, "a binary_ref field cannot be optional: a null would have no range to reset it to");
 			}
 
 			if (const json::value* range = find_value(object, "range")) {
@@ -361,6 +368,44 @@ namespace desc
 				}
 			}
 			return field;
+		}
+
+		bool nests_structure(const field_schema& field)
+		{
+			return field.kind == field_kind::structure
+				|| ((field.kind == field_kind::array || field.kind == field_kind::map) && field.element == field_kind::structure);
+		}
+
+		bool holds_binary_ref(const type_schema& schema)
+		{
+			return std::ranges::any_of(schema.fields, [](const field_schema& field) { return field.kind == field_kind::binary_ref; });
+		}
+
+		// A range of the binary file is a root field of the desc (or component) the file stands beside (EPIC-79, #1068): never
+		// inside a structure, so whatever walks nested values never meets one. Empty when `schema` keeps to that.
+		std::string binary_ref_problem(const type_schema& schema, const schema_registry* resolve)
+		{
+			for (const auto& field : schema.fields) {
+				if (field.kind == field_kind::binary_ref && field.key.find('/', 1) != std::string::npos) {
+					return std::format("binary_ref field '{}' must be a root field: its key '{}' is nested", field.name, field.key);
+				}
+			}
+			if (schema.kind == schema_kind::structure && holds_binary_ref(schema)) {
+				return "a structure cannot hold a binary_ref field: a range of the binary file is a root field of a desc";
+			}
+			if (!resolve) {
+				return {};
+			}
+			for (const auto& field : schema.fields) {
+				if (!nests_structure(field)) {
+					continue;
+				}
+				if (const type_schema* nested = resolve->find(field.ref_type); nested && holds_binary_ref(*nested)) {
+					return std::format("field '{}' nests '{}', which holds a binary_ref field: a range of the binary file is a root field",
+						field.name, field.ref_type);
+				}
+			}
+			return {};
 		}
 	}
 
@@ -400,6 +445,21 @@ namespace desc
 				egLOG_ERROR("desc/error", "Schema '{}' is stored without is_document: {}", schema.name, problem);
 				schema.is_document = false;
 			}
+		}
+		std::string blob_problem = binary_ref_problem(schema, this);
+		if (blob_problem.empty() && holds_binary_ref(schema)) {
+			// Registered after a schema that already names it as a structure.
+			for (const auto& [other_name, other] : m_types) {
+				for (const auto& field : other.fields) {
+					if (nests_structure(field) && field.ref_type == schema.name) {
+						blob_problem = std::format("'{}' nests it in field '{}': a range of the binary file is a root field", other_name, field.name);
+					}
+				}
+			}
+		}
+		if (!blob_problem.empty()) {
+			egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", schema.name, blob_problem);
+			return nullptr;
 		}
 		const std::string name = schema.name;
 		m_names_by_id.emplace(id, name);
@@ -538,7 +598,7 @@ namespace desc
 
 	type_schema parse_type_schema(const json::object& object, const schema_registry* resolve)
 	{
-		check_keys(object, { "name", "version", "kind", "is_component", "is_document", "fields" }, "type");
+		check_keys(object, { "name", "version", "kind", "is_component", "is_document", "fields", "migrations" }, "type");
 
 		type_schema schema;
 		schema.name = read_string(object, "name", "type", true);
@@ -553,6 +613,16 @@ namespace desc
 				fail(path, "'version' must be a positive integer");
 			}
 			schema.version = static_cast<int>(version->as_int64());
+		}
+		// The steps are registered with the schema (desc_system::register_schema), not kept in it; checked here so a
+		// schema file that cannot register fails where it is read.
+		if (const json::value* migrations = find_value(object, "migrations")) {
+			if (!migrations->is_array()) {
+				fail(path, "'migrations' must be an array");
+			}
+			if (std::string problem = schema_migrations_problem(migrations->as_array(), schema.version); !problem.empty()) {
+				fail(path, problem);
+			}
 		}
 
 		const std::string kind_text = read_string(object, "kind", path, false, "desc");
@@ -584,6 +654,9 @@ namespace desc
 		}
 
 		compute_layout(schema, resolve);
+		if (std::string problem = binary_ref_problem(schema, resolve); !problem.empty()) {
+			fail(path, problem);
+		}
 		return schema;
 	}
 
@@ -685,6 +758,8 @@ namespace desc
 			}
 			case field_kind::structure:
 				return structure_problem(field.ref_type);
+			case field_kind::binary_ref:
+				return std::format("field '{}' is a range of a binary file, which only a mesh desc saved with its binary file has", where);
 			case field_kind::map:
 			case field_kind::array:
 				if (field.element == field_kind::custom) {

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/resource/res_asset_id.h>
+#include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include <string>
 #include <string_view>

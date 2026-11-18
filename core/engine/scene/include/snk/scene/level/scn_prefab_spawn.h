@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/common/eng_transform_3d.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <entt/entity/entity.hpp>

@@ -178,7 +178,7 @@ gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
   the string must contain "protocol://" or protocol/path/name slices are wrong.
   Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend
   the default protocol; 2-arg form asserts the path has no "://" already.
-  source: core/core/resource/include/snk/resource/res_tag.h ctor (L20-40)
+  source: core/core/model_codec/include/snk/model_codec/res_tag.h ctor (L20-40)
 
 [CONSTRAINTS_DESCRIPTORS]
 [CONSTRAINT_16]

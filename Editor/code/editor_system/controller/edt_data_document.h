@@ -2,7 +2,7 @@
 #include "edt_desc_file_commands.h"
 #include <snk/editor/edt_document.h>
 #include "edt_document_history.h"
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 #include <cstdint>

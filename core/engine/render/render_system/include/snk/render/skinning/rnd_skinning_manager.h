@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>

@@ -2,7 +2,7 @@
 #include "mdl_api.h"
 #include <snk/desc/desc_system.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
-#include <snk/resource/res_tag.h>
+#include <snk/model_codec/res_tag.h>
 #include <cstddef>
 #include <memory>
 #include <vector>
