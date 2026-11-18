@@ -253,6 +253,16 @@ namespace desc
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
 		void stamp_header(json::object& obj) const;
 
+		// The JSON of `desc` written in place of its memory:// tag (desc_ref_traits<res_handle<T>>::to_json, #1236) gets
+		// "__type" and the current "__version" of the type from the desc_system that made `desc`: read back, a typed
+		// object without __version is version 1 and would go through every step of its type again. Nothing without one.
+		static void stamp_inline_version(json::object& inline_desc, const desc_base& desc);
+
+		// Gives every typed object under `value` that has no "__version" the current one of its type; one that has a
+		// version keeps it (#1236). For JSON of this process's memory (serialize of a loaded desc): an inline desc a module
+		// built before #1236 wrote without a version is of the current format, not version 1. Never for file data.
+		void stamp_unversioned(json::value& value) const;
+
 		// stamp_header for every typed object under `value` (the files embed typed descs, and a memory://
 		// copy of them goes through the adapter - and its migrations - again).
 		void stamp_tree(json::value& value) const;

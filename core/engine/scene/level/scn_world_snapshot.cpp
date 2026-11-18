@@ -162,25 +162,6 @@ namespace
 {
 	// Set by capture_world with a desc system: every typed object inside carries its version.
 	constexpr std::string_view k_typed_versions = "typed_versions";
-
-	// A typed object without __version gets the current one of its type: the desc reader would take it for version 1.
-	void stamp_unversioned(const desc::desc_system& descs, json::value& value)
-	{
-		if (json::object* object = value.if_object()) {
-			if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
-				(*object)["__version"] = descs.current_version(type->as_string());
-			}
-			for (auto& member : *object) {
-				stamp_unversioned(descs, member.value());
-			}
-		} else if (json::array* array = value.if_array()) {
-			// Numeric payloads (geometry) can be long and hold no typed object.
-			if (!array->empty() && array->front().is_number()) return;
-			for (json::value& element : *array) {
-				stamp_unversioned(descs, element);
-			}
-		}
-	}
 }
 
 json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
@@ -294,8 +275,8 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 	const bool current_root = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
 	if (context.system && !stamped) {
 		upgraded.emplace(given);
-		if (json::value* ctx = upgraded->if_contains("ctx")) stamp_unversioned(*context.system, *ctx);
-		if (json::value* entities = upgraded->if_contains("entities")) stamp_unversioned(*context.system, *entities);
+		if (json::value* ctx = upgraded->if_contains("ctx")) context.system->stamp_unversioned(*ctx);
+		if (json::value* entities = upgraded->if_contains("entities")) context.system->stamp_unversioned(*entities);
 	}
 	if (context.system && (stamped || !current_root)) {
 		if (!upgraded) upgraded.emplace(given);

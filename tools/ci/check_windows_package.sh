@@ -162,6 +162,8 @@ ls -l "${proj}/build/shipping"
 test -f "${proj}/build/shipping/game.exe"
 # No snk_engine.dll lies next to it: an import of the shared engine fails here like any other non-Windows DLL.
 bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${proj}/build/shipping" game.exe
+# #1179: nor the editor's decoder sandbox (AppContainer, userenv.dll).
+bash tools/ci/check_windows_deps.sh --deny userenv.dll "${proj}/build/shipping" game.exe
 
 # ---- 6. editor.exe from the unpacked folder ----
 log="${work}/editor_headless"

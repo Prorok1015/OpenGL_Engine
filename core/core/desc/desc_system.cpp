@@ -1198,3 +1198,32 @@ std::optional<res::tag> desc::reference_tag(const json::value& in, const read_co
 	}
 	return ctx.system ? ctx.system->resolve_reference(*read) : read->path;
 }
+
+void desc::desc_system::stamp_inline_version(json::object& inline_desc, const desc_base& desc)
+{
+	if (!desc.m_system || desc.get_type().empty()) {
+		return;
+	}
+	inline_desc["__type"] = std::string{ desc.get_type() };
+	desc.m_system->stamp_header(inline_desc);
+}
+
+void desc::desc_system::stamp_unversioned(json::value& value) const
+{
+	if (json::object* object = value.if_object()) {
+		if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
+			(*object)["__version"] = current_version(type->as_string());
+		}
+		for (auto& member : *object) {
+			stamp_unversioned(member.value());
+		}
+	} else if (json::array* array = value.if_array()) {
+		// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
+		if (!array->empty() && array->front().is_number()) {
+			return;
+		}
+		for (json::value& element : *array) {
+			stamp_unversioned(element);
+		}
+	}
+}
