@@ -159,6 +159,41 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_ReadsTheMaterialAsAnInlineObjectAndWritesItInlin
 	BOOST_TEST(written.at("shader_vertex").as_string() == "res://shaders/sky.vert");
 }
 
+// #1236: an inline desc written from memory carries the current version of its type, so read back (through the memory
+// store and the adapter's migrate_tree) it does not go through a step of that type again; one without __version, as an
+// older file holds it, still is version 1 and does. A prefab's composed component (compose_json starts with
+// serialize(parent)) and a world snapshot read their inline descs this same way.
+BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialWrittenFromMemory_IsNotMigratedAgain)
+{
+	auto sky = make_skybox(*this);
+	sky->deserialize(*descs, parse(with_material(k_inline_material)));
+	pump();
+	BOOST_REQUIRE(sky->material.get_sync());
+	// From here material_desc has one more step; what was loaded is of the format before it.
+	const int version = descs->current_version("material_desc");
+	descs->register_migration("material_desc", version, [](json::object& o) { o["queue"] = "opaque"; });
+
+	const json::object saved = ser(*sky);
+	BOOST_REQUIRE(saved.at("material").is_object());
+	const json::object& written = saved.at("material").as_object();
+	BOOST_TEST(written.at("__type").as_string() == "material_desc");
+	BOOST_REQUIRE(written.contains("__version"));
+	BOOST_TEST(written.at("__version").as_int64() == version + 1);
+	BOOST_TEST(written.begin()->key() == "__type");
+
+	auto reread = make_skybox(*this, "reread.desc");
+	reread->deserialize(*descs, saved);
+	pump();
+	BOOST_REQUIRE(reread->material.get_sync());
+	BOOST_TEST((reread->material.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+
+	auto older = make_skybox(*this, "older.desc");
+	older->deserialize(*descs, parse(with_material(k_inline_material)));
+	pump();
+	BOOST_REQUIRE(older->material.get_sync());
+	BOOST_TEST((older->material.get_sync()->queue == scn::pass_queue::OPAQUE));
+}
+
 BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialNeedsASkyboxWithATag)
 {
 	auto untagged = std::dynamic_pointer_cast<scn::skybox_desc>(descs->create_instance("skybox_desc", res::tag{}));

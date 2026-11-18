@@ -37,8 +37,8 @@ namespace desc
 	// An empty string clears the handle (so does a null on a field with write_null_if_empty). Written as the tag of the
 	// handle, an empty string while it is not set (so write_if_valid() leaves the key out). A handle whose tag is one of
 	// those memory copies (desc::is_override_tag) is written as the inline object again (the loaded desc's own serialize plus
-	// "__type"): the copy lives in the memory store of this process only, and a saved tag would not resolve in the next
-	// one. A value that is neither a reference nor an object with "__type", a read without a desc_system and owner in the
+	// "__type" and "__version", desc_system::stamp_inline_version): the copy lives in the memory store of this process
+	// only, and a saved tag would not resolve in the next one. A value that is neither a reference nor an object with "__type", a read without a desc_system and owner in the
 	// context, or an inline object of an owner without a tag, does not fit: the field keeps its handle. Only the
 	// handle itself is a desc_ref: the elements of a vector of handles are custom fields.
 	template<typename T>
@@ -87,6 +87,7 @@ namespace desc
 					if (!instance->get_type().empty()) {
 						inline_desc["__type"] = std::string{ instance->get_type() };
 					}
+					desc::desc_system::stamp_inline_version(inline_desc, *instance);
 					return json::value(std::move(inline_desc));
 				}
 			}

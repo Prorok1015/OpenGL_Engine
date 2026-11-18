@@ -1171,3 +1171,12 @@ std::optional<res::tag> desc::reference_tag(const json::value& in, const read_co
 	}
 	return ctx.system ? ctx.system->resolve_reference(*read) : read->path;
 }
+
+void desc::desc_system::stamp_inline_version(json::object& inline_desc, const desc_base& desc)
+{
+	if (!desc.m_system || desc.get_type().empty()) {
+		return;
+	}
+	inline_desc["__type"] = std::string{ desc.get_type() };
+	desc.m_system->stamp_header(inline_desc);
+}
