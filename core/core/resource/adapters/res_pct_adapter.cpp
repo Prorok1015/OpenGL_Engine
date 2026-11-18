@@ -3,9 +3,20 @@
 #include <snk/common/logger/engine_log.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
+
+namespace {
+	void copy_rows_reversed(const unsigned char* source, unsigned char* target, std::size_t row_bytes, std::size_t rows)
+	{
+		for (std::size_t row = 0; row < rows; ++row) {
+			std::memcpy(target + (rows - 1 - row) * row_bytes, source + row * row_bytes, row_bytes);
+		}
+	}
+}
 
 std::optional<res::raw_image_adapter::raw_image_header> res::raw_image_adapter::read_header(const std::vector<std::byte>& data) const
 {
@@ -108,7 +119,12 @@ std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag
 	}
 	glm::ivec2 size(picture.width(), picture.height());
 	auto raw_data = new unsigned char[picture.size()];
-	std::memcpy(raw_data, picture.data(), picture.size());
+	if (picture.flipped() == img::image_flip::vertical) {
+		std::memcpy(raw_data, picture.data(), picture.size());
+	} else {
+		const std::size_t row_bytes = static_cast<std::size_t>(picture.width()) * static_cast<std::size_t>(picture.channels());
+		copy_rows_reversed(picture.data(), raw_data, row_bytes, static_cast<std::size_t>(picture.height()));
+	}
 	return std::make_shared<res::picture_resource>(tag, size, picture.channels(), raw_data);
 }
 
@@ -119,7 +135,12 @@ std::vector<std::byte> res::pct_adapter::serialize(const res::tag& tag, const st
 		ASSERT_FAIL("Resource is not picture resource!");
 		return {};
 	}
+	// A file holds its top row first.
+	const std::size_t row_bytes = static_cast<std::size_t>(pic_res->size().x) * static_cast<std::size_t>(pic_res->channels());
+	const std::size_t rows = static_cast<std::size_t>(pic_res->size().y);
+	std::vector<unsigned char> top_down(row_bytes * rows);
+	copy_rows_reversed(pic_res->data(), top_down.data(), row_bytes, rows);
 	std::vector<std::byte> out_data;
-	img::image::write_to_memory(img::image_type::jpg, pic_res->data(), pic_res->size().x, pic_res->size().y, pic_res->channels(), out_data);
+	img::image::write_to_memory(img::image_type::jpg, top_down.data(), pic_res->size().x, pic_res->size().y, pic_res->channels(), out_data);
 	return out_data;
 }

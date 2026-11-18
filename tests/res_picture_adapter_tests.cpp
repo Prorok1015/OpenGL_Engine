@@ -45,9 +45,9 @@ BOOST_AUTO_TEST_CASE(Raw_ShortOrMismatchedData_Throws)
 	BOOST_CHECK_THROW(adapter(res::tag{ "memory://t/huge.raw" }, data), std::runtime_error);
 }
 
-// #1160: the adapter saves a picture as JPEG in memory and reads it back; flat colours survive the lossy codec.
-// The rows come back reversed: serialize writes the bottom-up rows the adapter loads as they are (#1222).
-BOOST_AUTO_TEST_CASE(Pct_SavedPicture_LoadsBackWithItsRowsReversed)
+// #1160, #1222: the adapter saves a picture as JPEG in memory and reads it back in its row order; flat colours survive
+// the lossy codec, and a lost or doubled row reversal swaps the two halves.
+BOOST_AUTO_TEST_CASE(Pct_SavedPicture_LoadsBackInItsRowOrder)
 {
 	constexpr int width = 16;
 	constexpr int height = 16;
@@ -82,8 +82,8 @@ BOOST_AUTO_TEST_CASE(Pct_SavedPicture_LoadsBackWithItsRowsReversed)
 		}
 		return true;
 	};
-	BOOST_TEST(has_colour(height / 4, last_rows));
-	BOOST_TEST(has_colour(height * 3 / 4, first_rows));
+	BOOST_TEST(has_colour(height / 4, first_rows));
+	BOOST_TEST(has_colour(height * 3 / 4, last_rows));
 }
 
 BOOST_FIXTURE_TEST_CASE(UndecodablePicture_EndsInAnErrorNotInAReadyNull, test_util::ram_res_env)
