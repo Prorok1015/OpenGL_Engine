@@ -235,23 +235,21 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
 		return false;
 	}
-	// EPIC-58 section 7.2: an older snapshot is brought up by the steps of the world's desc system, a newer one refused.
+	// EPIC-58 section 7.2: with the world's desc system every snapshot goes through its steps, so an older one is brought
+	// up and a newer one refused, the root or a typed object inside alike; without one only the version capture_world
+	// writes is read.
 	std::optional<json::object> upgraded;
-	const json::value* given_version = given.if_contains("__version");
-	const bool current = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
-	if (!current || (context.system && context.system->current_version(k_type) != k_version)) {
-		std::string problem;
-		if (context.system) {
-			upgraded.emplace(given);
-			problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name()));
-		} else {
-			problem = std::format("world '{}': '{}' is version {}, not the version {} this engine reads", world.get_name(), k_type,
-				json::serialize(*given_version), k_version);
-		}
-		if (!problem.empty()) {
+	if (context.system) {
+		upgraded.emplace(given);
+		if (const std::string problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name())); !problem.empty()) {
 			egLOG_ERROR("scene", "{}", problem);
 			return false;
 		}
+	} else if (const json::value* given_version = given.if_contains("__version");
+		given_version && !(given_version->is_int64() && given_version->as_int64() == k_version)) {
+		egLOG_ERROR("scene", "world '{}': '{}' is version {}, not the version {} this engine reads", world.get_name(), k_type,
+			json::serialize(*given_version), k_version);
+		return false;
 	}
 	const json::object& snapshot = upgraded ? *upgraded : given;
 	const json::value* entities_value = snapshot.if_contains("entities");
@@ -430,4 +428,12 @@ void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& val
 		if (!fits) ++report.partial[type->name];
 		board.restore(std::string_view{ *key }, type->id, type->type_name, std::move(restored));
 	}
+}
+
+std::string scn::world_snapshot_version_problem(const desc::desc_system& descs)
+{
+	const int steps = descs.current_version(k_type);
+	if (steps == k_version) return {};
+	return std::format("'{}' is written at version {}, but its migration steps lead to version {}: raise the version with its step",
+		k_type, k_version, steps);
 }

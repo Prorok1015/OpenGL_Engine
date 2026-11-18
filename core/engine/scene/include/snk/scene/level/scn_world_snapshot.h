@@ -77,6 +77,10 @@ namespace scn
 	SNK_API bool restore_world(world_context& world, const json::object& snapshot, const component_catalog& catalog,
 		const desc::read_context& context, snapshot_report& report);
 
+	// Empty when the version capture_world writes is the one the steps `descs` has for world_snapshot lead to; else what
+	// is wrong (EPIC-58 section 7.2): a snapshot of this engine would read back as newer, or go through a step it needs not.
+	SNK_API std::string world_snapshot_version_problem(const desc::desc_system& descs);
+
 	// The committed blackboard of a set as [{key, type, value}], each value through the schema `types` has for it. A
 	// value of a type without one is left out and counted in report.unsaved under entt's type name (HOT_RELOAD_PLAY.md
 	// 4.4: lost, with a warning from the owner).

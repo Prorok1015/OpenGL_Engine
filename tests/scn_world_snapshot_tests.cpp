@@ -585,4 +585,26 @@ BOOST_AUTO_TEST_CASE(AnOlderSnapshotIsMigrated_ANewerOneRefused)
 	BOOST_TEST((entities == nullptr || entities->size() == 0u));
 }
 
+// Review of #1231: a snapshot of the current version is still looked into; a typed object newer than this engine reads
+// inside it refuses the snapshot.
+BOOST_AUTO_TEST_CASE(ASnapshotOfTheCurrentVersion_WithANewerObjectInside_IsRefused)
+{
+	scn::world_context source{ 1, "main" };
+	scn::snapshot_report captured;
+	json::object snapshot = scn::capture_world(source, layer, captured);
+	snapshot["later"] = json::object{ { "__type", "world_snapshot" }, { "__version", 7 } };
+	scn::world_context refused{ 1, "main" };
+	scn::snapshot_report report;
+	BOOST_TEST(!scn::restore_world(refused, snapshot, layer, read_context(), report));
+}
+
+BOOST_AUTO_TEST_CASE(TheVersionWritten_MustBeWhereTheStepsLead)
+{
+	BOOST_TEST(scn::world_snapshot_version_problem(*descs).empty());
+	descs->register_migration("world_snapshot", 1, [](json::object&) {});
+	const std::string problem = scn::world_snapshot_version_problem(*descs);
+	BOOST_TEST(problem.find("written at version 1") != std::string::npos, problem);
+	BOOST_TEST(problem.find("lead to version 2") != std::string::npos, problem);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

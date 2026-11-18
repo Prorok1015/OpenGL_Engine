@@ -10,11 +10,15 @@
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/game/gs_capture_on_settled.h>
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/game/gs_input_actions.h>
+#include <snk/game/gs_input_bindings_file.h>
+#include <snk/scene/level/scn_world_snapshot.h>
+#include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_consumable_listener.h>
@@ -84,6 +88,14 @@ void engine::engine_module::initialize_services(ds::app_data_storage& data)
 		input_service->push_consumable_listener(m_content_scale_listener);
 	}
 	input::input_init(data);
+	// EPIC-58 section 7.2: a format of the player's written at another version than its steps lead to would read back as
+	// newer (bindings never saved again) or go through a step it needs not.
+	const auto& descs = data.require<desc::desc_system>();
+	for (const std::string& problem : { gs::user_bindings_version_problem(descs), scn::world_snapshot_version_problem(descs) }) {
+		if (problem.empty()) continue;
+		egLOG_ERROR("desc/error", "{}", problem);
+		ASSERT_FAIL("{}", problem);
+	}
 }
 
 void engine::engine_module::shutdown_services(ds::app_data_storage& data)

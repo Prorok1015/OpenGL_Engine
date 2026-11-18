@@ -5,6 +5,7 @@
 #include <snk/project/prj_json_text.h>
 #include <snk/desc/desc_system.h>
 #include <boost/json.hpp>
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <algorithm>
@@ -23,6 +24,29 @@ namespace
 	constexpr std::uint64_t k_max_file_bytes = 256u * 1024u;
 	constexpr std::size_t k_max_actions = 256;
 	constexpr std::size_t k_max_bindings_per_action = 16;
+
+	// <name>.broken-<UTC time> next to it, -2, -3... when one of that second is there. False, with a warning, when the
+	// file could not be moved: it is then kept as it is.
+	bool move_aside(const std::filesystem::path& file)
+	{
+		const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+		std::filesystem::path stem = file;
+		stem += fs_paths::path_from_utf8(std::format(".broken-{:%Y%m%dT%H%M%SZ}", now));
+		std::error_code ec;
+		for (int attempt = 1; attempt <= 100; ++attempt) {
+			std::filesystem::path target = stem;
+			if (attempt > 1) target += fs_paths::path_from_utf8(std::format("-{}", attempt));
+			if (std::filesystem::exists(std::filesystem::symlink_status(target, ec))) continue;
+			std::filesystem::rename(file, target, ec);
+			if (ec) break;
+			egLOG_WARN("input", "{} could not be read: moved aside to {}, the next save writes a new file", fs_paths::utf8_of(file),
+				fs_paths::utf8_of(target));
+			return true;
+		}
+		egLOG_WARN("input", "{} could not be read and could not be moved aside{}{}; it is not written over", fs_paths::utf8_of(file),
+			ec ? ": " : "", ec ? ec.message() : std::string{});
+		return false;
+	}
 
 	std::string_view display(std::string_view source)
 	{
@@ -111,22 +135,30 @@ namespace
 
 inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_view source)
 {
-	bool keep_file = false;
-	return parse_user_bindings(text, source, nullptr, keep_file);
+	user_file_state state = user_file_state::usable;
+	return parse_user_bindings(text, source, nullptr, state);
 }
 
-inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_view source, const desc::desc_system* descs, bool& keep_file)
+inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_view source, const desc::desc_system* descs,
+	user_file_state& state)
 {
 	inp::user_bindings result;
-	keep_file = false;
+	state = user_file_state::usable;
 	const std::string_view file = display(source);
 	boost::system::error_code error;
 	json::value root = json::parse(text, error);
 	json::object* document = error ? nullptr : root.if_object();
 	const json::value* type = document ? document->if_contains("__type") : nullptr;
 	if (!document || !type || !type->is_string() || type->as_string() != k_type) {
-		egLOG_WARN("input", "{}: not a {} document, the bindings of the project stay and the file is not written over", file, k_type);
-		keep_file = true;
+		egLOG_WARN("input", "{}: not a {} document, the bindings of the project stay", file, k_type);
+		state = user_file_state::unreadable;
+		return result;
+	}
+	const std::int64_t supported = descs ? descs->current_version(k_type) : k_version;
+	if (const json::value* version = document->if_contains("__version"); version && version->is_int64() && version->as_int64() > supported) {
+		egLOG_WARN("input", "{}: '{}' is version {}, newer than the version {} this engine reads; the bindings of the project stay "
+			"and the file is not written over", file, k_type, version->as_int64(), supported);
+		state = user_file_state::newer;
 		return result;
 	}
 	std::string problem;
@@ -136,8 +168,8 @@ inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_vi
 		problem = std::format("{}: '{}' is version {}, not the version {} this engine reads", file, k_type, json::serialize(*version), k_version);
 	}
 	if (!problem.empty()) {
-		egLOG_WARN("input", "{}; the bindings of the project stay and the file is not written over", problem);
-		keep_file = true;
+		egLOG_WARN("input", "{}; the bindings of the project stay", problem);
+		state = user_file_state::unreadable;
 		return result;
 	}
 	const json::value* actions = document->if_contains("actions");
@@ -191,8 +223,13 @@ std::string gs::write_user_bindings(const inp::user_bindings& bindings)
 
 inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file)
 {
-	bool keep_file = false;
-	return load_user_bindings(file, nullptr, keep_file);
+	const prj::project_file_location where = prj::project_file_location_of(file);
+	const prj::project_file_text found = prj::read_project_file(where.root, where.relative, k_max_file_bytes);
+	if (!found.error.empty()) {
+		egLOG_WARN("input", "cannot read {}: {}", fs_paths::utf8_of(file), found.error);
+		return {};
+	}
+	return found.exists ? parse_user_bindings(found.text, fs_paths::utf8_of(file)) : inp::user_bindings{};
 }
 
 inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file, const desc::desc_system* descs, bool& keep_file)
@@ -207,7 +244,14 @@ inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file, con
 		return {};
 	}
 	if (!found.exists) return {};
-	return parse_user_bindings(found.text, name, descs, keep_file);
+	user_file_state state = user_file_state::usable;
+	inp::user_bindings bindings = parse_user_bindings(found.text, name, descs, state);
+	if (state == user_file_state::newer) {
+		keep_file = true;
+	} else if (state == user_file_state::unreadable) {
+		keep_file = !move_aside(file);
+	}
+	return bindings;
 }
 
 bool gs::save_user_bindings(const std::filesystem::path& file, const inp::user_bindings& bindings)
@@ -220,4 +264,12 @@ bool gs::save_user_bindings(const std::filesystem::path& file, const inp::user_b
 		return false;
 	}
 	return true;
+}
+
+std::string gs::user_bindings_version_problem(const desc::desc_system& descs)
+{
+	const int steps = descs.current_version(k_type);
+	if (steps == k_version) return {};
+	return std::format("'{}' is written at version {}, but its migration steps lead to version {}: raise the version with its step",
+		k_type, k_version, steps);
 }

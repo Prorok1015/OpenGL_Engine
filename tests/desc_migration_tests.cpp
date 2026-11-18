@@ -318,4 +318,20 @@ BOOST_AUTO_TEST_CASE(UpgradeInMemory_NamesTheSourceAndBothVersions)
 	BOOST_TEST(!ds.upgrade_in_memory(malformed, "bad.json").empty());
 }
 
+// Review of #1231: a root of the current version does not let a typed object inside through unchecked. A newer one is
+// refused, an older one brought up.
+BOOST_AUTO_TEST_CASE(UpgradeInMemory_LooksInsideARootOfTheCurrentVersion)
+{
+	register_two_steps();
+	auto newer_inside = parse(R"({"__type":"test_migr_desc","__version":3,"inner":{"__type":"test_migr_desc","__version":5}})");
+	const std::string problem = ds.upgrade_in_memory(newer_inside, "world 'main'");
+	BOOST_TEST(!problem.empty());
+	BOOST_TEST(problem.find("5") != std::string::npos, problem);
+
+	auto older_inside = parse(R"({"__type":"test_migr_desc","__version":3,"inner":{"__type":"test_migr_desc","a":4}})");
+	BOOST_TEST(ds.upgrade_in_memory(older_inside, "world 'main'").empty());
+	BOOST_TEST(older_inside.at("inner").at("__version").as_int64() == 3);
+	BOOST_TEST(older_inside.at("inner").at("b").as_int64() == 40);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

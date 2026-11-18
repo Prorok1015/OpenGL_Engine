@@ -240,8 +240,9 @@ namespace desc
 		void migrate_tree(json::object& root, std::string_view context) const;
 
 		// A user's document read into memory rather than the project's (player settings, a world snapshot; EPIC-58 section
-		// 7.2): brought up to current_version of its __type by the registered steps, the file itself left as it is. Returns
-		// what is wrong, or empty: no __type, a malformed __version, one newer than this engine reads, a step that failed.
+		// 7.2): brought up to current_version of its __type by the registered steps, the file itself left as it is; typed
+		// objects inside too, whatever the root's version. Returns what is wrong, or empty: no __type, a malformed
+		// __version, one newer than this engine reads (of the root or an object inside), a step that failed.
 		// `source` (the file, or the world) is named in the text, with the version and the one supported.
 		std::string upgrade_in_memory(json::object& document, std::string_view source) const;
 

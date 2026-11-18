@@ -319,12 +319,11 @@ std::string desc::desc_system::upgrade_in_memory(json::object& document, std::st
 	if (version > supported) {
 		return std::format("{}: '{}' is version {}, newer than the version {} this engine reads", source, name, version, supported);
 	}
-	if (version < supported) {
-		try {
-			migrate_tree(document, source);
-		} catch (const std::exception& error) {
-			return error.what();
-		}
+	// Every time, not only for an older root: a typed object inside may be older or newer than this engine reads.
+	try {
+		migrate_tree(document, source);
+	} catch (const std::exception& error) {
+		return error.what();
 	}
 	return {};
 }
