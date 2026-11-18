@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include "edt_asset_layers.h"
+#include "edt_asset_operation_form.h"
 #include "edt_asset_usages.h"
 #include "edt_ui_probe.h"
 #include <filesystem>
@@ -46,6 +47,11 @@ namespace edt
 			m_usages.set_source(std::move(report), std::move(stamp));
 		}
 
+		// "Rename...", "Move..." and "Delete..." in the context menu of a file (#775, EPIC-57 section 6.4): a window with the preview of what
+		// the operation does and why it is refused, then the report of what it did with an Undo. They run what the asset commands run
+		// (`ports.run`), as a person's call. Without ports the menu has no such items.
+		void set_asset_operations(asset_operation_ports ports);
+
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
 		// "Create Variant" in the context menu of a `*.prefab.desc` file (#151): a window with the suggested name (Enter creates, Esc cancels);
 		// `on_created` gets the new file. Null: no item.
@@ -69,6 +75,13 @@ namespace edt
 		// The "Used by" section of the picked file, under the list.
 		void draw_usages();
 		void draw_usage_rows();
+		void ask_operation(asset_operation what, const std::filesystem::path& relative);
+		void draw_operation_window();
+		void draw_operation_editing(asset_operation_form& form);
+		void draw_operation_force(asset_operation_form& form);
+		void draw_operation_report(asset_operation_form& form);
+		// Lines in a framed, scrolling region; `error` draws them in the error colour.
+		void draw_operation_lines(const char* id, const std::vector<std::string>& lines, bool error);
 		// Short icon prefix for a file based on extension.
 		const char* get_file_icon(const std::filesystem::path& path) const;
 
@@ -104,5 +117,8 @@ namespace edt
 		std::unique_ptr<document_create_form> m_create_form;
 		std::function<void(const res::tag&)> m_on_document_created;
 		bool m_create_requested = false;
+
+		std::unique_ptr<asset_operation_form> m_operation_form;
+		bool m_operation_requested = false;
 	};
 }
