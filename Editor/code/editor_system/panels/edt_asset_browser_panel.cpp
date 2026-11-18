@@ -310,9 +310,9 @@ namespace edt
 			for (const auto& part : m_current_rel) {
 				if (part == ".") continue;
 				cursor /= part;
-				ImGui::SameLine(0.f, dpi_px(2.f));
+				ImGui::SameLine(0.f, em(2.f));
 				ImGui::TextDisabled(">");
-				ImGui::SameLine(0.f, dpi_px(2.f));
+				ImGui::SameLine(0.f, em(2.f));
 				const std::string seg = fs_paths::utf8_of(part);
 				if (ImGui::SmallButton(seg.c_str()))
 					navigate_to(cursor);
@@ -329,10 +329,10 @@ namespace edt
 
 		// ── two columns: tree | files ─────────────────────────────────────────
 		ImGui::Columns(2, "ab_cols", true);
-		ImGui::SetColumnWidth(0, dpi_px(160.f));
+		ImGui::SetColumnWidth(0, em(160.f));
 
 		// Left: directory tree
-		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, dpi_px(12.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, em(12.f));
 		if (ImGui::TreeNodeEx("res://##directorytreeroot", ImGuiTreeNodeFlags_DefaultOpen |
 		                                ImGuiTreeNodeFlags_SpanFullWidth))
 		{

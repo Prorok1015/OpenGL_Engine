@@ -8,13 +8,11 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -101,38 +99,6 @@ namespace ds {
 
 namespace
 {
-	struct binary_entry
-	{
-		rnd::detail::geometry_binary_state state = rnd::detail::geometry_binary_state::none;
-		rnd::detail::geometry_binary_ranges ranges;
-	};
-
-	// By address: geometry_desc has no member for it. Never destroyed, so a geometry freed at exit still finds it.
-	struct binary_registry
-	{
-		std::mutex mutex;
-		std::unordered_map<const rnd::geometry_desc*, binary_entry> entries;
-	};
-
-	binary_registry& registry()
-	{
-		static binary_registry* const made = new binary_registry;
-		return *made;
-	}
-
-	void copy_binary(const rnd::geometry_desc& from, const rnd::geometry_desc& to)
-	{
-		binary_registry& reg = registry();
-		std::lock_guard lock(reg.mutex);
-		const auto found = reg.entries.find(&from);
-		if (found == reg.entries.end()) {
-			reg.entries.erase(&to);
-			return;
-		}
-		binary_entry copy = found->second;
-		reg.entries.insert_or_assign(&to, std::move(copy));
-	}
-
 	// A range object: recorded for the adapter. Anything else is not a range (an array, read as before).
 	std::optional<res::binary_range> range_at(const json::value& value, std::string_view path)
 	{
@@ -167,42 +133,30 @@ namespace
 
 rnd::detail::geometry_binary_state rnd::detail::binary_state_of(const geometry_desc& geometry)
 {
-	binary_registry& reg = registry();
-	std::lock_guard lock(reg.mutex);
-	const auto found = reg.entries.find(&geometry);
-	return found == reg.entries.end() ? geometry_binary_state::none : found->second.state;
+	return geometry.binary.state;
 }
 
 std::optional<rnd::detail::geometry_binary_ranges> rnd::detail::binary_ranges_of(const geometry_desc& geometry)
 {
-	binary_registry& reg = registry();
-	std::lock_guard lock(reg.mutex);
-	const auto found = reg.entries.find(&geometry);
-	if (found == reg.entries.end() || found->second.state != geometry_binary_state::not_loaded) {
+	if (geometry.binary.state != geometry_binary_state::not_loaded) {
 		return std::nullopt;
 	}
-	return found->second.ranges;
+	return geometry.binary.ranges;
 }
 
-void rnd::detail::set_binary_ranges(const geometry_desc& geometry, geometry_binary_ranges ranges)
+void rnd::detail::set_binary_ranges(geometry_desc& geometry, geometry_binary_ranges ranges)
 {
-	binary_registry& reg = registry();
-	std::lock_guard lock(reg.mutex);
-	reg.entries.insert_or_assign(&geometry, binary_entry{ geometry_binary_state::not_loaded, std::move(ranges) });
+	geometry.binary = geometry_binary{ geometry_binary_state::not_loaded, std::move(ranges) };
 }
 
-void rnd::detail::set_binary_loaded(const geometry_desc& geometry)
+void rnd::detail::set_binary_loaded(geometry_desc& geometry)
 {
-	binary_registry& reg = registry();
-	std::lock_guard lock(reg.mutex);
-	reg.entries[&geometry].state = geometry_binary_state::loaded;
+	geometry.binary.state = geometry_binary_state::loaded;
 }
 
-void rnd::detail::forget_binary(const geometry_desc& geometry)
+void rnd::detail::forget_binary(geometry_desc& geometry)
 {
-	binary_registry& reg = registry();
-	std::lock_guard lock(reg.mutex);
-	reg.entries.erase(&geometry);
+	geometry.binary = {};
 }
 
 namespace
@@ -262,43 +216,6 @@ void rnd::detail::rebuild_bounds(geometry_desc& geometry)
 	for (const auto& [box, triangle] : geometry.bounds) {
 		geometry.rtree.insert(box, triangle);
 	}
-}
-
-rnd::geometry_desc::geometry_desc()
-{
-	// The address may be one a geometry destroyed without this dtor (an inline one of an old module) left in the table.
-	detail::forget_binary(*this);
-}
-
-rnd::geometry_desc::geometry_desc(const geometry_desc& other)
-	: desc::desc_base(other)
-	, layout(other.layout)
-	, indices(other.indices)
-	, vertices(other.vertices)
-	, bounds(other.bounds)
-	, rtree(other.rtree)
-{
-	copy_binary(other, *this);
-}
-
-rnd::geometry_desc& rnd::geometry_desc::operator=(const geometry_desc& other)
-{
-	if (this == &other) {
-		return *this;
-	}
-	desc::desc_base::operator=(other);
-	layout = other.layout;
-	indices = other.indices;
-	vertices = other.vertices;
-	bounds = other.bounds;
-	rtree = other.rtree;
-	copy_binary(other, *this);
-	return *this;
-}
-
-rnd::geometry_desc::~geometry_desc()
-{
-	detail::forget_binary(*this);
 }
 
 void rnd::geometry_desc::deserialize(desc::desc_system&, const json::object& resource)
@@ -389,6 +306,6 @@ void rnd::geometry_desc::serialize(json::object& resource) const
 	case detail::geometry_binary_state::none:
 		break;
 	}
-	// Whatever the table says: a layout without vertices is never written empty (write_geometry_arrays throws).
+	// Whatever the state says: a layout without vertices is never written empty (write_geometry_arrays throws).
 	write_geometry_arrays(get_tag(), geometry_view_of(*this), resource);
 }

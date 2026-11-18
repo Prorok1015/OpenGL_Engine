@@ -31,6 +31,9 @@
 #include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_user_bindings.h>
+#include <snk/model_codec/res_desc_binary_codec.h>
+#include <snk/model_codec/rnd_geometry_encode.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/rnd_render_context.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
@@ -138,6 +141,12 @@ namespace gs
 			inp::gamepad_config, inp::user_bindings,
 			// Returned by value from the exports of user_bindings; rng::save and rng::load are inline.
 			inp::rebind_result, inp::binding_conflict, ecs::rng::position,
+			// A module may make, copy or assign a geometry_desc (inline since #1068 PR5, with its binary state as a member).
+			rnd::geometry_desc,
+			// In geometry_desc's binary state; the desc binary exports (to_json, binary_range_from_json, encode) pass it by value.
+			res::binary_range,
+			// The geometry writers (encode_geometry_files, write_geometry_arrays) take a view and options a module builds.
+			rnd::geometry_view, rnd::geometry_file_options,
 			// The third-party types every module holds or passes: the registry of a world, a JSON value, a transform.
 			entt::registry, boost::json::value, glm::mat4,
 			interface_abi_revisions, third_party_versions>;

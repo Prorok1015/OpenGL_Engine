@@ -2,6 +2,8 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_dynamic.h>
+#include <snk/desc/desc_migrations.h>
+#include <boost/json/array.hpp>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_scene_layer.h>
@@ -223,6 +225,12 @@ void scn::schema_component_registration::reset()
 
 scn::schema_component_registration scn::register_schema_component(context_manager& manager, scene_layer& layer, desc::type_schema schema)
 {
+	return register_schema_component(manager, layer, std::move(schema), json::array{});
+}
+
+scn::schema_component_registration scn::register_schema_component(context_manager& manager, scene_layer& layer, desc::type_schema schema,
+	const json::array& migrations)
+{
 	const std::string name = schema.name;
 	const auto refuse = [&name](std::string_view why) {
 		egLOG_ERROR("scene", "component without a C++ type '{}' not registered: {}", name, why);
@@ -251,8 +259,17 @@ scn::schema_component_registration scn::register_schema_component(context_manage
 		return refuse("a spawner of that name exists");
 	}
 	// desc_system::register_schema only asserts this; a release build would register the wrong version.
-	if (const int current = layer.descs().current_version(name); schema.version != current) {
-		return refuse(std::format("the schema is version {}, its migrations lead to version {}", schema.version, current));
+	if (migrations.empty()) {
+		if (const int current = layer.descs().current_version(name); schema.version != current) {
+			return refuse(std::format("the schema is version {}, its migrations lead to version {}", schema.version, current));
+		}
+	} else {
+		if (const std::string problem = desc::schema_migrations_problem(migrations, schema.version); !problem.empty()) {
+			return refuse(problem);
+		}
+		if (layer.descs().current_version(name) != 1) {
+			return refuse("its type has migration steps registered in C++ already");
+		}
 	}
 
 	// Every step below may have run or thrown half-way; the name was free in the layer, so all of it is ours to undo.
@@ -267,7 +284,7 @@ scn::schema_component_registration scn::register_schema_component(context_manage
 		if (schema.layout.size == 0 && !schema.fields.empty()) {
 			desc::compute_layout(schema, &layer.descs().schemas());
 		}
-		const desc::type_schema* stored = layer.descs().register_schema(std::move(schema));
+		const desc::type_schema* stored = layer.descs().register_schema(std::move(schema), migrations);
 		if (!stored || !layer.descs().is_registered(name)) {
 			undo();
 			return refuse("its schema cannot be bound (a nested or enum schema it names is missing?)");

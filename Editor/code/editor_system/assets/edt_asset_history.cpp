@@ -2,6 +2,7 @@
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -50,6 +51,21 @@ namespace
 		return std::string(slash == std::string_view::npos ? relative : relative.substr(slash + 1));
 	}
 
+	// The file the operation was asked about: the first one that was moved or deleted and is neither a .resource nor a desc's binary
+	// file, so a pair is named by its desc, whatever order its steps are in. A referrer that was rewritten is never it.
+	std::string primary_file_of(const edt::operation_journal& journal)
+	{
+		const auto moved = [](const edt::journal_step& step) { return step.kind != edt::journal_step_kind::rewrite && !step.from.starts_with("cache://"); };
+		const auto main_name = [](const edt::journal_step& step) {
+			const std::string name = name_of(step.from);
+			return !res::is_asset_meta_name(name) && !res::desc_binary_owner_name(name);
+		};
+		const auto main = std::ranges::find_if(journal.steps, [&](const edt::journal_step& step) { return moved(step) && main_name(step); });
+		if (main != journal.steps.end()) return main->from;
+		const auto any_moved = std::ranges::find_if(journal.steps, moved);
+		return (any_moved != journal.steps.end() ? *any_moved : journal.steps.front()).from;
+	}
+
 	std::string listed(const std::vector<std::string>& files)
 	{
 		std::string out;
@@ -79,7 +95,7 @@ std::string edt::asset_operation_label(const operation_journal& journal)
 	case asset_operation::remove: verb = "Delete"; break;
 	}
 	if (journal.steps.empty()) return std::string(verb) + " asset";
-	return std::format("{} {}", verb, forge::escaped_text(name_of(journal.steps.front().from), 128));
+	return std::format("{} {}", verb, forge::escaped_text(name_of(primary_file_of(journal)), 128));
 }
 
 fs::path edt::asset_history_file(const std::vector<fs::path>& edt_roots, const fs::path& user_data_dir, const fs::path& journal_root)

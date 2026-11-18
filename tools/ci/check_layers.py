@@ -11,6 +11,9 @@ use its own layer and the ones below it, never one above:
   - a CMakeLists.txt under core/ names, in target_link_libraries, a snk:: target defined in a higher layer, or puts a
     directory of a higher layer into target_include_directories.
 The layers above core/model_import are not checked against each other.
+
+It also fails when a public header of a target under core/ includes a component its target does not reach through
+PUBLIC/INTERFACE links (a hidden dependency: it builds only through the aggregates core_api/engine_api).
 """
 import re
 import sys
@@ -83,6 +86,87 @@ def cmake_problems(path, text, targets):
     return out
 
 
+LINK_KEYWORDS = ('PUBLIC', 'PRIVATE', 'INTERFACE')
+PUBLIC_INCLUDE = re.compile(r'^\s*#\s*include\s*<snk/([A-Za-z0-9_]+)/([^>]*)>', re.M)
+# Targets whose headers come from an aggregate on purpose (their CMake links snk::engine_api / is the aggregate).
+AGGREGATE_USERS = {'snk::engine', 'snk::model_import_assimp'}
+# (target, component it includes) left hidden, with the reason.
+HIDDEN_EXCEPTIONS = {}
+
+
+def links_of(text):
+    """The snk:: targets a CMakeLists.txt links, with the strongest visibility it names them with."""
+    body = '\n'.join(line.split('#', 1)[0] for line in text.splitlines())
+    links = {}
+    for call in LINKS.findall(body):
+        visibility = 'PRIVATE'
+        for token in call.split()[1:]:
+            if token in LINK_KEYWORDS:
+                visibility = token
+                continue
+            for name in TARGET.findall(token):
+                if links.get(name) not in ('PUBLIC', 'INTERFACE'):
+                    links[name] = visibility
+    return links
+
+
+def public_closure(target, links_by_target):
+    reached, stack = set(), [target]
+    while stack:
+        for name, visibility in links_by_target.get(stack.pop(), {}).items():
+            if visibility in ('PUBLIC', 'INTERFACE') and name not in reached:
+                reached.add(name)
+                stack.append(name)
+    return reached
+
+
+def hidden_problems(targets, owners_of_names, headers_of, exceptions=None):
+    """`targets`: alias -> links; `owners_of_names`: snk/<name> -> alias; `headers_of`: alias -> [(path, text)]."""
+    exceptions = HIDDEN_EXCEPTIONS if exceptions is None else exceptions
+    out = []
+    for target in sorted(targets):
+        if target in AGGREGATE_USERS:
+            continue
+        reach = public_closure(target, targets) | {target}
+        for path, text in headers_of.get(target, []):
+            for name, rest in PUBLIC_INCLUDE.findall(text):
+                if name == 'common' and rest == 'snk_api.h' and 'snk::api' in targets[target]:
+                    continue
+                owner = owners_of_names.get(name)
+                if owner is None or owner in reach or (target, owner) in exceptions:
+                    continue
+                out.append(f'{path}: a public header of {target} includes <snk/{name}/...> of {owner}, '
+                           f'which {target} does not link PUBLIC')
+    return out
+
+
+def hidden_dependencies(root):
+    targets, owners_of_names, headers_of = {}, {}, {}
+    for cmake in sorted(root.glob('core/**/CMakeLists.txt')):
+        if 'lib3dparty' in cmake.parts:
+            continue
+        text = cmake.read_text(encoding='utf-8', errors='replace')
+        aliases = ALIAS.findall(text)
+        if not aliases:
+            continue
+        target = aliases[0]
+        targets[target] = links_of(text)
+        headers_of[target] = []
+        for sub in ('include', 'include_base'):
+            folder = cmake.parent / sub
+            if not folder.is_dir():
+                continue
+            if (folder / 'snk').is_dir():
+                for named in (folder / 'snk').iterdir():
+                    if named.is_dir():
+                        owners_of_names.setdefault(named.name, target)
+            for header in sorted(folder.rglob('*')):
+                if header.is_file() and header.suffix in ('.h', '.hpp', '.inl'):
+                    headers_of[target].append((header.relative_to(root).as_posix(),
+                                               header.read_text(encoding='utf-8', errors='replace')))
+    return hidden_problems(targets, owners_of_names, headers_of)
+
+
 def walk(root):
     for path in sorted(root.rglob('*')):
         parts = path.relative_to(root).parts
@@ -131,7 +215,7 @@ def check(root):
             problems += include_problems(relative, text, owners)
         elif path.name == 'CMakeLists.txt':
             problems += cmake_problems(relative, text, targets)
-    return problems
+    return problems + hidden_dependencies(root)
 
 
 def self_test():
@@ -157,6 +241,21 @@ def self_test():
             'target_include_directories(m PUBLIC "$<BUILD_INTERFACE:${ENGINE_CORE_PATH}/engine/scene/include>")', targets), 0),
         ('the editor is not checked', cmake_problems('Editor/CMakeLists.txt', 'target_link_libraries(e snk::editor_api)', targets), 0),
     ]
+    links = {'snk::a': {'snk::b': 'PRIVATE', 'snk::api': 'PUBLIC'}, 'snk::b': {}, 'snk::c': {'snk::b': 'PUBLIC'},
+             'snk::d': {'snk::c': 'PUBLIC'}, 'snk::drv_opengl': {}, 'snk::window': {}}
+    owned = {'b': 'snk::b', 'common': 'snk::common', 'window': 'snk::window'}
+    cases += [
+        ('a hidden dependency', hidden_problems(links, owned, {'snk::a': [('a.h', '#include <snk/b/x.h>\n')]}), 1),
+        ('a public link', hidden_problems(links, owned, {'snk::c': [('c.h', '#include <snk/b/x.h>\n')]}), 0),
+        ('through a public link', hidden_problems(links, owned, {'snk::d': [('d.h', '#include <snk/b/x.h>\n')]}), 0),
+        ('snk_api.h through snk::api', hidden_problems(links, owned, {'snk::a': [('a.h', '#include <snk/common/snk_api.h>\n')]}), 0),
+        ('another common header', hidden_problems(links, owned, {'snk::a': [('a.h', '#include <snk/common/x.h>\n')]}), 1),
+        ('a listed exception', hidden_problems(links, owned, {'snk::drv_opengl': [('g.h', '#include <snk/window/w.h>\n')]},
+                                               {('snk::drv_opengl', 'snk::window'): 'a reason'}), 0),
+        ('links are read with their visibility', [] if links_of(
+            'target_link_libraries(x PRIVATE snk::b PUBLIC snk::c $<BUILD_LOCAL_INTERFACE:snk::d>)') ==
+            {'snk::b': 'PRIVATE', 'snk::c': 'PUBLIC', 'snk::d': 'PUBLIC'} else ['wrong'], 0),
+    ]
     failed = 0
     for name, problems, expected in cases:
         if len(problems) != expected:
@@ -176,10 +275,11 @@ def main(argv):
     for problem in problems:
         print(f'check_layers: {problem}')
     if problems:
-        print(f'check_layers: {len(problems)} edge(s) from a lower layer to a higher one; layers: '
+        print(f'check_layers: {len(problems)} problem(s): an edge from a lower layer to a higher one, or a public header '
+              f'including what its target does not link PUBLIC; layers: '
               f'{" < ".join(layer_name(index) for index in range(TOP + 1))}')
         return 1
-    print('check_layers: no lower layer includes or links a higher one')
+    print('check_layers: no lower layer includes or links a higher one, no hidden public dependency')
     return 0
 
 

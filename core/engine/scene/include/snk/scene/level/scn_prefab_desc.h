@@ -180,6 +180,10 @@ namespace scn {
 	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);
 
+	// Whether an override edit at `path` (a JSON pointer) reaches a field of `schema`: the field itself, inside it (an
+	// element of a vector) or above it (an object of nested fields). A field key without a leading '/' is a plain key.
+	SNK_API bool override_names_a_field(const desc::type_schema& schema, std::string_view path);
+
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	SNK_API void assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 
