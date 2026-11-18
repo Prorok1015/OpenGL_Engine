@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "../test_module_env.hpp"
+#include "../test_fixture_project.hpp"
 #include "../test_temp_dir.hpp"
 #include "test_dll_project.hpp"
 #include "test_game_dll_api.h"
@@ -15,6 +16,9 @@
 #include <snk/ecs/ecs_component.h>
 #include <snk/game/gs_module_layout.h>
 #include <snk/project/prj_project.h>
+#include <snk/project_migration/pmg_asset_steps.h>
+#include <snk/project_migration/pmg_command.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -31,6 +35,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -1078,6 +1083,66 @@ BOOST_AUTO_TEST_CASE(a_reload_of_an_untrusted_build_is_refused_and_the_running_m
 	BOOST_TEST(moved_value(*this) == 3);
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
+}
+
+// #764 (EPIC-58 S9b): a file of a module's type is unknown_type and left as it is while the module is not loaded (the
+// command exits partial), migrates through the module's steps once it is, and is left alone again after it goes.
+BOOST_AUTO_TEST_CASE(a_file_of_a_module_type_migrates_only_while_the_module_is_loaded)
+{
+	namespace fs = std::filesystem;
+	namespace pmg = prj::migration;
+	const auto read_text = [](const fs::path& path) {
+		std::ifstream in(path, std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+	const auto write_text = [](const fs::path& path, std::string_view text) {
+		fs::create_directories(path.parent_path());
+		std::ofstream(path, std::ios::binary) << text;
+	};
+
+	test_util::fixture_copy copy{ "migration_v1" };
+	fs::remove(copy.res() / "broken.desc");
+	fs::remove(copy.res() / "newer.desc");
+	fs::remove(copy.res() / "module" / "unknown.desc");
+	const fs::path file = copy.res() / "module" / "dll.desc";
+	write_text(file, std::format(R"({{"__type":"{}","old":5}})", dll_game::migrated_type));
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ copy.res() });
+
+	pmg::project_step_registry steps;
+	pmg::register_project_steps(steps);
+	pmg::project_writer write;
+	std::string printed;
+	int run = 0;
+	const auto migrate = [&](desc::desc_system& with) {
+		pmg::command_context context{ copy.root(), with, *rs, &steps, write, [&run] { return std::format("test-migration-{}", ++run); }, {}, {} };
+		context.print = [&printed](std::string_view text) { printed += std::string(text) + "\n"; };
+		return pmg::run_migrate(pmg::migrate_command{}, context);
+	};
+
+	// Without the module: the rest of the project migrates, the module's file is unknown_type and keeps its bytes.
+	const std::string unloaded = read_text(file);
+	BOOST_TEST(migrate(*descs) == pmg::k_exit_partial, printed);
+	BOOST_TEST(read_text(file) == unloaded);
+
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_TEST(migrate(layer->descs()) == pmg::k_exit_done, printed);
+	const boost::json::object migrated = boost::json::parse(read_text(file)).as_object();
+	BOOST_TEST(migrated.at("__version").as_int64() == 3);
+	BOOST_TEST(migrated.at("migrated_by").as_string() == "dll");
+	BOOST_TEST(migrated.at("new").as_int64() == 5);
+	BOOST_TEST(!migrated.contains("old"));
+
+	// The steps went with the module: a file of its type at v1 is left alone again.
+	loader.unload(dll_game::module_name, root);
+	auto* after = contexts().game_layer();
+	BOOST_REQUIRE(after != nullptr);
+	write_text(file, std::format(R"({{"__type":"{}","old":7}})", dll_game::migrated_type));
+	const std::string gone = read_text(file);
+	BOOST_TEST(migrate(after->descs()) == pmg::k_exit_partial, printed);
+	BOOST_TEST(read_text(file) == gone);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
