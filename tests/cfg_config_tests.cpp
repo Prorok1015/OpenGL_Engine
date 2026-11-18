@@ -1,12 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_variables.h>
+#include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include "edt_editor_mode.h"
 #include "test_temp_dir.hpp"
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <initializer_list>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // NOTE: cfg::initialize_configs(path) is guarded by a process-wide "already initialized" flag,
@@ -23,6 +26,32 @@ int run_cli(std::vector<std::string> args)
 	for (auto& a : args) argv.push_back(a.data());
 	return cfg::initialize_configs(static_cast<int>(argv.size()), argv.data()) ? 1 : 0;
 }
+
+// A run of --migrate/--migrate-rollback/--migrate-prune also sets process-wide variables of the engine (a read-only
+// project, no log file, no watching or hot reload): they are put back as they were, or every later test of the binary
+// would run against a read-only project.
+struct restore_variables
+{
+	std::vector<std::pair<std::string, std::string>> saved;
+
+	explicit restore_variables(std::initializer_list<std::string_view> names)
+	{
+		const cfg::config_view view;
+		for (const std::string_view name : names) {
+			if (auto value = view.value(name)) saved.emplace_back(std::string{ name }, std::move(*value));
+		}
+	}
+
+	~restore_variables()
+	{
+		std::vector<std::string> args{ "--set" };
+		for (const auto& [name, value] : saved) {
+			args.push_back(name);
+			args.push_back(value);
+		}
+		if (args.size() > 1) run_cli(std::move(args));
+	}
+};
 
 }
 
@@ -122,6 +151,8 @@ BOOST_AUTO_TEST_CASE(Cli_MigratePruneTakesKeepAndDryRunOnly)
 	cfg::variable<std::string> command{ "migration/command", "" };
 	cfg::variable<int> keep{ "migration/keep", 0 };
 	cfg::variable<bool> dry_run{ "migration/dry_run", false };
+	const restore_variables restore{ "project/allow_engine_version_mismatch", "logger/file", "res/read_only_project", "res/watch_files",
+		"scene/hot_reload", "editor/headless" };
 	BOOST_TEST(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--dry-run" }) == 1);
 	BOOST_TEST(*command == "prune");
 	BOOST_TEST(static_cast<int>(keep) == 3);
