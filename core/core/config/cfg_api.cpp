@@ -240,7 +240,8 @@ bool cfg::initialize_configs(int argc, char* argv[], const std::filesystem::path
 			"it also ends the editor (unsaved changes are dropped)")
 		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
 			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
-			"Missing or broken: every agent request is denied")
+			"The file is chosen by whoever launches the editor: do not pass a file from the project's repository, "
+			"otherwise the permission comes from the repository. Missing or broken: every agent request is denied")
 		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
 			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
 			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)")
