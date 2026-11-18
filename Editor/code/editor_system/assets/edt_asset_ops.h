@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_asset_usages.h"
 #include <snk/model_codec/res_tag.h>
+#include <snk/resource/res_file_change.h>
 #include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,7 @@
 namespace edt
 {
 	class asset_database;
+	class document;
 
 	enum class asset_operation : std::uint8_t { rename, move, remove };
 
@@ -243,6 +245,9 @@ namespace edt
 		std::function<bool(const res::tag&)> is_open_with_unsaved_changes;
 		// Held for the length of an operation (resource_system::hold_changes), so the watcher reports it as one batch.
 		std::function<std::shared_ptr<void>()> hold_changes;
+		// What an operation or its undo did to files of the layers, once it is on the disk and still under the hold: the editor's
+		// own change (asset_database::report_self_change), not a delete and a create that somebody else made.
+		std::function<void(std::span<const res::file_change>)> report_self_change;
 		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"), before it is written to the journal; a
 		// non-empty answer fails it.
 		std::function<std::string(std::string_view)> fail_step;
@@ -250,6 +255,12 @@ namespace edt
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).
 	bool is_engine_layer(const std::vector<std::filesystem::path>& layers, std::size_t layer, const std::filesystem::path& engine_base);
+
+	// The port is_open_with_unsaved_changes from what the editor knows of one asset: `open` is the open document that has it as its
+	// source (null: none), `scene` the editor's scene document, `is_editor_copy` whether the asset is the open level's editor copy.
+	// An operation would lose the unsaved edits of a dirty document; the open level, clean or not, cannot take a change of its file
+	// from outside yet (US-60-C, #1188).
+	bool is_open_with_unsaved_changes(const document* open, const document& scene, bool is_editor_copy);
 
 	class asset_ops
 	{
@@ -264,14 +275,20 @@ namespace edt
 		// skipped, the ones before it are put back. The journal is not trusted: its folder must be journal_root/<id>, its roots
 		// the project's own (top) layer or the manifest's folder, its names ones the project lists, a rewrite of a desc or the manifest.
 		undo_report undo(const operation_journal& journal) const;
+		// The folders an operation may have changed files in: the project's own (top) layer and the manifest's. The only roots a
+		// journal may name (the history checks the journals it reads against them).
+		std::vector<std::filesystem::path> changeable_roots() const;
+		// `text` with the host's folders written as the project knows them (a layer is "res://", the journal folder
+		// "cache://asset_ops", the manifest's folder "<project>", the engine's "<engine>"): what an agent is told of an error.
+		std::string without_host_paths(std::string text) const;
 
 	private:
 		std::optional<refusal> plan_one(plan_item& item) const;
+		// Tells report_self_change what `steps` did (`undoing`: what taking them back did).
+		void announce(const std::vector<journal_step>& steps, bool undoing) const;
 		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;
 		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
 		void roll_back(operation_report& report) const;
-		// The folders an operation may have changed files in: the project's own (top) layer and the manifest's.
-		std::vector<std::filesystem::path> changeable_roots() const;
 
 		asset_ops_ports m_ports;
 	};

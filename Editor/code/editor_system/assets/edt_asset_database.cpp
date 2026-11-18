@@ -2223,7 +2223,7 @@ void edt::asset_database::push_history(std::string label, std::function<asset_fi
 	if (m_history.size() >= max_history) {
 		m_history.erase(m_history.begin());
 	}
-	m_history.push_back(history_entry{ std::move(label), std::move(undo) });
+	m_history.push_back(history_entry{ std::move(label), std::move(undo), next_history_serial() });
 	++m_revision;
 }
 
@@ -2243,6 +2243,23 @@ edt::asset_fix_result edt::asset_database::undo_last()
 		}
 	}
 	return result;
+}
+
+std::optional<std::uint64_t> edt::asset_database::next_undo_serial() const
+{
+	if (m_history.empty()) {
+		return std::nullopt;
+	}
+	return m_history.back().serial;
+}
+
+edt::asset_batch edt::asset_database::report_self_change(std::span<const res::file_change> changes)
+{
+	std::vector<res::file_change> own(changes.begin(), changes.end());
+	for (res::file_change& change : own) {
+		change.self = true;
+	}
+	return apply_changes(own);
 }
 
 void edt::asset_database::refresh(const std::vector<std::string>& relatives)

@@ -3,6 +3,7 @@
 #include "edt_reference_rewrite.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/platform/plt_beneath.h>
@@ -13,6 +14,7 @@
 #include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -610,6 +612,11 @@ bool edt::is_engine_layer(const std::vector<fs::path>& layers, std::size_t layer
 	return a == b;
 }
 
+bool edt::is_open_with_unsaved_changes(const document* open, const document& scene, bool is_editor_copy)
+{
+	return is_editor_copy || open == &scene || (open != nullptr && open->is_dirty());
+}
+
 edt::asset_ops::asset_ops(asset_ops_ports ports)
 	: m_ports(std::move(ports))
 {
@@ -873,6 +880,44 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 	return std::nullopt;
 }
 
+void edt::asset_ops::announce(const std::vector<journal_step>& steps, bool undoing) const
+{
+	const asset_database* db = m_ports.report_self_change && m_ports.assets ? m_ports.assets() : nullptr;
+	if (!db) return;
+	// Only the files res:// shows: a step in another root (the manifest's folder) is not one of the database's.
+	std::vector<std::string> roots;
+	roots.reserve(db->layers().size());
+	for (const fs::path& layer : db->layers()) roots.push_back(utf8(layer));
+	const auto in_layers = [&roots](const journal_step& step) { return std::ranges::find(roots, step.root) != roots.end(); };
+
+	std::vector<res::file_change> changes;
+	changes.reserve(steps.size());
+	const auto add = [&changes](std::string_view relative, std::string_view old_relative, res::change_kind kind) {
+		res::file_change change;
+		change.tag = res::tag::make(relative);
+		if (!old_relative.empty()) change.old_tag = res::tag::make(old_relative);
+		change.kind = kind;
+		change.self = true;
+		changes.push_back(std::move(change));
+	};
+	for (const journal_step& step : steps) {
+		if (!in_layers(step)) continue;
+		switch (step.kind) {
+		case journal_step_kind::move:
+			if (undoing) add(step.from, step.to, res::change_kind::renamed);
+			else add(step.to, step.from, res::change_kind::renamed);
+			break;
+		case journal_step_kind::rewrite:
+			add(step.from, {}, res::change_kind::modified);
+			break;
+		case journal_step_kind::stash:
+			add(step.from, {}, undoing ? res::change_kind::created : res::change_kind::deleted);
+			break;
+		}
+	}
+	if (!changes.empty()) m_ports.report_self_change(changes);
+}
+
 edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const execute_options& options) const
 {
 	operation_report report;
@@ -893,6 +938,7 @@ edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const 
 void edt::asset_ops::roll_back(operation_report& report) const
 {
 	operation_journal& journal = report.journal;
+	std::vector<journal_step> stuck;
 	for (auto step = journal.steps.rbegin(); step != journal.steps.rend(); ++step) {
 		std::string undone;
 		try {
@@ -905,8 +951,11 @@ void edt::asset_ops::roll_back(operation_report& report) const
 		if (!undone.empty()) {
 			report.rollback_failures.push_back(std::format("{}: {}", step_label(*step), undone));
 			egLOG_WARN("asset_ops", "'{}' could not be taken back: {}", step_label(*step), undone);
+			stuck.push_back(*step);
 		}
 	}
+	// A step taken back leaves the disk as it was; only what stayed done is news to the database.
+	if (!stuck.empty()) announce(stuck, false);
 	if (report.rollback_failures.empty()) journal.steps.clear();
 	try {
 		persist(journal, m_ports.journal_root);
@@ -1058,6 +1107,7 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 		roll_back(report);
 		return;
 	}
+	announce(journal.steps, false);
 
 	for (const planned_move& move : item.moves) {
 		const std::string to = removing ? std::format("cache://asset_ops/{}/{}", journal.id, move.to) : std::string(res::tag::make(move.to).view());
@@ -1079,6 +1129,46 @@ std::vector<fs::path> edt::asset_ops::changeable_roots() const
 	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
 	if (manifest) roots.push_back(manifest->root);
 	return roots;
+}
+
+std::string edt::asset_ops::without_host_paths(std::string text) const
+{
+	// A bare folder is replaced where it is a whole name, not the start of a longer one.
+	const auto replace_all = [&text](const std::string& from, std::string_view with, bool whole_name) {
+		if (from.empty()) return;
+		const auto name_char = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '_' || ch == '-'; };
+		for (std::size_t at = text.find(from); at != std::string::npos; ) {
+			const std::size_t end = at + from.size();
+			if (whole_name && end < text.size() && name_char(text[end])) {
+				at = text.find(from, end);
+				continue;
+			}
+			text.replace(at, from.size(), with);
+			at = text.find(from, at + with.size());
+		}
+	};
+	// `root/x` becomes `prefix` + `x`, a bare `root` becomes `bare`.
+	const auto hide = [&](const fs::path& root, std::string_view prefix, std::string_view bare) {
+		if (root.empty()) return;
+		for (const std::string& form : { utf8(root), fs_paths::utf8_of(root) }) {
+			replace_all(form + "/", prefix, false);
+			replace_all(form, bare, true);
+		}
+	};
+	// The longest first: the journal folder lies inside the project.
+	hide(m_ports.journal_root, "cache://asset_ops/", "cache://asset_ops");
+	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+	if (db) {
+		const std::vector<fs::path>& layers = db->layers();
+		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+			if (is_engine_layer(layers, layer, m_ports.engine_base)) hide(layers[layer], "<engine>/", "<engine>");
+			else hide(layers[layer], "res://", "res://");
+		}
+	}
+	if (manifest) hide(manifest->root, "<project>/", "<project>");
+	hide(m_ports.engine_base, "<engine>/", "<engine>");
+	return text;
 }
 
 edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
@@ -1151,6 +1241,7 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		}
 
 		const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
+		std::vector<journal_step> put_back;
 		for (std::size_t i = journal.steps.size(); i-- > 0;) {
 			const journal_step& step = journal.steps[i];
 			if (states[i] == step_state::not_done) continue;
@@ -1160,7 +1251,9 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 				continue;
 			}
 			report.restored.push_back(step.from);
+			put_back.push_back(step);
 		}
+		announce(put_back, true);
 		report.ok = report.failures.empty();
 		if (!report.ok) report.error = "some files could not be put back";
 	} catch (const std::exception& error) {
