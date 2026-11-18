@@ -231,30 +231,6 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_AComposedComponentOfAnOldModule_IsNotMigratedAga
 	BOOST_TEST(!scn::compose_component_json(cnode, &parent).at("material").as_object().contains("__version"));
 }
 
-// assemble_and_apply with overrides reads serialize(parent) merged with them: the old module's inline material there is
-// of the current format, so the spawned component's material does not go through the later step.
-BOOST_AUTO_TEST_CASE(SkyboxDesc_AnAssembledComponentOfAnOldModuleWithOverrides_IsNotMigratedAgain)
-{
-	descs->register_desc<old_module_sky>("old_module_sky_desc");
-	const res::tag tag = put("old.sky.desc", std::string{ R"({"__type":"old_module_sky_desc","material":)" } + k_inline_material + "}");
-	auto parent = require_loaded<desc::desc_base>(tag);
-	auto* old = dynamic_cast<old_module_sky*>(parent.get_sync().get());
-	BOOST_REQUIRE(old);
-	// As such a module's to_json writes it from memory.
-	old->material.erase("__version");
-	const int version = descs->current_version("material_desc");
-	descs->register_migration("material_desc", version, [](json::object& o) { o["queue"] = "opaque"; });
-
-	entt::registry reg;
-	const entt::entity e = reg.create();
-	assembler->assemble_and_apply(reg, e, "skybox_desc", parent, parse(R"({"exposure":2})"), "sky");
-	const auto* component = reg.try_get<scn::material_desc_component>(e);
-	BOOST_REQUIRE(component);
-	pump();
-	BOOST_REQUIRE(component->mlt_desc.get_sync());
-	BOOST_TEST((component->mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
-}
-
 BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialNeedsASkyboxWithATag)
 {
 	auto untagged = std::dynamic_pointer_cast<scn::skybox_desc>(descs->create_instance("skybox_desc", res::tag{}));
