@@ -298,4 +298,40 @@ BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
 	}
 }
 
+// #766 (EPIC-58 section 7.2): a user's document in memory: older brought up, newer and malformed refused with the
+// source, its version and the one this engine reads named.
+BOOST_AUTO_TEST_CASE(UpgradeInMemory_NamesTheSourceAndBothVersions)
+{
+	register_two_steps();
+	auto newer = parse(R"({"__type":"test_migr_desc","__version":5})");
+	const std::string problem = ds.upgrade_in_memory(newer, "user://settings/x.json");
+	BOOST_TEST(problem.find("user://settings/x.json") != std::string::npos, problem);
+	BOOST_TEST(problem.find("version 5") != std::string::npos, problem);
+	BOOST_TEST(problem.find("version 3") != std::string::npos, problem);
+
+	auto older = parse(R"({"__type":"test_migr_desc","a":4})");
+	BOOST_TEST(ds.upgrade_in_memory(older, "older.json").empty());
+	BOOST_TEST(older.at("__version").as_int64() == 3);
+	BOOST_TEST(older.at("b").as_int64() == 40);
+
+	auto malformed = parse(R"({"__type":"test_migr_desc","__version":"x"})");
+	BOOST_TEST(!ds.upgrade_in_memory(malformed, "bad.json").empty());
+}
+
+// Review of #1231: a root of the current version does not let a typed object inside through unchecked. A newer one is
+// refused, an older one brought up.
+BOOST_AUTO_TEST_CASE(UpgradeInMemory_LooksInsideARootOfTheCurrentVersion)
+{
+	register_two_steps();
+	auto newer_inside = parse(R"({"__type":"test_migr_desc","__version":3,"inner":{"__type":"test_migr_desc","__version":5}})");
+	const std::string problem = ds.upgrade_in_memory(newer_inside, "world 'main'");
+	BOOST_TEST(!problem.empty());
+	BOOST_TEST(problem.find("5") != std::string::npos, problem);
+
+	auto older_inside = parse(R"({"__type":"test_migr_desc","__version":3,"inner":{"__type":"test_migr_desc","a":4}})");
+	BOOST_TEST(ds.upgrade_in_memory(older_inside, "world 'main'").empty());
+	BOOST_TEST(older_inside.at("inner").at("__version").as_int64() == 3);
+	BOOST_TEST(older_inside.at("inner").at("b").as_int64() == 40);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

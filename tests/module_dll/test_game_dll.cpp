@@ -292,6 +292,7 @@ private:
 					context.warn("no 'old' field");
 				}
 			});
+		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::migrated_schema_json).as_object()));
 		layer.descs().register_schema(desc::parse_type_schema(boost::json::parse(dll_game::schema_document_json).as_object()));
 		data.require<gs::module_context>().mark_document(dll_game::schema_document_type);
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });

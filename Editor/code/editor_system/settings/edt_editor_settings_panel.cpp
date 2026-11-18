@@ -1,5 +1,6 @@
 #include "edt_editor_settings_panel.h"
 #include "edt_theme_settings.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 
 #include <imgui.h>
@@ -43,9 +44,9 @@ void edt::editor_settings_panel::on_render()
 		ImGui::TextDisabled("There is no renderer (headless): the theme cannot be changed.");
 		return;
 	}
-	ImGui::SeparatorText("Theme");
+	bold_separator_text("Theme");
 	draw_theme_list();
-	ImGui::SeparatorText("Preset");
+	bold_separator_text("Preset");
 	draw_preset_editor();
 	if (!m_model.last_message().empty()) {
 		ImGui::Spacing();

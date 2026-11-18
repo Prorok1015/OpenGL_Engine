@@ -1,12 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_variables.h>
+#include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include "edt_editor_mode.h"
 #include "test_temp_dir.hpp"
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <initializer_list>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // NOTE: cfg::initialize_configs(path) is guarded by a process-wide "already initialized" flag,
@@ -23,6 +26,32 @@ int run_cli(std::vector<std::string> args)
 	for (auto& a : args) argv.push_back(a.data());
 	return cfg::initialize_configs(static_cast<int>(argv.size()), argv.data()) ? 1 : 0;
 }
+
+// A run of --migrate/--migrate-rollback/--migrate-prune also sets process-wide variables of the engine (a read-only
+// project, no log file, no watching or hot reload): they are put back as they were, or every later test of the binary
+// would run against a read-only project.
+struct restore_variables
+{
+	std::vector<std::pair<std::string, std::string>> saved;
+
+	explicit restore_variables(std::initializer_list<std::string_view> names)
+	{
+		const cfg::config_view view;
+		for (const std::string_view name : names) {
+			if (auto value = view.value(name)) saved.emplace_back(std::string{ name }, std::move(*value));
+		}
+	}
+
+	~restore_variables()
+	{
+		std::vector<std::string> args{ "--set" };
+		for (const auto& [name, value] : saved) {
+			args.push_back(name);
+			args.push_back(value);
+		}
+		if (args.size() > 1) run_cli(std::move(args));
+	}
+};
 
 }
 
@@ -113,6 +142,30 @@ BOOST_AUTO_TEST_CASE(Cli_TrustProjectSetsItsVariableAndAConfigFileCannot)
 	BOOST_REQUIRE(static_cast<bool>(trust));
 	BOOST_TEST(run_cli({}) == 1);
 	BOOST_TEST(!static_cast<bool>(trust));
+}
+
+// #767: --migrate-prune runs alone, headless, with --keep <N>; --dry-run goes with it, --force and --report do not.
+BOOST_AUTO_TEST_CASE(Cli_MigratePruneTakesKeepAndDryRunOnly)
+{
+	// Stand in for the editor's variables of the same names for the length of the test.
+	cfg::variable<std::string> command{ "migration/command", "" };
+	cfg::variable<int> keep{ "migration/keep", 0 };
+	cfg::variable<bool> dry_run{ "migration/dry_run", false };
+	const restore_variables restore{ "project/allow_engine_version_mismatch", "logger/file", "res/read_only_project", "res/watch_files",
+		"scene/hot_reload", "editor/headless" };
+	BOOST_TEST(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--dry-run" }) == 1);
+	BOOST_TEST(*command == "prune");
+	BOOST_TEST(static_cast<int>(keep) == 3);
+	BOOST_TEST(static_cast<bool>(dry_run));
+
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--keep", "3" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep=-1" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--migrate-prune", "--keep", "3" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--force" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--migrate" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--migrate-prune", "--keep", "3", "--migrate-rollback", "x" }), std::invalid_argument);
+	BOOST_CHECK_THROW(run_cli({ "--headless", "--dry-run" }), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(Cli_NonInteractiveSetsItsVariableInBothForms)
@@ -327,6 +380,31 @@ BOOST_AUTO_TEST_CASE(ConfigView_ReadsRegisteredVariablesAsText)
 	BOOST_TEST(!view.has("cfgtest/view_missing"));
 }
 
+// #1090: a chain that comes back to one of its files, the file itself included, or goes deeper than 16 files is an
+// error that names the file, not a stack overflow.
+BOOST_AUTO_TEST_CASE(ConfigFile_AnExtendsCycleOrSelfReferenceOrTooDeepChain_IsAnError_NotACrash)
+{
+	test_util::temp_dir dir("cfg_extends_cycle");
+	const auto self = dir.write("self.yaml", "extends:\n  - self.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(self));
+	dir.write("a.yaml", "extends:\n  - b.yaml\n");
+	const auto b = dir.write("b.yaml", "extends:\n  - ./sub/../a.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(b));
+	for (int i = 0; i < 20; ++i) {
+		dir.write("deep" + std::to_string(i) + ".yaml", "extends:\n  - deep" + std::to_string(i + 1) + ".yaml\n");
+	}
+	dir.write("deep20.yaml", "deep_end: true\n");
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep0.yaml"));
+	// deep5..deep20 is sixteen files, the most a chain may have; deep4 makes seventeen.
+	BOOST_TEST(cfg::load_config_file(dir.path() / "deep5.yaml"));
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "deep4.yaml"));
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep5.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(dir.path() / "deep0.yaml").size() == 16u);
+	BOOST_TEST(cfg::config_files_of(self).size() == 1u);
+	dir.write("scalar.yaml", "extends: self.yaml\n");
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "scalar.yaml"));
+}
+
 BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningFile)
 {
 	test_util::temp_dir dir("cfg_files");
@@ -373,6 +451,16 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	// Through the command line, as the editor gets it: -c is --config (#382).
 	BOOST_TEST(run_cli({ "-c", top.string() }) == 1);
 	BOOST_TEST(cfg::loaded_config_path() == std::filesystem::absolute(top).lexically_normal());
+	// #1090: every file of the chain, the top one first, as the editor guards them.
+	const std::vector<std::filesystem::path> chain{ std::filesystem::absolute(top).lexically_normal(),
+		(dir.path() / "mid/mid.yaml").lexically_normal(), (dir.path() / "base/base.yaml").lexically_normal() };
+	BOOST_TEST(cfg::loaded_config_files() == chain, boost::test_tools::per_element());
+	// The same list without loading, as the editor reads the default config's chain; a missing base ends its branch.
+	BOOST_TEST(cfg::config_files_of(top) == chain, boost::test_tools::per_element());
+	const auto lonely = dir.write("lonely.yaml", "extends:\n  - not_there.yaml\n");
+	const std::vector<std::filesystem::path> lonely_chain{ std::filesystem::absolute(lonely).lexically_normal(),
+		(dir.path() / "not_there.yaml").lexically_normal() };
+	BOOST_TEST(cfg::config_files_of(lonely) == lonely_chain, boost::test_tools::per_element());
 
 	// base value inherited through two levels of extends
 	BOOST_TEST(static_cast<int>(width) == 100);

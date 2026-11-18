@@ -514,7 +514,8 @@ BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesAnyFile_WhenEveryCommandIsAllowedB
 // #1076: only a person sets the model decoder's OS sandbox (import/decoder_sandbox, read once at start). This covers the
 // commands: none an agent may call changes the loaded setting, even with every command allowed by name, and none that
 // names settings or config writes. The files are covered elsewhere: no agent write reaches a cfg file, and an agent's
-// checkout or pull that changes one is refused (EdtVcsServiceTests, AGuardedCheckout_ThatChangesTheEditorsConfiguration_IsDenied).
+// checkout or pull that changes one, a base of its extends chain or a tracked link to it is refused (EdtVcsServiceTests,
+// AGuardedCheckout_ThatChangesTheEditorsConfiguration_IsDenied and the #1090 tests after it).
 BOOST_FIXTURE_TEST_CASE(NoAgentCommand_ChangesTheLoadedDecoderSandboxSetting_WhenEveryCommandIsAllowedByName, agent_editor_fixture)
 {
 	const cfg::config_view config;

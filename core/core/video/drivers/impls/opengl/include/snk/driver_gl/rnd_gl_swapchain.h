@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/driver/rnd_swapchain_interface.h>
-#include <snk/driver/rnd_gl_surface.h>
+#include <snk/driver/rnd_driver_gl_surface.h>
 
 namespace rnd::driver::gl
 {

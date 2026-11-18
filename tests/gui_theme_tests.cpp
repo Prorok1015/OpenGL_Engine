@@ -417,6 +417,69 @@ BOOST_AUTO_TEST_CASE(AFontReplacedUnderItsName_IsReadAgainOnlyAfterForgetFonts)
 	BOOST_TEST((again.text_font == second));
 }
 
+// #1136: the bold and the mono faces, read like the text font.
+BOOST_AUTO_TEST_CASE(APresetWithoutTheBoldAndMonoFonts_GetsTheShippedOnes)
+{
+	const fs::path fonts = fs::path{ SNK_CORE_RES_DIR } / "fonts";
+	const res::tag preset = put("no_faces.desc", R"({ "__type" : "gui.theme", "__version" : 1, "base" : "palette" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(service.selected().view() == preset.view());
+	BOOST_TEST((theme.bold_font == read_bytes(fonts / "NotoSans-Bold.ttf")));
+	BOOST_TEST((theme.mono_font == read_bytes(fonts / "NotoSansMono-Regular.ttf")));
+}
+
+BOOST_AUTO_TEST_CASE(TheClassicPreset_HasNoBoldOrMonoFace_TheTextFontStandsIn)
+{
+	const auto& theme = select("engine://themes/classic.desc");
+
+	BOOST_TEST(gui::ui_font::looks_like_font(theme.text_font));
+	BOOST_TEST(theme.bold_font.empty());
+	BOOST_TEST(theme.mono_font.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ABoldOrMonoFontThatCannotBeUsed_IsReplacedByTheTextFont)
+{
+	put("garbage.ttf", "this is not a font, only bytes with a .ttf name");
+	const res::tag preset = put("bad_faces.desc", R"({ "__type" : "gui.theme", "__version" : 1,
+		"font_bold" : "memory://t/garbage.ttf", "font_mono" : "memory://t/none.ttf" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(service.selected().view() == preset.view());
+	BOOST_TEST(gui::ui_font::looks_like_font(theme.text_font));
+	BOOST_TEST(theme.bold_font.empty());
+	BOOST_TEST(theme.mono_font.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AMonoFontOfTheProject_IsNotRead_TheTextFontStandsIn)
+{
+	const std::vector<std::byte> mono = read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSansMono-Regular.ttf");
+	rs->store(res::tag{ "res://fonts/project_mono.ttf" }, mono);
+	put("mine/project_mono.desc", R"({ "__type" : "gui.theme", "__version" : 1,
+		"font_mono" : "res://fonts/project_mono.ttf" })");
+	editor_service.set_sources({ "engine://", "memory://t/mine" }, { "engine://" });
+
+	const auto& theme = select(editor_service, "memory://t/mine/project_mono.desc");
+
+	BOOST_TEST(editor_service.selected().view() == "memory://t/mine/project_mono.desc");
+	BOOST_TEST(theme.mono_font.empty());
+	BOOST_TEST(gui::ui_font::looks_like_font(theme.bold_font));
+}
+
+BOOST_AUTO_TEST_CASE(AnotherMonoFont_ReadsTheFontsAgain)
+{
+	select("engine://themes/dark_neutral.desc");
+	const res::tag preset = put("other_mono.desc", R"({ "__type" : "gui.theme", "__version" : 1,
+		"font_mono" : "engine://fonts/NotoSans-Bold.ttf" })");
+
+	const auto& theme = select(preset.view());
+
+	BOOST_TEST(theme.fonts_changed);
+	BOOST_TEST((theme.mono_font == read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Bold.ttf")));
+}
+
 BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)
 {
 	gui::theme_desc preset;

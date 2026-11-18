@@ -9,6 +9,7 @@
 #include <snk/model_codec/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
+#include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/model_codec/res_reference.h>
 #include <snk/resource/res_system.h>
@@ -1149,10 +1150,18 @@ namespace {
 	// serialize(parent) with the component's own overrides merged in, then the edits in order. With the component's
 	// `schema`, an edit at no field of it is reported: the read would drop it quietly, e.g. after a migration moved the
 	// field (EPIC-58 #763).
-	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent, const desc::type_schema* schema = nullptr)
+	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent, const desc::desc_system* descs,
+		const desc::type_schema* schema = nullptr)
 	{
 		json::object effective;
 		if (parent) parent->serialize(effective);
+		// serialize(parent) is this process's memory: an inline desc in it without __version (a module built before #1236
+		// wrote one so) is of the current format, not version 1. The overrides and edits below are file data: untouched.
+		if (parent && descs) {
+			for (auto& member : effective) {
+				descs->stamp_unversioned(member.value());
+			}
+		}
 		desc::json_deep_merge(effective, cnode.overrides);
 
 		json::value holder = std::move(effective);
@@ -1246,7 +1255,13 @@ namespace {
 
 json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent)
 {
-	return compose_json(cnode, parent);
+	return compose_json(cnode, parent, nullptr);
+}
+
+json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent,
+	const desc::desc_system& descs)
+{
+	return compose_json(cnode, parent, &descs);
 }
 
 bool scn::override_names_a_field(const desc::type_schema& schema, std::string_view path)
@@ -1474,7 +1489,7 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 		}
 		std::string type = cnode.type_name;
 		if (type.empty() && parent) type = std::string{ parent->get_type() };
-		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get(), assembler.get_desc_system().find_schema(type)), comp_name);
+		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get(), &assembler.get_desc_system(), assembler.get_desc_system().find_schema(type)), comp_name);
 	}
 
 	// A fresh spawn has no children yet; on a reload the live ones go away unless a node claims them.

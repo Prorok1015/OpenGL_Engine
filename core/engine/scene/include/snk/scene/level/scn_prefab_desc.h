@@ -179,6 +179,11 @@ namespace scn {
 
 	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);
+	// The same with the typed objects of serialize(parent) that have no "__version" given the current one in `descs`
+	// (#1236): they come from the memory of this process, and a module built before #1236 writes its inline descs without
+	// it, which a read takes for version 1.
+	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent,
+		const desc::desc_system& descs);
 
 	// Whether an override edit at `path` (a JSON pointer) reaches a field of `schema`: the field itself, inside it (an
 	// element of a vector) or above it (an object of nested fields). A field key without a leading '/' is a plain key.

@@ -7,7 +7,7 @@
 #include <string_view>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/common/snk_api.h>
-#include <snk/driver/rnd_gl_surface.h>
+#include <snk/driver/rnd_driver_gl_surface.h>
 
 namespace wnd
 {

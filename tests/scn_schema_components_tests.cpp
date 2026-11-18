@@ -485,7 +485,7 @@ BOOST_AUTO_TEST_CASE(a_snapshot_keeps_the_component)
 	auto& source = mgr.level_set().get("w0");
 
 	scn::snapshot_report captured;
-	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), layer->descs(), captured);
 	BOOST_TEST(captured.unsaved.empty());
 
 	scn::world_context target{ 1, "copy" };
@@ -648,7 +648,7 @@ BOOST_AUTO_TEST_CASE(a_snapshot_maps_the_entity_fields_to_the_restored_entities)
 	scn::emplace_schema_component(from, pointer, link.id(), link_blob(1, entt::to_integral(pointee)));
 
 	scn::snapshot_report captured;
-	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), layer->descs(), captured);
 	scn::world_context target{ 1, "copy" };
 	entt::registry& to = target.state();
 	scn::snapshot_report restored;
@@ -748,7 +748,7 @@ BOOST_AUTO_TEST_CASE(a_component_written_by_no_layout_is_reported_unsaved)
 	scn::world_context source{ 1, "main" };
 	scn::emplace_schema_component(source.state(), source.state().create(), health.id(), desc::dyn_blob{});
 	scn::snapshot_report captured;
-	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), layer->descs(), captured);
 	BOOST_TEST(captured.unsaved.count("mod.health") == 1u);
 	BOOST_TEST(boost::json::serialize(snapshot).find("mod.health") == std::string::npos);
 }
@@ -770,7 +770,7 @@ BOOST_AUTO_TEST_CASE(entities_in_a_nested_structure_and_an_array_follow_a_snapsh
 	scn::emplace_schema_component(from, pointer, deep.id(), deep_blob(in));
 
 	scn::snapshot_report captured;
-	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), captured);
+	const boost::json::object snapshot = scn::capture_world(source, layer->catalog(), layer->descs(), captured);
 	scn::world_context target{ 1, "copy" };
 	scn::snapshot_report restored;
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer->catalog(), read_context(), restored));
@@ -927,7 +927,7 @@ BOOST_AUTO_TEST_CASE(a_hot_reload_to_another_layout_keeps_the_fields_both_have)
 	BOOST_REQUIRE(mgr.load_level(put("lv.desc", k_level)));
 	pump();
 	scn::snapshot_report captured;
-	const boost::json::object snapshot = scn::capture_world(mgr.level_set().get("w0"), previous.catalog(), captured);
+	const boost::json::object snapshot = scn::capture_world(mgr.level_set().get("w0"), previous.catalog(), previous.descs(), captured);
 
 	auto& next = mgr.create_layer();
 	auto v2 = scn::register_schema_component(mgr, next, schema_from(k_health_v2_schema));

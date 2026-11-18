@@ -2,6 +2,7 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
 #include "edt_file_dialog.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <boost/json/object.hpp>
@@ -130,7 +131,10 @@ public:
 
 		std::optional<edt::unsaved_choice> choice;
 		if (begin_modal(label, MODAL_FLAGS)) {
-			ImGui::Text("You have unsaved changes. What would you like to do?");
+			{
+				const edt::font_scope bold(edt::ui_font::bold);
+				ImGui::TextUnformatted("You have unsaved changes. What would you like to do?");
+			}
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();

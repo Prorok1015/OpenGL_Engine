@@ -8,7 +8,9 @@ namespace gui::icon
 	inline constexpr ImWchar last = 0xe529;
 
 	inline constexpr char add[]         = "\xee\x84\xbd";
+	inline constexpr char animation[]   = "\xee\x83\x90";
 	inline constexpr char back[]        = "\xee\x81\x88";
+	inline constexpr char bone[]        = "\xee\x8d\x98";
 	inline constexpr char camera[]      = "\xee\x81\xa4";
 	inline constexpr char close[]       = "\xee\x86\xb2";
 	inline constexpr char collapse[]    = "\xee\x81\xad";
@@ -30,6 +32,7 @@ namespace gui::icon
 	inline constexpr char lock[]        = "\xee\x84\x8b";
 	inline constexpr char model[]       = "\xee\x81\xa1";
 	inline constexpr char move[]        = "\xee\x84\xa1";
+	inline constexpr char package[]     = "\xee\x84\xa9";
 	inline constexpr char pause[]       = "\xee\x84\xae";
 	inline constexpr char play[]        = "\xee\x84\xbc";
 	inline constexpr char refresh[]     = "\xee\x85\x85";
@@ -39,6 +42,7 @@ namespace gui::icon
 	inline constexpr char scale[]       = "\xee\x8b\xac";
 	inline constexpr char search[]      = "\xee\x85\x91";
 	inline constexpr char settings[]    = "\xee\x85\x94";
+	inline constexpr char skybox[]      = "\xee\x88\x96";
 	inline constexpr char sound[]       = "\xee\x84\xa2";
 	inline constexpr char stop[]        = "\xee\x85\xa7";
 	inline constexpr char sun[]         = "\xee\x85\xb8";
