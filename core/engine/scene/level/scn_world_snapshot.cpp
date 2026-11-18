@@ -17,6 +17,7 @@
 #include <string>
 #include <boost/json/array.hpp>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -26,6 +27,7 @@
 namespace
 {
 	constexpr std::string_view k_type = "world_snapshot";
+	// The format capture_world writes. A change of it raises this with a migration step registered for k_type.
 	constexpr std::int64_t k_version = 1;
 	// Restored in the first pass with the entity: node_index must know every path before any other component lands.
 	constexpr std::string_view k_node_id = "scn.node_id";
@@ -225,12 +227,35 @@ json::object scn::capture_world(const world_context& world, const component_cata
 	return out;
 }
 
-bool scn::restore_world(world_context& world, const json::object& snapshot, const component_catalog& catalog,
+bool scn::restore_world(world_context& world, const json::object& given, const component_catalog& catalog,
 	const desc::read_context& context, snapshot_report& report)
 {
-	const json::value* type = snapshot.if_contains("__type");
+	const json::value* given_type = given.if_contains("__type");
+	if (!given_type || !given_type->is_string() || given_type->as_string() != k_type) {
+		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
+		return false;
+	}
+	// EPIC-58 section 7.2: an older snapshot is brought up by the steps of the world's desc system, a newer one refused.
+	std::optional<json::object> upgraded;
+	const json::value* given_version = given.if_contains("__version");
+	const bool current = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
+	if (!current || (context.system && context.system->current_version(k_type) != k_version)) {
+		std::string problem;
+		if (context.system) {
+			upgraded.emplace(given);
+			problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name()));
+		} else {
+			problem = std::format("world '{}': '{}' is version {}, not the version {} this engine reads", world.get_name(), k_type,
+				json::serialize(*given_version), k_version);
+		}
+		if (!problem.empty()) {
+			egLOG_ERROR("scene", "{}", problem);
+			return false;
+		}
+	}
+	const json::object& snapshot = upgraded ? *upgraded : given;
 	const json::value* entities_value = snapshot.if_contains("entities");
-	if (!type || !type->is_string() || type->as_string() != k_type || !entities_value || !entities_value->is_array()) {
+	if (!entities_value || !entities_value->is_array()) {
 		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
 		return false;
 	}

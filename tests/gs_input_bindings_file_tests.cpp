@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/game/gs_input_bindings_file.h>
+#include "test_scene_env.hpp"
+#include <snk/desc/desc_system.h>
 #include <snk/input/inp_events.hpp>
 #include <filesystem>
 #include <cstdint>
@@ -152,6 +154,41 @@ BOOST_AUTO_TEST_CASE(ABrokenFileOnDisk_GivesNoBindings)
 	const auto file = dir.path / "broken.json";
 	std::ofstream(file) << "{ \"__type\": ";
 	BOOST_TEST(gs::load_user_bindings(file).empty());
+}
+
+// #766 (EPIC-58 section 7.2): an older file is brought up in memory by the steps of the desc system; a newer or malformed
+// one gives no bindings and is marked to be kept, so a newer build's settings are not written over.
+BOOST_FIXTURE_TEST_CASE(AnOlderFile_IsMigratedInMemory_ANewerOrBrokenOneIsKept, test_util::scene_env)
+{
+	// The format moves to 2 in this test: its step renames "keys" to "actions".
+	descs->register_migration("user_input_bindings", 1, [](boost::json::object& o) {
+		if (const auto* keys = o.if_contains("keys")) {
+			boost::json::value moved = *keys;
+			o.erase("keys");
+			o["actions"] = std::move(moved);
+		}
+	});
+	bool keep = true;
+	const inp::user_bindings older = gs::parse_user_bindings(
+		R"({"__type":"user_input_bindings","__version":1,"keys":[{"name":"Jump","bindings":[{"key":"Q"}]}]})", "older.json", descs.get(), keep);
+	BOOST_TEST(!keep);
+	BOOST_TEST(older.overrides().size() == 1u);
+
+	const inp::user_bindings newer = gs::parse_user_bindings(
+		R"({"__type":"user_input_bindings","__version":3,"actions":[{"name":"Jump","bindings":[{"key":"Q"}]}]})", "newer.json", descs.get(), keep);
+	BOOST_TEST(keep);
+	BOOST_TEST(newer.empty());
+
+	BOOST_TEST(gs::parse_user_bindings(R"({"__type":"user_input_bindings","__version":"x","actions":[]})", "bad.json", descs.get(), keep).empty());
+	BOOST_TEST(keep);
+	BOOST_TEST(gs::parse_user_bindings("{ not json", "broken.json", descs.get(), keep).empty());
+	BOOST_TEST(keep);
+
+	// Without a desc system only the version this engine writes is read.
+	BOOST_TEST(gs::parse_user_bindings(R"({"__type":"user_input_bindings","__version":2,"actions":[]})", "two.json", nullptr, keep).empty());
+	BOOST_TEST(keep);
+	gs::parse_user_bindings(R"({"__type":"user_input_bindings","__version":1,"actions":[]})", "one.json", nullptr, keep);
+	BOOST_TEST(!keep);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

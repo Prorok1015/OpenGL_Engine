@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+namespace desc { class desc_system; }
+
 namespace ds { class app_data_storage; }
 namespace inp { class action_map; }
 
@@ -55,6 +57,12 @@ namespace gs
 		// The player's bindings live in `folder`, one file per project named by the hash of the project name (#736); an empty folder keeps them in memory only. They
 		// are read when the project opens and written after each change.
 		void set_user_folder(std::filesystem::path folder);
+		// The desc system whose migration steps bring an older file of the player's bindings up (EPIC-58 section 7.2); without
+		// one only the version this engine writes is read. Set before set_user_folder.
+		void set_desc_system(const desc::desc_system* descs);
+		// True while the player's file is one this engine must not write over (newer, unreadable, no bindings document):
+		// changes stay in memory and user_file_saved() is false.
+		bool user_file_kept() const;
 		const inp::user_bindings& user_bindings() const;
 		// `allow_conflict`: a binding another action has is put all the same (both keep it, conflicts() names the pair).
 		rebind_outcome rebind(std::string_view action, std::size_t slot, inp::action_binding binding, bool allow_conflict);
@@ -96,5 +104,8 @@ namespace gs
 		// Added after the first 3.16 build: at the end, so nothing a module read before moves.
 		std::vector<inp::binding_conflict> m_conflicts{};
 		std::uint64_t m_revision = 0;
+		// Added for #766, at the end like the two above.
+		const desc::desc_system* m_descs = nullptr;
+		bool m_user_file_kept = false;
 	};
 }

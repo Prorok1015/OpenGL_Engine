@@ -3,7 +3,9 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/desc/desc_system.h>
 #include <boost/json.hpp>
+#include <cstdint>
 #include <format>
 #include <algorithm>
 #include <system_error>
@@ -15,6 +17,8 @@ namespace json = boost::json;
 namespace
 {
 	constexpr std::string_view k_type = "user_input_bindings";
+	// The format write_user_bindings writes. A change of it raises this with a migration step registered for k_type.
+	constexpr std::int64_t k_version = 1;
 	// The file is the player's, but a profile can be shared or damaged: what it may hold is bounded.
 	constexpr std::uint64_t k_max_file_bytes = 256u * 1024u;
 	constexpr std::size_t k_max_actions = 256;
@@ -107,14 +111,33 @@ namespace
 
 inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_view source)
 {
+	bool keep_file = false;
+	return parse_user_bindings(text, source, nullptr, keep_file);
+}
+
+inp::user_bindings gs::parse_user_bindings(std::string_view text, std::string_view source, const desc::desc_system* descs, bool& keep_file)
+{
 	inp::user_bindings result;
+	keep_file = false;
 	const std::string_view file = display(source);
 	boost::system::error_code error;
-	const json::value root = json::parse(text, error);
-	const json::object* document = error ? nullptr : root.if_object();
+	json::value root = json::parse(text, error);
+	json::object* document = error ? nullptr : root.if_object();
 	const json::value* type = document ? document->if_contains("__type") : nullptr;
 	if (!document || !type || !type->is_string() || type->as_string() != k_type) {
-		egLOG_WARN("input", "{}: not a {} document, the bindings of the project stay", file, k_type);
+		egLOG_WARN("input", "{}: not a {} document, the bindings of the project stay and the file is not written over", file, k_type);
+		keep_file = true;
+		return result;
+	}
+	std::string problem;
+	if (descs) {
+		problem = descs->upgrade_in_memory(*document, file);
+	} else if (const json::value* version = document->if_contains("__version"); version && !(version->is_int64() && version->as_int64() == k_version)) {
+		problem = std::format("{}: '{}' is version {}, not the version {} this engine reads", file, k_type, json::serialize(*version), k_version);
+	}
+	if (!problem.empty()) {
+		egLOG_WARN("input", "{}; the bindings of the project stay and the file is not written over", problem);
+		keep_file = true;
 		return result;
 	}
 	const json::value* actions = document->if_contains("actions");
@@ -161,22 +184,30 @@ std::string gs::write_user_bindings(const inp::user_bindings& bindings)
 	}
 	json::object root;
 	root["__type"] = json::string(k_type);
-	root["__version"] = 1;
+	root["__version"] = k_version;
 	root["actions"] = std::move(actions);
 	return json::serialize(root);
 }
 
 inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file)
 {
+	bool keep_file = false;
+	return load_user_bindings(file, nullptr, keep_file);
+}
+
+inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file, const desc::desc_system* descs, bool& keep_file)
+{
+	keep_file = false;
 	const std::string name = fs_paths::utf8_of(file);
 	const prj::project_file_location where = prj::project_file_location_of(file);
 	const prj::project_file_text found = prj::read_project_file(where.root, where.relative, k_max_file_bytes);
 	if (!found.error.empty()) {
-		egLOG_WARN("input", "cannot read {}: {}", name, found.error);
+		egLOG_WARN("input", "cannot read {}: {}; it is not written over", name, found.error);
+		keep_file = true;
 		return {};
 	}
 	if (!found.exists) return {};
-	return parse_user_bindings(found.text, name);
+	return parse_user_bindings(found.text, name, descs, keep_file);
 }
 
 bool gs::save_user_bindings(const std::filesystem::path& file, const inp::user_bindings& bindings)

@@ -560,4 +560,29 @@ BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)
 	BOOST_TEST(!scn::restore_world(empty, other, layer, read_context(), report));
 }
 
+// #766 (EPIC-58 section 7.2): an older snapshot is brought up by the steps of the world's desc system; a newer one is
+// refused and the world stays empty.
+BOOST_AUTO_TEST_CASE(AnOlderSnapshotIsMigrated_ANewerOneRefused)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().ctx().emplace<score>(score{ 17 });
+	scn::snapshot_report captured;
+	const json::object snapshot = scn::capture_world(source, layer, captured);
+
+	// The format moves to 2 in this test: its step sets the time the restored world shows.
+	descs->register_migration("world_snapshot", 1, [](json::object& o) { o["time"].as_object()["world_time"] = 42.0; });
+	scn::world_context migrated{ 1, "main" };
+	scn::snapshot_report report;
+	BOOST_REQUIRE(scn::restore_world(migrated, snapshot, layer, read_context(), report));
+	BOOST_TEST(migrated.state().ctx().get<scn::world_time>().seconds == 42.0);
+	BOOST_TEST(snapshot.at("__version").as_int64() == 1); // the caller's copy is not changed
+
+	json::object newer = snapshot;
+	newer["__version"] = 3;
+	scn::world_context refused{ 1, "main" };
+	BOOST_TEST(!scn::restore_world(refused, newer, layer, read_context(), report));
+	const auto* entities = std::as_const(refused.state()).storage<entt::entity>();
+	BOOST_TEST((entities == nullptr || entities->size() == 0u));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
