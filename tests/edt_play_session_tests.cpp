@@ -2605,7 +2605,7 @@ BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answe
 	scn::world_context& world = play_set()->get("w0");
 	const scn::component_catalog& catalog = contexts().game_layer()->catalog();
 	scn::snapshot_report before_report;
-	const std::string before = json::serialize(scn::capture_world(world, catalog, before_report));
+	const std::string before = json::serialize(scn::capture_world(world, catalog, contexts().game_layer()->descs(), before_report));
 
 	const mcp::call_result first = call_tool("runtime_query", "{}");
 	const mcp::call_result second = call_tool("runtime_query", "{}");
@@ -2618,7 +2618,7 @@ BOOST_AUTO_TEST_CASE(the_runtime_commands_change_nothing_and_a_paused_game_answe
 	}
 
 	scn::snapshot_report after_report;
-	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, after_report)) == before);
+	BOOST_TEST(json::serialize(scn::capture_world(world, catalog, contexts().game_layer()->descs(), after_report)) == before);
 }
 
 BOOST_AUTO_TEST_CASE(world_events_and_input_actions_are_an_error_outside_play)

@@ -24,6 +24,7 @@
 #include <entt/entt.hpp>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <set>
 #include <string>
 #include <string_view>
@@ -172,7 +173,7 @@ BOOST_AUTO_TEST_CASE(EverySavedComponentComesBackFieldByField)
 	from.ctx().emplace<score>(score{ 17 });
 
 	scn::snapshot_report captured;
-	const json::object snapshot = scn::capture_world(source, layer, captured);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, captured);
 	BOOST_TEST(captured.unsaved.empty());
 
 	scn::world_context target{ 1, "main" };
@@ -236,7 +237,7 @@ BOOST_AUTO_TEST_CASE(DerivedComponentsAreRebuiltForTheFirstFrame)
 	scn::world_context source{ 1, "main" };
 	spawn(source.state());
 	scn::snapshot_report report;
-	const json::object snapshot = scn::capture_world(source, layer, report);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	for (const auto& entity : snapshot.at("entities").as_array()) {
 		const auto& components = entity.as_object().at("components").as_object();
 		BOOST_TEST(!components.contains("scn.world_transform"));
@@ -269,7 +270,7 @@ BOOST_AUTO_TEST_CASE(TimeAndRandomStreamContinueWhereTheyStood)
 	(void)stream.next_u32();
 
 	scn::snapshot_report report;
-	const json::object snapshot = scn::capture_world(source, layer, report);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	scn::world_context target{ 3, "main" };
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
 
@@ -314,7 +315,7 @@ BOOST_AUTO_TEST_CASE(WhatCannotBeSavedOrPlacedIsReported)
 	from.emplace<editor_marker>(editor_camera);
 
 	scn::snapshot_report captured;
-	const json::object snapshot = scn::capture_world(source, layer, captured);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, captured);
 	BOOST_TEST(captured.entities == 1u);
 	BOOST_TEST(captured.unsaved.at("test.no_schema") == 1u);
 	BOOST_TEST(captured.unsaved.size() == 2u); // and the storage of `scratch`, which the catalog does not know
@@ -377,7 +378,7 @@ BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
 	const entt::entity shot = source.state().create();
 	source.state().emplace<bullet>(shot, bullet{ 7 });
 	scn::snapshot_report report;
-	json::object snapshot = scn::capture_world(source, layer, report);
+	json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object()["speed"] = "fast";
 
 	scn::world_context target{ 1, "main" };
@@ -396,7 +397,7 @@ BOOST_AUTO_TEST_CASE(AFieldTheSchemaNoLongerHasIsReportedAsRemoved)
 	scn::world_context source{ 1, "main" };
 	source.state().emplace<bullet>(source.state().create(), bullet{ 7 });
 	scn::snapshot_report report;
-	json::object snapshot = scn::capture_world(source, layer, report);
+	json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object()["spin"] = 3;
 
 	scn::world_context target{ 1, "main" };
@@ -442,7 +443,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 	from.emplace<scn::prefab_instance>(named("Instance"), instance);
 
 	scn::snapshot_report report;
-	const json::object snapshot = scn::capture_world(source, layer, report);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	scn::world_context target{ 1, "main" };
 	entt::registry& to = target.state();
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
@@ -473,6 +474,73 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 	BOOST_TEST(restored_instance.local_overrides.children[0].name == "Child");
 }
 
+// Review of #1231: an inline desc goes into the snapshot with the version of its type, so restore_world, which runs the
+// snapshot through the steps, does not run data of the current format through them again.
+BOOST_AUTO_TEST_CASE(AnInlineDescOfATypeWithSteps_ComesBackUnchanged)
+{
+	const auto sky_tag = put("steps.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	// From here the format of material_desc has one more step; what is loaded is of the format before it.
+	descs->register_migration("material_desc", descs->current_version("material_desc"), [](json::object& o) { o["queue"] = "opaque"; });
+
+	scn::world_context source{ 1, "main" };
+	const entt::entity entity = source.state().create();
+	source.state().emplace<scn::name_component>(entity, scn::name_component{ "Inline" });
+	source.state().emplace<scn::material_desc_component>(entity, scn::material_desc_component{ sky->material, false });
+	scn::snapshot_report report;
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
+	const std::string text = json::serialize(snapshot);
+	BOOST_TEST(text.find(std::format(R"("__type":"material_desc","__version":{})", descs->current_version("material_desc"))) != std::string::npos, text);
+	BOOST_TEST(snapshot.at("typed_versions").as_bool());
+
+	scn::world_context target{ 1, "main" };
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
+	pump();
+	const auto& restored = target.state().get<scn::material_desc_component>(find_named(target.state(), "Inline"));
+	BOOST_REQUIRE(restored.mlt_desc.get_sync());
+	BOOST_TEST((restored.mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+}
+
+// The deprecated capture_world writes no versions inside: restore_world brings up only an older root then, so an inline
+// desc of a type with steps comes back as it was, not run through them as version 1.
+BOOST_AUTO_TEST_CASE(ASnapshotWithoutVersionsInside_ComesBackUnchanged)
+{
+	const auto sky_tag = put("plain.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	descs->register_migration("material_desc", descs->current_version("material_desc"), [](json::object& o) { o["queue"] = "opaque"; });
+
+	scn::world_context source{ 1, "main" };
+	const entt::entity entity = source.state().create();
+	source.state().emplace<scn::name_component>(entity, scn::name_component{ "Inline" });
+	source.state().emplace<scn::material_desc_component>(entity, scn::material_desc_component{ sky->material, false });
+	scn::snapshot_report report;
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	const json::object snapshot = scn::capture_world(source, layer, report);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+	BOOST_TEST(!snapshot.contains("typed_versions"));
+
+	scn::world_context target{ 1, "main" };
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
+	pump();
+	const auto& restored = target.state().get<scn::material_desc_component>(find_named(target.state(), "Inline"));
+	BOOST_REQUIRE(restored.mlt_desc.get_sync());
+	BOOST_TEST((restored.mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+}
+
 BOOST_AUTO_TEST_CASE(TheFirstFrameAfterARestoreComputesTheSameTransforms)
 {
 	ecs::system_factory systems;
@@ -488,7 +556,7 @@ BOOST_AUTO_TEST_CASE(TheFirstFrameAfterARestoreComputesTheSameTransforms)
 	source_set.update(std::chrono::duration<float>(0.016f));
 
 	scn::snapshot_report report;
-	const json::object snapshot = scn::capture_world(source, layer, report);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	scn::context_set target_set("play", nullptr);
 	scn::world_context& target = world_of(target_set);
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
@@ -525,7 +593,7 @@ BOOST_AUTO_TEST_CASE(ARestoredMesh_HoldsItsGeometry)
 	const entt::entity mesh = source.state().create();
 	source.state().emplace<scn::geometry_component>(mesh, scn::geometry_component{ .geom_tag = geometry });
 	scn::snapshot_report captured;
-	const json::object snapshot = scn::capture_world(source, layer, captured);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, captured);
 
 	auto hot_reload = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 	scn::context_set set("play", hot_reload);
@@ -548,7 +616,7 @@ BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)
 {
 	scn::world_context source{ 1, "main" };
 	scn::snapshot_report report;
-	const json::object snapshot = scn::capture_world(source, layer, report);
+	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 
 	scn::world_context busy{ 1, "main" };
 	(void)busy.state().create();
@@ -558,6 +626,53 @@ BOOST_AUTO_TEST_CASE(OnlyAnEmptyWorldTakesASnapshot)
 	json::object other = snapshot;
 	other["__type"] = "level_desc";
 	BOOST_TEST(!scn::restore_world(empty, other, layer, read_context(), report));
+}
+
+// #766 (EPIC-58 section 7.2): an older snapshot is brought up by the steps of the world's desc system; a newer one is
+// refused and the world stays empty.
+BOOST_AUTO_TEST_CASE(AnOlderSnapshotIsMigrated_ANewerOneRefused)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().ctx().emplace<score>(score{ 17 });
+	scn::snapshot_report captured;
+	const json::object snapshot = scn::capture_world(source, layer, *descs, captured);
+
+	// The format moves to 2 in this test: its step sets the time the restored world shows.
+	descs->register_migration("world_snapshot", 1, [](json::object& o) { o["time"].as_object()["world_time"] = 42.0; });
+	scn::world_context migrated{ 1, "main" };
+	scn::snapshot_report report;
+	BOOST_REQUIRE(scn::restore_world(migrated, snapshot, layer, read_context(), report));
+	BOOST_TEST(migrated.state().ctx().get<scn::world_time>().seconds == 42.0);
+	BOOST_TEST(snapshot.at("__version").as_int64() == 1); // the caller's copy is not changed
+
+	json::object newer = snapshot;
+	newer["__version"] = 3;
+	scn::world_context refused{ 1, "main" };
+	BOOST_TEST(!scn::restore_world(refused, newer, layer, read_context(), report));
+	const auto* entities = std::as_const(refused.state()).storage<entt::entity>();
+	BOOST_TEST((entities == nullptr || entities->size() == 0u));
+}
+
+// Review of #1231: a snapshot of the current version is still looked into; a typed object newer than this engine reads
+// inside it refuses the snapshot.
+BOOST_AUTO_TEST_CASE(ASnapshotOfTheCurrentVersion_WithANewerObjectInside_IsRefused)
+{
+	scn::world_context source{ 1, "main" };
+	scn::snapshot_report captured;
+	json::object snapshot = scn::capture_world(source, layer, *descs, captured);
+	snapshot["later"] = json::object{ { "__type", "world_snapshot" }, { "__version", 7 } };
+	scn::world_context refused{ 1, "main" };
+	scn::snapshot_report report;
+	BOOST_TEST(!scn::restore_world(refused, snapshot, layer, read_context(), report));
+}
+
+BOOST_AUTO_TEST_CASE(TheVersionWritten_MustBeWhereTheStepsLead)
+{
+	BOOST_TEST(scn::world_snapshot_version_problem(*descs).empty());
+	descs->register_migration("world_snapshot", 1, [](json::object&) {});
+	const std::string problem = scn::world_snapshot_version_problem(*descs);
+	BOOST_TEST(problem.find("written at version 1") != std::string::npos, problem);
+	BOOST_TEST(problem.find("lead to version 2") != std::string::npos, problem);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
