@@ -298,6 +298,8 @@ bool edt::asset_operation_form::run(bool force)
 	case asset_run_state::blocked:
 	case asset_run_state::no_project:
 	case asset_run_state::failed:
+	case asset_run_state::denied:
+	case asset_run_state::stale:
 		m_error = shown(m_run.message);
 		return false;
 	case asset_run_state::refused:
