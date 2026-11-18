@@ -154,7 +154,7 @@ struct ops_fixture
 		edt::asset_ops_ports ports;
 		ports.assets = [this]() -> const edt::asset_database* { return db.get(); };
 		ports.engine_base = engine.path();
-		ports.journal_root = journal.path();
+		ports.journal_root = journal_override.empty() ? journal.path() : journal_override;
 		if (!manifest_dir.empty()) {
 			ports.manifest = [this]() -> std::optional<edt::asset_ops_manifest> {
 				return edt::asset_ops_manifest{ manifest_dir, std::string(prj::k_manifest_file_name), {} };
@@ -171,6 +171,7 @@ struct ops_fixture
 			if (forward_self_changes && db) db->report_self_change(changes);
 		};
 		ports.force_copy = [this](std::string_view) { return copy_instead_of_rename; };
+		ports.rename_error = [this](std::string_view) { return rename_error_text; };
 		ports.fail_step = [this](std::string_view step) -> std::string {
 			steps.emplace_back(step);
 			if (on_step) on_step(step);
@@ -244,6 +245,8 @@ struct ops_fixture
 	std::string throw_at;
 	bool throw_in_hold = false;
 	bool copy_instead_of_rename = false;
+	std::string rename_error_text;
+	fs::path journal_override;
 	std::function<void(std::string_view)> on_step;
 	std::vector<std::string> steps;
 	int holds = 0;
@@ -1143,6 +1146,83 @@ BOOST_AUTO_TEST_CASE(AMoveStepWhoseSourceAndTargetAreBothThere_IsRefusedNotGuess
 	const edt::undo_report refused = ops().undo(moved.journal);
 	BOOST_TEST(!refused.ok);
 	BOOST_TEST(!refused.changed_since.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AJournalFolderThatIsALink_RefusesTheDelete_AndNothingGoesThroughIt)
+{
+	open();
+	const auto before = snapshot();
+	test_util::temp_dir target("asset_ops_link_target");
+	const fs::path link = journal.path().parent_path() / "asset_ops_journal_link";
+	std::error_code ec;
+	fs::remove(link, ec);
+	ec.clear();
+	fs::create_directory_symlink(target.path(), link, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("no symlink here: " + ec.message());
+		return;
+	}
+	journal_override = link;
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	fs::remove(link, ec);
+	BOOST_TEST(!report.ok);
+	BOOST_TEST((snapshot() == before), "the original file is where it was");
+	for (const fs::directory_entry& entry : fs::recursive_directory_iterator(target.path())) {
+		BOOST_TEST(entry.path().filename().string().find("lonely") == std::string::npos, "nothing of the asset went through the link: " + entry.path().string());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ARenameThatFailsForAnyReasonButAnotherVolume_RefusesTheStep_AndCopiesNothing)
+{
+	open();
+	const auto before = snapshot();
+	rename_error_text = "access denied";
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_TEST(report.error.find("access denied") != std::string::npos);
+	BOOST_TEST(report.rollback_failures.empty());
+	BOOST_TEST((snapshot() == before));
+	BOOST_TEST(!fs::exists(journal.path() / report.operation_id / "files" / "lonely.desc"), "no copy was made instead");
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoWhoseRenameFailsForAnotherReasonThanTheVolume_FailsTheStep_AndKeepsTheKeptFile)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const fs::path kept = journal.path() / report.operation_id / "files" / "lonely.desc";
+
+	rename_error_text = "access denied";
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(!failed.failures.empty());
+	BOOST_TEST(fs::is_regular_file(kept));
+	BOOST_TEST(!has("lonely.desc"), "nothing was copied back");
+
+	rename_error_text.clear();
+	const edt::undo_report again = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AKeptFileThatChangesJustBeforeItComesBack_IsMovedBackIntoTheJournal_AndTheStepFails)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const fs::path kept = journal.path() / report.operation_id / "files" / "lonely.desc";
+	on_step = [&](std::string_view step) {
+		if (step == "unstash:lonely.desc") std::ofstream(kept, std::ios::binary | std::ios::trunc) << "corrupted";
+	};
+
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(failed.failures.size() == 1u);
+	BOOST_TEST(!has("lonely.desc"), "a file that is not the removed one is not left in the project");
+	BOOST_REQUIRE(fs::is_regular_file(kept));
+	std::ifstream in(kept, std::ios::binary);
+	BOOST_TEST((std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) == "corrupted"));
 }
 
 BOOST_AUTO_TEST_CASE(ADeleteOfADescWithItsBinaryFile_StashesBothInChunks_AndUndoPutsThemBack)

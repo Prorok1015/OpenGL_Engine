@@ -373,6 +373,9 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 
 std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
 {
+	if (request.across_volumes) {
+		*request.across_volumes = false;
+	}
 	const auto from_parts = folder_parts(request.from_folder);
 	const auto to_parts = folder_parts(request.to_folder);
 	if (!from_parts || !to_parts || !is_plain_name(request.from_leaf) || !is_plain_name(request.to_leaf)) {
@@ -406,6 +409,11 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 		? ::renameat(from_folder.get(), request.from_leaf.c_str(), to_folder.get(), request.to_leaf.c_str())
 		: rename_no_replace(from_folder.get(), request.from_leaf.c_str(), to_folder.get(), request.to_leaf.c_str());
 	if (moved != 0) {
+		const int code = errno;
+		if (request.across_volumes) {
+			*request.across_volumes = code == EXDEV;
+		}
+		errno = code;
 		return errno_text("cannot move to", to_reached / request.to_leaf);
 	}
 	return {};
@@ -1048,6 +1056,9 @@ std::string platform::beneath::remove_beneath(pinned_root& root, const fs::path&
 
 std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
 {
+	if (request.across_volumes) {
+		*request.across_volumes = false;
+	}
 	const auto from_parts = folder_parts(request.from_folder);
 	const auto to_parts = folder_parts(request.to_folder);
 	if (!from_parts || !to_parts || !is_plain_name(request.from_leaf) || !is_plain_name(request.to_leaf)) {
@@ -1086,6 +1097,11 @@ std::string platform::beneath::rename_beneath(pinned_root& root, const rename_re
 		return last_error_text("the file to replace is not below the root under this name", to_reached / request.to_leaf);
 	}
 	if (!rename_to(file.get(), to_chain.last(), request.to_leaf, request.allow_replace)) {
+		const DWORD code = ::GetLastError();
+		if (request.across_volumes) {
+			*request.across_volumes = code == ERROR_NOT_SAME_DEVICE;
+		}
+		::SetLastError(code);
 		return last_error_text("cannot move to", to_reached / request.to_leaf);
 	}
 	return {};

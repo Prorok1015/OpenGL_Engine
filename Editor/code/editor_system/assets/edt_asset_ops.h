@@ -255,8 +255,12 @@ namespace edt
 		// and checked, before it is flushed and put in place.
 		std::function<std::string(std::string_view)> fail_step;
 		// Tests: asked with "stash:<from>" (a delete moving the file into the journal) and "unstash:<from>" (an undo moving it back);
-		// true makes the rename fail the way a move to another volume does, so the file is copied, flushed and checked instead.
+		// true makes the rename report a move to another volume (the one failure a copy takes over from), so the file is copied,
+		// flushed and checked instead.
 		std::function<bool(std::string_view)> force_copy;
+		// Tests: asked with the same labels before the rename; a non-empty answer is a rename that failed for another reason (a
+		// link, a denied access): the step fails and nothing is copied.
+		std::function<std::string(std::string_view)> rename_error;
 	};
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).

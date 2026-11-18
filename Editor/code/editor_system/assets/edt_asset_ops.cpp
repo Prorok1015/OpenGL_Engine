@@ -222,12 +222,20 @@ namespace
 	{
 		std::function<std::string(std::string_view)> fail;
 		std::function<bool(std::string_view)> force_copy;
+		std::function<std::string(std::string_view)> rename_error;
 	};
 
 	move_seams seams_of(const edt::asset_ops_ports& ports)
 	{
-		return move_seams{ ports.fail_step, ports.force_copy };
+		return move_seams{ ports.fail_step, ports.force_copy, ports.rename_error };
 	}
+
+	struct rename_outcome
+	{
+		std::string error;
+		// Only the move between two volumes: the one failure a copy may take over from.
+		bool across_volumes = false;
+	};
 
 	std::string injected_failure(const move_seams& seams, const std::string& label)
 	{
@@ -266,12 +274,12 @@ namespace
 	}
 
 	// A rename from one root to another: both lie in a folder the move is made from, and every folder below it is opened
-	// without following a link, as a rename inside one root is. An error when the roots share no folder or the file system
-	// cannot rename between them (another volume); the file stays where it was.
-	std::string rename_between(const fs::path& from_root, const std::string& from, const fs::path& to_root, const std::string& to)
+	// without following a link, as a rename inside one root is. An error when it cannot be made, the file staying where it
+	// was; `across_volumes` says the cause was another volume (or another drive: no shared folder), which is not a refusal.
+	rename_outcome rename_between(const fs::path& from_root, const std::string& from, const fs::path& to_root, const std::string& to)
 	{
 		const fs::path common = common_folder(from_root, to_root);
-		if (common.empty()) return "the two folders share no parent folder";
+		if (common.empty()) return rename_outcome{ "the two folders share no parent folder", true };
 		const fs::path source = (relative_to(from_root, common) / path_of(from)).lexically_normal();
 		const fs::path target = (relative_to(to_root, common) / path_of(to)).lexically_normal();
 		platform::beneath::pinned_root pinned{ common };
@@ -280,7 +288,10 @@ namespace
 		request.from_leaf = source.filename();
 		request.to_folder = target.parent_path();
 		request.to_leaf = target.filename();
-		return platform::beneath::rename_beneath(pinned, request);
+		rename_outcome outcome;
+		request.across_volumes = &outcome.across_volumes;
+		outcome.error = platform::beneath::rename_beneath(pinned, request);
+		return outcome;
 	}
 
 	// Copies a file from one root to another in chunks (never held whole), flushed to the disk and moved into place only when
@@ -323,8 +334,9 @@ namespace
 	}
 
 	// The file of the project goes into the journal folder (below `journal_root`): moved by a rename, which copies nothing and
-	// is atomic, or, where the file system cannot rename between the two (another volume), copied, flushed and checked before
-	// the original is removed. At no moment is there no complete copy.
+	// is atomic, or, only where the two lie on different volumes, copied, flushed and checked before the original is removed.
+	// Any other reason the rename cannot be made (a link in the way, an escape, a denied access) refuses the step and leaves
+	// the file where it is: a copy must not go where the rename was not allowed. At no moment is there no complete copy.
 	std::string stash_file(const fs::path& root, const std::string& relative, const fs::path& journal_root, const std::string& journal_relative,
 		const std::string& hash, const move_seams& seams)
 	{
@@ -332,18 +344,20 @@ namespace
 		if (std::string error = plain_folders_below(journal_root, target.parent_path()); !error.empty()) return error;
 		const std::string changed = std::format("'{}' changed while it was removed", relative);
 		if (!copy_forced(seams, "stash:" + relative)) {
-			const std::string moved = rename_between(root, relative, journal_root, journal_relative);
-			if (moved.empty()) {
+			rename_outcome moved{ seams.rename_error ? seams.rename_error("stash:" + relative) : std::string{}, false };
+			if (moved.error.empty()) moved = rename_between(root, relative, journal_root, journal_relative);
+			if (moved.error.empty()) {
 				std::string error;
 				const std::string now = hash_file(journal_root, journal_relative, error);
 				if (error.empty() && now == hash) return {};
 				if (error.empty()) error = changed;
-				if (const std::string back = rename_between(journal_root, journal_relative, root, relative); !back.empty()) {
-					error += std::format(" and could not be put back: {}", back);
+				if (const rename_outcome back = rename_between(journal_root, journal_relative, root, relative); !back.error.empty()) {
+					error += std::format(" and could not be put back: {}", back.error);
 				}
 				return error;
 			}
-			egLOG_INFO("asset_ops", "'{}' is copied into the journal, not moved: {}", relative, moved);
+			if (!moved.across_volumes) return std::format("'{}' cannot be moved into the journal: {}", relative, moved.error);
+			egLOG_INFO("asset_ops", "'{}' is copied into the journal, not moved: {}", relative, moved.error);
 		}
 		if (std::string error = copy_verified(root, relative, journal_root, journal_relative, hash, "stash_copied:" + relative, seams, changed); !error.empty()) {
 			return error;
@@ -351,9 +365,10 @@ namespace
 		return remove_file(root, relative);
 	}
 
-	// The kept file comes back to `relative` below `root`, without replacing anything: moved by a rename, or, where that is not
-	// possible, copied beside it under a temporary name, flushed, checked against `hash` and moved in. The kept file is removed
-	// only once the restored one is complete, so a failure leaves the kept one.
+	// The kept file comes back to `relative` below `root`, without replacing anything: moved by a rename, or, only where the two
+	// lie on different volumes, copied beside it under a temporary name, flushed, checked against `hash` and moved in; any other
+	// reason the rename cannot be made fails the step. A file that came back by rename is checked too, and goes back to the journal
+	// when it is not `hash`. The kept file is removed only once the restored one is complete, so a failure leaves the kept one.
 	std::string restore_file(const fs::path& journal_root, const std::string& journal_relative, const fs::path& root, const std::string& relative,
 		const std::string& hash, const move_seams& seams)
 	{
@@ -361,9 +376,20 @@ namespace
 		const fs::path target = path_of(relative);
 		if (std::string error = plain_folders_below(root, target.parent_path()); !error.empty()) return error;
 		if (!copy_forced(seams, "unstash:" + relative)) {
-			const std::string moved = rename_between(journal_root, journal_relative, root, relative);
-			if (moved.empty()) return {};
-			egLOG_INFO("asset_ops", "'{}' is copied back from the journal, not moved: {}", relative, moved);
+			rename_outcome moved{ seams.rename_error ? seams.rename_error("unstash:" + relative) : std::string{}, false };
+			if (moved.error.empty()) moved = rename_between(journal_root, journal_relative, root, relative);
+			if (moved.error.empty()) {
+				std::string error;
+				const std::string now = hash_file(root, relative, error);
+				if (error.empty() && now == hash) return {};
+				if (error.empty()) error = "the kept copy is not the file that was removed";
+				if (const rename_outcome back = rename_between(root, relative, journal_root, journal_relative); !back.error.empty()) {
+					error += std::format(" and could not be put back into the journal: {}", back.error);
+				}
+				return error;
+			}
+			if (!moved.across_volumes) return std::format("'{}' cannot be moved back from the journal: {}", relative, moved.error);
+			egLOG_INFO("asset_ops", "'{}' is copied back from the journal, not moved: {}", relative, moved.error);
 		}
 		if (std::string error = copy_verified(journal_root, journal_relative, root, relative, hash, "unstash_copied:" + relative, seams,
 			"the kept copy is not the file that was removed"); !error.empty()) {

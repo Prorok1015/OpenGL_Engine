@@ -66,8 +66,6 @@ namespace platform::beneath {
 		std::filesystem::path leaf;
 		std::filesystem::path tmp_leaf;
 		std::span<const std::byte> data;
-		// Not null: the content comes from it in pieces (a file too big to hold whole) and `data` is not used.
-		const chunk_source* stream = nullptr;
 		// fsync of the file before the rename and of the folder after it (#417).
 		bool durable = true;
 		// false: the temp file is moved to the target only if nothing is there yet (a new file that must not replace one
@@ -76,6 +74,8 @@ namespace platform::beneath {
 		// Tests only: called once the folders are held and just before the rename, with the temp file's full path.
 		const write_hook* hook = nullptr;
 		std::filesystem::path tmp_path;
+		// Not null: the content comes from it in pieces (a file too big to hold whole) and `data` is not used.
+		const chunk_source* stream = nullptr;
 	};
 
 	// Empty on success, else why it failed; on failure the target is as it was and the temp file is gone.
@@ -94,6 +94,10 @@ namespace platform::beneath {
 		// The target is the source under another case (a case-only rename on a case-insensitive file system), so it may
 		// be "replaced" by the source itself.
 		bool allow_replace = false;
+		// Not null: set to true when the move failed only because the two folders are on different volumes (POSIX EXDEV,
+		// Windows ERROR_NOT_SAME_DEVICE), false for every other outcome: a refused link, a missing folder, an existing
+		// target, a denied access are not that, and a caller that copies instead must copy for this one alone.
+		bool* across_volumes = nullptr;
 	};
 
 	// Moves a regular file between folders below the root, each opened without following a link and the move done
