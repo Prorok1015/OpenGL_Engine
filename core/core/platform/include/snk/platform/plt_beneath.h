@@ -27,6 +27,12 @@ namespace platform::beneath {
 	enum class read_stage : int { before_walk, folders_held };
 
 	using write_hook = std::function<void(write_stage, const std::filesystem::path& tmp_path)>;
+	// Takes the next piece of a file being written; false: it could not be written, stop.
+	using chunk_sink = std::function<bool(std::span<const std::byte>)>;
+	// Hands the whole content to `sink` in pieces, in order. false: the content could not be produced (or `sink` refused a
+	// piece): the temp file is removed and the target stays as it was. It may check the content once it is complete and
+	// answer false then, so nothing is flushed or moved into place.
+	using chunk_source = std::function<bool(const chunk_sink& sink)>;
 
 	// The root a resolver writes under. POSIX: its descriptor, opened on the first write (the root may not exist when it
 	// is mounted) and opened again when the folder at the root's path is no longer the one it holds (removed, or renamed
@@ -68,6 +74,8 @@ namespace platform::beneath {
 		// Tests only: called once the folders are held and just before the rename, with the temp file's full path.
 		const write_hook* hook = nullptr;
 		std::filesystem::path tmp_path;
+		// Not null: the content comes from it in pieces (a file too big to hold whole) and `data` is not used.
+		const chunk_source* stream = nullptr;
 	};
 
 	// Empty on success, else why it failed; on failure the target is as it was and the temp file is gone.
@@ -86,6 +94,10 @@ namespace platform::beneath {
 		// The target is the source under another case (a case-only rename on a case-insensitive file system), so it may
 		// be "replaced" by the source itself.
 		bool allow_replace = false;
+		// Not null: set to true when the move failed only because the two folders are on different volumes (POSIX EXDEV,
+		// Windows ERROR_NOT_SAME_DEVICE), false for every other outcome: a refused link, a missing folder, an existing
+		// target, a denied access are not that, and a caller that copies instead must copy for this one alone.
+		bool* across_volumes = nullptr;
 	};
 
 	// Moves a regular file between folders below the root, each opened without following a link and the move done
