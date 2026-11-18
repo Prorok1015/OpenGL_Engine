@@ -4,6 +4,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/desc/desc_system.h>
+#include <snk/platform/plt_beneath.h>
 #include <boost/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -25,26 +26,34 @@ namespace
 	constexpr std::size_t k_max_actions = 256;
 	constexpr std::size_t k_max_bindings_per_action = 16;
 
-	// <name>.broken-<UTC time> next to it, -2, -3... when one of that second is there. False, with a warning, when the
-	// file could not be moved: it is then kept as it is.
+	// <name>.broken-<UTC time> next to it, -2, -3... when one of that second is there; the way save_user_bindings
+	// writes it (prj::write_project_file): its folder opened without following a link, and a file already at the new
+	// name is never replaced. False, with a warning, when the file could not be moved: it is then kept as it is.
 	bool move_aside(const std::filesystem::path& file)
 	{
 		const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-		std::filesystem::path stem = file;
-		stem += fs_paths::path_from_utf8(std::format(".broken-{:%Y%m%dT%H%M%SZ}", now));
-		std::error_code ec;
+		const prj::project_file_location where = prj::project_file_location_of(file);
+		const std::filesystem::path stem = where.relative.filename().native()
+			+ fs_paths::path_from_utf8(std::format(".broken-{:%Y%m%dT%H%M%SZ}", now)).native();
+		platform::beneath::pinned_root root{ where.root };
+		platform::beneath::rename_request request;
+		request.from_folder = where.relative.parent_path();
+		request.from_leaf = where.relative.filename();
+		request.to_folder = request.from_folder;
+		std::string error;
 		for (int attempt = 1; attempt <= 100; ++attempt) {
-			std::filesystem::path target = stem;
-			if (attempt > 1) target += fs_paths::path_from_utf8(std::format("-{}", attempt));
-			if (std::filesystem::exists(std::filesystem::symlink_status(target, ec))) continue;
-			std::filesystem::rename(file, target, ec);
-			if (ec) break;
+			request.to_leaf = stem;
+			if (attempt > 1) request.to_leaf += fs_paths::path_from_utf8(std::format("-{}", attempt));
+			std::error_code ec;
+			if (std::filesystem::exists(std::filesystem::symlink_status(file.parent_path() / request.to_leaf, ec))) continue;
+			error = platform::beneath::rename_beneath(root, request);
+			if (!error.empty()) break;
 			egLOG_WARN("input", "{} could not be read: moved aside to {}, the next save writes a new file", fs_paths::utf8_of(file),
-				fs_paths::utf8_of(target));
+				fs_paths::utf8_of(file.parent_path() / request.to_leaf));
 			return true;
 		}
 		egLOG_WARN("input", "{} could not be read and could not be moved aside{}{}; it is not written over", fs_paths::utf8_of(file),
-			ec ? ": " : "", ec ? ec.message() : std::string{});
+			error.empty() ? "" : ": ", error);
 		return false;
 	}
 

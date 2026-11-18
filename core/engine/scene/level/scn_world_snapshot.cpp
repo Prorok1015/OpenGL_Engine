@@ -227,6 +227,15 @@ json::object scn::capture_world(const world_context& world, const component_cata
 	return out;
 }
 
+json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
+	snapshot_report& report)
+{
+	json::object out = capture_world(world, catalog, report);
+	descs.stamp_tree(out["ctx"]);
+	descs.stamp_tree(out["entities"]);
+	return out;
+}
+
 bool scn::restore_world(world_context& world, const json::object& given, const component_catalog& catalog,
 	const desc::read_context& context, snapshot_report& report)
 {
