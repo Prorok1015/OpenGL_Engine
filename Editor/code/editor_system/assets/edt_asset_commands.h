@@ -3,6 +3,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_registration.h>
 #include <boost/json/value.hpp>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -32,6 +33,32 @@ namespace edt
 		// agent_action after each change an agent made; null: none.
 		editor_events* events = nullptr;
 	};
+
+	enum class asset_run_state : std::uint8_t
+	{
+		done,
+		// Why nothing may be written now, or the asset index cannot judge yet: `message`; waiting or a person's save helps.
+		blocked,
+		no_project,
+		// Planned or executed and refused with nothing changed: `refused`.
+		refused,
+		// A step failed and what was done was taken back (or not: `report.rollback_failures`): `message`.
+		failed,
+	};
+
+	struct asset_run
+	{
+		asset_run_state state = asset_run_state::failed;
+		std::string message;
+		std::optional<refusal> refused;
+		// done and failed.
+		operation_report report;
+	};
+
+	// The one path of an operation that is not asked about: the guards, plan, execute and `sources.done` (the history takes the
+	// journal). The commands wrap it with their own checks (origin, arguments, the agent's ticket); the asset browser runs it as a
+	// person's call, having asked for `force` apart.
+	asset_run run_asset_operation(const asset_command_sources& sources, const asset_request& request, bool force);
 
 	[[nodiscard]] std::vector<registration> register_asset_commands(cmd::command_registry& commands, asset_command_sources sources);
 

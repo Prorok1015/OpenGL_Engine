@@ -97,12 +97,6 @@ namespace
 			if (call.from.kind == cmd::origin_kind::game) {
 				return cmd::result::failure(cmd::codes::denied, "a running game does not change the project's assets");
 			}
-			if (std::optional<std::string> why = write_blocked()) return cmd::result::failure(cmd::codes::busy, std::move(*why));
-			const edt::asset_ops* operations = m_sources.operations ? m_sources.operations() : nullptr;
-			if (!operations) return cmd::result::failure(cmd::codes::failed, "no project is open: there are no assets to change");
-			if (std::optional<std::string> why = m_sources.asset_index_wait ? m_sources.asset_index_wait() : std::nullopt) {
-				return cmd::result::failure(cmd::codes::busy, std::move(*why));
-			}
 			const request_args args = parse(operation, call);
 			if (!args.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, args.error);
 			// What `force` leaves broken is decided by a person for this very call: the ticket the registry hands on only after the
@@ -112,24 +106,25 @@ namespace
 					"`force` leaves references broken and is done only after a person confirmed this very call; it was not asked");
 			}
 
-			const edt::operation_plan plan = operations->plan(std::span<const edt::asset_request>(&args.request, 1));
-			if (plan.refused) return refused(*plan.refused);
-			const edt::operation_report report = operations->execute(plan, edt::execute_options{ args.force });
-			if (report.refused) return refused(*report.refused);
-			if (!report.ok) {
-				std::string error = std::format("the operation failed and was taken back: {}", report.error);
-				if (!report.rollback_failures.empty()) {
-					error += std::format("; {} step(s) could not be taken back, the project is half done there: {}", report.rollback_failures.size(),
-						report.rollback_failures.front());
-				}
-				cmd::result out = cmd::result::failure(cmd::codes::failed, std::move(error));
+			const edt::asset_run run = edt::run_asset_operation(m_sources, args.request, args.force);
+			switch (run.state) {
+			case edt::asset_run_state::blocked:
+				return cmd::result::failure(cmd::codes::busy, run.message);
+			case edt::asset_run_state::no_project:
+				return cmd::result::failure(cmd::codes::failed, run.message);
+			case edt::asset_run_state::refused:
+				return refused(*run.refused);
+			case edt::asset_run_state::failed: {
+				cmd::result out = cmd::result::failure(cmd::codes::failed, run.message);
 				json::array stuck;
-				for (const std::string& step : report.rollback_failures) stuck.push_back(json::string(step));
-				out.value = json::object{ { "code", "operation_failed" }, { "reason", report.error }, { "rollback_failures", std::move(stuck) } };
+				for (const std::string& step : run.report.rollback_failures) stuck.push_back(json::string(step));
+				out.value = json::object{ { "code", "operation_failed" }, { "reason", run.report.error }, { "rollback_failures", std::move(stuck) } };
 				return out;
 			}
-
-			if (m_sources.done) m_sources.done(report);
+			case edt::asset_run_state::done:
+				break;
+			}
+			const edt::operation_report& report = run.report;
 			const std::string target = report.moved.empty() ? std::string(args.request.asset.view())
 				: report.moved.front().to.starts_with("cache://") ? report.moved.front().from : std::format("{} -> {}", report.moved.front().from, report.moved.front().to);
 			egLOG_INFO("agent", "asset.{} {} by {}", edt::asset_operation_name(operation), target, who(call.from));
@@ -222,6 +217,51 @@ namespace
 
 		edt::asset_command_sources m_sources;
 	};
+}
+
+edt::asset_run edt::run_asset_operation(const asset_command_sources& sources, const asset_request& request, bool force)
+{
+	asset_run out;
+	if (const std::optional<std::string> why = sources.write_blocker ? sources.write_blocker() : std::nullopt) {
+		out.state = asset_run_state::blocked;
+		out.message = *why;
+		return out;
+	}
+	const asset_ops* operations = sources.operations ? sources.operations() : nullptr;
+	if (!operations) {
+		out.state = asset_run_state::no_project;
+		out.message = "no project is open: there are no assets to change";
+		return out;
+	}
+	if (const std::optional<std::string> why = sources.asset_index_wait ? sources.asset_index_wait() : std::nullopt) {
+		out.state = asset_run_state::blocked;
+		out.message = *why;
+		return out;
+	}
+	const operation_plan plan = operations->plan(std::span<const asset_request>(&request, 1));
+	if (plan.refused) {
+		out.state = asset_run_state::refused;
+		out.refused = plan.refused;
+		return out;
+	}
+	out.report = operations->execute(plan, execute_options{ force });
+	if (out.report.refused) {
+		out.state = asset_run_state::refused;
+		out.refused = out.report.refused;
+		return out;
+	}
+	if (!out.report.ok) {
+		out.state = asset_run_state::failed;
+		out.message = std::format("the operation failed and was taken back: {}", out.report.error);
+		if (!out.report.rollback_failures.empty()) {
+			out.message += std::format("; {} step(s) could not be taken back, the project is half done there: {}", out.report.rollback_failures.size(),
+				out.report.rollback_failures.front());
+		}
+		return out;
+	}
+	if (sources.done) sources.done(out.report);
+	out.state = asset_run_state::done;
+	return out;
 }
 
 const char* edt::command_code_of(refusal_code code)
