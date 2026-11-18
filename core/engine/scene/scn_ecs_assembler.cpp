@@ -71,6 +71,11 @@ namespace scn {
 			// the overrides would replace a nested object whole and lose the sibling fields the parent set.
 			boost::json::object effective;
 			parent_desc->serialize(effective);
+			// This process's memory, before the overrides (file data) go in: an old module's inline desc without
+			// __version is of the current format (#1236). The root is read by deserialize, not migrated.
+			for (auto& member : effective) {
+				m_desc_sys.stamp_unversioned(member.value());
+			}
 			desc::json_deep_merge(effective, overrides);
 			temp_desc->deserialize(m_desc_sys, effective);
 		} else if (!overrides.empty()) {

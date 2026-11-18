@@ -1150,25 +1150,6 @@ namespace {
 	// serialize(parent) with the component's own overrides merged in, then the edits in order. With the component's
 	// `schema`, an edit at no field of it is reported: the read would drop it quietly, e.g. after a migration moved the
 	// field (EPIC-58 #763).
-	// A typed object without __version gets the current one of its type; one that has a version keeps it.
-	void stamp_unversioned(const desc::desc_system& descs, json::value& value)
-	{
-		if (json::object* object = value.if_object()) {
-			if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
-				(*object)["__version"] = descs.current_version(type->as_string());
-			}
-			for (auto& member : *object) {
-				stamp_unversioned(descs, member.value());
-			}
-		} else if (json::array* array = value.if_array()) {
-			// Numeric payloads (geometry) can be long and hold no typed object.
-			if (!array->empty() && array->front().is_number()) return;
-			for (json::value& element : *array) {
-				stamp_unversioned(descs, element);
-			}
-		}
-	}
-
 	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent, const desc::desc_system* descs,
 		const desc::type_schema* schema = nullptr)
 	{
@@ -1178,7 +1159,7 @@ namespace {
 		// wrote one so) is of the current format, not version 1. The overrides and edits below are file data: untouched.
 		if (parent && descs) {
 			for (auto& member : effective) {
-				stamp_unversioned(*descs, member.value());
+				descs->stamp_unversioned(member.value());
 			}
 		}
 		desc::json_deep_merge(effective, cnode.overrides);
