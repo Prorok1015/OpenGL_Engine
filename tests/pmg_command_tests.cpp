@@ -56,7 +56,7 @@ struct command_fixture : test_util::scene_env
 
 	pmg::command_context context()
 	{
-		pmg::command_context context{ copy.root(), *descs, *rs, &steps, write, [] { return std::string{ "test-migration" }; }, {}, {} };
+		pmg::command_context context{ copy.root(), *descs, *rs, &steps, write, [] { return std::string{ "test-migration" }; }, {}, {}, {} };
 		context.print = [this](std::string_view text) { printed += std::string(text) + "\n"; };
 		return context;
 	}

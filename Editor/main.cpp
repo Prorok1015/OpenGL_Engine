@@ -52,7 +52,7 @@ namespace
 		res::resource_system& resources = layer ? layer->resources() : storage.require<res::resource_system>();
 		prj::migration::project_step_registry steps;
 		prj::migration::register_project_steps(steps);
-		const prj::migration::command_context context{ project.root, descs, resources, &steps, {}, {}, {}, {} };
+		const prj::migration::command_context context{ project.root, descs, resources, &steps, {}, {}, {}, {}, {} };
 		if (*cfg_migration_command == "rollback") {
 			return prj::migration::run_migrate_rollback(*cfg_migration_rollback_id, context);
 		}
