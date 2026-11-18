@@ -481,4 +481,10 @@ namespace edt
 	// stderr_tail its last 20 stderr lines (at most 4 KiB).
 	// Only without git (vcs_unavailable) or a project (no_project) do the commands fail at once.
 	[[nodiscard]] std::vector<registration> register_vcs_commands(cmd::command_registry& commands, vcs_service& service);
+
+	// What vcs_service::set_config_files guards for the configuration files the editor read (#1090): each one as written,
+	// every link met while resolving it (a file or a folder on the way, each as the link itself: a checkout may point
+	// it elsewhere) and what it finally resolves to (a checkout may change that file). Absolute and without
+	// duplicates; empty entries are dropped.
+	std::vector<std::filesystem::path> config_files_to_guard(const std::vector<std::filesystem::path>& files);
 }

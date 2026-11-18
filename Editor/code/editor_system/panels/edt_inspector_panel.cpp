@@ -4,13 +4,51 @@
 #include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
 #include "edt_schema_inspector.h"
+#include "edt_ui_fonts.h"
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
+#include <snk/scene/scn_bone_desc.h>
+#include <snk/scene/scn_animated_node_desc.h>
 #include <snk/gui/gui_theme.h>
+#include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
 #include <format>
+
+namespace
+{
+	const char* component_icon(std::string_view type)
+	{
+		if (type == scn::camera_desc::__type) return gui::icon::camera;
+		if (type == scn::directional_light_desc::__type) return gui::icon::sun;
+		if (type == scn::mesh_node_desc::__type) return gui::icon::model;
+		if (type == scn::skybox_desc::__type) return gui::icon::skybox;
+		if (type == scn::bone_desc::__type) return gui::icon::bone;
+		if (type == scn::animated_node_desc::__type) return gui::icon::animation;
+		return nullptr;
+	}
+
+	// A component's header: bold, with the icon of its type when the font has the icons (#1136).
+	bool component_header(const std::string& type, const std::string& shown, const std::string& key)
+	{
+		const char* icon = gui::ui_font_has_icons() ? component_icon(type) : nullptr;
+		const std::string label = icon ? std::format("{} {}##{}", icon, shown, key) : std::format("{}##{}", shown, key);
+		const edt::font_scope bold(edt::ui_font::bold);
+		return ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+	}
+
+	bool transform_header()
+	{
+		const std::string label = gui::ui_font_has_icons() ? std::format("{} Transform", gui::icon::move) : "Transform";
+		const edt::font_scope bold(edt::ui_font::bold);
+		return ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+	}
+}
 
 namespace edt
 {
@@ -195,7 +233,7 @@ namespace edt
 		if (m_readonly) ImGui::BeginDisabled();
 
 		// Transform
-		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (transform_header()) {
 			bool transform_changed = false;
 			if (ImGui::DragFloat3("Position", &node.position.x, 0.01f)) transform_changed = true;
 			if (ImGui::DragFloat3("Rotation", &node.rotation.x, 0.5f))  transform_changed = true;
@@ -219,8 +257,7 @@ namespace edt
 			}
 
 			const std::string& header = effective_type.empty() ? key : effective_type;
-			std::string header_id = header + "##" + key;
-			if (ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (component_header(effective_type, header, key)) {
 				if (m_readonly) ImGui::BeginDisabled();
 				// Field labels repeat across components, so scope their IDs per component.
 				ImGui::PushID(key.c_str());
@@ -312,7 +349,7 @@ namespace edt
 		ImGui::Separator();
 
 		const std::string transform_key{ scn::transform_pseudo_component };
-		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (transform_header()) {
 			ImGui::PushID("transform");
 			glm::vec3 pos, rot, scl;
 			oe::effective_transform(*m_owner, m_target, base, pos, rot, scl);
@@ -339,8 +376,7 @@ namespace edt
 				effective_type = std::string(comp.parent_desc->get_type());
 			}
 			const std::string& header = effective_type.empty() ? key : effective_type;
-			const std::string header_id = header + "##" + key;
-			if (!ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+			if (!component_header(effective_type, header, key))
 				continue;
 
 			ImGui::PushID(key.c_str());
@@ -410,6 +446,7 @@ namespace edt
 
 	bool inspector_panel::render_generic_json(boost::json::object& obj)
 	{
+		const font_scope mono(ui_font::mono);
 		bool changed = false;
 		for (auto& [key, val] : obj) {
 			std::string k(key);
@@ -499,6 +536,7 @@ namespace edt
 
 	void inspector_panel::render_generic_json_readonly(const boost::json::object& obj)
 	{
+		const font_scope mono(ui_font::mono);
 		for (auto const& [key, val] : obj) {
 			std::string k(key);
 			if (k.starts_with("__")) continue;

@@ -408,7 +408,7 @@ std::string edt::play_session::capture_for_reload()
 		saved.input_stack = world.input_stack();
 		if (const auto* bus = world.state().ctx().find<ecs::world_bus>()) snapshot.bus_events += bus->queued();
 		scn::snapshot_report report;
-		saved.state = scn::capture_world(world, layer->catalog(), report);
+		saved.state = scn::capture_world(world, layer->catalog(), layer->descs(), report);
 		for (const auto& [type, count] : report.unsaved) {
 			egLOG_WARN("hot_reload", "the module reload drops {} ({}) of the world '{}': it has no schema", type, count, saved.name);
 		}

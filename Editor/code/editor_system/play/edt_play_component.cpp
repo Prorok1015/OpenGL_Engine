@@ -22,6 +22,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/gui/gui_theme.h>
+#include <snk/gui/gui_ui_font.h>
 #include <imgui.h>
 #include <format>
 #include <utility>
@@ -180,5 +181,11 @@ void edt::play_component::draw_status() const
 	if (!m_play || !m_play->active()) return;
 	const bool paused = m_play->state() == play_state::paused;
 	const gui::theme_semantic_colors& colors = m_ports.context.colors();
-	ImGui::TextColored(paused ? colors.warning : colors.success, "%s", paused ? "Play: paused" : "Play: playing");
+	const char* text = paused ? "Play: paused" : "Play: playing";
+	const ImVec4& color = paused ? colors.warning : colors.success;
+	if (gui::ui_font_has_icons()) {
+		ImGui::TextColored(color, "%s %s", paused ? gui::icon::pause : gui::icon::play, text);
+	} else {
+		ImGui::TextColored(color, "%s", text);
+	}
 }

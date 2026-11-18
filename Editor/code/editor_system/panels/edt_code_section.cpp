@@ -4,6 +4,7 @@
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <utility>
 
@@ -107,7 +108,11 @@ namespace edt
 				continue;
 			}
 			const std::string label = std::string{ tag_of_category(entry.category) } + " " + entry.name;
-			ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanFullWidth);
+			{
+				const font_scope mono(ui_font::mono);
+				ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen
+					| ImGuiTreeNodeFlags_SpanFullWidth);
+			}
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 				report(m_actions.open_in_ide(entry.relative));
 			}

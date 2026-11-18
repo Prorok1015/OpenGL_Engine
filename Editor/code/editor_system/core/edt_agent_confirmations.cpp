@@ -1,5 +1,6 @@
 #include "edt_agent_confirmations.h"
 #include "edt_forge_types.h"
+#include "edt_ui_fonts.h"
 #include "edt_ui_metrics.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/gui/gui_theme.h>
@@ -614,6 +615,7 @@ namespace edt
 				}
 				// The arguments in full, as the registry bound them: what is approved is what is shown, however long.
 				if (ImGui::BeginChild("arguments", ImVec2(0.f, em(140.f)), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+					const font_scope mono(ui_font::mono);
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();

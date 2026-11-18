@@ -143,24 +143,19 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
-	// The configuration files the editor read its settings from (--config, else the one beside the executable): an agent's
-	// checkout or pull must not change them, import/decoder_sandbox is a person's (#1076).
+	// The configuration files the editor read its settings from (--config, else the one beside the executable, with its
+	// whole extends chain, #1090), and the one beside the executable: an agent's checkout or pull must not change them,
+	// import/decoder_sandbox is a person's (#1076). Links are guarded as links and as their targets.
 	std::vector<std::filesystem::path> editor_config_files()
 	{
-		std::vector<std::filesystem::path> files;
-		const auto add = [&files](const std::filesystem::path& file) {
-			if (file.empty()) return;
-			std::error_code ec;
-			std::filesystem::path absolute = std::filesystem::weakly_canonical(file, ec);
-			if (ec) absolute = std::filesystem::absolute(file, ec);
-			if (ec || absolute.empty()) return;
-			if (std::find(files.begin(), files.end(), absolute) == files.end()) files.push_back(std::move(absolute));
-		};
-		add(cfg::loaded_config_path());
+		std::vector<std::filesystem::path> files = cfg::loaded_config_files();
 		if (const std::filesystem::path program = platform::current_executable(); !program.empty()) {
-			add(program.parent_path() / ".." / "config" / "editor.cfg");
+			// The next start without --config reads this one and its chain.
+			for (std::filesystem::path& file : cfg::config_files_of(program.parent_path() / ".." / "config" / "editor.cfg")) {
+				files.push_back(std::move(file));
+			}
 		}
-		return files;
+		return edt::config_files_to_guard(files);
 	}
 
 
