@@ -3,6 +3,9 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <snk/desc/desc_migrations.h>
+#include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include "test_manual_tasks.hpp"
@@ -166,6 +169,133 @@ BOOST_AUTO_TEST_CASE(StampHeader_WithoutTypeIsUntouched)
 	auto o = parse(R"({"name":"x"})");
 	ds.stamp_header(o);
 	BOOST_TEST(!o.contains("__version"));
+}
+
+// EPIC-58 S9a (#763): the declarative steps of a runtime schema, and the helpers C++ steps share with them.
+BOOST_AUTO_TEST_CASE(SchemaV3WithTwoSteps_MigratesAV1Desc)
+{
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 3,
+		"fields": [ { "name": "health", "kind": "f32" }, { "name": "armor", "kind": "i32" } ],
+		"migrations": [ { "from": 1, "rename": { "/hp": "/health" } },
+		                { "from": 2, "remove": ["/legacy"], "set_default": { "/armor": 0 } } ] })");
+	BOOST_REQUIRE((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
+	BOOST_TEST(ds.current_version(k_type) == 3);
+	BOOST_TEST(ds.migration_summary(k_type, 1) == "rename /hp -> /health");
+	BOOST_TEST(ds.migration_summary(k_type, 2) == "remove /legacy; default /armor");
+
+	auto o = parse(R"({"__type":"test_migr_desc","hp":5,"legacy":true})");
+	ds.migrate_tree(o, "ctx");
+	BOOST_TEST(o.at("__version").as_int64() == 3);
+	BOOST_TEST(o.at("health").as_int64() == 5);
+	BOOST_TEST(!o.contains("hp"));
+	BOOST_TEST(!o.contains("legacy"));
+	BOOST_TEST(o.at("armor").as_int64() == 0);
+
+	// A default does not replace a value already there.
+	auto kept = parse(R"({"__type":"test_migr_desc","__version":2,"armor":7})");
+	ds.migrate_tree(kept, "ctx");
+	BOOST_TEST(kept.at("armor").as_int64() == 7);
+}
+
+BOOST_AUTO_TEST_CASE(SchemaSteps_ThatCannotLeadToItsVersion_AreRefused)
+{
+	const auto schema = [](int version) {
+		desc::type_schema result;
+		result.name = k_type;
+		result.version = version;
+		return result;
+	};
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST((ds.register_schema(schema(3), steps(R"([{"from":1,"remove":["/a"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(3), steps(R"([{"from":1,"remove":["/a"]},{"from":3,"remove":["/b"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/__guid"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b","/c":"/b"}}])")) == nullptr));
+	// A chain depends on the order of the keys; header keys at any depth; array indexes and malformed pointers.
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b","/b":"/c"}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"rename":{"/a":"/b/c","/b":"/d"}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"set_default":{"/a":1,"/a/b":2}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/a/b"],"set_default":{"/a":{}}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/weapon/__version"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"set_default":{"/items/0/hp":1}}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/items/-"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/a//b"]}])")) == nullptr));
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/a~2"]}])")) == nullptr));
+	// Without steps, a version they do not lead to is refused in every build, not only asserted.
+	BOOST_TEST((ds.register_schema(schema(3)) == nullptr));
+	BOOST_TEST(ds.current_version(k_type) == 1);
+	BOOST_TEST((ds.find_schema(k_type) == nullptr));
+
+	// The type has steps in C++ already: the schema does not bring a second set of them.
+	ds.register_migration(k_type, 1, [](json::object&) {});
+	BOOST_TEST((ds.register_schema(schema(2), steps(R"([{"from":1,"remove":["/a"]}])")) == nullptr));
+	BOOST_TEST(ds.current_version(k_type) == 2);
+	BOOST_TEST((ds.find_schema(k_type) == nullptr));
+}
+
+BOOST_AUTO_TEST_CASE(UnregisteringTheSchema_TakesItsStepsAlong)
+{
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [],
+		"migrations": [ { "from": 1, "remove": ["/old"] } ] })");
+	BOOST_REQUIRE((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
+	ds.unregister_desc(k_type);
+	BOOST_TEST(ds.current_version(k_type) == 1);
+	BOOST_TEST(ds.migration_summary(k_type, 1).empty());
+
+	// Registered again, without a duplicate step.
+	BOOST_TEST((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
+	BOOST_TEST(ds.current_version(k_type) == 2);
+}
+
+BOOST_AUTO_TEST_CASE(MigrationHelpers_MoveRemoveAndFillFields)
+{
+	auto o = parse(R"({"__type":"t","hp":5,"stats":{"old":1},"armor":null})");
+	desc::migrations::rename(o, "/hp", "/stats/health");
+	BOOST_TEST(!o.contains("hp"));
+	BOOST_TEST(o.at("stats").at("health").as_int64() == 5);
+
+	desc::migrations::rename(o, "/missing", "/other");
+	BOOST_TEST(!o.contains("other"));
+	// A value already at the target is not overwritten, and the source stays.
+	BOOST_CHECK_THROW(desc::migrations::rename(o, "/stats/old", "/stats/health"), std::runtime_error);
+	BOOST_TEST(o.at("stats").at("old").as_int64() == 1);
+	BOOST_TEST(o.at("stats").at("health").as_int64() == 5);
+
+	desc::migrations::remove(o, "/stats/old");
+	BOOST_TEST(!o.at("stats").as_object().contains("old"));
+	desc::migrations::remove(o, "/stats/old");
+
+	desc::migrations::set_default(o, "/armor", 3);
+	BOOST_TEST(o.at("armor").is_null());
+	desc::migrations::set_default(o, "/speed", 2);
+	BOOST_TEST(o.at("speed").as_int64() == 2);
+
+	BOOST_CHECK_THROW(desc::migrations::remove(o, "hp"), std::invalid_argument);
+	BOOST_CHECK_THROW(desc::migrations::set_default(o, "/__version", 1), std::invalid_argument);
+	BOOST_CHECK_THROW(desc::migrations::remove(o, "/stats/__guid"), std::invalid_argument);
+	BOOST_TEST(o.at("__type").as_string() == "t");
+
+	// A step does not enter an array: it would turn it into an object or shift its elements.
+	auto listed = parse(R"({"items":[{"hp":1}]})");
+	BOOST_CHECK_THROW(desc::migrations::remove(listed, "/items/hp"), std::runtime_error);
+	BOOST_CHECK_THROW(desc::migrations::set_default(listed, "/items/hp", 2), std::runtime_error);
+	BOOST_TEST(listed.at("items").as_array().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
+{
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [],
+		"migrations": [ { "from": 1, "rename": { "/a": "/b" } } ] })");
+	BOOST_REQUIRE((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
+	auto o = parse(R"({"__type":"test_migr_desc","a":1,"b":2})");
+	try {
+		ds.migrate_tree(o, "ctx");
+		BOOST_FAIL("expected an exception");
+	} catch (const std::runtime_error& error) {
+		const std::string_view what = error.what();
+		BOOST_TEST(what.find("'test_migr_desc' step from version 1") != std::string_view::npos, what);
+		BOOST_TEST(what.find("rename /a -> /b") != std::string_view::npos, what);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

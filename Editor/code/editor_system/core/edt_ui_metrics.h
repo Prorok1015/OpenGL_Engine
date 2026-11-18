@@ -5,8 +5,8 @@ namespace edt
 {
 	// The pixel sizes of the panels were tuned at 13 px, ImGui's default font (the classic theme): they scale with the
 	// font, so a larger font size or DPI keeps the layout (#1136).
-	// One rule: dpi_px only for a size drawn in the default layout (the views the CI reference images show: hierarchy,
-	// inspector, viewport, asset browser, problems, console, main menu), em for every other size.
+	// em for every size, the default layout of the CI reference images too (owner decision, #1136); dpi_px only for a
+	// size that must not follow the font.
 	constexpr float em_of(float px, float font_px)
 	{
 		return px * font_px / 13.f;
@@ -30,7 +30,7 @@ namespace edt
 		return ImVec2(em(px.x), em(px.y));
 	}
 
-	// A size that follows the DPI only, not the font size: the layout of the default view stays as it is.
+	// A size that follows the DPI only, not the font size.
 	inline float dpi_px(float px)
 	{
 		const float scale = ImGui::GetMainViewport()->DpiScale;

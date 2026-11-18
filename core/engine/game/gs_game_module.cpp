@@ -169,11 +169,16 @@ gs::module_context::module_context(scn::scene_layer& layer, cmd::command_registr
 
 bool gs::module_context::register_component(desc::type_schema schema)
 {
+	return register_component(std::move(schema), json::array{});
+}
+
+bool gs::module_context::register_component(desc::type_schema schema, const json::array& migrations)
+{
 	if (!m_contexts) {
 		egLOG_ERROR("scene", "module_context::register_component('{}'): the engine has no context manager", schema.name);
 		return false;
 	}
-	auto registration = scn::register_schema_component(*m_contexts, m_layer, std::move(schema));
+	auto registration = scn::register_schema_component(*m_contexts, m_layer, std::move(schema), migrations);
 	if (!registration) {
 		return false;
 	}

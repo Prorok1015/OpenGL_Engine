@@ -71,4 +71,9 @@ namespace scn
 	// the layer or below. A schema built in code gets its layout here. The spawner refuses a desc read by another
 	// layout of the schema (one cached from an earlier registration of the name).
 	SNK_API schema_component_registration register_schema_component(context_manager& manager, scene_layer& layer, desc::type_schema schema);
+
+	// The same with the schema's declarative "migrations" (desc::desc_system::register_schema): they lead to the
+	// schema's version and go with the registration. Also refused when they are malformed or the type has C++ steps.
+	SNK_API schema_component_registration register_schema_component(context_manager& manager, scene_layer& layer, desc::type_schema schema,
+		const json::array& migrations);
 }

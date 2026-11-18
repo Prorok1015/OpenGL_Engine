@@ -5,6 +5,7 @@
 
 namespace res
 {
+	// Rows bottom-up, as a GL texture takes them: pct_adapter loads them so and writes them back reversed (#1222).
 	class SNK_API picture_resource : public resource_entry
 	{
 	public:
