@@ -152,14 +152,39 @@ void edt::asset_operation_form::close()
 
 void edt::asset_operation_form::set_input(std::string input)
 {
-	if (input == m_input) return;
+	if (input == m_input && !m_pending) return;
 	m_input = std::move(input);
 	m_error.clear();
 	replan();
 }
 
+void edt::asset_operation_form::type_input(std::string input, std::chrono::steady_clock::time_point now)
+{
+	if (input == m_input) return;
+	m_input = std::move(input);
+	m_error.clear();
+	m_pending = true;
+	m_typed_at = now;
+}
+
+void edt::asset_operation_form::settle(std::chrono::steady_clock::time_point now)
+{
+	if (m_pending && now - m_typed_at >= input_delay) replan();
+}
+
+bool edt::asset_operation_form::take_disk_changed()
+{
+	return std::exchange(m_disk_changed, false);
+}
+
+std::string edt::asset_operation_form::asset_text() const
+{
+	return shown(m_asset.view());
+}
+
 void edt::asset_operation_form::replan()
 {
+	m_pending = false;
 	m_item.reset();
 	m_refused.reset();
 	if (!m_ports.plan) {
@@ -243,7 +268,7 @@ bool edt::asset_operation_form::needs_force() const
 
 bool edt::asset_operation_form::can_submit() const
 {
-	return m_stage == stage::editing && m_item && !m_refused && !needs_force();
+	return m_stage == stage::editing && !m_pending && m_item && !m_refused && !needs_force();
 }
 
 bool edt::asset_operation_form::can_ask_force() const
@@ -289,6 +314,7 @@ bool edt::asset_operation_form::run(bool force)
 		return false;
 	}
 	m_run = m_ports.run(request(), force);
+	m_disk_changed = m_disk_changed || (m_run.state != asset_run_state::blocked && m_run.state != asset_run_state::no_project);
 	switch (m_run.state) {
 	case asset_run_state::done:
 		m_stage = stage::reported;
@@ -297,10 +323,13 @@ bool edt::asset_operation_form::run(bool force)
 		return true;
 	case asset_run_state::blocked:
 	case asset_run_state::no_project:
-	case asset_run_state::failed:
 	case asset_run_state::denied:
 	case asset_run_state::stale:
 		m_error = shown(m_run.message);
+		return false;
+	case asset_run_state::failed:
+		m_error = shown(m_run.message);
+		replan();
 		return false;
 	case asset_run_state::refused:
 		m_error = m_run.refused ? refusal_message(*m_run.refused) : std::string("The operation was refused.");
@@ -313,7 +342,7 @@ bool edt::asset_operation_form::run(bool force)
 
 std::string edt::asset_operation_form::report_title() const
 {
-	return std::format("{} {}", label_of(m_run.report.journal.operation), shown(m_asset.view()));
+	return std::format("{} {}", label_of(m_run.report.journal.operation), asset_text());
 }
 
 std::vector<std::string> edt::asset_operation_form::report_lines() const
@@ -353,6 +382,7 @@ bool edt::asset_operation_form::undo()
 		return false;
 	}
 	const asset_fix_result result = m_ports.undo(m_run.report.operation_id);
+	m_disk_changed = true;
 	if (!result.ok) {
 		m_undo_error = shown(result.error);
 		m_undo_dropped = !result.keep;

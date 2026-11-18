@@ -3,6 +3,7 @@
 #include "edt_asset_database.h"
 #include "edt_asset_ops.h"
 #include <snk/model_codec/res_tag.h>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -54,6 +55,12 @@ namespace edt
 		// rename: the new file name; move: the folder below res:// ("" is the root); delete: not used. Plans again (the disk is read).
 		const std::string& input() const { return m_input; }
 		void set_input(std::string input);
+		// A key press of the person: the disk is read for the new plan only once typing stopped for `input_delay` (`settle`), so a big
+		// project is not walked at every key. Meanwhile the plan is the old input's: nothing can be submitted.
+		static constexpr std::chrono::milliseconds input_delay{ 250 };
+		void type_input(std::string input, std::chrono::steady_clock::time_point now);
+		void settle(std::chrono::steady_clock::time_point now);
+		bool planning_pending() const { return m_pending; }
 		// Plans again, for a disk that changed meanwhile.
 		void replan();
 
@@ -80,6 +87,10 @@ namespace edt
 		bool submit_force();
 		// What the last run said when it did not go through, as a person reads it.
 		const std::string& error() const { return m_error; }
+		// The last run or undo may have changed files (done, failed, refused; an undo): the list of files is read again. Asked once.
+		bool take_disk_changed();
+		// The asset's tag, safe to show.
+		std::string asset_text() const;
 
 		const asset_run& result() const { return m_run; }
 		// The report of the operation done: what moved, what was rewritten (with pointers), what could not be, warnings, what is broken.
@@ -106,6 +117,9 @@ namespace edt
 		asset_run m_run;
 		bool m_undone = false;
 		bool m_undo_dropped = false;
+		bool m_disk_changed = false;
+		bool m_pending = false;
+		std::chrono::steady_clock::time_point m_typed_at;
 		std::string m_undo_error;
 	};
 }

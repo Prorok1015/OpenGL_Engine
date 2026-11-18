@@ -137,6 +137,7 @@ struct form_fixture
 			if (!manifest.start_scene.empty()) out.references.push_back(edt::manifest_reference{ "/start_scene", manifest.start_scene });
 			return out;
 		};
+		ports.fail_step = [this](std::string_view step) -> std::string { return !fail_prefix.empty() && step.starts_with(fail_prefix) ? "boom" : ""; };
 		ports.engine_base = engine.path();
 		ports.journal_root = journal.path();
 		ports.is_open_with_unsaved_changes = [this](const res::tag& tag) { return open_files.contains(std::string(tag.view())); };
@@ -150,7 +151,7 @@ struct form_fixture
 	edt::asset_operation_ports make_ports()
 	{
 		edt::asset_operation_ports out;
-		out.plan = [this](const edt::asset_request& request) { return operations.plan(std::span<const edt::asset_request>(&request, 1)); };
+		out.plan = [this](const edt::asset_request& request) { ++plan_calls; return operations.plan(std::span<const edt::asset_request>(&request, 1)); };
 		out.run = [this](const edt::asset_request& request, bool force) { return edt::run_asset_operation(sources, request, force); };
 		// What asset_component::undo_operation does: the newest operation only.
 		out.undo = [this](const std::string& id) -> edt::asset_fix_result {
@@ -208,6 +209,8 @@ struct form_fixture
 	std::unique_ptr<edt::asset_database> db;
 	std::set<std::string> open_files;
 	std::optional<std::string> blocked;
+	std::string fail_prefix;
+	int plan_calls = 0;
 	edt::asset_ops operations{ make_operations() };
 	edt::asset_history history{ journal.path(), fs::path{}, [this] { return db->next_history_serial(); } };
 	edt::asset_command_sources sources;
@@ -555,6 +558,100 @@ BOOST_AUTO_TEST_CASE(AfterAForcedDelete_TheBrokenReferencesAreRowsOfProblems_And
 	settle();
 	publisher.publish(problems, *db);
 	BOOST_TEST(broken_rows().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AfterAFailedRun_TheListIsAskedToRefresh_AndThePlanIsMadeAgain)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("sky.desc"));
+	form.set_input("clouds.desc");
+	BOOST_TEST(!form.take_disk_changed(), "nothing ran yet");
+	const int planned = plan_calls;
+
+	fail_prefix = "rewrite:";
+	BOOST_TEST(!form.submit());
+	BOOST_TEST((form.result().state == edt::asset_run_state::failed));
+	BOOST_TEST(!form.error().empty());
+	BOOST_TEST(form.take_disk_changed(), "files may have moved before the failure");
+	BOOST_TEST(!form.take_disk_changed(), "asked once");
+	BOOST_TEST(plan_calls == planned + 1, "the form plans again for the disk as it is now");
+	BOOST_TEST((form.current() == edt::asset_operation_form::stage::editing));
+	BOOST_TEST(form.item() != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AfterARefusalOfTheRun_TheListIsAskedToRefresh_AndThePlanIsMadeAgain)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("sky.desc"));
+	form.set_input("clouds.desc");
+	write("levels/main.desc", canonical(R"({ "__type": "level_desc" })"));
+	const int planned = plan_calls;
+
+	BOOST_TEST(!form.submit());
+	BOOST_TEST((form.result().state == edt::asset_run_state::refused));
+	BOOST_TEST(form.take_disk_changed());
+	BOOST_TEST(plan_calls == planned + 1, "planned again after the refusal");
+}
+
+BOOST_AUTO_TEST_CASE(ABlockedRun_ChangesNothing_AndPlansNothingAgain)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("sky.desc"));
+	form.set_input("clouds.desc");
+	blocked = "a migration is running";
+	const int planned = plan_calls;
+	BOOST_TEST(!form.submit());
+	BOOST_TEST(!form.take_disk_changed());
+	BOOST_TEST(plan_calls == planned);
+}
+
+BOOST_AUTO_TEST_CASE(AnUndo_AsksForARefreshWhetherOrNotItWorked)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("lonely.desc"));
+	form.set_input("alone.desc");
+	BOOST_REQUIRE(form.submit());
+	BOOST_TEST(form.take_disk_changed());
+	BOOST_REQUIRE(form.undo());
+	BOOST_TEST(form.take_disk_changed());
+}
+
+BOOST_AUTO_TEST_CASE(TypingPlansOnlyOnceItStopped_AndNothingCanBeSubmittedMeanwhile)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("sky.desc"));
+	const auto start = std::chrono::steady_clock::now();
+	const int planned = plan_calls;
+
+	form.type_input("clouds.desc", start);
+	form.type_input("clouds2.desc", start + std::chrono::milliseconds(100));
+	BOOST_TEST(form.planning_pending());
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(!form.submit());
+	form.settle(start + std::chrono::milliseconds(300));
+	BOOST_TEST(form.planning_pending(), "the last key was 200 ms ago");
+	BOOST_TEST(plan_calls == planned);
+
+	form.settle(start + std::chrono::milliseconds(100) + edt::asset_operation_form::input_delay);
+	BOOST_TEST(!form.planning_pending());
+	BOOST_TEST(plan_calls == planned + 1, "one plan for the two keys");
+	BOOST_TEST(form.can_submit());
+	BOOST_TEST(contains(form.preview_lines(), "res://clouds2.desc"));
+
+	form.type_input("other.desc", start);
+	BOOST_TEST(!form.can_submit());
+	form.set_input("other.desc");
+	BOOST_TEST(!form.planning_pending(), "Enter plans at once");
+	BOOST_TEST(plan_calls == planned + 2);
+}
+
+BOOST_AUTO_TEST_CASE(TheAssetsName_IsShownEscaped)
+{
+	open();
+	form.open(edt::asset_operation::rename, res::tag::make("we\nird.desc"));
+	const std::string shown = form.asset_text();
+	BOOST_TEST(shown.find('\n') == std::string::npos);
+	BOOST_TEST(contains(shown, "\\n"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

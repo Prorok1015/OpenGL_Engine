@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <optional>
 #include <vector>
 
@@ -611,7 +612,8 @@ void edt::asset_browser_panel::draw_operation_window()
 void edt::asset_browser_panel::draw_operation_editing(asset_operation_form& form)
 {
 	const char* verb = verb_of(form.operation());
-	ImGui::Text("%s %s", verb, std::string(form.asset().view()).c_str());
+	form.settle(std::chrono::steady_clock::now());
+	ImGui::Text("%s %s", verb, form.asset_text().c_str());
 	bool entered = false;
 	if (form.operation() != asset_operation::remove) {
 		std::vector<char> buffer(std::max<std::size_t>(form.input().size() + 64, 256), '\0');
@@ -620,9 +622,14 @@ void edt::asset_browser_panel::draw_operation_editing(asset_operation_form& form
 		ImGui::SetNextItemWidth(em(480.f));
 		const char* label = form.operation() == asset_operation::rename ? "New name" : "Folder below res://";
 		entered = ImGui::InputText(label, buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
-		if (buffer.data() != form.input()) form.set_input(buffer.data());
+		if (buffer.data() != form.input()) {
+			if (entered) form.set_input(buffer.data());
+			else form.type_input(buffer.data(), std::chrono::steady_clock::now());
+		}
 	}
-	if (form.refused()) {
+	if (form.planning_pending()) {
+		ImGui::TextDisabled("Checking...");
+	} else if (form.refused()) {
 		draw_operation_lines("##operation_refusal", lines_of(form.refusal_text()), true);
 	} else {
 		draw_operation_lines("##operation_preview", form.preview_lines(), false);
@@ -635,10 +642,9 @@ void edt::asset_browser_panel::draw_operation_editing(asset_operation_form& form
 	ImGui::BeginDisabled(!form.can_submit());
 	const bool clicked = ImGui::Button(verb);
 	ImGui::EndDisabled();
-	if ((clicked || (entered && form.can_submit())) && form.submit()) {
-		m_needs_refresh = true;
-		m_selected_rel.clear();
-	}
+	const bool done = (clicked || (entered && form.can_submit())) && form.submit();
+	if (form.take_disk_changed()) m_needs_refresh = true;
+	if (done) m_selected_rel.clear();
 	if (form.can_ask_force()) {
 		ImGui::SameLine();
 		if (ImGui::Button("Delete anyway (force)...")) form.ask_force();
@@ -652,16 +658,15 @@ void edt::asset_browser_panel::draw_operation_editing(asset_operation_form& form
 
 void edt::asset_browser_panel::draw_operation_force(asset_operation_form& form)
 {
-	ImGui::Text("Delete %s although other files refer to it?", std::string(form.asset().view()).c_str());
+	ImGui::Text("Delete %s although other files refer to it?", form.asset_text().c_str());
 	draw_operation_lines("##operation_force", lines_of(form.force_text()), false);
 	if (!form.error().empty()) draw_operation_lines("##operation_error", lines_of(form.error()), true);
 	ImGui::PushStyleColor(ImGuiCol_Text, colors().warning);
 	const bool clicked = ImGui::Button("Delete and break the references");
 	ImGui::PopStyleColor();
-	if (clicked && form.submit_force()) {
-		m_needs_refresh = true;
-		m_selected_rel.clear();
-	}
+	const bool done = clicked && form.submit_force();
+	if (form.take_disk_changed()) m_needs_refresh = true;
+	if (done) m_selected_rel.clear();
 	ImGui::SameLine();
 	if (ImGui::Button("Back") || ImGui::IsKeyPressed(ImGuiKey_Escape)) form.back();
 }
@@ -675,7 +680,8 @@ void edt::asset_browser_panel::draw_operation_report(asset_operation_form& form)
 	ImGui::BeginDisabled(!form.can_undo());
 	const bool undo = ImGui::Button("Undo");
 	ImGui::EndDisabled();
-	if (undo && form.undo()) m_needs_refresh = true;
+	if (undo) form.undo();
+	if (form.take_disk_changed()) m_needs_refresh = true;
 	ImGui::SameLine();
 	if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
 		form.close();
