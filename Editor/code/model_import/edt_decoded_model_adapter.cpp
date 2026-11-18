@@ -79,7 +79,7 @@ std::shared_ptr<res::resource_entry> edt::decoded_model_adapter::deserialize(con
 		throw refuse(why);
 	}
 	if (raw_data.size() > k_max_person_source_bytes) {
-		throw refuse(std::format("the file is too big: {} bytes, the limit is {}", raw_data.size(), k_max_person_source_bytes));
+		throw refuse(std::format("the model file of {} bytes exceeds {} ({})", raw_data.size(), limit_text(k_max_person_source_bytes), k_step_source));
 	}
 
 	import_source source;
@@ -171,7 +171,7 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 
 	// What is in memory:// now is read back as a decoder's answer, and checked as one: anyone may change those files.
 	const decode_request request = import_request(source);
-	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * 2;
+	const std::uintmax_t blob_limit = static_cast<std::uintmax_t>(request.limits.max_file_bytes) * k_decoder_answer_factor;
 	decode_bundle answer;
 	answer.manifest["kind"] = "import";
 	answer.manifest["import"] = to_json(decode.imported);
@@ -180,7 +180,7 @@ std::optional<edt::import_intermediate> edt::decoded_model_adapter::cached(const
 		std::optional<std::vector<std::byte>> bytes{ std::in_place };
 		const platform::beneath::read_result read = m_resources.read_now(resource, blob_limit, *bytes);
 		if (read.status == platform::beneath::read_status::too_large) {
-			problem = std::format("'{}' is bigger than a resource of the import may be", resource.view());
+			problem = std::format("'{}' exceeds {} per resource ({})", resource.view(), limit_text(blob_limit), k_step_decoder_answer);
 			return std::nullopt;
 		}
 		// Gone (erased, or the folder was swept): decoded again like a model seen for the first time.

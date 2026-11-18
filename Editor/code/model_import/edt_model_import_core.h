@@ -2,6 +2,7 @@
 #include "edt_async_import_task.h"
 #include "edt_decoder_sandbox.h"
 #include "edt_model_file_access.h"
+#include "edt_model_import_limits.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/model_import/mdl_import.h>
@@ -19,8 +20,6 @@
 // model_importer runs over the resource system in the editor's own tests. Links no engine code but snk_model_codec.
 namespace edt {
 
-	// The largest model file an import a person starts reads into memory (an agent's import has its own, smaller limit).
-	inline constexpr std::uintmax_t k_max_person_source_bytes = 256ull * 1024ull * 1024ull;
 	// How long each decoder step (listing the files, importing) may take: an agent's import, and the one a person starts
 	// (larger models, nobody waiting on a deadline of their own).
 	inline constexpr std::chrono::seconds k_agent_parse_time_limit{ 60 };

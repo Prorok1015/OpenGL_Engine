@@ -96,11 +96,23 @@ BOOST_AUTO_TEST_CASE(ABundle_RoundTrips_ManifestAndResources)
 	BOOST_CHECK(back.bundle->blobs[1].bytes.empty());
 }
 
+BOOST_AUTO_TEST_CASE(TheDefaultLimits_KeepTheirValues)
+{
+	const edt::bundle_limits limits;
+	BOOST_CHECK_EQUAL(limits.max_manifest_bytes, 4ull * 1024 * 1024);
+	BOOST_CHECK_EQUAL(limits.max_blob_bytes, 256ull * 1024 * 1024);
+	BOOST_CHECK_EQUAL(limits.max_total_bytes, 512ull * 1024 * 1024);
+	BOOST_CHECK_EQUAL(limits.max_blobs, 4096u);
+	BOOST_CHECK_EQUAL(limits.max_json_depth, 32u);
+	BOOST_CHECK_EQUAL(limits.max_tag_bytes, 512u);
+}
+
 BOOST_AUTO_TEST_CASE(ADeclaredBlobOfFourGiB_IsRefusedWithoutBeingAllocated)
 {
 	const std::string manifest = "{}";
 	std::string bytes = raw_header(manifest.size(), 1) + manifest + raw_blob_head("memory://x/y.bin", 4ull * 1024 * 1024 * 1024);
-	BOOST_CHECK(read_error(bytes).find("too big") != std::string::npos);
+	const std::string too_big = read_error(bytes);
+	BOOST_CHECK_MESSAGE(too_big.find("exceeds 256 MiB per resource (bundle)") != std::string::npos, too_big);
 
 	// Even when the limits would allow it, the file does not hold it: nothing is allocated for what is declared.
 	edt::bundle_limits wide;
@@ -111,11 +123,11 @@ BOOST_AUTO_TEST_CASE(ADeclaredBlobOfFourGiB_IsRefusedWithoutBeingAllocated)
 
 BOOST_AUTO_TEST_CASE(TooManyResourcesOrATooBigManifest_AreRefusedByTheirDeclaredCounts)
 {
-	BOOST_CHECK(read_error(raw_header(2, 1ull << 40) + "{}").find("too many") != std::string::npos);
-	BOOST_CHECK(read_error(raw_header(1ull << 40, 0)).find("manifest") != std::string::npos);
+	BOOST_CHECK(read_error(raw_header(2, 1ull << 40) + "{}").find("more than 4096 resources (bundle)") != std::string::npos);
+	BOOST_CHECK(read_error(raw_header(1ull << 40, 0)).find("manifest of the bundle exceeds 4 MiB (bundle)") != std::string::npos);
 	edt::bundle_limits tight;
 	tight.max_blobs = 1;
-	BOOST_CHECK(read_error(raw_header(2, 2) + "{}", tight).find("too many") != std::string::npos);
+	BOOST_CHECK(read_error(raw_header(2, 2) + "{}", tight).find("more than 1 resources (bundle)") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AManifestThatIsNotAnObjectOrIsTooDeep_IsRefused)
@@ -175,7 +187,7 @@ BOOST_AUTO_TEST_CASE(TheTotalOfAllResources_IsLimitedToo)
 	limits.max_total_bytes = 1000;
 	const edt::bundle_read_result result = edt::read_bundle(file, limits);
 	BOOST_CHECK(!result.ok());
-	BOOST_CHECK(result.error.find("together") != std::string::npos);
+	BOOST_CHECK_MESSAGE(result.error.find("exceed 1000 bytes in total (bundle)") != std::string::npos, result.error);
 }
 
 BOOST_AUTO_TEST_CASE(AFileBiggerThanTheLimitsAllow_IsRefusedWithoutBeingRead)
@@ -191,7 +203,7 @@ BOOST_AUTO_TEST_CASE(AFileBiggerThanTheLimitsAllow_IsRefusedWithoutBeingRead)
 	limits.max_blobs = 0;
 	const edt::bundle_read_result result = edt::read_bundle(file, limits);
 	BOOST_CHECK(!result.ok());
-	BOOST_CHECK_MESSAGE(result.error.find("bigger than the limits") != std::string::npos, result.error);
+	BOOST_CHECK_MESSAGE(result.error.find("the bundle file exceeds 44 bytes, the most its limits allow (bundle)") != std::string::npos, result.error);
 }
 
 #if !defined(_WIN32)

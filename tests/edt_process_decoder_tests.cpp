@@ -328,11 +328,12 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_BiggerThanTheRequestAllows_IsRefused)
 	request.limits.max_total_bytes = 1000;
 	std::string problem;
 	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("bigger than the request") != std::string::npos, problem);
+	BOOST_CHECK_MESSAGE(problem.find("exceeds 8 bytes per resource (decoder answer)") != std::string::npos, problem);
 
 	request = request_in();
 	request.limits.max_total_bytes = 10;
 	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("exceed 20 bytes in total (decoder answer)") != std::string::npos, problem);
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_IsHandedBackAsItsError_ButNeverWithResources)
@@ -933,7 +934,7 @@ BOOST_AUTO_TEST_CASE(TheBudget_CountsOverEveryRound)
 		return asking({ calls == 1 ? "a.mtl" : "b.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 2);
-	BOOST_CHECK_MESSAGE(scan.error.find("together are bigger than 100 bytes") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("exceed 100 bytes in total (side files)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ADeadlineThatHasPassed_RunsNoRound)
@@ -987,7 +988,7 @@ BOOST_AUTO_TEST_CASE(ASideFileOverALimit_FailsTheScan)
 		return asking({ "a.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 1);
-	BOOST_CHECK_MESSAGE(scan.error.find("too big") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("exceeds 4 bytes per file (side files)") != std::string::npos, scan.error);
 	BOOST_CHECK_EQUAL(warnings.count("side-file rule"), 0u);
 }
 

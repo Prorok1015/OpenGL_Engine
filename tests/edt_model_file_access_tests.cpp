@@ -138,18 +138,33 @@ BOOST_AUTO_TEST_CASE(TooManyFilesOrTooManyBytes_RefuseTheModel)
 	two_files.max_files = 1;
 	auto few = make(two_files);
 	BOOST_CHECK(few.resolve("skin.png", edt::model_file_kind::texture).found());
-	BOOST_CHECK(!few.resolve("tex/normal.png", edt::model_file_kind::texture).error.empty());
+	const std::string many = few.resolve("tex/normal.png", edt::model_file_kind::texture).error;
+	BOOST_CHECK_MESSAGE(many.find("more than 1 files (side files)") != std::string::npos, many);
 
 	edt::model_file_limits small;
 	small.max_total_bytes = png_bytes.size() + 1;
 	auto budget = make(small);
 	BOOST_CHECK(budget.resolve("skin.png", edt::model_file_kind::texture).found());
-	BOOST_CHECK(!budget.resolve("tex/normal.png", edt::model_file_kind::texture).error.empty());
+	const std::string total = budget.resolve("tex/normal.png", edt::model_file_kind::texture).error;
+	BOOST_CHECK_MESSAGE(total.find("exceed " + edt::limit_text(small.max_total_bytes) + " in total (side files)") != std::string::npos, total);
 
 	edt::model_file_limits tiny_file;
 	tiny_file.max_file_bytes = 8;
 	auto big = make(tiny_file);
-	BOOST_CHECK(!big.resolve("skin.png", edt::model_file_kind::texture).error.empty());
+	const std::string one = big.resolve("skin.png", edt::model_file_kind::texture).error;
+	BOOST_CHECK_MESSAGE(one.find("exceeds 8 bytes per file (side files)") != std::string::npos, one);
+}
+
+BOOST_AUTO_TEST_CASE(TheSideFileLimits_Are64FilesOf64MiBAnd128MiBTogether_NamedInWholeUnits)
+{
+	const edt::model_file_limits limits;
+	BOOST_CHECK_EQUAL(limits.max_files, 64u);
+	BOOST_CHECK_EQUAL(edt::limit_text(limits.max_file_bytes), "64 MiB");
+	BOOST_CHECK_EQUAL(edt::limit_text(limits.max_total_bytes), "128 MiB");
+	BOOST_CHECK_EQUAL(edt::limit_text(64 * 1024), "64 KiB");
+	BOOST_CHECK_EQUAL(edt::limit_text(2ull * 1024 * 1024 * 1024), "2 GiB");
+	BOOST_CHECK_EQUAL(edt::limit_text(1025), "1025 bytes");
+	BOOST_CHECK_EQUAL(edt::limit_text(0), "0 bytes");
 }
 
 BOOST_AUTO_TEST_CASE(ManyAliasesOfOneBigFile_CannotMakeTheImportReadItAgainAndAgain)

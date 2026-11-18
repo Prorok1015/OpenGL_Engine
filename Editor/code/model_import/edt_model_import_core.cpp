@@ -154,7 +154,7 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 
 		const auto file_size = static_cast<std::uintmax_t>(in.tellg());
 		if (file_size > k_max_person_source_bytes) {
-			im.error = std::format("The model file is too big: {} bytes, the limit is {}", file_size, k_max_person_source_bytes);
+			im.error = std::format("The model file of {} bytes exceeds {} ({})", file_size, limit_text(k_max_person_source_bytes), k_step_source);
 			egLOG_ERROR("edt/import", "{}", text_escape::escaped_text(im.error, 1024));
 			return im;
 		}

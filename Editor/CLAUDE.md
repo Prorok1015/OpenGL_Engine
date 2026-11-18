@@ -126,6 +126,7 @@ code/model_import/                    # snk::model_import (#647): what reads a m
     ├── edt_decode_{bundle,codec,runner}.cpp/h  # the decoder process (#647): bundle file format, JSON of request/scan/import, decode_runner (scratch folder 0700, kill on deadline/cancel, stale-folder cleanup)
     ├── edt_model_file_source.cpp/h   # mdl::file_source of the import: the model from memory, side files through model_file_access
     ├── edt_model_file_access.cpp/h   # what a model may make the import read (#548)
+    ├── edt_model_import_limits.h     # every import limit with its step (#1044); refusals say "<what> exceeds <limit> (<step>)"
     └── edt_async_import_task.h       # import_intermediate: background-thread import result (missing_textures: the person's import shows them in Problems, source `import`)
 
 code/file_identity/                   # snk::file_identity (#888): no engine, no importer; editor_system and model_import link it

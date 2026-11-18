@@ -278,7 +278,7 @@ bool edt::decode_log_budget::take(std::size_t bytes)
 	if (m_done) return false;
 	if (++m_lines > k_max_lines || (m_bytes += bytes) > k_max_bytes) {
 		m_done = true;
-		egLOG_WARN("edt/decoder", "the decoder's output is cut here: more than {} lines or {} KiB; the rest is dropped", k_max_lines, k_max_bytes / 1024);
+		egLOG_WARN("edt/decoder", "the decoder's output is cut here: it exceeds {} lines or {} ({}); the rest is dropped", k_max_lines, limit_text(k_max_bytes), k_step_decoder_log);
 		return false;
 	}
 	return true;

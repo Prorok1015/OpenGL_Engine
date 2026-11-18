@@ -402,7 +402,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (ec) return refuse(cmd::codes::invalid_args, "the size of the source cannot be read");
 	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
 	if (plan.size > m_options.max_source_bytes) {
-		return refuse(cmd::codes::invalid_args, std::format("the source is too big: {}, the limit is {}", size_text(plan.size), size_text(m_options.max_source_bytes)));
+		return refuse(cmd::codes::invalid_args, std::format("the model file of {} exceeds {} for an agent's import ({})", size_text(plan.size), limit_text(m_options.max_source_bytes), k_step_source));
 	}
 	plan.modified = fs::last_write_time(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the time of the source cannot be read");

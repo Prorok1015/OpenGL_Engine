@@ -2,6 +2,7 @@
 #include "edt_decode_bundle.h"
 #include "edt_decode_codec.h"
 #include "edt_decoder_sandbox.h"
+#include "edt_model_import_limits.h"
 #include <snk/platform/plt_process.h>
 #include <chrono>
 #include <cstddef>
@@ -22,7 +23,7 @@ namespace edt {
 		std::filesystem::path decoder;
 		// The child is killed when it runs longer. Also the deadline the child gets for its parse.
 		std::chrono::milliseconds timeout{ std::chrono::minutes(2) };
-		std::uint64_t memory_limit_bytes = 2ull * 1024ull * 1024ull * 1024ull;
+		std::uint64_t memory_limit_bytes = k_default_decoder_memory_mb * 1024ull * 1024ull;
 		bundle_limits answer_limits;
 		// The child's OS sandbox (#1043), passed as --sandbox; process_decoder sets the stricter of the editor's mode and the
 		// import's.
@@ -87,8 +88,8 @@ namespace edt {
 		bool take(std::size_t bytes);
 
 	private:
-		static constexpr std::size_t k_max_lines = 200;
-		static constexpr std::size_t k_max_bytes = 64 * 1024;
+		static constexpr std::size_t k_max_lines = k_max_decoder_log_lines;
+		static constexpr std::size_t k_max_bytes = k_max_decoder_log_bytes;
 		std::mutex m_mutex;
 		std::size_t m_lines = 0;
 		std::size_t m_bytes = 0;
