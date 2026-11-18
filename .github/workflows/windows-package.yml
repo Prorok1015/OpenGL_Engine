@@ -119,6 +119,9 @@ jobs:
           static_tree="build/ci-windows-msvc-static-${{ matrix.config == 'Release' && 'release' || 'debug' }}"
           bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${static_tree}/apps/game" game.exe
           bash tools/ci/check_windows_deps.sh --runtime-elsewhere "${static_tree}/tests/static_game" test_static_game_host.exe
+          # #1179: the decoder sandbox (AppContainer, userenv.dll) is the editor's; a game host must not pull it in.
+          bash tools/ci/check_windows_deps.sh --deny userenv.dll "${static_tree}/apps/game" game.exe
+          bash tools/ci/check_windows_deps.sh --deny userenv.dll "${static_tree}/tests/static_game" test_static_game_host.exe
 
       # #592: the game module compiled into the host (tests/static_game), the counterpart of the Linux step (build.yml).
       - name: Static game module headless run (static engine)

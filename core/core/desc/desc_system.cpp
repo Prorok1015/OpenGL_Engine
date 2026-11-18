@@ -301,6 +301,33 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema, 
 	return stored;
 }
 
+std::string desc::desc_system::upgrade_in_memory(json::object& document, std::string_view source) const
+{
+	const json::value* type = document.if_contains("__type");
+	if (!type || !type->is_string()) {
+		return std::format("{}: no __type", source);
+	}
+	const std::string name{ type->as_string() };
+	int version = 1;
+	if (const json::value* found = document.if_contains("__version")) {
+		if (!found->is_int64() || found->as_int64() < 1 || found->as_int64() > std::numeric_limits<int>::max()) {
+			return std::format("{}: '{}' has an invalid __version", source, name);
+		}
+		version = static_cast<int>(found->as_int64());
+	}
+	const int supported = current_version(name);
+	if (version > supported) {
+		return std::format("{}: '{}' is version {}, newer than the version {} this engine reads", source, name, version, supported);
+	}
+	// Every time, not only for an older root: a typed object inside may be older or newer than this engine reads.
+	try {
+		migrate_tree(document, source);
+	} catch (const std::exception& error) {
+		return error.what();
+	}
+	return {};
+}
+
 const desc::type_schema* desc::desc_system::find_schema(std::string_view type_name) const
 {
 	std::shared_lock lock(m_registry_mutex);
@@ -1170,4 +1197,33 @@ std::optional<res::tag> desc::reference_tag(const json::value& in, const read_co
 		return std::nullopt;
 	}
 	return ctx.system ? ctx.system->resolve_reference(*read) : read->path;
+}
+
+void desc::desc_system::stamp_inline_version(json::object& inline_desc, const desc_base& desc)
+{
+	if (!desc.m_system || desc.get_type().empty()) {
+		return;
+	}
+	inline_desc["__type"] = std::string{ desc.get_type() };
+	desc.m_system->stamp_header(inline_desc);
+}
+
+void desc::desc_system::stamp_unversioned(json::value& value) const
+{
+	if (json::object* object = value.if_object()) {
+		if (const json::value* type = object->if_contains("__type"); type && type->is_string() && !object->contains("__version")) {
+			(*object)["__version"] = current_version(type->as_string());
+		}
+		for (auto& member : *object) {
+			stamp_unversioned(member.value());
+		}
+	} else if (json::array* array = value.if_array()) {
+		// Numeric payloads (geometry) can be megabytes long and never contain typed descs.
+		if (!array->empty() && array->front().is_number()) {
+			return;
+		}
+		for (json::value& element : *array) {
+			stamp_unversioned(element);
+		}
+	}
 }

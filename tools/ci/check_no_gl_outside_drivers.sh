@@ -58,7 +58,7 @@ gl_re+='|(#[[:space:]]*include[[:space:]]*[<"](glad|GLFW|GL|OpenGL|KHR)/)'
 gl_re+='|(#[[:space:]]*include[[:space:]]*[<"]([A-Za-z0-9_./-]*/)?(rnd_gl_[A-Za-z0-9_]+|open_gl_specific)\.h[>"])'
 gl_re+='|(imgui_impl_opengl|ImGui_ImplOpenGL)'
 gl_re+='|(\bdriver::gl::)'
-# drv_interface (snk/driver/, e.g. rnd_gl_surface.h) holds no GL and is scanned here itself: including it is not GL use.
+# drv_interface (snk/driver/, e.g. rnd_driver_gl_surface.h) holds no GL and is scanned here itself: including it is not GL use.
 interface_include_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]snk/driver/[^>"]+[>"][[:space:]]*$'
 
 sources=('*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx' '*.inl' '*.ipp' '*.mm')

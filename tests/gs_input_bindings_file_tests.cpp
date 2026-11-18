@@ -1,11 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/game/gs_input_bindings_file.h>
+#include "test_scene_env.hpp"
+#include <snk/desc/desc_system.h>
 #include <snk/input/inp_events.hpp>
 #include <filesystem>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <boost/json.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The player's bindings as a file (#736).
@@ -152,6 +156,128 @@ BOOST_AUTO_TEST_CASE(ABrokenFileOnDisk_GivesNoBindings)
 	const auto file = dir.path / "broken.json";
 	std::ofstream(file) << "{ \"__type\": ";
 	BOOST_TEST(gs::load_user_bindings(file).empty());
+}
+
+// #766 (EPIC-58 section 7.2): an older file is brought up in memory by the steps of the desc system; a newer one gives
+// no bindings and is newer, one that is no bindings document of a version this engine reads is unreadable.
+BOOST_FIXTURE_TEST_CASE(AnOlderFile_IsMigratedInMemory_ANewerOneIsNewer_ABrokenOneUnreadable, test_util::scene_env)
+{
+	using state = gs::user_file_state;
+	// The format moves to 2 in this test: its step renames "keys" to "actions".
+	descs->register_migration("user_input_bindings", 1, [](boost::json::object& o) {
+		if (const auto* keys = o.if_contains("keys")) {
+			boost::json::value moved = *keys;
+			o.erase("keys");
+			o["actions"] = std::move(moved);
+		}
+	});
+	state got = state::newer;
+	const inp::user_bindings older = gs::parse_user_bindings(
+		R"({"__type":"user_input_bindings","__version":1,"keys":[{"name":"Jump","bindings":[{"key":"Q"}]}]})", "older.json", descs.get(), got);
+	BOOST_TEST((got == state::usable));
+	BOOST_TEST(older.overrides().size() == 1u);
+
+	const inp::user_bindings newer = gs::parse_user_bindings(
+		R"({"__type":"user_input_bindings","__version":3,"actions":[{"name":"Jump","bindings":[{"key":"Q"}]}]})", "newer.json", descs.get(), got);
+	BOOST_TEST((got == state::newer));
+	BOOST_TEST(newer.empty());
+
+	for (const std::string_view text : { std::string_view{ R"({"__type":"user_input_bindings","__version":"x","actions":[]})" },
+			std::string_view{ R"({"__type":"user_input_bindings","__version":0,"actions":[]})" }, std::string_view{ R"({"__type":"other"})" },
+			std::string_view{ "{ not json" }, std::string_view{} }) {
+		BOOST_TEST(gs::parse_user_bindings(text, "broken.json", descs.get(), got).empty(), text);
+		BOOST_TEST((got == state::unreadable), text);
+	}
+
+	// Without a desc system only the version this engine writes is read.
+	BOOST_TEST(gs::parse_user_bindings(R"({"__type":"user_input_bindings","__version":2,"actions":[]})", "two.json", nullptr, got).empty());
+	BOOST_TEST((got == state::newer));
+	gs::parse_user_bindings(R"({"__type":"user_input_bindings","__version":1,"actions":[]})", "one.json", nullptr, got);
+	BOOST_TEST((got == state::usable));
+}
+
+namespace {
+
+std::string read_all(const std::filesystem::path& file)
+{
+	std::ifstream in(file, std::ios::binary);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+std::vector<std::filesystem::path> files_in(const std::filesystem::path& folder)
+{
+	std::vector<std::filesystem::path> files;
+	for (const auto& entry : std::filesystem::directory_iterator(folder)) files.push_back(entry.path());
+	return files;
+}
+
+}
+
+// #766, review of #1231: only a newer bindings document is kept as it is. An unreadable file is moved aside with its
+// bytes, so the next save writes a new one; the plain load never moves a file.
+BOOST_FIXTURE_TEST_CASE(OnLoad_ANewerFileIsKept_AnUnreadableOneIsMovedAside, test_util::scene_env)
+{
+	temp_folder dir;
+	const auto file = dir.path / "player.json";
+	const std::string newer = R"({"__type":"user_input_bindings","__version":2,"actions":[]})";
+	std::ofstream(file, std::ios::binary) << newer;
+	bool keep = false;
+	BOOST_TEST(gs::load_user_bindings(file, descs.get(), keep).empty());
+	BOOST_TEST(keep);
+	BOOST_TEST(read_all(file) == newer);
+	BOOST_TEST(files_in(dir.path).size() == 1u);
+
+	for (const std::string& broken : { std::string{}, std::string{ R"({"__type":"user_input_bin)" }, std::string{ "not json" } }) {
+		std::ofstream(file, std::ios::binary | std::ios::trunc) << broken;
+		BOOST_TEST(gs::load_user_bindings(file).empty());
+		BOOST_TEST(std::filesystem::exists(file));
+
+		keep = true;
+		BOOST_TEST(gs::load_user_bindings(file, descs.get(), keep).empty());
+		BOOST_TEST(!keep);
+		BOOST_TEST(!std::filesystem::exists(file));
+		const std::vector<std::filesystem::path> files = files_in(dir.path);
+		BOOST_REQUIRE(files.size() == 1u);
+		BOOST_TEST(files[0].filename().string().starts_with("player.json.broken-"), files[0].filename().string());
+		BOOST_TEST(read_all(files[0]) == broken);
+		std::filesystem::remove(files[0]);
+
+		BOOST_TEST(gs::save_user_bindings(file, inp::user_bindings{}));
+		BOOST_TEST(gs::load_user_bindings(file, descs.get(), keep).empty());
+		BOOST_TEST(!keep);
+		std::filesystem::remove(file);
+	}
+}
+
+// A file over the 256 KiB a bindings document may take is no newer one either: moved aside; a folder at the name stays.
+BOOST_AUTO_TEST_CASE(OnLoad_AFileTooBigIsMovedAside_AFolderStays)
+{
+	temp_folder dir;
+	const auto file = dir.path / "player.json";
+	const std::string big(300u * 1024u, ' ');
+	std::ofstream(file, std::ios::binary) << big;
+	bool keep = true;
+	BOOST_TEST(gs::load_user_bindings(file, nullptr, keep).empty());
+	BOOST_TEST(!keep);
+	BOOST_TEST(!std::filesystem::exists(file));
+	const std::vector<std::filesystem::path> files = files_in(dir.path);
+	BOOST_REQUIRE(files.size() == 1u);
+	BOOST_TEST(std::filesystem::file_size(files[0]) == big.size());
+
+	const auto folder = dir.path / "folder.json";
+	std::filesystem::create_directories(folder);
+	BOOST_TEST(gs::load_user_bindings(folder, nullptr, keep).empty());
+	BOOST_TEST(keep);
+	BOOST_TEST(std::filesystem::is_directory(folder));
+}
+
+BOOST_FIXTURE_TEST_CASE(TheVersionWritten_MustBeWhereTheStepsLead, test_util::scene_env)
+{
+	BOOST_TEST(gs::user_bindings_version_problem(*descs).empty());
+	descs->register_migration("user_input_bindings", 1, [](boost::json::object&) {});
+	const std::string problem = gs::user_bindings_version_problem(*descs);
+	BOOST_TEST(problem.find("written at version 1") != std::string::npos, problem);
+	BOOST_TEST(problem.find("lead to version 2") != std::string::npos, problem);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -18,6 +18,10 @@ void desc::desc_base::copy_through_json(desc_base& other) const
 	try {
 		json::object transfer;
 		serialize(transfer);
+		// Memory of this process: an inline desc an old module wrote without __version is current, not version 1 (#1236).
+		for (auto& member : transfer) {
+			system->stamp_unversioned(member.value());
+		}
 		other.deserialize(*system, transfer);
 	} catch (const std::exception& e) {
 		egLOG_WARN("desc", "copying desc '{}' to '{}' failed: {}", type, other.type, e.what());

@@ -3,6 +3,8 @@
 #include <snk/platform/plt_beneath.h>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <vector>
@@ -101,5 +103,40 @@ BOOST_AUTO_TEST_CASE(a_link_and_a_fifo_are_not_read)
 	BOOST_TEST(!called);
 }
 #endif
+
+// #775: a file written from pieces is flushed and moved into place whole; a source that fails leaves no target and no temp file.
+BOOST_AUTO_TEST_CASE(a_write_from_pieces_lands_whole_and_a_failed_source_leaves_nothing)
+{
+	test_util::temp_dir dir("beneath_stream_write");
+	const auto write_with = [&](const platform::beneath::chunk_source& source, const char* leaf) {
+		platform::beneath::pinned_root root{ dir.path() };
+		platform::beneath::write_request request;
+		request.folder = "sub";
+		request.leaf = leaf;
+		request.tmp_leaf = std::string(".") + leaf + ".tmp";
+		request.stream = &source;
+		request.replace = false;
+		request.tmp_path = dir.path() / request.folder / request.tmp_leaf;
+		return platform::beneath::write_beneath(root, request);
+	};
+
+	const std::string first(100u * 1024u, 'a');
+	const std::string second(70u * 1024u, 'b');
+	const platform::beneath::chunk_source whole = [&](const platform::beneath::chunk_sink& sink) {
+		return sink(std::as_bytes(std::span<const char>(first.data(), first.size())))
+			&& sink(std::as_bytes(std::span<const char>(second.data(), second.size())));
+	};
+	BOOST_TEST(write_with(whole, "whole.bin").empty());
+	std::ifstream in(dir.path() / "sub" / "whole.bin", std::ios::binary);
+	const std::string read{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	BOOST_TEST((read == first + second));
+
+	const platform::beneath::chunk_source broken = [&](const platform::beneath::chunk_sink& sink) {
+		return sink(std::as_bytes(std::span<const char>(first.data(), first.size()))) && false;
+	};
+	BOOST_TEST(!write_with(broken, "broken.bin").empty());
+	BOOST_TEST(!fs::exists(dir.path() / "sub" / "broken.bin"));
+	BOOST_TEST(!fs::exists(dir.path() / "sub" / ".broken.bin.tmp"));
+}
 
 BOOST_AUTO_TEST_SUITE_END()

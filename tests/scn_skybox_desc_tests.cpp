@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <memory>
 #include <sstream>
@@ -157,6 +158,77 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_ReadsTheMaterialAsAnInlineObjectAndWritesItInlin
 	BOOST_TEST(written.at("__type").as_string() == "material_desc");
 	BOOST_TEST(written.at("queue").as_string() == "transparent");
 	BOOST_TEST(written.at("shader_vertex").as_string() == "res://shaders/sky.vert");
+}
+
+// #1236: an inline desc written from memory carries the current version of its type, so read back (through the memory
+// store and the adapter's migrate_tree) it does not go through a step of that type again; one without __version, as an
+// older file holds it, still is version 1 and does. A prefab's composed component (compose_json starts with
+// serialize(parent)) and a world snapshot read their inline descs this same way.
+BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialWrittenFromMemory_IsNotMigratedAgain)
+{
+	auto sky = make_skybox(*this);
+	sky->deserialize(*descs, parse(with_material(k_inline_material)));
+	pump();
+	BOOST_REQUIRE(sky->material.get_sync());
+	// From here material_desc has one more step; what was loaded is of the format before it.
+	const int version = descs->current_version("material_desc");
+	descs->register_migration("material_desc", version, [](json::object& o) { o["queue"] = "opaque"; });
+
+	const json::object saved = ser(*sky);
+	BOOST_REQUIRE(saved.at("material").is_object());
+	const json::object& written = saved.at("material").as_object();
+	BOOST_TEST(written.at("__type").as_string() == "material_desc");
+	BOOST_REQUIRE(written.contains("__version"));
+	BOOST_TEST(written.at("__version").as_int64() == version + 1);
+	BOOST_TEST(written.begin()->key() == "__type");
+
+	auto reread = make_skybox(*this, "reread.desc");
+	reread->deserialize(*descs, saved);
+	pump();
+	BOOST_REQUIRE(reread->material.get_sync());
+	BOOST_TEST((reread->material.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+
+	auto older = make_skybox(*this, "older.desc");
+	older->deserialize(*descs, parse(with_material(k_inline_material)));
+	pump();
+	BOOST_REQUIRE(older->material.get_sync());
+	BOOST_TEST((older->material.get_sync()->queue == scn::pass_queue::OPAQUE));
+}
+
+namespace {
+
+// A parent desc of a module built before #1236: its inline material is written as such a module's to_json wrote it,
+// without __version.
+struct old_module_sky final : desc::desc_base
+{
+	json::object material;
+	void deserialize(desc::desc_system&, const json::object& in) override { material = in.at("material").as_object(); }
+	void serialize(json::object& out) const override { out["material"] = material; }
+};
+
+}
+
+// The prefab instance's component is composed from serialize(parent), memory of this process: an inline desc there
+// without __version is of the current format, so the read does not run a step over it as version 1.
+BOOST_AUTO_TEST_CASE(SkyboxDesc_AComposedComponentOfAnOldModule_IsNotMigratedAgain)
+{
+	const int version = descs->current_version("material_desc");
+	descs->register_migration("material_desc", version, [](json::object& o) { o["queue"] = "opaque"; });
+	old_module_sky parent;
+	parent.material = parse(k_inline_material);
+	scn::prefab_desc::prefab_comp_node cnode;
+	cnode.type_name = "skybox_desc";
+
+	const json::object composed = scn::compose_component_json(cnode, &parent, *descs);
+	BOOST_TEST(composed.at("material").as_object().at("__version").as_int64() == version + 1);
+	auto sky = make_skybox(*this, "composed.desc");
+	sky->deserialize(*descs, composed);
+	pump();
+	BOOST_REQUIRE(sky->material.get_sync());
+	BOOST_TEST((sky->material.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+
+	// Without the desc system the parent's JSON is left as it is.
+	BOOST_TEST(!scn::compose_component_json(cnode, &parent).at("material").as_object().contains("__version"));
 }
 
 BOOST_AUTO_TEST_CASE(SkyboxDesc_AnInlineMaterialNeedsASkyboxWithATag)
