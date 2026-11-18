@@ -5,6 +5,7 @@
 #include "edt_prefab_close.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_panel.h"
+#include "edt_prefab_save_all.h"
 #include "edt_prefab_variant_creator.h"
 #include "edt_save_all.h"
 #include "edt_scene_document.h"
@@ -176,67 +177,17 @@ bool edt::prefab_editor_component::apply_dirty()
 void edt::prefab_editor_component::resolve_unsaved(const save_all_ask& ask, std::function<void(bool resolved)> resolved)
 {
 	prefab_document* prefab = prefab_of(m_ports.context.documents());
-	if (!prefab || prefab->id() != ask.item.id || !resolved) {
+	if (!prefab || prefab->id() != ask.item.id) {
 		if (resolved) resolved(false);
 		return;
 	}
-	const document_id id = prefab->id();
-	const auto still_open = [this, id]() -> prefab_document* {
-		prefab_document* open = prefab_of(m_ports.context.documents());
-		return open && open->id() == id ? open : nullptr;
-	};
-	if (ask.question == save_all_question::disk_changed) {
-		m_ports.context.dialogs().choose("File changed on disk",
-			std::format("'{}' was changed on disk since you opened it.\n\nReload reads the file again and drops your unapplied edits. "
-				"Overwrite replaces the file with your version.", prefab->title()),
-			{ "Reload (drop my edits)", "Overwrite the file", "Cancel" },
-			[this, still_open, resolved = std::move(resolved), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
-				if (!alive.lock()) return;
-				prefab_document* open = still_open();
-				if (!open || !choice || *choice > 1) {
-					resolved(false);
-					return;
-				}
-				if (*choice == 0) {
-					const std::string error = open->reload();
-					if (!error.empty()) {
-						egLOG_WARN("editor", "{}", error);
-						m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not reloaded:\n{}", open->title(), error));
-					}
-					resolved(error.empty());
-					return;
-				}
-				const save_result written = open->overwrite();
-				if (!written.saved) {
-					egLOG_WARN("editor", "{}", written.error);
-					m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not written:\n{}", open->title(), written.error));
-				}
-				resolved(written.saved);
-			});
-		return;
-	}
-	if (ask.question == save_all_question::base_layer) {
-		m_ports.context.dialogs().choose("Apply to a variant",
-			std::format("'{}' is a variant whose edits no layer over its base can say.\n\nThe edits stay in the window. The file can be saved whole "
-				"instead, without '__parent': it then stops following its base prefab.", prefab->title()),
-			{ "Save without base", "Cancel" },
-			[this, still_open, resolved = std::move(resolved), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
-				if (!alive.lock()) return;
-				prefab_document* open = still_open();
-				if (!open || choice != std::optional<std::size_t>{ 0 }) {
-					resolved(false);
-					return;
-				}
-				const save_result whole = open->save_without_base();
-				if (!whole.saved) {
-					egLOG_WARN("editor", "{}", whole.error);
-					m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not saved:\n{}", open->title(), whole.error));
-				}
-				resolved(whole.saved);
-			});
-		return;
-	}
-	resolved(false);
+	const prefab_question_ports question{ m_ports.context.dialogs(),
+		[this, id = prefab->id()]() -> prefab_document* {
+			prefab_document* open = prefab_of(m_ports.context.documents());
+			return open && open->id() == id ? open : nullptr;
+		},
+		m_alive };
+	ask_prefab_question(question, *prefab, ask.question, std::move(resolved));
 }
 
 void edt::prefab_editor_component::close()

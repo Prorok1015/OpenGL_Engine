@@ -18,20 +18,6 @@ namespace {
 		return kind;
 	}
 
-	std::optional<edt::save_all_question> question_of(const edt::document& open)
-	{
-		if (const auto* data = dynamic_cast<const edt::data_document*>(&open)) {
-			if (data->changed_on_disk()) return edt::save_all_question::disk_changed;
-			if (data->needs_version_confirmation()) return edt::save_all_question::version;
-			return std::nullopt;
-		}
-		if (const auto* prefab = dynamic_cast<const edt::prefab_document*>(&open)) {
-			if (prefab->changed_on_disk()) return edt::save_all_question::disk_changed;
-			if (prefab->layer_refused()) return edt::save_all_question::base_layer;
-		}
-		return std::nullopt;
-	}
-
 	void write_scene(const edt::document& open, edt::unsaved_item item, const edt::save_all_scene_ports& scene, edt::save_all_report& report)
 	{
 		if (open.edits_locked()) {
@@ -118,6 +104,20 @@ std::vector<edt::unsaved_item> edt::list_unsaved(document_manager& documents)
 	return out;
 }
 
+std::optional<edt::save_all_question> edt::save_all_question_of(const document& open)
+{
+	if (const auto* data = dynamic_cast<const data_document*>(&open)) {
+		if (data->changed_on_disk()) return save_all_question::disk_changed;
+		if (data->needs_version_confirmation()) return save_all_question::version;
+		return std::nullopt;
+	}
+	if (const auto* prefab = dynamic_cast<const prefab_document*>(&open)) {
+		if (prefab->changed_on_disk()) return save_all_question::disk_changed;
+		if (prefab->layer_refused()) return save_all_question::base_layer;
+	}
+	return std::nullopt;
+}
+
 std::size_t edt::count_unsaved(document_manager& documents)
 {
 	std::size_t count = 0;
@@ -159,7 +159,7 @@ edt::save_all_report edt::save_all_write(document_manager& documents, const save
 			report.saved.push_back(std::move(item));
 			continue;
 		}
-		if (const std::optional<save_all_question> question = question_of(*open)) {
+		if (const std::optional<save_all_question> question = save_all_question_of(*open)) {
 			report.asked.push_back({ std::move(item), *question });
 			continue;
 		}

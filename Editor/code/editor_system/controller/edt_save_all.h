@@ -79,6 +79,9 @@ namespace edt
 		std::function<bool()> quick_save;
 	};
 
+	// What a document that refused to be saved waits for (nullopt: nothing, the refusal is a failure). Looks at data and prefab documents.
+	std::optional<save_all_question> save_all_question_of(const document& open);
+
 	// Writes every document that can be written and goes on after one that cannot: a document that waits for a question
 	// (a file that changed on disk, a migrated file, a variant prefab) is collected in `asked`, an untitled level, a level
 	// of a running Play are `skipped`, any other refusal is `failed`. Asks nothing.
