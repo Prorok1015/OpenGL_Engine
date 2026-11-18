@@ -37,8 +37,8 @@ namespace gs
 	// is warned about and read as none. At most 256 actions of 16 bindings are read. The file is never moved. Main thread.
 	SNK_API inp::user_bindings load_user_bindings(const std::filesystem::path& file);
 	// The same through parse_user_bindings with `descs`. `keep_file` is set when the file must not be written over: it is
-	// newer, it cannot be read from disk (a link, a folder, over 256 KiB), or it is unreadable and could not be moved
-	// aside. An unreadable one is renamed to <name>.broken-<UTC time> next to it, with a warning naming it, so the next
+	// newer, it cannot be read from disk (a link, a folder), or it is unreadable and could not be moved aside. An
+	// unreadable one, a file over 256 KiB too, is renamed to <name>.broken-<UTC time> next to it, with a warning naming it, so the next
 	// save writes a new file and one bad write never stops the player's bindings from being saved.
 	SNK_API inp::user_bindings load_user_bindings(const std::filesystem::path& file, const desc::desc_system* descs, bool& keep_file);
 	// prj::write_project_file with the file's folder below its parent: the folder and the file are opened without following

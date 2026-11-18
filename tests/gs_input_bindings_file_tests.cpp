@@ -249,6 +249,28 @@ BOOST_FIXTURE_TEST_CASE(OnLoad_ANewerFileIsKept_AnUnreadableOneIsMovedAside, tes
 	}
 }
 
+// A file over the 256 KiB a bindings document may take is no newer one either: moved aside; a folder at the name stays.
+BOOST_AUTO_TEST_CASE(OnLoad_AFileTooBigIsMovedAside_AFolderStays)
+{
+	temp_folder dir;
+	const auto file = dir.path / "player.json";
+	const std::string big(300u * 1024u, ' ');
+	std::ofstream(file, std::ios::binary) << big;
+	bool keep = true;
+	BOOST_TEST(gs::load_user_bindings(file, nullptr, keep).empty());
+	BOOST_TEST(!keep);
+	BOOST_TEST(!std::filesystem::exists(file));
+	const std::vector<std::filesystem::path> files = files_in(dir.path);
+	BOOST_REQUIRE(files.size() == 1u);
+	BOOST_TEST(std::filesystem::file_size(files[0]) == big.size());
+
+	const auto folder = dir.path / "folder.json";
+	std::filesystem::create_directories(folder);
+	BOOST_TEST(gs::load_user_bindings(folder, nullptr, keep).empty());
+	BOOST_TEST(keep);
+	BOOST_TEST(std::filesystem::is_directory(folder));
+}
+
 BOOST_FIXTURE_TEST_CASE(TheVersionWritten_MustBeWhereTheStepsLead, test_util::scene_env)
 {
 	BOOST_TEST(gs::user_bindings_version_problem(*descs).empty());
