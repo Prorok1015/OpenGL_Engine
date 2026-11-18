@@ -202,8 +202,13 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
 		return nullptr;
 	}
-	ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
-		schema.name, schema.version, current_version(schema.name));
+	// Refused in every build: a schema registered at a version its steps do not lead to would stamp files with a version
+	// no step brings older ones to.
+	if (const int current = current_version(schema.name); schema.version != current) {
+		egLOG_ERROR("desc/error", "Schema '{}' not registered: it is version {}, but its migration steps lead to version {}",
+			schema.name, schema.version, current);
+		return nullptr;
+	}
 	ASSERT_MSG(find_schema(schema.name) == nullptr, "Schema '{}' is already registered!", schema.name);
 	if (schema.is_document) {
 		std::string problem;
@@ -273,8 +278,12 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema, 
 	for (detail::schema_migration& step : steps) {
 		const int from = step.from;
 		std::string summary = detail::summary_of(step);
-		register_migration(name, from, summary, [step = std::move(step)](json::object& object, migration_context&) {
-			detail::apply(step, object);
+		register_migration(name, from, summary, [step = std::move(step), name, summary](json::object& object, migration_context&) {
+			try {
+				detail::apply(step, object);
+			} catch (const std::exception& error) {
+				throw std::runtime_error(std::format("'{}' step from version {} ({}): {}", name, step.from, summary, error.what()));
+			}
 		});
 	}
 	{

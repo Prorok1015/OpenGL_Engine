@@ -1111,8 +1111,20 @@ namespace {
 		return true;
 	}
 
-	// serialize(parent) with the component's own overrides merged in, then the edits in order.
-	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent)
+	// Whether `path` is a field of `schema`, inside one (an element of a vector) or above some (an object of nested fields).
+	bool names_a_field(const desc::type_schema& schema, std::string_view path)
+	{
+		return std::ranges::any_of(schema.fields, [path](const desc::field_schema& field) {
+			const std::string_view key = field.key;
+			return key == path || (path.starts_with(key) && path.size() > key.size() && path[key.size()] == '/')
+				|| (key.starts_with(path) && key.size() > path.size() && key[path.size()] == '/');
+		});
+	}
+
+	// serialize(parent) with the component's own overrides merged in, then the edits in order. With the component's
+	// `schema`, an edit at no field of it is reported: the read would drop it quietly, e.g. after a migration moved the
+	// field (EPIC-58 #763).
+	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent, const desc::type_schema* schema = nullptr)
 	{
 		json::object effective;
 		if (parent) parent->serialize(effective);
@@ -1126,8 +1138,14 @@ namespace {
 					if (!member.key().starts_with("__")) mergeable.insert_or_assign(member.key(), member.value());
 				}
 				desc::json_deep_merge(holder.as_object(), mergeable);
-			} else if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
-				egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
+			} else {
+				if (schema && !names_a_field(*schema, edit.path)) {
+					egLOG_WARN("desc", "override of '{}' at '{}': the component has no such field (moved by a migration?), the edit does nothing",
+						schema->name, edit.path);
+				}
+				if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
+					egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
+				}
 			}
 		}
 		return std::move(holder.as_object());
@@ -1423,7 +1441,7 @@ void reconcile_node(const scn::ecs_assembler& assembler, entt::registry& reg, en
 		}
 		std::string type = cnode.type_name;
 		if (type.empty() && parent) type = std::string{ parent->get_type() };
-		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get()), comp_name);
+		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get(), assembler.get_desc_system().find_schema(type)), comp_name);
 	}
 
 	// A fresh spawn has no children yet; on a reload the live ones go away unless a node claims them.

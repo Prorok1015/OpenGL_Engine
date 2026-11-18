@@ -187,8 +187,8 @@ namespace desc
 
 		// Registration and unregistration are done by one thread at a time (the main thread); only lookups run concurrently.
 		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
-		// current_version(name). Migrations registered later move the stored schema's version along, so the order
-		// does not matter.
+		// current_version(name), or the schema is refused (logged, nullptr) in every build. Migrations registered later
+		// move the stored schema's version along.
 		// A schema whose type has no factory yet gets one that creates dynamic_desc objects; a component schema is
 		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.

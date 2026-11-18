@@ -6,9 +6,11 @@
 #include <boost/json/value.hpp>
 #include <snk/common/snk_api.h>
 
-// Field moves of a migration step (EPIC-58 section 3.5, DESC_SCHEMA section 2.6), for C++ steps and for the "migrations" of a runtime
-// schema alike. A pointer is a JSON pointer from the root of the desc object ("/hp", "/stats/hp"); the header keys
-// (__type, __version, __guid) are not a field and are refused. A malformed pointer throws std::invalid_argument.
+// Field moves of a migration step (EPIC-58 section 3.5, DESC_SCHEMA section 2.6), for C++ steps and for the
+// "migrations" of a runtime schema alike. A pointer is a JSON pointer from the root of the desc object ("/hp",
+// "/stats/hp") through object keys only: an empty part, an escape other than ~0/~1, a header key (__type, __version,
+// __guid) at any depth and an array index ("0", "-") throw std::invalid_argument. A step does not enter arrays: an
+// array on the way throws std::runtime_error.
 namespace desc::migrations
 {
 	// Moves the value at `from` to `to`. Nothing to move is no step; a value already at `to` throws std::runtime_error
