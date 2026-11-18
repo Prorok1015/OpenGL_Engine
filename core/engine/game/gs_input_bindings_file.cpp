@@ -248,7 +248,8 @@ inp::user_bindings gs::load_user_bindings(const std::filesystem::path& file, con
 	const prj::project_file_location where = prj::project_file_location_of(file);
 	const prj::project_file_text found = prj::read_project_file(where.root, where.relative, k_max_file_bytes);
 	if (!found.error.empty()) {
-		// Too big for any bindings document, a newer one too; kept, it would stop the bindings from ever being saved.
+		// Too big for any bindings document, a newer one too; kept, it would stop the bindings from ever being saved. It
+		// is moved aside even if a newer build wrote it: its bytes stay, under the .broken-* name.
 		std::error_code ec;
 		const bool regular = std::filesystem::is_regular_file(std::filesystem::symlink_status(file, ec));
 		if (regular && !ec && std::filesystem::file_size(file, ec) > k_max_file_bytes && !ec) {

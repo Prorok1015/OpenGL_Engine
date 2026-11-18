@@ -63,13 +63,16 @@ namespace scn
 
 	// The live state of one world as plain data (HOT_RELOAD_PLAY.md section 4.1): every entity by its raw id, the
 	// components and ctx resources the catalog saves, world_time, the fixed step not yet taken and the random stream.
-	// Entities carrying an editor-only component (the editor's cameras) are left out. Main thread, between frames.
-	SNK_API json::object capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report);
-	// The same with every typed object inside (an inline desc of a component or a ctx resource) stamped with the version
-	// of its type in `descs`. restore_world with a desc system runs the snapshot through its steps, and a typed object
-	// without __version reads there as version 1: data of the current format would go through every step again.
+	// Entities carrying an editor-only component (the editor's cameras) are left out. Every typed object inside (an
+	// inline desc of a component or a ctx resource) carries the version of its type in `descs`, and the root says so
+	// ("typed_versions"): restore_world then runs the whole snapshot through the steps of its desc system. Main thread,
+	// between frames.
 	SNK_API json::object capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
 		snapshot_report& report);
+	// Without the versions inside: restore_world brings up only an older root, as before #766 (a typed object without
+	// __version would read as version 1 and go through every step again).
+	[[deprecated("capture_world with the desc system; remove at the next major of SNK_MODULE_API_VERSION")]]
+	SNK_API json::object capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report);
 
 	// Rebuilds a world from capture_world into `world`, whose registry must hold no entity. Entities are created first
 	// (with their node path, so node_index is whole), then their components in catalog order with references mapped to

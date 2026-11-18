@@ -493,6 +493,45 @@ BOOST_AUTO_TEST_CASE(AnInlineDescOfATypeWithSteps_ComesBackUnchanged)
 	const json::object snapshot = scn::capture_world(source, layer, *descs, report);
 	const std::string text = json::serialize(snapshot);
 	BOOST_TEST(text.find(std::format(R"("__type":"material_desc","__version":{})", descs->current_version("material_desc"))) != std::string::npos, text);
+	BOOST_TEST(snapshot.at("typed_versions").as_bool());
+
+	scn::world_context target{ 1, "main" };
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));
+	pump();
+	const auto& restored = target.state().get<scn::material_desc_component>(find_named(target.state(), "Inline"));
+	BOOST_REQUIRE(restored.mlt_desc.get_sync());
+	BOOST_TEST((restored.mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+}
+
+// The deprecated capture_world writes no versions inside: restore_world brings up only an older root then, so an inline
+// desc of a type with steps comes back as it was, not run through them as version 1.
+BOOST_AUTO_TEST_CASE(ASnapshotWithoutVersionsInside_ComesBackUnchanged)
+{
+	const auto sky_tag = put("plain.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	descs->register_migration("material_desc", descs->current_version("material_desc"), [](json::object& o) { o["queue"] = "opaque"; });
+
+	scn::world_context source{ 1, "main" };
+	const entt::entity entity = source.state().create();
+	source.state().emplace<scn::name_component>(entity, scn::name_component{ "Inline" });
+	source.state().emplace<scn::material_desc_component>(entity, scn::material_desc_component{ sky->material, false });
+	scn::snapshot_report report;
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	const json::object snapshot = scn::capture_world(source, layer, report);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+	BOOST_TEST(!snapshot.contains("typed_versions"));
 
 	scn::world_context target{ 1, "main" };
 	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), report));

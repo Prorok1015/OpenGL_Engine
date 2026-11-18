@@ -158,6 +158,34 @@ scn::entity_writer::components scn::entity_writer::write(const entt::registry& r
 	return out;
 }
 
+namespace
+{
+	// Set by capture_world with a desc system: every typed object inside carries its version.
+	constexpr std::string_view k_typed_versions = "typed_versions";
+}
+
+json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
+	snapshot_report& report)
+{
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	json::object out = capture_world(world, catalog, report);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+	descs.stamp_tree(out["ctx"]);
+	descs.stamp_tree(out["entities"]);
+	out[k_typed_versions] = true;
+	return out;
+}
+
 json::object scn::capture_world(const world_context& world, const component_catalog& catalog, snapshot_report& report)
 {
 	const entt::registry& reg = world.state();
@@ -227,15 +255,6 @@ json::object scn::capture_world(const world_context& world, const component_cata
 	return out;
 }
 
-json::object scn::capture_world(const world_context& world, const component_catalog& catalog, const desc::desc_system& descs,
-	snapshot_report& report)
-{
-	json::object out = capture_world(world, catalog, report);
-	descs.stamp_tree(out["ctx"]);
-	descs.stamp_tree(out["entities"]);
-	return out;
-}
-
 bool scn::restore_world(world_context& world, const json::object& given, const component_catalog& catalog,
 	const desc::read_context& context, snapshot_report& report)
 {
@@ -244,18 +263,21 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
 		return false;
 	}
-	// EPIC-58 section 7.2: with the world's desc system every snapshot goes through its steps, so an older one is brought
-	// up and a newer one refused, the root or a typed object inside alike; without one only the version capture_world
-	// writes is read.
+	// EPIC-58 section 7.2: with the world's desc system a snapshot whose typed objects carry their versions goes through
+	// its steps whole, so an older one is brought up and a newer one refused, the root or an object inside alike. One
+	// without them (the deprecated capture_world) goes through only when its root is older, as before #766; without a
+	// desc system only the version capture_world writes is read.
 	std::optional<json::object> upgraded;
-	if (context.system) {
+	const json::value* typed_versions = given.if_contains(k_typed_versions);
+	const json::value* given_version = given.if_contains("__version");
+	const bool current_root = !given_version || (given_version->is_int64() && given_version->as_int64() == k_version);
+	if (context.system && ((typed_versions && typed_versions->is_bool() && typed_versions->as_bool()) || !current_root)) {
 		upgraded.emplace(given);
 		if (const std::string problem = context.system->upgrade_in_memory(*upgraded, std::format("world '{}'", world.get_name())); !problem.empty()) {
 			egLOG_ERROR("scene", "{}", problem);
 			return false;
 		}
-	} else if (const json::value* given_version = given.if_contains("__version");
-		given_version && !(given_version->is_int64() && given_version->as_int64() == k_version)) {
+	} else if (!context.system && !current_root) {
 		egLOG_ERROR("scene", "world '{}': '{}' is version {}, not the version {} this engine reads", world.get_name(), k_type,
 			json::serialize(*given_version), k_version);
 		return false;
