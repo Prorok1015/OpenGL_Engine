@@ -472,12 +472,12 @@ BOOST_AUTO_TEST_CASE(AnotherMonoFont_ReadsTheFontsAgain)
 {
 	select("engine://themes/dark_neutral.desc");
 	const res::tag preset = put("other_mono.desc", R"({ "__type" : "gui.theme", "__version" : 1,
-		"font_mono" : "engine://fonts/NotoSans-Regular.ttf" })");
+		"font_mono" : "engine://fonts/NotoSans-Bold.ttf" })");
 
 	const auto& theme = select(preset.view());
 
 	BOOST_TEST(theme.fonts_changed);
-	BOOST_TEST((theme.mono_font == read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Regular.ttf")));
+	BOOST_TEST((theme.mono_font == read_bytes(fs::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Bold.ttf")));
 }
 
 BOOST_AUTO_TEST_CASE(AColorOutsideZeroToOne_IsRefusedWithItsName)
