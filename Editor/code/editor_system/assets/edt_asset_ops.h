@@ -186,7 +186,8 @@ namespace edt
 
 	boost::json::value journal_to_json(const operation_journal& journal);
 	// Why `journal` cannot be trusted as it is (empty: its shape is fine): an id that is not one safe name, a step path that is
-	// absolute, has '..' or is not where its kind keeps it. A journal read from a disk is data, never instructions.
+	// absolute, has '..', is a name the project does not list (the check of a live operation) or is not where its kind keeps it,
+	// a rewrite of anything but a desc or the manifest. A journal read from a disk is data, never instructions.
 	std::string journal_problem(const operation_journal& journal);
 	// nullopt: not a journal, or journal_problem found one (`reason` says which).
 	std::optional<operation_journal> journal_from_json(const boost::json::value& value, std::string& reason);
@@ -215,6 +216,9 @@ namespace edt
 		std::string error;
 		// Files that are not as the operation left them: nothing was touched.
 		std::vector<std::string> changed_since;
+		// Files the undo would touch that are open with unsaved changes (the `is_open_with_unsaved_changes` port): nothing was touched.
+		std::vector<std::string> open_with_unsaved_changes;
+		// Steps that were recorded and never done (a crash between the record and the action) are left out.
 		std::vector<std::string> restored;
 		std::vector<std::string> failures;
 	};
@@ -267,8 +271,9 @@ namespace edt
 		operation_plan plan(std::span<const asset_request> requests) const;
 		// Does what `plan` found: the asset first, then the files that refer to it; any failure takes everything back.
 		operation_report execute(const operation_plan& plan, const execute_options& options = {}) const;
-		// Puts back what `journal` records, when none of its files changed since. The journal is not trusted: its folder must be
-		// journal_root/<id>, its roots the project's own layers or the manifest's folder, its paths relative and without '..'.
+		// Puts back what `journal` records, when none of its files changed since; a step recorded but never done (a crash) is
+		// skipped, the ones before it are put back. The journal is not trusted: its folder must be journal_root/<id>, its roots
+		// the project's own (top) layer or the manifest's folder, its names ones the project lists, a rewrite of a desc or the manifest.
 		undo_report undo(const operation_journal& journal) const;
 
 	private:
@@ -278,7 +283,7 @@ namespace edt
 		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;
 		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
 		void roll_back(operation_report& report) const;
-		// The folders an operation may have changed files in: the project's layers below the engine's, and the manifest's.
+		// The folders an operation may have changed files in: the project's own (top) layer and the manifest's.
 		std::vector<std::filesystem::path> changeable_roots() const;
 
 		asset_ops_ports m_ports;
