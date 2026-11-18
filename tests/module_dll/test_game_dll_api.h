@@ -52,6 +52,11 @@ namespace dll_game {
 	inline constexpr std::string_view linked_type = "dll.linked";
 	// A type the module migrates from version 1 (#786): the steps live in the engine's registry, written by its code.
 	inline constexpr std::string_view migrated_type = "dll.migrated";
+	// The schema of migrated_type at the version its steps lead to: a type with steps alone is unknown_type to the
+	// migration scan (it cannot be loaded), so the module registers both (#764).
+	inline constexpr const char* migrated_schema_json = R"json({
+		"name": "dll.migrated", "version": 3,
+		"fields": [ { "name": "migrated_by", "kind": "string" }, { "name": "new", "kind": "i32" } ] })json";
 	inline constexpr const char* schema_document_json = R"json({
 		"name": "dll.settings", "kind": "desc",
 		"fields": [ { "name": "speed", "kind": "f32", "default": 2 }, { "name": "goals", "kind": "array", "element": "i32" } ]
