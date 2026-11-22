@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <snk/desc/desc_migrations.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -332,6 +333,27 @@ BOOST_AUTO_TEST_CASE(UpgradeInMemory_LooksInsideARootOfTheCurrentVersion)
 	BOOST_TEST(ds.upgrade_in_memory(older_inside, "world 'main'").empty());
 	BOOST_TEST(older_inside.at("inner").at("__version").as_int64() == 3);
 	BOOST_TEST(older_inside.at("inner").at("b").as_int64() == 40);
+}
+
+// #1228: a field is read at a JSON pointer by every reader; a key or an alias without the leading '/' was read as one
+// plain key by some and as a path by others, so a schema with one is refused.
+BOOST_AUTO_TEST_CASE(ASchemaFieldKeyWithoutALeadingSlash_IsRefused)
+{
+	const auto schema_with = [](std::string key, std::vector<std::string> aliases) {
+		desc::type_schema schema;
+		schema.name = k_type;
+		desc::field_schema field;
+		field.name = "hp";
+		field.key = std::move(key);
+		field.kind = desc::field_kind::i32;
+		field.read_aliases = std::move(aliases);
+		schema.fields.push_back(std::move(field));
+		return schema;
+	};
+	BOOST_TEST((ds.register_schema(schema_with("stats/hp", {})) == nullptr));
+	BOOST_TEST((ds.register_schema(schema_with("/hp", { "health" })) == nullptr));
+	BOOST_TEST((ds.find_schema(k_type) == nullptr));
+	BOOST_TEST((ds.register_schema(schema_with("/stats/hp", { "/health" })) != nullptr));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
