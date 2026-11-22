@@ -307,12 +307,24 @@ BOOST_AUTO_TEST_CASE(MigrationHelpers_ARefusedRename_LeavesTheObjectAsItWas)
 	BOOST_TEST((o == before));
 	BOOST_CHECK_THROW(desc::migrations::rename(o, "/hp", "/taken/x"), std::runtime_error);
 	BOOST_TEST((o == before));
+}
 
-	// Onto a deeper place inside the source: the value is wrapped, as before #1228.
-	auto wrapped = parse(R"({"pos":{"x":1}})");
-	desc::migrations::rename(wrapped, "/pos", "/pos/local");
-	BOOST_TEST(wrapped.at("pos").at("local").at("x").as_int64() == 1);
-	BOOST_TEST(wrapped.at("pos").as_object().size() == 1u);
+// Onto a place inside the source the whole value moves down: an object, and a scalar or an array too, whose way to the
+// target runs through the source itself.
+BOOST_AUTO_TEST_CASE(MigrationHelpers_RenameInsideItsSource_MovesTheValueDown)
+{
+	auto o = parse(R"({"pos":{"x":1},"hp":5,"tags":["a"]})");
+	desc::migrations::rename(o, "/pos", "/pos/local");
+	BOOST_TEST(o.at("pos").at("local").at("x").as_int64() == 1);
+	BOOST_TEST(o.at("pos").as_object().size() == 1u);
+	desc::migrations::rename(o, "/hp", "/hp/value");
+	BOOST_TEST(o.at("hp").at("value").as_int64() == 5);
+	desc::migrations::rename(o, "/tags", "/tags/list/items");
+	BOOST_TEST(o.at("tags").at("list").at("items").as_array().size() == 1u);
+
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST(desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/hp":"/hp/value"}}])"), 2).empty());
+	BOOST_TEST(!desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/hp":"/hp/value"},"set_default":{"/hp/max":9}}])"), 2).empty());
 }
 
 BOOST_AUTO_TEST_CASE(SchemaSteps_ALiftParses_ARepeatedRemovalDoesNot)

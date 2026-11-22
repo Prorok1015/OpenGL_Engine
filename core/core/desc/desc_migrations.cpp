@@ -174,14 +174,10 @@ void desc::migrations::rename(json::object& object, std::string_view from, std::
 		lift(object, source, target, from, to);
 		return;
 	}
-	if (const json::object* target_holder = holder_of(object, target, to, false); target_holder && target_holder->contains(target.back())) {
-		throw std::runtime_error(std::format("rename {} -> {}: a value is already at {}", from, to, to));
-	}
-	check_writable(object, target, to);
-	// Written before the source goes, so a failure leaves the object as it was.
-	json::value value = source_holder->at(source.back());
+	// Onto a place inside the source: the whole value moves down, whatever it is (a scalar, an array). The way to the
+	// target runs through the source itself, which is no obstacle here.
 	if (lies_inside(target, source)) {
-		json::value wrapped = std::move(value);
+		json::value wrapped = source_holder->at(source.back());
 		for (std::size_t i = target.size(); i-- > source.size();) {
 			json::object level;
 			level.emplace(target[i], std::move(wrapped));
@@ -190,6 +186,12 @@ void desc::migrations::rename(json::object& object, std::string_view from, std::
 		holder_of(object, source, from, false)->at(source.back()) = std::move(wrapped);
 		return;
 	}
+	if (const json::object* target_holder = holder_of(object, target, to, false); target_holder && target_holder->contains(target.back())) {
+		throw std::runtime_error(std::format("rename {} -> {}: a value is already at {}", from, to, to));
+	}
+	check_writable(object, target, to);
+	// Written before the source goes, so a failure leaves the object as it was.
+	json::value value = source_holder->at(source.back());
 	holder_of(object, target, to, true)->insert_or_assign(target.back(), std::move(value));
 	// The insert may have moved the objects the source was found in.
 	holder_of(object, source, from, false)->erase(source.back());
@@ -286,7 +288,8 @@ std::vector<desc::detail::schema_migration> desc::detail::parse_schema_migration
 			}
 		}
 		// A pointer of the step inside another one (/a and /a/b) makes the outcome depend on which runs first. The two
-		// pointers of one rename are no such pair: a rename onto the object that holds its source lifts the value.
+		// pointers of one rename are no such pair: it lifts its value onto the object that holds it, or moves it down
+		// inside itself.
 		struct step_pointer
 		{
 			std::string_view text;
@@ -311,7 +314,7 @@ std::vector<desc::detail::schema_migration> desc::detail::parse_schema_migration
 			for (const auto& inner_pointer : pointers) {
 				const std::string_view outer = outer_pointer.text;
 				const std::string_view inner = inner_pointer.text;
-				if (outer_pointer.rename && outer_pointer.rename == inner_pointer.rename && inner == step.renames[*inner_pointer.rename].first) {
+				if (outer_pointer.rename && outer_pointer.rename == inner_pointer.rename) {
 					continue;
 				}
 				if (lies_inside(inner_pointer.tokens, outer_pointer.tokens)) {
