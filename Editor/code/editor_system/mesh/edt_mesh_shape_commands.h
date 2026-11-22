@@ -2,6 +2,8 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
 #include "edt_desc_file_commands.h"
+#include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/resource/res_file_change.h>
 #include <functional>
 #include <optional>
 #include <string>
@@ -40,6 +42,9 @@ namespace edt::mesh
 		cmd::command_registry& commands;
 		// agent_action after each file an agent wrote; null: none.
 		editor_events* events;
+		// How the files are written; null: rnd::write_geometry_files and resource_system::store_sync. The tests put a failing one here.
+		std::function<std::string(const res::tag&, const rnd::geometry_desc&)> write_geometry;
+		std::function<bool(const res::tag&, const std::vector<std::byte>&)> write_poly;
 	};
 
 	// shape.create: a parametric shape as two files of the project, <folder>/<name>.poly.desc (the editable source, editor only,

@@ -11,6 +11,25 @@ namespace edt::mesh
 {
 	namespace
 	{
+		// The offsets, sizes and layouts of the vertex and index chunks of two geometry descs (the hashes are left out).
+		bool same_chunks(const json::value& made, std::string_view disk_text)
+		{
+			boost::system::error_code parse_error;
+			const json::value disk = json::parse(disk_text, parse_error);
+			if (parse_error || !disk.is_object() || !made.is_object()) return false;
+			for (const char* chunk : { "vertices", "indices" }) {
+				const json::value* wanted = made.get_object().if_contains(chunk);
+				const json::value* found = disk.get_object().if_contains(chunk);
+				if (!wanted || !found || !wanted->is_object() || !found->is_object()) return false;
+				json::object left = wanted->get_object();
+				json::object right = found->get_object();
+				left.erase("sha256");
+				right.erase("sha256");
+				if (left != right) return false;
+			}
+			return true;
+		}
+
 		std::string repository_text(json::object body, int version)
 		{
 			// The version goes right after the type, as every repository desc has it (DescRepoRoundtripTests, desc_resave --check).
@@ -43,7 +62,7 @@ namespace edt::mesh
 		return std::visit(counter{}, params);
 	}
 
-	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error)
+	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error, std::string_view disk_desc)
 	{
 		boost::system::error_code parse_error;
 		const json::value parsed = json::parse(poly_text, parse_error);
@@ -62,6 +81,18 @@ namespace edt::mesh
 		if (baked.ranges.size() != 1) {
 			error = baked.ranges.empty() ? "the mesh has no triangles" : "the mesh has several materials: one node draws one of them";
 			return std::nullopt;
+		}
+		if (!disk_desc.empty()) {
+			std::string encode_error;
+			const geometry_pair made = encode_geometry_pair(res::tag{ std::string("res://") + "check.geom.desc" }, baked.geometry, encode_error);
+			if (!encode_error.empty()) {
+				error = encode_error;
+				return std::nullopt;
+			}
+			if (!same_chunks(json::parse(made.desc), disk_desc)) {
+				error = "the geometry on disk is not the bake of this source (it was edited or rolled back without shape.rebuild): run shape.rebuild";
+				return std::nullopt;
+			}
 		}
 		return baked.ranges.front();
 	}

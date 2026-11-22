@@ -660,6 +660,13 @@ BOOST_AUTO_TEST_CASE(create_takes_a_transform_for_the_node)
 	BOOST_TEST(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"position":[1.0]})").code == cmd::codes::invalid_args);
 }
 
+BOOST_AUTO_TEST_CASE(shape_update_nodes_is_not_a_tool_an_agent_can_call_and_shape_add_base_is)
+{
+	BOOST_REQUIRE(commands.find("shape.update_nodes") != nullptr);
+	BOOST_TEST(!commands.find("shape.update_nodes")->expose_as_tool);
+	BOOST_TEST(commands.find("shape.add_base")->expose_as_tool);
+}
+
 BOOST_AUTO_TEST_CASE(shape_update_nodes_gives_the_nodes_that_draw_a_geometry_its_new_range_in_one_edit)
 {
 	const auto mesh = [&](const char* geometry, int vx_end, int ind_end) {

@@ -1211,7 +1211,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 	auto ctx = std::make_shared<context>(context{ std::move(sources) });
 	std::vector<registration> out;
 	const auto add = [&](std::string id, std::string summary, std::string args, std::string_view result,
-		cmd::result (*body)(context&, const cmd::call&)) {
+		cmd::result (*body)(context&, const cmd::call&), bool as_tool = true) {
 		cmd::command_desc desc;
 		desc.id = std::move(id);
 		desc.summary = std::move(summary);
@@ -1219,6 +1219,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		desc.result_schema = parse_schema(result);
 		desc.mutates = true;
 		desc.category = cmd::agent_category::scene_edit;
+		desc.expose_as_tool = as_tool;
 		desc.invoke = [ctx, body](const cmd::call& call) { return body(*ctx, call); };
 		registration added = commands.add(std::move(desc));
 		if (added.active()) out.push_back(std::move(added));
@@ -1235,12 +1236,12 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		args_with(std::string(R"("parent":@REF@,"shape":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"scale":{"type":"array","items":{"type":"number"}},)")
 			+ std::string(R"("material":{"type":"string","description":"a material desc tag, res://..."},)") + std::string(index_arg_schema), R"("parent","shape")"),
 		ref_result, &shape_add_base);
-	add("shape.update_nodes", "Give every mesh node of the scene that draws `geometry` (a res:// tag) the range vx_begin, vx_end, ind_begin, ind_end: what a rebuilt shape needs; "
+	add("shape.update_nodes", "(Not a tool: shape.rebuild calls it.) Give every mesh node of the scene that draws `geometry` (a res:// tag) the range vx_begin, vx_end, ind_begin, ind_end: what a rebuilt shape needs; "
 			"one edit, `updated` counts the nodes changed",
 		args_with(R"("geometry":{"type":"string","minLength":1},"vx_begin":{"type":"integer","minimum":0},"vx_end":{"type":"integer","minimum":0},"ind_begin":{"type":"integer","minimum":0},"ind_end":{"type":"integer","minimum":0})",
 			R"("geometry","vx_begin","vx_end","ind_begin","ind_end")"),
 		std::string_view(R"({"type":"object","properties":{"generation":{"type":"integer"},"updated":{"type":"integer"},"unchanged":{"type":"boolean"}},"required":["generation"]})"),
-		&shape_update_nodes);
+		&shape_update_nodes, false);
 	add("scene.node.delete", "Delete a node with everything under it", args_with(R"("ref":@REF@)", R"("ref")"), generation_result, &node_delete);
 	add("scene.node.duplicate", "Copy a node with everything under it right after it; the copy gets new ids",
 		args_with(R"("ref":@REF@)", R"("ref")"), ref_result, &node_duplicate);

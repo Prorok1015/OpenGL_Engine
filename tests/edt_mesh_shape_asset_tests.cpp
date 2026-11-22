@@ -7,7 +7,9 @@
 #include "edt_mesh_shape_asset.h"
 #include "edt_mesh_shape_commands.h"
 #include <snk/command/cmd_registry.h>
+#include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_system.h>
@@ -75,7 +77,17 @@ struct shape_fixture : test_util::scene_env
 		layout.top_layer = [this] { return res_root; };
 		layout.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
 		layout.write_blocker = [this] { return blocked; };
-		registrations = register_shape_commands(commands, shape_command_deps{ *rs, *descs, std::move(layout), commands, &events });
+		shape_command_deps deps{ *rs, *descs, std::move(layout), commands, &events };
+		deps.write_geometry = [this](const res::tag& tag, const rnd::geometry_desc& geometry) -> std::string {
+			++geometry_writes;
+			if (geometry_writes == fail_geometry_write) return "the disk is full";
+			return rnd::write_geometry_files(*rs, tag, geometry);
+		};
+		deps.write_poly = [this](const res::tag& tag, const std::vector<std::byte>& bytes) {
+			++poly_writes;
+			return poly_writes != fail_poly_write && rs->store_sync(tag, bytes);
+		};
+		registrations = register_shape_commands(commands, std::move(deps));
 		stub("scene.node.create", created);
 		stub("shape.update_nodes", updated_with, &updated_nodes);
 	}
@@ -129,6 +141,10 @@ struct shape_fixture : test_util::scene_env
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 	std::optional<std::string> blocked;
+	int geometry_writes = 0;
+	int fail_geometry_write = 0;
+	int poly_writes = 0;
+	int fail_poly_write = 0;
 	json::object created;
 	json::object updated_with;
 	std::size_t updated_nodes = 0;
@@ -529,6 +545,123 @@ BOOST_AUTO_TEST_CASE(Create_SaysABuiltInNameIsTaken)
 	const auto clash = call("shape.create", json::object{ { "name", "box" }, { "kind", "box" } });
 	BOOST_TEST(clash.code == cmd::codes::needs_input);
 	BOOST_TEST(clash.error.find("choose another name") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Add_RefusesAGeometryThatIsNotTheBakeOfItsSource_AMissingBin_AndADescWithoutRanges)
+{
+	const json::value parent = json::parse(R"({"context":"w0","path":[]})");
+	BOOST_REQUIRE(create_sphere().ok);
+	const fs::path poly = res_root / "shapes" / "ball.poly.desc";
+	const std::string made = read_file(poly);
+
+	write_file(poly, built(sphere_params{ 0.5f, 16, 8 }).poly);
+	const auto stale = call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } });
+	BOOST_TEST(stale.code == cmd::codes::failed);
+	BOOST_TEST(stale.error.find("shape.rebuild") != std::string::npos);
+	BOOST_TEST(created.empty());
+	write_file(poly, made);
+
+	const fs::path bin = res_root / "shapes" / "ball.geom.bin";
+	const std::string bin_bytes = read_file(bin);
+	fs::remove(bin);
+	const auto without_bin = call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } });
+	BOOST_TEST(without_bin.code == cmd::codes::failed);
+	BOOST_TEST(without_bin.error.find("geom.bin") != std::string::npos);
+	write_file(bin, bin_bytes);
+
+	const fs::path desc = res_root / "shapes" / "ball.geom.desc";
+	const std::string desc_text = read_file(desc);
+	write_file(desc, "{}");
+	BOOST_TEST(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } }).code == cmd::codes::failed);
+	write_file(desc, desc_text);
+	BOOST_TEST(created.empty());
+
+	BOOST_REQUIRE(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", parent } }).ok);
+	BOOST_TEST(created.contains("components"));
+}
+
+BOOST_AUTO_TEST_CASE(Add_RefusesAShapeOfSeveralMaterials)
+{
+	BOOST_REQUIRE(create_sphere().ok);
+	const fs::path poly = res_root / "shapes" / "ball.poly.desc";
+	json::value two = json::parse(read_file(poly));
+	two.as_object().at("faces").as_array()[0].as_object()["material"] = 1;
+	write_file(poly, json::serialize(two));
+	const auto refused = call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", json::parse(R"({"context":"w0","path":[]})") } });
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("several materials") != std::string::npos);
+	BOOST_TEST(created.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Add_TakesTheRangeBeginsOfTheBake)
+{
+	BOOST_REQUIRE(create_sphere().ok);
+	BOOST_REQUIRE(call("shape.add", json::object{ { "poly", "shapes/ball.poly.desc" }, { "parent", json::parse(R"({"context":"w0","path":[]})") } }).ok);
+	const json::object& fields = created.at("components").as_object().at("mesh").as_object().at("fields").as_object();
+	std::string error;
+	const std::optional<material_range> range = poly_text_range(built(small_sphere).poly, error);
+	BOOST_REQUIRE_MESSAGE(range.has_value(), error);
+	BOOST_TEST(fields.at("vx_begin").to_number<std::uint32_t>() == range->vx_begin);
+	BOOST_TEST(fields.at("ind_begin").to_number<std::uint32_t>() == range->ind_begin);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_WhenTheGeometryCannotBeWritten_ChangesNothing)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	const std::string poly_before = read_file(res_root / "shapes" / "ball.poly.desc");
+	const std::string desc_before = read_file(res_root / "shapes" / "ball.geom.desc");
+	fail_geometry_write = geometry_writes + 1;
+	json::object args = rebuild_args("shapes/ball.poly.desc", std::string(made.value.at("version").as_string()));
+	args["params"] = json::object{ { "radius", 2.0 } };
+	const auto refused = call("shape.rebuild", args);
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("disk is full") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == desc_before);
+	BOOST_TEST(poly_writes == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_WhenTheSourceCannotBeWritten_PutsTheOldGeometryBack)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	const std::string poly_before = read_file(res_root / "shapes" / "ball.poly.desc");
+	const std::string bin_before = read_file(res_root / "shapes" / "ball.geom.bin");
+	const int geometry_before = geometry_writes;
+	fail_poly_write = poly_writes + 1;
+	json::object args = rebuild_args("shapes/ball.poly.desc", std::string(made.value.at("version").as_string()));
+	args["params"] = json::object{ { "radius", 2.0 } };
+	const auto refused = call("shape.rebuild", args);
+	BOOST_TEST(refused.code == cmd::codes::failed);
+	BOOST_TEST(refused.error.find("put back") != std::string::npos);
+	BOOST_TEST(geometry_writes == geometry_before + 2);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.bin") == bin_before);
+	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), built(small_sphere).geometry));
+}
+
+BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyInCaseWhereNamesFoldCase_AndABinWithoutItsDesc)
+{
+	for (const char* name : { "a.poly", "A.GEOM", "a.bin" }) {
+		BOOST_TEST_CONTEXT(name) {
+			BOOST_TEST(call("shape.create", json::object{ { "name", name }, { "kind", "box" } }).code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_REQUIRE(create_sphere().ok);
+	const auto folded = call("shape.create", json::object{ { "name", "Ball" }, { "kind", "box" } });
+	if constexpr (res::asset_names_case_insensitive) {
+		BOOST_TEST(folded.code == cmd::codes::needs_input);
+		BOOST_TEST(!fs::exists(res_root / "shapes" / "Ball.poly.desc"));
+	} else {
+		BOOST_TEST(folded.ok);
+	}
+
+	write_file(res_root / "shapes" / "orphan.geom.bin", "x");
+	const auto orphan = call("shape.create", json::object{ { "name", "orphan" }, { "kind", "box" } });
+	BOOST_TEST(orphan.code == cmd::codes::needs_input);
+	BOOST_TEST(!fs::exists(res_root / "shapes" / "orphan.poly.desc"));
+	BOOST_TEST(!fs::exists(res_root / "shapes" / "orphan.geom.desc"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

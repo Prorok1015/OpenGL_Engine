@@ -2,6 +2,7 @@
 #include "edt_mesh_io.h"
 #include "edt_mesh_shape_asset.h"
 #include "edt_code_commands.h"
+#include "edt_document_creator.h"
 #include "edt_file_menu.h"
 #include "edt_forge_types.h"
 #include <snk/common/engine_assert.h>
@@ -10,6 +11,8 @@
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
+#include <algorithm>
+#include <cctype>
 #include <format>
 #include <glm/vec3.hpp>
 #include <memory>
@@ -148,6 +151,17 @@ namespace edt::mesh
 			return shape_params_from_json(kind_name, merged, error);
 		}
 
+		// ".poly", ".geom" or ".bin" at the end of a name (in any case): the endings the names of a shape's files are made with.
+		std::string ending_of_a_file_of_the_shape(std::string_view name)
+		{
+			std::string lower(name);
+			std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			for (const std::string_view ending : { ".poly", ".geom", ".bin" }) {
+				if (lower.ends_with(ending)) return std::string(ending);
+			}
+			return {};
+		}
+
 		class shape_commands
 		{
 		public:
@@ -159,6 +173,9 @@ namespace edt::mesh
 				const std::string name = string_of(args.at("name"));
 				const agent_level_path named = check_agent_name(name);
 				if (!named.ok()) return refuse(cmd::codes::invalid_args, named.error);
+				if (std::string ending = ending_of_a_file_of_the_shape(name); !ending.empty()) {
+					return refuse(cmd::codes::invalid_args, std::format("a shape's name does not end with '{}': that is how the names of its files end", ending));
+				}
 				std::string folder = std::string(default_folder);
 				if (const json::value* given = args.if_contains("folder")) {
 					const agent_level_path checked = check_agent_folder(string_of(*given));
@@ -188,9 +205,19 @@ namespace edt::mesh
 							there.error.empty() ? std::format("'res://{}' exists: shape.create never replaces a file; use shape.rebuild (a person confirms that)", path) : there.error);
 					}
 				}
+				// A name that differs only in case, or whose .resource of a deleted file is left, would collide on a file system that folds case.
+				document_creator::ports creator_ports;
+				creator_ports.layers = m_deps.layout.layers;
+				const document_creator creator(std::move(creator_ports));
+				for (const char* suffix : { ".poly", ".geom" }) {
+					if (std::string taken = creator.check(folder, name + suffix); !taken.empty()) return refuse(cmd::codes::needs_input, std::move(taken));
+				}
+				if (m_deps.res.exists(tag_of(paths->binary))) {
+					return refuse(cmd::codes::needs_input, std::format("'res://{}' exists without its desc: shape.create never replaces a file", paths->binary));
+				}
 				const res::tag poly_tag = tag_of(paths->poly);
 				const res::tag geometry_tag = tag_of(paths->geometry);
-				if (const std::string why = rnd::write_geometry_files(m_deps.res, geometry_tag, ready.files.data); !why.empty()) {
+				if (const std::string why = write_geometry(geometry_tag, ready.files.data); !why.empty()) {
 					return refuse(cmd::codes::failed, std::format("'res://{}' was not created: {}", paths->geometry, why));
 				}
 				const res::file_operation poly_made = m_deps.res.create_sync(poly_tag, bytes_of(ready.files.poly));
@@ -210,17 +237,18 @@ namespace edt::mesh
 				if (!plan.failure.ok) return plan.failure;
 				const res::tag poly_tag = tag_of(plan.paths.poly);
 				const res::tag geometry_tag = tag_of(plan.paths.geometry);
-				if (!m_deps.res.store_sync(poly_tag, bytes_of(plan.ready.files.poly))) {
-					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written", plan.paths.poly));
+				// The geometry first and the source last: a stop between the two leaves a source that says what the pair is no more,
+				// which shape.add notices, rather than a new source over an old pair.
+				if (const std::string why = write_geometry(geometry_tag, plan.ready.files.data); !why.empty()) {
+					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written: {}", plan.paths.geometry, why));
+				}
+				if (!write_poly(poly_tag, bytes_of(plan.ready.files.poly))) {
+					const shape_asset_result old = build_shape_asset(plan.old_generator, res::tag{ "res://" + plan.paths.geometry });
+					const bool restored = old.files && write_geometry(geometry_tag, old.files->data).empty();
+					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written{}", plan.paths.poly,
+						restored ? std::string(": the geometry is put back as it was") : std::format(" and the geometry of 'res://{}' could not be put back: run shape.rebuild with the old parameters", plan.paths.geometry)));
 				}
 				m_deps.res.signal_changed(poly_tag);
-				const std::string geometry_problem = rnd::write_geometry_files(m_deps.res, geometry_tag, plan.ready.files.data);
-				if (!geometry_problem.empty()) {
-					const bool restored = m_deps.res.store_sync(poly_tag, plan.old_poly);
-					m_deps.res.signal_changed(poly_tag);
-					return refuse(cmd::codes::failed, std::format("'res://{}' could not be written: {}{}", plan.paths.geometry, geometry_problem,
-						restored ? std::string{} : std::format(" and 'res://{}' could not be put back: it holds the new parameters", plan.paths.poly)));
-				}
 				changed(call, "shape.rebuild", plan.paths.poly, plan.ready.files.poly.size() + plan.ready.files.geometry.size());
 				return success_of(plan.paths, plan.ready.files, update_nodes(call, plan.paths, plan.ready.files));
 			}
@@ -249,11 +277,14 @@ namespace edt::mesh
 				const desc_file_read geometry = look_at(paths->geometry);
 				if (geometry.missing) return refuse(cmd::codes::not_found, std::format("no file 'res://{}': the shape has no geometry yet", paths->geometry));
 				if (!geometry.error.empty()) return refuse(cmd::codes::failed, geometry.error);
-				const std::optional<material_range> range = poly_text_range(text_of(poly.bytes), error);
+				const std::optional<material_range> range = poly_text_range(text_of(poly.bytes), error, text_of(geometry.bytes));
 				if (!range) return refuse(cmd::codes::failed, std::format("'res://{}': {}", paths->poly, error));
+				if (!m_deps.res.exists(tag_of(paths->binary))) {
+					return refuse(cmd::codes::failed, std::format("'res://{}' is missing: the geometry is not whole, run shape.rebuild", paths->binary));
+				}
 
-				json::object fields{ { "geometry", "res://" + paths->geometry }, { "vx_begin", 0 }, { "vx_end", range->vx_end },
-					{ "ind_begin", 0 }, { "ind_end", range->ind_end } };
+				json::object fields{ { "geometry", "res://" + paths->geometry }, { "vx_begin", range->vx_begin }, { "vx_end", range->vx_end },
+					{ "ind_begin", range->ind_begin }, { "ind_end", range->ind_end } };
 				if (const json::value* material = args.if_contains("material")) fields["material"] = *material;
 				const std::string stem = paths->poly.substr(paths->poly.rfind('/') == std::string::npos ? 0 : paths->poly.rfind('/') + 1);
 				json::object made;
@@ -284,7 +315,7 @@ namespace edt::mesh
 				cmd::result failure = cmd::result::success();
 				shape_paths paths;
 				prepared_shape ready;
-				std::vector<std::byte> old_poly;
+				shape_params old_generator = box_params{};
 			};
 
 			plan_result plan_rebuild(const cmd::call& call) const
@@ -321,12 +352,12 @@ namespace edt::mesh
 					out.failure = std::move(stale);
 					return out;
 				}
-				out.old_poly = poly.bytes;
 				const shape_source_check source = check_shape_source(text_of(poly.bytes));
 				if (source.state != shape_source::generated) {
 					out.failure = refuse(cmd::codes::failed, std::format("'res://{}' is not rebuilt: {}", paths->poly, source.error));
 					return out;
 				}
+				out.old_generator = *source.generator;
 				const std::optional<shape_params> params = params_of_call(args, source.generator, error);
 				if (!params) {
 					out.failure = refuse(cmd::codes::invalid_args, error);
@@ -346,6 +377,16 @@ namespace edt::mesh
 					out.failure = refuse(cmd::codes::invalid_args, std::format("'res://{}' belongs to a lower layer, not to the project's own res/", paths->geometry));
 				}
 				return out;
+			}
+
+			std::string write_geometry(const res::tag& tag, const rnd::geometry_desc& geometry) const
+			{
+				return m_deps.write_geometry ? m_deps.write_geometry(tag, geometry) : rnd::write_geometry_files(m_deps.res, tag, geometry);
+			}
+
+			bool write_poly(const res::tag& tag, const std::vector<std::byte>& bytes) const
+			{
+				return m_deps.write_poly ? m_deps.write_poly(tag, bytes) : m_deps.res.store_sync(tag, bytes);
 			}
 
 			desc_file_read look_at(const std::string& path) const
