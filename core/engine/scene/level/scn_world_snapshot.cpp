@@ -66,6 +66,43 @@ namespace
 		void serialize(json::object&) const override {}
 	};
 
+	// Set by capture_world with a desc system: the version of each saved type's steps, by catalog name (#1233).
+	constexpr std::string_view k_component_versions = "component_versions";
+
+	// What restore_world reads of one saved value: the value itself, the value brought through the steps of its type
+	// from the version it was captured at (into `storage`), or nullptr when it cannot be read (logged).
+	const json::object* current_format(const scn::component_entry& entry, const json::object& saved, const json::object* versions,
+		const desc::desc_system* descs, std::string_view world, json::object& storage)
+	{
+		const json::value* recorded = versions ? versions->if_contains(entry.name) : nullptr;
+		if (!recorded || !descs || !recorded->is_int64()) {
+			return &saved;
+		}
+		const std::string& type = entry.schema->schema->name;
+		const int current = descs->current_version(type);
+		const std::int64_t version = recorded->as_int64();
+		if (version == current) {
+			return &saved;
+		}
+		if (version < 1 || version > current) {
+			egLOG_WARN("scene", "world '{}': '{}' was captured at version {}, but its type '{}' is version {} now; not restored",
+				world, entry.name, version, type, current);
+			return nullptr;
+		}
+		storage = saved;
+		storage["__type"] = type;
+		storage["__version"] = version;
+		try {
+			descs->migrate_tree(storage, std::format("world '{}' {}", world, entry.name));
+		} catch (const std::exception& error) {
+			egLOG_WARN("scene", "world '{}': '{}' not restored: {}", world, entry.name, error.what());
+			return nullptr;
+		}
+		storage.erase("__type");
+		storage.erase("__version");
+		return &storage;
+	}
+
 	std::optional<std::uint64_t> to_u64(const json::value* value)
 	{
 		std::uint64_t number = 0;
@@ -183,6 +220,25 @@ json::object scn::capture_world(const world_context& world, const component_cata
 	descs.stamp_tree(out["ctx"]);
 	descs.stamp_tree(out["entities"]);
 	out[k_typed_versions] = true;
+	json::object versions;
+	const auto note_version = [&](std::string_view name) {
+		const component_entry* entry = catalog.find(name);
+		if (entry && entry->saved() && !versions.contains(name)) {
+			versions[name] = descs.current_version(entry->schema->schema->name);
+		}
+	};
+	if (const json::array* entities = out["entities"].if_array()) {
+		for (const json::value& entity : *entities) {
+			const json::value* components = entity.is_object() ? entity.as_object().if_contains("components") : nullptr;
+			if (components && components->is_object()) {
+				for (const auto& component : components->as_object()) note_version(component.key());
+			}
+		}
+	}
+	if (const json::object* resources = out["ctx"].if_object()) {
+		for (const auto& resource : *resources) note_version(resource.key());
+	}
+	out[k_component_versions] = std::move(versions);
 	return out;
 }
 
@@ -290,6 +346,9 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 		return false;
 	}
 	const json::object& snapshot = upgraded ? *upgraded : given;
+	const json::value* versions_value = snapshot.if_contains(k_component_versions);
+	const json::object* versions = versions_value ? versions_value->if_object() : nullptr;
+	json::object migrated;
 	const json::value* entities_value = snapshot.if_contains("entities");
 	if (!entities_value || !entities_value->is_array()) {
 		egLOG_ERROR("scene", "world '{}': not a world snapshot", world.get_name());
@@ -355,7 +414,12 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 				return;
 			}
 			if (const auto* value = components.if_contains(entry.name); value && value->is_object()) {
-				const json::object& saved = value->as_object();
+				const json::object* readable = current_format(entry, value->as_object(), versions, context.system, world.get_name(), migrated);
+				if (!readable) {
+					++report.unknown[entry.name];
+					return;
+				}
+				const json::object& saved = *readable;
 				auto known = known_by_type.find(&entry);
 				if (known == known_by_type.end()) known = known_by_type.emplace(&entry, desc::known_keys(*entry.schema)).first;
 				const std::vector<std::string> removed = desc::unknown_keys(known->second, saved);
@@ -383,7 +447,12 @@ bool scn::restore_world(world_context& world, const json::object& given, const c
 				++report.unknown[std::string{ name }];
 				continue;
 			}
-			if (!entry->read(*entry->schema, reg, entt::null, value.as_object(), read)) {
+			const json::object* readable = current_format(*entry, value.as_object(), versions, context.system, world.get_name(), migrated);
+			if (!readable) {
+				++report.unknown[entry->name];
+				continue;
+			}
+			if (!entry->read(*entry->schema, reg, entt::null, *readable, read)) {
 				++report.partial[entry->name];
 			}
 		}
