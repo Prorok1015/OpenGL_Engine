@@ -1100,7 +1100,11 @@ BOOST_AUTO_TEST_CASE(SaveAll_AMigratedFile_AsksTheVersionAfterTheOthersAreWritte
 	host->open(tag, false);
 	edt::document* old = context->documents().find_by_source(tag);
 	BOOST_REQUIRE(old != nullptr);
-	edt::document& plain = open_config("b.desc");
+	const res::tag current_tag = put("b.desc", R"({"__type":"test.config","__version":2,"speed":2.0})");
+	host->open(current_tag, false);
+	edt::document* current = context->documents().find_by_source(current_tag);
+	BOOST_REQUIRE(current != nullptr);
+	edt::document& plain = *current;
 	make_dirty(*old);
 	make_dirty(plain);
 
