@@ -31,7 +31,9 @@ namespace edt
 	// warning without a fix when no holder is in the project's own layer); of a desc and its binary file (EPIC-79, #1129):
 	// asset.orphan_binary (a binary file without its desc, no ID; "Delete" asks first), asset.binary_sidecar (a .resource
 	// of a binary file whose desc is beside it again; "Remove the sidecar" asks first), asset.missing_binary (an error: a desc with
-	// ranges and no binary file beside it). Main thread only.
+	// ranges and no binary file beside it); of the references of the saved files (#775): asset.broken_reference (on the file that holds it, with
+	// its JSON pointer: an error for a {guid, path} whose guid no file holds and whose path is no file either, a warning for a res:// path
+	// that names no file; this is where what a forced delete left broken shows). Main thread only.
 	class asset_problem_publisher
 	{
 	public:
@@ -45,7 +47,7 @@ namespace edt
 		std::vector<problem_action> actions_of(const problem& row, asset_database& assets) const;
 
 	private:
-		enum class kind { no_id, bad_meta, orphan, duplicate_id, orphan_binary, binary_sidecar, missing_binary };
+		enum class kind { no_id, bad_meta, orphan, duplicate_id, orphan_binary, binary_sidecar, missing_binary, broken_reference };
 
 		struct entry
 		{
