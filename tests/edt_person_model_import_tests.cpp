@@ -2,14 +2,21 @@
 #include "edt_person_model_import.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/common/fs_paths.h>
+#include <snk/common/logger/engine_log_sinks.h>
+#include <snk/platform/plt_process.h>
 #include <snk/resource/res_system.h>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // File > Import Model goes through the decoder process (#987): the steps are faked here, so this runs without assimp too.
@@ -199,7 +206,7 @@ BOOST_AUTO_TEST_CASE(AStopRequestWhileTheDecoderImports_LeavesNothingInMemory)
 
 BOOST_AUTO_TEST_CASE(TheFoldersOfEarlierImports_GoWithOneSweepOfImports)
 {
-	// What the editor does at startup: an import of an earlier run that ended without erasing its folder (a crash).
+	// erase_memory_folder takes every import below the folder it is given, and nothing beside it.
 	const res::tag first{ "memory://__imports/1/robot/robot.geom.desc" };
 	const res::tag second{ "memory://__imports/7/crate/materials/m.mat.desc" };
 	const res::tag other{ "memory://__models/res/levels/robot.glb/robot.prefab.desc" };
@@ -212,12 +219,66 @@ BOOST_AUTO_TEST_CASE(TheFoldersOfEarlierImports_GoWithOneSweepOfImports)
 	BOOST_TEST(resources->exists(other), "only the imports' folder is swept");
 }
 
-BOOST_AUTO_TEST_CASE(EachImportHasAFolderOfItsOwn)
+BOOST_AUTO_TEST_CASE(EachImportHasAFolderOfItsOwn_InTheFolderOfItsRun)
 {
-	BOOST_TEST(edt::person_import_folder(model, 1) == "__imports/1/robot/");
-	BOOST_TEST(edt::person_import_folder(model, 2) == "__imports/2/robot/");
+	BOOST_TEST(edt::person_import_folder(model, 42, 1) == "__imports/42/1/robot/");
+	BOOST_TEST(edt::person_import_folder(model, 42, 2) == "__imports/42/2/robot/");
+	BOOST_TEST(edt::person_import_folder(model, 43, 1) == "__imports/43/1/robot/");
 	BOOST_TEST(edt::k_person_parse_time_limit.count() == 120);
 	BOOST_TEST(edt::k_agent_parse_time_limit.count() == 60);
+}
+
+BOOST_AUTO_TEST_CASE(TheSweepAtStartup_ErasesOnlyTheImportsOfRunsThatEnded)
+{
+	// memory:// is shared by every editor on the project: another one's imports, and this run's, stay.
+	constexpr std::int64_t ended_run = 2147483646;
+	BOOST_REQUIRE(!platform::process_is_running(ended_run));
+	const std::int64_t this_run = platform::current_process_id();
+	const res::tag ended{ std::format("memory://__imports/{}/1/robot/robot.geom.desc", ended_run) };
+	const res::tag ended_other{ std::format("memory://__imports/{}/7/crate/materials/m.mat.desc", ended_run) };
+	const res::tag current{ std::format("memory://__imports/{}/1/robot/robot.geom.desc", this_run) };
+	const res::tag not_a_run{ "memory://__imports/notes/robot.geom.desc" };
+	// The layout before the run folders: "__imports/<serial>/<stem>/", erased even when a process has that number (pid 1).
+	const res::tag earlier_layout{ "memory://__imports/1/robot/robot.geom.desc" };
+	const res::tag other{ "memory://__models/res/levels/robot.glb/robot.prefab.desc" };
+	for (const res::tag& tag : { ended, ended_other, current, not_a_run, earlier_layout, other }) {
+		BOOST_REQUIRE(resources->store_sync(tag, std::vector<std::byte>(4, std::byte{ 1 })));
+	}
+	edt::erase_imports_of_ended_runs(*resources, this_run);
+	BOOST_TEST(!resources->exists(ended));
+	BOOST_TEST(!resources->exists(ended_other));
+	BOOST_TEST(resources->exists(current), "this run's imports are not an earlier run's");
+	BOOST_TEST(resources->exists(not_a_run), "a folder that names no process is left alone");
+	BOOST_TEST(!resources->exists(earlier_layout));
+	BOOST_TEST(resources->exists(other), "only the imports' folder is swept");
+}
+
+BOOST_AUTO_TEST_CASE(TheNameOfTheModelFile_ReachesTheLogOnlyEscaped)
+{
+	// U+202E (right-to-left override) and, where a file name may hold them, '\' and ':'.
+#if defined(_WIN32)
+	const std::string name = std::string{ "ro" } + "\xE2\x80\xAE" + "bot.glb";
+	const std::string shown = "ro\\u{202E}bot.glb";
+#else
+	const std::string name = std::string{ "r\\o:" } + "\xE2\x80\xAE" + "bot.glb";
+	const std::string shown = "r\\\\o:\\u{202E}bot.glb";
+#endif
+	model = dir.write(fs_paths::path_from_utf8("models/" + name), "glb-bytes");
+	std::mutex mutex;
+	std::vector<std::string> lines;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "Editor/Import") return;
+		std::lock_guard lock(mutex);
+		lines.emplace_back(message);
+	});
+	const edt::import_intermediate result = run(decoder());
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	std::lock_guard lock(mutex);
+	BOOST_REQUIRE(!lines.empty());
+	for (const std::string& line : lines) {
+		BOOST_TEST(line.find("\xE2\x80\xAE") == std::string::npos, line);
+		BOOST_TEST(line.find(shown) != std::string::npos, line);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
