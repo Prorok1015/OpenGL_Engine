@@ -66,9 +66,6 @@ namespace edt
 		bool needs_attention() const { return !failed.empty() || !asked.empty() || !skipped.empty(); }
 	};
 
-	// What is still unsaved after a Save All (failed, waiting for an answer, left out), each row with its reason.
-	std::vector<unsaved_group> unsaved_groups(const save_all_report& report);
-
 	// What Save All needs to write the level, which the document does not do by itself.
 	struct save_all_scene_ports
 	{
@@ -99,6 +96,8 @@ namespace edt
 	// The one list the menu bar's popup, its tooltip and the message after a Save All show: grouped by kind (level, prefab, data,
 	// the rest), in the order the documents came in.
 	std::vector<unsaved_group> unsaved_groups(const std::vector<unsaved_item>& items);
+	// What is still unsaved after a Save All (failed, waiting for an answer, left out), each row with its reason.
+	std::vector<unsaved_group> unsaved_groups(const save_all_report& report);
 	// `heading`, then every group's heading with its rows under it.
 	std::string unsaved_groups_text(const std::vector<unsaved_group>& groups, std::string_view heading);
 	// The dirty documents as text (tooltip).
