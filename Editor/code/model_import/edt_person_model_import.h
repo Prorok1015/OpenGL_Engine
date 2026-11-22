@@ -18,8 +18,16 @@ namespace edt {
 	import_intermediate person_model_import(const std::filesystem::path& path, const std::string& memory_folder,
 		const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx);
 
-	// "__imports/<serial>/<stem>/": one memory:// folder per import a person starts, apart from an agent's "<stem>/" and the
-	// "__models/" of the models levels refer to.
-	std::string person_import_folder(const std::filesystem::path& path, std::uint64_t serial);
+	// "__imports/<process id>/<serial>/<stem>/": one memory:// folder per import a person starts, apart from an agent's
+	// "<stem>/" and the "__models/" of the models levels refer to. memory:// is shared by every editor on the project, so
+	// each run has a folder of its own.
+	std::string person_import_folder(const std::filesystem::path& path, std::int64_t process_id, std::uint64_t serial);
+	// "__imports/<process id>/": every import folder of that run.
+	std::string person_run_folder(std::int64_t process_id);
+
+	// At startup: erases the "__imports/<process id>/" folders of memory:// whose process is not running (a run that crashed
+	// or was killed), never `current_process_id`'s; a folder whose name is no process id is left as it is.
+	// Process ids are this machine's: editors on other hosts or containers sharing the project's disk are not told apart.
+	void erase_imports_of_ended_runs(res::resource_system& resources, std::int64_t current_process_id);
 
 } // namespace edt

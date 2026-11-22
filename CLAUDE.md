@@ -66,7 +66,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 
 ### Geometry data lives in `<name>.geom.bin`
 - **What:** a triangle `*.geom.desc` (`geometry_desc` v2) holds `layout` and ranges `{offset,size,sha256,layout}`; the bytes are in `<name>.geom.bin` beside it (`res::desc_binary`). Write geometry only through `rnd::write_geometry_files` (`snk/render/geom/rnd_geometry_files.h`); never write triangle vertices/indices as JSON arrays. Lines/points and old files stay arrays (migration step `engine.geometry_blobs`)
-- **Why:** the writer stages `.bin.new`, writes the desc and commits under a save lock; the loader checks hashes and data and rebuilds bounds. The `.bin` has no `.resource`; rename, move and delete of a desc must carry it (not done yet: #775)
+- **Why:** the writer stages `.bin.new`, writes the desc and commits under a save lock; the loader checks hashes and data and rebuilds bounds. The `.bin` has no `.resource`; rename, move and delete of a desc carry it as one operation (`edt::asset_ops`, `asset.rename/move/delete`, #775)
 - **Ref:** `docs/epics/desc-driven/EPIC-79.md`
 
 ## 🗣️ Conventions

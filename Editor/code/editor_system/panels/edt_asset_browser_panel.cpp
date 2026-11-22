@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <optional>
 #include <vector>
 
@@ -418,6 +419,12 @@ namespace edt
 
 					// Context menu
 					if (ImGui::BeginPopupContextItem()) {
+						if (m_operation_form) {
+							if (ImGui::MenuItem("Rename...")) ask_operation(asset_operation::rename, e.src.relative);
+							if (ImGui::MenuItem("Move...")) ask_operation(asset_operation::move, e.src.relative);
+							if (ImGui::MenuItem("Delete...")) ask_operation(asset_operation::remove, e.src.relative);
+							ImGui::Separator();
+						}
 						if (ImGui::MenuItem("Copy path"))
 							ImGui::SetClipboardText(fs_paths::utf8_of(e.src.path).c_str());
 						if (ImGui::MenuItem("Copy relative path")) {
@@ -452,6 +459,7 @@ namespace edt
 
 		draw_create_window();
 		draw_variant_window();
+		draw_operation_window();
 	}
 }
 
@@ -524,5 +532,159 @@ void edt::asset_browser_panel::draw_usage_rows()
 				names += file + '\n';
 			ImGui::SetTooltip("%s", names.c_str());
 		}
+	}
+}
+
+void edt::asset_browser_panel::set_asset_operations(asset_operation_ports ports)
+{
+	m_operation_form = std::make_unique<asset_operation_form>(std::move(ports));
+}
+
+void edt::asset_browser_panel::ask_operation(asset_operation what, const std::filesystem::path& relative)
+{
+	m_operation_form->open(what, res::tag::make(fs_paths::generic_utf8_of(relative)));
+	m_operation_requested = true;
+}
+
+namespace
+{
+	std::vector<std::string> lines_of(const std::string& text)
+	{
+		std::vector<std::string> out;
+		std::size_t start = 0;
+		while (start <= text.size()) {
+			const std::size_t end = text.find('\n', start);
+			out.push_back(text.substr(start, end == std::string::npos ? std::string::npos : end - start));
+			if (end == std::string::npos) break;
+			start = end + 1;
+		}
+		return out;
+	}
+
+	const char* verb_of(edt::asset_operation what)
+	{
+		switch (what) {
+		case edt::asset_operation::rename: return "Rename";
+		case edt::asset_operation::move: return "Move";
+		case edt::asset_operation::remove: return "Delete";
+		}
+		return "Change";
+	}
+}
+
+void edt::asset_browser_panel::draw_operation_lines(const char* id, const std::vector<std::string>& lines, bool error)
+{
+	if (ImGui::BeginChild(id, ImVec2(em(480.f), em(lines.size() > 8 ? 220.f : 120.f)), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+		if (error) ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
+		for (const std::string& line : lines) ImGui::TextUnformatted(line.c_str());
+		if (error) ImGui::PopStyleColor();
+	}
+	ImGui::EndChild();
+}
+
+void edt::asset_browser_panel::draw_operation_window()
+{
+	if (!m_operation_form) return;
+	asset_operation_form& form = *m_operation_form;
+	constexpr const char* title = "Asset Operation";
+	if (m_operation_requested) {
+		ImGui::OpenPopup(title);
+		m_operation_requested = false;
+	}
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	switch (form.current()) {
+	case asset_operation_form::stage::editing:
+		draw_operation_editing(form);
+		break;
+	case asset_operation_form::stage::confirming_force:
+		draw_operation_force(form);
+		break;
+	case asset_operation_form::stage::reported:
+		draw_operation_report(form);
+		break;
+	case asset_operation_form::stage::closed:
+		ImGui::CloseCurrentPopup();
+		break;
+	}
+	ImGui::EndPopup();
+}
+
+void edt::asset_browser_panel::draw_operation_editing(asset_operation_form& form)
+{
+	const char* verb = verb_of(form.operation());
+	form.settle(std::chrono::steady_clock::now());
+	ImGui::Text("%s %s", verb, form.asset_text().c_str());
+	bool entered = false;
+	if (form.operation() != asset_operation::remove) {
+		std::vector<char> buffer(std::max<std::size_t>(form.input().size() + 64, 256), '\0');
+		std::copy(form.input().begin(), form.input().end(), buffer.begin());
+		if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+		ImGui::SetNextItemWidth(em(480.f));
+		const char* label = form.operation() == asset_operation::rename ? "New name" : "Folder below res://";
+		entered = ImGui::InputText(label, buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (buffer.data() != form.input()) {
+			if (entered) form.set_input(buffer.data());
+			else form.type_input(buffer.data(), std::chrono::steady_clock::now());
+		}
+	}
+	if (form.planning_pending()) {
+		ImGui::TextDisabled("Checking...");
+	} else if (form.refused()) {
+		draw_operation_lines("##operation_refusal", lines_of(form.refusal_text()), true);
+	} else {
+		draw_operation_lines("##operation_preview", form.preview_lines(), false);
+	}
+	if (form.needs_force() && !form.refused()) {
+		ImGui::TextUnformatted("Other files refer to it, so Delete stays off.");
+	}
+	if (!form.error().empty()) draw_operation_lines("##operation_error", lines_of(form.error()), true);
+
+	ImGui::BeginDisabled(!form.can_submit());
+	const bool clicked = ImGui::Button(verb);
+	ImGui::EndDisabled();
+	const bool done = (clicked || (entered && form.can_submit())) && form.submit();
+	if (form.take_disk_changed()) m_needs_refresh = true;
+	if (done) m_selected_rel.clear();
+	if (form.can_ask_force()) {
+		ImGui::SameLine();
+		if (ImGui::Button("Delete anyway (force)...")) form.ask_force();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+		form.close();
+		ImGui::CloseCurrentPopup();
+	}
+}
+
+void edt::asset_browser_panel::draw_operation_force(asset_operation_form& form)
+{
+	ImGui::Text("Delete %s although other files refer to it?", form.asset_text().c_str());
+	draw_operation_lines("##operation_force", lines_of(form.force_text()), false);
+	if (!form.error().empty()) draw_operation_lines("##operation_error", lines_of(form.error()), true);
+	ImGui::PushStyleColor(ImGuiCol_Text, colors().warning);
+	const bool clicked = ImGui::Button("Delete and break the references");
+	ImGui::PopStyleColor();
+	const bool done = clicked && form.submit_force();
+	if (form.take_disk_changed()) m_needs_refresh = true;
+	if (done) m_selected_rel.clear();
+	ImGui::SameLine();
+	if (ImGui::Button("Back") || ImGui::IsKeyPressed(ImGuiKey_Escape)) form.back();
+}
+
+void edt::asset_browser_panel::draw_operation_report(asset_operation_form& form)
+{
+	ImGui::TextUnformatted(form.report_title().c_str());
+	draw_operation_lines("##operation_report", form.report_lines(), false);
+	if (form.undone()) ImGui::TextDisabled("Undone: the files are back as they were.");
+	if (!form.undo_error().empty()) draw_operation_lines("##operation_undo_error", lines_of(form.undo_error()), true);
+	ImGui::BeginDisabled(!form.can_undo());
+	const bool undo = ImGui::Button("Undo");
+	ImGui::EndDisabled();
+	if (undo) form.undo();
+	if (form.take_disk_changed()) m_needs_refresh = true;
+	ImGui::SameLine();
+	if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+		form.close();
+		ImGui::CloseCurrentPopup();
 	}
 }

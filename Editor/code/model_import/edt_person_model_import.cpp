@@ -2,15 +2,19 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
+#include <snk/platform/plt_process.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -57,9 +61,54 @@ std::vector<std::byte> read_model(const fs::path& path, std::string& error, ds::
 
 }
 
-std::string edt::person_import_folder(const fs::path& path, std::uint64_t serial)
+std::string edt::person_import_folder(const fs::path& path, std::int64_t process_id, std::uint64_t serial)
 {
-	return std::format("__imports/{}/{}/", serial, res::sanitize_relative_path(fs_paths::utf8_of(path.stem())));
+	return std::format("{}{}/{}/", person_run_folder(process_id), serial, res::sanitize_relative_path(fs_paths::utf8_of(path.stem())));
+}
+
+std::string edt::person_run_folder(std::int64_t process_id)
+{
+	return std::format("__imports/{}/", process_id);
+}
+
+void edt::erase_imports_of_ended_runs(res::resource_system& resources, std::int64_t current_process_id)
+{
+	constexpr std::string_view imports = "__imports/";
+	const std::optional<std::vector<res::tag>> listed = resources.files_under(res::tag::memory, imports);
+	if (!listed) {
+		egLOG_WARN("Editor/Import", "memory:// cannot list '{}': the imports of earlier runs stay", imports);
+		return;
+	}
+	const auto is_number = [](std::string_view text, std::int64_t& value) {
+		const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+		return error == std::errc{} && end == text.data() + text.size() && value > 0;
+	};
+	std::set<std::string, std::less<>> kept;
+	std::set<std::string, std::less<>> ended_runs;
+	for (const res::tag& tag : *listed) {
+		if (!tag.relative().starts_with(imports)) continue;
+		const std::string_view below = tag.relative().substr(imports.size());
+		const std::size_t slash = below.find('/');
+		if (slash == std::string_view::npos) continue;
+		const std::string_view run = below.substr(0, slash);
+		std::int64_t process_id = 0;
+		// Not a run's folder (no process id): nothing tells whether an editor still uses it, so it stays.
+		if (!is_number(run, process_id) || process_id == current_process_id || kept.contains(run) || ended_runs.contains(run)) continue;
+		const std::string_view inside = below.substr(slash + 1);
+		std::int64_t serial = 0;
+		// "__imports/<serial>/<stem>/" of the layout before #1044: no run's, whatever process has that number now.
+		const bool earlier_layout = !is_number(inside.substr(0, inside.find('/')), serial);
+		if (earlier_layout || !platform::process_is_running(process_id)) {
+			ended_runs.emplace(run);
+		} else {
+			kept.emplace(run);
+		}
+	}
+	for (const std::string& run : ended_runs) {
+		if (const std::optional<res::tag> left = erase_memory_folder(resources, std::format("{}{}/", imports, run))) {
+			egLOG_WARN("Editor/Import", "'{}' of an earlier run's import cannot be removed", left->view());
+		}
+	}
 }
 
 edt::import_intermediate edt::person_model_import(const fs::path& path, const std::string& memory_folder,
