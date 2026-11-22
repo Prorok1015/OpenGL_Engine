@@ -1,13 +1,16 @@
 #include "edt_decoder_copy.h"
 #include "edt_decode_codec.h"
 #include "edt_file_identity.h"
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -79,6 +82,17 @@ struct listed_file
 
 std::optional<edt::decoder_copy> edt::make_decoder_copy(const fs::path& decoder, const fs::path& base, std::string& error)
 {
+	// #1158: how long hashing takes in a Debug build, measured before anything is optimized.
+	const auto started = std::chrono::steady_clock::now();
+	std::chrono::steady_clock::duration hashing{};
+	std::uint64_t hashed_bytes = 0;
+	const auto timed_digest = [&](std::span<const std::byte> bytes) {
+		const auto begin = std::chrono::steady_clock::now();
+		std::string digest = digest_to_hex(digest_of(bytes));
+		hashing += std::chrono::steady_clock::now() - begin;
+		hashed_bytes += bytes.size();
+		return digest;
+	};
 	if (base.empty()) {
 		error = "there is no folder for a copy of the decoder";
 		return std::nullopt;
@@ -123,7 +137,7 @@ std::optional<edt::decoder_copy> edt::make_decoder_copy(const fs::path& decoder,
 			error = std::format("'{}' beside the decoder cannot be read", name);
 			return std::nullopt;
 		}
-		std::string digest = digest_to_hex(digest_of(*bytes));
+		std::string digest = timed_digest(*bytes);
 		manifest += name + " " + digest + "\n";
 		files.push_back({ name, std::move(*bytes), std::move(digest) });
 	}
@@ -138,7 +152,7 @@ std::optional<edt::decoder_copy> edt::make_decoder_copy(const fs::path& decoder,
 	const auto copy_is_whole = [&] {
 		for (const listed_file& file : files) {
 			const std::optional<std::vector<std::byte>> copied = read_all(file_in_copy(file.name));
-			if (!copied || digest_to_hex(digest_of(*copied)) != file.digest) return false;
+			if (!copied || timed_digest(*copied) != file.digest) return false;
 		}
 		return true;
 	};
@@ -175,6 +189,9 @@ std::optional<edt::decoder_copy> edt::make_decoder_copy(const fs::path& decoder,
 		std::error_code ignored;
 		if (entry.path().filename() != folder.filename() && entry.is_directory(ignored)) fs::remove_all(entry.path(), ignored);
 	}
+	const auto ms = [](std::chrono::steady_clock::duration d) { return std::chrono::duration_cast<std::chrono::milliseconds>(d).count(); };
+	egLOG_INFO("edt/decoder", "copy of the decoder: {} files, {} bytes hashed in {} ms, {} ms in all", files.size(), hashed_bytes,
+		ms(hashing), ms(std::chrono::steady_clock::now() - started));
 	return decoder_copy{ file_in_copy(utf8_name(decoder.filename())), folder };
 }
 
