@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <format>
 #include <map>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -14,6 +16,28 @@ namespace
 {
 	// A file name in a question: one line, nothing hidden.
 	constexpr std::size_t k_shown_path_bytes = 512;
+
+	// What a reference points at that nothing in the project answers to: a guid no file holds (its path, when it has one, names no
+	// file either), or a res:// path that is no file. A path with a '#' or '?' addresses a part of a file, which the database does
+	// not list. Only the saved files are looked at, as in "Used by".
+	std::optional<std::string> missing_target_of(const edt::asset_database& assets, const edt::raw_reference& reference)
+	{
+		if (reference.guid && !assets.find(*reference.guid).empty()) {
+			return std::nullopt;
+		}
+		if (reference.path.empty()) {
+			return reference.guid ? std::optional<std::string>(std::format("the asset ID {}", res::to_text(*reference.guid))) : std::nullopt;
+		}
+		constexpr std::string_view protocol = "res://";
+		if (!reference.path.starts_with(protocol) || reference.path.find_first_of("#?") != std::string::npos) {
+			return std::nullopt;
+		}
+		const res::tag target{ reference.path };
+		if (assets.find(target) || assets.find_any_case(target)) {
+			return std::nullopt;
+		}
+		return reference.guid ? std::format("the asset ID {} (last known as {})", res::to_text(*reference.guid), reference.path) : reference.path;
+	}
 
 	bool same(const edt::problem& a, const edt::problem& b)
 	{
@@ -42,6 +66,20 @@ void edt::asset_problem_publisher::publish(problem_list& problems, const asset_d
 			row.item.file = key;
 			row.item.code = "asset.bad_meta";
 			row.item.message = std::format("the .resource cannot be read: {}", record.meta_error);
+			found.push_back(std::move(row));
+		}
+		for (const edt::raw_reference& reference : edt::references_in(record.references)) {
+			const std::optional<std::string> target = missing_target_of(assets, reference);
+			if (!target) {
+				continue;
+			}
+			entry row;
+			row.what = kind::broken_reference;
+			row.path = key;
+			row.item.severity = reference.guid ? problem_severity::error : problem_severity::warning;
+			row.item.file = key;
+			row.item.code = "asset.broken_reference";
+			row.item.message = std::format("{} refers to {}, which is not in the project", reference.json_pointer, *target);
 			found.push_back(std::move(row));
 		}
 		if (record.type == "desc" && record.binary_ranges && !record.binary_beside) {
@@ -224,6 +262,7 @@ std::vector<edt::problem_action> edt::asset_problem_publisher::actions_of(const 
 		break;
 	case kind::bad_meta:
 	case kind::missing_binary:
+	case kind::broken_reference:
 		break;
 	}
 	return out;
