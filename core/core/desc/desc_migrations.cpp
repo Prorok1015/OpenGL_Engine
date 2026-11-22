@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <format>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -99,6 +101,47 @@ namespace {
 		}
 	}
 
+	bool lies_inside(const std::vector<std::string>& inner, const std::vector<std::string>& outer)
+	{
+		return outer.size() < inner.size() && std::equal(outer.begin(), outer.end(), inner.begin());
+	}
+
+	std::string pointer_of_tokens(std::span<const std::string> tokens)
+	{
+		std::string pointer;
+		for (const std::string& token : tokens) {
+			pointer += '/';
+			for (const char c : token) {
+				if (c == '~') pointer += "~0";
+				else if (c == '/') pointer += "~1";
+				else pointer += c;
+			}
+		}
+		return pointer;
+	}
+
+	// rename onto an object that holds the source: the value takes the object's place, so the object may hold nothing
+	// but the way down to the source, which would otherwise be lost with it.
+	void lift(json::object& object, const std::vector<std::string>& source, const std::vector<std::string>& target,
+		std::string_view from, std::string_view to)
+	{
+		json::value& top = holder_of(object, target, to, false)->at(target.back());
+		const json::value* node = &top;
+		for (std::size_t i = target.size(); i < source.size(); ++i) {
+			const json::object& level = node->as_object();
+			for (const auto& member : level) {
+				if (member.key() != source[i]) {
+					std::vector<std::string> dropped(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(i));
+					dropped.emplace_back(member.key());
+					throw std::runtime_error(std::format("rename {} -> {} would drop {}", from, to, pointer_of_tokens(dropped)));
+				}
+			}
+			node = &level.at(source[i]);
+		}
+		json::value value = *node;
+		top = std::move(value);
+	}
+
 	[[noreturn]] void fail(std::string_view what)
 	{
 		throw std::runtime_error(std::string{ what });
@@ -123,17 +166,33 @@ void desc::migrations::rename(json::object& object, std::string_view from, std::
 {
 	const std::vector<std::string> source = field_tokens(from);
 	const std::vector<std::string> target = field_tokens(to);
-	json::object* source_holder = holder_of(object, source, from, false);
+	const json::object* source_holder = holder_of(object, source, from, false);
 	if (!source_holder || !source_holder->contains(source.back())) {
+		return;
+	}
+	if (lies_inside(source, target)) {
+		lift(object, source, target, from, to);
 		return;
 	}
 	if (const json::object* target_holder = holder_of(object, target, to, false); target_holder && target_holder->contains(target.back())) {
 		throw std::runtime_error(std::format("rename {} -> {}: a value is already at {}", from, to, to));
 	}
 	check_writable(object, target, to);
-	json::value value = std::move(source_holder->at(source.back()));
-	source_holder->erase(source.back());
+	// Written before the source goes, so a failure leaves the object as it was.
+	json::value value = source_holder->at(source.back());
+	if (lies_inside(target, source)) {
+		json::value wrapped = std::move(value);
+		for (std::size_t i = target.size(); i-- > source.size();) {
+			json::object level;
+			level.emplace(target[i], std::move(wrapped));
+			wrapped = std::move(level);
+		}
+		holder_of(object, source, from, false)->at(source.back()) = std::move(wrapped);
+		return;
+	}
 	holder_of(object, target, to, true)->insert_or_assign(target.back(), std::move(value));
+	// The insert may have moved the objects the source was found in.
+	holder_of(object, source, from, false)->erase(source.back());
 }
 
 void desc::migrations::remove(json::object& object, std::string_view pointer)
@@ -195,7 +254,11 @@ std::vector<desc::detail::schema_migration> desc::detail::parse_schema_migration
 					fail(std::format("{}: 'remove' must be an array of pointers", where));
 				}
 				for (const json::value& pointer : member.value().as_array()) {
-					step.removals.push_back(pointer_of(pointer, where));
+					std::string removed = pointer_of(pointer, where);
+					if (std::ranges::find(step.removals, removed) != step.removals.end()) {
+						fail(std::format("{}: remove {} twice", where, removed));
+					}
+					step.removals.push_back(std::move(removed));
 				}
 			} else if (key == "set_default") {
 				if (!member.value().is_object()) {
@@ -222,22 +285,36 @@ std::vector<desc::detail::schema_migration> desc::detail::parse_schema_migration
 				fail(std::format("{}: rename onto {}, which another rename of the step moves away; put them in two steps", where, target));
 			}
 		}
-		// A pointer of the step inside another one (/a and /a/b) makes the outcome depend on which runs first.
-		std::vector<std::pair<std::string_view, std::vector<std::string>>> pointers;
-		const auto add_pointer = [&pointers](std::string_view pointer) { pointers.emplace_back(pointer, field_tokens(pointer)); };
-		for (const auto& [source, target] : step.renames) {
-			add_pointer(source);
-			add_pointer(target);
+		// A pointer of the step inside another one (/a and /a/b) makes the outcome depend on which runs first. The two
+		// pointers of one rename are no such pair: a rename onto the object that holds its source lifts the value.
+		struct step_pointer
+		{
+			std::string_view text;
+			std::vector<std::string> tokens;
+			std::optional<std::size_t> rename;
+		};
+		std::vector<step_pointer> pointers;
+		const auto add_pointer = [&pointers](std::string_view pointer, std::optional<std::size_t> rename) {
+			pointers.push_back(step_pointer{ pointer, field_tokens(pointer), rename });
+		};
+		for (std::size_t i = 0; i < step.renames.size(); ++i) {
+			add_pointer(step.renames[i].first, i);
+			add_pointer(step.renames[i].second, i);
 		}
 		for (const auto& pointer : step.removals) {
-			add_pointer(pointer);
+			add_pointer(pointer, std::nullopt);
 		}
 		for (const auto& entry : step.defaults) {
-			add_pointer(entry.first);
+			add_pointer(entry.first, std::nullopt);
 		}
-		for (const auto& [outer, outer_tokens] : pointers) {
-			for (const auto& [inner, inner_tokens] : pointers) {
-				if (outer_tokens.size() < inner_tokens.size() && std::equal(outer_tokens.begin(), outer_tokens.end(), inner_tokens.begin())) {
+		for (const auto& outer_pointer : pointers) {
+			for (const auto& inner_pointer : pointers) {
+				const std::string_view outer = outer_pointer.text;
+				const std::string_view inner = inner_pointer.text;
+				if (outer_pointer.rename && outer_pointer.rename == inner_pointer.rename && inner == step.renames[*inner_pointer.rename].first) {
+					continue;
+				}
+				if (lies_inside(inner_pointer.tokens, outer_pointer.tokens)) {
 					fail(std::format("{}: {} lies inside {}, which the same step also moves; put them in two steps", where, inner, outer));
 				}
 			}

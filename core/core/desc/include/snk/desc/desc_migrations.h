@@ -14,7 +14,9 @@
 namespace desc::migrations
 {
 	// Moves the value at `from` to `to`. Nothing to move is no step; a value already at `to` throws std::runtime_error
-	// rather than be overwritten.
+	// rather than be overwritten, except onto an object that holds `from` ("/a/b" -> "/a"): the value takes its place
+	// when the object holds nothing else on the way down, else it throws naming what would be dropped. A throw leaves
+	// the object as it was.
 	SNK_API void rename(boost::json::object& object, std::string_view from, std::string_view to);
 
 	// Removes the value at `pointer`, if there is one.
