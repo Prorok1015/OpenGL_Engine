@@ -131,6 +131,30 @@ BOOST_AUTO_TEST_CASE(NewerVersionThrows)
 	});
 }
 
+// #1226: a type no layer registers has no steps, so its version is 1 to them. Above 1 it is not newer than the engine but
+// unknown here (its module is not loaded): the message says so, not "newer". At version 1 it passes as before, so a file
+// that holds a type of an unloaded module is still read.
+BOOST_AUTO_TEST_CASE(UnregisteredTypeAboveVersion1_IsNotCalledNewer)
+{
+	register_two_steps();
+	const auto is_unregistered = [](const std::runtime_error& e) {
+		const std::string what = e.what();
+		return what.find("'test.unknown' is not a registered desc type (version 3)") != std::string::npos
+			&& what.find("newer") == std::string::npos;
+	};
+	auto root = parse(R"({"__type":"test.unknown","__version":3})");
+	BOOST_CHECK_EXCEPTION(ds.migrate_tree(root, "ctx"), std::runtime_error, is_unregistered);
+	auto inside = parse(R"({"__type":"test_migr_desc","__version":3,"inner":{"__type":"test.unknown","__version":3}})");
+	BOOST_CHECK_EXCEPTION(ds.migrate_tree(inside, "ctx"), std::runtime_error, is_unregistered);
+}
+
+BOOST_AUTO_TEST_CASE(UnregisteredTypeAtVersion1_PassesAsBefore)
+{
+	auto o = parse(R"({"__type":"test.unknown","__version":1,"x":2})");
+	BOOST_CHECK_NO_THROW(ds.migrate_tree(o, "ctx"));
+	BOOST_TEST(o.at("x").as_int64() == 2);
+}
+
 BOOST_AUTO_TEST_CASE(NonIntegerVersionThrows)
 {
 	register_two_steps();
@@ -317,6 +341,16 @@ BOOST_AUTO_TEST_CASE(UpgradeInMemory_NamesTheSourceAndBothVersions)
 
 	auto malformed = parse(R"({"__type":"test_migr_desc","__version":"x"})");
 	BOOST_TEST(!ds.upgrade_in_memory(malformed, "bad.json").empty());
+}
+
+// #1226: a player's file whose root type no layer registers is not called newer than the engine.
+BOOST_AUTO_TEST_CASE(UpgradeInMemory_AnUnregisteredRootAboveVersion1_IsNotCalledNewer)
+{
+	auto unknown = parse(R"({"__type":"test.unknown","__version":2})");
+	const std::string problem = ds.upgrade_in_memory(unknown, "user://settings/x.json");
+	BOOST_TEST(problem.find("user://settings/x.json") != std::string::npos, problem);
+	BOOST_TEST(problem.find("'test.unknown' is not a registered desc type (version 2)") != std::string::npos, problem);
+	BOOST_TEST(problem.find("newer") == std::string::npos, problem);
 }
 
 // Review of #1231: a root of the current version does not let a typed object inside through unchecked. A newer one is
