@@ -100,7 +100,8 @@ const edt::document& edt::document_manager::scene() const
 void edt::document_manager::shutdown()
 {
 	if (!m_scene) return;
-	if (m_open_preview) close(m_open_preview->id());
+	for (previewable_document* open : previews()) close(open->id());
+	m_open_previews.clear();
 	while (!adopted_view(this).empty()) close(adopted_view(this).back()->id());
 	m_scene->bind_events(nullptr);
 	m_scene = nullptr;
@@ -115,7 +116,9 @@ edt::document* edt::document_manager::active()
 edt::document* edt::document_manager::find(document_id id)
 {
 	if (m_scene && id == m_scene->id()) return m_scene;
-	if (m_open_preview && m_open_preview->is_open() && m_open_preview->id() == id) return m_open_preview;
+	for (previewable_document* open : m_open_previews) {
+		if (open->is_open() && open->id() == id) return open;
+	}
 	const adopted_list& adopted = adopted_view(this);
 	const auto kept = std::find_if(adopted.begin(), adopted.end(), [id](const std::unique_ptr<document>& d) { return d->id() == id; });
 	return kept != adopted.end() ? kept->get() : nullptr;
@@ -128,32 +131,87 @@ void edt::document_manager::set_active(document_id id)
 	m_events.document_activated.emit(id);
 }
 
-edt::previewable_document& edt::document_manager::instance_of(const asset_preview_desc& preview)
+edt::document_manager::kept_preview& edt::document_manager::kind_of(const asset_preview_desc& preview)
 {
 	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&preview](const kept_preview& p) { return p.preview_id == preview.id; });
-	if (known != m_previews.end()) return *known->instance;
+	if (known != m_previews.end()) return *known;
+	m_previews.push_back({ preview.id, preview.multiple, {} });
+	return m_previews.back();
+}
 
-	const auto make = preview.make_preview;
-	auto made = make(*m_services);
-	ASSERT_MSG(made, "make_preview of an asset preview made no document");
-	m_previews.push_back({ preview.id, std::move(made) });
-	return *m_previews.back().instance;
+edt::previewable_document* edt::document_manager::preview_by_id(document_id id)
+{
+	for (previewable_document* open : m_open_previews) {
+		if (open->is_open() && open->id() == id) return open;
+	}
+	return nullptr;
+}
+
+edt::document_manager::kept_preview* edt::document_manager::kind_holding(const previewable_document* instance)
+{
+	for (kept_preview& kind : m_previews) {
+		const auto holds = std::find_if(kind.instances.begin(), kind.instances.end(),
+			[instance](const std::unique_ptr<previewable_document>& d) { return d.get() == instance; });
+		if (holds != kind.instances.end()) return &kind;
+	}
+	return nullptr;
 }
 
 edt::previewable_document* edt::document_manager::open_with(const asset_preview_desc& preview, const res::tag& source)
 {
-	previewable_document& next = instance_of(preview);
-	if (m_open_preview) close(m_open_preview->id());
+	// A preview that closed itself is no open preview any more.
+	std::erase_if(m_open_previews, [](const previewable_document* d) { return !d->is_open(); });
+	const bool multiple = kind_of(preview).multiple;
+	previewable_document* next = nullptr;
+	if (multiple) {
+		const std::string wanted = source_key(source);
+		for (const auto& candidate : kind_of(preview).instances) {
+			if (candidate->is_open() && source_key(candidate->source()) == wanted) {
+				const document_id id = candidate->id();
+				set_active(id);
+				return preview_by_id(id);
+			}
+		}
+		auto made = preview.make_preview(*m_services);
+		ASSERT_MSG(made, "make_preview of an asset preview made no document");
+		next = made.get();
+		kind_of(preview).instances.push_back(std::move(made));
+	} else {
+		// A single kind replaces every other single-kind preview; a `multiple` one is never closed by it. The closes are
+		// announced, and a listener may register another kind, so no reference into the kinds is held across them.
+		std::vector<document_id> replaced;
+		for (previewable_document* open : m_open_previews) {
+			const kept_preview* held = kind_holding(open);
+			if (held && !held->multiple) replaced.push_back(open->id());
+		}
+		for (const document_id id : replaced) close(id);
+		kept_preview& kind = kind_of(preview);
+		if (kind.instances.empty()) {
+			auto made = preview.make_preview(*m_services);
+			ASSERT_MSG(made, "make_preview of an asset preview made no document");
+			kind.instances.push_back(std::move(made));
+		}
+		next = kind_of(preview).instances.front().get();
+	}
 	if (m_problems) m_problems->clear(k_preview_problem_source);
 
-	next.open(source);
-	if (next.is_open()) {
-		m_open_preview = &next;
-		next.assign_id(m_next_id++);
-		m_events.document_opened.emit(next.id());
-		set_active(next.id());
+	next->open(source);
+	if (next->is_open()) {
+		next->assign_id(m_next_id++);
+		m_open_previews.push_back(next);
+		m_events.document_opened.emit(next->id());
+		set_active(next->id());
+	} else if (multiple) {
+		// Nothing was announced; the document that did not open is kept until the next open_preview, so the pointer given back is valid.
+		kept_preview& kind = kind_of(preview);
+		const auto failed = std::find_if(kind.instances.begin(), kind.instances.end(),
+			[next](const std::unique_ptr<previewable_document>& d) { return d.get() == next; });
+		if (failed != kind.instances.end()) {
+			m_failed_preview = std::move(*failed);
+			kind.instances.erase(failed);
+		}
 	}
-	return &next;
+	return next;
 }
 
 edt::previewable_document* edt::document_manager::open_preview(const res::tag& source)
@@ -194,7 +252,23 @@ edt::document* edt::document_manager::find_by_source(const res::tag& source)
 
 edt::previewable_document* edt::document_manager::preview()
 {
-	return m_open_preview && m_open_preview->is_open() ? m_open_preview : nullptr;
+	previewable_document* last = nullptr;
+	for (previewable_document* open : m_open_previews) {
+		if (!open->is_open()) continue;
+		if (open->id() == m_active) return open;
+		last = open;
+	}
+	return last;
+}
+
+std::vector<edt::previewable_document*> edt::document_manager::previews()
+{
+	std::vector<previewable_document*> out;
+	out.reserve(m_open_previews.size());
+	for (previewable_document* open : m_open_previews) {
+		if (open->is_open()) out.push_back(open);
+	}
+	return out;
 }
 
 void edt::document_manager::close(document_id id)
@@ -216,10 +290,23 @@ void edt::document_manager::close(document_id id)
 		m_events.document_closed.emit(id);
 		return;
 	}
-	if (!m_open_preview || !m_open_preview->is_open() || m_open_preview->id() != id) return;
+	const auto open = std::find_if(m_open_previews.begin(), m_open_previews.end(),
+		[id](const previewable_document* d) { return d->is_open() && d->id() == id; });
+	if (open == m_open_previews.end()) return;
 
-	m_open_preview->close();
-	m_open_preview = nullptr;
+	previewable_document* closing = *open;
+	end_preview(*closing);
+	// A `multiple` kind's document is destroyed once it is announced closed; a single kind keeps its one.
+	if (kept_preview* kind = kind_holding(closing); kind && kind->multiple) {
+		std::erase_if(kind->instances, [closing](const std::unique_ptr<previewable_document>& d) { return d.get() == closing; });
+	}
+}
+
+void edt::document_manager::end_preview(previewable_document& closing)
+{
+	const document_id id = closing.id();
+	closing.close();
+	std::erase(m_open_previews, &closing);
 	if (m_active == id) {
 		m_active = m_scene ? m_scene->id() : 0;
 		m_events.document_activated.emit(m_active);
@@ -233,25 +320,26 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 	if (known == m_previews.end()) return;
 
 	// Out of the list before anything is announced: a listener of the close may open another preview, which changes the list.
-	std::unique_ptr<previewable_document> owned = std::move(known->instance);
+	kept_preview removed = std::move(*known);
 	m_previews.erase(known);
-	if (m_open_preview == owned.get()) {
-		if (owned->is_dirty()) {
+	std::vector<problem> unsaved;
+	for (const auto& instance : removed.instances) {
+		if (!instance->is_open()) continue;
+		if (instance->is_dirty()) {
 			// Nothing saves it any more: the code that made it is going away. Said where a person looks, not only in the log.
-			const std::string message = "the preview '" + owned->title() + "' had unsaved changes and was closed: its asset preview '"
+			const std::string message = "the preview '" + instance->title() + "' had unsaved changes and was closed: its asset preview '"
 				+ preview.id + "' was unloaded";
 			egLOG_WARN("Editor/Documents", "{}", message);
-			if (m_problems) {
-				problem item;
-				item.severity = problem_severity::warning;
-				item.file = std::string(owned->source().relative());
-				item.message = message;
-				m_problems->set(k_preview_problem_source, { std::move(item) });
-			}
+			problem item;
+			item.severity = problem_severity::warning;
+			item.file = std::string(instance->source().relative());
+			item.message = message;
+			unsaved.push_back(std::move(item));
 		}
-		close(owned->id());
+		end_preview(*instance);
 	}
-	// `owned` goes here, after the announcements and while the preview's make_preview is still registered.
+	if (m_problems && !unsaved.empty()) m_problems->set(k_preview_problem_source, std::move(unsaved));
+	// `removed` goes here, after the announcements and while the preview's make_preview is still registered.
 }
 
 void edt::document_manager::for_each(const std::function<void(document&)>& fn)
@@ -260,8 +348,16 @@ void edt::document_manager::for_each(const std::function<void(document&)>& fn)
 	adopted_ids.reserve(adopted_view(this).size());
 	for (const auto& kept : adopted_view(this)) adopted_ids.push_back(kept->id());
 
+	std::vector<document_id> preview_ids;
+	preview_ids.reserve(m_open_previews.size());
+	for (const previewable_document* open : m_open_previews) {
+		if (open->is_open()) preview_ids.push_back(open->id());
+	}
+
 	if (m_scene) fn(*m_scene);
-	if (preview()) fn(*m_open_preview);
+	for (const document_id id : preview_ids) {
+		if (document* still_open = find(id)) fn(*still_open);
+	}
 	for (const document_id id : adopted_ids) {
 		if (document* still_open = find(id)) fn(*still_open);
 	}

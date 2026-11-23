@@ -18,11 +18,13 @@ namespace edt
 	struct asset_preview_desc;
 	struct editor_services;
 
-	// The documents of the editor: the one scene, and at most one open preview (the prefab, stage D). The scene is
+	// The documents of the editor: the one scene, and the open previews (the prefab; one at a time unless the preview
+	// is `multiple`, #1185). The scene is
 	// owned by the editor, which builds its controllers on it before the editor_context exists; the manager gives it
 	// its id and binds its document_changed to `events`. A preview is made by the asset preview that handles its source
 	// (asset_preview_desc, the longest matching suffix): the manager asks the registry, keeps one document per preview
-	// id, and closes and destroys it when that preview is removed. The editor reaches the concrete
+	// id (a `multiple` preview: one per source opened, destroyed when closed), and closes and destroys them when that preview
+	// is removed. The editor reaches the concrete
 	// scene and prefab documents through scene_of / prefab_of (controller/edt_document_cast.h).
 	class SNK_EDITOR_API document_manager
 	{
@@ -57,8 +59,11 @@ namespace edt
 		// form; null when no preview has that id).
 		previewable_document* open_preview(const res::tag& source);
 		previewable_document* open_preview(std::string_view preview_id, const res::tag& source);
-		// The open preview, null when there is none.
+		// The open preview a caller that knows of one means: the active document when it is a preview, else the one opened last;
+		// null when there is none.
 		previewable_document* preview();
+		// Every open preview, in the order they were opened.
+		std::vector<previewable_document*> previews();
 		// The adopted documents are not a member: editor_context holds this class by value, so its size is part of the
 		// module ABI (the services after it are read by a module's inline code); they are kept by the .cpp, per manager.
 		// A document of the editor's own (a data document, EPIC-56): it gets its id, hears `document_changed` through
@@ -85,8 +90,21 @@ namespace edt
 			std::unique_ptr<previewable_document> instance;
 		};
 
-		previewable_document& instance_of(const asset_preview_desc& preview);
+		// The previews of one asset_preview_desc: its one document (single kind) or the documents opened with it (multiple).
+		struct kept_preview
+		{
+			std::string preview_id;
+			bool multiple = false;
+			// A single kind keeps its one document for the life of the kind; a multiple kind's documents live while open.
+			std::vector<std::unique_ptr<previewable_document>> instances;
+		};
+
+		kept_preview& kind_of(const asset_preview_desc& preview);
+		kept_preview* kind_holding(const previewable_document* instance);
+		previewable_document* preview_by_id(document_id id);
 		previewable_document* open_with(const asset_preview_desc& preview, const res::tag& source);
+		// Closes the document and announces it; destroys nothing (the caller does, after the announcement).
+		void end_preview(previewable_document& closing);
 		void preview_removed(const asset_preview_desc& preview);
 
 		document* m_scene;
@@ -95,7 +113,12 @@ namespace edt
 		editor_services* m_services = nullptr;
 		problem_list* m_problems = nullptr;
 		std::vector<kept_preview> m_previews;
-		previewable_document* m_open_preview = nullptr;
+		// The open previews in the order they were opened: the document state of the several previews (#1185) is a member, not a
+		// table in the .cpp, so it is found where the manager is (its size is in the editor layout key: editor_layout_revision 2).
+		std::vector<previewable_document*> m_open_previews;
+		// The last document of a `multiple` kind that did not open (nothing announced it): kept until the next open, as the
+		// pointer open_preview returned for it must stay valid.
+		std::unique_ptr<previewable_document> m_failed_preview;
 		document_id m_active = 0;
 		document_id m_next_id = 1;
 		// Last: ends first, so no removal is reported to a half-destroyed manager.
