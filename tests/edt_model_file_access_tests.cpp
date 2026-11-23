@@ -168,6 +168,10 @@ BOOST_AUTO_TEST_CASE(TheSideFileLimits_Are64FilesOf64MiBAnd128MiBTogether_NamedI
 	BOOST_CHECK_EQUAL(edt::duration_text(edt::k_decoder_run_time_limit), "2 min");
 	BOOST_CHECK_EQUAL(edt::duration_text(edt::k_referenced_model_time_limit), "10 s");
 	BOOST_CHECK_EQUAL(edt::duration_text(std::chrono::milliseconds(1500)), "1500 ms");
+	BOOST_CHECK_EQUAL(edt::time_limit_refusal("decoding the model", edt::k_person_parse_time_limit),
+		"decoding the model exceeds 2 min (decoder time)");
+	BOOST_CHECK_EQUAL(edt::time_limit_refusal("reading the model", std::chrono::milliseconds::zero()),
+		"reading the model exceeds its time limit (decoder time)");
 }
 
 BOOST_AUTO_TEST_CASE(ManyAliasesOfOneBigFile_CannotMakeTheImportReadItAgainAndAgain)
