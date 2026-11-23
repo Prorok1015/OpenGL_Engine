@@ -744,9 +744,11 @@ BOOST_AUTO_TEST_CASE(ARootGivenWithATrailingSeparator_StillDeletesTheJournalFold
 	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	const std::string id = text_of(result.value.at("operation"));
-	std::ifstream in(journal.path() / id / "journal.json", std::ios::binary);
-	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-	const json::value written = json::parse(text);
+	// Read in a scope of its own: on Windows a journal file still open keeps the undo from deleting its folder.
+	const json::value written = [&] {
+		std::ifstream in(journal.path() / id / "journal.json", std::ios::binary);
+		return json::parse(std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() });
+	}();
 	std::string reason;
 	const std::optional<edt::operation_journal> read = edt::journal_from_json(written, reason);
 	BOOST_REQUIRE_MESSAGE(read, reason);
