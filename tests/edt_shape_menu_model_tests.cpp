@@ -229,7 +229,7 @@ BOOST_AUTO_TEST_CASE(RunShapeRequest_UnderANodeThatIsGone_WritesNoFiles)
 	run.stub("node.get", cmd::result::failure(cmd::codes::not_found, "no node at that path"));
 	run.stub("shape.create", cmd::result::success(json::object{ { "poly", "shapes/ball.poly.desc" } }));
 	run.stub("shape.add", cmd::result::success());
-	const mesh::shape_request request{ {}, json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xa1 } };
+	const shape_request request{ {}, json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xa1 } };
 
 	const std::string error = edt::run_shape_request(run.actions, "main", request);
 
