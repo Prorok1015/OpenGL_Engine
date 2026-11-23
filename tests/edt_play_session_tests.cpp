@@ -73,6 +73,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/scene/scn_schema_components.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -3351,11 +3352,38 @@ BOOST_AUTO_TEST_CASE(a_field_the_schema_does_not_know_is_an_error_at_its_pointer
 	BOOST_TEST((found[0].target.path == std::vector<std::uint64_t>{ cam_id }));
 }
 
+namespace {
+
+// The render descs are not part of this fixture (rnd_shader_desc_tests registers them the same way): a test that needs
+// the geometry_desc schema registers them while it runs.
+struct render_descs_while_running
+{
+	desc::desc_system& descs;
+	bool registered_here = false;
+
+	explicit render_descs_while_running(desc::desc_system& system)
+		: descs(system)
+	{
+		if (!descs.is_registered("geometry_desc")) {
+			engine::render::register_render_descs(descs);
+			registered_here = true;
+		}
+	}
+
+	~render_descs_while_running()
+	{
+		if (registered_here) engine::render::unregister_render_descs(descs);
+	}
+};
+
+}
+
 // #1180: component.set never writes a blob field (binary_ref), the engine reads one all the same: an override holding a
 // range is a warning, Play is not held back.
 BOOST_AUTO_TEST_CASE(an_override_of_a_blob_field_is_a_warning_at_its_pointer)
 {
 	open_level();
+	const render_descs_while_running with_render(*descs);
 	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
 	scn::prefab_desc::prefab_comp_node blob;
 	blob.type_name = "geometry_desc";

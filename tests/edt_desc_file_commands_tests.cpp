@@ -16,6 +16,7 @@
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
@@ -1087,10 +1088,37 @@ BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
 	BOOST_TEST(broken[1].find("/indices") == 0u, broken[1]);
 }
 
+namespace {
+
+// The render descs are not part of this fixture (rnd_shader_desc_tests registers them the same way): a test that needs
+// the geometry_desc schema registers them while it runs.
+struct render_descs_while_running
+{
+	desc::desc_system& descs;
+	bool registered_here = false;
+
+	explicit render_descs_while_running(desc::desc_system& system)
+		: descs(system)
+	{
+		if (!descs.is_registered("geometry_desc")) {
+			engine::render::register_render_descs(descs);
+			registered_here = true;
+		}
+	}
+
+	~render_descs_while_running()
+	{
+		if (registered_here) engine::render::unregister_render_descs(descs);
+	}
+};
+
+}
+
 // #1180: the loader reads "layout", "indices" and "vertices" of every geometry_desc, a child of another one too; the check
 // of a geometry file says which is missing instead of passing a file that does not load.
 BOOST_AUTO_TEST_CASE(AGeometryDesc_WithoutAMemberTheLoaderReads_IsAnError)
 {
+	const render_descs_while_running with_render(*descs);
 	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
 	const auto member_errors = [&](const std::string& text) {
 		std::vector<std::string> out;
