@@ -119,4 +119,19 @@ BOOST_AUTO_TEST_CASE(OnlyTheExitCodesOfALoaderThatFailed_SayTheDecoderCouldNotLo
 	BOOST_CHECK(!edt::is_loader_failure(-1));
 }
 
+#if defined(_WIN32)
+// The decoder this build made, with its runtime: the log line of make_decoder_copy is the measurement of #1158.
+BOOST_AUTO_TEST_CASE(TheCopyOfTheBuiltDecoder_IsMade)
+{
+#if defined(SNK_MODEL_DECODER_PATH)
+	std::string error;
+	const auto copy = edt::make_decoder_copy(SNK_MODEL_DECODER_PATH, dir.path() / "built", error);
+	BOOST_REQUIRE_MESSAGE(copy.has_value(), error);
+	BOOST_CHECK(fs::is_regular_file(copy->program));
+#else
+	BOOST_TEST_MESSAGE("skipped: this build has no model decoder (SNK_MODEL_DECODER_PATH)");
+#endif
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()
