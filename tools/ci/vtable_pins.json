@@ -1,5 +1,5 @@
 {
-  "layout_revision": 21,
+  "layout_revision": 23,
   "editor_layout_revision": 2,
   "interfaces": [
     {
@@ -366,6 +366,114 @@
         "void open(const res::tag&)",
         "void close()",
         "bool is_open() const"
+      ]
+    },
+    {
+      "class": "driver_interface",
+      "header": "core/core/video/drivers/interface/include/snk/driver/rnd_driver_interface.h",
+      "constant": "driver_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~driver_interface()",
+        "void begin_render_pass(const render_pass_desc&)",
+        "void end_render_pass()",
+        "void set_viewport(glm::ivec4)",
+        "void set_line_size(float)",
+        "void draw_indices(const std::unique_ptr<vertex_array_interface>&, unsigned int, unsigned int)",
+        "void draw_indices(const vertex_array_interface*, unsigned int, unsigned int, unsigned int)",
+        "std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>&, shader_build_log*)",
+        "std::unique_ptr<vertex_array_interface> create_vertex_array()",
+        "std::unique_ptr<buffer_interface> create_buffer()",
+        "void begin_frame()",
+        "const binding_table& bindings() const",
+        "std::size_t uniform_offset_alignment() const",
+        "std::size_t storage_offset_alignment() const",
+        "buffer_handle create_buffer(const buffer_desc&)",
+        "void destroy_buffer(buffer_handle)",
+        "void update_buffer(buffer_handle, std::size_t, std::span<const std::byte>)",
+        "bind_group_layout_handle create_bind_group_layout(const bind_group_layout_desc&)",
+        "bind_group_handle create_bind_group(const bind_group_desc&, lifetime)",
+        "void destroy_bind_group(bind_group_handle)",
+        "void set_bind_group(std::uint32_t, bind_group_handle, std::span<const std::uint32_t>)",
+        "pipeline_handle create_pipeline(const pipeline_desc&)",
+        "void destroy_pipelines_of(const shader_ref&)",
+        "void bind_pipeline(pipeline_handle)",
+        "const pipeline_desc& pipeline_info(pipeline_handle) const",
+        "void invalidate_state_cache()",
+        "std::vector<std::byte> read_texture(texture_handle, glm::ivec4)",
+        "texture_handle create_texture(const texture_header&)",
+        "void destroy(texture_handle)",
+        "void update_texture(texture_handle, const void*, const texture_region&)",
+        "std::uint64_t native_texture_name(texture_handle) const",
+        "const texture_header& info(texture_handle) const",
+        "bool is_alive(texture_handle) const",
+        "bool supports_timer_queries() const",
+        "uint32_t create_timer_query()",
+        "void destroy_timer_query(uint32_t)",
+        "void timestamp_query(uint32_t)",
+        "bool is_query_ready(uint32_t) const",
+        "uint64_t get_query_result_ns(uint32_t) const"
+      ]
+    },
+    {
+      "class": "shader_interface",
+      "header": "core/core/video/drivers/interface/include/snk/driver/rnd_shader_interface.h",
+      "constant": "shader_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~shader_interface()"
+      ]
+    },
+    {
+      "class": "vertex_array_interface",
+      "header": "core/core/video/drivers/interface/include/snk/driver/rnd_vertex_array_interface.h",
+      "constant": "vertex_array_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~vertex_array_interface()",
+        "void bind() const",
+        "void unbind() const",
+        "void add_vertex_buffer(const std::shared_ptr<buffer_interface>&)",
+        "void set_index_buffer(const std::shared_ptr<buffer_interface>&)"
+      ]
+    },
+    {
+      "class": "buffer_interface",
+      "header": "core/core/video/drivers/interface/include/snk/driver/rnd_buffer_interface.h",
+      "constant": "buffer_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~buffer_interface()",
+        "void set_data(const void*, size_t, BUFFER_BINDING)",
+        "const BufferLayout& get_layout() const",
+        "void set_layout(const BufferLayout&)"
+      ]
+    },
+    {
+      "class": "render_pass_interface",
+      "header": "core/engine/render/render_system/include/snk/render/rnd_render_pass_interface.h",
+      "constant": "render_pass_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~render_pass_interface()",
+        "void execute(render_context&, driver::driver_interface&)",
+        "bool once_per_frame() const"
+      ]
+    },
+    {
+      "class": "material_compiler_interface",
+      "header": "core/engine/render/render_system/include/snk/render/shader/rnd_material_compiler.h",
+      "constant": "material_compiler_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~material_compiler_interface()",
+        "rnd::shader_config compile(const material_desc&, const material_compile_context&)"
       ]
     }
   ],

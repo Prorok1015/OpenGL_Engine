@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <snk/driver/rnd_buffer_layout.h>
 
 namespace rnd::driver
@@ -7,6 +8,10 @@ namespace rnd::driver
 	{
 		STATIC, DYNAMIC
 	};
+
+	// Module code calls this vtable through render_system::get_driver() (#1298): raised with any change of its bases or
+	// virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t buffer_interface_abi_revision = 1;
 
 	class buffer_interface
 	{
