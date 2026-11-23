@@ -11,7 +11,7 @@
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 
 // A shader program as a resource (.shader.desc, #1199): its stages and preprocessor defines. Parameters and samplers come
-// later; no material refers to it yet (#1200).
+// later; a material refers to one through material_desc::shader (#1200).
 namespace rnd
 {
 	class shader_desc;
@@ -37,7 +37,15 @@ namespace rnd
 		using base_type = desc::desc_base;
 
 		// The program and defines the material compiler builds from the same stages (without its skinning define).
-		shader_config config() const;
+		// `extra_defines` are the material's: the defines are the union of both, sorted, without duplicates. Sorting changes
+		// the order of the `#define` lines against the files, and that is intended: the same set always gives the same
+		// constant_data, so operator== (order-sensitive) agrees with variant_hash (order-independent). Two entries for the
+		// same NAME with different text: the extra (material) one is kept, with a warning.
+		shader_config config(const std::vector<std::string>& extra_defines = {}) const;
+
+		// The schema read, then the stages are checked (a missing vertex or fragment, an extension that is not the stage's):
+		// load warnings, the values are kept as written.
+		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override;
 
 		res::tag vertex;
 		res::tag fragment;

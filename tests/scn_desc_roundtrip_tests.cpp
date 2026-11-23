@@ -971,33 +971,28 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_ShippedFilesResaveToTheSameBytes)
 {
 	const material_io io{ *descs };
 	BOOST_TEST(io.resave(R"({"__type":"material_desc","__version":1,"__guid":"f90d3c03-865c-4193-aa09-cb2f98315634",
-		"defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag",
-		"shader_geometry":null,"queue":"opaque","uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},
-		"render_mode":"TRIANGLE"})")
-		== R"({"defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag",)"
-		R"("shader_geometry":null,"queue":"opaque","uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},)"
-		R"("render_mode":"TRIANGLE"})");
+		"defines":[],"samplers":[],"shader":"res://shaders/scene.shader.desc","queue":"opaque",
+		"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})")
+		== R"({"defines":[],"samplers":[],"shader":"res://shaders/scene.shader.desc","queue":"opaque",)"
+		R"("uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},"render_mode":"TRIANGLE"})");
 
 	BOOST_TEST(io.resave(R"({"__type":"material_desc","defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],
-		"shader_vertex":"res://shaders/sky.vert","shader_fragment":"res://shaders/sky.frag","shader_geometry":null,"queue":"opaque",
+		"shader":"res://shaders/sky.shader.desc","queue":"opaque",
 		"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})")
-		== R"({"defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],"shader_vertex":"res://shaders/sky.vert",)"
-		R"("shader_fragment":"res://shaders/sky.frag","shader_geometry":null,"queue":"opaque",)"
-		R"("uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},"render_mode":"TRIANGLE"})");
+		== R"({"defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],"shader":"res://shaders/sky.shader.desc",)"
+		R"("queue":"opaque","uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},"render_mode":"TRIANGLE"})");
 }
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_OnDiskTextMatchesTheShippedFile)
 {
 	std::ostringstream ss;
 	descs->write_pretty_json(ss, ser(material_io{ *descs }.read(R"({"defines":[],"samplers":[],
-		"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag","shader_geometry":null,
+		"shader":"res://shaders/scene.shader.desc",
 		"queue":"opaque","uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})")));
 	BOOST_TEST(ss.str() == "{\n"
 		"    \"defines\" : [],\n"
 		"    \"samplers\" : [],\n"
-		"    \"shader_vertex\" : \"res://shaders/scene.vert\",\n"
-		"    \"shader_fragment\" : \"res://shaders/scene.frag\",\n"
-		"    \"shader_geometry\" : null,\n"
+		"    \"shader\" : \"res://shaders/scene.shader.desc\",\n"
 		"    \"queue\" : \"opaque\",\n"
 		"    \"uniforms\" : {\n"
 		"        \"albedo\" : [1.0, 1.0, 1.0, 1.0],\n"
@@ -1007,8 +1002,8 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_OnDiskTextMatchesTheShippedFile)
 		"}\n");
 }
 
-// What the model importer writes: a hole in the sampler slots is a null, the tags of the shaders come from the parent (so
-// they are empty here and written as null), shininess is a number of the file.
+// What the model importer writes: a hole in the sampler slots is a null, the shader comes from the importer or the parent (so
+// it is not set here and not written), shininess is a number of the file.
 BOOST_AUTO_TEST_CASE(MaterialDesc_ImporterFormKeepsTheSlotHoleAndNowKeepsShininess)
 {
 	const material_io io{ *descs };
@@ -1022,7 +1017,7 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_ImporterFormKeepsTheSlotHoleAndNowKeepsShinine
 
 	const std::string written = json::serialize(ser(m));
 	BOOST_TEST(written == R"({"defines":["LIGHTS_ENABLED","USE_SPECULAR_MAP"],"samplers":[null,"res://spec.png"],)"
-		R"("shader_vertex":null,"shader_fragment":null,"shader_geometry":null,"queue":"opaque",)"
+		R"("queue":"opaque",)"
 		R"("uniforms":{"albedo":[5E-1,2.5E-1,5E-1,1E0],"emissive":[0E0,0E0,0E0,1E0],"shininess":1.6E1},"render_mode":"TRIANGLE"})");
 	// and a second round trip is a fixed point
 	BOOST_TEST(io.resave(written.c_str()) == written);
@@ -1099,27 +1094,22 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RenderModeUsesTheEnumeratorNames)
 	BOOST_CHECK((io.read(R"({"render_mode":"POINT"})").render_mode == rnd::driver::RENDER_MODE::POINT));
 }
 
-BOOST_AUTO_TEST_CASE(MaterialDesc_EmptyTagsAreWrittenAsNullAndNullOrEmptyReadAsEmpty)
+// #1200: the shader is a reference to a .shader.desc, written only while it is set.
+BOOST_AUTO_TEST_CASE(MaterialDesc_TheShaderIsWrittenOnlyWhileSetAndAnEmptyStringClearsIt)
 {
 	const material_io io{ *descs };
-	for (const char* text : { R"({})", R"({"shader_vertex":null,"shader_fragment":"","shader_geometry":null})" }) {
+	for (const char* text : { R"({})", R"({"shader":""})" }) {
 		const scn::material_desc m = io.read(text);
 		BOOST_TEST_CONTEXT(text) {
-			BOOST_TEST(!m.vertex_shader.is_valid());
-			BOOST_TEST(!m.fragment_shader.is_valid());
-			BOOST_TEST(!m.geometry_shader.is_valid());
-			const json::object out = ser(m);
-			for (const char* key : { "shader_vertex", "shader_fragment", "shader_geometry" }) {
-				BOOST_REQUIRE_MESSAGE(out.if_contains(key), key);
-				BOOST_CHECK_MESSAGE(out.at(key).is_null(), key);
-			}
+			BOOST_TEST(!m.shader.is_valid());
+			BOOST_TEST(!ser(m).contains("shader"));
 		}
 	}
-	// null clears a tag that was set, as it did
-	scn::material_desc m = io.read(R"({"shader_geometry":"res://g.geom"})");
-	BOOST_TEST(m.geometry_shader.string() == "res://g.geom");
-	m.deserialize(*descs, json::parse(R"({"shader_geometry":null})").as_object());
-	BOOST_TEST(!m.geometry_shader.is_valid());
+	scn::material_desc m = io.read(R"({"shader":"res://a.shader.desc"})");
+	BOOST_TEST(m.shader.get_tag().string() == "res://a.shader.desc");
+	BOOST_TEST(ser(m).at("shader").as_string() == "res://a.shader.desc");
+	m.deserialize(*descs, json::parse(R"({"shader":""})").as_object());
+	BOOST_TEST(!m.shader.is_valid());
 	// a sampler that is not a string is an empty slot
 	const scn::material_desc slots = io.read(R"({"samplers":[1,"res://a.png",null]})");
 	BOOST_REQUIRE_EQUAL(slots.samplers_textures.size(), 3u);
@@ -1172,9 +1162,7 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 	const expected fields[] = {
 		{ "defines", "/defines", desc::field_kind::array, wp::always },
 		{ "samplers_textures", "/samplers", desc::field_kind::custom, wp::always },
-		{ "vertex_shader", "/shader_vertex", desc::field_kind::res_tag, wp::null_if_empty },
-		{ "fragment_shader", "/shader_fragment", desc::field_kind::res_tag, wp::null_if_empty },
-		{ "geometry_shader", "/shader_geometry", desc::field_kind::res_tag, wp::null_if_empty },
+		{ "shader", "/shader", desc::field_kind::desc_ref, wp::if_valid },
 		{ "queue", "/queue", desc::field_kind::enumeration, wp::null_if_empty },
 		{ "albedo", "/uniforms/albedo", desc::field_kind::vec4, wp::always },
 		{ "emissive", "/uniforms/emissive", desc::field_kind::vec4, wp::always },
@@ -1190,10 +1178,11 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 			BOOST_CHECK(schema->fields[i].write == fields[i].write);
 		}
 	}
-	BOOST_TEST(schema->fields[8].default_value.to_number<double>() == 32.0);
-	BOOST_REQUIRE(schema->fields[8].range);
-	BOOST_TEST(schema->fields[8].range->min == 0.0);
-	BOOST_TEST(schema->fields[8].range->max == 1000.0);
+	BOOST_TEST(schema->fields[2].ref_type == "shader_desc");
+	BOOST_TEST(schema->fields[6].default_value.to_number<double>() == 32.0);
+	BOOST_REQUIRE(schema->fields[6].range);
+	BOOST_TEST(schema->fields[6].range->min == 0.0);
+	BOOST_TEST(schema->fields[6].range->max == 1000.0);
 
 	const desc::enum_schema* queue = descs->schemas().find_enum("pass_queue");
 	BOOST_REQUIRE(queue);
@@ -1215,8 +1204,8 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 
 namespace {
 
-constexpr const char* BASE_MATERIAL = R"({"__type":"material_desc","defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert",
-	"shader_fragment":"res://shaders/scene.frag","shader_geometry":null,"queue":"opaque",
+constexpr const char* BASE_MATERIAL = R"({"__type":"material_desc","defines":[],"samplers":[],"shader":"res://shaders/scene.shader.desc",
+	"queue":"opaque",
 	"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})";
 
 struct parent_fixture : roundtrip_fixture
@@ -1430,17 +1419,17 @@ BOOST_FIXTURE_TEST_CASE(AParentChangedAfterTheChildWasRead_TheChildSavesWhatItSh
 	BOOST_REQUIRE(shown);
 
 	std::string changed{ BASE_MATERIAL };
-	const std::string from = "res://shaders/scene.vert";
-	changed.replace(changed.find(from), from.size(), "res://shaders/other.vert");
+	const std::string from = "res://shaders/scene.shader.desc";
+	changed.replace(changed.find(from), from.size(), "res://shaders/other.shader.desc");
 	put("base.mat.desc", changed);
 	rs->signal_changed(base);
 	pump();
-	BOOST_REQUIRE(ser(*loaded(base)).at("shader_vertex").as_string() == "res://shaders/other.vert");
+	BOOST_REQUIRE(ser(*loaded(base)).at("shader").as_string() == "res://shaders/other.shader.desc");
 
 	const json::object saved = serialized_by_adapter(child, shown);
 	BOOST_TEST(saved.at("__parent").as_string() == "memory://t/base.mat.desc");
-	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "shader_vertex", "queue" }));
-	BOOST_TEST(saved.at("shader_vertex").as_string() == "res://shaders/scene.vert");
+	BOOST_TEST((own_keys(saved) == std::vector<std::string>{ "shader", "queue" }));
+	BOOST_TEST(saved.at("shader").as_string() == "res://shaders/scene.shader.desc");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

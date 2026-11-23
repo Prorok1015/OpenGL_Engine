@@ -32,7 +32,6 @@
    "dest": "snk/window",
    "public": [
     "wnd_coordinates.h",
-    "wnd_null_window_system.h",
     "wnd_window.h",
     "wnd_window_event_listener_interface.h",
     "wnd_window_service_init.h",
@@ -272,6 +271,7 @@
     "rnd_light_data.hpp",
     "rnd_material_desc.h",
     "rnd_material_groups.h",
+    "rnd_material_migration.h",
     "rnd_render_context.h",
     "rnd_render_packet.hpp",
     "rnd_render_pass_interface.h",

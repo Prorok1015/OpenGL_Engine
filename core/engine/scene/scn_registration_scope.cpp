@@ -15,6 +15,7 @@
 #include <snk/scene/scn_directional_light_desc.h>
 #include <snk/scene/scn_input_actions_desc.h>
 #include <snk/scene/scn_material_desc.h>
+#include <snk/render/rnd_material_migration.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_object_desc.h>
 #include <snk/scene/scn_screen_anchor_desc.h>
@@ -142,6 +143,8 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 		[](json::object& obj, desc::migration_context& context) { migrate_camera_v1(obj, context); });
 	scope.migration("level_desc", 1, "nothing: the worlds are typed objects and migrate on their own",
 		[](json::object&, desc::migration_context&) {});
+	scope.migration("material_desc", 1, "the shader stage tags become a reference to one of the engine's .shader.desc files",
+		[](json::object& obj, desc::migration_context& context) { rnd::migrate_material_v1(obj, context); });
 
 	// The assembler that runs it: a prefab spawned in a layer builds its components with the layer's.
 	auto prefab_spawn = [](const ecs_assembler& running, entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {

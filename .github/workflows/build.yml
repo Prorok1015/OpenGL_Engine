@@ -57,7 +57,8 @@ jobs:
   #          pull_request.base.sha, which GitHub refreshes only on a push to the PR. Both can lag behind the branch:
   #          GitHub does not rebuild the merge commit on ready_for_review.
   #   abi  - Windows MSVC Shared+PCH and Linux GCC Shared, the builds of the engine as a shared library. On a PR that is
-  #          not a draft and touches any header (.h, .hpp, .inl: SNK_API headers live outside include/ too), CMake
+  #          not a draft (as the PR is when Plan runs, not as the event saw it: #1268) and
+  #          touches any header (.h, .hpp, .inl: SNK_API headers live outside include/ too), CMake
   #          (CMakeLists.txt, *.cmake, *.cmake.in, cmake/**, CMakePresets.json) or a workflow (.github/**); always on a
   #          push and by hand. A PR whose file list is cut off at GitHub's 3000 files counts as touching them.
   # The changed files are read here, not through `paths:` on the trigger, so the workflow always starts and a required
@@ -96,8 +97,18 @@ jobs:
               const touched = files.flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
               const cut_off = files.length >= LIST_FILES_LIMIT;
               const docs_only = !cut_off && touched.length > 0 && touched.every(path => DOCS_PATHS.some(re => re.test(path)));
-              abi = !pr.draft && (cut_off || touched.some(path => ABI_PATHS.some(re => re.test(path))));
-              core.info(`${files.length} files changed; docs only: ${docs_only}; shared-engine builds: ${abi}`);
+              // The PR now, not the event's snapshot: a push and "ready for review" a second apart leave the run of the
+              // push alive, and its payload still says draft (#1268). Unreadable counts as not a draft: a spare build
+              // beats a missed one.
+              let draft = false;
+              try {
+                ({ data: { draft } } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number }));
+              } catch (error) {
+                core.warning(`could not read the PR (${error.message}): built as not a draft`);
+              }
+              abi = !draft && (cut_off || touched.some(path => ABI_PATHS.some(re => re.test(path))));
+              core.info(`${files.length} files changed; docs only: ${docs_only}; `
+                + `draft: payload ${pr.draft}, now ${draft}; shared-engine builds: ${abi}`);
               if (docs_only) {
                 fast = false;
               } else if (context.payload.action === 'ready_for_review') {

@@ -154,6 +154,12 @@ namespace {
 		} else if (field.kind == desc::field_kind::map) {
 			out = typed("object");
 			out["additionalProperties"] = value_schema(field.element, field.ref_type, resolve, depth, budget);
+		} else if (field.kind == desc::field_kind::desc_ref && field.reference_only) {
+			boost::json::array forms;
+			forms.emplace_back(typed("string"));
+			forms.emplace_back(reference_object());
+			out = boost::json::object{ { "oneOf", std::move(forms) } };
+			out["description"] = "a tag of a desc file, or the {guid, path} reference the editor writes; never an inline desc object";
 		} else {
 			out = value_schema(field.kind, field.ref_type, resolve, depth, budget);
 		}

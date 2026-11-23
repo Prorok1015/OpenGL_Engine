@@ -55,6 +55,9 @@ namespace prj::migration
 		std::function<std::optional<std::string>(const std::filesystem::path& file, std::string_view text)> write_report;
 		// By default core::res::remove_tree_without_following (--migrate-prune).
 		std::function<bool(const std::filesystem::path& folder, std::error_code& ec)> remove_tree;
+		// The root of `resources` when that is a layer (the game layer's): it gets the project's asset index for a
+		// --migrate (scoped_project_index). Null: `resources` itself.
+		res::resource_system* index_root = nullptr;
 	};
 
 	// The exit code of a migration that ended with `status`.
