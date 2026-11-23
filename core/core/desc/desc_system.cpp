@@ -68,30 +68,54 @@ namespace
 		return pointer == root || (pointer.starts_with(root) && pointer.size() > root.size() && pointer[root.size()] == '/');
 	}
 
-	// Where `pointer` of step `index` is once the later steps ran: a rename carries it with its source, a removal drops it
-	// (nullopt). Within a step the renames run before the removals, as detail::apply does.
-	std::optional<std::string> pointer_after(const std::vector<desc::detail::schema_migration>& steps, std::size_t index, std::string pointer)
+	// Where a value put at `pointer` by step `index` is once the later steps ran: a rename carries it with its source, a
+	// removal drops it (`pointer` empty). Within a step the renames run before the removals (detail::apply), so a rename
+	// target is also dropped by a removal of its own step. `emptied`: a later rename took something out from under it, so
+	// it was a staging place, not where a field ends up.
+	struct carried_pointer
 	{
+		std::optional<std::string> pointer;
+		bool emptied = false;
+	};
+
+	carried_pointer pointer_after(const std::vector<desc::detail::schema_migration>& steps, std::size_t index, std::string pointer,
+		bool removed_by_its_own_step)
+	{
+		carried_pointer result;
+		if (removed_by_its_own_step) {
+			for (const std::string& removed : steps[index].removals) {
+				if (under(pointer, removed)) return result;
+			}
+		}
 		for (std::size_t i = index + 1; i < steps.size(); ++i) {
+			bool moved = false;
 			for (const auto& [source, target] : steps[i].renames) {
-				if (under(pointer, source)) {
+				if (!moved && under(pointer, source)) {
 					pointer = target + pointer.substr(source.size());
-					break;
+					moved = true;
+				} else if (source != pointer && under(source, pointer)) {
+					result.emptied = true;
 				}
 			}
 			for (const std::string& removed : steps[i].removals) {
-				if (under(pointer, removed)) return std::nullopt;
+				if (under(pointer, removed)) return result;
 			}
 		}
-		return pointer;
+		result.pointer = std::move(pointer);
+		return result;
 	}
 
+	// The field itself (key or alias), a container of fields, or a place inside a field whose value is an object of keys
+	// (a structure, a map, a custom value): a number or a list cannot take a key.
 	bool reaches_a_field(const desc::type_schema& schema, std::string_view pointer, const desc::schema_registry& resolve)
 	{
 		for (const desc::field_schema& field : schema.fields) {
-			if (under(pointer, field.key)) return true;
-			for (const std::string& alias : field.read_aliases) {
-				if (under(pointer, alias)) return true;
+			const bool holds_keys = field.kind == desc::field_kind::structure || field.kind == desc::field_kind::map
+				|| field.kind == desc::field_kind::custom;
+			std::vector<std::string_view> keys{ field.key };
+			keys.insert(keys.end(), field.read_aliases.begin(), field.read_aliases.end());
+			for (const std::string_view key : keys) {
+				if (pointer == key || (holds_keys && under(pointer, key))) return true;
 			}
 		}
 		return desc::is_field_container(schema, pointer, &resolve);
@@ -105,28 +129,27 @@ namespace
 	{
 		for (std::size_t i = 0; i < steps.size(); ++i) {
 			const desc::detail::schema_migration& step = steps[i];
-			const auto ends_at = [&](const std::string& pointer) {
-				const std::optional<std::string> last = pointer_after(steps, i, pointer);
-				return last && *last != pointer ? std::format("{} (after the later steps {})", pointer, *last) : pointer;
+			const auto ends_at = [&](const std::string& pointer, const carried_pointer& last) {
+				return last.pointer && *last.pointer != pointer ? std::format("{} (after the later steps {})", pointer, *last.pointer) : pointer;
 			};
 			for (const auto& [source, target] : step.renames) {
-				const std::optional<std::string> last = pointer_after(steps, i, target);
-				if (last && !reaches_a_field(schema, *last, resolve)) {
-					return std::format("migration #{}: rename {} -> {} reaches no field of version {}", i + 1, source, ends_at(target),
+				const carried_pointer last = pointer_after(steps, i, target, true);
+				if (last.pointer && !last.emptied && !reaches_a_field(schema, *last.pointer, resolve)) {
+					return std::format("migration #{}: rename {} -> {} reaches no field of version {}", i + 1, source, ends_at(target, last),
 						schema.version);
 				}
 			}
 			for (const auto& [pointer, value] : step.defaults) {
-				const std::optional<std::string> last = pointer_after(steps, i, pointer);
-				if (!last) continue;
+				const carried_pointer last = pointer_after(steps, i, pointer, false);
+				if (!last.pointer || last.emptied) continue;
 				json::value patch = json::object{};
-				desc::json_pointer_set(patch, *last, value);
+				desc::json_pointer_set(patch, *last.pointer, value);
 				const desc::override_failure failure = desc::check_override_object(schema, patch.as_object(), nullptr, &resolve);
 				if (failure.status == desc::override_status::stale) {
-					return std::format("migration #{}: set_default {} reaches no field of version {}", i + 1, ends_at(pointer), schema.version);
+					return std::format("migration #{}: set_default {} reaches no field of version {}", i + 1, ends_at(pointer, last), schema.version);
 				}
 				if (failure.status == desc::override_status::bad_value) {
-					return std::format("migration #{}: set_default {} does not fit: {} expects {}", i + 1, ends_at(pointer), failure.pointer,
+					return std::format("migration #{}: set_default {} does not fit: {} expects {}", i + 1, ends_at(pointer, last), failure.pointer,
 						desc::override_expectation(schema, failure, &resolve));
 				}
 			}
@@ -347,6 +370,18 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 		m_component_type_names.push_back(stored->name);
 	}
 	return stored;
+}
+
+std::string desc::desc_system::migrations_problem(const type_schema& schema, const json::array& migrations) const
+{
+	std::vector<detail::schema_migration> steps;
+	try {
+		steps = detail::parse_schema_migrations(migrations, schema.version);
+	} catch (const std::runtime_error& error) {
+		return error.what();
+	}
+	std::shared_lock lock(m_registry_mutex);
+	return steps_against_schema(steps, schema, m_schemas);
 }
 
 const desc::type_schema* desc::desc_system::register_schema(type_schema schema, const json::array& migrations)
