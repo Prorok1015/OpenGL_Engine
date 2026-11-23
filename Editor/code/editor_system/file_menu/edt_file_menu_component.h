@@ -1,4 +1,6 @@
 #pragma once
+#include "edt_document_tabs.h"
+#include "edt_document_tabs_bar.h"
 #include "edt_save_all.h"
 #include "edt_version_notice.h"
 #include <snk/editor/edt_registration.h>
@@ -75,15 +77,22 @@ namespace edt
 		// list as a popup (a row focuses its document, "Save All" runs it) (#1183). Draws nothing (no ImGui call) while all is
 		// saved. One call in the menu bar status: move or drop it there.
 		void draw_unsaved_indicator();
+		// The strip of document tabs under the main menu (#1184): the scene, the prefab and the data documents, dirty ones marked.
+		// A click activates, the close button goes through the document's own close question. One call in the dock host.
+		void draw_document_tabs();
 
 	private:
 		// The rows of the unsaved list, one place (the popup of the menu bar item): a row focuses its document.
 		void draw_unsaved_list(const std::vector<unsaved_group>& groups);
 		void focus_unsaved(document_id id);
+		// What bringing a data document's window or the prefab window to the front takes: shared by the Unsaved list and the tabs.
+		document_focus_ports focus_ports();
 		std::optional<std::string> migration_blocker() const;
 
 		ports m_ports;
 		std::unique_ptr<file_menu> m_menu;
 		timed_notice m_save_notice;
+		std::unique_ptr<document_tabs> m_tabs;
+		document_tabs_bar m_tabs_bar;
 	};
 }
