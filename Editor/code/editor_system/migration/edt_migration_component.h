@@ -2,6 +2,7 @@
 #include "edt_migration_startup.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_registration.h>
+#include <snk/project_migration/pmg_geometry_check_cache.h>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -104,6 +105,8 @@ namespace edt
 		bool m_running = false;
 		// The notice of a project in an old format (#761) and whether its scan still runs.
 		std::unique_ptr<migration_notice_model> m_notice;
+		// The editor never changes its project: one cache serves every scan of this session (the notice's and the plans').
+		std::shared_ptr<prj::migration::geometry_check_cache> m_geometry_checks = std::make_shared<prj::migration::geometry_check_cache>();
 		std::uint64_t m_scan_job = 0;
 		// Migration and rollback runs started so far: a format check made before one is stale.
 		std::uint64_t m_runs = 0;

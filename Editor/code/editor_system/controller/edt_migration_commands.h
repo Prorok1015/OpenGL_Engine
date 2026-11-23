@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -92,6 +93,9 @@ namespace edt
 		// What project.migration_plan's answer goes through for a caller that is not a person (#935), as a job's
 		// result does: a reason may quote a file by its full path. Null: the answer goes as it is (tests).
 		const cmd::log_read_filter* log_filter = nullptr;
+		// What the scans of this editor learned of the project's geometry (#1155), shared with the notice's scan; null: a plan
+		// encodes every desc that holds geometry arrays again.
+		std::shared_ptr<prj::migration::geometry_check_cache> geometry_checks;
 	};
 
 	inline constexpr std::string_view k_migration_frame_id = "edt/migrate_project";
