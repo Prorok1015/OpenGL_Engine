@@ -162,7 +162,9 @@ namespace scn {
 	// Nothing deletes it by itself (it stays in the file, apply skips it with a warning); an editor shows it as stale.
 	struct stale_override
 	{
-		enum class reason : std::uint8_t { node_gone, component_gone };
+		// dropped_by_migration: a step of the component's type removed the field the record sets; duplicated_by_migration: the
+		// steps put its value in more than one place, so it is not applied (#1255). Both name the record and the type in `what`.
+		enum class reason : std::uint8_t { node_gone, component_gone, dropped_by_migration, duplicated_by_migration };
 		// Number of the record among `node.overrides` of the node it was found for.
 		std::size_t index = 0;
 		reason why = reason::node_gone;
@@ -176,6 +178,11 @@ namespace scn {
 	SNK_API std::vector<stale_override> find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node);
 	// Removes them from `node.overrides` (what the editor's "clear stale overrides" and a cook do); returns how many went.
 	SNK_API std::size_t prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node);
+	// Rewrites the set records of `node` written against an older version of their component's type to the current one (#1255),
+	// and gives a record without a version the current one: what the editor does when it loads a document, since a step of the
+	// file cannot see the type an instance's record edits. Expands the node as find_stale_records does; a record the steps drop or
+	// duplicate is left as it is (find_stale_records names it). Returns how many records changed.
+	SNK_API std::size_t migrate_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node);
 
 	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);

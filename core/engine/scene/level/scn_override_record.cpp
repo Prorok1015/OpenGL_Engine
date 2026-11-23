@@ -439,7 +439,9 @@ namespace scn {
 		if (tokens.empty()) {
 			// A merge into the whole component: each field it sets goes its own way, the ones a step removed fall out.
 			if (!record.value.is_object()) {
-				return { record_migration::failed, named + ": a merge into a component is an object" };
+				// A reference that replaces the component whole: the file it names carries its own version.
+				record.type_version = current;
+				return {};
 			}
 			std::vector<std::pair<tokens_t, const boost::json::value*>> leaves;
 			tokens_t at;
