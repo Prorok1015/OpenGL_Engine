@@ -61,17 +61,31 @@ BOOST_AUTO_TEST_CASE(TheSameTextAtAnotherPath_IsCheckedAgain)
 	BOOST_TEST(check.calls == 2);
 }
 
-BOOST_AUTO_TEST_CASE(AFullCache_StartsOver)
+BOOST_AUTO_TEST_CASE(AChangedText_ReplacesTheAnswerOfItsPath)
+{
+	prj::migration::geometry_check_cache cache;
+	counted_check check{ "" };
+	ask(cache, "res/a.desc", R"({"v":[1]})", check);
+	ask(cache, "res/a.desc", R"({"v":[2]})", check);
+	ask(cache, "res/b.desc", R"({"v":[1]})", check);
+	BOOST_TEST(cache.size() == 2u);
+	ask(cache, "res/a.desc", R"({"v":[1]})", check);
+	BOOST_TEST(check.calls == 4);
+}
+
+// Review of #1290: scans walk the project in the same order; a cache that started over when full got no hits past it.
+BOOST_AUTO_TEST_CASE(AFullCache_KeepsHittingOnWhatItHolds)
 {
 	prj::migration::geometry_check_cache cache(2);
 	counted_check check{ "" };
-	ask(cache, "res/a.desc", "{}", check);
-	ask(cache, "res/b.desc", "{}", check);
+	for (int scan = 0; scan < 3; ++scan) {
+		for (const char* path : { "res/a.desc", "res/b.desc", "res/c.desc" }) {
+			ask(cache, path, "{}", check);
+		}
+	}
 	BOOST_TEST(cache.size() == 2u);
-	ask(cache, "res/c.desc", "{}", check);
-	BOOST_TEST(cache.size() == 1u);
-	ask(cache, "res/a.desc", "{}", check);
-	BOOST_TEST(check.calls == 4);
+	// a and b once, c on every scan.
+	BOOST_TEST(check.calls == 5);
 }
 
 BOOST_AUTO_TEST_CASE(Clear_ForgetsEveryAnswer)

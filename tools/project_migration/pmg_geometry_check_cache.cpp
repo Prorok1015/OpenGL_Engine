@@ -18,9 +18,13 @@ std::string prj::migration::geometry_check_cache::problem(std::string_view path,
 	}
 	std::string answer = check();
 	std::lock_guard lock(m_mutex);
-	// Whole, not least recently used: the bound only keeps a long session with many edited files from growing without end.
-	if (m_problems.size() >= m_max_entries) m_problems.clear();
-	if (m_max_entries > 0) m_problems.insert_or_assign(std::move(id), answer);
+	// One entry a path: the answer for an older text of it is no use any more.
+	for (auto it = m_problems.lower_bound(key{ id.path, 0, {} }); it != m_problems.end() && it->first.path == id.path;) {
+		it = m_problems.erase(it);
+	}
+	// A full cache keeps what it holds: a scan walks the project in the same order every time, so evicting would make the
+	// files past the bound push out the ones before them and no scan would hit.
+	if (m_problems.size() < m_max_entries) m_problems.emplace(std::move(id), answer);
 	return answer;
 }
 

@@ -11,7 +11,8 @@ namespace prj::migration
 	// What geometry_conversion_problem said of a desc, kept between the scans of one editor session (#1155): the check
 	// encodes the whole pair, and a project not yet migrated is scanned on every open and every plan. The answer depends
 	// on the path and the JSON of the desc alone, so the key is the path with the size and SHA-256 of the text: a file
-	// touched without a change keeps its answer, any change of its bytes is checked again.
+	// touched without a change keeps its answer, any change of its bytes is checked again. One answer a path is kept; past
+	// `max_entries` paths a new one is checked every time and the ones kept stay.
 	class geometry_check_cache
 	{
 	public:

@@ -416,7 +416,8 @@ BOOST_AUTO_TEST_CASE(AnUnchangedDesc_TakesItsGeometryCheckFromTheCache_AChangedO
 	BOOST_REQUIRE(changed.scan.find(k_desc));
 	BOOST_TEST(changed.scan.find(k_desc)->geometry_left.empty());
 	BOOST_TEST(planned(changed));
-	BOOST_TEST(primed.size() == known + 1);
+	// The answer of the old text gave way to the new one: one answer a path.
+	BOOST_TEST(primed.size() == known);
 }
 
 BOOST_AUTO_TEST_CASE(APlanWithTheCache_IsThePlanWithoutIt)
