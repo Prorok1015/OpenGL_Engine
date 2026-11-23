@@ -2,20 +2,25 @@
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <cstddef>
+#include <format>
 #include <optional>
-#include <regex>
 #include <string_view>
 
 namespace
 {
+	// A driver's log is the driver's: a line, the whole log and the rows it gives are bounded before anything reads them.
+	constexpr std::size_t max_line_bytes = 4 * 1024;
+	constexpr std::size_t max_log_bytes = 256 * 1024;
+	constexpr std::size_t max_problems = 100;
+	constexpr std::string_view ellipsis = "\xE2\x80\xA6";
+
 	struct log_line
 	{
 		std::size_t source = 0;
 		int line = 0;
 		int column = 0;
-		std::string message;
+		std::string_view message;
 	};
 
 	std::string_view trimmed(std::string_view text)
@@ -29,56 +34,180 @@ namespace
 		return text;
 	}
 
-	int to_int(const std::ssub_match& match)
+	// `text` within max_line_bytes, not cut inside a UTF-8 sequence, with an ellipsis when it was cut here or before (`cut`).
+	std::string bounded(std::string_view text, bool cut)
 	{
-		int value = 0;
-		const std::string text = match.str();
-		std::from_chars(text.data(), text.data() + text.size(), value);
-		return value;
-	}
-
-	std::optional<log_line> parse_log_line(const std::string& text)
-	{
-		// NVIDIA: 0(12) : error C0000: ...
-		static const std::regex nvidia{ R"(^\s*(\d+)\((\d+)\)\s*:\s*(.*)$)" };
-		// Mesa: 0:12(5): error: ...
-		static const std::regex mesa{ R"(^\s*(\d+):(\d+)\((\d+)\)\s*:\s*(.*)$)" };
-		// AMD, ANGLE: ERROR: 0:12: ...
-		static const std::regex amd{ R"(^\s*(ERROR|WARNING)\s*:\s*(\d+):(\d+)\s*:\s*(.*)$)" };
-		std::smatch match;
-		if (std::regex_match(text, match, mesa)) {
-			return log_line{ static_cast<std::size_t>(to_int(match[1])), to_int(match[2]), to_int(match[3]), match[4].str() };
-		}
-		if (std::regex_match(text, match, nvidia)) {
-			return log_line{ static_cast<std::size_t>(to_int(match[1])), to_int(match[2]), 0, match[3].str() };
-		}
-		if (std::regex_match(text, match, amd)) {
-			std::string message = match[4].str();
-			if (match[1].str() == "WARNING") {
-				message = "warning: " + message;
+		std::size_t end = text.size();
+		if (end > max_line_bytes) {
+			end = max_line_bytes;
+			while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0u) == 0x80u) {
+				--end;
 			}
-			return log_line{ static_cast<std::size_t>(to_int(match[2])), to_int(match[3]), 0, std::move(message) };
+			cut = true;
 		}
-		return std::nullopt;
+		std::string out{ text.substr(0, end) };
+		if (cut) {
+			out += ellipsis;
+		}
+		return out;
 	}
 
-	bool is_warning(std::string_view message)
+	struct cursor
 	{
-		std::string lower;
-		for (const char c : message.substr(0, 7)) {
-			lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		std::string_view text;
+		std::size_t pos = 0;
+
+		void skip_blank()
+		{
+			while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t')) {
+				++pos;
+			}
 		}
-		return lower == "warning";
+
+		bool eat(char c)
+		{
+			if (pos < text.size() && text[pos] == c) {
+				++pos;
+				return true;
+			}
+			return false;
+		}
+
+		bool eat(std::string_view word)
+		{
+			if (text.substr(pos).starts_with(word)) {
+				pos += word.size();
+				return true;
+			}
+			return false;
+		}
+
+		// A run of digits; only the first 9 make the value, so it never overflows.
+		std::optional<std::size_t> number()
+		{
+			const std::size_t begin = pos;
+			std::size_t value = 0;
+			while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos]))) {
+				if (pos - begin < 9) {
+					value = value * 10 + static_cast<std::size_t>(text[pos] - '0');
+				}
+				++pos;
+			}
+			return pos == begin ? std::nullopt : std::optional<std::size_t>{ value };
+		}
+
+		// `:` with blanks around it, then the rest of the line.
+		std::optional<std::string_view> rest_after_colon()
+		{
+			skip_blank();
+			if (!eat(':')) {
+				return std::nullopt;
+			}
+			skip_blank();
+			return text.substr(pos);
+		}
+	};
+
+	// NVIDIA `k(line) : ...` or Mesa `k:line(column): ...`.
+	std::optional<log_line> parse_numbered(std::string_view text)
+	{
+		cursor at{ text };
+		const auto source = at.number();
+		if (!source) {
+			return std::nullopt;
+		}
+		log_line out;
+		out.source = *source;
+		if (at.eat('(')) {
+			const auto line = at.number();
+			if (!line || !at.eat(')')) {
+				return std::nullopt;
+			}
+			out.line = static_cast<int>(*line);
+		} else if (at.eat(':')) {
+			const auto line = at.number();
+			if (!line || !at.eat('(')) {
+				return std::nullopt;
+			}
+			const auto column = at.number();
+			if (!column || !at.eat(')')) {
+				return std::nullopt;
+			}
+			out.line = static_cast<int>(*line);
+			out.column = static_cast<int>(*column);
+		} else {
+			return std::nullopt;
+		}
+		const auto message = at.rest_after_colon();
+		if (!message) {
+			return std::nullopt;
+		}
+		out.message = *message;
+		return out;
 	}
 
-	// AMD closes its log with a count of what it already listed.
+	// AMD, ANGLE: `ERROR: k:line: ...` (or WARNING).
+	std::optional<log_line> parse_tagged(std::string_view text, bool& warning)
+	{
+		cursor at{ text };
+		warning = at.eat("WARNING");
+		if (!warning && !at.eat("ERROR")) {
+			return std::nullopt;
+		}
+		at.skip_blank();
+		if (!at.eat(':')) {
+			return std::nullopt;
+		}
+		at.skip_blank();
+		const auto source = at.number();
+		if (!source || !at.eat(':')) {
+			return std::nullopt;
+		}
+		const auto line = at.number();
+		if (!line) {
+			return std::nullopt;
+		}
+		const auto message = at.rest_after_colon();
+		if (!message) {
+			return std::nullopt;
+		}
+		return log_line{ *source, static_cast<int>(*line), 0, *message };
+	}
+
+	// AMD closes its log with a count of what it already listed: `ERROR: N compilation errors. ...`.
 	bool is_summary(std::string_view text)
 	{
-		static const std::regex summary{ R"(^\s*ERROR:\s*\d+\s+compilation errors?\..*$)" };
-		return std::regex_match(text.begin(), text.end(), summary);
+		cursor at{ text };
+		if (!at.eat("ERROR")) {
+			return false;
+		}
+		at.skip_blank();
+		if (!at.eat(':')) {
+			return false;
+		}
+		at.skip_blank();
+		if (!at.number()) {
+			return false;
+		}
+		at.skip_blank();
+		return at.eat("compilation error");
 	}
 
-	rnd::shader_problem make_problem(res::tag file, int line, int column, std::string code, std::string message, const std::string& program)
+	bool starts_with_warning(std::string_view message)
+	{
+		constexpr std::string_view word = "warning";
+		if (message.size() < word.size()) {
+			return false;
+		}
+		for (std::size_t i = 0; i < word.size(); ++i) {
+			if (std::tolower(static_cast<unsigned char>(message[i])) != word[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	rnd::shader_problem make_problem(res::tag file, int line, int column, std::string message, const std::string& program, std::string code = "shader/compile")
 	{
 		rnd::shader_problem problem;
 		problem.file = std::move(file);
@@ -89,55 +218,78 @@ namespace
 		problem.program = program;
 		return problem;
 	}
+
+	// The rows of one kind (errors or warnings): the first max_problems kept, the rest counted.
+	struct bounded_rows
+	{
+		std::vector<rnd::shader_problem> kept;
+		std::size_t total = 0;
+
+		void add(rnd::shader_problem problem)
+		{
+			++total;
+			if (kept.size() < max_problems) {
+				kept.push_back(std::move(problem));
+			}
+		}
+	};
 }
 
 std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
 	const std::vector<std::vector<res::tag>>& sources, const std::string& program)
 {
-	const auto stage_file = [&](std::size_t stage, std::size_t source) -> res::tag {
-		if (stage >= sources.size() || sources[stage].empty()) {
-			return {};
-		}
-		return source < sources[stage].size() ? sources[stage][source] : sources[stage].front();
+	const auto stage_file = [&](std::size_t stage) -> res::tag {
+		return stage < sources.size() && !sources[stage].empty() ? sources[stage].front() : res::tag{};
 	};
 
-	std::vector<shader_problem> out;
-	std::vector<bool> warnings;
+	bounded_rows errors;
+	bounded_rows warnings;
+	std::size_t budget = max_log_bytes;
 	for (const driver::shader_stage_log& stage : log.stages) {
-		const std::size_t before = out.size();
+		const std::size_t before = errors.total + warnings.total;
+		const std::string_view text = std::string_view{ stage.text }.substr(0, budget);
+		budget -= text.size();
 		std::size_t line_begin = 0;
-		const std::string_view text = stage.text;
 		while (line_begin < text.size()) {
 			const std::size_t newline = text.find('\n', line_begin);
-			const std::string_view raw = text.substr(line_begin, newline == std::string_view::npos ? std::string_view::npos : newline - line_begin);
-			line_begin = newline == std::string_view::npos ? text.size() : newline + 1;
-			const std::string_view line = trimmed(raw);
+			const std::size_t line_end = newline == std::string_view::npos ? text.size() : newline;
+			const bool cut = line_end - line_begin > max_line_bytes;
+			const std::string_view line = trimmed(text.substr(line_begin, std::min(line_end - line_begin, max_line_bytes)));
+			line_begin = line_end + 1;
 			if (line.empty() || is_summary(line)) {
 				continue;
 			}
-			const std::string owned{ line };
-			if (const auto parsed = parse_log_line(owned)) {
-				out.push_back(make_problem(stage_file(stage.stage, parsed->source), parsed->line, parsed->column, "shader/compile", parsed->message, program));
-				warnings.push_back(is_warning(parsed->message));
-			} else {
-				out.push_back(make_problem(stage_file(stage.stage, 0), 0, 0, "shader/compile", owned, program));
-				warnings.push_back(is_warning(owned));
+			bool tagged_warning = false;
+			std::optional<log_line> parsed = parse_numbered(line);
+			if (!parsed) {
+				parsed = parse_tagged(line, tagged_warning);
 			}
+			if (!parsed) {
+				std::string message = bounded(line, cut);
+				const bool warning = starts_with_warning(message);
+				(warning ? warnings : errors).add(make_problem(stage_file(stage.stage), 0, 0, std::move(message), program));
+				continue;
+			}
+			std::string message = bounded(parsed->message, cut);
+			const bool warning = tagged_warning || starts_with_warning(message);
+			if (tagged_warning) {
+				message = "warning: " + message;
+			}
+			// A source number the stage's table does not have names no file of it, so its line is no line of a file either.
+			const bool known = stage.stage < sources.size() && parsed->source < sources[stage.stage].size();
+			auto problem = known
+				? make_problem(sources[stage.stage][parsed->source], parsed->line, parsed->column, std::move(message), program)
+				: make_problem(stage_file(stage.stage), 0, 0, std::move(message), program);
+			(warning ? warnings : errors).add(std::move(problem));
 		}
-		if (out.size() == before) {
-			out.push_back(make_problem(stage_file(stage.stage, 0), 0, 0, "shader/compile", "the stage did not compile", program));
-			warnings.push_back(false);
+		if (errors.total + warnings.total == before) {
+			errors.add(make_problem(stage_file(stage.stage), 0, 0, "the stage did not compile", program));
 		}
 	}
-	if (std::find(warnings.begin(), warnings.end(), false) != warnings.end()) {
-		std::vector<shader_problem> errors;
-		for (std::size_t i = 0; i < out.size(); ++i) {
-			if (!warnings[i]) {
-				errors.push_back(std::move(out[i]));
-			}
-		}
-		out = std::move(errors);
-	}
+	// Warnings only matter when nothing else says why the program did not build.
+	bounded_rows& chosen = errors.total > 0 ? errors : warnings;
+	std::vector<shader_problem> out = std::move(chosen.kept);
+	std::size_t more = chosen.total - out.size();
 
 	if (!log.link.empty()) {
 		std::size_t vertex = 0;
@@ -147,8 +299,17 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 				break;
 			}
 		}
-		const std::string_view text = trimmed(log.link);
-		out.push_back(make_problem(stage_file(vertex, 0), 0, 0, "shader/link", text.empty() ? std::string{ "the program did not link" } : std::string{ text }, program));
+		const std::string_view link = std::string_view{ log.link }.substr(0, budget);
+		const std::string_view text = trimmed(link.substr(0, max_line_bytes));
+		if (out.size() < max_problems) {
+			out.push_back(make_problem(stage_file(vertex), 0, 0,
+				text.empty() ? std::string{ "the program did not link" } : bounded(text, link.size() > max_line_bytes), program, "shader/link"));
+		} else {
+			++more;
+		}
+	}
+	if (more > 0) {
+		out.push_back(make_problem(stage_file(0), 0, 0, std::format("{} {} more problems", ellipsis, more), program));
 	}
 	return out;
 }

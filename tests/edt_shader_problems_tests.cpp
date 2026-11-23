@@ -5,6 +5,8 @@
 #include <snk/render/rnd_shader_problem.h>
 #include <snk/command/cmd_registry.h>
 #include <boost/json/parse.hpp>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,17 @@ BOOST_AUTO_TEST_CASE(ARowIsAnErrorAtTheFileAndLineWithTheProgramAsItsNote)
 	BOOST_TEST(rows[0].code == "shader/compile");
 	BOOST_TEST(rows[0].message == "error: `x' undeclared");
 	BOOST_TEST((rows[0].notes == std::vector<std::string>{ "scene.vert + scene.frag { OPAQUE }" }));
+}
+
+BOOST_AUTO_TEST_CASE(TheSameProblemInTwoVariantsIsOneRow)
+{
+	rnd::shader_problem other = compile_error("res://shaders/lib.glsl", 12, 5, "error: `x' undeclared");
+	other.program = "scene.vert + scene.frag { SKINNED }";
+	const auto rows = edt::shader_problem_publisher::to_problems({ compile_error("res://shaders/lib.glsl", 12, 5, "error: `x' undeclared"), other,
+		compile_error("res://shaders/lib.glsl", 13, 5, "error: `x' undeclared") });
+	BOOST_REQUIRE(rows.size() == 2u);
+	BOOST_TEST((rows[0].notes == std::vector<std::string>{ "scene.vert + scene.frag { OPAQUE }", "scene.vert + scene.frag { SKINNED }" }));
+	BOOST_TEST(rows[1].line == 13);
 }
 
 BOOST_AUTO_TEST_CASE(TheSourceFollowsTheGenerationAndIsClearedByAFix)
@@ -94,6 +107,40 @@ BOOST_AUTO_TEST_CASE(ProblemsListGivesTheShaderRowsWithTheirLines)
 	BOOST_TEST(row.at("line").as_int64() == 12);
 	BOOST_TEST(row.at("column").as_int64() == 5);
 	BOOST_TEST(std::string(row.at("code").as_string()) == "shader/compile");
+}
+
+// An #include may name any file: Go to hands only a shader source to the system's app, which would run a script.
+BOOST_AUTO_TEST_CASE(GoToOpensOnlyShaderSources)
+{
+	std::vector<std::filesystem::path> opened;
+	const auto open_file = [&](const std::filesystem::path& file) {
+		opened.push_back(file);
+		return std::string{};
+	};
+	const auto disk_path = [](const res::tag& tag) -> std::optional<std::filesystem::path> {
+		return std::filesystem::path{ "/project/res" } / std::string{ tag.relative() };
+	};
+	const auto row = [](std::string file) {
+		edt::problem out;
+		out.file = std::move(file);
+		return out;
+	};
+
+	for (const char* file : { "res://tools/x.cmd", "res://tools/x.bat", "res://tools/x.sh", "res://tools/x.exe", "res://tools/x" }) {
+		BOOST_TEST_CONTEXT(file) {
+			BOOST_TEST((edt::open_shader_problem_file(row(file), disk_path, open_file) == edt::shader_file_open::not_a_shader_source));
+		}
+	}
+	BOOST_TEST(opened.empty());
+
+	BOOST_TEST((edt::open_shader_problem_file(row("res://shaders/lib.glsl"), disk_path, open_file) == edt::shader_file_open::opened));
+	BOOST_TEST((edt::open_shader_problem_file(row("res://shaders/scene.FRAG"), disk_path, open_file) == edt::shader_file_open::opened));
+	BOOST_TEST(opened.size() == 2u);
+
+	// The tag is a shader's, the file it resolves to is not.
+	const auto elsewhere = [](const res::tag&) -> std::optional<std::filesystem::path> { return std::filesystem::path{ "/project/res/run.cmd" }; };
+	BOOST_TEST((edt::open_shader_problem_file(row("res://shaders/lib.glsl"), elsewhere, open_file) == edt::shader_file_open::not_a_shader_source));
+	BOOST_TEST(opened.size() == 2u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

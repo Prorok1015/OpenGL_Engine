@@ -4,8 +4,13 @@
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
+#include <cctype>
+#include <chrono>
+#include <format>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // #1201: why a shader program did not build, at the file and line: the engine's preprocessing errors, the #line
@@ -36,6 +41,75 @@ struct shader_problems_fixture
 
 	test_util::ram_res_env env;
 };
+
+// Where a GLSL compiler puts the line of `source` that holds `marker`: the source string and line number it reports. A
+// small stand-in for its preprocessor: #define, #ifdef, #ifndef, #else and #endif decide which groups are taken, and a
+// #line counts only in a taken group (every other #if is taken as true).
+struct compiler_location
+{
+	std::size_t source = 0;
+	int line = 0;
+};
+
+std::optional<compiler_location> compiler_location_of(std::string_view source, std::string_view marker)
+{
+	struct group
+	{
+		bool active = true;
+		bool parent = true;
+		bool taken = false;
+	};
+	std::vector<group> groups;
+	std::set<std::string> defined;
+	compiler_location at{ 0, 1 };
+	const auto word_after = [](std::string_view text, std::string_view directive) -> std::optional<std::string_view> {
+		const std::size_t first = text.find_first_not_of(" \t");
+		if (first == std::string_view::npos || text[first] != '#') return std::nullopt;
+		text.remove_prefix(text.find_first_not_of(" \t", first + 1) == std::string_view::npos ? text.size() : text.find_first_not_of(" \t", first + 1));
+		if (!text.starts_with(directive)) return std::nullopt;
+		text.remove_prefix(directive.size());
+		if (!text.empty() && text.front() != ' ' && text.front() != '\t' && text.front() != '\r') return std::nullopt;
+		const std::size_t begin = text.find_first_not_of(" \t");
+		if (begin == std::string_view::npos) return std::string_view{};
+		const std::size_t end = text.find_first_of(" \t\r", begin);
+		return text.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin);
+	};
+	std::size_t line_begin = 0;
+	while (line_begin < source.size()) {
+		const std::size_t newline = source.find('\n', line_begin);
+		const std::string_view line = source.substr(line_begin, newline == std::string_view::npos ? std::string_view::npos : newline - line_begin);
+		line_begin = newline == std::string_view::npos ? source.size() : newline + 1;
+		const bool active = groups.empty() || groups.back().active;
+		if (line.find(marker) != std::string_view::npos && active) {
+			return at;
+		}
+		if (const auto ifdef = word_after(line, "ifdef")) {
+			const bool on = active && defined.contains(std::string{ *ifdef });
+			groups.push_back({ on, active, on });
+		} else if (const auto ifndef = word_after(line, "ifndef")) {
+			const bool on = active && !defined.contains(std::string{ *ifndef });
+			groups.push_back({ on, active, on });
+		} else if (word_after(line, "if")) {
+			groups.push_back({ active, active, active });
+		} else if (word_after(line, "else") && !groups.empty()) {
+			groups.back().active = groups.back().parent && !groups.back().taken;
+		} else if (word_after(line, "endif") && !groups.empty()) {
+			groups.pop_back();
+		} else if (const auto define = word_after(line, "define"); define && active) {
+			defined.insert(std::string{ *define });
+		} else if (const auto number = word_after(line, "line"); number && active) {
+			const std::string_view rest = line.substr(line.find(*number) + number->size());
+			const std::size_t k = rest.find_first_not_of(" \t");
+			at.line = std::stoi(std::string{ *number });
+			if (k != std::string_view::npos && std::isdigit(static_cast<unsigned char>(rest[k]))) {
+				at.source = static_cast<std::size_t>(std::stoi(std::string{ rest.substr(k) }));
+			}
+			continue;
+		}
+		++at.line;
+	}
+	return std::nullopt;
+}
 
 driver::shader_build_log stage_log(std::size_t stage, std::string text)
 {
@@ -247,6 +321,84 @@ BOOST_AUTO_TEST_CASE(APreprocessingErrorReachesTheManagerAndAFixClearsIt)
 	env.pump();
 	BOOST_TEST(shaders.program(variant) != nullptr);
 	BOOST_TEST(shaders.problems().empty());
+}
+
+// Fable's case: an include in a group the compiler skips. Its #line directives are not followed there, so the numbering is
+// set again after the #endif. The fake compiler reports the marker where a GLSL preprocessor puts it (compiler_location_of).
+BOOST_AUTO_TEST_CASE(AnIncludeInASkippedGroupDoesNotMoveTheLinesAfterIt)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	put("skipped_lib.glsl", "float a;\nfloat b;\nfloat c;\n");
+	const auto vertex = put("skipped.vert", "#version 450 core\n#ifdef NOT_DEFINED\n#include \"skipped_lib.glsl\"\n#endif\nERROR_HERE;\nvoid main() {}\n");
+	const auto variant = shaders.variants().intern(program_of(vertex, put("skipped.frag", good_fragment)));
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		const auto at = compiler_location_of(headers[0].body, "ERROR_HERE");
+		if (!at) {
+			return std::nullopt;
+		}
+		return stage_log(0, std::format("{}({}) : error C1008: undefined variable \"ERROR_HERE\"\n", at->source, at->line));
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems[0].file == vertex);
+	BOOST_TEST(problems[0].line == 5);
+}
+
+BOOST_AUTO_TEST_CASE(EveryGroupEndOrTurnSetsTheNumberingAgain)
+{
+	put("turn_lib.glsl", "#ifdef A\nfloat a;\n#else\nfloat b;\n#endif\n");
+	const auto vertex = put("turn.vert", "#version 450 core\n#ifdef B\n#include \"turn_lib.glsl\"\n#endif\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("turn.frag", good_fragment)));
+	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
+	BOOST_TEST(result.headers[0].body.ends_with("#ifdef B\n#line 1 1\n#ifdef A\nfloat a;\n#else\n#line 4 1\nfloat b;\n#endif\n#line 6 1\n#line 4 0\n#endif\n#line 5 0\nvoid main() {}\n"), result.headers[0].body);
+}
+
+BOOST_AUTO_TEST_CASE(ASourceNumberOutsideTheTableIsTheStageWithoutALine)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto vertex = put("unknown_source.vert", "#version 450 core\nvoid main() {}\n");
+	const auto variant = shaders.variants().intern(program_of(vertex, put("unknown_source.frag", good_fragment)));
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		return stage_log(0, "7(12) : error C0000: somewhere\n");
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems[0].file == vertex);
+	BOOST_TEST(problems[0].line == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AHugeLineAndAFloodOfErrorsAreBounded)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto huge = shaders.variants().intern(program_of(put("huge.vert", "#version 450 core\nvoid main() {}\n"), put("huge.frag", good_fragment)));
+	const auto flood = shaders.variants().intern(program_of(put("flood.vert", "#version 450 core\nvoid main() {}\n"), put("flood.frag", good_fragment)));
+	std::string one_line = "0(2) : error C0000: " + std::string(200 * 1024, 'x') + "\n";
+	std::string many_lines;
+	for (int i = 1; i <= 10000; ++i) {
+		many_lines += std::format("0({}) : error C0000: e\n", i);
+	}
+	drv.judge_shaders_with([&](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		return stage_log(0, headers[0].title.starts_with("huge") ? one_line : many_lines);
+	});
+
+	const auto started = std::chrono::steady_clock::now();
+	BOOST_TEST(shaders.program(huge) == nullptr);
+	BOOST_TEST(shaders.program(flood) == nullptr);
+	BOOST_TEST(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
+
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 1u + 101u);
+	BOOST_TEST(problems[0].line == 2);
+	BOOST_TEST(problems[0].message.size() <= 4u * 1024u + 3u);
+	BOOST_TEST(problems[0].message.ends_with("\xE2\x80\xA6"));
+	BOOST_TEST(problems[100].line == 100);
+	BOOST_TEST(problems[101].line == 0);
+	BOOST_TEST(problems[101].message == "\xE2\x80\xA6 9900 more problems");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

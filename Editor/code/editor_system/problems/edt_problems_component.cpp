@@ -145,16 +145,11 @@ void edt::problems_component::go_to_problem(const std::string& source, const pro
 {
 	if (source == shader_problem_publisher::source) {
 		// The file opens in the app the system gives it, at its top: going to the line is #1291.
-		if (item.file.empty() || !m_ports.open_file) return;
-		const res::tag file{ item.file };
-		const std::optional<res::disk_file> on_disk = m_ports.context.resources().disk_file_of(file);
-		if (!on_disk) {
-			egLOG_INFO("editor", "'{}' is not a file on the disk", item.file);
-			return;
-		}
-		if (const std::string error = m_ports.open_file(on_disk->file); !error.empty()) {
-			egLOG_WARN("editor", "cannot open '{}': {}", on_disk->file.string(), error);
-		}
+		const auto disk_path = [this](const res::tag& file) -> std::optional<std::filesystem::path> {
+			const std::optional<res::disk_file> on_disk = m_ports.context.resources().disk_file_of(file);
+			return on_disk ? std::optional<std::filesystem::path>{ on_disk->file } : std::nullopt;
+		};
+		open_shader_problem_file(item, disk_path, m_ports.open_file);
 		return;
 	}
 	if (source == desc_problem_publisher::source) {

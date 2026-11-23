@@ -116,6 +116,32 @@ namespace {
 		return out;
 	}
 
+	// An #else, #elif or #endif line (comments already blanked).
+	bool ends_group(std::string_view code_line)
+	{
+		std::size_t pos = 0;
+		const auto skip_blank = [&] {
+			while (pos < code_line.size() && (code_line[pos] == ' ' || code_line[pos] == '\t')) {
+				++pos;
+			}
+		};
+		skip_blank();
+		if (pos >= code_line.size() || code_line[pos] != '#') {
+			return false;
+		}
+		++pos;
+		skip_blank();
+		for (const std::string_view word : { std::string_view{ "else" }, std::string_view{ "elif" }, std::string_view{ "endif" } }) {
+			if (code_line.compare(pos, word.size(), word) == 0) {
+				const std::size_t after = pos + word.size();
+				if (after >= code_line.size() || !(std::isalnum(static_cast<unsigned char>(code_line[after])) || code_line[after] == '_')) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	std::string chain_text(const include_context& ctx, const std::string& again)
 	{
 		std::string text;
@@ -147,11 +173,19 @@ namespace {
 			const std::size_t newline = text.find('\n', line_begin);
 			const std::size_t line_end = newline == std::string::npos ? text.size() : newline + 1;
 			const std::string_view line{ text.data() + line_begin, line_end - line_begin };
-			const directive include = parse_include(std::string_view{ code.data() + line_begin, line_end - line_begin });
+			const std::string_view code_line{ code.data() + line_begin, line_end - line_begin };
+			const directive include = parse_include(code_line);
 			line_begin = line_end;
 
 			if (!include.found) {
 				result += line;
+				// A #line in a group the compiler skips is not followed: numbering is set again where a group ends or turns.
+				if (ctx.sources && ends_group(code_line)) {
+					if (!line.ends_with('\n')) {
+						result += '\n';
+					}
+					result += std::format("#line {} {}\n", line_number + 1, file_index);
+				}
 				continue;
 			}
 			// With #line directives a line left out would shift the lines after it: its line break stays.
