@@ -1109,9 +1109,15 @@ BOOST_AUTO_TEST_CASE(AGeometryDesc_WithoutAMemberTheLoaderReads_IsAnError)
 	BOOST_REQUIRE_EQUAL(child.size(), 1u);
 	BOOST_TEST(child[0].find("\"layout\" is missing") != std::string::npos, child[0]);
 
-	const auto flat_layout = member_errors(R"({"__type":"geometry_desc","layout":"vec3","indices":[],"vertices":[]})");
-	BOOST_REQUIRE_EQUAL(flat_layout.size(), 1u);
-	BOOST_TEST(flat_layout[0].find("object of attribute names") != std::string::npos, flat_layout[0]);
+	const auto no_indices = member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"vertices":[]})");
+	BOOST_REQUIRE_EQUAL(no_indices.size(), 1u);
+	BOOST_TEST(no_indices[0].find("\"indices\" is missing") != std::string::npos, no_indices[0]);
+
+	for (const char* layout : { R"("vec3")", R"(["position","vec3"])" }) {
+		const auto bad_layout = member_errors(std::string(R"({"__type":"geometry_desc","layout":)") + layout + R"(,"indices":[],"vertices":[]})");
+		BOOST_REQUIRE_EQUAL(bad_layout.size(), 1u);
+		BOOST_TEST(bad_layout[0].find("object of attribute names") != std::string::npos, bad_layout[0]);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)

@@ -1135,6 +1135,12 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_inside_a_custom_value_is_checked_too)
 	BOOST_TEST(nested.code == cmd::codes::invalid_args);
 	BOOST_CHECK_MESSAGE(nested.error.find("material/samplers/0/wrapped") != std::string::npos, nested.error);
 
+	// An inline desc there is held to the rule of one in a desc_ref field: a type without a schema cannot be checked.
+	const auto unknown = samplers(R"("res://t.png",[{"__type":"no_such_desc"}])");
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(unknown.error.find("material/samplers/1/0") != std::string::npos, unknown.error);
+	BOOST_CHECK_MESSAGE(unknown.error.find("without a schema") != std::string::npos, unknown.error);
+
 	const auto parent = samplers(R"({"__type":"material_desc","__parent":"user://m.desc"})");
 	BOOST_TEST(parent.code == cmd::codes::invalid_args);
 	BOOST_CHECK_MESSAGE(parent.error.find("material/samplers/0/__parent") != std::string::npos, parent.error);

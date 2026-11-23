@@ -479,6 +479,26 @@ BOOST_AUTO_TEST_CASE(AChildWithItsOwnBounds_HasOnlyThoseInItsTree)
 	BOOST_TEST(child.rtree.query(ds::bbox{ { 0.0f, 0.0f }, { 1.0f, 1.0f } }).size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(AChildWithItsOwnIndicesAlone_DoesNotKeepTheBoundsOfItsParent)
+{
+	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(),
+		boost::json::parse(R"({"layout":{"position":"vec3"},"indices":[2,1,0],"vertices":[]})").as_object());
+	BOOST_TEST(child.vertices.size() == 36u);
+	BOOST_TEST((child.indices == std::vector<unsigned int>{ 2, 1, 0 }));
+	BOOST_TEST(child.bounds.empty());
+	BOOST_TEST(child.rtree.query(parent_box).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AChildWithBoundsAlone_HasItsOwnBoundsOverTheDataOfItsParent)
+{
+	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(),
+		boost::json::parse(R"({"layout":{"position":"vec3"},"indices":[],"vertices":[],"bounds":[[[{"x":0,"y":0},{"x":1,"y":1}],0]]})").as_object());
+	BOOST_TEST(child.vertices.size() == 36u);
+	BOOST_REQUIRE(child.bounds.size() == 1u);
+	BOOST_TEST(child.rtree.query(parent_box).empty());
+	BOOST_TEST(child.rtree.query(ds::bbox{ { 0.0f, 0.0f }, { 1.0f, 1.0f } }).size() == 1u);
+}
+
 BOOST_AUTO_TEST_CASE(AChildWithoutDataOfItsOwn_KeepsTheDataAndBoundsOfItsParent)
 {
 	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(),

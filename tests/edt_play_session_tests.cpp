@@ -3363,15 +3363,24 @@ BOOST_AUTO_TEST_CASE(an_override_of_a_blob_field_is_a_warning_at_its_pointer)
 		R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})");
 	crate().components["blob"] = std::move(blob);
 
-	const auto found = edt::run_play_preflight(state, checks());
-	const edt::preflight_problem* row = with_note(found, "/worlds/0/children/1/components/blob/vertices", "schema");
-	BOOST_REQUIRE(row != nullptr);
-	BOOST_TEST((row->item.severity == edt::problem_severity::warning));
-	BOOST_TEST(row->item.message.find("blob field") != std::string::npos, row->item.message);
-	for (const edt::preflight_problem& p : found) {
-		const bool about_blob = !p.item.notes.empty() && p.item.notes.front().starts_with("/worlds/0/children/1/components/blob");
-		BOOST_TEST(!(about_blob && p.item.severity == edt::problem_severity::error), p.item.message);
-	}
+	const std::string at = "/worlds/0/children/1/components/blob/vertices";
+	const auto rows_at = [&](const std::vector<edt::preflight_problem>& found) {
+		std::vector<const edt::preflight_problem*> out;
+		for (const edt::preflight_problem& p : found) {
+			if (!p.item.notes.empty() && p.item.notes.front() == at) out.push_back(&p);
+		}
+		return out;
+	};
+	const auto range_rows = rows_at(edt::run_play_preflight(state, checks()));
+	BOOST_REQUIRE_EQUAL(range_rows.size(), 1u);
+	BOOST_TEST((range_rows[0]->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(range_rows[0]->item.message.find("blob field") != std::string::npos, range_rows[0]->item.message);
+
+	// A value that is no range is the schema's error alone, not a warning beside it.
+	crate().components.at("blob").overrides["vertices"] = "not a range";
+	const auto broken_rows = rows_at(edt::run_play_preflight(state, checks()));
+	BOOST_REQUIRE_EQUAL(broken_rows.size(), 1u);
+	BOOST_TEST((broken_rows[0]->item.severity == edt::problem_severity::error));
 }
 
 // A component of #606 (#703): described only by a schema, registered in the game layer. The editor's services are the

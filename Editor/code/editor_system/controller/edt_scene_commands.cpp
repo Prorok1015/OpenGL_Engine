@@ -227,8 +227,8 @@ namespace {
 
 	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
 	// a tag the codec may load, and is held to the same rule. A string without one is not taken for a tag. An object with a
-	// "__type" may be an inline desc the codec loads (an animation clip, a prefab node's components, #1180): no mesh, and
-	// one of a type with a schema is checked by it; one without a schema is walked like any other object.
+	// "__type" may be an inline desc the codec loads (an animation clip, a prefab node's components, #1180): it is held to
+	// the rule of an inline desc in a desc_ref field, at the same depth.
 	std::optional<reference_issue> tags_in(const desc::desc_system& descs, reference_scope& scope, const json::value& value,
 		std::string_view owner_protocol, int depth)
 	{
@@ -246,10 +246,7 @@ namespace {
 		}
 		if (const auto* object = value.if_object()) {
 			if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
-				const std::string_view type_name(type->as_string());
-				const desc::type_schema* schema = descs.find_schema(type_name);
-				if (auto refused = mesh_refusal(type_name, schema)) return refused;
-				if (schema) return reference_of(descs, scope, value, nullptr, owner_protocol, depth);
+				return reference_of(descs, scope, value, nullptr, owner_protocol, depth);
 			}
 			for (const auto& member : *object) {
 				if (auto issue = tags_in(descs, scope, member.value(), owner_protocol, depth)) return under(std::move(issue), std::string_view(member.key()));

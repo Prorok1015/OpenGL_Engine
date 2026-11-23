@@ -217,12 +217,14 @@ namespace {
 				for (const auto& member : component.overrides) {
 					if (!member.key().starts_with("__")) fields.emplace(member.key(), member.value());
 				}
-				// The engine reads it, so Play is not held back; the rule is component.set's, which would not write it (#1180).
-				if (const std::string blob = edt::override_edit::binary_ref_in_patch(services.descs->schemas(), *schema, fields); !blob.empty()) {
+				const desc::override_failure bad = desc::check_override_object(*schema, fields, nullptr, &services.descs->schemas());
+				// The engine reads a range there, so Play is not held back; the rule is component.set's, which would not write it
+				// (#1180). A value that is no range is the error below, not this row too.
+				if (const std::string blob = edt::override_edit::binary_ref_in_patch(services.descs->schemas(), *schema, fields);
+					!blob.empty() && !(bad.status != desc::override_status::valid && bad.pointer.starts_with(blob))) {
 					add(edt::problem_severity::warning, "schema", std::format("component '{}' ({}): {} is a blob field (binary_ref) set by an "
 						"override: mesh data is written only by saving the mesh", key, type, std::string_view(blob).substr(1)), path, json_path + blob);
 				}
-				const desc::override_failure bad = desc::check_override_object(*schema, fields, nullptr, &services.descs->schemas());
 				if (bad.status != desc::override_status::valid) {
 					const std::string expected = desc::override_expectation(*schema, bad, &services.descs->schemas());
 					add(edt::problem_severity::error, "schema", std::format("component '{}' ({}): {} ({}){}{}", key, type,
