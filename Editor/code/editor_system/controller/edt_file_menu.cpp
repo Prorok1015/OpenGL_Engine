@@ -450,7 +450,14 @@ void edt::file_menu::save_all()
 {
 	if (!m_hooks.save_all || m_save_all_running) return;
 	m_save_all_running = true;
-	save_all_resolve(m_hooks.save_all(), m_hooks.ask_unsaved, [this, alive = std::weak_ptr<void>(m_alive)](save_all_report report) {
+	save_all_report written;
+	try {
+		written = m_hooks.save_all();
+	} catch (...) {
+		m_save_all_running = false;
+		throw;
+	}
+	save_all_resolve(std::move(written), m_hooks.ask_unsaved, [this, alive = std::weak_ptr<void>(m_alive)](save_all_report report) {
 		if (!alive.lock()) return;
 		m_save_all_running = false;
 		show_save_all_result(report);
