@@ -29,13 +29,16 @@ namespace edt
 	void prefab_editor_panel::on_hidden()
 	{
 		// Collapsed or behind another tab the window is still open: only a closed one lets the document go.
-		if (!is_open() && m_ctx && m_on_close) {
+		// Once per hide: the close may leave another prefab in the window, which must not be closed by the same hide.
+		if (!is_open() && m_ctx && m_on_close && !m_hide_reported) {
+			m_hide_reported = true;
 			m_on_close();
 		}
 	}
 
 	void prefab_editor_panel::on_before_begin()
 	{
+		m_hide_reported = false;
 		// The unapplied-edits mark is in the window's title; ### keeps its ImGui id while the text changes.
 		m_title = (m_ctx && m_ctx->is_open() ? "Prefab: " + m_ctx->display_title() : std::string{ "Prefab Editor" }) + "###prefab_editor";
 		ImGui::SetNextWindowSize(ImVec2(em(900.f), em(650.f)), ImGuiCond_FirstUseEver);

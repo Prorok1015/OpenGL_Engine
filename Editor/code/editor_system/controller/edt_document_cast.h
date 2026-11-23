@@ -24,17 +24,6 @@ namespace edt
 		}
 		return out;
 	}
-	// The active prefab document, else the one opened last; null when no prefab is open.
-	inline prefab_document* prefab_of(document_manager& documents)
-	{
-		prefab_document* last = nullptr;
-		const document* active = documents.active();
-		for (prefab_document* prefab : prefabs_of(documents)) {
-			if (active && prefab->id() == active->id()) return prefab;
-			last = prefab;
-		}
-		return last;
-	}
 	// The open prefab documents with unapplied edits (what quit, New, Open and a module reload must not lose).
 	inline std::vector<prefab_document*> dirty_prefabs_of(document_manager& documents)
 	{

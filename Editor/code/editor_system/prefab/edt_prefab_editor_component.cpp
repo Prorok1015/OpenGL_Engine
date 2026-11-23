@@ -23,6 +23,12 @@
 #include <optional>
 #include <utility>
 
+namespace
+{
+	// What a prefab that did not load reported: its own scope of the source "desc", so the scope "prefab" stays the shown prefab's.
+	constexpr const char* k_failed_open_scope = "prefab_open";
+}
+
 edt::prefab_editor_component::prefab_editor_component(ports from)
 	: m_ports(from)
 {
@@ -163,6 +169,7 @@ cmd::result edt::prefab_editor_component::create_variant(const cmd::call& call)
 
 void edt::prefab_editor_component::open(const res::tag& tag)
 {
+	m_ports.desc_problems.clear(m_ports.context.problems(), k_failed_open_scope);
 	if (prefab_document* open = prefab_for(tag)) {
 		m_ports.context.documents().set_active(open->id());
 		show_document(*open);
@@ -209,6 +216,7 @@ void edt::prefab_editor_component::resolve_unsaved(const save_all_ask& ask, std:
 
 void edt::prefab_editor_component::close()
 {
+	m_ports.desc_problems.clear(m_ports.context.problems(), k_failed_open_scope);
 	cancel_open();
 	release_inspector(true);
 	auto& documents = m_ports.context.documents();
@@ -238,9 +246,11 @@ void edt::prefab_editor_component::request_close(document_id id)
 {
 	prefab_document* prefab = prefab_by_id(id);
 	if (!prefab) return;
-	confirm_close(prefab, [this, id] {
+	// A window that was hidden stays hidden: closing a tab must not bring it back.
+	const bool window_was_open = m_panel->is_open();
+	confirm_close(prefab, [this, id, window_was_open] {
 		close_document(id);
-		if (shown()) m_panel->set_open(true);
+		if (window_was_open && shown()) m_panel->set_open(true);
 	});
 }
 
@@ -306,17 +316,17 @@ void edt::prefab_editor_component::show_document(prefab_document& prefab)
 	m_panel->clear_selection();
 	m_panel->set_context(&prefab);
 	publish_diagnostics();
-	}
+}
 
-	void edt::prefab_editor_component::publish_diagnostics()
-	{
-		const auto found = m_diagnostics.find(m_shown);
-		if (found == m_diagnostics.end()) {
-			m_ports.desc_problems.clear(m_ports.context.problems(), "prefab");
-			return;
-		}
-		m_ports.desc_problems.report(m_ports.context.problems(), "prefab", found->second);
+void edt::prefab_editor_component::publish_diagnostics()
+{
+	const auto found = m_diagnostics.find(m_shown);
+	if (found == m_diagnostics.end()) {
+		m_ports.desc_problems.clear(m_ports.context.problems(), "prefab");
+		return;
 	}
+	m_ports.desc_problems.report(m_ports.context.problems(), "prefab", found->second);
+}
 
 void edt::prefab_editor_component::leave_shown()
 {
@@ -325,12 +335,14 @@ void edt::prefab_editor_component::leave_shown()
 	const std::vector<prefab_document*> left = prefabs();
 	if (!left.empty()) {
 		show_document(*left.back());
+		// The tab strip highlights the active document: it follows the window.
+		m_ports.context.documents().set_active(left.back()->id());
 		return;
 	}
 	m_panel->clear_selection();
 	m_panel->set_context(nullptr);
 	publish_diagnostics();
-	}
+}
 
 void edt::prefab_editor_component::open_now(const res::tag& tag)
 {
@@ -409,7 +421,8 @@ bool edt::prefab_editor_component::settle_open()
 void edt::prefab_editor_component::report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out)
 {
 	const std::vector<res::diagnostic> items = diagnostics_of(handle);
-	m_ports.desc_problems.report(m_ports.context.problems(), "prefab", items);
+	// Not the scope "prefab": that one follows the prefab the window shows.
+	m_ports.desc_problems.report(m_ports.context.problems(), k_failed_open_scope, items);
 	std::string reason = timed_out ? std::format("it was still loading after {} s", prefab_open_watch::k_deadline.count()) : std::string{ "the file could not be loaded" };
 	if (const auto error = std::ranges::find(items, res::diagnostic_severity::error, &res::diagnostic::severity); !timed_out && error != items.end()) {
 		reason = error->reason;
@@ -439,7 +452,7 @@ void edt::prefab_editor_component::finish_open(const res::tag& tag, const res::r
 		publish_diagnostics();
 		m_panel->set_open(true);
 	} else {
-		m_ports.desc_problems.report(m_ports.context.problems(), "prefab", diagnostics_of(reread));
+		m_ports.desc_problems.report(m_ports.context.problems(), k_failed_open_scope, diagnostics_of(reread));
 		if (prefabs().empty() && !loading()) m_panel->set_open(false);
 	}
 }

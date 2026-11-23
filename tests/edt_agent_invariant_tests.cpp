@@ -6,6 +6,7 @@
 #include "edt_agent_server.h"
 #include "edt_data_protocol.h"
 #include "edt_document_cast.h"
+#include "edt_prefab_preview_kinds.hpp"
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
 #include "edt_mcp_bridge_host.h"
@@ -38,6 +39,10 @@
 #include "edt_inspector_panel.h"
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
+#include "edt_prefab_editor_component.h"
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/editor/edt_dialog_service.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -1331,7 +1336,7 @@ BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevel
 	const std::uint64_t generation_before = scene.generation();
 
 	open_prefab(prefab);
-	edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	edt::prefab_document* document = test_util::prefab_of(editor().context()->documents());
 	BOOST_REQUIRE(document && document->is_open());
 	BOOST_REQUIRE(document->edit([](scn::prefab_desc& desc) {
 		desc.get_root().children[0].name = "renamed";
@@ -1366,7 +1371,7 @@ BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_Whe
 	const std::uint64_t generation_before = scene.generation();
 
 	open_prefab(prefab);
-	edt::prefab_document* document = edt::prefab_of(context.documents());
+	edt::prefab_document* document = test_util::prefab_of(context.documents());
 	BOOST_REQUIRE(document && document->is_open());
 	BOOST_REQUIRE(!document->is_dirty());
 	tree->select_node({ 0xe1 });
@@ -1396,7 +1401,7 @@ struct prefab_inspector_fixture : desc_problems_fixture
 		tree = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
 		BOOST_REQUIRE(inspector && tree);
 		open_prefab(prefab);
-		document = edt::prefab_of(editor().context()->documents());
+		document = test_util::prefab_of(editor().context()->documents());
 		BOOST_REQUIRE(document && document->is_open());
 		tree->select_node({ 0xe1 });
 	}
@@ -1505,7 +1510,7 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 	auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
 	BOOST_REQUIRE(window);
 	open_prefab(first);
-	edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
+	edt::prefab_document* document = test_util::prefab_of(editor().context()->documents());
 	BOOST_REQUIRE(document && document->is_open());
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), second)); });
@@ -1513,14 +1518,14 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 	window->cancel_loading();
 
 	BOOST_TEST(!window->loading());
-	document = edt::prefab_of(editor().context()->documents());
+	document = test_util::prefab_of(editor().context()->documents());
 	BOOST_REQUIRE(document && document->is_open());
 	BOOST_TEST(document->source_tag() == first);
 	for (int frame = 0; frame < 20; ++frame) {
 		test_util::pump(tasks);
 		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
 	}
-	document = edt::prefab_of(editor().context()->documents());
+	document = test_util::prefab_of(editor().context()->documents());
 	BOOST_REQUIRE(document && document->is_open());
 	BOOST_TEST(document->source_tag() == first);
 }
@@ -1558,7 +1563,7 @@ BOOST_FIXTURE_TEST_CASE(TwoPrefabs_TheWindowShowsTheActiveOne_AndClosingItShowsT
 	auto& documents = editor().context()->documents();
 	BOOST_REQUIRE_EQUAL(edt::prefabs_of(documents).size(), 2u);
 	BOOST_TEST(desc_rows().empty());
-	BOOST_TEST(edt::prefab_of(documents)->source_tag() == plain);
+	BOOST_TEST(test_util::prefab_of(documents)->source_tag() == plain);
 
 	edt::prefab_document* odd_document = nullptr;
 	for (edt::prefab_document* candidate : edt::prefabs_of(documents)) {
@@ -1571,9 +1576,238 @@ BOOST_FIXTURE_TEST_CASE(TwoPrefabs_TheWindowShowsTheActiveOne_AndClosingItShowsT
 	documents.close(odd_document->id());
 
 	BOOST_TEST(desc_rows().empty());
-	BOOST_REQUIRE(edt::prefab_of(documents));
-	BOOST_TEST(edt::prefab_of(documents)->source_tag() == plain);
+	BOOST_REQUIRE(test_util::prefab_of(documents));
+	BOOST_TEST(test_util::prefab_of(documents)->source_tag() == plain);
 }
+
+// Several prefabs at once (#1185): the component's own flows, driven through the editor over files in the project's res folder.
+struct multi_prefab_fixture : desc_problems_fixture
+{
+	static constexpr std::string_view k_text =
+		R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json";
+
+	multi_prefab_fixture()
+	{
+		for (const char name : { 'a', 'b', 'c' }) project.write(std::string("res/prefabs/multi_") + name + ".prefab.desc", k_text);
+		open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
+			{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+		auto& rs = storage.require<res::resource_system>();
+		BOOST_REQUIRE_MESSAGE(rs.remount(res::tag::default_protocol(), { project.path() / "res" }), "res:// is not mounted");
+		inspector = dynamic_cast<edt::inspector_panel*>(editor().context()->panels().find("inspector"));
+		window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
+		BOOST_REQUIRE(inspector && window);
+	}
+
+	static res::tag tag_of(char name) { return res::tag::make(std::string("prefabs/multi_") + name + ".prefab.desc"); }
+
+	edt::document_manager& documents() { return editor().context()->documents(); }
+
+	edt::prefab_document* document_of(char name)
+	{
+		for (edt::prefab_document* prefab : edt::prefabs_of(documents())) {
+			if (prefab->source_tag() == tag_of(name)) return prefab;
+		}
+		return nullptr;
+	}
+
+	edt::prefab_document& open(char name)
+	{
+		open_prefab(tag_of(name));
+		edt::prefab_document* prefab = document_of(name);
+		BOOST_REQUIRE(prefab && prefab->is_open());
+		return *prefab;
+	}
+
+	static bool rename(edt::prefab_document& prefab, const std::string& name)
+	{
+		return prefab.edit([&name](scn::prefab_desc& desc) {
+			desc.get_root().children[0].name = name;
+			return true;
+		});
+	}
+
+	std::string file_text(char name)
+	{
+		std::ifstream in(project.path() / "res" / "prefabs" / (std::string("multi_") + name + ".prefab.desc"), std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	void pump_frames(int frames)
+	{
+		for (int frame = 0; frame < frames; ++frame) {
+			test_util::pump(tasks);
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		}
+	}
+
+	edt::inspector_panel* inspector = nullptr;
+	edt::prefab_editor_panel* window = nullptr;
+};
+
+BOOST_FIXTURE_TEST_CASE(CloseDirty_ClosesEveryPrefabWithUnappliedEdits_AndKeepsTheCleanOne, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	edt::prefab_document& b = open('b');
+	open('c');
+	BOOST_REQUIRE(rename(a, "x"));
+	BOOST_REQUIRE(rename(b, "y"));
+
+	editor().prefab_editor().close_dirty();
+
+	const std::vector<edt::prefab_document*> left = edt::prefabs_of(documents());
+	BOOST_REQUIRE_EQUAL(left.size(), 1u);
+	BOOST_TEST(left.front()->source_tag() == tag_of('c'));
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyTab_AsksFirst_CancelKeepsThePrefabAndItsEdits, multi_prefab_fixture)
+{
+	open('a');
+	edt::prefab_document& b = open('b');
+	BOOST_REQUIRE(rename(b, "typed"));
+	auto& dialogs = editor().context()->dialogs();
+
+	editor().prefab_editor().request_close(b.id());
+
+	const auto asked = dialogs.list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "unsaved");
+	BOOST_REQUIRE(dialogs.answer(asked.front().id, boost::json::object{ { "choice", "cancel" } }).ok);
+
+	edt::prefab_document* kept = document_of('b');
+	BOOST_REQUIRE(kept && kept->is_open());
+	BOOST_TEST(kept->is_dirty());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 2u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ApplyDirty_WritesInOpenOrder_AndStopsAtTheFirstRefusal, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	edt::prefab_document& b = open('b');
+	edt::prefab_document& c = open('c');
+	BOOST_REQUIRE(rename(a, "armA"));
+	BOOST_REQUIRE(rename(b, "armB"));
+	BOOST_REQUIRE(rename(c, "armC"));
+	const std::string c_before = file_text('c');
+	project.write("res/prefabs/multi_b.prefab.desc",
+		R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"outside"}]})json");
+	storage.require<res::resource_system>().signal_changed(tag_of('b'));
+	pump_frames(5);
+	BOOST_REQUIRE(b.changed_on_disk());
+
+	BOOST_TEST(!editor().prefab_editor().apply_dirty());
+
+	BOOST_TEST(!a.is_dirty());
+	BOOST_TEST(file_text('a').find("armA") != std::string::npos);
+	BOOST_TEST(b.is_dirty());
+	BOOST_TEST(c.is_dirty());
+	BOOST_TEST(file_text('c') == c_before);
+}
+
+BOOST_FIXTURE_TEST_CASE(APrefabThatFinishesLoading_AfterAnotherPrefabWasClosed_OpensAndIsShown, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	const edt::document_id a_id = a.id();
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+
+	documents().close(a_id);
+	pump_frames(30);
+
+	BOOST_TEST(!window->loading());
+	const std::vector<edt::prefab_document*> open_now = edt::prefabs_of(documents());
+	BOOST_REQUIRE_EQUAL(open_now.size(), 1u);
+	BOOST_TEST(open_now.front()->source_tag() == tag_of('b'));
+	BOOST_REQUIRE(documents().active() != nullptr);
+	BOOST_TEST(documents().active()->id() == open_now.front()->id());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheInspectorNode_NeverBelongsToAPrefabTheWindowStoppedShowing, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	window->select_node({ 0xe1 });
+	BOOST_REQUIRE(inspector->selected_node() == a.working_node({ 0xe1 }));
+
+	edt::prefab_document& b = open('b');
+
+	BOOST_TEST(inspector->selected_node() == nullptr);
+	window->select_node({ 0xe1 });
+	BOOST_TEST(inspector->selected_node() == b.working_node({ 0xe1 }));
+	BOOST_TEST(inspector->selected_node() != a.working_node({ 0xe1 }));
+
+	documents().set_active(a.id());
+
+	BOOST_TEST(inspector->selected_node() == nullptr);
+}
+
+BOOST_FIXTURE_TEST_CASE(APrefabTheWindowStoppedShowing_GivesUpTheRenderTarget_ItsCameraIsSkipped, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	entt::registry* reg = a.get_registry();
+	BOOST_REQUIRE(reg);
+	for (auto ent : reg->view<scn::camera_component>()) reg->get<scn::camera_component>(ent).m_viewport.size = glm::ivec2{ 64, 64 };
+
+	open('b');
+
+	std::size_t cameras = 0;
+	for (auto ent : reg->view<scn::camera_component>()) {
+		const scn::camera_component& cam = reg->get<scn::camera_component>(ent);
+		++cameras;
+		BOOST_TEST((cam.m_viewport.size == glm::ivec2{ 0 }));
+		BOOST_TEST(!rnd::effective_camera_viewport(cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), glm::ivec2{ 1280, 720 }).has_value());
+	}
+	BOOST_TEST(cameras > 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ClosingABackgroundTab_DoesNotReopenAHiddenWindow, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	open('b');
+	window->set_open(false);
+
+	editor().prefab_editor().request_close(a.id());
+
+	BOOST_TEST(!window->is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ClosingABackgroundTab_KeepsAnOpenWindowOpen, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	open('b');
+	window->set_open(true);
+
+	editor().prefab_editor().request_close(a.id());
+
+	BOOST_TEST(window->is_open());
+}
+
+BOOST_FIXTURE_TEST_CASE(AClosedShownPrefab_MovesTheWindowAndTheActiveTabToTheNextOne, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	edt::prefab_document& b = open('b');
+	BOOST_REQUIRE(documents().active() != nullptr);
+	BOOST_REQUIRE(documents().active()->id() == b.id());
+
+	documents().close(b.id());
+
+	BOOST_REQUIRE(documents().active() != nullptr);
+	BOOST_TEST(documents().active()->id() == a.id());
+}
+
+BOOST_FIXTURE_TEST_CASE(AFailedOpen_LeavesTheShownPrefabsProblemsAlone, multi_prefab_fixture)
+{
+	const res::tag odd = res::tag::make("prefabs/multi_odd.prefab.desc");
+	store(odd, k_prefab_with_unknown);
+	open_prefab(odd);
+	BOOST_REQUIRE(has_unknown_component_of("prefabs/multi_odd.prefab.desc"));
+
+	open_prefab(res::tag::make("prefabs/no_such_prefab.prefab.desc"));
+
+	BOOST_TEST(has_unknown_component_of("prefabs/multi_odd.prefab.desc"));
+	BOOST_TEST(desc_rows().size() > 1u);
+	open('a');
+	BOOST_TEST(desc_rows().empty());
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()
 

@@ -71,6 +71,7 @@ namespace edt
 		rnd::render_system& m_rnd;
 		gui::gui_system& m_gui;
 		prefab_document* m_ctx = nullptr;
+		bool m_hide_reported = false;
 		std::function<void()> m_on_close;
 		std::function<void()> m_on_cancel_loading;
 		std::string m_loading;
