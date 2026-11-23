@@ -746,6 +746,40 @@ BOOST_AUTO_TEST_CASE(HotReload_InstanceKeepsItsRecordsWhenTheBaseChanges)
 	BOOST_TEST(!reg.valid(child_named(reg, inst, "arm")));                 // dropped from the base
 }
 
+// Review of #1310: the copy an instance keeps for a hot reload has the version of its records too, or a record written against
+// an older version of its type would be applied at its old path once the prefab changes.
+BOOST_AUTO_TEST_CASE(HotReload_ARecordOfAnOlderTypeVersion_StillFollowsTheSteps)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object& o) {
+		if (const auto it = o.find("health"); it != o.end()) {
+			boost::json::value moved = it->value();
+			o.erase(it);
+			o["hp"] = std::move(moved);
+		}
+	});
+	auto base_tag = put("base.prefab.desc", BASE_PREFAB);
+	auto level = parse(R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"},
+		 "overrides":[{"target":["00000000000000a2"],"component":"stat","path":"/health","value":40,"version":1}]}]})");
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, level, "level", res::tag{});
+	auto inst = child_named(reg, root, "inst");
+	BOOST_REQUIRE(reg.valid(inst));
+	auto leg = child_named(reg, inst, "leg");
+	BOOST_REQUIRE(reg.valid(leg));
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).hp == 40);
+
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000a2","name":"leg","components":{"stat":{"__type":"stat_desc","__version":2,"hp":44,"label":"v2"}}}]})");
+	rs->signal_changed(base_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(base_tag));
+
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).hp == 40);
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).label == "v2");
+}
+
 // ---------------------------------------------------------------- records on disk
 
 BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)

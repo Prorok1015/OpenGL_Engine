@@ -3,6 +3,8 @@
 #include <snk/desc/desc_node_id.h>
 #include <snk/common/ds/ds_json_storage.hpp>
 #include <snk/desc/desc_system.h>
+#include <snk/desc/desc_schema.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <algorithm>
 #include <format>
 #include <limits>
@@ -375,13 +377,19 @@ namespace scn {
 			std::vector<std::pair<tokens_t, boost::json::value>> differences;
 			tokens_t at;
 			collect_differences(with_value, &bare, at, differences, true);
-			// A step that wraps the value in an object carries the marker deeper than the field: the field is the one difference.
-			const bool wrapped = marked.size() == 1 && differences.size() == 1
-				&& differences.front().first.size() < marked.front().size()
-				&& std::equal(differences.front().first.begin(), differences.front().first.end(), marked.front().begin());
-			if (marked.size() == 1 && !wrapped) {
-				const boost::json::value* converted = value_at(with_value, marked.front());
-				return { record_migration::kept, marked.front(), converted ? *converted : value, {} };
+			// The marker is trusted only where the real value went too, and where the trees differ, if they do, at it or around it:
+			// a step that looks at the value (a type check, a conversion) leaves a string marker where it was while the value
+			// moves (review of #1310), and a step that wraps the value carries the marker to the leaf that holds it.
+			if (marked.size() == 1) {
+				const tokens_t& place = marked.front();
+				const boost::json::value* there = value_at(with_value, place);
+				const auto related = [&place](const tokens_t& other) {
+					const std::size_t common = std::min(place.size(), other.size());
+					return std::equal(place.begin(), place.begin() + static_cast<std::ptrdiff_t>(common), other.begin());
+				};
+				if (there && (differences.empty() || (differences.size() == 1 && related(differences.front().first)))) {
+					return { record_migration::kept, place, *there, {} };
+				}
 			}
 			if (differences.empty()) {
 				return { record_migration::dropped, {}, {}, "a step removed the field" };
@@ -416,19 +424,41 @@ namespace scn {
 			}
 			(*holder)[tokens.back()] = std::move(value);
 		}
+
+		// Does the current type have every field the record sets? A type without fields in its schema cannot tell: yes.
+		bool names_current_fields(const desc::desc_system& descs, std::string_view type, const override_record& record)
+		{
+			const desc::type_schema* schema = descs.find_schema(type);
+			if (!schema || schema->fields.empty()) return true;
+			if (!record.path.empty()) return override_names_a_field(*schema, record.path);
+			if (!record.value.is_object()) return true;
+			std::vector<std::pair<tokens_t, const boost::json::value*>> leaves;
+			tokens_t at;
+			merge_leaves(record.value.as_object(), at, leaves);
+			return std::ranges::all_of(leaves, [&](const auto& leaf) { return override_names_a_field(*schema, pointer_of(leaf.first)); });
+		}
 	}
 
 	record_migration_result migrate_override_record(const desc::desc_system& descs, std::string_view type, override_record& record)
 	{
-		if (record.op != override_op::set || type.empty() || record.component == transform_pseudo_component) {
+		// A type no layer knows (its module is not loaded) has no steps to follow and no version to give: left as it is.
+		const bool known = !type.empty() && (descs.is_registered(type) || descs.find_schema(type) || descs.current_version(type) > 1);
+		if (record.op != override_op::set || !known || record.component == transform_pseudo_component) {
 			return {};
 		}
 		const int current = descs.current_version(type);
-		if (record.type_version <= 0 || record.type_version >= current) {
-			// Newer than the engine knows is left as written: the off-the-fields warning names it when it is applied.
-			if (record.type_version <= 0) record.type_version = current;
+		if (record.type_version <= 0) {
+			// Written before records had versions: taken as written against the current version only when the current type has
+			// the field, so a truly old edit is not locked in on a path that is gone (review of #1310).
+			if (!names_current_fields(descs, type, record)) {
+				return { record_migration::failed, std::format("override of '{}' at '{}' (no version): '{}' has no such field any more, "
+					"the edit does nothing", record.component, record.path, type) };
+			}
+			record.type_version = current;
 			return {};
 		}
+		// Newer than the engine knows is left as written: the off-the-fields warning names it when it is applied.
+		if (record.type_version >= current) return {};
 		const std::string named = std::format("override of '{}' at '{}' (version {} of '{}')", record.component, record.path,
 			record.type_version, type);
 		auto refused = [&](const located& where) {
@@ -465,29 +495,20 @@ namespace scn {
 			return { changed ? record_migration::moved : record_migration::kept, {} };
 		}
 
-		// A path through an array is followed only up to the array: the steps move the field that holds it, what is inside
-		// is not known here, so the field must come out as it went in.
-		const auto index = std::ranges::find_if(tokens, is_index_token);
-		const tokens_t rest(index, tokens.end());
-		tokens.erase(index, tokens.end());
-		if (tokens.empty()) {
-			return { record_migration::failed, named + ": a component is not an array" };
+		// Steps may change what is inside an array element or under a numeric key; a sparse object cannot hold the element, so
+		// such a record cannot be followed and keeps its version (review of #1310).
+		if (std::ranges::any_of(tokens, is_index_token)) {
+			return { record_migration::failed, named + ": the path goes through an array or a numeric key, which the steps of the type "
+				"cannot be followed into; applied as written" };
 		}
-		static const boost::json::value placeholder = boost::json::array{};
-		located where = locate(descs, type, record.type_version, tokens, rest.empty() ? record.value : placeholder, named);
+		located where = locate(descs, type, record.type_version, tokens, record.value, named);
 		if (where.outcome != record_migration::kept) return refused(where);
-		if (!rest.empty() && where.value != placeholder) {
-			return { record_migration::failed, named + ": a step changed the array the path goes through" };
-		}
 
-		where.tokens.insert(where.tokens.end(), rest.begin(), rest.end());
 		std::string new_path = pointer_of(where.tokens);
-		const bool changed = new_path != record.path || (rest.empty() && where.value != record.value);
+		const bool changed = new_path != record.path || where.value != record.value;
 		record.path = std::move(new_path);
-		if (rest.empty()) {
-			record.value = std::move(where.value);
-			ds::keep_in_default_resource(record.value);
-		}
+		record.value = std::move(where.value);
+		ds::keep_in_default_resource(record.value);
 		record.type_version = current;
 		return { changed ? record_migration::moved : record_migration::kept, {} };
 	}

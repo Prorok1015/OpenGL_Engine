@@ -1,7 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
+#include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
@@ -165,14 +167,94 @@ BOOST_AUTO_TEST_CASE(AMergeIntoTheWholeComponent_MovesEachFieldItSets)
 	BOOST_TEST((written.value == json::parse(R"({"health":5,"armor":2})")));
 }
 
-BOOST_AUTO_TEST_CASE(APathThroughAnArray_FollowsTheFieldThatHoldsIt)
+// Review of #1310: a step may change what is inside the elements, which a sparse object cannot hold.
+BOOST_AUTO_TEST_CASE(APathThroughAnArray_IsNotFollowed_AndKeepsItsVersion)
 {
-	step(1, [](json::object& o) { rename(o, "list", "items"); });
-	auto written = record("/list/2/x", 7, 1);
+	step(1, [](json::object& o) {
+		if (auto* lights = o.if_contains("lights"); lights && lights->is_array()) {
+			for (auto& light : lights->as_array()) {
+				if (light.is_object()) rename(light.as_object(), "color", "tint");
+			}
+		}
+	});
+	auto written = record("/lights/0/color", json::parse("[1,0,0]"), 1);
+	const auto result = scn::migrate_override_record(descs, k_type, written);
+	BOOST_TEST((result.outcome == scn::record_migration::failed));
+	BOOST_TEST(written.path == "/lights/0/color");
+	BOOST_TEST(written.type_version == 1);
+}
+
+// Review of #1310: the string marker survives a step that converts only numbers, while the value itself moves.
+BOOST_AUTO_TEST_CASE(AStepThatChecksTheKindOfTheValue_IsFollowedByWhereTheValueWent)
+{
+	step(1, [](json::object& o) {
+		if (const auto it = o.find("hp"); it != o.end() && it->value().is_number()) {
+			const auto tenfold = it->value().to_number<std::int64_t>() * 10;
+			o.erase(it);
+			o["health"] = tenfold;
+		}
+	});
+	auto written = record("/hp", 5, 1);
 	const auto result = scn::migrate_override_record(descs, k_type, written);
 	BOOST_TEST((result.outcome == scn::record_migration::moved));
-	BOOST_TEST(written.path == "/items/2/x");
-	BOOST_TEST(written.value.as_int64() == 7);
+	BOOST_TEST(written.path == "/health");
+	BOOST_TEST(written.value.as_int64() == 50);
+}
+
+// A set replaces the value at its pointer: the leaf the value went to is set, not the whole object that wraps it.
+BOOST_AUTO_TEST_CASE(AStepThatWrapsTheValue_MovesTheRecordToTheLeafThatHoldsIt)
+{
+	step(1, [](json::object& o) {
+		if (const auto it = o.find("hp"); it != o.end()) {
+			json::object wrapped{ { "value", it->value() }, { "max", 100 } };
+			o.erase(it);
+			o["hp"] = std::move(wrapped);
+		}
+	});
+	auto written = record("/hp", 5, 1);
+	const auto result = scn::migrate_override_record(descs, k_type, written);
+	BOOST_TEST((result.outcome == scn::record_migration::moved));
+	BOOST_TEST(written.path == "/hp/value");
+	BOOST_TEST(written.value.as_int64() == 5);
+}
+
+BOOST_AUTO_TEST_CASE(AStepThatThrows_FailsTheRecord_AndLeavesItAsItWas)
+{
+	step(1, [](json::object&) { throw std::runtime_error("broken step"); });
+	auto written = record("/hp", 5, 1);
+	const auto result = scn::migrate_override_record(descs, k_type, written);
+	BOOST_TEST((result.outcome == scn::record_migration::failed));
+	BOOST_TEST(result.reason.find("broken step") != std::string::npos);
+	BOOST_TEST(written.path == "/hp");
+	BOOST_TEST(written.type_version == 1);
+}
+
+// Review of #1310: a type whose module is not loaded must not be given version 1, its steps would run again later.
+BOOST_AUTO_TEST_CASE(ATypeNoLayerKnows_LeavesTheRecordAsItIs)
+{
+	for (const int version : { 0, 3 }) {
+		auto written = record("/hp", 5, version);
+		const auto result = scn::migrate_override_record(descs, "test_record_unknown_desc", written);
+		BOOST_TEST((result.outcome == scn::record_migration::kept));
+		BOOST_TEST(written.type_version == version);
+	}
+}
+
+// Review of #1310: an edit older than versions whose field the type has not got any more is not taken as current.
+BOOST_AUTO_TEST_CASE(ARecordWithoutAVersion_WhoseFieldIsGone_KeepsNoVersion)
+{
+	const json::object text = json::parse(R"({ "name": "test_record_migr_desc", "version": 2,
+		"fields": [ { "name": "health", "kind": "f32" } ],
+		"migrations": [ { "from": 1, "rename": { "/hp": "/health" } } ] })").as_object();
+	BOOST_REQUIRE((descs.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
+
+	auto old = record("/hp", 5, 0);
+	BOOST_TEST((scn::migrate_override_record(descs, k_type, old).outcome == scn::record_migration::failed));
+	BOOST_TEST(old.type_version == 0);
+
+	auto fine = record("/health", 5, 0);
+	BOOST_TEST((scn::migrate_override_record(descs, k_type, fine).outcome == scn::record_migration::kept));
+	BOOST_TEST(fine.type_version == 2);
 }
 
 BOOST_AUTO_TEST_CASE(ATransformRecord_IsLeftAsItIs)

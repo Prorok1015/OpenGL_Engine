@@ -594,7 +594,8 @@ namespace {
 		}
 		copy.overrides.reserve(node.overrides.size());
 		for (const auto& record : node.overrides) {
-			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op });
+			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op,
+				record.type_version });
 		}
 		copy.children.reserve(node.children.size());
 		for (const auto& child : node.children) {
@@ -929,6 +930,19 @@ namespace {
 		std::vector<std::pair<std::size_t, scn::override_record>> migrated;
 	};
 
+	// A record is applied on every expansion of its instance: what the steps did to it is said once a run, not each time.
+	void log_once(bool error, const std::string& text)
+	{
+		static std::mutex mutex;
+		static std::unordered_set<std::string> said;
+		{
+			std::lock_guard lock(mutex);
+			if (!said.insert(text).second) return;
+		}
+		if (error) egLOG_ERROR("desc", "{}", text);
+		else egLOG_WARN("desc", "{}", text);
+	}
+
 	// False: the record names a component the node does not have and cannot add it (its target is gone).
 	bool apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& given,
 		std::size_t index, stale_sink* sink)
@@ -955,7 +969,7 @@ namespace {
 		std::string type = held.type_name;
 		if (type.empty() && held.parent_desc.is_valid() && held.parent_desc.is_ready()) type = std::string(held.parent_desc->get_type());
 		scn::override_record migrated;
-		if (!type.empty() && desc_system.is_registered(type)) {
+		if (!type.empty()) {
 			migrated = given;
 			const scn::record_migration_result result = scn::migrate_override_record(desc_system, type, migrated);
 			switch (result.outcome) {
@@ -968,15 +982,16 @@ namespace {
 				break;
 			case scn::record_migration::dropped:
 				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::dropped_by_migration, result.reason });
-				else egLOG_WARN("desc", "{}: the edit is dropped", result.reason);
+				else log_once(false, result.reason + ": the edit is dropped");
 				return true;
 			case scn::record_migration::duplicated:
 				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::duplicated_by_migration, result.reason });
-				else egLOG_ERROR("desc", "{}: the record is not applied", result.reason);
+				else log_once(true, result.reason + ": the record is not applied");
 				return true;
 			case scn::record_migration::failed:
-				// Not worse than before records had versions: applied as written, the off-the-fields check names a field that moved.
-				if (!quiet) egLOG_WARN("desc", "{}: applied as written", result.reason);
+				// Not worse than before records had versions: applied as written.
+				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::not_migrated, result.reason });
+				else log_once(false, result.reason);
 				break;
 			}
 		}
@@ -1396,7 +1411,9 @@ std::size_t scn::migrate_records(const ecs_assembler& assembler, prefab_desc::pr
 
 std::size_t scn::prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node)
 {
-	const std::vector<stale_override> found = find_stale_records(assembler, node);
+	std::vector<stale_override> found = find_stale_records(assembler, node);
+	// The steps put the value of such a record in more than one place: which one it meant is for a person to say.
+	std::erase_if(found, [](const stale_override& entry) { return entry.why == stale_override::reason::duplicated_by_migration; });
 	for (auto it = found.rbegin(); it != found.rend(); ++it) {
 		node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(it->index));
 	}

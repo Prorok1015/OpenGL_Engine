@@ -48,7 +48,8 @@ namespace scn {
 		moved,      // the steps moved or converted the value: path, value and version are rewritten
 		dropped,    // a step removed the field: the edit is gone
 		duplicated, // a step put the value in more than one place: the record is left as it is and must not be applied
-		failed,     // a step threw, or changed an array the path goes through: the record is left as it is
+		failed,     // a step threw, the path goes through an array or a numeric key, or a record without a version sets a field
+		            // the type no longer has: the record is left as it is and applied as written
 	};
 
 	struct record_migration_result {
@@ -60,7 +61,8 @@ namespace scn {
 	// one (#1255) through the same steps an object of that type takes, C++ and declarative alike: a sparse object holding
 	// the value at the record's path goes through the steps next to the same object without the value, and what differs
 	// after is where the value is now. A record without a version (0) is taken as written against the current one and gets
-	// that version. On kept and moved the record is at the current version; on the others it is left untouched.
+	// that version when the current type has its fields. On kept and moved the record is at the current version; on the others
+	// it is left untouched.
 	SNK_API record_migration_result migrate_override_record(const desc::desc_system& descs, std::string_view type,
 		override_record& record);
 }
