@@ -1366,6 +1366,8 @@ judged_records judge_node(const scn::ecs_assembler& assembler, const prefab_node
 	return found;
 }
 
+}
+
 std::vector<scn::stale_override> scn::find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node)
 {
 	constexpr std::size_t nesting_followed = 64;
@@ -1378,7 +1380,8 @@ std::size_t scn::migrate_records(const ecs_assembler& assembler, prefab_desc::pr
 {
 	constexpr std::size_t nesting_followed = 64;
 	std::size_t rewritten = 0;
-	for (auto& [index, migrated] : judge_node(assembler, node, {}, nesting_followed).migrated) {
+	judged_records judged = judge_node(assembler, node, {}, nesting_followed);
+	for (auto& [index, migrated] : judged.migrated) {
 		if (index >= node.overrides.size()) continue;
 		// The target stays the node's own: a record handed down to a nested instance comes back with the target it had there.
 		override_record& record = node.overrides[index];
