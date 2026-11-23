@@ -93,6 +93,10 @@ namespace prj::migration
 		// Why engine.geometry_blobs leaves such a desc in JSON arrays (geometry_conversion_problem, or too big for the
 		// scan); skipped_by lists it as not migrated. Empty otherwise.
 		std::string geometry_left;
+		// A material_desc object at version 1 (the file's root or an inline one) has shader stages the type step refuses
+		// (refused_material_stages): engine.material_shaders writes a .shader.desc for them before the type migrations, so
+		// the plan does not run the type step on the file (#1200).
+		bool material_stages = false;
 	};
 
 	struct manifest_state

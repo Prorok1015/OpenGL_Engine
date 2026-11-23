@@ -204,6 +204,7 @@ struct project_step {
 |---|---|---|---|
 | `engine.manifest_format` | pre | EPIC-58 | поднимает `format_version` манифеста до текущего |
 | `engine.geometry_blobs` | post | EPIC-79 (#1129) | вершины и индексы `geometry_desc` треугольников из JSON-массивов в `<name>.<ext>.bin` рядом (создаётся), desc получает диапазоны; файл, который перевести нельзя, — строка «not migrated» в отчёте |
+| `engine.material_shaders` | pre | EPIC-26 (#1200) | стадии `material_desc` v1, которые шаг типа отклоняет (пара не из движка или её дополняет родитель), — в `.shader.desc` рядом с первым материалом (по пути) с той же тройкой стадий (`<имя>.shader.desc`, при занятом имени `-2`, `-3`…; создаётся вместе с `.resource`), в материале вместо `shader_*` ставится `shader`; тройка движка ссылается на его файл; материал, чьи стадии не собрать, — строка «not migrated» в отчёте |
 | `assets.ids` | pre | EPIC-57 (S57-12, #776) | создаёт отсутствующие `.resource`, id берёт из `__guid` desc |
 | `assets.ids_below` | pre | EPIC-57 (#902) | новый ID файлу проекта, чей `.resource` несёт ID файла движка (копия): ID остаётся у файла движка; ссылки на копию — в `assets.refs` того же прогона, а `{guid, path}` с guid движка не переводятся |
 | `assets.ids_drop_desc_guid` | post | EPIC-57 (S57-8, #772) | снимает корневой `__guid` у desc с `.resource`; `__guid` ≠ ID — строка в отчёте |

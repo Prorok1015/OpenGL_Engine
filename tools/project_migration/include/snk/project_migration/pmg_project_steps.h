@@ -95,6 +95,10 @@ namespace prj::migration
 	// asks it, so such a desc is "not migrated" with this reason and never keeps the step needed (#1129).
 	std::string geometry_conversion_problem(std::string_view path, const boost::json::object& root);
 
+	// The JSON pointers of the material_desc objects at version 1 under `root` (in the order of a walk of the file) whose
+	// shader stages rnd::migrate_material_v1 refuses, `id_of` answering its migration_context::id_of (#1200).
+	std::vector<std::string> refused_material_stages(const boost::json::object& root, const desc::migration_id_lookup& id_of);
+
 	// What a migration writes at most for one file (scan_options::max_file_bytes, the applier's limit).
 	inline constexpr std::uint64_t k_geometry_binary_max_bytes = std::uint64_t{ 64 } << 20;
 
@@ -104,5 +108,12 @@ namespace prj::migration
 	// pair. A .bin already at the name with exactly the bytes it would write (a run stopped between creating it and its
 	// journal) is taken as it is. A desc it cannot convert then (a .bin.new or another .bin at the name, a check that the
 	// type migrations made fail) stays as it is with a line "<path>: not migrated: <why>" in the report.
+	// engine.material_shaders (pre, #1200): every material the scan marks material_stages gets its effective stages (its
+	// own shader_* keys, the others from its __parent chain through the project and the read-only layers) as a reference
+	// "shader" instead of its shader_* keys; __version stays, the type step then stamps v2. One .shader.desc per distinct
+	// triple, beside the first material (by path) that uses it, <material stem>.shader.desc (-2, -3... when taken: an
+	// existing file is never overwritten), with a .resource of a new ID; a triple that is one of the engine's shaders
+	// takes the engine's file. The report lists every file and the materials that point to it. A material whose stages
+	// cannot be completed (a parent that does not read) stays as it is with "<path>: not migrated: <why>".
 	void register_engine_project_steps(project_step_registry& registry);
 }

@@ -269,8 +269,17 @@ namespace
 		return true;
 	}
 
+	bool holds_material_v1(const prj::migration::scanned_file& file)
+	{
+		return std::ranges::any_of(file.objects, [](const prj::migration::typed_object& object) {
+			return object.type == "material_desc" && object.version == 1;
+		});
+	}
+
+	// `materials`: the text of every outdated desc with a material_desc at version 1, kept until the asset index exists:
+	// whether the type step refuses its stages may depend on the ID of its parent (mark_material_stages).
 	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
-		std::uintmax_t max_bytes, reference_texts& texts)
+		std::uintmax_t max_bytes, reference_texts& texts, reference_texts& materials)
 	{
 		if (too_big_geometry(file, path, max_bytes)) return;
 		std::string text;
@@ -282,6 +291,7 @@ namespace
 			file.geometry_left = prj::migration::geometry_conversion_problem(file.path, root.as_object());
 			file.geometry_arrays = file.geometry_left.empty();
 		}
+		if (file.kind == file_class::outdated && holds_material_v1(file)) materials.emplace(file.path, text);
 		if (prj::migration::reads_references(file) && prj::migration::may_hold_references(text)) texts.emplace(file.path, std::move(text));
 	}
 
@@ -390,6 +400,7 @@ namespace
 		const type_source& descs;
 		const prj::migration::scan_options& options;
 		reference_texts& texts;
+		reference_texts& materials;
 
 		void refuse(const fs::path& path, std::string reason)
 		{
@@ -436,7 +447,7 @@ namespace
 				file.has_resource = owner != owners.end();
 				if (file.has_resource) file.resource_path = fs_paths::generic_utf8_of((path.parent_path() / fs_paths::path_from_utf8(owner->second)).lexically_relative(project));
 				if (extension == ".desc") {
-					scan_desc(file, project, path, descs, options.max_file_bytes, texts);
+					scan_desc(file, project, path, descs, options.max_file_bytes, texts, materials);
 				} else {
 					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
 				}
@@ -475,9 +486,9 @@ namespace
 	};
 
 	void scan_root(prj::migration::scan_result& result, const fs::path& project, const fs::path& content_root, const type_source& descs,
-		const prj::migration::scan_options& options, reference_texts& texts)
+		const prj::migration::scan_options& options, reference_texts& texts, reference_texts& materials)
 	{
-		root_walk walk{ result, project, descs, options, texts };
+		root_walk walk{ result, project, descs, options, texts, materials };
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(content_root, ec);
 		if (ec || status.type() == fs::file_type::not_found) return;
@@ -732,6 +743,25 @@ namespace
 	}
 }
 
+namespace
+{
+	// scanned_file::material_stages, by the type step itself over the scan's index: what it refuses, engine.material_shaders
+	// converts first (#1200).
+	void mark_material_stages(prj::migration::scan_result& result, const prj::migration::project_assets& assets, const reference_texts& materials)
+	{
+		const desc::migration_id_lookup id_of = [&assets](std::string_view path) { return assets.id_of(res::tag{ path }); };
+		for (prj::migration::scanned_file& file : result.files) {
+			if (file.kind != file_class::outdated) continue;
+			const auto text = materials.find(file.path);
+			if (text == materials.end()) continue;
+			boost::system::error_code error;
+			const json::value root = parse_desc_json(without_bom(text->second), error);
+			if (error || !root.is_object()) continue;
+			file.material_stages = !prj::migration::refused_material_stages(root.as_object(), id_of).empty();
+		}
+	}
+}
+
 bool prj::migration::gets_resource_from_ids(const scanned_file& file)
 {
 	return !file.has_resource && file.kind != file_class::invalid;
@@ -872,8 +902,9 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 	if (!manifest) return result;
 
 	reference_texts texts;
+	reference_texts materials;
 	for (const auto& content_root : manifest->content_roots) {
-		scan_root(result, project, normalized(project / content_root), types, options, texts);
+		scan_root(result, project, normalized(project / content_root), types, options, texts, materials);
 	}
 	std::ranges::sort(result.files, {}, &scanned_file::path);
 
@@ -912,6 +943,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		}
 	}
 	count_reference_fixes(result, types, assets, texts, options);
+	mark_material_stages(result, assets, materials);
 	result.read_only_resources = assets.read_only_resources();
 	std::ranges::sort(result.read_only_resources, {}, [](const read_only_resource& file) {
 		return std::pair{ fs_paths::generic_utf8_of(file.layer), file.path };
@@ -962,6 +994,23 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 
 		file_plan planned;
 		planned.path = file.path;
+		// The type step refuses its stages until engine.material_shaders (pre) rewrote them: its dry run would fail here,
+		// so the file is planned with its steps and no diff, and the type migration runs on what the step leaves.
+		if (file.material_stages) {
+			planned.warnings.push_back(desc::migration_warning{ "material_desc", 1, file.path,
+				"its shader stages are written to a .shader.desc by the project step engine.material_shaders first; "
+				"the type migration runs after it (no diff in this plan)" });
+			for (const typed_object& object : file.objects) {
+				if (!object.known) continue;
+				for (int from = object.version; from < object.current; ++from) {
+					const std::string summary = game_layer.migration_summary(object.type, from);
+					add_step(planned.steps, object.type, from, summary);
+					add_step(plan.steps, object.type, from, summary);
+				}
+			}
+			plan.files.push_back(std::move(planned));
+			continue;
+		}
 		json::value after = before;
 		try {
 			if (sidecar) {

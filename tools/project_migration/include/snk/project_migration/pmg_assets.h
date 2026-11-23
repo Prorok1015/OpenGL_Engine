@@ -82,6 +82,8 @@ namespace prj::migration
 		const std::vector<std::string>& problems() const { return m_problems; }
 		// Every .resource the walk found in the read-only layers, in the order of the walk.
 		const std::vector<read_only_resource>& read_only_resources() const { return m_read_only_resources; }
+		// The read-only layers it was made with, lowest first.
+		const std::vector<std::filesystem::path>& read_only_layers() const { return m_read_only_layers; }
 
 	private:
 		std::filesystem::path m_root;
