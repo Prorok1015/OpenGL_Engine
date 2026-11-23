@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1157,11 +1158,15 @@ BOOST_AUTO_TEST_CASE(AJournalFolderThatIsALink_RefusesTheDelete_AndNothingGoesTh
 	std::error_code ec;
 	fs::remove(link, ec);
 	ec.clear();
+#ifdef _WIN32
+	// A junction needs no privilege: one that cannot be made is a broken test, not a skip.
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.path().string() + "\" >nul";
+	const bool linked = std::system(command.c_str()) == 0 && fs::exists(link);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << link.string());
+#else
 	fs::create_directory_symlink(target.path(), link, ec);
-	if (ec) {
-		BOOST_TEST_MESSAGE("no symlink here: " + ec.message());
-		return;
-	}
+	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
 	journal_override = link;
 	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
 	fs::remove(link, ec);
