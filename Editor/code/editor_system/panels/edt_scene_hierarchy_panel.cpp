@@ -463,8 +463,11 @@ namespace edt
 
 		ImGui::Separator();
 
-		if (!m_world_desc)
+		if (!m_world_desc) {
+			m_shape_menu.reset();
+			m_pending_shape.reset();
 			return;
+		}
 
 		std::string lower_filter = m_filter;
 		std::transform(lower_filter.begin(), lower_filter.end(), lower_filter.begin(), ::tolower);

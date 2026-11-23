@@ -10,9 +10,10 @@ namespace edt
 {
 	namespace
 	{
-		scn::prefab_desc::prefab_node* node_at(scn::prefab_desc& desc, const std::vector<std::uint64_t>& path)
+		template <class Node>
+		Node* node_at(Node& root, const std::vector<std::uint64_t>& path)
 		{
-			scn::prefab_desc::prefab_node* node = &desc.get_root();
+			Node* node = &root;
 			for (const std::uint64_t id : path) {
 				const auto found = std::ranges::find(node->children, id, &scn::prefab_desc::prefab_node::node_id);
 				if (found == node->children.end()) return nullptr;
@@ -35,6 +36,11 @@ namespace edt
 
 	std::string add_shape_to_prefab(action_registry& actions, prefab_document& prefab, const mesh::shape_request& request)
 	{
+		// shape.create writes three files; once it has, a refused node would leave them behind, so the document and the parent are checked first.
+		const scn::prefab_desc* working = prefab.working();
+		if (!working || prefab.edits_locked()) return "the prefab cannot be edited now";
+		if (!node_at(working->get_root(), request.parent)) return "the node the shape goes under is gone";
+
 		std::optional<scn::prefab_desc::prefab_node> node;
 		if (!request.base_shape.empty()) {
 			const mesh::base_shape* shape = mesh::find_base_shape(request.base_shape);
@@ -47,8 +53,8 @@ namespace edt
 		}
 
 		bool found_parent = false;
-		const bool changed = prefab.edit([&](scn::prefab_desc& working) {
-			scn::prefab_desc::prefab_node* parent = node_at(working, request.parent);
+		const bool changed = prefab.edit([&](scn::prefab_desc& copy) {
+			scn::prefab_desc::prefab_node* parent = node_at(copy.get_root(), request.parent);
 			if (!parent) return false;
 			found_parent = true;
 			parent->children.push_back(std::move(*node));

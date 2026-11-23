@@ -79,7 +79,7 @@ namespace edt
 			ImGui::TextWrapped("%s", m_problem.c_str());
 			ImGui::PopStyleColor();
 		}
-		if (ImGui::Button("Create")) {
+		if (ImGui::Button("Create") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			m_problem = m_form.problem();
 			if (m_problem.empty()) {
 				ImGui::CloseCurrentPopup();

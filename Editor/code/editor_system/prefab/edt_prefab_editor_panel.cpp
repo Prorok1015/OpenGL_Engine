@@ -44,6 +44,10 @@ namespace edt
 
 	void prefab_editor_panel::on_render()
 	{
+		if (!m_loading.empty() || !m_ctx || !m_ctx->is_open()) {
+			m_shape_menu.reset();
+			m_pending_shape.reset();
+		}
 		if (!m_loading.empty()) {
 			ImGui::TextUnformatted(m_loading.c_str());
 			if (m_on_cancel_loading && ImGui::Button("Cancel")) m_on_cancel_loading();

@@ -1308,4 +1308,30 @@ BOOST_AUTO_TEST_CASE(AddShape_OfAParametricShape_ThatShapeCreateRefuses_ChangesN
 	BOOST_TEST(!document->is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(AddShape_OfAParametricShape_UnderANodeThatIsGone_AsksNothingOfShapeCreate)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	int creates = 0;
+	cmd::command_desc create;
+	create.id = "shape.create";
+	create.summary = "stub";
+	create.args_schema = boost::json::parse(R"({"type":"object"})");
+	create.result_schema = boost::json::parse(R"({"type":"object"})");
+	create.mutates = true;
+	create.category = cmd::agent_category::scene_edit;
+	create.invoke = [&creates](const cmd::call&) {
+		++creates;
+		return cmd::result::success();
+	};
+	const edt::registration made = actions.commands().add(std::move(create));
+
+	const std::string error = edt::add_shape_to_prefab(actions, *document, { {}, boost::json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xdead } });
+
+	BOOST_TEST(error != "");
+	BOOST_TEST(creates == 0);
+	BOOST_TEST(!document->is_dirty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

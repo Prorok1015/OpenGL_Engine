@@ -22,6 +22,8 @@ namespace edt
 		void draw_menu(const std::vector<std::uint64_t>& parent, const on_pick& pick);
 		// Once per frame from the panel's on_render, outside any popup: the dialog the submenu opened.
 		void draw_dialog(const gui::theme_semantic_colors& colors, const on_pick& pick);
+		// The panel cannot show it (no document, no world): a request for the dialog must not wait for the next frame that can.
+		void reset() { m_open_requested = false; }
 
 	private:
 		mesh::parametric_shape_form m_form;

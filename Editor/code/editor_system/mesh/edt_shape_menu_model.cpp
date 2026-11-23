@@ -3,6 +3,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/desc/desc_node_id.h>
 #include <cmath>
+#include <format>
 #include <utility>
 
 namespace json = boost::json;
@@ -20,6 +21,14 @@ namespace edt::mesh
 				out.push_back(value.to_number<double>());
 			}
 			return out;
+		}
+
+		constexpr double largest_count = 4294967295.0;
+
+		std::string whole_number_problem(double value)
+		{
+			if (!std::isfinite(value) || value < 0.0 || value > largest_count || value != std::floor(value)) return "a whole number from 0 to 4294967295";
+			return {};
 		}
 
 		bool is_whole(const json::value& value)
@@ -57,7 +66,8 @@ namespace edt::mesh
 		json::object out;
 		for (const shape_field& field : m_fields) {
 			const auto one = [&field](double value) -> json::value {
-				return field.integer ? json::value(static_cast<std::uint64_t>(std::llround(value < 0 ? 0 : value))) : json::value(value);
+				if (!field.integer) return json::value(value);
+				return json::value(whole_number_problem(value).empty() ? static_cast<std::uint64_t>(std::llround(value)) : std::uint64_t{ 0 });
 			};
 			if (field.values.size() == 1) {
 				out[field.key] = one(field.values.front());
@@ -73,6 +83,14 @@ namespace edt::mesh
 	std::string parametric_shape_form::problem() const
 	{
 		if (name.empty()) return "the name is empty";
+		for (const shape_field& field : m_fields) {
+			for (const double value : field.values) {
+				if (!std::isfinite(value)) return std::format("{} must be a finite number", field.key);
+				if (field.integer) {
+					if (const std::string needed = whole_number_problem(value); !needed.empty()) return std::format("{} must be {}", field.key, needed);
+				}
+			}
+		}
 		std::string error;
 		const std::optional<shape_params> params = shape_params_from_json(m_kind, params_json(), error);
 		if (!params) return error;

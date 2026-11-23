@@ -3,6 +3,8 @@
 #include "edt_shape_request.h"
 #include <snk/editor/edt_action_registry.h>
 #include <boost/json.hpp>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -187,22 +189,25 @@ BOOST_AUTO_TEST_CASE(RunShapeRequest_OfABaseShape_CallsAddBaseUnderTheParent)
 BOOST_AUTO_TEST_CASE(RunShapeRequest_OfAParametricShape_CreatesThenAddsTheFileItMade)
 {
 	recorded_commands run;
+	run.stub("node.get", cmd::result::success());
 	run.stub("shape.create", cmd::result::success(json::object{ { "poly", "shapes/ball.poly.desc" } }));
 	run.stub("shape.add", cmd::result::success());
 
 	const std::string error = edt::run_shape_request(run.actions, "main", { {}, json::object{ { "name", "ball" }, { "kind", "sphere" } }, {} });
 
 	BOOST_TEST(error == "");
-	BOOST_REQUIRE(run.ids.size() == 2u);
-	BOOST_TEST(run.ids[0] == "shape.create");
-	BOOST_TEST(run.ids[1] == "shape.add");
-	BOOST_TEST(run.arguments[1].at("poly").as_string() == "shapes/ball.poly.desc");
-	BOOST_TEST(run.arguments[1].at("name").as_string() == "ball");
+	BOOST_REQUIRE(run.ids.size() == 3u);
+	BOOST_TEST(run.ids[0] == "node.get");
+	BOOST_TEST(run.ids[1] == "shape.create");
+	BOOST_TEST(run.ids[2] == "shape.add");
+	BOOST_TEST(run.arguments[2].at("poly").as_string() == "shapes/ball.poly.desc");
+	BOOST_TEST(run.arguments[2].at("name").as_string() == "ball");
 }
 
 BOOST_AUTO_TEST_CASE(RunShapeRequest_StopsAtTheFirstRefusal_AndSaysWhich)
 {
 	recorded_commands run;
+	run.stub("node.get", cmd::result::success());
 	run.stub("shape.create", cmd::result::failure(cmd::codes::needs_input, "the file exists"));
 	run.stub("shape.add", cmd::result::success());
 
@@ -210,12 +215,62 @@ BOOST_AUTO_TEST_CASE(RunShapeRequest_StopsAtTheFirstRefusal_AndSaysWhich)
 
 	BOOST_TEST(error.find("shape.create") != std::string::npos);
 	BOOST_TEST(error.find("the file exists") != std::string::npos);
-	BOOST_TEST(run.ids.size() == 1u);
+	BOOST_TEST(run.ids.size() == 2u);
 
 	recorded_commands second;
 	second.stub("shape.add_base", cmd::result::failure(cmd::codes::invalid_args, "inside a prefab instance"));
 	BOOST_TEST(edt::run_shape_request(second.actions, "main", { "box", {}, {} }).find("inside a prefab instance") != std::string::npos);
 	BOOST_TEST(edt::run_shape_request(second.actions, "main", { {}, {}, {} }) != "");
+}
+
+BOOST_AUTO_TEST_CASE(RunShapeRequest_UnderANodeThatIsGone_WritesNoFiles)
+{
+	recorded_commands run;
+	run.stub("node.get", cmd::result::failure(cmd::codes::not_found, "no node at that path"));
+	run.stub("shape.create", cmd::result::success(json::object{ { "poly", "shapes/ball.poly.desc" } }));
+	run.stub("shape.add", cmd::result::success());
+	const mesh::shape_request request{ {}, json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xa1 } };
+
+	const std::string error = edt::run_shape_request(run.actions, "main", request);
+
+	BOOST_TEST(error.find("no node at that path") != std::string::npos);
+	BOOST_REQUIRE(run.ids.size() == 1u);
+	BOOST_TEST(run.ids[0] == "node.get");
+}
+
+BOOST_AUTO_TEST_CASE(RunShapeRequest_WhenTheNodeIsRefusedAfterTheFiles_SaysWhichFilesWereWritten)
+{
+	recorded_commands run;
+	run.stub("node.get", cmd::result::success());
+	run.stub("shape.create", cmd::result::success(json::object{ { "poly", "shapes/ball.poly.desc" } }));
+	run.stub("shape.add", cmd::result::failure(cmd::codes::busy, "the scene is playing"));
+
+	const std::string error = edt::run_shape_request(run.actions, "main", { {}, json::object{ { "name", "ball" }, { "kind", "sphere" } }, {} });
+
+	BOOST_TEST(error.find("the scene is playing") != std::string::npos);
+	BOOST_TEST(error.find("shapes/ball.poly.desc") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Problem_RefusesCountsThatAreNotWholeNumbersOfAnUnsignedInt_AndNumbersThatAreNotFinite)
+{
+	for (const double bad : { std::nan(""), std::numeric_limits<double>::infinity(), 1e30, -3.0, 3.5 }) {
+		BOOST_TEST_CONTEXT(bad) {
+			parametric_shape_form form;
+			form.name = "a";
+			form.set_kind("sphere");
+			for (shape_field& field : form.fields()) {
+				if (field.key == "segments") field.values = { bad };
+			}
+			BOOST_TEST(form.problem() != "");
+		}
+	}
+	parametric_shape_form real;
+	real.name = "a";
+	real.set_kind("sphere");
+	for (shape_field& field : real.fields()) {
+		if (field.key == "radius") field.values = { std::numeric_limits<double>::quiet_NaN() };
+	}
+	BOOST_TEST(real.problem() != "");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
