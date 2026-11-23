@@ -169,6 +169,11 @@ namespace {
 					sink_failed = !sink(chunk);
 					return !sink_failed;
 				});
+			if (result.status == platform::beneath::read_status::too_large) {
+				problem = std::format("'{}' is larger than {} bytes, the most a module copy takes", utf8(source),
+					k_max_copied_file_bytes);
+				return false;
+			}
 			if (result.status != platform::beneath::read_status::ok) {
 				problem = result.error.empty() ? std::format("'{}' cannot be read", utf8(source)) : result.error;
 				return false;

@@ -3,12 +3,15 @@
 #include "test_temp_dir.hpp"
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
+#include <snk/resource/res_shipping_dirs.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -686,6 +689,60 @@ BOOST_AUTO_TEST_CASE(a_taken_copy_name_is_skipped)
 	BOOST_TEST(asked_copy.parent_path().filename() == std::format("{}-1", platform::current_process_id()));
 	BOOST_TEST(files_in(outside) == std::vector<std::string>{ "keep.txt" }, "nothing was copied through the link");
 }
+
+// A read-only project keeps its copies in the run's scratch folder, reached from it by literal names too.
+BOOST_AUTO_TEST_CASE(a_scratch_modules_folder_that_is_a_link_gets_no_copy_and_loses_nothing)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const fs::path outside = dir.write(fs::path{ "outside" } / "keep.txt", "keep").parent_path();
+	const fs::path scratch = dir.path() / "scratch";
+	fs::create_directories(scratch);
+	data.construct<core::res::run_scratch_folder>(scratch);
+	cfg::set_variable("res/read_only_project", "true");
+	struct writable_on_exit {
+		~writable_on_exit() { cfg::set_variable("res/read_only_project", "false"); }
+	} writable;
+	const fs::path link = scratch / "modules";
+#ifdef _WIN32
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.string() + "\" >nul";
+	const bool linked = std::system(command.c_str()) == 0 && fs::exists(link);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << link.string());
+#else
+	std::error_code ec;
+	fs::create_directory_symlink(outside, link, ec);
+	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
+	const auto report = load();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(files_in(outside) == std::vector<std::string>{ "keep.txt" }, "nothing was copied through the link");
+	BOOST_TEST(!fs::exists(root / ".cache"), "a read-only project gets nothing written into it");
+}
+
+// Windows: a file past 2 GiB is not made sparse by resize_file, so the test would write 2 GiB.
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(a_library_past_the_copy_limit_is_refused_naming_the_file_and_the_limit)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	fs::resize_file(library, (std::uintmax_t{ 2 } << 30) + 1);
+	std::vector<std::string> warnings;
+	const engine::log_sink_handle sink =
+		engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
+			if (level >= engine::log_level::warn) warnings.emplace_back(message);
+		});
+	const auto report = load();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	const bool named = std::ranges::any_of(warnings, [&](const std::string& line) {
+		return line.find(library.filename().string()) != std::string::npos
+			&& line.find(std::to_string(std::uint64_t{ 2 } << 30)) != std::string::npos;
+	});
+	BOOST_TEST(named, "the reason names the file and the limit");
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
+}
+#endif
 
 // A copy that fails part way leaves no folder behind.
 BOOST_AUTO_TEST_CASE(a_copy_that_fails_leaves_no_folder)
