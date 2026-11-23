@@ -279,7 +279,7 @@ namespace
 	// `materials`: the text of every outdated desc with a material_desc at version 1, kept until the asset index exists:
 	// whether the type step refuses its stages may depend on the ID of its parent (mark_material_stages).
 	void scan_desc(prj::migration::scanned_file& file, const fs::path& project, const fs::path& path, const type_source& descs,
-		std::uintmax_t max_bytes, reference_texts& texts, reference_texts& materials)
+		std::uintmax_t max_bytes, prj::migration::geometry_check_cache* checks, reference_texts& texts, reference_texts& materials)
 	{
 		if (too_big_geometry(file, path, max_bytes)) return;
 		std::string text;
@@ -288,7 +288,8 @@ namespace
 		classify(file, root.as_object(), descs);
 		if ((file.kind == file_class::current || file.kind == file_class::outdated)
 			&& prj::migration::holds_convertible_geometry(file.path, root.as_object())) {
-			file.geometry_left = prj::migration::geometry_conversion_problem(file.path, root.as_object());
+			const auto check = [&] { return prj::migration::geometry_conversion_problem(file.path, root.as_object()); };
+			file.geometry_left = checks ? checks->problem(file.path, text, check) : check();
 			file.geometry_arrays = file.geometry_left.empty();
 		}
 		if (file.kind == file_class::outdated && holds_material_v1(file)) materials.emplace(file.path, text);
@@ -447,7 +448,7 @@ namespace
 				file.has_resource = owner != owners.end();
 				if (file.has_resource) file.resource_path = fs_paths::generic_utf8_of((path.parent_path() / fs_paths::path_from_utf8(owner->second)).lexically_relative(project));
 				if (extension == ".desc") {
-					scan_desc(file, project, path, descs, options.max_file_bytes, texts, materials);
+					scan_desc(file, project, path, descs, options.max_file_bytes, options.geometry_checks, texts, materials);
 				} else {
 					file.kind = file.has_resource ? file_class::current : file_class::missing_resource;
 				}

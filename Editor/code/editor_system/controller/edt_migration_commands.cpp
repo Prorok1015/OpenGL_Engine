@@ -990,6 +990,7 @@ namespace {
 			options.project_steps = &m_steps;
 			options.force = false;
 			options.scan.read_only_layers = pmg::read_only_layers(m_deps.resources(), root);
+			options.scan.geometry_checks = m_deps.geometry_checks.get();
 			return pmg::plan_migration(root, pmg::scan_project(root, descs, options.scan), descs, options);
 		}
 
