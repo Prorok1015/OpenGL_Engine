@@ -91,7 +91,7 @@ edt::file_menu_component::file_menu_component(ports from)
 {
 	m_tabs = std::make_unique<document_tabs>(m_ports.context.documents(),
 		document_tab_ports{ focus_ports(), [this](document_id id) { m_ports.asset_open.data_documents().request_close(id); },
-			[this] { m_ports.prefab.request_close(); } });
+			[this] { m_ports.prefab.request_close(); }, [this] { return m_menu && m_menu->save_all_running(); } });
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_ports.state.editor_tag.is_valid(); };
 	hooks.is_dirty = [this] { return m_ports.state.is_dirty(); };

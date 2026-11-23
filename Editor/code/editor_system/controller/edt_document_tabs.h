@@ -19,7 +19,8 @@ namespace edt
 		std::string title;
 		bool dirty = false;
 		bool active = false;
-		// The scene is always there and cannot be closed.
+		// Only a data document and the prefab have a close flow of their own; the scene is always there, and a close is not
+		// offered while it is blocked (document_tab_ports::close_blocked).
 		bool closable = false;
 	};
 
@@ -46,6 +47,8 @@ namespace edt
 		// The window's own close flow: closes at once when clean, else asks Save / Discard / Cancel. Nothing is lost on Cancel.
 		std::function<void(document_id id)> request_close_data;
 		std::function<void()> request_close_prefab;
+		// True while a close must not start (a Save All asks its questions: the document it still asks about must not go).
+		std::function<bool()> close_blocked;
 	};
 
 	class document_tabs
@@ -61,6 +64,8 @@ namespace edt
 		bool close(document_id id);
 
 	private:
+		bool closing_blocked() const;
+
 		document_manager& m_documents;
 		document_tab_ports m_ports;
 	};

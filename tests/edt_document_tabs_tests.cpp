@@ -191,6 +191,57 @@ BOOST_AUTO_TEST_CASE(TheCloseButton_AsksThroughTheDocumentsOwnCloseFlow_NothingI
 	BOOST_TEST(edt::tabs_of(documents).size() == 4u);
 }
 
+BOOST_AUTO_TEST_CASE(ADocumentOfAnotherKind_HasNoCloseFlow_ItsTabIsNotClosableAndCloseDoesNothing)
+{
+	fake_document* other = new fake_document("model", "m");
+	documents.adopt(std::unique_ptr<edt::document>(other));
+	edt::document_tabs tabs(documents, ports());
+
+	const std::vector<edt::document_tab> shown = tabs.tabs();
+
+	BOOST_REQUIRE(shown.size() == 5u);
+	BOOST_TEST(!shown.back().closable);
+	BOOST_TEST(!tabs.close(other->id()));
+	BOOST_TEST(closed_data.empty());
+	BOOST_TEST(closed_prefab == 0);
+}
+
+BOOST_AUTO_TEST_CASE(WhileClosingIsBlocked_NoTabIsClosable_AndCloseAsksNothing)
+{
+	bool blocked = true;
+	edt::document_tab_ports blocking = ports();
+	blocking.close_blocked = [&blocked] { return blocked; };
+	edt::document_tabs tabs(documents, blocking);
+
+	for (const edt::document_tab& tab : tabs.tabs()) BOOST_TEST(!tab.closable);
+	BOOST_TEST(!tabs.close(data_a->id()));
+	BOOST_TEST(!tabs.close(prefab->id()));
+	BOOST_TEST(closed_data.empty());
+	BOOST_TEST(closed_prefab == 0);
+
+	blocked = false;
+	BOOST_TEST(tabs.close(data_a->id()));
+	BOOST_TEST(closed_data.size() == 1u);
+	BOOST_TEST(tabs.tabs()[1].closable);
+}
+
+BOOST_AUTO_TEST_CASE(TwoDocumentsWithOneTitle_AreTwoTabsWithTheirOwnIds)
+{
+	fake_document* twin = new fake_document("data", "a");
+	documents.adopt(std::unique_ptr<edt::document>(twin));
+
+	const std::vector<edt::document_tab> shown = edt::tabs_of(documents);
+
+	BOOST_REQUIRE(shown.size() == 5u);
+	BOOST_TEST(shown[1].title == shown[4].title);
+	BOOST_TEST(shown[1].id != shown[4].id);
+	edt::document_tabs tabs(documents, ports());
+	tabs.activate(twin->id());
+	BOOST_TEST((shown_data == std::vector<std::string>{ "a.desc" }));
+	BOOST_TEST(tabs.close(twin->id()));
+	BOOST_TEST((closed_data == std::vector<edt::document_id>{ twin->id() }));
+}
+
 BOOST_AUTO_TEST_CASE(TheSceneTab_CannotBeClosed)
 {
 	edt::document_tabs tabs(documents, ports());
@@ -220,6 +271,25 @@ BOOST_FIXTURE_TEST_CASE(TheStrip_DrawsWithoutCallingAnythingWhileNobodyClicks, i
 
 	BOOST_TEST(activations == 0);
 	BOOST_TEST(closes == 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheStrip_DrawsTwoTabsOfOneTitle_WithoutAClash, imgui_frame)
+{
+	fake_document scene{ "scene", "level" };
+	edt::editor_events events;
+	edt::document_manager manager{ scene, events };
+	manager.adopt(std::make_unique<fake_document>("data", "same"));
+	manager.adopt(std::make_unique<fake_document>("data", "same", true));
+	edt::document_tabs_bar bar;
+	gui::theme_semantic_colors colors;
+	int activations = 0;
+	const edt::document_tabs_bar::actions on{ [&](edt::document_id) { ++activations; }, [](edt::document_id) {} };
+
+	for (int i = 0; i < 3; ++i) {
+		frame([&] { bar.draw(edt::tabs_of(manager), colors, on); });
+	}
+
+	BOOST_TEST(activations == 0);
 }
 
 BOOST_FIXTURE_TEST_CASE(TheStrip_WithoutTabs_DrawsNothing, imgui_frame)
