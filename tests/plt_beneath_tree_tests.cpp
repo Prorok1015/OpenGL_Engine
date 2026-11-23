@@ -1,11 +1,14 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include <snk/platform/plt_beneath.h>
+#include <snk/platform/plt_beneath_tree_hook.h>
 #include <snk/platform/plt_reparse_tag.h>
+#include <snk/platform/plt_windows_names.h>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -152,7 +155,7 @@ BOOST_AUTO_TEST_CASE(remove_tree_removes_a_link_swapped_in_mid_walk_as_the_link)
 			fs::remove_all(folder / "b");
 			swapped = link_folder(outside(), folder / "b", junction);
 		};
-		BOOST_TEST(platform::beneath::remove_tree_beneath(pinned, "", "tree", &hook).empty());
+		BOOST_TEST(platform::beneath::remove_tree_beneath_watched(pinned, "", "tree", hook).empty());
 		if (!swapped) {
 			BOOST_TEST_MESSAGE("links unavailable");
 			continue;
@@ -186,6 +189,49 @@ BOOST_AUTO_TEST_CASE(remove_tree_refuses_dot_dot_an_absolute_path_and_a_nul)
 	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, dot_dot_nul(), "outside").empty());
 	BOOST_TEST(fs::exists(outside() / "keep.txt"));
 	BOOST_TEST(fs::exists(root / "inner"));
+}
+
+BOOST_AUTO_TEST_CASE(write_and_rename_refuse_a_nul_in_a_name)
+{
+	dir.write("inner/a.txt", "a");
+	platform::beneath::pinned_root inner{ root / "inner" };
+	platform::beneath::write_request write;
+	write.folder = dot_dot_nul();
+	write.leaf = "written.txt";
+	write.tmp_leaf = "written.tmp";
+	BOOST_TEST(!platform::beneath::write_beneath(inner, write).empty());
+	write.folder = "";
+	write.leaf = dot_dot_nul();
+	BOOST_TEST(!platform::beneath::write_beneath(inner, write).empty());
+	BOOST_TEST(!fs::exists(root / "written.txt"));
+
+	platform::beneath::rename_request rename;
+	rename.from_leaf = "a.txt";
+	rename.to_folder = dot_dot_nul();
+	rename.to_leaf = "moved.txt";
+	BOOST_TEST(!platform::beneath::rename_beneath(inner, rename).empty());
+	BOOST_TEST(fs::exists(root / "inner" / "a.txt"));
+	BOOST_TEST(!fs::exists(root / "moved.txt"));
+}
+
+BOOST_AUTO_TEST_CASE(windows_refuses_names_it_cannot_remove_later)
+{
+	using platform::beneath::windows_refuses_name;
+	for (const std::u16string_view name : { u"trailing.", u"trailing ", u"a:stream", u"CON", u"con", u"Nul.txt",
+			 u"NUL .txt", u"aux.tar.gz", u"PRN", u"COM1", u"lpt9.log", u"COM¹", u"CONIN$", u"conout$.x" }) {
+		BOOST_TEST_INFO("refused, " << name.size() << " units");
+		BOOST_TEST(windows_refuses_name(name));
+	}
+	for (const std::u16string_view name : { u"plain.txt", u".hidden", u"CONSOLE", u"COM", u"COM10", u"LPTX", u"nul_x",
+			 u"x.con", u"a b" }) {
+		BOOST_TEST_INFO("allowed, " << name.size() << " units");
+		BOOST_TEST(!windows_refuses_name(name));
+	}
+#ifdef _WIN32
+	BOOST_TEST(!platform::beneath::make_folders_beneath(pinned, "made/trailing.").empty());
+	BOOST_TEST(!platform::beneath::make_folders_beneath(pinned, "nul").empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(pinned, "", "CON").empty());
+#endif
 }
 
 BOOST_AUTO_TEST_CASE(remove_tree_removes_a_file_given_as_the_tree)

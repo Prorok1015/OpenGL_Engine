@@ -114,15 +114,12 @@ namespace platform::beneath {
 	SNK_API std::string make_folders_beneath(pinned_root& root, const std::filesystem::path& folder,
 		bool must_be_new = false);
 
-	// Tests only: called with each folder of the tree once it is held, before its entries are read.
-	using tree_hook = std::function<void(const std::filesystem::path& folder)>;
-
 	// Removes `leaf` in `folder` below the root and everything in it (#1294). The way to `folder` is opened without
 	// following a link and `leaf` must not be one; inside the tree every folder is opened from the one above it as
 	// itself, so a link or a junction met there is removed as the link, never entered. Read-only files go too. Nothing
 	// there: success. Empty on success, else why it failed; what was removed before the failure stays removed.
 	SNK_API std::string remove_tree_beneath(pinned_root& root, const std::filesystem::path& folder,
-		const std::filesystem::path& leaf, const tree_hook* hook = nullptr);
+		const std::filesystem::path& leaf);
 
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 

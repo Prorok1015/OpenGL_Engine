@@ -1,5 +1,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_reparse_tag.h>
+#include <snk/platform/plt_beneath_tree_hook.h>
+#include <snk/platform/plt_windows_names.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
 #include <algorithm>
@@ -47,6 +49,15 @@ namespace {
 		return path.native().find(fs::path::value_type{}) != fs::path::string_type::npos;
 	}
 
+	bool refused_by_windows([[maybe_unused]] const fs::path& name)
+	{
+#ifdef _WIN32
+		return platform::beneath::windows_refuses_name(name.u16string());
+#else
+		return false;
+#endif
+	}
+
 	// The folders below the root. safe_path never yields an absolute path or "..", but the walk does not rely on it.
 	std::optional<std::vector<fs::path>> folder_parts(const fs::path& folder)
 	{
@@ -55,7 +66,7 @@ namespace {
 		}
 		std::vector<fs::path> parts;
 		for (const auto& part : folder) {
-			if (part == "..") {
+			if (part == ".." || (part != "." && refused_by_windows(part))) {
 				return std::nullopt;
 			}
 			// lexically_relative gives "." for the root itself; a trailing separator gives an empty one.
@@ -69,13 +80,18 @@ namespace {
 	bool is_plain_name(const fs::path& name)
 	{
 		return !name.empty() && !has_nul(name) && !name.has_root_path() && name == name.filename() && name != "."
-			&& name != "..";
+			&& name != ".." && !refused_by_windows(name);
 	}
 
 	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the root";
 	// remove_tree_beneath recurses once per folder: a tree nested past this is refused, not walked to a stack overflow.
 	constexpr int k_tree_depth_limit = 256;
 
+}
+
+std::string platform::beneath::remove_tree_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf)
+{
+	return remove_tree_beneath_watched(root, folder, leaf, tree_hook{});
 }
 
 bool platform::beneath::may_be_short_name(const fs::path& name)
@@ -500,9 +516,10 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 	return {};
 }
 
-std::string platform::beneath::remove_tree_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf,
-	const tree_hook* hook)
+std::string platform::beneath::remove_tree_beneath_watched(pinned_root& root, const fs::path& folder,
+	const fs::path& leaf, const tree_hook& watch)
 {
+	const tree_hook* const hook = &watch;
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
 		return std::string{ k_not_below };
@@ -1407,9 +1424,10 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 	return {};
 }
 
-std::string platform::beneath::remove_tree_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf,
-	const tree_hook* hook)
+std::string platform::beneath::remove_tree_beneath_watched(pinned_root& root, const fs::path& folder,
+	const fs::path& leaf, const tree_hook& watch)
 {
+	const tree_hook* const hook = &watch;
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
 		return std::string{ k_not_below };
