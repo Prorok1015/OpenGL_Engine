@@ -1,8 +1,10 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include <snk/scene/level/scn_world_desc.h>
+#include "edt_shape_menu.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <string>
 #include <unordered_set>
@@ -27,6 +29,8 @@ namespace edt
 		void set_on_delete_node(std::function<void(uint64_t node_id)> cb);
 		void set_on_delete_nodes(std::function<void(const std::vector<uint64_t>&)> cb);
 		void set_on_create_node(std::function<void(const std::string& type_name)> cb);
+		// A shape picked in "Add shape" (the request names the parent); called after the frame's tree is drawn, so the edit may rebuild the world.
+		void set_on_add_shape(std::function<void(const shape_request&)> cb) { m_on_add_shape = std::move(cb); }
 		void set_on_rename_node(std::function<void(const std::string& old_name, const std::string& new_name)> cb);
 		void set_on_duplicate_node(std::function<void(uint64_t node_id)> cb);
 		void set_on_duplicate_nodes(std::function<void(const std::vector<uint64_t>&)> cb);
@@ -113,6 +117,10 @@ namespace edt
 		bool m_rename_seen = false; // drawn this frame
 
 		// World tabs
+		shape_menu m_shape_menu;
+		std::function<void(const shape_request&)> m_on_add_shape;
+		std::optional<shape_request> m_pending_shape;
+
 		std::vector<std::string> m_world_names;
 		int                      m_world_idx        = 0;
 		bool                     m_force_tab_switch = false;

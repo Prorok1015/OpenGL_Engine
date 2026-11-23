@@ -455,13 +455,19 @@ namespace edt
 					if (m_on_create_node) m_on_create_node(std::string(t.type));
 				}
 			}
+			ImGui::Separator();
+			m_shape_menu.draw_menu({}, [this](const shape_request& request) { m_pending_shape = request; });
 			ImGui::EndPopup();
 		}
+		m_shape_menu.draw_dialog(colors(), [this](const shape_request& request) { m_pending_shape = request; });
 
 		ImGui::Separator();
 
-		if (!m_world_desc)
+		if (!m_world_desc) {
+			m_shape_menu.reset();
+			m_pending_shape.reset();
 			return;
+		}
 
 		std::string lower_filter = m_filter;
 		std::transform(lower_filter.begin(), lower_filter.end(), lower_filter.begin(), ::tolower);
@@ -500,6 +506,12 @@ namespace edt
 				}
 				ImGui::EndDragDropTarget();
 			}
+		}
+
+		if (m_pending_shape) {
+			const shape_request request = std::move(*m_pending_shape);
+			m_pending_shape.reset();
+			if (m_on_add_shape) m_on_add_shape(request);
 		}
 	}
 
@@ -667,6 +679,10 @@ namespace edt
 			if (!multi_mode) {
 				if (ImGui::MenuItem("Rename")) {
 					begin_rename(node);
+				}
+				std::vector<uint64_t> node_path;
+				if (m_world_desc && find_path(m_world_desc->get_root().children, &node, node_path)) {
+					m_shape_menu.draw_menu(node_path, [this](const shape_request& request) { m_pending_shape = request; });
 				}
 			}
 

@@ -16,10 +16,12 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_scene_hierarchy_panel.h"
+#include "edt_shape_request.h"
 #include "edt_ui_probe.h"
 #include "edt_viewport_panel.h"
 #include "edt_world_controller.h"
 #include "edt_world_systems_panel.h"
+#include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_services.h>
@@ -118,6 +120,14 @@ void edt::panels_component::wire_scene_callbacks()
 	});
 	m_hierarchy->set_on_create_node([this](const std::string& type_name) {
 		m_ports.scene.create_entity(type_name);
+	});
+	m_hierarchy->set_on_add_shape([this](const mesh::shape_request& request) {
+		const std::string* world = m_ports.state.active_world_name();
+		if (!world) return;
+		if (const std::string error = run_shape_request(m_ports.context.actions(), *world, request); !error.empty()) {
+			egLOG_WARN("editor/shape", "Add shape failed: {}", error);
+			m_ports.context.dialogs().message(message_level::error, std::format("The shape was not added:\n{}", error));
+		}
 	});
 	m_hierarchy->set_on_delete_node([this](uint64_t node_id) {
 		m_ports.scene.delete_entity(node_id);
