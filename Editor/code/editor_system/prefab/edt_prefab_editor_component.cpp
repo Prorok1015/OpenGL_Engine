@@ -5,6 +5,7 @@
 #include "edt_prefab_close.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_panel.h"
+#include "edt_prefab_shape.h"
 #include "edt_prefab_variant_creator.h"
 #include "edt_scene_document.h"
 #include <snk/common/logger/engine_log.h>
@@ -43,6 +44,14 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 					m_ports.context.dialogs().message(message_level::error, std::format("'{}' was not reverted:\n{}", open->title(), error));
 				}
 			});
+	});
+	m_panel->set_on_add_shape([this](const mesh::shape_request& request) {
+		prefab_document* prefab = prefab_of(m_ports.context.documents());
+		if (!prefab) return;
+		if (const std::string error = add_shape_to_prefab(m_ports.context.actions(), *prefab, request); !error.empty()) {
+			egLOG_WARN("editor/shape", "Add shape failed: {}", error);
+			m_ports.context.dialogs().message(message_level::error, std::format("The shape was not added:\n{}", error));
+		}
 	});
 	m_panel->set_input_router(m_ports.input_router);
 	m_ports.inspector.set_on_node_changed([this] {
