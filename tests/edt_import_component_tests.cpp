@@ -195,15 +195,21 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 		return listed->size();
 	}
 
-	// Windows lists a removed file until the last handle on it closes (the resolver's watcher may hold one a moment).
-	bool no_files_of_this_run_within(std::chrono::milliseconds limit)
+	// Windows lists a removed file until the last handle on it closes (the resolver's watcher may hold one a moment), so
+	// every check that a file is gone waits for it.
+	static bool within(std::chrono::milliseconds limit, const std::function<bool()>& done)
 	{
 		const auto deadline = std::chrono::steady_clock::now() + limit;
-		while (files_of_this_run() != 0u) {
+		while (!done()) {
 			if (std::chrono::steady_clock::now() >= deadline) return false;
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 		return true;
+	}
+
+	bool no_files_of_this_run_within(std::chrono::milliseconds limit)
+	{
+		return within(limit, [this] { return files_of_this_run() == 0u; });
 	}
 
 	std::vector<std::string> dialog_texts() const
@@ -242,7 +248,8 @@ BOOST_AUTO_TEST_CASE(AnImportWaitingInTheExportDialog_LeavesNothingOfThisRunInMe
 	BOOST_TEST(files_of_this_run() > 0u, "the import is in a folder of this run");
 
 	component->shutdown();
-	BOOST_TEST(files_of_this_run() == 0u);
+	test_util::pump(tasks);
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 }
 
 BOOST_AUTO_TEST_CASE(ASecondImportWhileTheExportDialogIsOpen_IsRefused_AndTheDialogKeepsItsImport)
@@ -275,7 +282,7 @@ BOOST_AUTO_TEST_CASE(AShutdownWhileTheImportRuns_StopsTheJobFirst_AndLeavesNothi
 	BOOST_TEST(!component->person_import_running());
 	BOOST_TEST(scans == 0);
 	BOOST_TEST(imports == 0);
-	BOOST_TEST(files_of_this_run() == 0u);
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 	BOOST_TEST(context->jobs().running_count() == 0u);
 }
 
@@ -331,7 +338,7 @@ BOOST_AUTO_TEST_CASE(AnImportPastItsTimeLimit_NamesThePersonsLimitAndTheStep_InT
 	BOOST_TEST(contains(rows.front().item.message, refusal), rows.front().item.message);
 	BOOST_REQUIRE(!dialog_texts().empty());
 	BOOST_TEST(contains(dialog_texts().back(), refusal), dialog_texts().back());
-	BOOST_TEST(files_of_this_run() == 0u, "a failed import leaves nothing in memory://");
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)), "a failed import leaves nothing in memory://");
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_NamesTheModelAndTheSideFile_OnlyEscaped_InTheLogProblemsAndTheDialog)
@@ -394,7 +401,7 @@ BOOST_AUTO_TEST_CASE(AtStartup_TheImportsOfARunThatEnded_Go_AndThoseOfThisRunSta
 	BOOST_REQUIRE(rs().exists(current));
 
 	make_component();
-	BOOST_TEST(!rs().exists(ended));
+	BOOST_TEST(within(std::chrono::seconds(5), [&] { return !rs().exists(ended); }));
 	BOOST_TEST(rs().exists(current));
 }
 

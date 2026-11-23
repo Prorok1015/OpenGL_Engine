@@ -17,6 +17,7 @@ Editor/
     │   ├── edt_editor_system.cpp/h   # composition root (#1004): creates the services, the editor_context and the components below in order, wires the controllers' callbacks; no feature logic
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
     │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
+    │   ├── edt_document_tabs.cpp/h   # the strip of document tabs (#1184), no ImGui: `tabs_of`, `focus_document` (shared with the Unsaved list), `document_tabs::activate/close`
     │   ├── edt_save_all.cpp/h        # Save All (#1183): list_unsaved, save_all_write/save_all_resolve, the report, summary and JSON, `k_save_all_shortcut`; no ImGui
     │   ├── edt_world_controller.cpp/h # switch/create world
     │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit(), undo history
@@ -40,6 +41,7 @@ Editor/
     │   └── edt_prefab_editor_panel.h/.cpp # the window: toolbar, node tree, viewport
     │
     ├── panels/                       # 7 UI panels, all extend panel_base
+    │   ├── edt_document_tabs_bar.cpp/h # the strip of document tabs (#1184): drawn in the dock host between the main menu and the dock space (`dockspace::set_tabs_bar`, one call; outside the dock tree, so layout.ini stays valid; not drawn in game mode), a tab per open document (scene always, not closable; prefab; data), a dirty one marked and in the `warning` colour; a click = `focus_document`, the close button = the document's own close question (`data_document_host::request_close`, `prefab_editor_component::request_close`: Cancel keeps it); drawn by `file_menu_component::draw_document_tabs`; the model is `controller/edt_document_tabs.*`. Tests: `EdtDocumentTabs`
     │   └── edt_panels_component.cpp/h # panels_component (#1004): makes the editor's panels, wires them to the controllers and registers them in the View menu order (`install(out, after_assets)`: the prefab editor's window goes in after the Asset Browser; `add()` for the panels made elsewhere: migration, agents); `editor_system` reaches a panel through its accessors
     │
     ├── edt_component_renderers/      # per-type ImGui renderers for components

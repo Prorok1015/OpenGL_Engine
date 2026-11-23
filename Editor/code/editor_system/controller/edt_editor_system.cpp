@@ -220,7 +220,10 @@ edt::editor_system::~editor_system()
 		m_play = m_play_component->play();
 	}
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
-	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
+	if (editor_layer) {
+		editor_layer->set_menu_bar_status(nullptr);
+		editor_layer->set_tabs_bar(nullptr);
+	}
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
 	// Gone already (storage torn down without editor_term): its destructor stopped the jobs and let go of the document.
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
@@ -731,6 +734,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	});
 
 	editor_layer->set_ui_probe(m_panels->probe());
+	editor_layer->set_tabs_bar([this] { m_file_menu->draw_document_tabs(); });
 	editor_layer->set_menu_bar_status([this] {
 		// Left of the others, which place themselves at the right edge. Nothing at all unless an agent can connect or a policy waits.
 		if (m_agent_ui) m_agent_ui->draw_status();

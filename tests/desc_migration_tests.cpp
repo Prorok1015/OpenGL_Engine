@@ -1,10 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
+#include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/desc/desc_migrations.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
@@ -418,6 +421,40 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
 	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
 	BOOST_TEST(ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/armor"}},{"from":2,"remove":["/x"]}])")).empty());
 	BOOST_TEST(!ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/garbage"}},{"from":2,"remove":["/x"]}])")).empty());
+}
+
+// #1270: a staging place a later step takes parts out of, left in place and no field, is accepted with a warning, once
+// even when the same steps are registered again (a module reloaded); an explicit remove of it says it goes, with no warning.
+BOOST_AUTO_TEST_CASE(SchemaSteps_AStagingPlaceLeftBehind_IsWarnedAboutOnce)
+{
+	std::mutex mutex;
+	std::vector<std::string> warnings;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn) return;
+		std::lock_guard lock(mutex);
+		warnings.emplace_back(message);
+	});
+	const auto warned_about = [&](std::string_view part) {
+		std::lock_guard lock(mutex);
+		return std::ranges::count_if(warnings, [part](const std::string& w) { return w.find(part) != std::string::npos; });
+	};
+	const auto register_with = [this](const char* migrations, int version = 3) {
+		const json::object text = parse((R"({ "name": "test_migr_desc", "version": )" + std::to_string(version)
+			+ R"(, "fields": [ { "name": "hp", "kind": "f32" }, { "name": "mp", "kind": "f32" } ] })").c_str());
+		const desc::type_schema* stored = ds.register_schema(desc::parse_type_schema(text), json::parse(migrations).as_array());
+		if (stored) ds.unregister_desc(k_type);
+		return stored != nullptr;
+	};
+
+	constexpr const char* left = R"([{"from":1,"rename":{"/old_1270":"/stats_1270"}},{"from":2,"rename":{"/stats_1270/hp":"/hp"}}])";
+	BOOST_TEST(register_with(left));
+	BOOST_TEST(warned_about("leaves /stats_1270") == 1);
+	BOOST_TEST(register_with(left));
+	BOOST_TEST(warned_about("leaves /stats_1270") == 1);
+
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/old_1270":"/gone_1270"}},
+		{"from":2,"rename":{"/gone_1270/hp":"/hp","/gone_1270/mp":"/mp"}},{"from":3,"remove":["/gone_1270"]}])", 4));
+	BOOST_TEST(warned_about("/gone_1270") == 0);
 }
 
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
