@@ -95,6 +95,18 @@ namespace prj::migration
 	// asks it, so such a desc is "not migrated" with this reason and never keeps the step needed (#1129).
 	std::string geometry_conversion_problem(std::string_view path, const boost::json::object& root);
 
+	// The JSON pointers of the material_desc objects at version 1 under `root` (in the order of a walk of the file) whose
+	// shader stages rnd::migrate_material_v1 refuses, `id_of` answering its migration_context::id_of (#1200).
+	std::vector<std::string> refused_material_stages(const boost::json::object& root, const desc::migration_id_lookup& id_of);
+
+	// Why engine.material_shaders would leave `material` (one refused_material_stages lists, in the desc at `path` of the
+	// project under `root`) as it is, resolved as the step resolves it through `assets` and the files on the disk: its
+	// __parent chain does not read, a vertex or a fragment stage is missing, or its triple needs a new file and the asset
+	// walk does not list the desc. Empty when it converts. The scan makes such a desc invalid with it, so --force leaves
+	// it and the rest of the project migrates.
+	std::string material_shaders_problem(const std::filesystem::path& root, const project_assets& assets, const std::string& path,
+		const boost::json::object& material);
+
 	// What a migration writes at most for one file (scan_options::max_file_bytes, the applier's limit).
 	inline constexpr std::uint64_t k_geometry_binary_max_bytes = std::uint64_t{ 64 } << 20;
 
@@ -104,5 +116,14 @@ namespace prj::migration
 	// pair. A .bin already at the name with exactly the bytes it would write (a run stopped between creating it and its
 	// journal) is taken as it is. A desc it cannot convert then (a .bin.new or another .bin at the name, a check that the
 	// type migrations made fail) stays as it is with a line "<path>: not migrated: <why>" in the report.
+	// engine.material_shaders (pre, #1200): every material the scan marks material_stages (a material_desc file or an
+	// inline one, e.g. a mesh node's in a prefab) gets its effective stages (its own shader_* keys, the others from its
+	// __parent chain through the project and the read-only layers) as a reference "shader" instead of its shader_* keys;
+	// __version stays, the type step then stamps v2. A stage is written as the material wrote it ({guid, path} kept). One
+	// .shader.desc per distinct triple, beside the first material (by path) that uses it, <desc stem>.shader.desc, with
+	// -2, -3... while the res:// path (or its .resource) is taken in any content root or read-only layer: nothing is
+	// overwritten or shadowed. Each gets a .resource of a new ID; a triple that is one of the engine's shaders takes the
+	// engine's file. The report lists every file and the materials that point to it. A material the step could not
+	// convert is invalid in the scan already (material_shaders_problem), so it never reaches the step.
 	void register_engine_project_steps(project_step_registry& registry);
 }
