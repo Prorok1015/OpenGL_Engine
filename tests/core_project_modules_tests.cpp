@@ -25,6 +25,12 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <cstdio>
+#include <share.h>
+#else
+#include <unistd.h>
+#endif
 
 // core::load_project_modules (#428): the manifest's game modules, compiled in or copied out of <root>/build/bin, and
 // core::project_module_host::reload (#435) with compiled-in builds. A real library is loaded and reloaded in
@@ -615,6 +621,122 @@ BOOST_AUTO_TEST_CASE(a_link_in_a_stale_copy_is_removed_as_the_link_never_what_it
 
 	BOOST_TEST(!fs::exists(stale), "the stale copy and the link in it are gone");
 	BOOST_TEST(fs::is_regular_file(outside / "keep.txt"), "what the link led to is untouched");
+}
+
+// #1294 review: the copies are reached from the project root by literal names, so a .cache/modules swapped for a link
+// (here to the project's own textures) gets no copy, and the cleanup removes nothing where it leads.
+BOOST_AUTO_TEST_CASE(a_module_cache_that_is_a_link_gets_no_copy_and_loses_nothing)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const fs::path textures = root / "res" / "textures";
+	const fs::path in_textures = fs::path{ "game" } / "res" / "textures";
+	dir.write(in_textures / "keep.png", "a texture");
+	dir.write(in_textures / ("test_game.7" + copy_extension()), "named like an old copy");
+	dir.write(in_textures / std::format("{}-0", k_dead_pid) / "keep.txt", "named like a copy");
+	fs::create_directories(root / ".cache");
+	const fs::path link = root / ".cache" / "modules";
+#ifdef _WIN32
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + textures.string() + "\" >nul";
+	const bool linked = std::system(command.c_str()) == 0 && fs::exists(link);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << link.string());
+#else
+	std::error_code ec;
+	fs::create_directory_symlink(textures, link, ec);
+	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
+	const auto report = load();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	auto left = files_in(textures);
+	std::ranges::sort(left);
+	auto expected =
+		std::vector<std::string>{ std::format("{}-0", k_dead_pid), "keep.png", "test_game.7" + copy_extension() };
+	std::ranges::sort(expected);
+	BOOST_TEST(left == expected, boost::test_tools::per_element());
+	BOOST_TEST(fs::is_regular_file(textures / std::format("{}-0", k_dead_pid) / "keep.txt"));
+}
+
+// A name of this process that the cleanup could not take back (a link stands there) is skipped, never entered.
+BOOST_AUTO_TEST_CASE(a_taken_copy_name_is_skipped)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const fs::path outside = dir.write(fs::path{ "outside" } / "keep.txt", "keep").parent_path();
+	const fs::path cache = root / ".cache" / "modules";
+	fs::create_directories(cache);
+	const fs::path taken = cache / std::format("{}-0", platform::current_process_id());
+#ifdef _WIN32
+	const std::string command = "cmd /c mklink /J \"" + taken.string() + "\" \"" + outside.string() + "\" >nul";
+	const bool linked = std::system(command.c_str()) == 0 && fs::exists(taken);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << taken.string());
+#else
+	std::error_code ec;
+	fs::create_directory_symlink(outside, taken, ec);
+	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
+	fs::path asked_copy;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const fs::path& copy) {
+		asked_copy = copy;
+		return true;
+	};
+	load(options);
+
+	BOOST_TEST(asked_copy.parent_path().filename() == std::format("{}-1", platform::current_process_id()));
+	BOOST_TEST(files_in(outside) == std::vector<std::string>{ "keep.txt" }, "nothing was copied through the link");
+}
+
+// A copy that fails part way leaves no folder behind.
+BOOST_AUTO_TEST_CASE(a_copy_that_fails_leaves_no_folder)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+#ifdef _WIN32
+	// Held without sharing: the copy cannot read it.
+	std::FILE* held = ::_wfsopen(library.c_str(), L"rb", _SH_DENYRW);
+	BOOST_REQUIRE(held != nullptr);
+	struct close_on_exit {
+		std::FILE* file;
+		~close_on_exit() { std::fclose(file); }
+	} closer{ held };
+#else
+	if (::geteuid() == 0) {
+		BOOST_TEST_MESSAGE("root reads every file: the copy cannot be made to fail");
+		return;
+	}
+	fs::permissions(library, fs::perms::none);
+	struct restore_on_exit {
+		fs::path path;
+		~restore_on_exit() { std::error_code ec; fs::permissions(path, fs::perms::owner_all, ec); }
+	} restore{ library };
+#endif
+	const auto report = load();
+
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty(), "the folder of the failed copy was removed");
+}
+
+// A library beside the module that is a link out of build/bin does not travel with it.
+BOOST_AUTO_TEST_CASE(a_link_beside_the_library_in_the_build_output_is_not_copied)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const fs::path outside = dir.write(fs::path{ "outside" } / library_file("extra"), "a library outside");
+	std::error_code ec;
+	fs::create_symlink(outside, root / "build" / "bin" / library_file("extra"), ec);
+	if (symlinks_refused(ec)) {
+		return;
+	}
+	std::vector<std::string> copied;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const fs::path& copy) {
+		copied = files_in(copy.parent_path());
+		return true;
+	};
+	load(options);
+
+	BOOST_TEST(copied == std::vector<std::string>{ library_file("test_game") }, boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(a_static_host_leaves_the_copies_in_the_project_alone)
