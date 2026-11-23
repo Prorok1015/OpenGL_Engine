@@ -1087,6 +1087,33 @@ BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
 	BOOST_TEST(broken[1].find("/indices") == 0u, broken[1]);
 }
 
+// #1180: the loader reads "layout", "indices" and "vertices" of every geometry_desc, a child of another one too; the check
+// of a geometry file says which is missing instead of passing a file that does not load.
+BOOST_AUTO_TEST_CASE(AGeometryDesc_WithoutAMemberTheLoaderReads_IsAnError)
+{
+	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
+	const auto member_errors = [&](const std::string& text) {
+		std::vector<std::string> out;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(text), "res://meshes/m.geom.desc").problems) {
+			if (item.severity == res::diagnostic_severity::error && item.reason.find("geometry_desc") != std::string::npos) out.push_back(item.reason);
+		}
+		return out;
+	};
+	BOOST_TEST(member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})").empty());
+
+	const auto no_vertices = member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2]})");
+	BOOST_REQUIRE_EQUAL(no_vertices.size(), 1u);
+	BOOST_TEST(no_vertices[0].find("\"vertices\" is missing") != std::string::npos, no_vertices[0]);
+
+	const auto child = member_errors(R"({"__type":"geometry_desc","__parent":"res://meshes/base.geom.desc","vertices":[]})");
+	BOOST_REQUIRE_EQUAL(child.size(), 1u);
+	BOOST_TEST(child[0].find("\"layout\" is missing") != std::string::npos, child[0]);
+
+	const auto flat_layout = member_errors(R"({"__type":"geometry_desc","layout":"vec3","indices":[],"vertices":[]})");
+	BOOST_REQUIRE_EQUAL(flat_layout.size(), 1u);
+	BOOST_TEST(flat_layout[0].find("object of attribute names") != std::string::npos, flat_layout[0]);
+}
+
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)
 {
 	const fs::path outside = dir.path() / "outside";
