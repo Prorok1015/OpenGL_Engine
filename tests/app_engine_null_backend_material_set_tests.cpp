@@ -406,11 +406,10 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	desc.albedo = ds::color{ 0.25f, 0.5f, 0.75f, 1.f };
 	desc.emissive = ds::color{ 0.1f, 0.2f, 0.3f, 0.f };
 	desc.shininess = 77.f;
-	desc.vertex_shader = res::tag::make("shaders/scene.vert");
-	desc.fragment_shader = res::tag::make("shaders/scene.frag");
+	desc.shader = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 	desc.samplers_textures = { res::tag{}, res::tag{} };	// two slots without a texture
 
-	const auto config = compiler->compile(desc, rnd::material_compile_context{ &render.get_texture_manager(), false });
+	const auto config = compiler->compile(desc, rnd::material_compile_context{ &render.get_texture_manager(), false, std::nullopt });
 
 	rnd::material_params expected;
 	expected.diffuse_color = desc.albedo;
@@ -425,7 +424,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	static_assert(std::is_same_v<decltype(config.rdata.material_params), std::vector<std::byte>>);
 }
 
-// #1199: a shipped shader program gives the program and defines the material compiler builds from the same stages.
+// #1199, #1200: the material compiler builds the program and defines of the shader desc the material refers to.
 BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStages)
 {
 	auto& render = storage.require<rnd::render_system>();
@@ -437,17 +436,13 @@ BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStage
 	BOOST_REQUIRE(shader);
 
 	scn::material_desc material;
-	material.vertex_shader = shader->vertex;
-	material.fragment_shader = shader->fragment;
-	material.geometry_shader = shader->geometry;
+	material.shader = handle;
 	material.defines = { "USE_NORMAL_MAP" };
-	rnd::shader_desc with_defines = *shader;
-	with_defines.defines = material.defines;
 
 	for (const bool skinned : { false, true }) {
 		BOOST_TEST_CONTEXT("skinned " << skinned) {
-			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned });
-			const rnd::shader_config config = with_defines.config();
+			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned, std::nullopt });
+			const rnd::shader_config config = shader->config(material.defines);
 			BOOST_CHECK(config.cdata.program == compiled.cdata.program);
 			// The skinning define stays the compiler's.
 			std::vector<std::string> expected = config.cdata.defines;

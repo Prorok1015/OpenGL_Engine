@@ -12,6 +12,7 @@
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/scn_directional_light_desc.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <algorithm>
 #include <format>
 #include <ostream>
@@ -149,13 +150,16 @@ BOOST_AUTO_TEST_CASE(ASchemaWarningOfAnInlineDescIsAtTheOwnersFieldPath)
 // #631: a tag without a protocol names nothing; the file says where it is and how to write it.
 BOOST_AUTO_TEST_CASE(ATagFieldWithoutAProtocol_IsAWarningAtTheField_AndTheTextIsKept)
 {
-	put("mat.desc", R"json({"__type":"material_desc","shader_fragment":"shaders/a.frag"})json");
-	const auto items = diagnostics_of("mat.desc");
-	const auto it = std::ranges::find_if(items, [](const res::diagnostic& d) { return d.json_path == "/shader_fragment"; });
-	BOOST_REQUIRE_MESSAGE(it != items.end(), "no diagnostic at /shader_fragment");
+	// shader_desc is a render desc, which the scene environment does not register.
+	engine::render::register_render_descs(*descs);
+	put("prog.shader.desc", R"json({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"shaders/a.frag"})json");
+	const auto items = diagnostics_of("prog.shader.desc");
+	engine::render::unregister_render_descs(*descs);
+	const auto it = std::ranges::find_if(items, [](const res::diagnostic& d) { return d.json_path == "/fragment"; });
+	BOOST_REQUIRE_MESSAGE(it != items.end(), "no diagnostic at /fragment");
 	BOOST_TEST((it->severity == res::diagnostic_severity::warning));
 	BOOST_TEST(it->kind == res::diagnostic_kind::schema);
-	BOOST_TEST(it->resource == where("mat.desc"));
+	BOOST_TEST(it->resource == where("prog.shader.desc"));
 	BOOST_TEST(it->reason == "'shaders/a.frag' has no protocol: write res://shaders/a.frag");
 }
 
