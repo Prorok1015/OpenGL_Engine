@@ -419,4 +419,44 @@ BOOST_AUTO_TEST_CASE(Close_ErasesThePreviewGeometry_AndTheDestructorDoesToo)
 	BOOST_TEST(!rs->exists(second));
 }
 
+BOOST_AUTO_TEST_CASE(Save_AfterAFailedPair_AllowsATopologyChange_OverTheGeometryFileTheDocumentMade)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	BOOST_REQUIRE(document->save().saved);
+	std::string failure = "the disk is full";
+	document->set_geometry_writer([&failure](res::resource_system& system, const res::tag& file, const rnd::geometry_desc& geometry) {
+		return failure.empty() ? write_mesh_geometry(system, file, geometry) : failure;
+	});
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.set_position(mesh.vertices().begin()->first, glm::vec3{ 7.f, 7.f, 7.f }); }));
+	BOOST_REQUIRE(!document->save().saved);
+	BOOST_REQUIRE(document->geometry_stale());
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.remove_face(mesh.faces().begin()->first); }));
+	failure.clear();
+
+	const edt::save_result saved = document->save();
+
+	BOOST_TEST_REQUIRE(saved.saved, saved.error);
+	BOOST_TEST(!document->geometry_stale());
+}
+
+BOOST_AUTO_TEST_CASE(Save_ASourceWithTwoMaterials_MayBeSavedOverItsOwnGeometry)
+{
+	poly_mesh_desc source;
+	poly_mesh_from_json(boost::json::parse(box_text).as_object(), source);
+	const face_id first = source.mesh.faces().begin()->first;
+	const face moved = source.mesh.faces().begin()->second;
+	BOOST_REQUIRE(source.mesh.remove_face(first));
+	BOOST_REQUIRE(source.mesh.restore_face(first, moved.corners, 1));
+	write(res_root, "shapes/two.poly.desc", poly_file_text(source));
+	BOOST_REQUIRE(write_mesh_geometry(*rs, res::tag{ "res://shapes/two.geom.desc" }, bake(source.mesh).geometry).empty());
+	document->open(res::tag{ "res://shapes/two.poly.desc" });
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+	BOOST_REQUIRE(move_first_vertex());
+
+	const edt::save_result saved = document->save();
+
+	BOOST_TEST_REQUIRE(saved.saved, saved.error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

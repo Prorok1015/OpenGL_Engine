@@ -210,11 +210,11 @@ std::string edt::mesh_document::geometry_file_problem() const
 	if (!geometry.missing && !geometry.top_layer) {
 		return std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", m_geometry_tag.view());
 	}
-	// Only while the source is about to change: after a failed pair the file is ours and older than the source on purpose.
-	if (m_dirty && !geometry.missing) {
+	// Only while the source is about to change, and not after a failed pair: that file is ours and older than the source on purpose.
+	if (m_dirty && !m_geometry_stale && !geometry.missing) {
 		const std::string existing(reinterpret_cast<const char*>(geometry.bytes.data()), geometry.bytes.size());
 		std::string unused;
-		if (!mesh::poly_text_range(m_saved_text, unused, existing)) {
+		if (!mesh::geometry_is_bake_of(m_saved_text, existing, unused)) {
 			return std::format("{} exists and was not made from {} (an imported mesh or another source): nothing was written. Rename one of the files or delete the geometry file.",
 				m_geometry_tag.view(), m_poly_tag.view());
 		}

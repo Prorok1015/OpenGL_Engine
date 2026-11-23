@@ -67,6 +67,10 @@ namespace edt::mesh
 	// why a poly file has no range: it is no poly file, or its mesh bakes to no triangles or to several materials.
 	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error, std::string_view disk_desc = {});
 
+	// Whether `geometry_desc` (the text of an x.geom.desc) holds the offsets, sizes and layouts the bake of `poly_text` would write, whatever
+	// the number of material ranges (the hash is not compared). `error` says why not when the source cannot be baked or encoded.
+	bool geometry_is_bake_of(std::string_view poly_text, std::string_view geometry_desc, std::string& error);
+
 	// Empty when `scale` is a size for a shape node: every component finite and greater than 0 (a negative one turns the mesh inside out).
 	std::string shape_scale_problem(const glm::vec3& scale);
 
