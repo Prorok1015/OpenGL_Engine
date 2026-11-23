@@ -29,7 +29,7 @@
 | `platform::process_confinement`: `container_name` заменён общим `container` (#1099) | ключ раскладки остаётся; модуль, который запускает дочерний процесс с confinement, пересобирается | [1099](changes/1099.md) |
 | Адаптер модели вынесен из `snk_engine` в `snk::model_import_assimp` (#1108) | модуль, звавший `scn::model_importer_adapter`, переходит на `mdl::model_adapter` | [1108](changes/1108-model-import-module.md) |
 | Старые заголовки-перенаправления `res_tag.h`, `res_asset_id.h`, `res_reference.h` и др. убраны; код берёт `<snk/model_codec/...>` (#1161) | правка `#include` | [1161](changes/1161-drop-forwarders.md), [перенос](changes/1161-model-codec-headers.md) |
-| `wnd::gl_surface` → `rnd::driver::gl_surface` (#1161) | те же виртуальные функции в том же порядке | [1161](changes/1161-gl-surface.md) |
+| `wnd::gl_surface` → `rnd::driver::gl_surface` (#1161) | те же виртуальные функции в том же порядке; `layout_revision` 17 поднят в #1217 | [1161](changes/1161-gl-surface.md) |
 | `desc::field_kind::binary_ref`; `rnd::geometry_desc` держит двоичное состояние членом (#1068) | `layout_revision` 16, ключ получает `rnd::geometry_desc`, `res::binary_range`, `rnd::geometry_view`, `rnd::geometry_file_options`; модули пересобираются | [1068](changes/1068.md), [PR5](changes/1068-pr5.md) |
 | `register_schema` отказывает ключу поля не-JSON-pointer (#1228) | схема с ключом без `/` не регистрируется | [1228](changes/1228.md) |
 
