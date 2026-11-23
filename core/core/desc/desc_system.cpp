@@ -217,6 +217,18 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
 		return nullptr;
 	}
+	// Every reader takes a field key and an alias as a JSON pointer; a key without the leading '/' was read two ways (#1228).
+	for (const field_schema& field : schema.fields) {
+		std::vector<std::string_view> keys{ field.key };
+		keys.insert(keys.end(), field.read_aliases.begin(), field.read_aliases.end());
+		for (const std::string_view key : keys) {
+			if (!key.starts_with('/')) {
+				egLOG_ERROR("desc/error", "Schema '{}' not registered: field '{}' is read at '{}', which is not a JSON pointer starting with '/'",
+					schema.name, field.name, key);
+				return nullptr;
+			}
+		}
+	}
 	// Refused in every build: a schema registered at a version its steps do not lead to would stamp files with a version
 	// no step brings older ones to.
 	if (const int current = current_version(schema.name); schema.version != current) {
@@ -1014,7 +1026,7 @@ namespace
 				}
 				for (const std::string_view key : keys) {
 					if (json::value* value = value_at(data, key)) {
-						field_value(field, *value, where + pointer_of(key), depth);
+						field_value(field, *value, where + std::string(key), depth);
 					}
 				}
 			}
@@ -1060,7 +1072,7 @@ namespace
 					keys.push_back(alias);
 				}
 				for (const std::string_view key : keys) {
-					if (!desc::json_pointer_tokens(pointer_of(key), key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
+					if (!desc::json_pointer_tokens(key, key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
 						|| !std::equal(key_tokens.begin(), key_tokens.end(), tokens.begin())) {
 						continue;
 					}
@@ -1088,17 +1100,8 @@ namespace
 			}
 		}
 
-		static std::string pointer_of(std::string_view key)
-		{
-			return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
-		}
-
 		static json::value* value_at(json::value& root, std::string_view key)
 		{
-			if (!key.starts_with('/')) {
-				json::object* object = root.if_object();
-				return object ? object->if_contains(key) : nullptr;
-			}
 			return const_cast<json::value*>(desc::json_pointer_get(std::as_const(root), key));
 		}
 	};

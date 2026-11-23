@@ -281,19 +281,14 @@ namespace {
 		return std::nullopt;
 	}
 
-	std::string pointer_of(std::string_view key)
-	{
-		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
-	}
-
 	// Every reference `data` (a patch or a whole component of `schema`) holds, in its own fields and through structures,
 	// arrays and inline descs, read where the desc reads it: the field's key or one of its read aliases.
 	std::optional<reference_issue> references_of(const desc::desc_system& descs, reference_scope& scope, const desc::type_schema& schema, const json::value& data,
 		const json::value* merged, std::string_view owner_protocol, int depth)
 	{
 		for (const desc::field_schema& field : schema.fields) {
-			std::vector<std::string> pointers{ pointer_of(field.key) };
-			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			std::vector<std::string> pointers{ field.key };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(alias);
 			for (const std::string& pointer : pointers) {
 				const json::value* value = desc::json_pointer_get(data, pointer);
 				if (!value || value->is_null()) continue;
@@ -326,8 +321,8 @@ namespace {
 			return was && is_patch_reference(*was) && given.as_object().contains("__type");
 		};
 		for (const desc::field_schema& field : schema.fields) {
-			std::vector<std::string> pointers{ pointer_of(field.key) };
-			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			std::vector<std::string> pointers{ field.key };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(alias);
 			for (const std::string& pointer : pointers) {
 				const json::value* value = desc::json_pointer_get(patch, pointer);
 				if (!value || !value->is_object()) continue;
