@@ -190,9 +190,6 @@ namespace {
 		return type && type->is_string() ? type : nullptr;
 	}
 
-	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
-	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
-	// checked, so it is refused.
 	// Mesh data is written by the editor with its binary file (EPIC-79), never through a scene edit.
 	std::optional<reference_issue> mesh_refusal(std::string_view type_name, const desc::type_schema* schema)
 	{
@@ -202,6 +199,9 @@ namespace {
 		return reference_issue{ {}, std::format("an inline '{}': mesh data is written by the editor, refer to a mesh file", type_name) };
 	}
 
+	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
+	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
+	// checked, so it is refused.
 	std::optional<reference_issue> reference_of(const desc::desc_system& descs, reference_scope& scope, const json::value& value, const json::value* merged,
 		std::string_view owner_protocol, int depth)
 	{
