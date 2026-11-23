@@ -1,5 +1,6 @@
 #include "edt_prefab_shape.h"
 #include "edt_prefab_document.h"
+#include "edt_shape_parameters.h"
 #include <algorithm>
 #include <format>
 #include <optional>
@@ -32,6 +33,39 @@ namespace edt
 			node = mesh::mesh_node(args.at("name").as_string(), *fields);
 			return {};
 		}
+	}
+
+	std::string prefab_rebuild_blocker(const prefab_document& prefab)
+	{
+		if (!prefab.working()) return "the prefab is closed";
+		if (prefab.edits_locked()) return "Play is running";
+		return prefab.apply_blocker();
+	}
+
+	rebuild_report rebuild_shape(action_registry& actions, prefab_document* prefab, const json::object& arguments, std::string_view geometry)
+	{
+		rebuild_report report;
+		const cmd::result done = actions.invoke("shape.rebuild", arguments);
+		if (!done.ok) {
+			report.error = std::format("shape.rebuild: {} ({})", done.error, done.code);
+			return report;
+		}
+		const json::object* answer = done.value.if_object();
+		if (const json::value* refused = answer ? answer->if_contains("scene_update") : nullptr; refused && refused->is_string()) {
+			report.notes.push_back(std::format("The open level's nodes were not updated: {}", std::string(refused->as_string())));
+		}
+		const std::optional<json::object> range = answer ? mesh::range_of_rebuilt(*answer) : std::nullopt;
+		if (!prefab || !prefab->working() || !range) return report;
+
+		const std::size_t stale = mesh::count_stale_shape_nodes(prefab->working()->get_root(), geometry, *range);
+		if (stale == 0) return report;
+		if (const std::string blocker = prefab_rebuild_blocker(*prefab); !blocker.empty()) {
+			report.notes.push_back(std::format("The open prefab keeps the old range of {} node(s): {}", stale, blocker));
+			return report;
+		}
+		const bool edited = prefab->edit([&](scn::prefab_desc& copy) { return mesh::retarget_shape_nodes(copy.get_root(), geometry, *range) > 0; });
+		if (!edited) report.notes.push_back(std::format("The open prefab could not be updated: its {} node(s) keep the old range", stale));
+		return report;
 	}
 
 	std::string add_shape_to_prefab(action_registry& actions, prefab_document& prefab, const mesh::shape_request& request)

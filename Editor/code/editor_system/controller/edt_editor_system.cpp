@@ -34,6 +34,7 @@
 #include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
 #include "edt_panels_component.h"
+#include "edt_shape_parameters_component.h"
 #include "edt_problems_component.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
@@ -323,7 +324,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.services = m_services, .worlds = m_world_ctrl,
 		.assets = [this] { return m_asset_component.get(); },
 		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
-		.play_active = [this] { return m_play && m_play->active(); } });
+		.play_active = [this] { return m_play && m_play->active(); },
+		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); } });
 
 	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
 	// Create panels
@@ -389,6 +391,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.asset_catalog = asset_catalog };
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
+	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
+		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); } });
 
 	// Registration order is the render order and the View menu order (panels_component::install).
 	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
@@ -458,7 +462,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	}
 	// #746: parametric shapes (shape.create, shape.rebuild) as .poly.desc + .geom.desc files of res/.
-	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), { m_res, desc_system, m_asset_open->desc_layout(), m_context->actions().commands(), &m_context->events() })) {
+	mesh::shape_command_deps shape_deps{ m_res, desc_system, m_asset_open->desc_layout(), m_context->actions().commands(), &m_context->events() };
+	shape_deps.scene_blocker = [this]() -> std::string { return m_state.edits_locked() ? "the scene is playing: stop play first" : std::string{}; };
+	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), std::move(shape_deps))) {
 		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
@@ -713,10 +719,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_modal_probe([this] {
 		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
 	});
-	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
+	// Bindings two actions share and the shaders that did not build are Problems (sources "input", "shader"), whether or not
+	// the panel is open.
 	editor_layer->set_frame_hook([this, &data] {
 		// Before the shortcuts of the frame: Ctrl+Z goes to the document of the window the person is in.
 		if (m_asset_open) m_asset_open->data_documents().follow_focus();
+		if (m_context) m_problems->follow_shaders();
 		if (!m_context || !data.has_value<gs::input_actions>()) return;
 		const auto& actions = data.require<gs::input_actions>();
 		m_problems->follow_input_actions(actions);

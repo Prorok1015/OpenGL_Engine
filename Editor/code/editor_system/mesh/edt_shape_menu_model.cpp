@@ -61,6 +61,19 @@ namespace edt::mesh
 		m_fields = fields_of(shape_params_to_json(*defaults));
 	}
 
+	bool parametric_shape_form::load(std::string_view kind, const json::object& params, std::string& error)
+	{
+		if (!shape_params_from_json(kind, params, error)) return false;
+		const std::optional<shape_params> defaults = default_shape_params(kind);
+		if (!defaults) {
+			error = "unknown shape kind";
+			return false;
+		}
+		m_kind = std::string(kind);
+		m_fields = fields_of(params);
+		return true;
+	}
+
 	json::object parametric_shape_form::params_json() const
 	{
 		json::object out;
@@ -83,6 +96,11 @@ namespace edt::mesh
 	std::string parametric_shape_form::problem() const
 	{
 		if (name.empty()) return "the name is empty";
+		return parameters_problem();
+	}
+
+	std::string parametric_shape_form::parameters_problem() const
+	{
 		for (const shape_field& field : m_fields) {
 			for (const double value : field.values) {
 				if (!std::isfinite(value)) return std::format("{} must be a finite number", field.key);

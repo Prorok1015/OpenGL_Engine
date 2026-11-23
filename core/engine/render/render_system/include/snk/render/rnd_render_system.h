@@ -4,8 +4,11 @@
 
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <snk/render/texture/rnd_render_targets.h>
+#include <snk/common/snk_api.h>
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -74,6 +77,11 @@ namespace rnd
 
 		// The cache the draws' material ids refer to (valid between begin_frame and the next one).
 		material_instance_cache& material_instances() { return *m_instances; }
+
+		// Why the shader programs that did not build last time did not, at their files and lines (#1201); main thread,
+		// as the frames that build them. The generation changes whenever the problems do.
+		SNK_API std::uint64_t shader_problems_generation() const;
+		SNK_API std::vector<rnd::shader_problem> shader_problems() const;
 
 	private:
 		rnd::skinning_manager* m_skinning_manager = nullptr;

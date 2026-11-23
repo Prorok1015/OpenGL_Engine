@@ -78,6 +78,7 @@ struct shape_fixture : test_util::scene_env
 		layout.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
 		layout.write_blocker = [this] { return blocked; };
 		shape_command_deps deps{ *rs, *descs, std::move(layout), commands, &events };
+		deps.scene_blocker = [this] { return scene_blocked; };
 		deps.write_geometry = [this](const res::tag& tag, const rnd::geometry_desc& geometry) -> std::string {
 			++geometry_writes;
 			if (geometry_writes == fail_geometry_write) return "the disk is full";
@@ -141,6 +142,7 @@ struct shape_fixture : test_util::scene_env
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 	std::optional<std::string> blocked;
+	std::string scene_blocked;
 	int geometry_writes = 0;
 	int fail_geometry_write = 0;
 	int poly_writes = 0;
@@ -363,6 +365,30 @@ BOOST_AUTO_TEST_CASE(Rebuild_RefusesAStaleVersion_AMissingFile_ALowerLayersFile_
 	blocked = "a migration runs";
 	BOOST_TEST(call("shape.rebuild", rebuild_args("shapes/ball.poly.desc", version)).code == cmd::codes::busy);
 	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(Rebuild_WhileTheSceneCannotTakeTheNewRange_WritesNoFile)
+{
+	const auto made = create_sphere();
+	BOOST_REQUIRE(made.ok);
+	const std::string version = std::string(made.value.at("version").as_string());
+	const std::string poly_before = read_file(res_root / "shapes" / "ball.poly.desc");
+	const std::string geometry_before = read_file(res_root / "shapes" / "ball.geom.desc");
+	const int writes = geometry_writes;
+	scene_blocked = "the scene is playing: stop play first";
+
+	json::object args = rebuild_args("shapes/ball.poly.desc", version);
+	args["params"] = json::object{ { "radius", 2.0 } };
+	const auto refused = call("shape.rebuild", args);
+
+	BOOST_TEST(refused.code == cmd::codes::busy);
+	BOOST_TEST(refused.error.find("playing") != std::string::npos);
+	BOOST_TEST(geometry_writes == writes);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.geom.desc") == geometry_before);
+
+	scene_blocked.clear();
+	BOOST_TEST(call("shape.rebuild", args).ok);
 }
 
 BOOST_AUTO_TEST_CASE(Rebuild_RefusesAMeshEditedByHand_AndLeavesBothFilesAsTheyAre)
@@ -663,6 +689,25 @@ BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyI
 	BOOST_TEST(orphan.code == cmd::codes::needs_input);
 	BOOST_TEST(!fs::exists(res_root / "shapes" / "orphan.poly.desc"));
 	BOOST_TEST(!fs::exists(res_root / "shapes" / "orphan.geom.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(TheGeometryCheck_SaysWhenTheSourceCannotBeBaked_AndWhenTheGeometryIsAnotherMeshs)
+{
+	std::string error;
+	BOOST_TEST((geometry_is_bake_of("{", "{}", error) == geometry_match::unchecked));
+	BOOST_TEST(error == "the source is not a JSON object");
+
+	error.clear();
+	BOOST_TEST((geometry_is_bake_of(R"({"__type":"poly_mesh_desc","vertices":5})", "{}", error) == geometry_match::unchecked));
+	BOOST_TEST(!error.empty());
+
+	error.clear();
+	const shape_asset_files box = built(box_params{});
+	BOOST_TEST((geometry_is_bake_of(box.poly, box.geometry, error) == geometry_match::same));
+	const shape_asset_files sphere = built(small_sphere);
+	BOOST_TEST((geometry_is_bake_of(box.poly, sphere.geometry, error) == geometry_match::differs));
+	BOOST_TEST((geometry_is_bake_of(box.poly, "not json", error) == geometry_match::differs));
+	BOOST_TEST(error.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -190,6 +190,15 @@ namespace {
 		return type && type->is_string() ? type : nullptr;
 	}
 
+	// Mesh data is written by the editor with its binary file (EPIC-79), never through a scene edit.
+	std::optional<reference_issue> mesh_refusal(std::string_view type_name, const desc::type_schema* schema)
+	{
+		const bool mesh = type_name == "geometry_desc" || type_name == "poly_mesh_desc"
+			|| (schema && std::ranges::any_of(schema->fields, [](const desc::field_schema& field) { return field.kind == desc::field_kind::binary_ref; }));
+		if (!mesh) return std::nullopt;
+		return reference_issue{ {}, std::format("an inline '{}': mesh data is written by the editor, refer to a mesh file", type_name) };
+	}
+
 	// A tag, a {guid, path} reference, or a desc written inline: then its __parent and the references its own schema names,
 	// since the desc_system loads them as it reads the inline copy. An inline desc of a type without a schema cannot be
 	// checked, so it is refused.
@@ -208,10 +217,7 @@ namespace {
 		if (depth >= k_max_inline_depth) return reference_issue{ {}, "inline descs nested too deep" };
 		const std::string_view type_name(type->as_string());
 		const desc::type_schema* schema = descs.find_schema(type_name);
-		// Mesh data is written by the editor with its binary file (EPIC-79), never through a scene edit.
-		const bool mesh = type_name == "geometry_desc" || type_name == "poly_mesh_desc"
-			|| (schema && std::ranges::any_of(schema->fields, [](const desc::field_schema& field) { return field.kind == desc::field_kind::binary_ref; }));
-		if (mesh) return reference_issue{ {}, std::format("an inline '{}': mesh data is written by the editor, refer to a mesh file", type_name) };
+		if (auto refused = mesh_refusal(type_name, schema)) return refused;
 		if (!schema) return reference_issue{ {}, "an inline desc of a type without a schema: its references cannot be checked" };
 		if (const json::value* parent = inline_desc->if_contains("__parent")) {
 			if (auto issue = reference_of(descs, scope, *parent, nullptr, owner_protocol, depth + 1)) return under(std::move(issue), "__parent");
@@ -220,8 +226,11 @@ namespace {
 	}
 
 	// A custom field's codec is opaque to the schema (the material's samplers): every string in it that names a protocol is
-	// a tag the codec may load, and is held to the same rule. A string without one is not taken for a tag.
-	std::optional<reference_issue> tags_in(const json::value& value, std::string_view owner_protocol)
+	// a tag the codec may load, and is held to the same rule. A string without one is not taken for a tag. An object with a
+	// "__type" may be an inline desc the codec loads (an animation clip, a prefab node's components, #1180): it is held to
+	// the rule of an inline desc in a desc_ref field, at the same depth.
+	std::optional<reference_issue> tags_in(const desc::desc_system& descs, reference_scope& scope, const json::value& value,
+		std::string_view owner_protocol, int depth)
 	{
 		if (const auto* text = value.if_string()) {
 			// Judged as the codec would load it: res::tag normalizes the text first ("user:\\x" names user://).
@@ -232,12 +241,15 @@ namespace {
 		}
 		if (const auto* items = value.if_array()) {
 			for (std::size_t i = 0; i < items->size(); ++i) {
-				if (auto issue = tags_in((*items)[i], owner_protocol)) return under(std::move(issue), std::to_string(i));
+				if (auto issue = tags_in(descs, scope, (*items)[i], owner_protocol, depth)) return under(std::move(issue), std::to_string(i));
 			}
 		}
 		if (const auto* object = value.if_object()) {
+			if (const json::value* type = object->if_contains("__type"); type && type->is_string()) {
+				return reference_of(descs, scope, value, nullptr, owner_protocol, depth);
+			}
 			for (const auto& member : *object) {
-				if (auto issue = tags_in(member.value(), owner_protocol)) return under(std::move(issue), std::string_view(member.key()));
+				if (auto issue = tags_in(descs, scope, member.value(), owner_protocol, depth)) return under(std::move(issue), std::string_view(member.key()));
 			}
 		}
 		return std::nullopt;
@@ -257,7 +269,7 @@ namespace {
 	{
 		if (is_tag_kind(field.kind)) return reference_of(descs, scope, value, merged, owner_protocol, depth);
 		if (field.kind == desc::field_kind::structure) return structure_references(descs, scope, field, value, merged, owner_protocol, depth);
-		if (field.kind == desc::field_kind::custom) return tags_in(value, owner_protocol);
+		if (field.kind == desc::field_kind::custom) return tags_in(descs, scope, value, owner_protocol, depth);
 		if (field.kind == desc::field_kind::map) {
 			const json::object* entries = value.if_object();
 			if (!entries) return std::nullopt;
@@ -265,7 +277,7 @@ namespace {
 				std::optional<reference_issue> issue;
 				if (is_tag_kind(field.element)) issue = reference_of(descs, scope, entry.value(), nullptr, owner_protocol, depth);
 				else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, entry.value(), nullptr, owner_protocol, depth);
-				else if (field.element == desc::field_kind::custom) issue = tags_in(entry.value(), owner_protocol);
+				else if (field.element == desc::field_kind::custom) issue = tags_in(descs, scope, entry.value(), owner_protocol, depth);
 				if (issue) return under(std::move(issue), res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 			}
 			return std::nullopt;
@@ -276,7 +288,7 @@ namespace {
 			std::optional<reference_issue> issue;
 			if (is_tag_kind(field.element)) issue = reference_of(descs, scope, (*items)[i], merged_item(merged, i), owner_protocol, depth);
 			else if (field.element == desc::field_kind::structure) issue = structure_references(descs, scope, field, (*items)[i], merged_item(merged, i), owner_protocol, depth);
-			else if (field.element == desc::field_kind::custom) issue = tags_in((*items)[i], owner_protocol);
+			else if (field.element == desc::field_kind::custom) issue = tags_in(descs, scope, (*items)[i], owner_protocol, depth);
 			if (issue) return under(std::move(issue), std::to_string(i));
 		}
 		return std::nullopt;
@@ -756,7 +768,7 @@ namespace {
 	// shape.update_nodes (#746): after a shape was rebuilt, every mesh node of the scene that draws its geometry takes the new range.
 	cmd::result shape_update_nodes(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Rebuild shape", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+		cmd::result result = ctx.run(call, "Rebuild shape", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
 			const json::value* geometry = args.if_contains("geometry");
 			if (!geometry || !geometry->is_string()) return failure(cmd::codes::invalid_args, "geometry is a res:// tag");
 			const std::string wanted = geometry_key(std::string_view(geometry->as_string()));
@@ -775,6 +787,13 @@ namespace {
 			for (auto& world : scene.world_descs) retarget_nodes(world.get_root(), wanted, range);
 			return cmd::result::success();
 		});
+		// The shape's files were written again and cannot be taken back: an undo would give the nodes their old range over the new mesh.
+		const json::object* answer = result.ok ? result.value.if_object() : nullptr;
+		const json::value* updated = answer ? answer->if_contains("updated") : nullptr;
+		if (updated && updated->is_number() && updated->to_number<std::uint64_t>() > 0) {
+			edt::scene_of(ctx.sources.documents).reset_history();
+		}
+		return result;
 	}
 
 	cmd::result node_delete(context& ctx, const cmd::call& call)

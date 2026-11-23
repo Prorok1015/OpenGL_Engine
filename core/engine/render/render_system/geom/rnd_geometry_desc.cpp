@@ -102,8 +102,13 @@ namespace
 	// A range object: recorded for the adapter. Anything else is not a range (an array, read as before).
 	std::optional<res::binary_range> range_at(const json::value& value, std::string_view path)
 	{
-		if (!value.is_object()) {
+		if (value.is_array()) {
 			return std::nullopt;
+		}
+		// A null fits a binary_ref field ("no range", #1180), but a geometry has no data without it.
+		if (!value.is_object()) {
+			throw res::load_error(res::diagnostic_kind::load, path, std::format("{}: a geometry holds a range of its binary file or an array "
+				"here, not {}", path, value.is_null() ? "null" : "a scalar"));
 		}
 		std::string error;
 		auto range = res::binary_range_from_json(value, error);
@@ -242,6 +247,8 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 	}
 
 	detail::geometry_binary_ranges ranges;
+	// Empty arrays keep the data __parent gave (copy_to); its bounds hold only while neither array is this desc's own.
+	bool own_data = false;
 	{
 		auto& json_indices = resource.at("indices");
 		ranges.indices = range_at(json_indices, "/indices");
@@ -249,6 +256,7 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 			indices.clear();
 		} else if (!json_indices.as_array().empty()) {
 			indices = json::value_to<std::remove_cvref_t<decltype(indices)>>(json_indices);
+			own_data = true;
 		}
 	}
 
@@ -265,6 +273,7 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 				read.push_back(byte_of(item));
 			}
 			vertices = std::move(read);
+			own_data = true;
 		}
 	}
 
@@ -278,18 +287,15 @@ void rnd::detail::read_geometry_json(geometry_desc& geometry, const json::object
 	}
 	detail::forget_binary(geometry);
 
-	if (resource.contains("bounds"))
-	{
-		auto& json_bounds = resource.at("bounds");
-		bounds = json::value_to<std::remove_cvref_t<decltype(bounds)>>(json_bounds);
-
-		PROFILE_SCOPE("geometry_desc rtree build");
-		for(auto& [key, val] : bounds)
-		{
-			rtree.insert(key, val);
-		}
-
-		//rtree.build(bounds);
+	if (resource.contains("bounds")) {
+		bounds = json::value_to<std::remove_cvref_t<decltype(bounds)>>(resource.at("bounds"));
+	} else if (own_data) {
+		bounds.clear();
+	}
+	PROFILE_SCOPE("geometry_desc rtree build");
+	rtree = {};
+	for (const auto& [box, triangle] : bounds) {
+		rtree.insert(box, triangle);
 	}
 }
 

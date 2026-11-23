@@ -44,6 +44,24 @@ namespace rnd::driver
 		shader_type type;
 	};
 
+	// What the compiler and the linker said about a program that did not build, as the backend prints it.
+	struct shader_stage_log
+	{
+		// The index of the stage in the headers given to create_shader.
+		std::size_t stage = 0;
+		std::string text;
+	};
+
+	struct shader_build_log
+	{
+		// One entry per stage that did not compile.
+		std::vector<shader_stage_log> stages;
+		// The link log; empty when a stage did not compile (the program is not linked then).
+		std::string link;
+
+		bool empty() const noexcept { return stages.empty() && link.empty(); }
+	};
+
 	class driver_interface
 	{
 	public:
@@ -60,7 +78,8 @@ namespace rnd::driver
 		virtual void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;
 
 
-		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) = 0;
+		// Null when the program does not build; `log`, when given, then receives why (left as it is on success).
+		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers, shader_build_log* log = nullptr) = 0;
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() = 0;
 		virtual std::unique_ptr<buffer_interface> create_buffer() = 0;
 

@@ -124,13 +124,16 @@ struct blobs_fixture : test_util::scene_env
 		engine::render::unregister_render_descs(*descs);
 	}
 
-	pmg::migration_plan plan(std::uintmax_t max_file_bytes = pmg::scan_options{}.max_file_bytes)
+	pmg::migration_plan plan(std::uintmax_t max_file_bytes = pmg::scan_options{}.max_file_bytes, pmg::geometry_check_cache* checks = nullptr)
 	{
 		pmg::plan_options options;
 		options.project_steps = &registry;
 		options.scan.max_file_bytes = max_file_bytes;
+		options.scan.geometry_checks = checks;
 		return pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
 	}
+
+	pmg::migration_plan plan_with(pmg::geometry_check_cache& checks) { return plan(pmg::scan_options{}.max_file_bytes, &checks); }
 
 	pmg::apply_context context()
 	{
@@ -387,6 +390,59 @@ BOOST_AUTO_TEST_CASE(AGeometryDescTooBigForTheScan_IsNotMigrated_AndDoesNotStopT
 	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::partial), outcome.report.error);
 	BOOST_TEST(read_text(at(k_desc)) == big);
+}
+
+// #1155: the check encodes the whole pair, and a project not yet migrated is scanned on every open and every plan. A desc
+// whose text has not changed takes the answer the cache kept; a changed one is checked again.
+BOOST_AUTO_TEST_CASE(AnUnchangedDesc_TakesItsGeometryCheckFromTheCache_AChangedOneIsCheckedAgain)
+{
+	write_text(at(k_desc), arrays_desc({ 0, 1, 2 }));
+	pmg::geometry_check_cache checks;
+	BOOST_TEST(planned(plan_with(checks)));
+	BOOST_TEST(checks.size() >= 1u);
+
+	// An answer only the cache could give: the scan that reports it did not encode the desc again.
+	pmg::geometry_check_cache primed;
+	primed.problem(k_desc, read_text(at(k_desc)), [] { return std::string{ "remembered answer" }; });
+	const pmg::migration_plan from_cache = plan_with(primed);
+	const pmg::scanned_file* cached = from_cache.scan.find(k_desc);
+	BOOST_REQUIRE(cached);
+	BOOST_TEST(cached->geometry_left == "remembered answer");
+	BOOST_TEST(!planned(from_cache));
+	const std::size_t known = primed.size();
+
+	write_text(at(k_desc), arrays_desc({ 0, 2, 1 }));
+	const pmg::migration_plan changed = plan_with(primed);
+	BOOST_REQUIRE(changed.scan.find(k_desc));
+	BOOST_TEST(changed.scan.find(k_desc)->geometry_left.empty());
+	BOOST_TEST(planned(changed));
+	// The answer of the old text gave way to the new one: one answer a path.
+	BOOST_TEST(primed.size() == known);
+}
+
+BOOST_AUTO_TEST_CASE(APlanWithTheCache_IsThePlanWithoutIt)
+{
+	write_text(at(k_desc), arrays_desc({ 0, 1, 2 }));
+	write_text(at("res/geom/broken.geom.desc"), arrays_desc({ 0, 1, 5 }));
+	pmg::geometry_check_cache checks;
+	std::size_t after_first = 0;
+	for (int run = 0; run < 2; ++run) {
+		const pmg::migration_plan without = plan();
+		const pmg::migration_plan with = plan_with(checks);
+		BOOST_TEST(planned(with) == planned(without));
+		for (const std::string_view path : { k_desc, std::string_view{ "res/geom/broken.geom.desc" } }) {
+			const pmg::scanned_file* a = without.scan.find(path);
+			const pmg::scanned_file* b = with.scan.find(path);
+			BOOST_REQUIRE(a);
+			BOOST_REQUIRE(b);
+			BOOST_TEST(a->geometry_arrays == b->geometry_arrays);
+			BOOST_TEST(a->geometry_left == b->geometry_left);
+		}
+		BOOST_TEST(pmg::skipped_by(with).size() == pmg::skipped_by(without).size());
+		if (run == 0) after_first = checks.size();
+	}
+	BOOST_TEST(after_first >= 2u);
+	BOOST_TEST(checks.size() == after_first);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
