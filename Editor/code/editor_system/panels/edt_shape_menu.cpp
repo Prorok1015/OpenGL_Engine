@@ -37,6 +37,11 @@ namespace edt
 		}
 	}
 
+	void draw_shape_fields(mesh::parametric_shape_form& form)
+	{
+		for (mesh::shape_field& field : form.fields()) draw_field(field);
+	}
+
 	void shape_menu::draw_menu(const std::vector<std::uint64_t>& parent, const on_pick& pick)
 	{
 		if (!ImGui::BeginMenu("Add shape")) return;
@@ -72,7 +77,7 @@ namespace edt
 		draw_text_field("Folder", m_form.folder, false);
 		ImGui::TextDisabled("Files land in res://<folder>/<name>.*; the folder is shapes when empty");
 		ImGui::Separator();
-		for (mesh::shape_field& field : m_form.fields()) draw_field(field);
+		draw_shape_fields(m_form);
 
 		if (!m_problem.empty()) {
 			ImGui::PushStyleColor(ImGuiCol_Text, colors.error);

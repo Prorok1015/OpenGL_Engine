@@ -33,6 +33,9 @@ namespace edt::mesh
 			cmd::command_registry& registry, editor_events* sink = nullptr)
 			: res(resources), descs(descriptions), layout(std::move(where)), commands(registry), events(sink) {}
 
+		// Why the open scene cannot take the new range of the nodes now (Play); empty when it can. shape.rebuild asks it BEFORE it writes the
+		// files: files rebuilt under nodes that keep the old range are the one state nothing repairs.
+		std::function<std::string()> scene_blocker;
 		res::resource_system& res;
 		const desc::desc_system& descs;
 		// Where the project's res:// folders are: the same functions as the desc.* commands have.

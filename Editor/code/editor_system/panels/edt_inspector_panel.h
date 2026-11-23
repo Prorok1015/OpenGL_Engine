@@ -43,6 +43,9 @@ namespace edt
 		void set_desc_source(std::function<desc::desc_system*()> source);
 		// The files a reference field may point at, asked for at each use (null: no picker; the asset database exists only with a project).
 		void set_asset_source(std::function<const picker::catalog*()> source) { m_asset_source = std::move(source); }
+		// Drawn under a component of the given type in the node's own components (never inside an instance), after its fields; null: nothing.
+		using component_section = std::function<void(const std::string& type, const scn::prefab_desc::prefab_comp_node& comp, const gui::theme_semantic_colors& colors)>;
+		void set_component_section(component_section section) { m_component_section = std::move(section); }
 		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
@@ -89,6 +92,7 @@ namespace edt
 		inspector_registry*            m_inspectors     = nullptr;
 		std::function<desc::desc_system*()> m_desc_source;
 		std::function<const picker::catalog*()> m_asset_source;
+		component_section m_component_section;
 		desc::desc_system* descs() const { return m_desc_source ? m_desc_source() : nullptr; }
 		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;
