@@ -32,7 +32,6 @@
    "dest": "snk/window",
    "public": [
     "wnd_coordinates.h",
-    "wnd_null_window_system.h",
     "wnd_window.h",
     "wnd_window_event_listener_interface.h",
     "wnd_window_service_init.h",
