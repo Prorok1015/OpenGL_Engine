@@ -2,6 +2,7 @@
 #include "edt_document_cast.h"
 #include "edt_inspector_panel.h"
 #include "edt_prefab_document.h"
+#include "edt_prefab_shape.h"
 #include "edt_scene_document.h"
 #include "edt_shape_parameters_section.h"
 #include <snk/common/logger/engine_log.h>
@@ -24,17 +25,18 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 		if (!descs || !m_ports.desc_layout) return desc_file_read{};
 		return read_desc_file(m_ports.resources, *descs, m_ports.desc_layout(), res::tag::make(poly_path));
 	};
-	section.invoke = [this](std::string_view command, const json::value& args) { return m_ports.context.actions().invoke(command, args); };
-	section.facts = [this](std::string_view geometry, const std::string& poly_path) {
+	section.facts = [this](std::string_view geometry, const std::string& poly_path, const json::object& range) {
 		mesh::rebuild_facts facts;
 		facts.poly = poly_path;
 		facts.level_open = !m_ports.state.world_descs.empty();
 		facts.level_dirty = m_ports.state.is_dirty();
-		for (auto& world : m_ports.state.world_descs) facts.level_nodes += mesh::count_shape_nodes(world.get_root(), geometry);
+		facts.level_agent_changes = m_ports.state.has_agent_changes();
+		for (auto& world : m_ports.state.world_descs) facts.level_nodes += mesh::count_stale_shape_nodes(world.get_root(), geometry, range);
 		if (const prefab_document* prefab = prefab_of(m_ports.context.documents()); prefab && prefab->working()) {
 			facts.prefab_open = true;
 			facts.prefab_dirty = prefab->is_dirty();
-			facts.prefab_nodes = mesh::count_shape_nodes(prefab->working()->get_root(), geometry);
+			facts.prefab_blocker = prefab_rebuild_blocker(*prefab);
+			facts.prefab_nodes = mesh::count_stale_shape_nodes(prefab->working()->get_root(), geometry, range);
 		}
 		return facts;
 	};
@@ -44,16 +46,18 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 				if (choice == std::optional<std::size_t>{ 0 }) proceed();
 			});
 	};
-	section.retarget_prefab = [this](std::string_view geometry, const json::object& range) {
-		prefab_document* prefab = prefab_of(m_ports.context.documents());
-		if (!prefab || !prefab->working()) return;
-		prefab->edit([&](scn::prefab_desc& working) { return mesh::retarget_shape_nodes(working.get_root(), geometry, range) > 0; });
+	section.rebuild = [this](const json::object& arguments, std::string_view geometry) {
+		return rebuild_shape(m_ports.context.actions(), prefab_of(m_ports.context.documents()), arguments, geometry);
 	};
 	section.report_error = [this](std::string text) {
 		egLOG_WARN("editor/shape", "{}", text);
 		m_ports.context.dialogs().message(message_level::error, std::move(text));
 	};
-	section.locked = [this] { return m_ports.state.edits_locked(); };
+	section.locked = [this] {
+		if (m_ports.state.edits_locked()) return true;
+		const prefab_document* prefab = prefab_of(m_ports.context.documents());
+		return prefab && prefab->edits_locked();
+	};
 	m_section = std::make_unique<shape_parameters_section>(std::move(section));
 
 	m_ports.inspector.set_component_section([this](const std::string& type, const scn::prefab_desc::prefab_comp_node& comp, const gui::theme_semantic_colors& colors) {

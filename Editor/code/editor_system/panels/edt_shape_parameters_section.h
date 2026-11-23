@@ -1,7 +1,7 @@
 #pragma once
 #include "edt_shape_menu_model.h"
 #include "edt_shape_parameters.h"
-#include <snk/command/cmd_types.h>
+#include "edt_prefab_shape.h"
 #include <boost/json.hpp>
 #include <functional>
 #include <memory>
@@ -20,13 +20,14 @@ namespace edt
 		struct ports
 		{
 			std::function<desc_file_read(const std::string& poly_path)> read_poly;
-			std::function<cmd::result(std::string_view command, const boost::json::value& args)> invoke;
-			std::function<mesh::rebuild_facts(std::string_view geometry, const std::string& poly_path)> facts;
+			// What a rebuild to `range` does to the open level and prefab (the nodes it changes, what is unsaved).
+			std::function<mesh::rebuild_facts(std::string_view geometry, const std::string& poly_path, const boost::json::object& range)> facts;
 			// A person's answer: `proceed` runs on Rebuild only.
 			std::function<void(std::string title, std::string text, std::function<void()> proceed)> confirm;
-			// After a rebuild: the open prefab's working copy takes the new range too.
-			std::function<void(std::string_view geometry, const boost::json::object& range)> retarget_prefab;
+			// shape.rebuild, then the open prefab's working copy takes the new range; what went wrong is in the report.
+			std::function<rebuild_report(const boost::json::object& arguments, std::string_view geometry)> rebuild;
 			std::function<void(std::string text)> report_error;
+			// Play, or an open prefab that cannot be edited.
 			std::function<bool()> locked;
 		};
 
@@ -39,7 +40,7 @@ namespace edt
 
 	private:
 		void load(const std::string& geometry);
-		void rebuild(const std::string& geometry);
+		void begin_rebuild(const std::string& geometry);
 
 		ports m_ports;
 		std::shared_ptr<int> m_alive = std::make_shared<int>();

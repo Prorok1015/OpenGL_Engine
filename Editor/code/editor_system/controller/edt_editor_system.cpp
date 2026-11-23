@@ -458,7 +458,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	}
 	// #746: parametric shapes (shape.create, shape.rebuild) as .poly.desc + .geom.desc files of res/.
-	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), { m_res, desc_system, m_asset_open->desc_layout(), m_context->actions().commands(), &m_context->events() })) {
+	mesh::shape_command_deps shape_deps{ m_res, desc_system, m_asset_open->desc_layout(), m_context->actions().commands(), &m_context->events() };
+	shape_deps.scene_blocker = [this]() -> std::string { return m_state.edits_locked() ? "the scene is playing: stop play first" : std::string{}; };
+	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), std::move(shape_deps))) {
 		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration

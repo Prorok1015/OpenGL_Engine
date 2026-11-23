@@ -235,6 +235,9 @@ namespace edt::mesh
 			{
 				plan_result plan = plan_rebuild(call);
 				if (!plan.failure.ok) return plan.failure;
+				if (m_deps.scene_blocker) {
+					if (const std::string why = m_deps.scene_blocker(); !why.empty()) return refuse(cmd::codes::busy, why);
+				}
 				const res::tag poly_tag = tag_of(plan.paths.poly);
 				const res::tag geometry_tag = tag_of(plan.paths.geometry);
 				// The geometry first and the source last: a stop between the two leaves a source that says what the pair is no more,

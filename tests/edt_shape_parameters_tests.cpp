@@ -125,24 +125,54 @@ BOOST_AUTO_TEST_CASE(AMeshEditedByHand_AFileOfALowerLayer_AndAFileThatIsNotThere
 	BOOST_TEST(unreadable.reason == "the file cannot be read");
 }
 
-BOOST_AUTO_TEST_CASE(CountingAndRetargeting_FindEveryMeshNodeOfAGeometry_WhateverItsProtocol)
+BOOST_AUTO_TEST_CASE(OnlyTheNodesWhoseRangeChanges_AreCounted_AndRetargetingChangesExactlyThose)
 {
 	const std::string wanted = std::string("res://") + "shapes/x.geom.desc";
 	scn::prefab_desc::prefab_node root;
 	root.children.push_back(mesh_node_of(wanted, 4));
-	root.children.push_back(mesh_node_of("shapes/x.geom.desc", 4));
+	root.children.push_back(mesh_node_of("shapes/x.geom.desc", 50));
 	root.children.push_back(mesh_node_of("shapes/other.geom.desc", 4));
 	root.children[0].children.push_back(mesh_node_of(wanted, 4));
 
-	BOOST_TEST(count_shape_nodes(root, wanted) == 3u);
-	BOOST_TEST(count_shape_nodes(root, "shapes/x.geom.desc") == 3u);
+	json::object range{ { "vx_begin", 0 }, { "vx_end", 50 }, { "ind_begin", 0 }, { "ind_end", 6 } };
 
-	json::object range{ { "vx_begin", 0 }, { "vx_end", 50 }, { "ind_begin", 0 }, { "ind_end", 240 } };
-	BOOST_TEST(retarget_shape_nodes(root, wanted, range) == 3u);
+	const std::size_t stale = count_stale_shape_nodes(root, wanted, range);
+	BOOST_TEST(stale == 2u);
+	BOOST_TEST(count_stale_shape_nodes(root, "shapes/x.geom.desc", range) == 2u);
+	BOOST_TEST(retarget_shape_nodes(root, wanted, range) == stale);
 	BOOST_TEST(root.children[0].components.at("mesh").overrides.at("vx_end").to_number<int>() == 50);
-	BOOST_TEST(root.children[0].children[0].components.at("mesh").overrides.at("ind_end").to_number<int>() == 240);
+	BOOST_TEST(root.children[0].children[0].components.at("mesh").overrides.at("vx_end").to_number<int>() == 50);
 	BOOST_TEST(root.children[2].components.at("mesh").overrides.at("vx_end").to_number<int>() == 4);
+	BOOST_TEST(count_stale_shape_nodes(root, wanted, range) == 0u);
 	BOOST_TEST(retarget_shape_nodes(root, wanted, range) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AFieldANodeDoesNotHave_IsZero_SoANodeAlreadyAtTheRangeIsNotChanged)
+{
+	scn::prefab_desc::prefab_node root = mesh_node("n", json::object{ { "geometry", "shapes/x.geom.desc" }, { "vx_end", 4 }, { "ind_end", 6 } });
+	json::object range{ { "vx_begin", 0 }, { "vx_end", 4 }, { "ind_begin", 0 }, { "ind_end", 6 } };
+
+	BOOST_TEST(count_stale_shape_nodes(root, "shapes/x.geom.desc", range) == 0u);
+	BOOST_TEST(retarget_shape_nodes(root, "shapes/x.geom.desc", range) == 0u);
+	BOOST_TEST(!root.components.at("mesh").overrides.contains("vx_begin"));
+
+	range["vx_begin"] = 2;
+	BOOST_TEST(count_stale_shape_nodes(root, "shapes/x.geom.desc", range) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ThePredictedRange_IsTheOneTheRebuiltFileHas_AndABadParameterBuildsNothing)
+{
+	std::string error;
+	const std::optional<json::object> range = predicted_range("box", shape_params_to_json(box_params{}), error);
+	BOOST_REQUIRE_MESSAGE(range.has_value(), error);
+	BOOST_TEST(range->at("vx_begin").to_number<int>() == 0);
+	BOOST_TEST(range->at("vx_end").to_number<int>() > 0);
+	BOOST_TEST(range->at("ind_end").to_number<int>() > 0);
+
+	sphere_params sphere;
+	sphere.segments = 2;
+	BOOST_TEST(!predicted_range("sphere", shape_params_to_json(sphere), error).has_value());
+	BOOST_TEST(error != "");
 }
 
 BOOST_AUTO_TEST_CASE(TheRangeOfAnAnswer_NeedsAllFourFields)
@@ -155,13 +185,14 @@ BOOST_AUTO_TEST_CASE(TheRangeOfAnAnswer_NeedsAllFourFields)
 	BOOST_TEST(!range_of_rebuilt(answer).has_value());
 }
 
-BOOST_AUTO_TEST_CASE(TheConfirmation_SaysItCannotBeUndone_HowManyNodesAndWhatStaysUnsaved)
+BOOST_AUTO_TEST_CASE(TheConfirmation_SaysItCannotBeUndone_HowManyNodesChange_AndWhatStaysUnsaved)
 {
 	rebuild_facts facts;
 	facts.poly = "shapes/ball.poly.desc";
 	facts.level_open = true;
 	facts.level_nodes = 3;
 	facts.level_dirty = true;
+	facts.level_agent_changes = true;
 	facts.prefab_open = true;
 	facts.prefab_nodes = 2;
 	facts.prefab_dirty = true;
@@ -175,12 +206,47 @@ BOOST_AUTO_TEST_CASE(TheConfirmation_SaysItCannotBeUndone_HowManyNodesAndWhatSta
 	BOOST_TEST(text.find("not open keep the old range") != std::string::npos);
 	BOOST_TEST(text.find("unsaved changes; they stay unsaved") != std::string::npos);
 	BOOST_TEST(text.find("working copy on top of them") != std::string::npos);
+	BOOST_TEST(text.find("Agent edits nobody accepted") != std::string::npos);
 
 	facts.level_dirty = false;
-	facts.prefab_open = false;
-	const std::string quiet = rebuild_confirmation(facts);
-	BOOST_TEST(quiet.find("unsaved") == std::string::npos);
-	BOOST_TEST(quiet.find("open prefab") == std::string::npos);
+	facts.level_agent_changes = false;
+	facts.prefab_dirty = false;
+	const std::string clean = rebuild_confirmation(facts);
+	BOOST_TEST(clean.find("after the rebuild it has") != std::string::npos);
+	BOOST_TEST(clean.find("Agent edits") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheConfirmation_WithNoNodeChanging_KeepsTheHistory_AndSaysNothingIsUnsaved)
+{
+	rebuild_facts facts;
+	facts.poly = "shapes/ball.poly.desc";
+	facts.level_open = true;
+	facts.level_dirty = true;
+	facts.prefab_open = true;
+	facts.prefab_dirty = true;
+
+	const std::string text = rebuild_confirmation(facts);
+
+	BOOST_TEST(text.find("No mesh node of the open level needs a new range") != std::string::npos);
+	BOOST_TEST(text.find("No mesh node of the open prefab needs a new range") != std::string::npos);
+	BOOST_TEST(text.find("undo history will be cleared") == std::string::npos);
+	BOOST_TEST(text.find("the undo history is kept") != std::string::npos);
+	BOOST_TEST(text.find("unsaved") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheConfirmation_NamesWhyAnOpenPrefabIsLeftAsItIs)
+{
+	rebuild_facts facts;
+	facts.poly = "shapes/ball.poly.desc";
+	facts.prefab_open = true;
+	facts.prefab_nodes = 2;
+	facts.prefab_dirty = true;
+	facts.prefab_blocker = "this prefab belongs to a lower layer";
+
+	const std::string text = rebuild_confirmation(facts);
+
+	BOOST_TEST(text.find("The open prefab keeps the old range of its nodes: this prefab belongs to a lower layer") != std::string::npos);
+	BOOST_TEST(text.find("working copy") == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

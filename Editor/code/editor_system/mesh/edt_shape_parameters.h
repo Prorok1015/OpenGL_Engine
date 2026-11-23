@@ -32,10 +32,13 @@ namespace edt::mesh
 	// `file` is what read_desc_file gave for the poly file of `poly_path`; nothing is read here.
 	shape_parameters load_shape_parameters(std::string poly_path, const desc_file_read& file);
 
-	// How many mesh nodes below `root` (itself included) draw `geometry`; the protocol of a tag does not count.
-	std::size_t count_shape_nodes(const scn::prefab_desc::prefab_node& root, std::string_view geometry);
-	// They take `range` (vx_begin, vx_end, ind_begin, ind_end); the number of nodes whose range was another one.
+	// How many mesh nodes below `root` (itself included) draw `geometry` with a range other than `range` (vx_begin, vx_end, ind_begin, ind_end;
+	// a field a node does not have counts as 0): the nodes a rebuild changes. The protocol of a tag does not count.
+	std::size_t count_stale_shape_nodes(const scn::prefab_desc::prefab_node& root, std::string_view geometry, const boost::json::object& range);
+	// They take `range`; the number of nodes whose range was another one (the number count_stale_shape_nodes gave).
 	std::size_t retarget_shape_nodes(scn::prefab_desc::prefab_node& root, std::string_view geometry, const boost::json::object& range);
+	// The range the one mesh of a shape of `kind` with `params` has once it is built, as the fields above; nullopt, with `error`, when the parameters build nothing.
+	std::optional<boost::json::object> predicted_range(std::string_view kind, const boost::json::object& params, std::string& error);
 	// The range fields of an answer of shape.rebuild.
 	std::optional<boost::json::object> range_of_rebuilt(const boost::json::object& answer);
 
@@ -43,12 +46,17 @@ namespace edt::mesh
 	struct rebuild_facts
 	{
 		std::string poly;
-		std::size_t level_nodes = 0;
-		std::size_t prefab_nodes = 0;
 		bool level_open = false;
+		// Mesh nodes of the open level / prefab whose range the rebuild changes (count_stale_shape_nodes).
+		std::size_t level_nodes = 0;
 		bool level_dirty = false;
+		// Agent edits nobody accepted yet: the history boundary takes their marks away.
+		bool level_agent_changes = false;
 		bool prefab_open = false;
+		std::size_t prefab_nodes = 0;
 		bool prefab_dirty = false;
+		// Why the open prefab is left as it is (Play, a file of a lower layer, a project that may not be written); empty: its nodes follow.
+		std::string prefab_blocker;
 	};
 	std::string rebuild_confirmation(const rebuild_facts& facts);
 

@@ -303,7 +303,12 @@ namespace edt
 					}
 				}
 
-				if (m_component_section && !m_readonly && !effective_type.empty()) m_component_section(effective_type, comp, colors());
+				if (m_component_section && !m_readonly && !effective_type.empty()) {
+					// One set of inputs per node: the fields of a section must not move to another node's when the selection changes.
+					ImGui::PushID(static_cast<int>(node.node_id & 0x7fffffffu));
+					m_component_section(effective_type, comp, colors());
+					ImGui::PopID();
+				}
 				ImGui::PopID();
 				if (m_readonly) ImGui::EndDisabled();
 			}

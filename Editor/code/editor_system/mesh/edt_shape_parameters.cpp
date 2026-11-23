@@ -1,6 +1,7 @@
 #include "edt_shape_parameters.h"
 #include "edt_mesh_io.h"
 #include "edt_mesh_shape_asset.h"
+#include <snk/model_codec/res_tag.h>
 #include <format>
 
 namespace json = boost::json;
@@ -17,18 +18,33 @@ namespace edt::mesh
 			return tag.starts_with(protocol) ? tag.substr(protocol.size()) : tag;
 		}
 
+		std::optional<std::uint64_t> whole_of(const json::value& value)
+		{
+			boost::system::error_code failed;
+			const std::uint64_t number = value.to_number<std::uint64_t>(failed);
+			if (failed) return std::nullopt;
+			return number;
+		}
+
+		// A field a node does not have is 0, as the level's shape.update_nodes reads it: a node without vx_begin that a rebuild gives 0 is not changed.
+		bool has_range(const json::object& fields, const json::object& range)
+		{
+			for (const auto& [field, wanted] : range) {
+				const json::value* have = fields.if_contains(field);
+				const std::optional<std::uint64_t> now = have ? whole_of(*have) : std::optional<std::uint64_t>{ 0 };
+				const std::optional<std::uint64_t> then = whole_of(wanted);
+				if (!now || !then || *now != *then) return false;
+			}
+			return true;
+		}
+
 		bool draws(const scn::prefab_desc::prefab_node& node, std::string_view geometry, const json::object* range, bool* differs)
 		{
 			for (const auto& [key, component] : node.components) {
 				if (component.type_name != "mesh_node_desc") continue;
 				const json::value* tag = component.overrides.if_contains("geometry");
 				if (!tag || !tag->is_string() || without_protocol(std::string_view(tag->as_string())) != geometry) continue;
-				if (range && differs) {
-					for (const auto& [field, value] : *range) {
-						const json::value* have = component.overrides.if_contains(field);
-						if (!have || *have != value) *differs = true;
-					}
-				}
+				if (range && differs && !has_range(component.overrides, *range)) *differs = true;
 				return true;
 			}
 			return false;
@@ -74,10 +90,11 @@ namespace edt::mesh
 		return out;
 	}
 
-	std::size_t count_shape_nodes(const scn::prefab_desc::prefab_node& root, std::string_view geometry)
+	std::size_t count_stale_shape_nodes(const scn::prefab_desc::prefab_node& root, std::string_view geometry, const json::object& range)
 	{
-		std::size_t count = draws(root, without_protocol(geometry), nullptr, nullptr) ? 1u : 0u;
-		for (const auto& child : root.children) count += count_shape_nodes(child, geometry);
+		bool differs = false;
+		std::size_t count = draws(root, without_protocol(geometry), &range, &differs) && differs ? 1u : 0u;
+		for (const auto& child : root.children) count += count_stale_shape_nodes(child, geometry, range);
 		return count;
 	}
 
@@ -99,6 +116,21 @@ namespace edt::mesh
 		return changed;
 	}
 
+	std::optional<json::object> predicted_range(std::string_view kind, const json::object& params, std::string& error)
+	{
+		const std::optional<shape_params> shape = shape_params_from_json(kind, params, error);
+		if (!shape) return std::nullopt;
+		const shape_asset_result made = build_shape_asset(*shape, res::tag::make("probe.geom.desc"));
+		if (!made.files) {
+			error = made.error;
+			return std::nullopt;
+		}
+		const std::optional<material_range> range = poly_text_range(made.files->poly, error);
+		if (!range) return std::nullopt;
+		return json::object{ { "vx_begin", std::uint64_t{ range->vx_begin } }, { "vx_end", std::uint64_t{ range->vx_end } },
+			{ "ind_begin", std::uint64_t{ range->ind_begin } }, { "ind_end", std::uint64_t{ range->ind_end } } };
+	}
+
 	std::optional<json::object> range_of_rebuilt(const json::object& answer)
 	{
 		json::object range;
@@ -113,12 +145,27 @@ namespace edt::mesh
 	std::string rebuild_confirmation(const rebuild_facts& facts)
 	{
 		std::string text = std::format("Rebuild the shape '{}' from these parameters?\n\nBoth its files are written again.", facts.poly);
-		if (facts.level_open) text += std::format("\n{} mesh node(s) of the open level take the new range.", facts.level_nodes);
-		if (facts.prefab_open) text += std::format("\n{} mesh node(s) of the open prefab take the new range.", facts.prefab_nodes);
+		if (facts.level_open) {
+			text += facts.level_nodes > 0 ? std::format("\n{} mesh node(s) of the open level take the new range.", facts.level_nodes)
+				: std::string("\nNo mesh node of the open level needs a new range.");
+		}
+		if (facts.prefab_open) {
+			if (!facts.prefab_blocker.empty()) text += "\nThe open prefab keeps the old range of its nodes: " + facts.prefab_blocker + ".";
+			else if (facts.prefab_nodes > 0) text += std::format("\n{} mesh node(s) of the open prefab take the new range.", facts.prefab_nodes);
+			else text += "\nNo mesh node of the open prefab needs a new range.";
+		}
 		text += "\nNodes in files that are not open keep the old range (they show it in Problems later, #1140).";
-		text += "\n\nRebuild cannot be undone; the level's undo history will be cleared.";
-		if (facts.level_open && facts.level_dirty) text += "\nThe level has unsaved changes; they stay unsaved.";
-		if (facts.prefab_open && facts.prefab_dirty) text += "\nThe prefab has unsaved edits; the rebuild changes its working copy on top of them.";
+		if (facts.level_open && facts.level_nodes > 0) {
+			text += "\n\nRebuild cannot be undone; the level's undo history will be cleared.";
+			text += facts.level_dirty ? "\nThe level has unsaved changes; they stay unsaved." : "\nThe level has no unsaved changes; after the rebuild it has.";
+			if (facts.level_agent_changes) text += "\nAgent edits nobody accepted lose their marks, and an open agent session ends.";
+		} else {
+			text += "\n\nRebuild cannot be undone (its files are written again); the undo history is kept, no node of the level changes.";
+		}
+		if (facts.prefab_open && facts.prefab_blocker.empty() && facts.prefab_nodes > 0) {
+			text += facts.prefab_dirty ? "\nThe prefab has unsaved edits; the rebuild changes its working copy on top of them."
+				: "\nThe prefab has no unsaved edits; after the rebuild it has.";
+		}
 		return text;
 	}
 

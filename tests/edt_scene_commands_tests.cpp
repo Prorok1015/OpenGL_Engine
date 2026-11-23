@@ -710,6 +710,18 @@ BOOST_AUTO_TEST_CASE(shape_update_nodes_gives_the_nodes_that_draw_a_geometry_its
 	BOOST_TEST(call("shape.update_nodes", R"({"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":-1,"ind_begin":0,"ind_end":1})").code == cmd::codes::invalid_args);
 }
 
+BOOST_AUTO_TEST_CASE(shape_update_nodes_that_changes_no_node_keeps_the_history)
+{
+	BOOST_REQUIRE(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"components":{"mesh":{"type":"mesh_node_desc","fields":{"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":24,"ind_begin":0,"ind_end":36}}}})").ok);
+	BOOST_REQUIRE(scene.history().can_undo());
+
+	const auto same = call("shape.update_nodes", R"({"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":24,"ind_begin":0,"ind_end":36})");
+
+	BOOST_REQUIRE_MESSAGE(same.ok, same.error);
+	BOOST_TEST(same.value.at("updated").to_number<int>() == 0);
+	BOOST_TEST(scene.history().can_undo());
+}
+
 BOOST_AUTO_TEST_CASE(copies_get_free_names_and_moves_stay_in_their_world)
 {
 	const std::string crate = ref({ "00000000000000a3" });
