@@ -295,7 +295,7 @@ BOOST_AUTO_TEST_CASE(TheFolderOfAnImportCancelledWithEsc_GoesOnceItsJobStopped)
 	store_late_file();
 
 	frames_until([this] { return files_of_this_run() == 0u; });
-	BOOST_TEST(files_of_this_run() == 0u);
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 	BOOST_TEST(imports == 0);
 }
 
