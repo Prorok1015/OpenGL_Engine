@@ -134,6 +134,8 @@ BOOST_AUTO_TEST_CASE(AStageReferencedByIdOnly_IsNoEmptyStage_ItIsRefused)
 	BOOST_TEST(refused(R"({"__parent":"res://base_material.desc","shader_vertex":{"guid":"6a0e2f1c-3b5d-4e7f-9a1b-2c3d4e5f6a7b"},
 		"shader_fragment":null,"shader_geometry":null})", ids_answering(engine_base_guid)));
 	BOOST_TEST(refused(R"({"shader_vertex":{"guid":"6a0e2f1c-3b5d-4e7f-9a1b-2c3d4e5f6a7b"},"shader_fragment":"res://shaders/scene.frag"})"));
+	// A protocol with no path is no empty stage either.
+	BOOST_TEST(refused(R"({"__parent":"res://base_material.desc","shader_vertex":"res://","shader_fragment":null})", ids_answering(engine_base_guid)));
 }
 
 BOOST_AUTO_TEST_CASE(StagesTheEngineHasNoShaderFor_AreRefused)

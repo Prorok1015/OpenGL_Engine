@@ -52,7 +52,7 @@ namespace
 		}
 		const std::string_view path = reference->path.view();
 		for (const std::string_view protocol : { std::string_view{ "res://" }, std::string_view{ "engine://" } }) {
-			if (path.starts_with(protocol)) {
+			if (path.starts_with(protocol) && path.size() > protocol.size()) {
 				return std::string{ path.substr(protocol.size()) };
 			}
 		}
