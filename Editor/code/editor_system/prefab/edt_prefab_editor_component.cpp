@@ -27,7 +27,7 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 	: m_ports(from)
 {
 	m_panel = std::make_shared<prefab_editor_panel>(m_ports.rnd, m_ports.gui);
-	m_panel->set_on_close([this] { confirm_close([this] { close(); }); });
+	m_panel->set_on_close([this] { request_close(); });
 	m_panel->set_on_cancel_loading([this] { cancel_open(); });
 	m_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_node(path); });
 	m_panel->set_on_apply([this] {
@@ -210,6 +210,11 @@ void edt::prefab_editor_component::close()
 	}
 	m_panel->set_context(nullptr);
 	m_panel->set_open(false);
+}
+
+void edt::prefab_editor_component::request_close()
+{
+	confirm_close([this] { close(); });
 }
 
 void edt::prefab_editor_component::drop_dirty_document()

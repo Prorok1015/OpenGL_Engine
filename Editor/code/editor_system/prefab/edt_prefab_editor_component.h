@@ -70,6 +70,9 @@ namespace edt
 		// (Reload / Overwrite / Cancel) or a variant whose edits need its base dropped (Save without base / Cancel).
 		// `resolved(true)` once it was reloaded or written, `resolved(false)` after Cancel, a failure or when that prefab is not open.
 		void resolve_unsaved(const save_all_ask& ask, std::function<void(bool resolved)> resolved);
+		// The window's close button and the document tab's: closes at once when the prefab has no unapplied edits, else asks Apply /
+		// Discard / Cancel (Cancel keeps it open).
+		void request_close();
 		// Closes the window and the document without asking, the Inspector first: it holds a pointer into the working copy.
 		void close();
 		// Ends the wait for a prefab being opened and leaves the window as it was: a prefab that was open stays open.

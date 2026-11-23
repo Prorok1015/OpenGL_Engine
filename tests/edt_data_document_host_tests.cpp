@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "edt_document_tabs.h"
 #include <snk/command/cmd_registry.h>
 #include "null_engine_fixture.hpp"
 #include "test_temp_dir.hpp"
@@ -1121,6 +1122,43 @@ BOOST_AUTO_TEST_CASE(SaveAll_AMigratedFile_AsksTheVersionAfterTheOthersAreWritte
 	BOOST_REQUIRE(context->dialogs().list().size() == 1u);
 	BOOST_REQUIRE(context->dialogs().answer(context->dialogs().list().front().id, json::object{ { "index", 0 } }).ok);
 	BOOST_TEST(json::parse(read_text("old.desc")).as_object().at("__version").to_number<int>() == 2);
+}
+
+BOOST_AUTO_TEST_CASE(ClosingADirtyDocumentThroughItsTab_AsksFirst_CancelKeepsItAndItsEdits_DiscardCloses)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	make_dirty(open);
+	edt::document_tab_ports ports;
+	ports.request_close_data = [this](edt::document_id closing) { host->request_close(closing); };
+	edt::document_tabs tabs(context->documents(), ports);
+
+	BOOST_TEST(tabs.close(id));
+	BOOST_TEST(open_documents() == 2u);
+	answer_unsaved("cancel");
+	BOOST_TEST(host->owns(id));
+	BOOST_TEST(open.is_dirty());
+
+	BOOST_TEST(tabs.close(id));
+	answer_unsaved("discard");
+	BOOST_TEST(!host->owns(id));
+	BOOST_TEST(open_documents() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ClosingADirtyDocumentThroughItsTab_Save_WritesItThenCloses)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	make_dirty(open);
+	edt::document_tab_ports ports;
+	ports.request_close_data = [this](edt::document_id closing) { host->request_close(closing); };
+	edt::document_tabs tabs(context->documents(), ports);
+
+	BOOST_TEST(tabs.close(id));
+	answer_unsaved("save");
+
+	BOOST_TEST(!host->owns(id));
+	BOOST_TEST(read_text("config.desc").find("5") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
