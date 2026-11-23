@@ -405,11 +405,13 @@ BOOST_AUTO_TEST_CASE(AComponentOfAnOlderVersion_GoesThroughTheStepsOfItsType)
 	BOOST_TEST(snapshot.at("component_versions").at("test.score").as_int64() == 1);
 	// As the module before the reload wrote them: the fields under their old names.
 	json::object& shot = snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object();
-	shot["velocity"] = shot.at("speed");
+	json::value speed = shot.at("speed");
 	shot.erase("speed");
+	shot["velocity"] = std::move(speed);
 	json::object& points = snapshot.at("ctx").as_object().at("test.score").as_object();
-	points["total"] = points.at("points");
+	json::value total = points.at("points");
 	points.erase("points");
+	points["total"] = std::move(total);
 	descs->register_migration("test.bullet", 1, [](json::object& o) { desc::migrations::rename(o, "/velocity", "/speed"); });
 	descs->register_migration("test.score", 1, [](json::object& o) { desc::migrations::rename(o, "/total", "/points"); });
 
