@@ -464,12 +464,29 @@ namespace
 
 	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as it was
 	// before the step is left alone. Empty: done.
+	// A file at the step's source counts as put back only when it is the file the step moved (#1309): another file there
+	// fails the step, so the moved or kept file is never given up for it. Empty: it is the step's file.
+	std::string source_in_the_way(const edt::journal_step& step, const fs::path& root, std::string_view kept_where)
+	{
+		std::string error;
+		const std::string now = hash_file(root, step.from, error);
+		if (!error.empty()) return error;
+		if (now == step.hash) return {};
+		return std::format("a different file is at '{}' now: rename or delete that file, then undo again ({})",
+			step.from, kept_where);
+	}
+
 	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, const move_seams& seams)
 	{
 		std::vector<std::byte> bytes;
+		if (step.kind != edt::journal_step_kind::rewrite) {
+			if (std::string error = injected_failure(seams, "before_undo:" + step.from); !error.empty()) return error;
+		}
 		switch (step.kind) {
 		case edt::journal_step_kind::move:
-			if (exists_on_disk(root, step.from)) return {};
+			if (exists_on_disk(root, step.from)) {
+				return source_in_the_way(step, root, std::format("the moved file stays at '{}'", step.to));
+			}
 			return move_file(root, step.to, step.from);
 		case edt::journal_step_kind::rewrite: {
 			std::string error;
@@ -484,7 +501,9 @@ namespace
 			return write_file(root, step.from, bytes, true);
 		}
 		case edt::journal_step_kind::stash:
-			if (exists_on_disk(root, step.from)) return {};
+			if (exists_on_disk(root, step.from)) {
+				return source_in_the_way(step, root, "the deleted file is kept in the journal");
+			}
 			return restore_file(journal_base(journal_root), in_journal(journal_root, id, step.to), root, step.from,
 				step.hash, seams);
 		}

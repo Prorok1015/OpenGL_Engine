@@ -250,8 +250,9 @@ namespace edt
 		// own change (asset_database::report_self_change), not a delete and a create that somebody else made.
 		std::function<void(std::span<const res::file_change>)> report_self_change;
 		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"), before it is written to the journal; a
-		// non-empty answer fails it. An undo calls it with "unstash:<from>" before it brings a removed file back; the copy that
-		// replaces a rename (see force_copy) calls it with "stash_copied:<from>" / "unstash_copied:<from>" once the copy is read
+		// non-empty answer fails it. Undoing or rolling back a move or delete step calls it first with
+		// "before_undo:<from>"; an undo calls it with "unstash:<from>" before it brings a removed file back; the copy
+		// that replaces a rename (see force_copy) calls it with "stash_copied:<from>" / "unstash_copied:<from>" once the copy is read
 		// and checked, before it is flushed and put in place.
 		std::function<std::string(std::string_view)> fail_step;
 		// Tests: asked with "stash:<from>" (a delete moving the file into the journal) and "unstash:<from>" (an undo moving it back);
