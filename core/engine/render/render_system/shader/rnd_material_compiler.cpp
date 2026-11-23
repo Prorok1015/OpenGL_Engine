@@ -4,6 +4,14 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
+rnd::material_shader_state rnd::read_material_shader(const material_desc& mat)
+{
+	material_shader_state state;
+	state.desc = mat.shader.get();
+	state.failed = !state.desc && mat.shader.has_error();
+	return state;
+}
+
 rnd::shader_config rnd::default_material_compiler::compile(const material_desc& mat, const material_compile_context& ctx)
 {
 	ASSERT_MSG(ctx.textures, "material_compile_context.textures must be set");
@@ -32,13 +40,14 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 	// --- constant_data: the program and defines of the shader desc, with the material's defines ---
 	// An empty program is not drawn (no stage loads). build_compiled_material rebuilds while the shader is still loading.
 	rnd::shader_config::constant_data cdata;
-	if (const auto shader = mat.shader.get()) {
-		cdata = shader->config(mat.defines).cdata;
+	const material_shader_state shader = ctx.shader ? *ctx.shader : read_material_shader(mat);
+	if (shader.desc) {
+		cdata = shader.desc->config(mat.defines).cdata;
 	} else {
 		cdata.defines = mat.defines;
 		if (!mat.shader.is_valid()) {
 			egLOG_WARN("render/material", "'{}' has no shader, it is not drawn", mat.get_tag().view());
-		} else if (mat.shader.has_error()) {
+		} else if (shader.failed) {
 			egLOG_ERROR("render/material", "the shader '{}' of '{}' did not load, the material is not drawn: {}",
 				mat.shader.get_tag().view(), mat.get_tag().view(), mat.shader.error_text());
 		}
@@ -62,13 +71,14 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	out->skinned = skinned;
 	out->texture_generation = textures.generation();
 
-	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned });
+	const material_shader_state shader = read_material_shader(*mat);
+	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned, shader });
 	out->base = variants.intern(cfg.cdata);
 	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);
 	out->runtime = std::move(cfg.rdata);
 
 	// A failed shader is final: rebuilding would only log the same error every frame.
-	if (mat->shader.is_valid() && !mat->shader.is_ready() && !mat->shader.has_error()) {
+	if (mat->shader.is_valid() && !shader.desc && !shader.failed) {
 		out->complete = false;
 	}
 	for (std::size_t idx = 0; idx < mat->samplers_textures.size(); ++idx) {

@@ -1,7 +1,4 @@
 #include <snk/render/rnd_material_migration.h>
-#include <snk/desc/desc_system.h>
-#include <snk/model_codec/res_asset_id.h>
-#include <snk/model_codec/res_reference.h>
 
 #include <array>
 #include <format>
@@ -9,6 +6,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+#include <boost/json/serialize.hpp>
+
+#include <snk/desc/desc_system.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_reference.h>
 
 namespace
 {
@@ -31,13 +34,21 @@ namespace
 
 	constexpr std::array<std::string_view, 3> stage_keys{ "shader_vertex", "shader_fragment", "shader_geometry" };
 
+	bool stage_is_empty(const json::value& value)
+	{
+		return value.is_null() || (value.is_string() && value.as_string().empty());
+	}
+
 	// The path of a stage below the engine's folder, whichever way it is written: "res://x", "engine://x" or {guid, path}.
-	// Empty for null, "" or a form that names no path.
+	// A form that names no path (a reference by ID only, a number) gives a text no engine stage has, so it is refused.
 	std::string stage_path(const json::value& value)
 	{
-		const std::optional<res::reference> reference = res::reference_from_json(value);
-		if (!reference) {
+		if (stage_is_empty(value)) {
 			return {};
+		}
+		const std::optional<res::reference> reference = res::reference_from_json(value);
+		if (!reference || reference->path.view().empty()) {
+			return std::format("<{}>", json::serialize(value));
 		}
 		const std::string_view path = reference->path.view();
 		for (const std::string_view protocol : { std::string_view{ "res://" }, std::string_view{ "engine://" } }) {
@@ -48,8 +59,8 @@ namespace
 		return std::string{ path };
 	}
 
-	// The parent is the engine's base material only when the file it names has the engine's ID: a project file of the same
-	// path, or a parent between them, may set other stages.
+	// The parent is the engine's base material only when the file the project serves at its path has the engine's ID: a
+	// project file of the same path wins over a reference by ID too (R28), and a parent between them may set other stages.
 	bool parent_is_engine_base(const json::object& material, const desc::migration_context& context)
 	{
 		const json::value* parent = material.if_contains("__parent");
@@ -59,9 +70,15 @@ namespace
 		const std::optional<res::asset_id> engine_id = res::asset_id_from_text(base_material_guid);
 		if (parent->is_object()) {
 			const std::optional<res::reference> reference = res::reference_from_json(*parent);
-			return reference && !reference->guid.is_nil() && reference->guid == engine_id;
+			const bool names_base = reference && reference->guid == engine_id
+				&& (reference->path.view().empty() || reference->path.view() == base_material_path);
+			if (!names_base) {
+				return false;
+			}
+		} else if (!parent->is_string() || parent->as_string() != base_material_path) {
+			return false;
 		}
-		return parent->is_string() && parent->as_string() == base_material_path && context.id_of(base_material_path) == engine_id;
+		return context.id_of(base_material_path) == engine_id;
 	}
 
 	std::string described(std::string_view vertex, std::string_view fragment, std::string_view geometry)

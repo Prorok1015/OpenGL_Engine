@@ -257,6 +257,20 @@ BOOST_AUTO_TEST_CASE(AShaderStillLoadingLeavesTheInstanceIncompleteUntilItLoads)
 	BOOST_TEST(variants.resolve(loaded->base).program.get_fragment_shader().string() == "res://shaders/scene.frag");
 }
 
+// build_compiled_material reads the shader once and hands that state to compile: a shader that finishes loading between
+// two reads must not give an empty program marked complete.
+BOOST_AUTO_TEST_CASE(CompileUsesTheShaderStateItIsHanded_NotASecondRead)
+{
+	const auto desc = make_desc();
+	BOOST_REQUIRE(desc->shader.is_ready());
+
+	rnd::material_compile_context still_loading{ &textures(), false, rnd::material_shader_state{} };
+	BOOST_TEST(has_no_stage(compiler()->compile(*desc, still_loading).cdata));
+
+	rnd::material_compile_context loaded{ &textures(), false, rnd::read_material_shader(*desc) };
+	BOOST_TEST(compiler()->compile(*desc, loaded).cdata.program.get_vertex_shader().string() == "res://shaders/scene.vert");
+}
+
 // A shader that failed is final: the instance is complete with no program (not drawn) and is not compiled again.
 BOOST_AUTO_TEST_CASE(AShaderThatFailedToLoadIsNotDrawnAndNotRetried)
 {

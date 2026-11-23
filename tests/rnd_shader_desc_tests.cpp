@@ -315,22 +315,19 @@ BOOST_AUTO_TEST_CASE(AMaterialRefersToAProgram)
 	BOOST_TEST(ser(*by_tag).at("shader").as_string() == "memory://t/ref.shader.desc");
 }
 
-BOOST_AUTO_TEST_CASE(AnInlineProgramInAMaterial_IsRefusedWithAWarning)
+// Emptied instead, the material would be saved without its shader and lose it for good.
+BOOST_AUTO_TEST_CASE(AnInlineProgramInAMaterial_RefusesTheLoad)
 {
 	put("inline.mat.desc", R"({"__type":"material_desc","queue":"transparent","shader":{"__type":"shader_desc",
 		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag"}})");
-	const auto material = load<scn::material_desc>(tag_of("inline.mat.desc"));
-	BOOST_REQUIRE(material);
-	BOOST_TEST(!material->shader.is_valid());
-	BOOST_TEST((material->queue == scn::pass_queue::TRANSPARENT));	// the rest of the file is read
-	BOOST_TEST(!ser(*material).contains("shader"));
+	BOOST_TEST(!load<scn::material_desc>(tag_of("inline.mat.desc")));
 
 	const auto items = diagnostics_of(tag_of("inline.mat.desc"));
 	const res::diagnostic* refused = at(items, "/shader");
 	BOOST_REQUIRE_MESSAGE(refused, "no diagnostic at /shader");
-	BOOST_TEST((refused->severity == res::diagnostic_severity::warning));
+	BOOST_TEST((refused->severity == res::diagnostic_severity::error));
 	BOOST_TEST(refused->kind == res::diagnostic_kind::reference);
-	BOOST_TEST(refused->resource == std::string{ tag_of("inline.mat.desc").view() });
+	BOOST_TEST(refused->reason.find("inline shader_desc") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

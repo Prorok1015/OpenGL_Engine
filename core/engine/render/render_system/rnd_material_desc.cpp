@@ -16,15 +16,13 @@ void rnd::material_desc::deserialize(desc::desc_system& desc_system, const json:
 		rest["queue"] = json::value();
 	}
 
-	// The generic desc_ref reader would store an inline shader as a memory copy of this material: a program is shared by
-	// the materials that draw with it, so only a reference to a .shader.desc is taken.
+	// A program is shared by the materials that draw with it, so only a reference to a .shader.desc is taken. The load is
+	// refused rather than the field emptied: a saved material without its shader would lose it for good.
 	if (const auto* shader = rest.if_contains("shader"); shader && shader->is_object()) {
 		const auto* type = shader->as_object().if_contains("__type");
 		if (type && type->is_string()) {
-			constexpr std::string_view why = "an inline shader_desc is not allowed in a material: refer to a .shader.desc file";
-			egLOG_WARN("render/material", "'{}': {}, the material has no shader", get_tag().view(), why);
-			res::report_load_warning(res::diagnostic_kind::reference, "/shader", std::string{ why });
-			rest["shader"] = "";
+			throw res::load_error(res::diagnostic_kind::reference, "/shader",
+				"an inline shader_desc is not allowed in a material: refer to a .shader.desc file");
 		}
 	}
 
