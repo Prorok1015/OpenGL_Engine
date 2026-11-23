@@ -50,4 +50,29 @@ namespace platform::beneath {
 		return folder_entry::through_filter;
 	}
 
+	enum class tree_entry : std::uint8_t { remove_itself, walk, walk_through_filter, refused };
+
+	// What the Windows tree removal (#1294) does with an entry it opened as itself, decided as folder_entry_of decides
+	// a folder of the walk: a plain folder is walked, one a filter keeps in place is walked through the filter, a file
+	// is removed. A link, a junction or any other tag is never entered: at the top of the tree (`top`) it is refused,
+	// inside it is removed as itself.
+	constexpr tree_entry tree_entry_of(std::uint32_t attributes, bool tag_known, std::uint32_t tag, bool top)
+	{
+		const bool reparse_point = (attributes & k_file_attribute_reparse_point) != 0;
+		if ((attributes & k_file_attribute_directory) == 0) {
+			const bool kept_in_place = !reparse_point || (tag_known && reparse_tag_kept_in_place(tag));
+			return top && !kept_in_place ? tree_entry::refused : tree_entry::remove_itself;
+		}
+		switch (folder_entry_of(attributes, tag_known, tag)) {
+		case folder_entry::enter:
+			return tree_entry::walk;
+		case folder_entry::through_filter:
+			return tree_entry::walk_through_filter;
+		case folder_entry::not_a_folder:
+		case folder_entry::refused:
+			break;
+		}
+		return top ? tree_entry::refused : tree_entry::remove_itself;
+	}
+
 }

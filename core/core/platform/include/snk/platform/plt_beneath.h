@@ -107,6 +107,20 @@ namespace platform::beneath {
 	// failed; on failure the file stays where it was.
 	SNK_API std::string rename_beneath(pinned_root& root, const rename_request& request);
 
+	// Makes `folder` below the root with every missing folder on the way, each made or opened from the one above it
+	// without following a link (Windows: no link or junction): one on the way, or anything but a folder, is an error.
+	// `must_be_new`: the last folder must not exist yet, so a name is taken exclusively. Empty on success, else why it
+	// failed (the folders made before the failure stay).
+	SNK_API std::string make_folders_beneath(pinned_root& root, const std::filesystem::path& folder,
+		bool must_be_new = false);
+
+	// Removes `leaf` in `folder` below the root and everything in it (#1294). The way to `folder` is opened without
+	// following a link and `leaf` must not be one; inside the tree every folder is opened from the one above it as
+	// itself, so a link or a junction met there is removed as the link, never entered. Read-only files go too. Nothing
+	// there: success. Empty on success, else why it failed; what was removed before the failure stays removed.
+	SNK_API std::string remove_tree_beneath(pinned_root& root, const std::filesystem::path& folder,
+		const std::filesystem::path& leaf);
+
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 
 	// A file as its open handle saw it. The change time cannot be set back by a tool, unlike the write time.
