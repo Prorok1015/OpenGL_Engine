@@ -115,10 +115,12 @@ namespace
 		void migration_rows(const prefab_node& node, const std::string& pointer)
 		{
 			for (const scn::stale_override& stale : scn::find_stale_records(*assembler, node)) {
-				const bool dropped = stale.why == scn::stale_override::reason::dropped_by_migration;
-				if (!dropped && stale.why != scn::stale_override::reason::duplicated_by_migration) continue;
-				// A dropped edit is gone, the steps said so; a duplicated one is not applied at all until a person decides.
-				const res::diagnostic_severity severity = dropped ? res::diagnostic_severity::warning : res::diagnostic_severity::error;
+				using reason = scn::stale_override::reason;
+				const bool duplicated = stale.why == reason::duplicated_by_migration;
+				if (!duplicated && stale.why != reason::dropped_by_migration && stale.why != reason::not_migrated) continue;
+				// A dropped edit is gone and one the steps cannot follow is applied as written; a duplicated one is not applied at all
+				// until a person decides.
+				const res::diagnostic_severity severity = duplicated ? res::diagnostic_severity::error : res::diagnostic_severity::warning;
 				out.push_back({ severity, "override", file, pointer, std::format("node '{}': {}", shown_name(node), stale.what) });
 			}
 		}

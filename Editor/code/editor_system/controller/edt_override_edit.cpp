@@ -193,9 +193,15 @@ namespace
 				return;
 			}
 			if (parsed->type_version == 0) {
-				written.as_object()["version"] = m_descs.current_version(type);
-				// The insert may have moved the members.
-				value = written.as_object().if_contains("value");
+				// Only what loading would stamp: a type no layer knows, or a field the type no longer has, stays without a
+				// version, or its steps would run on it again later.
+				scn::override_record stamped = *parsed;
+				const scn::record_migration outcome = scn::migrate_override_record(m_descs, type, stamped).outcome;
+				if (outcome == scn::record_migration::kept && stamped.type_version > 0) {
+					written.as_object()["version"] = stamped.type_version;
+					// The insert may have moved the members.
+					value = written.as_object().if_contains("value");
+				}
 			}
 			const desc::type_schema* schema = m_descs.find_schema(type);
 			if (!schema) return;
@@ -508,7 +514,7 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 	}
 	std::vector<bool> known(owner.overrides.size(), false);
 	for (const scn::stale_override& entry : scn::find_stale_records(*m_services.assembler(), owner)) {
-		found.push_back({ entry.index, entry.what });
+		found.push_back({ entry.index, entry.what, entry.why == scn::stale_override::reason::duplicated_by_migration });
 		if (entry.index < known.size()) known[entry.index] = true;
 	}
 	if (const desc::desc_system* descs = m_services.descs()) {
@@ -526,16 +532,17 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 			}
 			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
 			if (!schema || schema->fields.empty()) continue;
-			// Judged where the steps of the type put it: a record of an older version names a field by its old path.
+			// Judged where the steps of the type put it: a record of an older version names a field by its old path. One the
+			// steps cannot follow is judged as written.
 			scn::override_record migrated = record;
 			const scn::record_migration outcome = scn::migrate_override_record(*descs, type, migrated).outcome;
-			if (outcome != scn::record_migration::kept && outcome != scn::record_migration::moved) continue;
+			if (outcome != scn::record_migration::kept && outcome != scn::record_migration::moved) migrated = record;
 			const std::optional<json::object> patch = field_patch(migrated);
 			if (!patch) continue;
 			const desc::override_failure failure = desc::check_override_object(*schema, *patch, nullptr, &descs->schemas());
 			if (failure.status == desc::override_status::stale) {
 				found.push_back({ i, std::format("field {} is not in component '{}' any more",
-					failure.pointer.empty() ? (migrated.path.empty() ? std::string{ "(whole)" } : migrated.path) : failure.pointer, record.component) });
+					failure.pointer.empty() ? (migrated.path.empty() ? std::string{ "(whole)" } : migrated.path) : failure.pointer, record.component), false });
 			}
 		}
 	}

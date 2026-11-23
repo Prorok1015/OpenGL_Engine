@@ -1666,6 +1666,33 @@ BOOST_AUTO_TEST_CASE(Open_GivesARecordWithoutAVersion_TheCurrentOne_AndStaysClea
 	BOOST_TEST(!document->is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(Apply_WritesAMovedRecordAtItsNewPath_AndAReopenFindsItThereAtTheCurrentVersion_Clean)
+{
+	BOOST_REQUIRE(register_versioned(*descs) != nullptr);
+	write_versioned_prefabs(res_root, R"([{"target":["00000000000000a1"],"component":"probe","path":"/health","value":7,"version":1}])");
+	const res::tag user = res::tag::make("prefabs/user.prefab.desc");
+	document->open(user);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->is_dirty());
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(!document->is_dirty());
+	const std::string written = text_of(res_root, "prefabs/user.prefab.desc");
+	BOOST_TEST(written.find("\"/hp\"") != std::string::npos);
+	BOOST_TEST(written.find("\"/health\"") == std::string::npos);
+
+	document->close();
+	document->open(user);
+	BOOST_REQUIRE(document->is_open());
+	const scn::prefab_desc::prefab_node& inst = document->working()->get_root().children.at(0);
+	BOOST_REQUIRE(inst.overrides.size() == 1u);
+	BOOST_TEST(inst.overrides[0].path == "/hp");
+	BOOST_TEST(inst.overrides[0].type_version == 2);
+	BOOST_TEST(inst.overrides[0].value.to_number<int>() == 7);
+	BOOST_TEST(!document->is_dirty());
+}
+
 BOOST_AUTO_TEST_CASE(WriteComponent_StampsTheRecordsWithTheCurrentTypeVersion)
 {
 	const desc::type_schema* schema = register_versioned(*descs);

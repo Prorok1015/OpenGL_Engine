@@ -34,6 +34,8 @@ namespace edt::override_edit
 	struct stale_record {
 		std::size_t index = 0;
 		std::string what;
+		// The steps of its type put its value in more than one place: a person decides, "Clear stale overrides" leaves it.
+		bool keep_on_clear = false;
 	};
 
 	// A node of an instance as the hierarchy lists it: no children, `has_children` says whether it has some.
@@ -65,7 +67,7 @@ namespace edt::override_edit
 		// The records of `owner` that find nothing to change in the prefab any more, kept like the others: the node and component
 		// level from scn::find_stale_records, then the field level: a `set` record whose pointer the schema of the component it
 		// sets (as the base content defines it) no longer has (desc::check_override_object: silent), judged at the record's path after the
-		// steps of that type (scn::migrate_override_record). A node that instantiates no prefab has none.
+		// steps of that type (scn::migrate_override_record), or as written where the steps cannot follow it. A node that instantiates no prefab has none.
 		std::shared_ptr<const std::vector<stale_record>> stale(const prefab_node& owner);
 
 	private:
