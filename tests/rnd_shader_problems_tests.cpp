@@ -389,7 +389,9 @@ BOOST_AUTO_TEST_CASE(AHugeLineAndAFloodOfErrorsAreBounded)
 	const auto started = std::chrono::steady_clock::now();
 	BOOST_TEST(shaders.program(huge) == nullptr);
 	BOOST_TEST(shaders.program(flood) == nullptr);
-	BOOST_TEST(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
+	// BOOST_TEST would print the time_point operand, which has no operator<<.
+	const bool within_ten_seconds = std::chrono::steady_clock::now() - started < std::chrono::seconds(10);
+	BOOST_TEST(within_ten_seconds);
 
 	const auto problems = shaders.problems();
 	BOOST_REQUIRE(problems.size() == 1u + 101u);
