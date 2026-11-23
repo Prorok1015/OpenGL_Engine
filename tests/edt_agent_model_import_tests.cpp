@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 // The model import an agent asks for (#548): the file a person is shown is the file that is imported, nothing is
@@ -137,6 +138,15 @@ struct import_fixture : test_util::scene_env
 		tasks.drain_main();
 	}
 
+	// The last step of a job runs on the main thread after its worker finishes; under ASan one drain can come before it.
+	void run_jobs_until_settled(std::uint64_t job, std::chrono::milliseconds limit = std::chrono::seconds(10))
+	{
+		const auto deadline = std::chrono::steady_clock::now() + limit;
+		for (run_jobs(); jobs.is_running(job) && std::chrono::steady_clock::now() < deadline; run_jobs()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+	}
+
 	edt::agent_import_request request(const std::string& name = {}, const std::string& folder = {}) const
 	{
 		return { source.string(), name, folder };
@@ -144,7 +154,7 @@ struct import_fixture : test_util::scene_env
 
 	json::object finished(std::uint64_t job)
 	{
-		run_jobs();
+		run_jobs_until_settled(job);
 		const auto info = jobs.info(job);
 		BOOST_REQUIRE(info.has_value());
 		BOOST_REQUIRE_MESSAGE(info->status == edt::job_status::done, info->error);
@@ -629,7 +639,7 @@ BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	BOOST_CHECK_GT(started.job, 0u);
 
-	run_jobs();
+	run_jobs_until_settled(started.job);
 	const auto info = jobs.info(started.job);
 	BOOST_REQUIRE(info.has_value());
 	BOOST_REQUIRE_MESSAGE(info->status == edt::job_status::done, info->error);
