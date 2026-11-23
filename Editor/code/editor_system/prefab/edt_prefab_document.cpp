@@ -297,6 +297,11 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", m_source_tag.view()));
 	}
 	if (on_disk.version != m_disk_version) {
+		// The watcher may not have said so yet: the file is known to differ now, and Save All's question depends on the flag.
+		if (!m_changed_on_disk) {
+			m_changed_on_disk = true;
+			announce();
+		}
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", m_source_tag.view()));
 	}
 	std::string why;
