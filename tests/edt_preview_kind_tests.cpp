@@ -344,7 +344,7 @@ BOOST_AUTO_TEST_CASE(ASingleKindReplacesTheOtherSingleKinds_ButNeverTheDocuments
 	auto prefab = kinds.add_preview(std::move(multi));
 	preview_counters other_counters;
 	auto model = kinds.add_preview(preview_kind("model", ".glb", model_counters));
-	auto module = kinds.add_preview(preview_kind("module", ".mod", other_counters));
+	auto mod_kind = kinds.add_preview(preview_kind("module", ".mod", other_counters));
 	documents.set_preview_kinds(kinds, services, &problems);
 	documents.open_preview(res::tag::make("a.prefab.desc"));
 
