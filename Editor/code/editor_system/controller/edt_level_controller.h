@@ -115,7 +115,8 @@ namespace edt
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;
 		bool write_level_to_disk(const std::string& rel_path);
-		void populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res);
+		// Returns how many records of the worlds' prefab instances it moved to the current versions of their types (#1255).
+		std::size_t populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res);
 		// The level manager rebuilt the desc worlds on a hot reload: realign the world arrays with the level.
 		void resync_worlds_after_reload();
 

@@ -1,6 +1,7 @@
 #include "edt_prefab_document.h"
 #include "edt_code_commands.h"
 #include "edt_prefab_file_edit.h"
+#include "edt_override_edit.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
@@ -99,7 +100,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// The preview shows the working copy: an edit changes it, never the desc the resource cache holds.
 	m_working = std::make_unique<scn::prefab_desc>();
-	take_from(*prefab_handle);
+	std::string as_read = take_from(*prefab_handle);
 	static std::atomic<std::uint64_t> s_opened{ 0 };
 	m_working_tag = std::format("{}/{}", k_working_tag_base, ++s_opened);
 
@@ -114,9 +115,9 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	m_open = true;
 	// Built again as content of the edited file, as every later sync is: a reference back to it is refused at once.
 	sync_preview();
-	m_dirty = false;
+	m_saved_form = std::move(as_read);
+	m_dirty = working_form() != m_saved_form;
 	m_changed_on_disk = false;
-	m_saved_form = working_form();
 	m_disk_version.clear();
 	m_lower_layer = false;
 	if (m_files.top_layer) {
@@ -153,12 +154,19 @@ void edt::prefab_document::close()
 }
 
 // copy_to leaves out what names a file (the tag, the __guid, the __parent): the copy is written back over that file.
-void edt::prefab_document::take_from(const scn::prefab_desc& source)
+std::string edt::prefab_document::take_from(const scn::prefab_desc& source)
 {
 	++m_replaced;
 	source.copy_to(*m_working);
 	m_working->set_guid(source.get_guid());
 	m_working->set_parent(source.get_parent());
+	const scn::ecs_assembler* assembler = m_services.assembler();
+	std::string as_read = working_form();
+	if (!assembler) return as_read;
+	std::size_t moved = 0;
+	override_edit::migrate_instance_records(*assembler, m_working->get_root(), &moved);
+	// A record that only got the current version is written with it by the next Apply; it does not make the copy edited.
+	return moved > 0 ? as_read : working_form();
 }
 
 // What the copy holds, without a file read: the "is it edited" test runs on every edit, an Apply builds the bytes.
@@ -447,12 +455,11 @@ std::string edt::prefab_document::revert()
 	if (!handle.is_ready()) {
 		return std::format("{} could not be loaded", m_source_tag.view());
 	}
-	take_from(*handle);
+	m_saved_form = take_from(*handle);
 	++m_generation;
 	sync_preview();
-	m_saved_form = working_form();
 	m_disk_version = std::move(version);
-	m_dirty = false;
+	m_dirty = working_form() != m_saved_form;
 	m_changed_on_disk = false;
 	announce();
 	return {};

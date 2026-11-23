@@ -182,4 +182,52 @@ BOOST_AUTO_TEST_CASE(TheSameCycleInTwoWorlds_GivesARowAtTheNodeOfEach_AnInlineWo
 	BOOST_TEST(rows[1].json_path == "/worlds/1/children/0");
 }
 
+// #1255: a record that a step of its component's type removes, or puts in two places, is a row at its instance node.
+BOOST_AUTO_TEST_CASE(ARecordAStepRemoves_IsAWarningRow_AtItsNode)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object& o) { o.erase("legacy"); });
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000f1","name":"tip","components":{"stat":{"__type":"stat_desc","__version":2,"hp":3}}}]})");
+	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},
+		"overrides":[{"target":["00000000000000f1"],"component":"stat","path":"/legacy","value":true,"version":1}]})");
+	BOOST_REQUIRE(world);
+	const std::vector<edt::instance_world> worlds{ { world.get(), "memory://t/w.desc", "" } };
+
+	BOOST_TEST(edt::instance_diagnostics(worlds).empty());
+	const auto rows = edt::instance_diagnostics(worlds, assembler.get());
+
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST((rows[0].severity == res::diagnostic_severity::warning));
+	BOOST_TEST(rows[0].resource == "memory://t/w.desc");
+	BOOST_TEST(rows[0].json_path == "/children/0");
+	BOOST_TEST(rows[0].reason.starts_with("node 'N': "));
+	BOOST_TEST(rows[0].reason.find("/legacy") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ARecordACppStepCopiesToTwoPlaces_IsAnErrorRow_AtItsNode)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object& o) {
+		if (const auto* hp = o.if_contains("hp")) {
+			const boost::json::value value = *hp;
+			o["health"] = value;
+			o["max_health"] = value;
+			o.erase("hp");
+		}
+	});
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000f1","name":"tip","components":{"stat":{"__type":"stat_desc","__version":2,"label":"x"}}}]})");
+	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},
+		"overrides":[{"target":["00000000000000f1"],"component":"stat","path":"/hp","value":5,"version":1}]})");
+	BOOST_REQUIRE(world);
+	const std::vector<edt::instance_world> worlds{ { world.get(), "memory://t/w.desc", "" } };
+
+	const auto rows = edt::instance_diagnostics(worlds, assembler.get());
+
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST((rows[0].severity == res::diagnostic_severity::error));
+	BOOST_TEST(rows[0].json_path == "/children/0");
+	BOOST_TEST(rows[0].reason.starts_with("node 'N': "));
+	BOOST_TEST(rows[0].reason.find("/hp") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

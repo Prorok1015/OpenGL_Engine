@@ -192,6 +192,11 @@ namespace
 					parsed->component, parsed->path);
 				return;
 			}
+			if (parsed->type_version == 0) {
+				written.as_object()["version"] = m_descs.current_version(type);
+				// The insert may have moved the members.
+				value = written.as_object().if_contains("value");
+			}
 			const desc::type_schema* schema = m_descs.find_schema(type);
 			if (!schema) return;
 			if (!parsed->path.empty()) {
@@ -521,12 +526,16 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 			}
 			const desc::type_schema* schema = type.empty() ? nullptr : descs->find_schema(type);
 			if (!schema || schema->fields.empty()) continue;
-			const std::optional<json::object> patch = field_patch(record);
+			// Judged where the steps of the type put it: a record of an older version names a field by its old path.
+			scn::override_record migrated = record;
+			const scn::record_migration outcome = scn::migrate_override_record(*descs, type, migrated).outcome;
+			if (outcome != scn::record_migration::kept && outcome != scn::record_migration::moved) continue;
+			const std::optional<json::object> patch = field_patch(migrated);
 			if (!patch) continue;
 			const desc::override_failure failure = desc::check_override_object(*schema, *patch, nullptr, &descs->schemas());
 			if (failure.status == desc::override_status::stale) {
 				found.push_back({ i, std::format("field {} is not in component '{}' any more",
-					failure.pointer.empty() ? (record.path.empty() ? std::string{ "(whole)" } : record.path) : failure.pointer, record.component) });
+					failure.pointer.empty() ? (migrated.path.empty() ? std::string{ "(whole)" } : migrated.path) : failure.pointer, record.component) });
 			}
 		}
 	}
@@ -613,6 +622,8 @@ void edt::override_edit::write_component(
 	erase_records(owner, target, component);
 
 	std::vector<scn::override_record> whole;
+	// The records follow the type as it is now (#1255).
+	const int version = descs && schema ? descs->current_version(schema->name) : 0;
 	const json::value base_value(base);
 	const json::value edited_value(edited);
 	const std::vector<std::string> replaced = descs && schema ? whole_values(*descs, *schema, base_value, edited_value) : std::vector<std::string>{};
@@ -633,6 +644,7 @@ void edt::override_edit::write_component(
 		record.component = component;
 		record.path = pointer;
 		record.value = *now;
+		record.type_version = version;
 		whole.push_back(std::move(record));
 	}
 
@@ -641,6 +653,7 @@ void edt::override_edit::write_component(
 		record.target.assign(target.begin(), target.end());
 		record.component = component;
 		record.value = std::move(changed);
+		record.type_version = version;
 		owner.overrides.push_back(std::move(record));
 	}
 	// After the record of the whole component: applied later, each sets its value over what that one merged.
@@ -734,8 +747,12 @@ namespace
 		const auto same = std::ranges::find_if(records, [&record] (const scn::override_record& held) {
 			return held.op == record.op && held.component == record.component && held.path == record.path && held.target == record.target;
 		});
-		if (same != records.end()) *same = std::move(record);
-		else records.push_back(std::move(record));
+		if (same != records.end()) {
+			record.type_version = std::max(record.type_version, same->type_version);
+			*same = std::move(record);
+		} else {
+			records.push_back(std::move(record));
+		}
 	}
 
 	// A node that instantiates a prefab, also while the handle of that prefab is still loading: then the type name of the component tells.
@@ -804,4 +821,33 @@ std::size_t edt::override_edit::count_instances(const std::vector<scn::world_des
 	std::size_t total = 0;
 	for (const scn::world_desc& world : worlds) total += count_in(world.get_root(), tag);
 	return total;
+}
+
+namespace
+{
+	void migrate_below(const scn::ecs_assembler& assembler, prefab_node& node, std::size_t& changed, std::size_t& moved)
+	{
+		// A document just read may still be loading the prefabs its nodes instantiate.
+		for (const auto& entry : node.components) {
+			const auto& comp = entry.second;
+			if (comp.type_name.empty() || comp.type_name == scn::prefab_desc::__type) comp.parent_desc.wait();
+		}
+		if (edt::override_edit::referenced_prefab(node) && !node.overrides.empty()) {
+			const std::vector<scn::override_record> before = node.overrides;
+			changed += scn::migrate_records(assembler, node);
+			for (std::size_t i = 0; i < before.size() && i < node.overrides.size(); ++i) {
+				if (before[i].path != node.overrides[i].path || before[i].value != node.overrides[i].value) ++moved;
+			}
+		}
+		for (prefab_node& child : node.children) migrate_below(assembler, child, changed, moved);
+	}
+}
+
+std::size_t edt::override_edit::migrate_instance_records(const scn::ecs_assembler& assembler, prefab_node& root, std::size_t* moved)
+{
+	std::size_t changed = 0;
+	std::size_t moved_here = 0;
+	migrate_below(assembler, root, changed, moved_here);
+	if (moved) *moved = moved_here;
+	return changed;
 }

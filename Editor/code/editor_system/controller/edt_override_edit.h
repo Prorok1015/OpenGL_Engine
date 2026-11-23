@@ -64,7 +64,8 @@ namespace edt::override_edit
 		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
 		// The records of `owner` that find nothing to change in the prefab any more, kept like the others: the node and component
 		// level from scn::find_stale_records, then the field level: a `set` record whose pointer the schema of the component it
-		// sets (as the base content defines it) no longer has (desc::check_override_object: silent). A node that instantiates no prefab has none.
+		// sets (as the base content defines it) no longer has (desc::check_override_object: silent), judged at the record's path after the
+		// steps of that type (scn::migrate_override_record). A node that instantiates no prefab has none.
 		std::shared_ptr<const std::vector<stale_record>> stale(const prefab_node& owner);
 
 	private:
@@ -163,6 +164,11 @@ namespace edt::override_edit
 	std::size_t count_instances(const std::vector<scn::world_desc>& worlds, const res::tag& tag);
 
 	bool has_record(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component);
+
+	// scn::migrate_records on every node below `root` (itself included) that instantiates a prefab: what the editor does to a document
+	// it loads, since a step of the file cannot see the type an instance's record edits (#1255). Returns how many records changed;
+	// `moved`, if given, receives how many of them changed their path or value (the rest only got the current version).
+	std::size_t migrate_instance_records(const scn::ecs_assembler& assembler, prefab_node& root, std::size_t* moved = nullptr);
 
 	// "Reset to base": drops the records of (target, component). True if there were any.
 	bool reset(prefab_node& owner, std::span<const uint64_t> target, const std::string& component);

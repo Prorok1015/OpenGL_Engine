@@ -17,6 +17,7 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/desc/desc_schema.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
@@ -1594,6 +1595,92 @@ BOOST_AUTO_TEST_CASE(RebuildShape_ForAPrefabOfALowerLayer_LeavesItAsItIsAndSaysW
 	BOOST_REQUIRE(report.notes.size() == 1u);
 	BOOST_TEST(report.notes[0].find("lower") != std::string::npos);
 	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
+}
+
+// #1255: the records of an instance are written against a version of their component's type; the document brings them to the
+// current one when it reads the file.
+namespace {
+
+const char* const k_versioned_schema = R"({ "name": "probe.versioned", "kind": "component", "version": 2,
+	"fields": [ { "name": "hp", "kind": "i32", "default": 1 }, { "name": "armor", "kind": "i32", "default": 0 } ],
+	"migrations": [ { "from": 1, "rename": { "/health": "/hp" } } ] })";
+
+const desc::type_schema* register_versioned(desc::desc_system& descs)
+{
+	const boost::json::object text = boost::json::parse(k_versioned_schema).as_object();
+	return descs.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array());
+}
+
+// v.prefab holds node a1 with a probe.versioned component; user.prefab instantiates it with `records`.
+void write_versioned_prefabs(const fs::path& root, std::string_view records)
+{
+	prefab_edit_fixture::write(root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000a1","name":"arm","components":{"probe":{"__type":"probe.versioned","__version":2,"hp":1}}}]})");
+	std::string user = R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/v.prefab.desc"}},
+		 "overrides":)";
+	user.append(records);
+	user.append("}]}");
+	prefab_edit_fixture::write(root, "prefabs/user.prefab.desc", user);
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(Open_MovesARecordOfAnOlderTypeVersion_ToWhereTheRenameStepPutTheField)
+{
+	BOOST_REQUIRE(register_versioned(*descs) != nullptr);
+	write_versioned_prefabs(res_root, R"([{"target":["00000000000000a1"],"component":"probe","path":"/health","value":7,"version":1}])");
+
+	document->open(res::tag::make("prefabs/user.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+
+	scn::prefab_desc::prefab_node& inst = document->working()->get_root().children[0];
+	BOOST_REQUIRE(inst.overrides.size() == 1u);
+	BOOST_TEST(inst.overrides[0].path == "/hp");
+	BOOST_TEST(inst.overrides[0].type_version == 2);
+	BOOST_TEST(inst.overrides[0].value.to_number<int>() == 7);
+	// The file still holds the old path: the next Apply writes the new one.
+	BOOST_TEST(document->is_dirty());
+
+	namespace oe = edt::override_edit;
+	const std::vector<std::uint64_t> target{ 0xa1 };
+	const auto base = oe::find_base_node(*assembler, inst, target, res::tag::make("prefabs/user.prefab.desc"));
+	BOOST_REQUIRE(base.has_value());
+	const boost::json::object shown = oe::effective_component(inst, target, "probe", oe::component_json(base->components.at("probe")));
+	BOOST_REQUIRE(shown.contains("hp"));
+	BOOST_TEST(shown.at("hp").to_number<int>() == 7);
+}
+
+BOOST_AUTO_TEST_CASE(Open_GivesARecordWithoutAVersion_TheCurrentOne_AndStaysClean)
+{
+	BOOST_REQUIRE(register_versioned(*descs) != nullptr);
+	write_versioned_prefabs(res_root, R"([{"target":["00000000000000a1"],"component":"probe","path":"/armor","value":3}])");
+
+	document->open(res::tag::make("prefabs/user.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+
+	const scn::prefab_desc::prefab_node& inst = document->working()->get_root().children[0];
+	BOOST_REQUIRE(inst.overrides.size() == 1u);
+	BOOST_TEST(inst.overrides[0].path == "/armor");
+	BOOST_TEST(inst.overrides[0].type_version == 2);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(WriteComponent_StampsTheRecordsWithTheCurrentTypeVersion)
+{
+	const desc::type_schema* schema = register_versioned(*descs);
+	BOOST_REQUIRE(schema != nullptr);
+	namespace oe = edt::override_edit;
+	scn::prefab_desc::prefab_node owner;
+	const std::vector<std::uint64_t> target{ 0xa1 };
+	const boost::json::object base{ { "hp", 1 }, { "armor", 0 } };
+	const boost::json::object edited{ { "hp", 4 }, { "armor", 0 } };
+
+	oe::write_component(owner, target, "probe", base, edited, descs.get(), schema);
+
+	BOOST_REQUIRE(owner.overrides.size() == 1u);
+	BOOST_TEST(owner.overrides[0].type_version == 2);
+	BOOST_TEST(scn::override_record_to_json(owner.overrides[0]).at("version").to_number<int>() == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

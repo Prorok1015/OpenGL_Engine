@@ -117,7 +117,7 @@ void edt::problems_component::refresh_instances()
 		worlds.push_back({ &state.world_descs[i], file_name, file.is_valid() ? std::string{} : std::format("/worlds/{}", i) });
 		located.worlds.push_back({ i < state.world_names.size() ? state.world_names[i] : std::string{}, &state.world_descs[i].get_root(), file_name });
 	}
-	const std::vector<res::diagnostic> items = instance_diagnostics(worlds);
+	const std::vector<res::diagnostic> items = instance_diagnostics(worlds, m_ports.services.assembler());
 	if (items.empty()) {
 		m_desc.clear(m_ports.context.problems(), k_instances_scope);
 		return;
