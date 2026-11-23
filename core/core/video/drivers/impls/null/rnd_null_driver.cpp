@@ -57,12 +57,33 @@ void rnd::driver::null::driver::draw_indices(const vertex_array_interface* /*va*
 	count_draw();
 }
 
-std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create_shader(const std::vector<shader_header>& headers)
+std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create_shader(const std::vector<shader_header>& headers, shader_build_log* log)
 {
 	const std::string error = validate_shader_headers(headers);
 	if (!error.empty()) {
 		egLOG_ERROR("shader/load", "null driver rejected the shader: {}", error);
+		if (log) {
+			// The reason goes to the stage it is about, as a compiler's would.
+			for (std::size_t index = 0; index < headers.size(); ++index) {
+				std::string stage_error = validate_shader_headers({ headers[index] });
+				if (!stage_error.empty()) {
+					log->stages.push_back({ index, std::move(stage_error) });
+				}
+			}
+			if (log->stages.empty()) {
+				log->link = error;
+			}
+		}
 		return nullptr;
+	}
+	if (m_shader_judge) {
+		if (auto verdict = m_shader_judge(headers)) {
+			egLOG_ERROR("shader/load", "null driver failed the shader as asked");
+			if (log) {
+				*log = std::move(*verdict);
+			}
+			return nullptr;
+		}
 	}
 	if (m_record_shader_sources) {
 		m_shader_sources.push_back(headers);

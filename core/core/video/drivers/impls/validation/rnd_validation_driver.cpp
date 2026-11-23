@@ -372,9 +372,9 @@ const rnd::driver::pipeline_desc& rnd::driver::validation::driver::pipeline_info
 	return known ? m_pipelines[pipeline.index - 1].desc : empty_pipeline_desc();
 }
 
-std::unique_ptr<rnd::driver::shader_interface> rnd::driver::validation::driver::create_shader(const std::vector<shader_header>& headers)
+std::unique_ptr<rnd::driver::shader_interface> rnd::driver::validation::driver::create_shader(const std::vector<shader_header>& headers, shader_build_log* log)
 {
-	auto created = m_inner->create_shader(headers);
+	auto created = m_inner->create_shader(headers, log);
 	if (!created) {
 		return nullptr;
 	}

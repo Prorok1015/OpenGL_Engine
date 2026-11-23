@@ -10,6 +10,7 @@
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/model_codec/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <snk/render/texture/rnd_texture_id.h>
 
 namespace res { class resource_system; }
@@ -156,6 +157,8 @@ namespace rnd
 		}
 
 		// The source of every stage with includes and defines resolved and the binding macros expanded for `bindings`.
+		// Every included file is wrapped in #line directives (`#line 1 <k>` before it, `#line <n> <parent>` after it) and
+		// `#line <n> 0` follows the defines after #version, so the compiler reports the lines of the files themselves.
 		// A source the engine cannot prepare (an unreadable binding macro, no #version) is not returned: `error`
 		// says why and the shader must not reach the compiler.
 		struct load_result
@@ -165,6 +168,13 @@ namespace rnd
 			// Every file the source was made of: the stages and the files they include, however deep. Filled
 			// when the load failed as well; whoever caches the result drops it when one of these changes.
 			std::vector<res::tag> files;
+			// What `error` says, one problem per reason at the file and line it is about (#1201).
+			std::vector<shader_problem> problems;
+			// Per stage that could be read (in the order of `headers`): the files its #line directives number, the stage
+			// itself first. A line of the compiler's log for that stage names its file by this index.
+			std::vector<std::vector<res::tag>> sources;
+			// The stages and the defines, as a problem names the program.
+			std::string program;
 
 			bool ok() const noexcept { return error.empty() && !headers.empty(); }
 		};

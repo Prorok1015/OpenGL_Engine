@@ -29,7 +29,7 @@ namespace rnd::driver::gl
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset = 0) override;
 		virtual void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
-		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
+		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers, shader_build_log* log = nullptr) override;
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		virtual std::unique_ptr<buffer_interface> create_buffer() override;
 

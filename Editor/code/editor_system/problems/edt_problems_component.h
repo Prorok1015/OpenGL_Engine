@@ -2,11 +2,13 @@
 #include "edt_desc_location.h"
 #include "edt_desc_problems.h"
 #include "edt_play_preflight.h"
+#include "edt_shader_problems.h"
 #include "edt_world_problems.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
 #include <snk/model_codec/res_tag.h>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -24,8 +26,8 @@ namespace edt
 	struct editor_services;
 	struct problem;
 
-	// What the Problems panel shows and where a row leads, whole: the publishers of the sources "desc", "world", "play" (and the
-	// input conflicts, "input"), what a double click on a row does (`go_to_problem`: select its node, or open its file), the fixes of
+	// What the Problems panel shows and where a row leads, whole: the publishers of the sources "desc", "world", "play", "shader" (and
+	// the input conflicts, "input"), what a double click on a row does (`go_to_problem`: select its node, or open its file), the fixes of
 	// the source "assets" the panel offers, and the refresh of the world rows on every change of the level. The publishers live here
 	// and are handed out by reference to whatever reports into them (the prefab editor, the level load, the drop of an asset, Play).
 	// editor_system creates it before the prefab editor, which reports into it, and so declares it before everything that holds one
@@ -44,6 +46,8 @@ namespace edt
 			// Opens the file a row leads to; false when nothing opens it (`quiet`: a link, not a double click).
 			std::function<bool(const res::tag&, bool quiet)> open_asset;
 			std::function<bool()> play_active;
+			// Opens a file on the disk in the app the system gives it (a shader's row); the error, empty when it opened.
+			std::function<std::string(const std::filesystem::path&)> open_file;
 		};
 
 		explicit problems_component(ports from);
@@ -65,6 +69,9 @@ namespace edt
 		void refresh_instances();
 		// Bindings two actions share are problems of the source "input" (the frame hook; only when the actions changed).
 		void follow_input_actions(const gs::input_actions& actions);
+		// The shader programs that did not build are problems of the source "shader" (the frame hook; only when the renderer's
+		// problems changed).
+		void follow_shaders();
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file opened when an
 		// asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
 		void go_to_problem(const std::string& source, const problem& item);
@@ -77,6 +84,8 @@ namespace edt
 		desc_problem_publisher m_desc;
 		// The source "play" (#597): the last check before Play.
 		play_preflight_publisher m_play_preflight;
+		// The source "shader" (#1201).
+		shader_problem_publisher m_shader;
 		// gs::input_actions::revision() the Problems of the source "input" were last made for.
 		std::uint64_t m_input_revision = ~std::uint64_t{ 0 };
 		// A fix's question holds it weakly: answered after this component went, it runs nothing.
