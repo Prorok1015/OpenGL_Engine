@@ -686,6 +686,18 @@ namespace {
 		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
 	}
 
+	// The loader reads these of every geometry_desc, a child of another one too: __parent is copied in first and the
+	// child's own JSON is read over it whole (read_geometry_json). The schema has no notion of a required field (#1180).
+	std::string geometry_members_problem(std::string_view type, const json::object& object)
+	{
+		if (type != "geometry_desc") return {};
+		for (const std::string_view key : { "layout", "indices", "vertices" }) {
+			if (!object.contains(key)) return std::format("a geometry_desc needs \"layout\", \"indices\" and \"vertices\" (the loader reads all three): \"{}\" is missing", key);
+		}
+		if (!object.at("layout").is_object()) return "\"layout\" of a geometry_desc is an object of attribute names and types";
+		return {};
+	}
+
 	// Why the value of a binary_ref field is not one; empty when it is a range, an array (the inline data of a file
 	// written before the binary file, EPIC-79) or null (no range, as an empty slot, #1180).
 	std::string binary_ref_problem(const json::value& value)
@@ -870,6 +882,10 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 							schema_error(pointer + "/__version", std::format("`__version` is written by the editor (now {}): leave it out", descs.current_version(type)));
 							fits = false;
 						}
+					}
+					if (std::string problem = geometry_members_problem(type, object); !problem.empty()) {
+						schema_error(pointer, std::move(problem));
+						fits = false;
 					}
 					for (const desc::field_schema& field : schema->fields) {
 						if (field.kind != desc::field_kind::binary_ref) continue;

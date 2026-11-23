@@ -16,6 +16,7 @@
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
@@ -1094,6 +1095,66 @@ BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
 	BOOST_REQUIRE_EQUAL(with_extra.size(), 1u);
 	BOOST_TEST(with_extra[0].find("/vertices") == 0u, with_extra[0]);
 	BOOST_TEST(with_extra[0].find("unknown member 'stride'") != std::string::npos, with_extra[0]);
+}
+
+namespace {
+
+// The render descs are not part of this fixture (rnd_shader_desc_tests registers them the same way): a test that needs
+// the geometry_desc schema registers them while it runs.
+struct render_descs_while_running
+{
+	desc::desc_system& descs;
+	bool registered_here = false;
+
+	explicit render_descs_while_running(desc::desc_system& system)
+		: descs(system)
+	{
+		if (!descs.is_registered("geometry_desc")) {
+			engine::render::register_render_descs(descs);
+			registered_here = true;
+		}
+	}
+
+	~render_descs_while_running()
+	{
+		if (registered_here) engine::render::unregister_render_descs(descs);
+	}
+};
+
+}
+
+// #1180: the loader reads "layout", "indices" and "vertices" of every geometry_desc, a child of another one too; the check
+// of a geometry file says which is missing instead of passing a file that does not load.
+BOOST_AUTO_TEST_CASE(AGeometryDesc_WithoutAMemberTheLoaderReads_IsAnError)
+{
+	const render_descs_while_running with_render(*descs);
+	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
+	const auto member_errors = [&](const std::string& text) {
+		std::vector<std::string> out;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(text), "res://meshes/m.geom.desc").problems) {
+			if (item.severity == res::diagnostic_severity::error && item.reason.find("geometry_desc") != std::string::npos) out.push_back(item.reason);
+		}
+		return out;
+	};
+	BOOST_TEST(member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[],"vertices":[]})").empty());
+
+	const auto no_vertices = member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2]})");
+	BOOST_REQUIRE_EQUAL(no_vertices.size(), 1u);
+	BOOST_TEST(no_vertices[0].find("\"vertices\" is missing") != std::string::npos, no_vertices[0]);
+
+	const auto child = member_errors(R"({"__type":"geometry_desc","__parent":"res://meshes/base.geom.desc","vertices":[]})");
+	BOOST_REQUIRE_EQUAL(child.size(), 1u);
+	BOOST_TEST(child[0].find("\"layout\" is missing") != std::string::npos, child[0]);
+
+	const auto no_indices = member_errors(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"vertices":[]})");
+	BOOST_REQUIRE_EQUAL(no_indices.size(), 1u);
+	BOOST_TEST(no_indices[0].find("\"indices\" is missing") != std::string::npos, no_indices[0]);
+
+	for (const char* layout : { R"("vec3")", R"(["position","vec3"])" }) {
+		const auto bad_layout = member_errors(std::string(R"({"__type":"geometry_desc","layout":)") + layout + R"(,"indices":[],"vertices":[]})");
+		BOOST_REQUIRE_EQUAL(bad_layout.size(), 1u);
+		BOOST_TEST(bad_layout[0].find("object of attribute names") != std::string::npos, bad_layout[0]);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)

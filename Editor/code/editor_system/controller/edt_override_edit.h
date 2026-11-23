@@ -129,7 +129,9 @@ namespace edt::override_edit
 
 	// The pointer of the first binary_ref field (a range of a mesh's binary file, EPIC-79) that `patch`, a JSON Merge Patch
 	// of a component of `schema`, sets, clears or reaches into, through nested objects and structures; empty when none.
-	// Such a field is written only by saving the mesh: an edit that touches it is refused whole.
+	// Such a field is written only by saving the mesh: an edit that touches it is refused whole. A desc file may hold a
+	// whole range there (desc::check_override accepts one, as a migration or the mesh save writes it): the file is the
+	// mesh's, an override of a scene or prefab is not (#1180). The Play preflight warns of an override that holds one.
 	std::string binary_ref_in_patch(const desc::schema_registry& schemas, const desc::type_schema& schema,
 		const boost::json::object& patch);
 

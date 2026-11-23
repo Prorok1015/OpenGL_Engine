@@ -74,6 +74,7 @@
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/scene/scn_schema_components.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -3350,6 +3351,67 @@ BOOST_AUTO_TEST_CASE(a_field_the_schema_does_not_know_is_an_error_at_its_pointer
 	BOOST_TEST(found[0].item.message.find("bogus") != std::string::npos);
 	BOOST_TEST(found[0].item.notes.at(0) == "/worlds/0/children/0/components/camera/bogus");
 	BOOST_TEST((found[0].target.path == std::vector<std::uint64_t>{ cam_id }));
+}
+
+namespace {
+
+// The render descs are not part of this fixture (rnd_shader_desc_tests registers them the same way): a test that needs
+// the geometry_desc schema registers them while it runs.
+struct render_descs_while_running
+{
+	desc::desc_system& descs;
+	bool registered_here = false;
+
+	explicit render_descs_while_running(desc::desc_system& system)
+		: descs(system)
+	{
+		if (!descs.is_registered("geometry_desc")) {
+			engine::render::register_render_descs(descs);
+			registered_here = true;
+		}
+	}
+
+	~render_descs_while_running()
+	{
+		if (registered_here) engine::render::unregister_render_descs(descs);
+	}
+};
+
+}
+
+// #1180: component.set never writes a blob field (binary_ref), the engine reads one all the same: an override holding a
+// range is a warning, Play is not held back.
+BOOST_AUTO_TEST_CASE(an_override_of_a_blob_field_is_a_warning_at_its_pointer)
+{
+	open_level();
+	const render_descs_while_running with_render(*descs);
+	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
+	scn::prefab_desc::prefab_comp_node blob;
+	blob.type_name = "geometry_desc";
+	blob.overrides["vertices"] = boost::json::parse(
+		R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})");
+	crate().components["blob"] = std::move(blob);
+
+	const std::string at = "/worlds/0/children/1/components/blob/vertices";
+	const auto rows_at = [&](const std::vector<edt::preflight_problem>& found) {
+		std::vector<const edt::preflight_problem*> out;
+		for (const edt::preflight_problem& p : found) {
+			if (!p.item.notes.empty() && p.item.notes.front() == at) out.push_back(&p);
+		}
+		return out;
+	};
+	const auto with_range = edt::run_play_preflight(state, checks());
+	const auto range_rows = rows_at(with_range);
+	BOOST_REQUIRE_EQUAL(range_rows.size(), 1u);
+	BOOST_TEST((range_rows[0]->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(range_rows[0]->item.message.find("blob field") != std::string::npos, range_rows[0]->item.message);
+
+	// A value that is no range is the schema's error alone, not a warning beside it.
+	crate().components.at("blob").overrides["vertices"] = "not a range";
+	const auto with_text = edt::run_play_preflight(state, checks());
+	const auto broken_rows = rows_at(with_text);
+	BOOST_REQUIRE_EQUAL(broken_rows.size(), 1u);
+	BOOST_TEST((broken_rows[0]->item.severity == edt::problem_severity::error));
 }
 
 // A component of #606 (#703): described only by a schema, registered in the game layer. The editor's services are the
