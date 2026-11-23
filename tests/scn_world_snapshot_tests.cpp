@@ -6,6 +6,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/scene/level/scn_world_snapshot.h>
+#include <snk/desc/desc_migrations.h>
 #include <snk/scene/scn_blackboard_catalog.h>
 #include <snk/scene/scn_component_catalog.h>
 #include <snk/scene/scn_component_schema.h>
@@ -452,6 +453,88 @@ BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
 	BOOST_REQUIRE(view.size() == 1u);
 	BOOST_TEST(view.get<bullet>(view.front()).id == 7);
 	BOOST_TEST(view.get<bullet>(view.front()).speed == 0.f);
+}
+
+// #1233: a snapshot records the version of each saved type. A module reload that raised it with a step brings the
+// value through the step before the read, so a renamed field keeps its value instead of being dropped as removed.
+BOOST_AUTO_TEST_CASE(AComponentOfAnOlderVersion_GoesThroughTheStepsOfItsType)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().emplace<bullet>(source.state().create(), bullet{ 7, entt::null, 2.5f });
+	source.state().ctx().emplace<score>(score{ 40 });
+	scn::snapshot_report report;
+	json::object snapshot = scn::capture_world(source, layer, *descs, report);
+	BOOST_TEST(snapshot.at("component_versions").at("test.bullet").as_int64() == 1);
+	BOOST_TEST(snapshot.at("component_versions").at("test.score").as_int64() == 1);
+	// As the module before the reload wrote them: the fields under their old names.
+	json::object& shot = snapshot.at("entities").as_array().at(0).as_object().at("components").as_object().at("test.bullet").as_object();
+	json::value speed = shot.at("speed");
+	shot.erase("speed");
+	shot["velocity"] = std::move(speed);
+	json::object& points = snapshot.at("ctx").as_object().at("test.score").as_object();
+	json::value total = points.at("points");
+	points.erase("points");
+	points["total"] = std::move(total);
+	descs->register_migration("test.bullet", 1, [](json::object& o) { desc::migrations::rename(o, "/velocity", "/speed"); });
+	descs->register_migration("test.score", 1, [](json::object& o) { desc::migrations::rename(o, "/total", "/points"); });
+
+	scn::world_context target{ 1, "main" };
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	BOOST_TEST(restored.removed_fields.empty());
+	BOOST_TEST(restored.unknown.empty());
+	const auto view = target.state().view<bullet>();
+	BOOST_REQUIRE(view.size() == 1u);
+	BOOST_TEST(view.get<bullet>(view.front()).id == 7);
+	BOOST_TEST(view.get<bullet>(view.front()).speed == 2.5f);
+	BOOST_REQUIRE(target.state().ctx().contains<score>());
+	BOOST_TEST(target.state().ctx().get<score>().points == 40);
+}
+
+// A version newer than the type has now (a reload to an older module) is not read by a schema it was not written for.
+BOOST_AUTO_TEST_CASE(AComponentOfANewerVersion_IsNotRestored)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().emplace<bullet>(source.state().create(), bullet{ 7 });
+	scn::snapshot_report report;
+	json::object snapshot = scn::capture_world(source, layer, *descs, report);
+	snapshot.at("component_versions").as_object()["test.bullet"] = 3;
+
+	scn::world_context target{ 1, "main" };
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	BOOST_TEST(restored.unknown.at("test.bullet") == 1u);
+	BOOST_TEST(target.state().view<bullet>().size() == 0u);
+}
+
+// The deprecated capture records no versions: its values are read as they are, as before #1233.
+BOOST_AUTO_TEST_CASE(ASnapshotWithoutVersions_IsReadAsBefore)
+{
+	scn::world_context source{ 1, "main" };
+	source.state().emplace<bullet>(source.state().create(), bullet{ 7, entt::null, 2.5f });
+	scn::snapshot_report report;
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	const json::object snapshot = scn::capture_world(source, layer, report);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+	BOOST_TEST(!snapshot.contains("component_versions"));
+	descs->register_migration("test.bullet", 1, [](json::object& o) { o["speed"] = 0.0; });
+
+	scn::world_context target{ 1, "main" };
+	scn::snapshot_report restored;
+	BOOST_REQUIRE(scn::restore_world(target, snapshot, layer, read_context(), restored));
+	const auto view = target.state().view<bullet>();
+	BOOST_REQUIRE(view.size() == 1u);
+	BOOST_TEST(view.get<bullet>(view.front()).speed == 2.5f);
 }
 
 // #601 (HOT_RELOAD_PLAY.md 7): a field the schema no longer has is dropped, and the report says which type lost one.
