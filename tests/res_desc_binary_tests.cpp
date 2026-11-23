@@ -239,6 +239,16 @@ BOOST_AUTO_TEST_CASE(RangesRoundTripThroughJson)
 	broken = res::to_json(ranges[0]);
 	broken["sha256"] = "abc";
 	BOOST_TEST(!res::binary_range_from_json(boost::json::value(broken), error).has_value());
+
+	// #1180: the four members and no other; a fifth would be dropped by the next to_json.
+	BOOST_TEST(res::to_json(ranges[0]).size() == 4u);
+	for (const char* key : { "stride", "layuot", "" }) {
+		broken = res::to_json(ranges[0]);
+		broken[key] = 1;
+		error.clear();
+		BOOST_TEST(!res::binary_range_from_json(boost::json::value(broken), error).has_value(), key);
+		BOOST_TEST(error == std::format("a binary range has an unknown member '{}'", key), error);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(OffsetsAndSizesAreIntegersUpTo2Pow53)
