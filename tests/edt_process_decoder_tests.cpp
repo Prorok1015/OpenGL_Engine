@@ -328,11 +328,12 @@ BOOST_AUTO_TEST_CASE(AnImportAnswer_BiggerThanTheRequestAllows_IsRefused)
 	request.limits.max_total_bytes = 1000;
 	std::string problem;
 	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("bigger than the request") != std::string::npos, problem);
+	BOOST_CHECK_MESSAGE(problem.find("exceeds 8 bytes per resource (decoder answer)") != std::string::npos, problem);
 
 	request = request_in();
 	request.limits.max_total_bytes = 10;
 	BOOST_CHECK(!edt::accept_import_answer(import_answer(), request, problem).has_value());
+	BOOST_CHECK_MESSAGE(problem.find("exceed 20 bytes in total (decoder answer)") != std::string::npos, problem);
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_IsHandedBackAsItsError_ButNeverWithResources)
@@ -421,7 +422,7 @@ BOOST_AUTO_TEST_CASE(AScanAnswer_ThatAsksForTooManyFiles_OrComesWithResources_Is
 	BOOST_CHECK_MESSAGE(edt::accept_scan_answer(scan_answer(many), problem).has_value(), problem);
 	many.push_back({ "one_more.png", edt::model_file_kind::texture });
 	BOOST_CHECK(!edt::accept_scan_answer(scan_answer(many), problem).has_value());
-	BOOST_CHECK_MESSAGE(problem.find("more files than it may") != std::string::npos, problem);
+	BOOST_CHECK_MESSAGE(problem.find("more than 256 files (decoder answer)") != std::string::npos, problem);
 
 	auto with_blob = scan_answer({});
 	with_blob.blobs.push_back({ "memory://m/x.desc", { std::byte{ 1 } } });
@@ -933,18 +934,19 @@ BOOST_AUTO_TEST_CASE(TheBudget_CountsOverEveryRound)
 		return asking({ calls == 1 ? "a.mtl" : "b.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 2);
-	BOOST_CHECK_MESSAGE(scan.error.find("together are bigger than 100 bytes") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("exceed 100 bytes in total (side files)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ADeadlineThatHasPassed_RunsNoRound)
 {
 	source.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+	source.time_limit = edt::k_person_parse_time_limit;
 	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>&) {
 		++calls;
 		return asking({});
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 0);
-	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("reading the model exceeds 2 min (decoder time)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ADeadlineThatPassesDuringARound_StopsTheScanBeforeTheNext)
@@ -956,7 +958,8 @@ BOOST_AUTO_TEST_CASE(ADeadlineThatPassesDuringARound_StopsTheScanBeforeTheNext)
 		return asking({ "a.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 1);
-	BOOST_CHECK_MESSAGE(scan.error.find("took too long") != std::string::npos, scan.error);
+	// No time_limit with the deadline: the refusal names no number.
+	BOOST_CHECK_MESSAGE(scan.error.find("reading the model exceeds its time limit (decoder time)") != std::string::npos, scan.error);
 }
 
 BOOST_AUTO_TEST_CASE(ASideFileTheRuleRefuses_IsMissingToTheChild_WithOneWarning)
@@ -987,7 +990,7 @@ BOOST_AUTO_TEST_CASE(ASideFileOverALimit_FailsTheScan)
 		return asking({ "a.mtl" });
 	}, nullptr);
 	BOOST_CHECK_EQUAL(calls, 1);
-	BOOST_CHECK_MESSAGE(scan.error.find("too big") != std::string::npos, scan.error);
+	BOOST_CHECK_MESSAGE(scan.error.find("exceeds 4 bytes per file (side files)") != std::string::npos, scan.error);
 	BOOST_CHECK_EQUAL(warnings.count("side-file rule"), 0u);
 }
 
@@ -1344,7 +1347,7 @@ BOOST_AUTO_TEST_CASE(ADecoderThatIsSlow_FailsTheImportWithoutStoringAnything)
 		decoder.import(source, nullptr);
 		BOOST_FAIL("a decoder that sleeps was not stopped");
 	} catch (const std::runtime_error& e) {
-		BOOST_CHECK_MESSAGE(std::string(e.what()).find("too long") != std::string::npos, e.what());
+		BOOST_CHECK_MESSAGE(std::string(e.what()).find("decoding the model exceeds 1 s (decoder time)") != std::string::npos, e.what());
 	}
 }
 

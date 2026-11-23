@@ -95,7 +95,8 @@ namespace scn
 	SNK_API json::array capture_blackboard(const ecs::blackboard_data& board, const blackboard_catalog& types, snapshot_report& report);
 
 	// Puts capture_blackboard's values back as committed. A type `types` no longer knows goes to report.unknown and is
-	// skipped; a value that does not fit its field to report.partial (the field keeps its default).
+	// skipped; a value that does not fit its field to report.partial (the field keeps its default). Without
+	// `context.owner` an owner named "blackboard" stands in, so inline descs in the values are read (#1238).
 	SNK_API void restore_blackboard(ecs::blackboard_data& board, const json::array& values, const blackboard_catalog& types,
 		const desc::read_context& context, snapshot_report& report);
 }
