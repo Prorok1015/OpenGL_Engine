@@ -213,10 +213,15 @@ std::string edt::mesh_document::geometry_file_problem() const
 	// Only while the source is about to change, and not after a failed pair: that file is ours and older than the source on purpose.
 	if (m_dirty && !m_geometry_stale && !geometry.missing) {
 		const std::string existing(reinterpret_cast<const char*>(geometry.bytes.data()), geometry.bytes.size());
-		std::string unused;
-		if (!mesh::geometry_is_bake_of(m_saved_text, existing, unused)) {
+		std::string why;
+		switch (mesh::geometry_is_bake_of(m_saved_text, existing, why)) {
+		case mesh::geometry_match::same:
+			break;
+		case mesh::geometry_match::differs:
 			return std::format("{} exists and was not made from {} (an imported mesh or another source): nothing was written. Rename one of the files or delete the geometry file.",
 				m_geometry_tag.view(), m_poly_tag.view());
+		case mesh::geometry_match::unchecked:
+			return std::format("{} cannot be compared with {}: {}. Nothing was written.", m_geometry_tag.view(), m_poly_tag.view(), why);
 		}
 	}
 	return {};
