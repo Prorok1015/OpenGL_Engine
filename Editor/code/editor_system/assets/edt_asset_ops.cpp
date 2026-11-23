@@ -188,33 +188,23 @@ namespace
 		return fs::is_regular_file(fs::symlink_status(root / path_of(relative), ec));
 	}
 
-	// `folder` below `root`, made where missing, one component at a time and never through a link: the std::filesystem calls
-	// that follow are for a file in a folder that was just seen to be a plain one.
-	std::string plain_folders_below(const fs::path& root, const fs::path& folder)
+	// `folder` below `root`, made where missing, each folder from the one above it and never through a link (#1294).
+	std::string make_folders(const fs::path& root, const fs::path& folder)
 	{
-		std::error_code ec;
-		fs::create_directories(root, ec);
-		fs::path current = root;
-		for (const fs::path& part : folder) {
-			if (part.empty() || part == ".") continue;
-			current /= part;
-			ec.clear();
-			if (fs::symlink_status(current, ec).type() == fs::file_type::not_found) {
-				ec.clear();
-				fs::create_directory(current, ec);
-				if (ec) return std::format("cannot make {}: {}", utf8(current), ec.message());
-			}
-			ec.clear();
-			if (fs::symlink_status(current, ec).type() != fs::file_type::directory) {
-				return std::format("{} is not a plain folder", utf8(current));
-			}
-		}
-		return {};
+		platform::beneath::pinned_root pinned{ root };
+		return platform::beneath::make_folders_beneath(pinned, folder);
 	}
 
-	std::string in_journal(const std::string& id, std::string_view relative)
+	// The journal's files are reached from the folder that holds journal_root (the project's cache), so a link at
+	// journal_root itself is refused like one below it (#1294): journal_base is that root, in_journal the path below it.
+	fs::path journal_base(const fs::path& journal_root)
 	{
-		return std::format("{}/{}", id, relative);
+		return journal_root.parent_path();
+	}
+
+	std::string in_journal(const fs::path& journal_root, const std::string& id, std::string_view relative)
+	{
+		return std::format("{}/{}/{}", utf8(journal_root.filename()), id, relative);
 	}
 
 	// What a test may take over (asset_ops_ports::fail_step, force_copy); both empty in production.
@@ -337,21 +327,22 @@ namespace
 	// is atomic, or, only where the two lie on different volumes, copied, flushed and checked before the original is removed.
 	// Any other reason the rename cannot be made (a link in the way, an escape, a denied access) refuses the step and leaves
 	// the file where it is: a copy must not go where the rename was not allowed. At no moment is there no complete copy.
-	std::string stash_file(const fs::path& root, const std::string& relative, const fs::path& journal_root, const std::string& journal_relative,
-		const std::string& hash, const move_seams& seams)
+	std::string stash_file(const fs::path& root, const std::string& relative, const fs::path& journal_root_base,
+		const std::string& journal_relative, const std::string& hash, const move_seams& seams)
 	{
 		const fs::path target = path_of(journal_relative);
-		if (std::string error = plain_folders_below(journal_root, target.parent_path()); !error.empty()) return error;
+		if (std::string error = make_folders(journal_root_base, target.parent_path()); !error.empty()) return error;
 		const std::string changed = std::format("'{}' changed while it was removed", relative);
 		if (!copy_forced(seams, "stash:" + relative)) {
 			rename_outcome moved{ seams.rename_error ? seams.rename_error("stash:" + relative) : std::string{}, false };
-			if (moved.error.empty()) moved = rename_between(root, relative, journal_root, journal_relative);
+			if (moved.error.empty()) moved = rename_between(root, relative, journal_root_base, journal_relative);
 			if (moved.error.empty()) {
 				std::string error;
-				const std::string now = hash_file(journal_root, journal_relative, error);
+				const std::string now = hash_file(journal_root_base, journal_relative, error);
 				if (error.empty() && now == hash) return {};
 				if (error.empty()) error = changed;
-				if (const rename_outcome back = rename_between(journal_root, journal_relative, root, relative); !back.error.empty()) {
+				const rename_outcome back = rename_between(journal_root_base, journal_relative, root, relative);
+				if (!back.error.empty()) {
 					error += std::format(" and could not be put back: {}", back.error);
 				}
 				return error;
@@ -359,8 +350,10 @@ namespace
 			if (!moved.across_volumes) return std::format("'{}' cannot be moved into the journal: {}", relative, moved.error);
 			egLOG_INFO("asset_ops", "'{}' is copied into the journal, not moved: {}", relative, moved.error);
 		}
-		if (std::string error = copy_verified(root, relative, journal_root, journal_relative, hash, "stash_copied:" + relative, seams, changed); !error.empty()) {
-			return error;
+		std::string copied = copy_verified(root, relative, journal_root_base, journal_relative, hash,
+			"stash_copied:" + relative, seams, changed);
+		if (!copied.empty()) {
+			return copied;
 		}
 		return remove_file(root, relative);
 	}
@@ -369,21 +362,22 @@ namespace
 	// lie on different volumes, copied beside it under a temporary name, flushed, checked against `hash` and moved in; any other
 	// reason the rename cannot be made fails the step. A file that came back by rename is checked too, and goes back to the journal
 	// when it is not `hash`. The kept file is removed only once the restored one is complete, so a failure leaves the kept one.
-	std::string restore_file(const fs::path& journal_root, const std::string& journal_relative, const fs::path& root, const std::string& relative,
-		const std::string& hash, const move_seams& seams)
+	std::string restore_file(const fs::path& journal_root_base, const std::string& journal_relative,
+		const fs::path& root, const std::string& relative, const std::string& hash, const move_seams& seams)
 	{
 		if (std::string error = injected_failure(seams, "unstash:" + relative); !error.empty()) return error;
 		const fs::path target = path_of(relative);
-		if (std::string error = plain_folders_below(root, target.parent_path()); !error.empty()) return error;
+		if (std::string error = make_folders(root, target.parent_path()); !error.empty()) return error;
 		if (!copy_forced(seams, "unstash:" + relative)) {
 			rename_outcome moved{ seams.rename_error ? seams.rename_error("unstash:" + relative) : std::string{}, false };
-			if (moved.error.empty()) moved = rename_between(journal_root, journal_relative, root, relative);
+			if (moved.error.empty()) moved = rename_between(journal_root_base, journal_relative, root, relative);
 			if (moved.error.empty()) {
 				std::string error;
 				const std::string now = hash_file(root, relative, error);
 				if (error.empty() && now == hash) return {};
 				if (error.empty()) error = "the kept copy is not the file that was removed";
-				if (const rename_outcome back = rename_between(root, relative, journal_root, journal_relative); !back.error.empty()) {
+				const rename_outcome back = rename_between(root, relative, journal_root_base, journal_relative);
+				if (!back.error.empty()) {
 					error += std::format(" and could not be put back into the journal: {}", back.error);
 				}
 				return error;
@@ -391,11 +385,12 @@ namespace
 			if (!moved.across_volumes) return std::format("'{}' cannot be moved back from the journal: {}", relative, moved.error);
 			egLOG_INFO("asset_ops", "'{}' is copied back from the journal, not moved: {}", relative, moved.error);
 		}
-		if (std::string error = copy_verified(journal_root, journal_relative, root, relative, hash, "unstash_copied:" + relative, seams,
+		if (std::string error = copy_verified(journal_root_base, journal_relative, root, relative, hash,
+			"unstash_copied:" + relative, seams,
 			"the kept copy is not the file that was removed"); !error.empty()) {
 			return error;
 		}
-		if (const std::string kept = remove_file(journal_root, journal_relative); !kept.empty()) {
+		if (const std::string kept = remove_file(journal_root_base, journal_relative); !kept.empty()) {
 			egLOG_WARN("asset_ops", "the kept copy of '{}' stays in the journal: {}", relative, kept);
 		}
 		return {};
@@ -475,13 +470,16 @@ namespace
 			if (!error.empty()) return error;
 			if (now == step.hash) return {};
 			if (now != step.after_hash) return "it changed meanwhile, so the original is not put over it";
-			if (std::string kept = read_file(journal_root, in_journal(id, step.original), edt::k_level_file_limit, bytes); !kept.empty()) return kept;
+			const std::string original = in_journal(journal_root, id, step.original);
+			std::string kept = read_file(journal_base(journal_root), original, edt::k_level_file_limit, bytes);
+			if (!kept.empty()) return kept;
 			if (hash_of(bytes) != step.hash) return "the kept original is not the file that was replaced";
 			return write_file(root, step.from, bytes, true);
 		}
 		case edt::journal_step_kind::stash:
 			if (exists_on_disk(root, step.from)) return {};
-			return restore_file(journal_root, in_journal(id, step.to), root, step.from, step.hash, seams);
+			return restore_file(journal_base(journal_root), in_journal(journal_root, id, step.to), root, step.from,
+				step.hash, seams);
 		}
 		return {};
 	}
@@ -526,7 +524,8 @@ namespace
 				file = step.from;
 				return step_state::changed;
 			}
-			if (hash_file(journal_root, in_journal(id, step.to), error) != step.hash || !error.empty()) {
+			const std::string kept = hash_file(journal_base(journal_root), in_journal(journal_root, id, step.to), error);
+			if (kept != step.hash || !error.empty()) {
 				file = step.to;
 				return step_state::changed;
 			}
@@ -538,7 +537,8 @@ namespace
 	std::string persist(const edt::operation_journal& journal, const fs::path& journal_root)
 	{
 		const std::string text = json::serialize(edt::journal_to_json(journal));
-		const std::string error = write_file(journal_root, in_journal(journal.id, k_journal_file),
+		const std::string error = write_file(journal_base(journal_root),
+			in_journal(journal_root, journal.id, k_journal_file),
 			std::as_bytes(std::span<const char>(text.data(), text.size())), true);
 		if (!error.empty()) egLOG_WARN("asset_ops", "the journal of '{}' was not written: {}", journal.id, error);
 		return error.empty() ? std::string{} : std::format("the journal was not written: {}", error);
@@ -1171,7 +1171,9 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	std::vector<std::string> original_names(item.rewrites.size());
 	for (std::size_t i = 0; i < item.rewrites.size(); ++i) {
 		original_names[i] = std::format("originals/{}", i);
-		if (const std::string error = write_file(journal_root, in_journal(journal.id, original_names[i]), originals[i], false); !error.empty()) {
+		const std::string kept = in_journal(journal_root, journal.id, original_names[i]);
+		const std::string error = write_file(journal_base(journal_root), kept, originals[i], false);
+		if (!error.empty()) {
 			report.refused = stop(refusal_code::io_error, std::format("the original of '{}' was not kept: {}", item.rewrites[i].file, error));
 			return;
 		}
@@ -1194,7 +1196,9 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 			if (removing) {
 				if (std::string error = injected("stash:" + move.from); !error.empty()) return error;
 				if (std::string error = record(journal_step{ journal_step_kind::stash, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;
-				if (std::string error = stash_file(item.root, move.from, journal_root, in_journal(journal.id, move.to), move.hash, seams); !error.empty()) return error;
+				const std::string kept = in_journal(journal_root, journal.id, move.to);
+				std::string error = stash_file(item.root, move.from, journal_base(journal_root), kept, move.hash, seams);
+				if (!error.empty()) return error;
 			} else {
 				if (std::string error = injected("move:" + move.from); !error.empty()) return error;
 				if (std::string error = record(journal_step{ journal_step_kind::move, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;

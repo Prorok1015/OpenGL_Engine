@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -29,6 +30,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -683,6 +685,34 @@ BOOST_AUTO_TEST_CASE(AnUndoThroughTheHistory_PutsEverythingBack_AndDeletesTheJou
 	BOOST_TEST((snapshot() == before));
 	BOOST_TEST(!fs::exists(journal.path() / id), "put back: the journal folder is not needed any more");
 	BOOST_TEST(history.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoThroughTheHistory_RemovesALinkInTheJournalFolderAsTheLink_NeverWhatItLeadsTo)
+{
+	open();
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	const std::string id = text_of(result.value.at("operation"));
+	test_util::temp_dir outside("asset_history_link_target");
+	outside.write("keep.txt", "keep");
+	const fs::path link = journal.path() / id / "planted";
+	bool linked = false;
+#ifdef _WIN32
+	// A junction needs no privilege: one that cannot be made is a broken test, not a skip.
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.path().string() + "\" >nul";
+	linked = std::system(command.c_str()) == 0 && fs::exists(link);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J could not make a junction at " << link.string());
+#else
+	std::error_code ec;
+	fs::create_directory_symlink(outside.path(), link, ec);
+	linked = !ec;
+	BOOST_REQUIRE_MESSAGE(linked, "no symlink: " << ec.message());
+#endif
+
+	const edt::asset_fix_result undone = history.undo_last(operations);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(!fs::exists(journal.path() / id), "the journal folder and the link in it are gone");
+	BOOST_TEST(fs::is_regular_file(outside.path() / "keep.txt"), "what the link led to is untouched");
 }
 
 BOOST_AUTO_TEST_CASE(AnUndoThatFindsAFileChanged_SaysWhichOnes_KeepsTheEntry_AndWorksAgainOnceItIsFixed)

@@ -76,6 +76,8 @@ namespace edt
 		};
 
 		bool inside_root(const std::filesystem::path& directory) const;
+		// The journal's folder is <root>/<its id>: one name below the root, the only folder set aside or deleted.
+		bool is_journal_folder(const operation_journal& journal) const;
 		void set_aside(const operation_journal& journal) const;
 		void save() const;
 

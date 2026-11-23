@@ -2,6 +2,7 @@
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_stamp.h>
 #include <boost/json.hpp>
@@ -277,13 +278,24 @@ std::optional<std::string> edt::asset_history::next_operation_id() const
 	return m_entries.back().journal.id;
 }
 
-void edt::asset_history::set_aside(const operation_journal& journal) const
+bool edt::asset_history::is_journal_folder(const operation_journal& journal) const
 {
 	const fs::path directory = fs_paths::path_from_utf8(journal.directory);
-	if (!inside_root(directory)) return;
-	std::error_code ec;
-	fs::rename(directory / std::string(k_journal_file), directory / std::string(dropped_journal_file), ec);
-	if (ec) egLOG_WARN("asset_ops", "the journal of '{}' could not be set aside: {}", journal.id, ec.message());
+	return !journal.id.empty() && fs_paths::utf8_of(directory.filename()) == journal.id && inside_root(directory);
+}
+
+void edt::asset_history::set_aside(const operation_journal& journal) const
+{
+	if (!is_journal_folder(journal)) return;
+	// Reached from the folder above the root (the project's cache), never through a link (#1294).
+	platform::beneath::pinned_root pinned{ m_root.parent_path() };
+	platform::beneath::rename_request request;
+	request.from_folder = m_root.filename() / fs_paths::path_from_utf8(journal.id);
+	request.from_leaf = std::string(k_journal_file);
+	request.to_folder = request.from_folder;
+	request.to_leaf = std::string(dropped_journal_file);
+	const std::string error = platform::beneath::rename_beneath(pinned, request);
+	if (!error.empty()) egLOG_WARN("asset_ops", "the journal of '{}' could not be set aside: {}", journal.id, error);
 }
 
 edt::asset_fix_result edt::asset_history::undo_last(const asset_ops& operations)
@@ -296,11 +308,14 @@ edt::asset_fix_result edt::asset_history::undo_last(const asset_ops& operations)
 	if (undone.ok) {
 		m_entries.pop_back();
 		save();
-		const fs::path directory = fs_paths::path_from_utf8(journal.directory);
-		if (inside_root(directory)) {
-			std::error_code ec;
-			fs::remove_all(directory, ec);
-			if (ec) egLOG_WARN("asset_ops", "the journal folder of '{}' was not deleted: {}", journal.id, ec.message());
+		if (is_journal_folder(journal)) {
+			// A link in the journal folder is removed as the link, never followed (#1294).
+			platform::beneath::pinned_root pinned{ m_root.parent_path() };
+			const std::string error = platform::beneath::remove_tree_beneath(pinned, m_root.filename(),
+				fs_paths::path_from_utf8(journal.id));
+			if (!error.empty()) {
+				egLOG_WARN("asset_ops", "the journal folder of '{}' was not deleted: {}", journal.id, error);
+			}
 		}
 		return asset_fix_result{ true, {} };
 	}
