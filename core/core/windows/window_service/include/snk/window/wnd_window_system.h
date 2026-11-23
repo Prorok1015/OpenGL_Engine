@@ -2,6 +2,7 @@
 #include <snk/window/wnd_window.h>
 #include <snk/window/wnd_window_event_listener_interface.h>
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -9,6 +10,9 @@
 
 namespace wnd
 {
+	// Module code calls this vtable: raised with any change of its bases or virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t window_system_abi_revision = 1;
+
 	// Backend-agnostic window system: concrete implementations live behind this interface.
 	class SNK_API window_system
 	{
@@ -30,35 +34,19 @@ namespace wnd
 		virtual void init_windows_frame_time() const = 0;
 		virtual void process_windows() const = 0;
 
-		void add_event_listener(std::shared_ptr<window_listener_interface> listener) {
-			m_event_listeners.push_back(listener);
-		}
-
-		void remove_event_listener(std::shared_ptr<window_listener_interface> listener) {
-			m_event_listeners.erase(std::remove(m_event_listeners.begin(), m_event_listeners.end(), listener), m_event_listeners.end());
-		}
-
-		const std::vector<std::shared_ptr<window_listener_interface>>& get_event_listeners() const {
-			return m_event_listeners;
-		}
+		// Exported, not inline: module code calling them must not compile the layout of the members (#1256).
+		void add_event_listener(std::shared_ptr<window_listener_interface> listener);
+		void remove_event_listener(std::shared_ptr<window_listener_interface> listener);
+		const std::vector<std::shared_ptr<window_listener_interface>>& get_event_listeners() const;
 
 		// Called for a close request from the user (X button, Alt+F4) instead of closing at once.
 		// The handler decides: window::shutdown() closes, doing nothing keeps the window open.
 		using close_request_handler = std::function<void()>;
-		void set_close_request_handler(close_request_handler handler) {
-			m_close_handler = std::move(handler);
-		}
+		void set_close_request_handler(close_request_handler handler);
 
 		// Backends call this when the user asks to close `win`. The window stays open unless the handler
 		// shuts it down; without a handler it closes at once.
-		void request_close(window& win) {
-			if (!m_close_handler) {
-				win.shutdown();
-				return;
-			}
-			win.shutdown(false);
-			m_close_handler();
-		}
+		void request_close(window& win);
 
 	private:
 		std::vector<std::shared_ptr<window_listener_interface>> m_event_listeners;
