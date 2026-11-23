@@ -252,8 +252,8 @@ namespace edt
 		// Tests: called before each step ("move:<from>", "stash:<from>", "rewrite:<file>"), before it is written to the journal; a
 		// non-empty answer fails it. Undoing or rolling back a move or delete step calls it first with
 		// "before_undo:<from>"; an undo calls it with "unstash:<from>" before it brings a removed file back; the copy
-		// that replaces a rename (see force_copy) calls it with "stash_copied:<from>" / "unstash_copied:<from>" once the copy is read
-		// and checked, before it is flushed and put in place.
+		// that replaces a rename (see force_copy) calls it with "stash_copied:<from>" / "unstash_copied:<from>" once
+		// the copy is read and checked, before it is flushed and put in place.
 		std::function<std::string(std::string_view)> fail_step;
 		// Tests: asked with "stash:<from>" (a delete moving the file into the journal) and "unstash:<from>" (an undo moving it back);
 		// true makes the rename report a move to another volume (the one failure a copy takes over from), so the file is copied,
