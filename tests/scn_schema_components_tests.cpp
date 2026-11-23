@@ -623,8 +623,9 @@ BOOST_AUTO_TEST_CASE(sandbox_commands_without_meta_are_dropped_not_crashed)
 	BOOST_TEST(log.count(id_text) == 1u); // once per id, not every frame
 }
 
-// #1180: an empty blob field is written as null, and that null is read back and checked as "no range".
-BOOST_AUTO_TEST_CASE(an_empty_blob_field_is_written_as_null_and_read_back)
+// #1180: an empty blob field has no value (the writer leaves it out); a null written for it is read as that same "no
+// range", and the checks take it.
+BOOST_AUTO_TEST_CASE(an_empty_blob_field_is_left_out_and_a_null_reads_as_it)
 {
 	auto blob_mesh = scn::register_schema_component(mgr, *layer, schema_from(R"json({
 		"name": "mod.blob_mesh", "kind": "component", "fields": [ { "name": "vertices", "kind": "binary_ref" } ]
@@ -635,18 +636,18 @@ BOOST_AUTO_TEST_CASE(an_empty_blob_field_is_written_as_null_and_read_back)
 	desc::dyn_ref ref{ &blob, 0 };
 	boost::json::object out;
 	desc::serialize(*entry.schema, &ref, out);
-	BOOST_REQUIRE(out.contains("vertices"));
-	BOOST_TEST(out.at("vertices").is_null());
+	BOOST_TEST(!out.contains("vertices"));
 
+	const boost::json::object with_null = boost::json::parse(R"json({"vertices":null})json").as_object();
 	const desc::type_schema* schema = layer->descs().find_schema("mod.blob_mesh");
 	BOOST_REQUIRE(schema);
-	BOOST_TEST((desc::check_override_object(*schema, out).status == desc::override_status::valid));
+	BOOST_TEST((desc::check_override_object(*schema, with_null).status == desc::override_status::valid));
 	entt::registry reg;
 	const entt::entity entity = reg.create();
-	BOOST_TEST(entry.read(*entry.schema, reg, entity, out, read_context()));
+	BOOST_TEST(entry.read(*entry.schema, reg, entity, with_null, read_context()));
 	boost::json::object again;
 	BOOST_TEST(entry.write(*entry.schema, reg, entity, again));
-	BOOST_TEST(again.at("vertices").is_null());
+	BOOST_TEST(!again.contains("vertices"));
 }
 
 BOOST_AUTO_TEST_CASE(an_entity_field_without_a_value_names_no_entity)

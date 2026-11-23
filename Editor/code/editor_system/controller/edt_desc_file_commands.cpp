@@ -687,7 +687,7 @@ namespace {
 	}
 
 	// Why the value of a binary_ref field is not one; empty when it is a range, an array (the inline data of a file
-	// written before the binary file, EPIC-79) or null (no range, #1180).
+	// written before the binary file, EPIC-79) or null (no range, as an empty slot, #1180).
 	std::string binary_ref_problem(const json::value& value)
 	{
 		if (value.is_null() || value.is_array()) return {};
