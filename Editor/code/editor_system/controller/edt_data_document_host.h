@@ -68,6 +68,9 @@ namespace edt
 		// a `##` name) or none changes nothing, any other window (viewport, hierarchy, inspector...) gives the scene. Windows
 		// whose focus moved on record what they have not recorded yet. Called once per frame, with the frame's windows known.
 		void follow_focus();
+		// The mesh the modeller's window shows (0: none): the window has no document of its own here, so a focus on it activates that
+		// document, and Ctrl+S saves the mesh, not the level (EPIC-77, #1011).
+		void set_shown_mesh(std::function<document_id()> shown_mesh) { m_shown_mesh = std::move(shown_mesh); }
 
 	private:
 		std::function<const picker::catalog*()> m_asset_source;
@@ -100,6 +103,7 @@ namespace edt
 		editor_services& m_services;
 		std::function<desc_file_layout()> m_layout;
 		std::function<void(document&)> m_focus_other;
+		std::function<document_id()> m_shown_mesh;
 		std::unordered_map<document_id, window> m_windows;
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		connection m_closed;

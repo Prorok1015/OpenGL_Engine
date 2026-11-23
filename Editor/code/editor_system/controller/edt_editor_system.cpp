@@ -402,6 +402,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.asset_catalog = asset_catalog };
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
+	m_asset_open->data_documents().set_shown_mesh([this] { return m_modeller ? m_modeller->shown_id() : document_id{}; });
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); } });
 
@@ -432,7 +433,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
 	m_game_layer = std::make_unique<game_layer_component>(game_layer_component::ports{ .services = m_services, .level_ctrl = m_level_ctrl,
 		.level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open,
-		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); } });
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); },
+		.meshes_before = [this] { m_modeller->park_for_layer_change(); },
+		.meshes_after = [this] { m_modeller->restore_after_layer_change(); } });
 
 	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
 		.level_ctrl = m_level_ctrl, .level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open, .problems = *m_problems,

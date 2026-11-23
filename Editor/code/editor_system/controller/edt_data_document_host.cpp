@@ -88,6 +88,12 @@ void edt::data_document_host::follow_focus()
 		manager.set_active(manager.preview()->id());
 		return;
 	}
+	if (taken != panels.end() && taken->id == "mesh_editor" && m_shown_mesh) {
+		if (const document_id shown = m_shown_mesh(); shown != document_id{}) {
+			manager.set_active(shown);
+			return;
+		}
+	}
 	manager.set_active(manager.scene().id());
 }
 

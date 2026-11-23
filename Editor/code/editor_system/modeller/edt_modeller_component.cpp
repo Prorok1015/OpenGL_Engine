@@ -9,6 +9,8 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_problem_list.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <format>
 #include <optional>
 #include <utility>
@@ -46,6 +48,10 @@ void edt::modeller_component::install(std::vector<registration>& out)
 		auto document = std::make_unique<mesh_document>(services);
 		if (m_ports.desc_layout) document->set_files(m_ports.desc_layout());
 		document->set_lock_source(m_ports.edits_locked);
+		document->set_targets_release([this](const std::vector<res::tag>& tags) {
+			auto& textures = m_ports.rnd.get_texture_manager();
+			for (const res::tag& tag : tags) textures.remove(tag);
+		});
 		return document;
 	};
 	out.push_back(kinds.add_preview({ .id = std::string(k_mesh_preview_id), .suffix = ".poly.desc", .make_preview = make, .multiple = true }));
@@ -97,6 +103,10 @@ void edt::modeller_component::report(const std::string& text)
 void edt::modeller_component::open(const res::tag& source)
 {
 	document_manager& documents = m_ports.context.documents();
+	if (mesh_document* open_already = mesh_of_source(documents, source)) {
+		show(open_already->id());
+		return;
+	}
 	const bool geometry = source.view().ends_with(".geom.desc");
 	previewable_document* preview = documents.open_preview(geometry ? k_mesh_geometry_preview_id : k_mesh_preview_id, source);
 	auto* mesh = dynamic_cast<mesh_document*>(preview);
@@ -126,7 +136,7 @@ void edt::modeller_component::overwrite_geometry_of_shown()
 	mesh_document* mesh = shown();
 	if (!mesh) return;
 	m_ports.context.dialogs().choose("Overwrite geometry",
-		std::format("Write {} from the source, replacing the file on disk?", mesh->geometry_file().view()), { "Overwrite", "Cancel" },
+		mesh->overwrite_geometry_question(), { "Overwrite", "Cancel" },
 		[this, id = mesh->id(), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
 			if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
 			mesh_document* open = mesh_by_id(m_ports.context.documents(), id);
@@ -215,6 +225,16 @@ void edt::modeller_component::detach_document()
 {
 	m_panel->set_context(nullptr);
 	m_shown = document_id{};
+}
+
+void edt::modeller_component::park_for_layer_change()
+{
+	for (mesh_document* mesh : meshes_of(m_ports.context.documents())) mesh->release_preview_world();
+}
+
+void edt::modeller_component::restore_after_layer_change()
+{
+	for (mesh_document* mesh : meshes_of(m_ports.context.documents())) mesh->rebuild_preview_world();
 }
 
 void edt::modeller_component::publish_problems()

@@ -2,9 +2,11 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_mesh_document.h"
+#include "edt_mesh_documents.h"
 #include "edt_mesh_shape_asset.h"
 #include "edt_save_all.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
@@ -585,6 +587,90 @@ BOOST_AUTO_TEST_CASE(Open_TheGeometryTheSourceMade_AndNoGeometryAtAll_AreNoMisma
 	open_crate();
 	BOOST_TEST(!document->geometry_mismatch());
 	BOOST_TEST(document->geometry_mismatch_message().empty());
+}
+
+BOOST_AUTO_TEST_CASE(OneSource_IsOneDocument_WhetherItWasOpenedAsThePolyFileOrTheGeometryFile)
+{
+	edt::scene_document scene;
+	edt::document_manager documents{ scene, events };
+	edt::asset_kind_registry kinds;
+	const edt::registration made = kinds.add_preview({ .id = "mesh", .suffix = ".poly.desc",
+		.make_preview = [this](edt::editor_services& given) -> std::unique_ptr<edt::previewable_document> {
+			auto created = std::make_unique<edt::mesh_document>(given);
+			created->set_files(layout());
+			return created;
+		}, .multiple = true });
+	documents.set_preview_kinds(kinds, services);
+	edt::previewable_document* opened = documents.open_preview("mesh", res::tag{ "res://shapes/crate.poly.desc" });
+	BOOST_REQUIRE(opened && opened->is_open());
+
+	BOOST_TEST(edt::mesh_of_source(documents, res::tag{ "res://shapes/crate.poly.desc" }) == opened);
+	BOOST_TEST(edt::mesh_of_source(documents, res::tag{ "res://shapes/crate.geom.desc" }) == opened);
+	BOOST_TEST(edt::mesh_of_source(documents, res::tag{ "res://shapes/other.geom.desc" }) == nullptr);
+	BOOST_TEST(edt::meshes_of(documents).size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Close_GivesUpTheRenderTargetsAndTheWorldTemplate)
+{
+	std::vector<res::tag> released;
+	document->set_targets_release([&released](const std::vector<res::tag>& tags) { released = tags; });
+	open_crate();
+	const res::tag world_template = document->world_template();
+	BOOST_TEST(rs->exists(world_template));
+	const std::string color = document->render_target();
+
+	document->close();
+
+	BOOST_TEST(!rs->exists(world_template));
+	BOOST_REQUIRE_EQUAL(released.size(), 4u);
+	BOOST_TEST(released.front().view() == color);
+	for (const res::tag& tag : released) BOOST_TEST(tag.view().starts_with("memory://__mesh_"));
+}
+
+BOOST_AUTO_TEST_CASE(TheGameLayerChange_DropsThePreviewWorld_AndKeepsTheEditsUntilItIsMadeAgain)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	BOOST_REQUIRE(document->registry() != nullptr);
+
+	document->release_preview_world();
+
+	BOOST_TEST(document->registry() == nullptr);
+	BOOST_TEST(mgr->find_preview("res://shapes/crate.poly.desc") == nullptr);
+	BOOST_TEST(document->is_open());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->stats().triangles == 12u);
+
+	document->rebuild_preview_world();
+
+	BOOST_TEST(document->registry() != nullptr);
+	BOOST_TEST(document->camera() != nullptr);
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(TheOverwriteQuestion_NamesBothWritesForAnEditedSource_AndSaysTheFileIsNotOursForAMismatch)
+{
+	open_crate();
+	const std::string clean = document->overwrite_geometry_question();
+	BOOST_TEST(clean.find("writes the geometry") != std::string::npos);
+	BOOST_TEST(clean.find("crate.geom.desc") != std::string::npos);
+	BOOST_TEST(clean.find("not made from this source") == std::string::npos);
+
+	BOOST_REQUIRE(move_first_vertex());
+	const std::string edited = document->overwrite_geometry_question();
+	BOOST_TEST(edited.find("two files") != std::string::npos);
+	BOOST_TEST(edited.find("crate.poly.desc") != std::string::npos);
+	BOOST_TEST(edited.find("crate.geom.desc") != std::string::npos);
+	document->close();
+
+	const shape_asset_result sphere = build_shape_asset(sphere_params{ 0.5f, 8, 4 }, res::tag{ "res://shapes/crate.geom.desc" });
+	BOOST_REQUIRE(sphere.files.has_value());
+	BOOST_REQUIRE(write_mesh_geometry(*rs, res::tag{ "res://shapes/crate.geom.desc" }, sphere.files->data).empty());
+	open_crate();
+	BOOST_REQUIRE(document->geometry_mismatch());
+	const std::string foreign = document->overwrite_geometry_question();
+	BOOST_TEST(foreign.find("not made from this source") != std::string::npos);
+	BOOST_TEST(foreign.find("it is replaced") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

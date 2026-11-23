@@ -482,6 +482,7 @@ void edt::mesh_document::open_preview_world()
 	m_has_world = false;
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return;
+	if (!m_services.resources() || !m_services.writable_resources() || !m_services.descs()) return;
 
 	const auto template_text = m_services.resources()->require_sync<res::text_resource>(k_template_tag);
 	if (!template_text.is_ready()) {
@@ -498,6 +499,7 @@ void edt::mesh_document::open_preview_world()
 		return;
 	}
 	const res::tag world_tag{ std::format("memory://editor/__mesh_preview/{}.desc", m_serial) };
+	m_world_tag = world_tag;
 	m_services.writable_resources()->store(world_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
 	m_services.resources()->signal_changed(world_tag);
 	const auto world_res = m_services.resources()->require_sync<scn::world_desc>(world_tag);
@@ -557,7 +559,7 @@ void edt::mesh_document::open_preview_world()
 	sync_preview_node();
 }
 
-void edt::mesh_document::close_preview_world()
+void edt::mesh_document::release_preview_world()
 {
 	if (m_has_world) {
 		if (auto ctx_mgr = m_services.ctx_manager.lock()) ctx_mgr->destroy_preview(m_poly_tag.view());
@@ -566,6 +568,37 @@ void edt::mesh_document::close_preview_world()
 	m_root = entt::null;
 	m_preview_prefab.reset();
 	m_set_name.clear();
+}
+
+void edt::mesh_document::rebuild_preview_world()
+{
+	if (!m_open || m_has_world) return;
+	open_preview_world();
+	rebake();
+}
+
+void edt::mesh_document::close_preview_world()
+{
+	const bool had_world = m_has_world;
+	release_preview_world();
+	if (!had_world) return;
+	if (res::resource_system* writer = m_services.writable_resources()) {
+		writer->erase(m_world_tag);
+	}
+	if (m_release_targets) {
+		m_release_targets({ res::tag{ m_rt_color }, res::tag{ m_rt_depth }, res::tag{ m_rt_accum }, res::tag{ m_rt_reveal } });
+	}
+}
+
+std::string edt::mesh_document::overwrite_geometry_question() const
+{
+	std::string text = m_dirty
+		? std::format("This writes two files: the edited source {} and the geometry {}.", m_poly_tag.view(), m_geometry_tag.view())
+		: std::format("This writes the geometry {} from the source {}.", m_geometry_tag.view(), m_poly_tag.view());
+	if (m_geometry_mismatch) {
+		text += std::format(" {} was not made from this source: it is replaced.", m_geometry_tag.view());
+	}
+	return text + " Continue?";
 }
 
 void edt::mesh_document::sync_preview_node()

@@ -59,6 +59,11 @@ namespace edt
 		void drop_dirty();
 		// The game layer goes or the editor quits: the window lets go of its document first.
 		void detach_document();
+		// The game layer changes: the meshes drop their preview worlds (the working copies and their edits stay) and make them again in the new one.
+		void park_for_layer_change();
+		void restore_after_layer_change();
+		// The mesh the window shows; none: no document.
+		document_id shown_id() const { return m_shown; }
 
 	private:
 		mesh_document* shown() const;

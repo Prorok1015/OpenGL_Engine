@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 #include <entt/entt.hpp>
 
 namespace res
@@ -116,9 +117,21 @@ namespace edt
 		const std::string& set_name() const { return m_set_name; }
 		static constexpr std::string_view context_name() { return "__mesh_preview"; }
 		const std::string& render_target() const { return m_rt_color; }
+		// The resource the preview world was made from (given up with it).
+		const res::tag& world_template() const { return m_world_tag; }
 		scn::camera_component* camera();
 		// The window stops showing this document: its camera draws nothing until it is shown again.
 		void park_camera();
+		// The render targets of the preview's camera and the template of its world are given up when the document closes: this takes the
+		// target tags (the renderer owns the textures, the document does not know it).
+		using targets_release = std::function<void(const std::vector<res::tag>&)>;
+		void set_targets_release(targets_release release) { m_release_targets = std::move(release); }
+		// The game layer goes: the preview world (a set of the context manager) is dropped, the working copy and its edits stay; after it
+		// the world is made again in the new layer.
+		void release_preview_world();
+		void rebuild_preview_world();
+		// What the Overwrite geometry question says: the files it writes and, when the geometry file is not the bake of the source, that it is replaced.
+		std::string overwrite_geometry_question() const;
 
 	private:
 		save_result save_impl(bool replace_foreign_geometry);
@@ -140,6 +153,7 @@ namespace edt
 		desc_file_layout m_files;
 		std::function<bool()> m_locked;
 		geometry_writer m_write_geometry;
+		targets_release m_release_targets;
 
 		mesh::poly_mesh_desc m_working;
 		mesh::baked_mesh m_baked;
@@ -169,6 +183,7 @@ namespace edt
 		std::string m_rt_accum;
 		std::string m_rt_reveal;
 		std::string m_working_tag;
+		res::tag m_world_tag;
 		std::unique_ptr<scn::prefab_desc> m_preview_prefab;
 		entt::entity m_root = entt::null;
 		bool m_has_world = false;
