@@ -1529,7 +1529,7 @@ BOOST_AUTO_TEST_CASE(RebuildShape_ThatTheCommandRefuses_ReportsItAndTouchesNoNod
 
 	BOOST_TEST(report.error.find("stale") != std::string::npos);
 	BOOST_TEST(report.error.find("the file changed since it was read") != std::string::npos);
-	BOOST_TEST(mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
 }
 
 BOOST_AUTO_TEST_CASE(RebuildShape_WhenTheLevelCouldNotFollow_SaysSo)
@@ -1567,7 +1567,7 @@ BOOST_AUTO_TEST_CASE(RebuildShape_InPlay_LeavesTheOpenPrefabAsItIs_AndSaysWhy)
 
 	BOOST_REQUIRE(report.notes.size() == 1u);
 	BOOST_TEST(report.notes[0].find("Play is running") != std::string::npos);
-	BOOST_TEST(mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
 	BOOST_TEST(!edt::prefab_rebuild_blocker(*document).empty());
 }
 
@@ -1593,7 +1593,7 @@ BOOST_AUTO_TEST_CASE(RebuildShape_ForAPrefabOfALowerLayer_LeavesItAsItIsAndSaysW
 
 	BOOST_REQUIRE(report.notes.size() == 1u);
 	BOOST_TEST(report.notes[0].find("lower") != std::string::npos);
-	BOOST_TEST(mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

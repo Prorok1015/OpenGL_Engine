@@ -120,7 +120,7 @@ namespace edt::mesh
 	{
 		const std::optional<shape_params> shape = shape_params_from_json(kind, params, error);
 		if (!shape) return std::nullopt;
-		const shape_asset_result made = build_shape_asset(*shape, res::tag::make("probe.geom.desc"));
+		const shape_asset_result made = build_shape_asset(*shape, res::tag{ std::string("res://") + "probe.geom.desc" });
 		if (!made.files) {
 			error = made.error;
 			return std::nullopt;
