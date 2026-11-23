@@ -401,4 +401,46 @@ BOOST_AUTO_TEST_CASE(AHugeLineAndAFloodOfErrorsAreBounded)
 	BOOST_TEST(problems[101].message == "\xE2\x80\xA6 9900 more problems");
 }
 
+BOOST_AUTO_TEST_CASE(ALineNumberOfMoreThanNineDigitsIsNoLine)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto vertex = put("long_number.vert", "#version 450 core\nvoid main() {}\n");
+	const auto variant = shaders.variants().intern(program_of(vertex, put("long_number.frag", good_fragment)));
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		return stage_log(0, "0:123456789012(5): error: too far\n0:0000000002(3): error: padded\n");
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(problems[0].file == vertex);
+	BOOST_TEST(problems[0].line == 0);
+	BOOST_TEST(problems[0].message.find("123456789012") != std::string::npos);
+	BOOST_TEST(problems[1].line == 2);
+	BOOST_TEST(problems[1].column == 3);
+}
+
+BOOST_AUTO_TEST_CASE(ALineCutInsideAMultibyteCharacterStaysValidUtf8)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto variant = shaders.variants().intern(program_of(put("utf8_cut.vert", "#version 450 core\nvoid main() {}\n"), put("utf8_cut.frag", good_fragment)));
+	const std::string prefix = "0(2) : error C0000: ";
+	// Byte 4096 of the line is the second byte of an "\xC3\xA9" pair.
+	std::string line = prefix + std::string(4 * 1024 - 1 - prefix.size(), 'x');
+	for (int i = 0; i < 100; ++i) {
+		line += "\xC3\xA9";
+	}
+	drv.judge_shaders_with([&line](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		return stage_log(0, line + "\n");
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 1u);
+	const std::string_view ellipsis = "\xE2\x80\xA6";
+	BOOST_REQUIRE(problems[0].message.ends_with(ellipsis));
+	const std::string_view kept = std::string_view{ problems[0].message }.substr(0, problems[0].message.size() - ellipsis.size());
+	BOOST_TEST(kept.ends_with('x'));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

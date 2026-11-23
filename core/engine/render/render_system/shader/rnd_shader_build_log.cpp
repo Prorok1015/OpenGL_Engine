@@ -34,18 +34,25 @@ namespace
 		return text;
 	}
 
+	// At most `limit` bytes of `text`, never ending inside a UTF-8 sequence.
+	std::string_view utf8_prefix(std::string_view text, std::size_t limit)
+	{
+		if (text.size() <= limit) {
+			return text;
+		}
+		std::size_t end = limit;
+		while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0u) == 0x80u) {
+			--end;
+		}
+		return text.substr(0, end);
+	}
+
 	// `text` within max_line_bytes, not cut inside a UTF-8 sequence, with an ellipsis when it was cut here or before (`cut`).
 	std::string bounded(std::string_view text, bool cut)
 	{
-		std::size_t end = text.size();
-		if (end > max_line_bytes) {
-			end = max_line_bytes;
-			while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0u) == 0x80u) {
-				--end;
-			}
-			cut = true;
-		}
-		std::string out{ text.substr(0, end) };
+		const std::string_view kept = utf8_prefix(text, max_line_bytes);
+		std::string out{ kept };
+		cut = cut || kept.size() < text.size();
 		if (cut) {
 			out += ellipsis;
 		}
@@ -82,14 +89,19 @@ namespace
 			return false;
 		}
 
-		// A run of digits; only the first 9 make the value, so it never overflows.
+		// A run of digits; leading zeros aside, more than 9 of them is no number a log means, so none at all.
 		std::optional<std::size_t> number()
 		{
 			const std::size_t begin = pos;
+			while (pos < text.size() && text[pos] == '0') {
+				++pos;
+			}
 			std::size_t value = 0;
+			std::size_t significant = 0;
 			while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos]))) {
-				if (pos - begin < 9) {
-					value = value * 10 + static_cast<std::size_t>(text[pos] - '0');
+				value = value * 10 + static_cast<std::size_t>(text[pos] - '0');
+				if (++significant > 9) {
+					return std::nullopt;
 				}
 				++pos;
 			}
@@ -247,14 +259,14 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 	std::size_t budget = max_log_bytes;
 	for (const driver::shader_stage_log& stage : log.stages) {
 		const std::size_t before = errors.total + warnings.total;
-		const std::string_view text = std::string_view{ stage.text }.substr(0, budget);
+		const std::string_view text = utf8_prefix(stage.text, budget);
 		budget -= text.size();
 		std::size_t line_begin = 0;
 		while (line_begin < text.size()) {
 			const std::size_t newline = text.find('\n', line_begin);
 			const std::size_t line_end = newline == std::string_view::npos ? text.size() : newline;
 			const bool cut = line_end - line_begin > max_line_bytes;
-			const std::string_view line = trimmed(text.substr(line_begin, std::min(line_end - line_begin, max_line_bytes)));
+			const std::string_view line = trimmed(utf8_prefix(text.substr(line_begin, line_end - line_begin), max_line_bytes));
 			line_begin = line_end + 1;
 			if (line.empty() || is_summary(line)) {
 				continue;
@@ -299,8 +311,8 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 				break;
 			}
 		}
-		const std::string_view link = std::string_view{ log.link }.substr(0, budget);
-		const std::string_view text = trimmed(link.substr(0, max_line_bytes));
+		const std::string_view link = utf8_prefix(log.link, budget);
+		const std::string_view text = trimmed(utf8_prefix(link, max_line_bytes));
 		if (out.size() < max_problems) {
 			out.push_back(make_problem(stage_file(vertex), 0, 0,
 				text.empty() ? std::string{ "the program did not link" } : bounded(text, link.size() > max_line_bytes), program, "shader/link"));
