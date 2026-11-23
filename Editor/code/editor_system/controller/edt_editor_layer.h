@@ -70,6 +70,8 @@ namespace edt {
 		void set_context(editor_context& context) { m_context = &context; }
 		// See dockspace::set_menu_bar_status.
 		void set_menu_bar_status(std::function<void()> draw) { m_dockspace.set_menu_bar_status(std::move(draw)); }
+		// See dockspace::set_tabs_bar.
+		void set_tabs_bar(std::function<void()> draw) { m_dockspace.set_tabs_bar(std::move(draw)); }
 		// See dockspace::set_ui_probe.
 		void set_ui_probe(std::shared_ptr<ui_probe> probe) { m_dockspace.set_ui_probe(std::move(probe)); }
 		// Game mode (#294): while `active` says so, `draw` is drawn instead of the dockspace and its panels (which is

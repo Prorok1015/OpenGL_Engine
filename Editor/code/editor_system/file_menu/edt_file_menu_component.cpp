@@ -89,6 +89,9 @@ namespace
 edt::file_menu_component::file_menu_component(ports from)
 	: m_ports(std::move(from))
 {
+	m_tabs = std::make_unique<document_tabs>(m_ports.context.documents(),
+		document_tab_ports{ focus_ports(), [this](document_id id) { m_ports.asset_open.data_documents().request_close(id); },
+			[this] { m_ports.prefab.request_close(); } });
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_ports.state.editor_tag.is_valid(); };
 	hooks.is_dirty = [this] { return m_ports.state.is_dirty(); };
@@ -225,18 +228,22 @@ void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
 	m_menu->attach_window_close(windows);
 }
 
+edt::document_focus_ports edt::file_menu_component::focus_ports()
+{
+	return { [this](const res::tag& source) { m_ports.asset_open.data_documents().open(source, false); },
+		[this] { m_ports.prefab.show(); } };
+}
+
 void edt::file_menu_component::focus_unsaved(document_id id)
 {
-	document_manager& documents = m_ports.context.documents();
-	const document* open = documents.find(id);
-	if (!open) return;
-	if (open->kind() == "data") {
-		// Opening what is open moves the focus to its window.
-		m_ports.asset_open.data_documents().open(open->source(), false);
-		return;
-	}
-	if (open->kind() == "prefab") m_ports.prefab.show();
-	documents.set_active(id);
+	focus_document(m_ports.context.documents(), id, focus_ports());
+}
+
+void edt::file_menu_component::draw_document_tabs()
+{
+	if (!m_tabs) return;
+	const document_tabs_bar::actions on{ [this](document_id id) { m_tabs->activate(id); }, [this](document_id id) { m_tabs->close(id); } };
+	m_tabs_bar.draw(m_tabs->tabs(), m_ports.context.colors(), on);
 }
 
 void edt::file_menu_component::draw_unsaved_list(const std::vector<unsaved_group>& groups)
