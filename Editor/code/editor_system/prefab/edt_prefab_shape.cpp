@@ -1,5 +1,6 @@
 #include "edt_prefab_shape.h"
 #include "edt_prefab_document.h"
+#include "edt_shape_parameters.h"
 #include <algorithm>
 #include <format>
 #include <optional>
