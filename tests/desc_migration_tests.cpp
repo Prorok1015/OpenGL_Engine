@@ -408,6 +408,16 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
 	BOOST_TEST(problem_of(health, R"([{"from":1,"rename":{"/hp":"/tags/hp"}},{"from":2,"remove":["/x"]}])").empty());
 
 	BOOST_TEST(problem_of(health, R"([{"from":1,"rename":{"/a":"/tmp"},"remove":["/tmp"]},{"from":2,"remove":["/x"]}])").empty());
+
+	// Below a structure the rest of the path is a field of its nested schema.
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(
+		R"({ "name": "test.inner", "kind": "struct", "fields": [ { "name": "armor", "kind": "i32" } ] })"))) != nullptr);
+	const json::object outer = parse(R"({ "name": "test_migr_desc", "version": 3,
+		"fields": [ { "name": "stats", "kind": "structure", "ref_type": "test.inner" } ] })");
+	const desc::type_schema with_stats = desc::parse_type_schema(outer, &ds.schemas());
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST(ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/armor"}},{"from":2,"remove":["/x"]}])")).empty());
+	BOOST_TEST(!ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/garbage"}},{"from":2,"remove":["/x"]}])")).empty());
 }
 
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)

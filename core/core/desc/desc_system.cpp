@@ -105,17 +105,22 @@ namespace
 		return result;
 	}
 
-	// The field itself (key or alias), a container of fields, or a place inside a field whose value is an object of keys
-	// (a structure, a map, a custom value): a number or a list cannot take a key.
-	bool reaches_a_field(const desc::type_schema& schema, std::string_view pointer, const desc::schema_registry& resolve)
+	// The field itself (key or alias), a container of fields, or a place inside a field whose value is an object of keys:
+	// a field of the nested schema of a structure (when it is known), any key of a map or a custom value. A number or a
+	// list cannot take a key.
+	bool reaches_a_field(const desc::type_schema& schema, std::string_view pointer, const desc::schema_registry& resolve, int depth = 0)
 	{
 		for (const desc::field_schema& field : schema.fields) {
-			const bool holds_keys = field.kind == desc::field_kind::structure || field.kind == desc::field_kind::map
-				|| field.kind == desc::field_kind::custom;
 			std::vector<std::string_view> keys{ field.key };
 			keys.insert(keys.end(), field.read_aliases.begin(), field.read_aliases.end());
 			for (const std::string_view key : keys) {
-				if (pointer == key || (holds_keys && under(pointer, key))) return true;
+				if (pointer == key) return true;
+				if (!under(pointer, key)) continue;
+				if (field.kind == desc::field_kind::map || field.kind == desc::field_kind::custom) return true;
+				if (field.kind == desc::field_kind::structure) {
+					const desc::type_schema* nested = depth < 16 ? resolve.find(field.ref_type) : nullptr;
+					return !nested || reaches_a_field(*nested, pointer.substr(key.size()), resolve, depth + 1);
+				}
 			}
 		}
 		return desc::is_field_container(schema, pointer, &resolve);
