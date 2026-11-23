@@ -452,6 +452,29 @@
         "const BufferLayout& get_layout() const",
         "void set_layout(const BufferLayout&)"
       ]
+    },
+    {
+      "class": "render_pass_interface",
+      "header": "core/engine/render/render_system/include/snk/render/rnd_render_pass_interface.h",
+      "constant": "render_pass_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~render_pass_interface()",
+        "void execute(render_context&, driver::driver_interface&)",
+        "bool once_per_frame() const"
+      ]
+    },
+    {
+      "class": "material_compiler_interface",
+      "header": "core/engine/render/render_system/include/snk/render/shader/rnd_material_compiler.h",
+      "constant": "material_compiler_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~material_compiler_interface()",
+        "rnd::shader_config compile(const material_desc&, const material_compile_context&)"
+      ]
     }
   ],
   "retired": []
