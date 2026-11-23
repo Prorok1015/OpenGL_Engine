@@ -13,6 +13,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -589,6 +590,31 @@ BOOST_AUTO_TEST_CASE(copies_of_ended_processes_are_removed_and_only_those)
 	auto left = files_in(cache);
 	std::ranges::sort(left);
 	BOOST_TEST(left == (std::vector<std::string>{ std::format("{}-3", k_running_pid), "notes" }), boost::test_tools::per_element());
+}
+
+// #1294: a stale copy is removed from .cache without following a link put into it.
+BOOST_AUTO_TEST_CASE(a_link_in_a_stale_copy_is_removed_as_the_link_never_what_it_leads_to)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const fs::path outside = dir.write(fs::path{ "outside" } / "keep.txt", "keep").parent_path();
+	const fs::path stale = root / ".cache" / "modules" / std::format("{}-0", k_dead_pid);
+	dir.write(stale / library_file("test_game"), "an editor that ended");
+	const fs::path link = stale / "planted";
+#ifdef _WIN32
+	// A junction needs no privilege: one that cannot be made is a broken test, not a skip.
+	const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.string() + "\" >nul";
+	const bool linked = std::system(command.c_str()) == 0 && fs::exists(link);
+	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << link.string());
+#else
+	std::error_code ec;
+	fs::create_directory_symlink(outside, link, ec);
+	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
+	load();
+
+	BOOST_TEST(!fs::exists(stale), "the stale copy and the link in it are gone");
+	BOOST_TEST(fs::is_regular_file(outside / "keep.txt"), "what the link led to is untouched");
 }
 
 BOOST_AUTO_TEST_CASE(a_static_host_leaves_the_copies_in_the_project_alone)
