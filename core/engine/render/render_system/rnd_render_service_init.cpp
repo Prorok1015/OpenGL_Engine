@@ -16,6 +16,7 @@
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include "geom/rnd_geometry_desc_adapter.h"
 #include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/render/rnd_shader_desc.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
 #include "passes/rnd_frame_upload_pass.h"
@@ -115,10 +116,13 @@ void engine::render::register_render_descs(desc::desc_system& desc_sys)
 	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
 	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
+	// A document: every field is on the schema, so the editor opens a .shader.desc as data.
+	desc_sys.register_document<rnd::shader_desc>("shader_desc");
 }
 
 void engine::render::unregister_render_descs(desc::desc_system& desc_sys)
 {
+	desc_sys.unregister_desc("shader_desc");
 	desc_sys.unregister_desc("texture_cubemap_desc");
 	desc_sys.unregister_desc("texture_2d_desc");
 	desc_sys.unregister_desc("texture_desc");

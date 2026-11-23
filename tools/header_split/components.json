@@ -277,6 +277,7 @@
     "rnd_render_pass_interface.h",
     "rnd_render_service_init.h",
     "rnd_render_system.h",
+    "rnd_shader_desc.h",
     "rnd_state_helper.h",
     "shader/rnd_material_compiler.h",
     "shader/rnd_material_params.h",

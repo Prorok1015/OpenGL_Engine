@@ -5,6 +5,7 @@
 #include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_material_params.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -422,6 +423,40 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 
 	// The block is bytes: nothing is left that the driver would set by name.
 	static_assert(std::is_same_v<decltype(config.rdata.material_params), std::vector<std::byte>>);
+}
+
+// #1199: a shipped shader program gives the program and defines the material compiler builds from the same stages.
+BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStages)
+{
+	auto& render = storage.require<rnd::render_system>();
+	rnd::material_compiler_interface* compiler = render.get_material_compiler();
+	BOOST_REQUIRE(compiler);
+	auto handle = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
+	test_util::pump(tasks);
+	const auto shader = handle.get_sync();
+	BOOST_REQUIRE(shader);
+
+	scn::material_desc material;
+	material.vertex_shader = shader->vertex;
+	material.fragment_shader = shader->fragment;
+	material.geometry_shader = shader->geometry;
+	material.defines = { "USE_NORMAL_MAP" };
+	rnd::shader_desc with_defines = *shader;
+	with_defines.defines = material.defines;
+
+	for (const bool skinned : { false, true }) {
+		BOOST_TEST_CONTEXT("skinned " << skinned) {
+			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned });
+			const rnd::shader_config config = with_defines.config();
+			BOOST_CHECK(config.cdata.program == compiled.cdata.program);
+			// The skinning define stays the compiler's.
+			std::vector<std::string> expected = config.cdata.defines;
+			if (skinned) expected.push_back("USE_ANIMATION");
+			BOOST_CHECK(expected == compiled.cdata.defines);
+			BOOST_CHECK(config.rdata.samplers.empty());
+			BOOST_CHECK(config.rdata.material_params.empty());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

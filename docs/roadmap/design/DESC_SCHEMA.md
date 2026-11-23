@@ -243,6 +243,10 @@
 
 Все четыре типа EPIC-55 (свет, камера, материал, skybox) описаны схемой; `desc_resave --check` не меняет ни одного отгруженного файла. Не переведено и не планируется: prefab/world/level (документы) и geometry (свой кодек). Остаётся за пределами #131: anchor/object/bone/animated_node, текстуры (`texture`, `texture_2d`, `texture_cubemap`), skin/animation и остальные типы сцены, список ведётся в описании #16. Поле `samplers` материала — JSON-редактор (вид `custom`), пока схема не принимает `null` в элементе массива.
 
+## Шейдерная программа (#1199, EPIC-26 US-26-1, 2026-11-23)
+
+`rnd::shader_desc` (`"__type": "shader_desc"`, файлы `*.shader.desc`, `rnd_shader_desc.h`) описан схемой (`schema_desc<shader_desc, schema_kind::desc>`) без рукописного чтения и записи и зарегистрирован в `engine::render::register_render_descs` через `register_document` (все поля в схеме, поэтому это документ данных). Ключи в порядке полей: `vertex`, `fragment`, `geometry` (`res_tag`, `write_if_valid`: пустая необязательная стадия не пишется, так что новая стадия не добавит строку в каждый файл при пересохранении; `vertex` и `fragment` обязательны), `defines` (массив строк). `config()` даёт программу и defines так же, как `default_material_compiler` (без `USE_ANIMATION`). `parameters`, `samplers`, `name` отложены; материал на него ещё не ссылается (#1200). Файлы `core/res/shaders/{scene,sky,mix_opaque_trans_scene}.shader.desc` побайтно равны записи адаптера (`RndShaderDescTests/ShippedProgramsLoadAndSaveToTheirOwnBytes`, `desc_resave --check`).
+
 ## Узел меша (#720, 2026-11-12)
 
 - `mesh_node_desc` описан схемой (`schema_desc<mesh_node_desc>`, вид `desc`, как у материала: тип регистрируется без флага `component`; `scn_mesh_node_desc.h`):

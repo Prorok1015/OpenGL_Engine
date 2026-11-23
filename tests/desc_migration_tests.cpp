@@ -307,6 +307,68 @@ BOOST_AUTO_TEST_CASE(MigrationHelpers_MoveRemoveAndFillFields)
 	BOOST_TEST(listed.at("items").as_array().size() == 1u);
 }
 
+// #1228: a rename onto the object that holds its source lifts the value a level up, while that object holds nothing
+// else on the way down; otherwise it names what would be dropped. A refusal leaves the object as it was.
+BOOST_AUTO_TEST_CASE(MigrationHelpers_RenameOntoItsOwnHolder_LiftsTheValue)
+{
+	auto lifted = parse(R"({"a":{"b":{"c":5}},"keep":1})");
+	desc::migrations::rename(lifted, "/a/b/c", "/a");
+	BOOST_TEST(lifted.at("a").as_int64() == 5);
+	BOOST_TEST(lifted.at("keep").as_int64() == 1);
+
+	const json::object crowded = parse(R"({"a":{"b":5,"c":1}})");
+	auto tried = crowded;
+	BOOST_CHECK_EXCEPTION(desc::migrations::rename(tried, "/a/b", "/a"), std::runtime_error, [](const std::runtime_error& e) {
+		return std::string(e.what()).find("would drop /a/c") != std::string::npos;
+	});
+	BOOST_TEST((tried == crowded));
+}
+
+BOOST_AUTO_TEST_CASE(MigrationHelpers_ARefusedRename_LeavesTheObjectAsItWas)
+{
+	const json::object before = parse(R"({"hp":5,"stats":3,"taken":{"x":1}})");
+	auto o = before;
+	BOOST_CHECK_THROW(desc::migrations::rename(o, "/hp", "/stats/health"), std::runtime_error);
+	BOOST_TEST((o == before));
+	BOOST_CHECK_THROW(desc::migrations::rename(o, "/hp", "/taken/x"), std::runtime_error);
+	BOOST_TEST((o == before));
+}
+
+// Onto a place inside the source the whole value moves down: an object, and a scalar or an array too, whose way to the
+// target runs through the source itself.
+BOOST_AUTO_TEST_CASE(MigrationHelpers_RenameInsideItsSource_MovesTheValueDown)
+{
+	auto o = parse(R"({"pos":{"x":1},"hp":5,"tags":["a"]})");
+	desc::migrations::rename(o, "/pos", "/pos/local");
+	BOOST_TEST(o.at("pos").at("local").at("x").as_int64() == 1);
+	BOOST_TEST(o.at("pos").as_object().size() == 1u);
+	desc::migrations::rename(o, "/hp", "/hp/value");
+	BOOST_TEST(o.at("hp").at("value").as_int64() == 5);
+	desc::migrations::rename(o, "/tags", "/tags/list/items");
+	BOOST_TEST(o.at("tags").at("list").at("items").as_array().size() == 1u);
+
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST(desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/hp":"/hp/value"}}])"), 2).empty());
+	BOOST_TEST(!desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/hp":"/hp/value"},"set_default":{"/hp/max":9}}])"), 2).empty());
+}
+
+BOOST_AUTO_TEST_CASE(SchemaSteps_ALiftParses_ARepeatedRemovalDoesNot)
+{
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST(desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])"), 2).empty());
+	BOOST_TEST(desc::schema_migrations_problem(steps(R"([{"from":1,"remove":["/a","/a"]}])"), 2).find("remove /a twice") != std::string::npos);
+	// The lift does not let another operation of the step inside the target.
+	BOOST_TEST(!desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"},"remove":["/stats/mp"]}])"), 2).empty());
+
+	desc::type_schema schema;
+	schema.name = k_type;
+	schema.version = 2;
+	BOOST_REQUIRE(ds.register_schema(schema, steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])")) != nullptr);
+	auto o = parse(R"({"__type":"test_migr_desc","stats":{"hp":7}})");
+	ds.migrate_tree(o, "ctx");
+	BOOST_TEST(o.at("stats").as_int64() == 7);
+}
+
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
 {
 	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [],

@@ -7,7 +7,7 @@
 std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks)
 {
 	std::vector<registration> out;
-	out.reserve(3);
+	out.reserve(4);
 	out.push_back(registry.add({
 		.id = "prefab",
 		.suffix = ".prefab.desc",
@@ -24,6 +24,15 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 			return document;
 		},
 	}));
+	// Not "shader": asset_type_of already names GLSL sources so, and an agent's asset.query by kind would mix the two.
+	if (hooks.open_desc) {
+		out.push_back(registry.add({
+			.id = "shader_desc",
+			.suffix = ".shader.desc",
+			.icon = "[S]",
+			.open = [open = std::move(hooks.open_desc)](editor_context&, const res::tag& tag) { open(tag); },
+		}));
+	}
 	// Empty suffix: every dropped asset is added through its desc, as before the registry existed.
 	out.push_back(registry.add({
 		.id = "desc",
