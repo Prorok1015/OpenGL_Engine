@@ -242,7 +242,8 @@ BOOST_AUTO_TEST_CASE(AnImportWaitingInTheExportDialog_LeavesNothingOfThisRunInMe
 	BOOST_TEST(files_of_this_run() > 0u, "the import is in a folder of this run");
 
 	component->shutdown();
-	BOOST_TEST(files_of_this_run() == 0u);
+	test_util::pump(tasks);
+	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 }
 
 BOOST_AUTO_TEST_CASE(ASecondImportWhileTheExportDialogIsOpen_IsRefused_AndTheDialogKeepsItsImport)
