@@ -360,18 +360,69 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_ALiftParses_ARepeatedRemovalDoesNot)
 	// The lift does not let another operation of the step inside the target.
 	BOOST_TEST(!desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"},"remove":["/stats/mp"]}])"), 2).empty());
 
-	desc::type_schema schema;
-	schema.name = k_type;
-	schema.version = 2;
-	BOOST_REQUIRE(ds.register_schema(schema, steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])")) != nullptr);
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [ { "name": "stats", "kind": "i32" } ] })");
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(text), steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])")) != nullptr);
 	auto o = parse(R"({"__type":"test_migr_desc","stats":{"hp":7}})");
 	ds.migrate_tree(o, "ctx");
 	BOOST_TEST(o.at("stats").as_int64() == 7);
 }
 
+// #1228: where a step puts a value is checked against the schema the steps lead to, after the later steps moved or removed
+// it: a rename onto no field, or a default that is no field or does not fit it, refuses the registration.
+BOOST_AUTO_TEST_CASE(SchemaSteps_ThatPutAValueWhereTheSchemaHasNoField_AreRefused)
+{
+	const auto register_with = [this](const char* migrations) {
+		const json::object text = parse(R"({ "name": "test_migr_desc", "version": 3, "fields": [
+			{ "name": "health", "kind": "f32" }, { "name": "armor", "key": "/stats/armor", "kind": "i32" } ] })");
+		const desc::type_schema* stored = ds.register_schema(desc::parse_type_schema(text), json::parse(migrations).as_array());
+		if (stored) ds.unregister_desc(k_type);
+		return stored != nullptr;
+	};
+	// Onto a field, into a container of fields, through a temporary key a later step moves on, or one a later step removes.
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/health"}},{"from":2,"rename":{"/def":"/stats"}}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"rename":{"/tmp":"/health"}}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"remove":["/tmp"]}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"set_default":{"/stats/armor":3}},{"from":2,"set_default":{"/health":1.5}}])"));
+	// No field where the value ends up, or a default of the wrong kind.
+	BOOST_TEST(!register_with(R"([{"from":1,"rename":{"/hp":"/health_points"}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"rename":{"/tmp":"/hitpoints"}}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"set_default":{"/shield":1}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"set_default":{"/stats/armor":"thick"}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(ds.current_version(k_type) == 1);
+}
+
+// Review of #1269 (Fable): a place a later step empties is a staging place, not where a field must be; only a field that
+// holds keys (a structure, a map, a custom value) takes a path below it; a rename target its own step removes is dropped.
+// A runtime schema has no map field (it needs a C++ type), so a structure stands for the fields that hold keys below.
+BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
+{
+	const auto problem_of = [this](const char* fields, const char* migrations) {
+		const json::object text = parse((std::string(R"({ "name": "test_migr_desc", "version": 3, "fields": )") + fields + " }").c_str());
+		return ds.migrations_problem(desc::parse_type_schema(text), json::parse(migrations).as_array());
+	};
+	constexpr const char* points = R"([ { "name": "hp", "kind": "f32" }, { "name": "mp", "kind": "f32" } ])";
+	BOOST_TEST(problem_of(points, R"([{"from":1,"rename":{"/stats_old":"/stats"}},{"from":2,"rename":{"/stats/hp":"/hp","/stats/mp":"/mp"}}])").empty());
+
+	constexpr const char* health = R"([ { "name": "health", "kind": "f32" } ])";
+	const std::string below_a_number = problem_of(health, R"([{"from":1,"rename":{"/hp":"/health/points"}},{"from":2,"remove":["/x"]}])");
+	BOOST_TEST(below_a_number.find("reaches no field") != std::string::npos, below_a_number);
+
+	BOOST_TEST(problem_of(health, R"([{"from":1,"rename":{"/a":"/tmp"},"remove":["/tmp"]},{"from":2,"remove":["/x"]}])").empty());
+
+	// Below a structure the rest of the path is a field of its nested schema.
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(parse(
+		R"({ "name": "test.inner", "kind": "struct", "fields": [ { "name": "armor", "kind": "i32" } ] })"))) != nullptr);
+	const json::object outer = parse(R"({ "name": "test_migr_desc", "version": 3,
+		"fields": [ { "name": "stats", "kind": "structure", "ref_type": "test.inner" } ] })");
+	const desc::type_schema with_stats = desc::parse_type_schema(outer, &ds.schemas());
+	const auto steps = [](const char* text) { return json::parse(text).as_array(); };
+	BOOST_TEST(ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/armor"}},{"from":2,"remove":["/x"]}])")).empty());
+	BOOST_TEST(!ds.migrations_problem(with_stats, steps(R"([{"from":1,"rename":{"/hp":"/stats/garbage"}},{"from":2,"remove":["/x"]}])")).empty());
+}
+
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
 {
-	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [],
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [ { "name": "b", "kind": "i32" } ],
 		"migrations": [ { "from": 1, "rename": { "/a": "/b" } } ] })");
 	BOOST_REQUIRE((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
 	auto o = parse(R"({"__type":"test_migr_desc","a":1,"b":2})");

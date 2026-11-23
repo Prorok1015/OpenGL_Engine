@@ -1,8 +1,10 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include "edt_input_binding.h"
+#include "edt_shape_menu.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -46,6 +48,8 @@ namespace edt
 		// What the Cancel button does (tests press it here).
 		void cancel_loading() { if (m_on_cancel_loading) m_on_cancel_loading(); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
+		// A shape picked in "Add shape" (the request names the parent node); called after the tree is drawn, so the edit may change the working copy.
+		void set_on_add_shape(std::function<void(const shape_request&)> cb) { m_on_add_shape = std::move(cb); }
 
 	protected:
 		void on_before_begin() override;
@@ -71,6 +75,9 @@ namespace edt
 		std::function<void()> m_on_revert;
 		inp::input_router* m_router = nullptr;
 		std::function<void(const std::vector<std::uint64_t>&)> m_on_node_selected;
+		shape_menu m_shape_menu;
+		std::function<void(const shape_request&)> m_on_add_shape;
+		std::optional<shape_request> m_pending_shape;
 		std::vector<std::uint64_t> m_selected_path;
 		bool m_has_selection = false;
 		bool m_banner_later = false;

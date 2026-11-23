@@ -10,6 +10,8 @@
 #include "edt_inspector_target.h"
 #include "edt_scene_document.h"
 #include "edt_prefab_close.h"
+#include "edt_prefab_shape.h"
+#include <snk/editor/edt_action_registry.h>
 #include "edt_prefab_save_all.h"
 #include "edt_save_all.h"
 #include <snk/editor/edt_dialog_service.h>
@@ -1234,6 +1236,139 @@ BOOST_AUTO_TEST_CASE(TheVariantForm_ATakenName_ShowsWhyAndWritesNothingOverTheFi
 	BOOST_TEST(form.problem().find("already exists") != std::string::npos);
 	BOOST_TEST(!form.submit().has_value());
 	BOOST_TEST(text_of(res_root, "prefabs/taken.prefab.desc") == "kept");
+}
+
+// #746 S3: the Add shape menu of the prefab editor puts a node with a mesh under the picked node of the working copy.
+
+namespace {
+
+const boost::json::object& mesh_fields_of(const scn::prefab_desc::prefab_node& node)
+{
+	return node.components.at("mesh").overrides;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_OfABaseShape_PutsAMeshNodeUnderTheParent_AndMakesTheDocumentDirty)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+
+	const std::string error = edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } });
+
+	BOOST_TEST(error == "");
+	BOOST_TEST(document->is_dirty());
+	const auto& arm = document->working()->get_root().children[0];
+	BOOST_REQUIRE(arm.children.size() == 1);
+	BOOST_TEST(arm.children[0].name == std::string(shape.name));
+	BOOST_TEST(arm.children[0].node_id != 0u);
+	BOOST_TEST(arm.children[0].components.at("mesh").type_name == "mesh_node_desc");
+	BOOST_TEST(mesh_fields_of(arm.children[0]).at("geometry").as_string() == edt::mesh::base_shape_path(shape));
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_WithAnEmptyParentPath_GoesUnderTheRoot)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	const std::size_t before = document->working()->get_root().children.size();
+
+	BOOST_TEST(edt::add_shape_to_prefab(actions, *document, { std::string(edt::mesh::base_shapes().front().name), {}, {} }) == "");
+
+	BOOST_TEST(document->working()->get_root().children.size() == before + 1);
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_UnderANodeThatIsGone_OrAnUnknownShape_ChangesNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+
+	BOOST_TEST(edt::add_shape_to_prefab(actions, *document, { std::string(edt::mesh::base_shapes().front().name), {}, { 0xdead } }) != "");
+	BOOST_TEST(edt::add_shape_to_prefab(actions, *document, { "no_such_shape", {}, {} }) != "");
+	BOOST_TEST(edt::add_shape_to_prefab(actions, *document, { {}, {}, {} }) != "");
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_OfAParametricShape_TakesTheRangeFromWhatShapeCreateAnswered)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	boost::json::object asked;
+	const std::string geometry_tag = std::string("res://") + "shapes/ball.geom.desc";
+	cmd::command_desc create;
+	create.id = "shape.create";
+	create.summary = "stub";
+	create.args_schema = boost::json::parse(R"({"type":"object"})");
+	create.result_schema = boost::json::parse(R"({"type":"object"})");
+	create.mutates = true;
+	create.category = cmd::agent_category::scene_edit;
+	create.invoke = [&asked, geometry_tag](const cmd::call& call) {
+		asked = call.args.as_object();
+		return cmd::result::success(boost::json::object{ { "poly", "shapes/ball.poly.desc" }, { "geometry", geometry_tag }, { "vx_begin", 0 },
+			{ "vx_end", 50 }, { "ind_begin", 0 }, { "ind_end", 240 } });
+	};
+	const edt::registration made = actions.commands().add(std::move(create));
+
+	const std::string error = edt::add_shape_to_prefab(actions, *document, { {}, boost::json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xa1 } });
+
+	BOOST_TEST(error == "");
+	BOOST_TEST(asked.at("name").as_string() == "ball");
+	const auto& node = document->working()->get_root().children[0].children.at(0);
+	BOOST_TEST(node.name == "ball");
+	BOOST_TEST(mesh_fields_of(node).at("geometry").as_string() == geometry_tag);
+	BOOST_TEST(mesh_fields_of(node).at("ind_end").to_number<int>() == 240);
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_OfAParametricShape_ThatShapeCreateRefuses_ChangesNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	cmd::command_desc create;
+	create.id = "shape.create";
+	create.summary = "stub";
+	create.args_schema = boost::json::parse(R"({"type":"object"})");
+	create.result_schema = boost::json::parse(R"({"type":"object"})");
+	create.mutates = true;
+	create.category = cmd::agent_category::scene_edit;
+	create.invoke = [](const cmd::call&) { return cmd::result::failure(cmd::codes::needs_input, "shapes/ball.poly.desc exists"); };
+	const edt::registration made = actions.commands().add(std::move(create));
+
+	const std::string error = edt::add_shape_to_prefab(actions, *document, { {}, boost::json::object{ { "name", "ball" }, { "kind", "sphere" } }, {} });
+
+	BOOST_TEST(error.find("shape.create") != std::string::npos);
+	BOOST_TEST(error.find("exists") != std::string::npos);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AddShape_OfAParametricShape_UnderANodeThatIsGone_AsksNothingOfShapeCreate)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	int creates = 0;
+	cmd::command_desc create;
+	create.id = "shape.create";
+	create.summary = "stub";
+	create.args_schema = boost::json::parse(R"({"type":"object"})");
+	create.result_schema = boost::json::parse(R"({"type":"object"})");
+	create.mutates = true;
+	create.category = cmd::agent_category::scene_edit;
+	create.invoke = [&creates](const cmd::call&) {
+		++creates;
+		return cmd::result::success();
+	};
+	const edt::registration made = actions.commands().add(std::move(create));
+
+	const std::string error = edt::add_shape_to_prefab(actions, *document, { {}, boost::json::object{ { "name", "ball" }, { "kind", "sphere" } }, { 0xdead } });
+
+	BOOST_TEST(error != "");
+	BOOST_TEST(creates == 0);
+	BOOST_TEST(!document->is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(SaveAll_ChangedOnDiskPrefab_AsksOverwriteOrReload)

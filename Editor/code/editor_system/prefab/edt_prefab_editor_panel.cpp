@@ -44,6 +44,10 @@ namespace edt
 
 	void prefab_editor_panel::on_render()
 	{
+		if (!m_loading.empty() || !m_ctx || !m_ctx->is_open()) {
+			m_shape_menu.reset();
+			m_pending_shape.reset();
+		}
 		if (!m_loading.empty()) {
 			ImGui::TextUnformatted(m_loading.c_str());
 			if (m_on_cancel_loading && ImGui::Button("Cancel")) m_on_cancel_loading();
@@ -77,6 +81,12 @@ namespace edt
 			}
 		}
 		ImGui::EndChild();
+		m_shape_menu.draw_dialog(colors(), [this](const shape_request& request) { m_pending_shape = request; });
+		if (m_pending_shape) {
+			const shape_request request = std::move(*m_pending_shape);
+			m_pending_shape.reset();
+			if (m_on_add_shape) m_on_add_shape(request);
+		}
 	}
 
 	void prefab_editor_panel::render_tree_node(const scn::prefab_desc::prefab_node& node, std::vector<std::uint64_t>& path)
@@ -88,6 +98,10 @@ namespace edt
 		const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
 		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
 			select_node(path);
+		}
+		if (!m_ctx->edits_locked() && ImGui::BeginPopupContextItem()) {
+			m_shape_menu.draw_menu(path, [this](const shape_request& request) { m_pending_shape = request; });
+			ImGui::EndPopup();
 		}
 		if (open) {
 			for (const auto& child : node.children) {

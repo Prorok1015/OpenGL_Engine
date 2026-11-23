@@ -210,6 +210,10 @@ namespace desc
 		// registered in C++ already. An empty array is the overload above.
 		const type_schema* register_schema(type_schema schema, const json::array& migrations);
 
+		// Why register_schema(schema, migrations) would refuse the steps, or empty: malformed, not leading to the schema's
+		// version, or putting a value where the schema has no field or a default that does not fit it (#1228).
+		std::string migrations_problem(const type_schema& schema, const json::array& migrations) const;
+
 		// The pointer stays valid until the type is unregistered; read schemas and their fields on the main thread, or in a load
 		// of a layer whose registrations outlive its loads. A layer's lookup falls through to the parent's without its lock.
 		const type_schema* find_schema(std::string_view type_name) const;
