@@ -864,6 +864,21 @@ BOOST_AUTO_TEST_CASE(whole_component_records_and_array_indexes_are_judged_by_the
 	BOOST_TEST((indices == std::vector<std::size_t>{ 0, 3 }));
 }
 
+// Review of #1310: Clear stale overrides leaves a record the steps of its type cannot follow; it may still work as written.
+BOOST_AUTO_TEST_CASE(a_record_through_an_index_after_a_type_version_bump_is_stale_but_kept_on_clear)
+{
+	scene.active_world_idx = 1;
+	auto& inst = const_cast<prefab_node&>(*child(root(1), 0xe1));
+	BOOST_REQUIRE(descs->current_version("camera_desc") > 1);
+	inst.overrides.push_back(scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = "/fov/0", .value = 1,
+		.type_version = 1 });
+	edt::override_edit::view_cache cache(services, scene);
+
+	const auto stale = cache.stale(inst);
+	BOOST_REQUIRE(stale->size() == 1u);
+	BOOST_TEST(stale->front().keep_on_clear);
+}
+
 BOOST_AUTO_TEST_CASE(resetting_the_history_after_an_apply_leaves_nothing_to_undo)
 {
 	BOOST_REQUIRE(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Renamed"})").ok);

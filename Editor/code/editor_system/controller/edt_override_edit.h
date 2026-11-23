@@ -34,7 +34,8 @@ namespace edt::override_edit
 	struct stale_record {
 		std::size_t index = 0;
 		std::string what;
-		// The steps of its type put its value in more than one place: a person decides, "Clear stale overrides" leaves it.
+		// The steps of its type put its value in more than one place, or cannot follow it (it may still work as written): a person
+		// decides, "Clear stale overrides" leaves it.
 		bool keep_on_clear = false;
 	};
 

@@ -117,7 +117,8 @@ namespace
 			for (const scn::stale_override& stale : scn::find_stale_records(*assembler, node)) {
 				using reason = scn::stale_override::reason;
 				const bool duplicated = stale.why == reason::duplicated_by_migration;
-				if (!duplicated && stale.why != reason::dropped_by_migration && stale.why != reason::not_migrated) continue;
+				if (!duplicated && stale.why != reason::dropped_by_migration && stale.why != reason::not_migrated
+					&& stale.why != reason::field_gone_without_version) continue;
 				// A dropped edit is gone and one the steps cannot follow is applied as written; a duplicated one is not applied at all
 				// until a person decides.
 				const res::diagnostic_severity severity = duplicated ? res::diagnostic_severity::error : res::diagnostic_severity::warning;

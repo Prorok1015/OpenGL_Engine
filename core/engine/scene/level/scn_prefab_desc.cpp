@@ -935,9 +935,13 @@ namespace {
 	{
 		static std::mutex mutex;
 		static std::unordered_set<std::string> said;
+		constexpr std::size_t remembered = 4096;
 		{
 			std::lock_guard lock(mutex);
-			if (!said.insert(text).second) return;
+			if (said.contains(text)) return;
+			// Bounded: a long session that meets many records starts over rather than keeping every text.
+			if (said.size() >= remembered) said.clear();
+			said.insert(text);
 		}
 		if (error) egLOG_ERROR("desc", "{}", text);
 		else egLOG_WARN("desc", "{}", text);
@@ -990,7 +994,11 @@ namespace {
 				return true;
 			case scn::record_migration::failed:
 				// Not worse than before records had versions: applied as written.
-				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::not_migrated, result.reason });
+				// A record without a version fails only when its field is gone; any other one may still work as written.
+				if (sink) {
+					sink->stale.push_back({ index, given.type_version <= 0 ? scn::stale_override::reason::field_gone_without_version
+						: scn::stale_override::reason::not_migrated, result.reason });
+				}
 				else log_once(false, result.reason);
 				break;
 			}
@@ -1412,8 +1420,10 @@ std::size_t scn::migrate_records(const ecs_assembler& assembler, prefab_desc::pr
 std::size_t scn::prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node)
 {
 	std::vector<stale_override> found = find_stale_records(assembler, node);
-	// The steps put the value of such a record in more than one place: which one it meant is for a person to say.
-	std::erase_if(found, [](const stale_override& entry) { return entry.why == stale_override::reason::duplicated_by_migration; });
+	// Which place a duplicated record meant, and whether one the steps cannot follow still does its job, is for a person to say.
+	std::erase_if(found, [](const stale_override& entry) {
+		return entry.why == stale_override::reason::duplicated_by_migration || entry.why == stale_override::reason::not_migrated;
+	});
 	for (auto it = found.rbegin(); it != found.rend(); ++it) {
 		node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(it->index));
 	}

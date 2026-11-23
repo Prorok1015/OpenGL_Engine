@@ -780,6 +780,23 @@ BOOST_AUTO_TEST_CASE(HotReload_ARecordOfAnOlderTypeVersion_StillFollowsTheSteps)
 	BOOST_TEST(reg.get<test_util::stat_component>(leg).label == "v2");
 }
 
+// Review of #1310: a record the steps of its type cannot follow (here: through an index) may still work as written, so it is
+// reported but not pruned; one without a version whose field is gone is.
+BOOST_AUTO_TEST_CASE(PruneStaleRecords_KeepsARecordTheStepsCannotFollow)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object&) {});
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(on_arm(R"("component":"stat","path":"/limits/0","value":1,"version":1)")).c_str());
+
+	const auto stale = scn::find_stale_records(*assembler, inst.get_root());
+	BOOST_REQUIRE_EQUAL(stale.size(), 1u);
+	BOOST_TEST((stale[0].why == scn::stale_override::reason::not_migrated));
+
+	scn::prefab_desc::prefab_node node = inst.get_root();
+	BOOST_TEST(scn::prune_stale_records(*assembler, node) == 0u);
+	BOOST_TEST(node.overrides.size() == 1u);
+}
+
 // ---------------------------------------------------------------- records on disk
 
 BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)

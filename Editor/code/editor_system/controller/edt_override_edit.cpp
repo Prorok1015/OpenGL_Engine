@@ -514,7 +514,8 @@ std::shared_ptr<const std::vector<edt::override_edit::stale_record>> edt::overri
 	}
 	std::vector<bool> known(owner.overrides.size(), false);
 	for (const scn::stale_override& entry : scn::find_stale_records(*m_services.assembler(), owner)) {
-		found.push_back({ entry.index, entry.what, entry.why == scn::stale_override::reason::duplicated_by_migration });
+		const bool keep = entry.why == scn::stale_override::reason::duplicated_by_migration || entry.why == scn::stale_override::reason::not_migrated;
+		found.push_back({ entry.index, entry.what, keep });
 		if (entry.index < known.size()) known[entry.index] = true;
 	}
 	if (const desc::desc_system* descs = m_services.descs()) {
