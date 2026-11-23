@@ -244,7 +244,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	out.id = file_id_of(*inside);
 	if (!out.id.valid) return refuse(refusal_kind::other, "its identity on the disk cannot be read");
 	if (out.size > m_limits.max_file_bytes) {
-		return refuse(refusal_kind::limit, std::format("too big ({} bytes, the limit is {})", out.size, m_limits.max_file_bytes));
+		return refuse(refusal_kind::limit, std::format("a side file of {} bytes exceeds {} per file ({})", out.size, limit_text(m_limits.max_file_bytes), k_step_side_files));
 	}
 
 	if (m_allowed) {
@@ -256,11 +256,11 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	} else if (m_seen.insert(key_of(*inside)).second) {
 		if (m_files.size() >= m_limits.max_files) {
 			m_seen.erase(key_of(*inside));
-			return refuse(refusal_kind::limit, std::format("the model refers to more than {} files", m_limits.max_files));
+			return refuse(refusal_kind::limit, std::format("the model refers to more than {} files ({})", m_limits.max_files, k_step_side_files));
 		}
 		if (m_listed_bytes + out.size > m_limits.max_total_bytes) {
 			m_seen.erase(key_of(*inside));
-			return refuse(refusal_kind::limit, std::format("the files of the model together are bigger than {} bytes", m_limits.max_total_bytes));
+			return refuse(refusal_kind::limit, std::format("the side files exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
 		}
 		m_listed_bytes += out.size;
 		referenced_file listed{ *inside, out.size, out.modified, out.id };
@@ -271,7 +271,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		const auto listed = std::find_if(m_files.begin(), m_files.end(), [&](const referenced_file& file) { return file.path == *inside; });
 		if (listed != m_files.end() && std::find(listed->names.begin(), listed->names.end(), reference) == listed->names.end()) {
 			if (listed->names.size() >= k_max_names_per_file) {
-				return refuse(refusal_kind::limit, std::format("the model names '{}' in more than {} ways", shown(fs_paths::generic_utf8_of(relative)), k_max_names_per_file));
+				return refuse(refusal_kind::limit, std::format("the model names '{}' in more than {} ways ({})", shown(fs_paths::generic_utf8_of(relative)), k_max_names_per_file, k_step_side_files));
 			}
 			listed->names.emplace_back(reference);
 		}
@@ -287,14 +287,18 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 		const provided_file* entry = provided_entry(file);
 		if (!entry) return std::nullopt;
 		m_bytes_read += entry->bytes->size();
-		if (m_bytes_read > m_limits.max_total_bytes) throw std::runtime_error("the import would read more bytes than it was allowed");
+		if (m_bytes_read > m_limits.max_total_bytes) {
+			throw std::runtime_error(std::format("the side files the import reads exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
+		}
 		if (entry->kind == model_file_kind::texture && !image_bytes_match(lowered_extension_of_name(entry->relative), *entry->bytes)) {
 			throw std::runtime_error(std::format("'{}' is no image", shown(entry->relative)));
 		}
 		return *entry->bytes;
 	}
 	m_bytes_read += file.size;
-	if (m_bytes_read > m_limits.max_total_bytes) throw std::runtime_error("the import would read more bytes from the disk than it was allowed");
+	if (m_bytes_read > m_limits.max_total_bytes) {
+		throw std::runtime_error(std::format("the side files the import reads from the disk exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
+	}
 	// Opened below the boundary without following a link: a folder or the file swapped for one since resolve() is not read.
 	fs::path below = file.path.lexically_relative(m_boundary);
 	if (below.empty() || *below.begin() == "..") {

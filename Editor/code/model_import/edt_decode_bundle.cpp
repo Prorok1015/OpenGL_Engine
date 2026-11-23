@@ -163,7 +163,8 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	switch (read.status) {
 	case platform::beneath::read_status::ok: break;
 	case platform::beneath::read_status::not_regular: return refuse("the bundle is not a regular file");
-	case platform::beneath::read_status::too_large: return refuse("the bundle is bigger than the limits allow");
+	case platform::beneath::read_status::too_large:
+		return refuse(std::format("the bundle file exceeds {}, the most its limits allow ({})", limit_text(largest_bundle_bytes(limits)), k_step_bundle));
 	case platform::beneath::read_status::missing: return refuse("the bundle file is missing");
 	default: return refuse(read.error.empty() ? std::string("the bundle file cannot be read") : "the bundle file cannot be read: " + read.error);
 	}
@@ -176,8 +177,10 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	if (!reader.read(magic.data(), magic.size()) || magic != k_magic) return refuse("not a decoder bundle");
 	if (!reader.u32(version) || version != k_version) return refuse("a decoder bundle of another version");
 	if (!reader.u64(manifest_size) || !reader.u64(blob_count)) return refuse("the bundle is truncated");
-	if (manifest_size > limits.max_manifest_bytes) return refuse("the manifest of the bundle is too big");
-	if (blob_count > limits.max_blobs) return refuse("the bundle holds too many resources");
+	if (manifest_size > limits.max_manifest_bytes) {
+		return refuse(std::format("the manifest of the bundle exceeds {} ({})", limit_text(limits.max_manifest_bytes), k_step_bundle));
+	}
+	if (blob_count > limits.max_blobs) return refuse(std::format("the bundle holds more than {} resources ({})", limits.max_blobs, k_step_bundle));
 	if (manifest_size > reader.left()) return refuse("the bundle is truncated");
 
 	decode_bundle bundle;
@@ -190,7 +193,9 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 		boost::system::error_code json_error;
 		parser.write(manifest_text.data(), manifest_text.size(), json_error);
 		if (!json_error) parser.finish(json_error);
-		if (json_error) return refuse("the manifest of the bundle is not valid JSON within the limits");
+		if (json_error) {
+			return refuse(std::format("the manifest of the bundle is not valid JSON or is nested deeper than {} levels ({})", limits.max_json_depth, k_step_bundle));
+		}
 		boost::json::value value = parser.release();
 		if (!value.is_object()) return refuse("the manifest of the bundle is not an object");
 		bundle.manifest = std::move(value.as_object());
@@ -202,7 +207,9 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 	for (std::uint64_t i = 0; i < blob_count; ++i) {
 		std::uint32_t tag_size = 0;
 		if (!reader.u32(tag_size)) return refuse("the bundle is truncated");
-		if (tag_size > limits.max_tag_bytes || tag_size > reader.left()) return refuse("a resource of the bundle has a tag that is too long");
+		if (tag_size > limits.max_tag_bytes || tag_size > reader.left()) {
+			return refuse(std::format("a tag of a resource of the bundle exceeds {} or the file ({})", limit_text(limits.max_tag_bytes), k_step_bundle));
+		}
 		std::string tag(tag_size, '\0');
 		if (!reader.read(tag.data(), tag_size)) return refuse("the bundle is truncated");
 		if (!is_bundle_tag(tag, limits.max_tag_bytes)) return refuse("a resource of the bundle has a tag that is not allowed");
@@ -210,9 +217,13 @@ edt::bundle_read_result edt::read_bundle(const std::filesystem::path& file, cons
 
 		std::uint64_t blob_size = 0;
 		if (!reader.u64(blob_size)) return refuse("the bundle is truncated");
-		if (blob_size > limits.max_blob_bytes) return refuse("a resource of the bundle is too big");
+		if (blob_size > limits.max_blob_bytes) {
+			return refuse(std::format("a resource of the bundle exceeds {} per resource ({})", limit_text(limits.max_blob_bytes), k_step_bundle));
+		}
 		if (blob_size > reader.left()) return refuse("a resource of the bundle is bigger than the file holds");
-		if (total + blob_size > limits.max_total_bytes) return refuse("the resources of the bundle together are too big");
+		if (total + blob_size > limits.max_total_bytes) {
+			return refuse(std::format("the resources of the bundle exceed {} in total ({})", limit_text(limits.max_total_bytes), k_step_bundle));
+		}
 		total += blob_size;
 
 		bundle_blob blob;

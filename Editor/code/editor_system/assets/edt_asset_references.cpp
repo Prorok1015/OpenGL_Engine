@@ -148,11 +148,6 @@ namespace
 		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
 	}
 
-	std::string pointer_of(std::string_view key)
-	{
-		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
-	}
-
 	// Whether `tokens` (a pointer inside an object of `schema`) name a res_tag or desc_ref value: the field itself, an
 	// element of a list or map of them, or such a field in a structure, by every key a field is read under.
 	bool reference_field_at(const desc::desc_system& descs, const desc::type_schema& schema, std::span<const std::string> tokens, int depth)
@@ -163,7 +158,7 @@ namespace
 			std::vector<std::string_view> keys{ field.key };
 			for (const std::string& alias : field.read_aliases) keys.push_back(alias);
 			for (const std::string_view key : keys) {
-				if (!desc::json_pointer_tokens(pointer_of(key), key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
+				if (!desc::json_pointer_tokens(key, key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
 					|| !std::equal(key_tokens.begin(), key_tokens.end(), tokens.begin())) {
 					continue;
 				}
