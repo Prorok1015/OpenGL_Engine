@@ -685,7 +685,8 @@ BOOST_AUTO_TEST_CASE(shape_update_nodes_gives_the_nodes_that_draw_a_geometry_its
 	BOOST_REQUIRE_MESSAGE(updated.ok, updated.error);
 	BOOST_TEST(updated.value.at("updated").to_number<int>() == 2);
 	BOOST_TEST(scene.generation() == generation + 1);
-	BOOST_TEST(last_record().label == "Rebuild shape");
+	// The files cannot be taken back, so no undo may give the nodes their old range over the new mesh.
+	BOOST_TEST(!scene.history().can_undo());
 
 	int moved = 0;
 	int untouched = 0;
@@ -704,8 +705,8 @@ BOOST_AUTO_TEST_CASE(shape_update_nodes_gives_the_nodes_that_draw_a_geometry_its
 	BOOST_TEST(again.value.at("updated").to_number<int>() == 0);
 	BOOST_TEST(scene.generation() == generation + 1);
 
-	BOOST_REQUIRE(scene.undo());
-	BOOST_TEST(root().children[3].components.at("mesh").overrides.at("vx_end").to_number<int>() == 24);
+	BOOST_TEST(!scene.undo());
+	BOOST_TEST(root().children[3].components.at("mesh").overrides.at("vx_end").to_number<int>() == 100);
 	BOOST_TEST(call("shape.update_nodes", R"({"geometry":"res://shapes/x.geom.desc","vx_begin":0,"vx_end":-1,"ind_begin":0,"ind_end":1})").code == cmd::codes::invalid_args);
 }
 

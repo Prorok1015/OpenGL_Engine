@@ -303,6 +303,7 @@ namespace edt
 					}
 				}
 
+				if (m_component_section && !m_readonly && !effective_type.empty()) m_component_section(effective_type, comp, colors());
 				ImGui::PopID();
 				if (m_readonly) ImGui::EndDisabled();
 			}

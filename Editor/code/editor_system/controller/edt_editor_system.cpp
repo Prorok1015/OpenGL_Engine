@@ -34,6 +34,7 @@
 #include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
 #include "edt_panels_component.h"
+#include "edt_shape_parameters_component.h"
 #include "edt_problems_component.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
@@ -386,6 +387,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.asset_catalog = asset_catalog };
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
+	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
+		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); } });
 
 	// Registration order is the render order and the View menu order (panels_component::install).
 	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
