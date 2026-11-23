@@ -233,6 +233,19 @@ else
 
 ---
 
+### US-26-C — Ошибки шейдеров в Problems со строкой
+
+**Issue:** #1201
+
+**Решения 2026-11-23:**
+- Драйвер отдаёт лог сборки: `driver_interface::create_shader(headers, shader_build_log* log = nullptr)`, `shader_build_log { stages: [{stage, text}], link }`. GL читает лог целиком (`GL_INFO_LOG_LENGTH`), при ошибке компиляции стадии не линкует; null-драйвер кладёт в лог причину отказа своей проверки.
+- `#line`: после `#version` и вставленных defines — `#line <строка после #version> 0`; каждый раскрытый include обёрнут в `#line 1 <k>` перед текстом и `#line <следующая строка родителя> <k родителя>` после. `k` — индекс в таблице файлов стадии (`load_result::sources`, 0 — сама стадия; своя таблица у каждой стадии). Пропущенная строка include (повторный файл, ошибка) оставляет перевод строки, чтобы номера не съезжали.
+- Ошибки структурные: `rnd::shader_problem { file, line, column, code, message, program }`, коды `shader/compile`, `shader/link`, `shader/include`, `shader/macro`, `shader/load`. Ошибки препроцессора — в `load_result::problems` (include — в файле, где он написан; макрос — через ту же таблицу `#line`). Строки лога GL разбираются в форматах NVIDIA `k(line)`, Mesa `k:line(col)`, AMD/ANGLE `ERROR: k:line:`; нераспознанная строка — проблема стадии без строки; лог линковки — одна проблема файла вершинной стадии.
+- `ShaderManager` хранит проблемы по варианту программы: успешная сборка их снимает, неудачная заменяет (в том числе когда остаётся прежняя программа). Наружу — `render_system::shader_problems()` и `shader_problems_generation()`.
+- Редактор: источник Problems `shader` (`shader_problem_publisher`, кадр редактора, только при смене поколения); `Go to` открывает файл в приложении системы (`platform::open_in_shell`), переход к строке — #1291. Агент видит записи через `problems.list {source:"shader"}`.
+
+---
+
 ## Новые файлы
 
 ```

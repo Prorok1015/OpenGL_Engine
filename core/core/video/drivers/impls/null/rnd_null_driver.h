@@ -70,7 +70,7 @@ namespace rnd::driver::null
 		void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset = 0) override;
 		void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
-		std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
+		std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers, shader_build_log* log = nullptr) override;
 		std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		std::unique_ptr<buffer_interface> create_buffer() override;
 
@@ -151,6 +151,11 @@ namespace rnd::driver::null
 		void record_shader_sources(bool on) { m_record_shader_sources = on; }
 		const std::vector<std::vector<shader_header>>& shader_sources() const { return m_shader_sources; }
 
+		// A stand-in for the compiler's verdict on a program the null backend accepts: a log makes create_shader fail
+		// with it, nullopt builds the program. Unset (the default): every such program builds.
+		using shader_judge = std::function<std::optional<shader_build_log>(const std::vector<shader_header>&)>;
+		void judge_shaders_with(shader_judge judge) { m_shader_judge = std::move(judge); }
+
 		// Optional diagnostic observer. The data pointer is valid only during this synchronous call.
 		using texture_upload_observer = std::function<void(texture_handle, const void*, const texture_region&)>;
 		void observe_texture_uploads(texture_upload_observer observer) { m_texture_upload_observer = std::move(observer); }
@@ -193,6 +198,7 @@ namespace rnd::driver::null
 		draws_per_set m_draws_with_set{};
 		bool m_record_shader_sources = false;
 		std::vector<std::vector<shader_header>> m_shader_sources;
+		shader_judge m_shader_judge;
 
 		void count_draw();
 	};

@@ -589,15 +589,48 @@ void rnd::driver::gl::driver::apply_pipeline(const pipeline_desc& desc)
 	CHECK_GL_ERROR();
 }
 
-std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_shader(const std::vector<shader_header>& headers)
+namespace
+{
+	// The whole info log: GL_INFO_LOG_LENGTH counts the terminating null.
+	std::string gl_shader_info_log(GLuint shader_id)
+	{
+		GLint length = 0;
+		glGetShaderiv(shader_id, GL_INFO_LOG_LENGTH, &length);
+		if (length <= 1) {
+			return {};
+		}
+		std::string text(static_cast<std::size_t>(length), '\0');
+		GLsizei written = 0;
+		glGetShaderInfoLog(shader_id, length, &written, text.data());
+		text.resize(static_cast<std::size_t>(written));
+		return text;
+	}
+
+	std::string gl_program_info_log(GLuint program_id)
+	{
+		GLint length = 0;
+		glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &length);
+		if (length <= 1) {
+			return {};
+		}
+		std::string text(static_cast<std::size_t>(length), '\0');
+		GLsizei written = 0;
+		glGetProgramInfoLog(program_id, length, &written, text.data());
+		text.resize(static_cast<std::size_t>(written));
+		return text;
+	}
+}
+
+std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_shader(const std::vector<shader_header>& headers, shader_build_log* log)
 {
 	std::vector<GLuint> shaders_ids;
 	GLint success;
-	GLchar infoLog[512];
+	bool compiled = true;
 
 	std::string dbgLogTitle;
 
-	for (const auto& header : headers) {
+	for (std::size_t index = 0; index < headers.size(); ++index) {
+		const auto& header = headers[index];
 		const GLchar* code = header.body.c_str();
 		GLuint shader_id;
 
@@ -606,8 +639,13 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 		glCompileShader(shader_id);
 		glGetShaderiv(shader_id, GL_COMPILE_STATUS, &success);
 		if (!success) {
-			glGetShaderInfoLog(shader_id, 512, nullptr, infoLog);
-			egLOG("shader/load", "Error compiling shader '{0}' with log: {1}", header.title, infoLog);
+			std::string info = gl_shader_info_log(shader_id);
+			egLOG("shader/load", "Error compiling shader '{0}' with log: {1}", header.title, info);
+			glDeleteShader(shader_id);
+			if (log) {
+				log->stages.push_back({ index, std::move(info) });
+			}
+			compiled = false;
 			continue;
 		}
 		if (dbgLogTitle.empty()) {
@@ -617,6 +655,14 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 		}
 
 		shaders_ids.push_back(shader_id);
+	}
+
+	// The link of a program with a stage missing only repeats that the stage did not compile.
+	if (!compiled) {
+		for (auto shader_id : shaders_ids) {
+			glDeleteShader(shader_id);
+		}
+		return nullptr;
 	}
 
 	// Shader Program
@@ -629,13 +675,17 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 
 	glGetProgramiv(id, GL_LINK_STATUS, &success);
 	if (!success) {
-		glGetProgramInfoLog(id, 512, nullptr, infoLog);
+		std::string info = gl_program_info_log(id);
 		for (auto shader_id : shaders_ids) {
 			glDeleteShader(shader_id);
 		}
+		glDeleteProgram(id);
 
 		egLOG("shader/load", "Error Linking shaders {}", dbgLogTitle);
-		egLOG("shader/load", "{}", infoLog);
+		egLOG("shader/load", "{}", info);
+		if (log) {
+			log->link = info.empty() ? std::string{ "the program did not link" } : std::move(info);
+		}
 		return nullptr;
 	}
 

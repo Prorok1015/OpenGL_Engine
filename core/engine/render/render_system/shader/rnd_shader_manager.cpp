@@ -1,4 +1,5 @@
 #include "rnd_shader_manager.h"
+#include "rnd_shader_source_map.h"
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/common/logger/engine_log.h>
@@ -65,9 +66,22 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 		slot.stale = false;
 		auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
 		track_files(variant, source.files);
+		std::vector<shader_problem> problems = std::move(source.problems);
 		std::unique_ptr<driver::shader_interface> fresh;
 		if (source.ok()) {
-			fresh = drv->create_shader(source.headers);
+			driver::shader_build_log log;
+			fresh = drv->create_shader(source.headers, &log);
+			if (!fresh) {
+				problems = problems_of_build_log(log, source.headers, source.sources, source.program);
+				if (problems.empty()) {
+					shader_problem unknown;
+					unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
+					unknown.code = "shader/compile";
+					unknown.message = "the driver did not build the program and said nothing";
+					unknown.program = source.program;
+					problems.push_back(std::move(unknown));
+				}
+			}
 		}
 		if (fresh) {
 			if (slot.program) {
@@ -76,8 +90,37 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 			slot.program = std::move(fresh);
 		}
 		slot.failed = !slot.program;
+		// Even when the program it had stays in place: the file as it is now does not build.
+		set_problems(slot, std::move(problems));
 	}
 	return slot.program.get();
+}
+
+void rnd::ShaderManager::set_problems(program_slot& slot, std::vector<shader_problem> problems) const
+{
+	if (slot.problems == problems) {
+		return;
+	}
+	slot.problems = std::move(problems);
+	++m_problems_generation;
+}
+
+void rnd::ShaderManager::clear_cache() const
+{
+	const bool had_problems = std::ranges::any_of(m_programs, [](const program_slot& slot) { return !slot.problems.empty(); });
+	m_programs.clear();
+	if (had_problems) {
+		++m_problems_generation;
+	}
+}
+
+std::vector<rnd::shader_problem> rnd::ShaderManager::problems() const
+{
+	std::vector<shader_problem> out;
+	for (const program_slot& slot : m_programs) {
+		out.insert(out.end(), slot.problems.begin(), slot.problems.end());
+	}
+	return out;
 }
 
 void rnd::ShaderManager::track_files(variant_id variant, const std::vector<res::tag>& files) const
