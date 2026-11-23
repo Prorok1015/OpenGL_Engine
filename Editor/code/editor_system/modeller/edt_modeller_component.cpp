@@ -18,6 +18,15 @@
 namespace
 {
 	constexpr const char* k_problem_source = "mesh";
+
+	edt::problem row_of(const edt::mesh_document& mesh, edt::problem_severity severity, const std::string& message)
+	{
+		edt::problem row;
+		row.severity = severity;
+		row.file = std::string(mesh.source().view());
+		row.message = message;
+		return row;
+	}
 }
 
 edt::modeller_component::modeller_component(ports from)
@@ -242,9 +251,9 @@ void edt::modeller_component::publish_problems()
 	std::vector<problem> items;
 	for (mesh_document* mesh : meshes_of(m_ports.context.documents())) {
 		if (mesh->geometry_stale()) {
-			items.push_back({ .severity = problem_severity::error, .file = std::string(mesh->source().view()), .message = mesh->stale_geometry_message() });
+			items.push_back(row_of(*mesh, problem_severity::error, mesh->stale_geometry_message()));
 		} else if (mesh->geometry_mismatch()) {
-			items.push_back({ .severity = problem_severity::warning, .file = std::string(mesh->source().view()), .message = mesh->geometry_mismatch_message() });
+			items.push_back(row_of(*mesh, problem_severity::warning, mesh->geometry_mismatch_message()));
 		}
 	}
 	if (items.empty()) {
