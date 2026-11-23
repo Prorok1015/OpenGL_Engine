@@ -6,6 +6,7 @@
 // into input_state yet; that is the gamepad story proper.
 namespace wnd
 {
+	// Not in vtable_pins.json: no engine code takes or calls one yet. Pin it when input polls it (#542, #1256).
 	class gamepad_source
 	{
 	public:
