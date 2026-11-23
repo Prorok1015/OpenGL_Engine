@@ -62,6 +62,77 @@ namespace
 		return std::format("{}: '{}' is not a registered desc type (version {}): is the module that registers it loaded?",
 			source, type, version);
 	}
+
+	bool under(std::string_view pointer, std::string_view root)
+	{
+		return pointer == root || (pointer.starts_with(root) && pointer.size() > root.size() && pointer[root.size()] == '/');
+	}
+
+	// Where `pointer` of step `index` is once the later steps ran: a rename carries it with its source, a removal drops it
+	// (nullopt). Within a step the renames run before the removals, as detail::apply does.
+	std::optional<std::string> pointer_after(const std::vector<desc::detail::schema_migration>& steps, std::size_t index, std::string pointer)
+	{
+		for (std::size_t i = index + 1; i < steps.size(); ++i) {
+			for (const auto& [source, target] : steps[i].renames) {
+				if (under(pointer, source)) {
+					pointer = target + pointer.substr(source.size());
+					break;
+				}
+			}
+			for (const std::string& removed : steps[i].removals) {
+				if (under(pointer, removed)) return std::nullopt;
+			}
+		}
+		return pointer;
+	}
+
+	bool reaches_a_field(const desc::type_schema& schema, std::string_view pointer, const desc::schema_registry& resolve)
+	{
+		for (const desc::field_schema& field : schema.fields) {
+			if (under(pointer, field.key)) return true;
+			for (const std::string& alias : field.read_aliases) {
+				if (under(pointer, alias)) return true;
+			}
+		}
+		return desc::is_field_container(schema, pointer, &resolve);
+	}
+
+	// What the steps put where the schema they lead to has no field, or a default value that does not fit its field
+	// (#1228): such a step would write data the current version drops or misreads. Empty when nothing is wrong. The schemas
+	// of the versions in between are not known, so only where a value ends up after the last step is checked.
+	std::string steps_against_schema(const std::vector<desc::detail::schema_migration>& steps, const desc::type_schema& schema,
+		const desc::schema_registry& resolve)
+	{
+		for (std::size_t i = 0; i < steps.size(); ++i) {
+			const desc::detail::schema_migration& step = steps[i];
+			const auto ends_at = [&](const std::string& pointer) {
+				const std::optional<std::string> last = pointer_after(steps, i, pointer);
+				return last && *last != pointer ? std::format("{} (after the later steps {})", pointer, *last) : pointer;
+			};
+			for (const auto& [source, target] : step.renames) {
+				const std::optional<std::string> last = pointer_after(steps, i, target);
+				if (last && !reaches_a_field(schema, *last, resolve)) {
+					return std::format("migration #{}: rename {} -> {} reaches no field of version {}", i + 1, source, ends_at(target),
+						schema.version);
+				}
+			}
+			for (const auto& [pointer, value] : step.defaults) {
+				const std::optional<std::string> last = pointer_after(steps, i, pointer);
+				if (!last) continue;
+				json::value patch = json::object{};
+				desc::json_pointer_set(patch, *last, value);
+				const desc::override_failure failure = desc::check_override_object(schema, patch.as_object(), nullptr, &resolve);
+				if (failure.status == desc::override_status::stale) {
+					return std::format("migration #{}: set_default {} reaches no field of version {}", i + 1, ends_at(pointer), schema.version);
+				}
+				if (failure.status == desc::override_status::bad_value) {
+					return std::format("migration #{}: set_default {} does not fit: {} expects {}", i + 1, ends_at(pointer), failure.pointer,
+						desc::override_expectation(schema, failure, &resolve));
+				}
+			}
+		}
+		return {};
+	}
 }
 
 desc::migration_context::migration_context(std::string_view type, int from_version, std::string_view file,
@@ -293,6 +364,15 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema, 
 		steps = detail::parse_schema_migrations(migrations, schema.version);
 	} catch (const std::runtime_error& error) {
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", name, error.what());
+		return nullptr;
+	}
+	std::string problem;
+	{
+		std::shared_lock lock(m_registry_mutex);
+		problem = steps_against_schema(steps, schema, m_schemas);
+	}
+	if (!problem.empty()) {
+		egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", name, problem);
 		return nullptr;
 	}
 	{

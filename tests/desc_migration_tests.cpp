@@ -360,13 +360,35 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_ALiftParses_ARepeatedRemovalDoesNot)
 	// The lift does not let another operation of the step inside the target.
 	BOOST_TEST(!desc::schema_migrations_problem(steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"},"remove":["/stats/mp"]}])"), 2).empty());
 
-	desc::type_schema schema;
-	schema.name = k_type;
-	schema.version = 2;
-	BOOST_REQUIRE(ds.register_schema(schema, steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])")) != nullptr);
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [ { "name": "stats", "kind": "i32" } ] })");
+	BOOST_REQUIRE(ds.register_schema(desc::parse_type_schema(text), steps(R"([{"from":1,"rename":{"/stats/hp":"/stats"}}])")) != nullptr);
 	auto o = parse(R"({"__type":"test_migr_desc","stats":{"hp":7}})");
 	ds.migrate_tree(o, "ctx");
 	BOOST_TEST(o.at("stats").as_int64() == 7);
+}
+
+// #1228: where a step puts a value is checked against the schema the steps lead to, after the later steps moved or removed
+// it: a rename onto no field, or a default that is no field or does not fit it, refuses the registration.
+BOOST_AUTO_TEST_CASE(SchemaSteps_ThatPutAValueWhereTheSchemaHasNoField_AreRefused)
+{
+	const auto register_with = [this](const char* migrations) {
+		const json::object text = parse(R"({ "name": "test_migr_desc", "version": 3, "fields": [
+			{ "name": "health", "kind": "f32" }, { "name": "armor", "key": "/stats/armor", "kind": "i32" } ] })");
+		const desc::type_schema* stored = ds.register_schema(desc::parse_type_schema(text), json::parse(migrations).as_array());
+		if (stored) ds.unregister_desc(k_type);
+		return stored != nullptr;
+	};
+	// Onto a field, into a container of fields, through a temporary key a later step moves on, or one a later step removes.
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/health"}},{"from":2,"rename":{"/def":"/stats"}}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"rename":{"/tmp":"/health"}}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"remove":["/tmp"]}])"));
+	BOOST_TEST(register_with(R"([{"from":1,"set_default":{"/stats/armor":3}},{"from":2,"set_default":{"/health":1.5}}])"));
+	// No field where the value ends up, or a default of the wrong kind.
+	BOOST_TEST(!register_with(R"([{"from":1,"rename":{"/hp":"/health_points"}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"rename":{"/hp":"/tmp"}},{"from":2,"rename":{"/tmp":"/hitpoints"}}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"set_default":{"/shield":1}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(!register_with(R"([{"from":1,"set_default":{"/stats/armor":"thick"}},{"from":2,"remove":["/x"]}])"));
+	BOOST_TEST(ds.current_version(k_type) == 1);
 }
 
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
