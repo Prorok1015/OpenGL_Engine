@@ -264,7 +264,7 @@ scn::schema_component_registration scn::register_schema_component(context_manage
 			return refuse(std::format("the schema is version {}, its migrations lead to version {}", schema.version, current));
 		}
 	} else {
-		if (const std::string problem = desc::schema_migrations_problem(migrations, schema.version); !problem.empty()) {
+		if (const std::string problem = layer.descs().migrations_problem(schema, migrations); !problem.empty()) {
 			return refuse(problem);
 		}
 		if (layer.descs().current_version(name) != 1) {
