@@ -435,4 +435,57 @@ BOOST_AUTO_TEST_CASE(AChildOfABinaryGeometry_IsWrittenWhole_KeepingItsParent)
 	BOOST_TEST(body.at("indices").as_array().size() == 3u);
 }
 
+namespace {
+
+// One triangle as arrays (3 vertices of one vec3, one byte a number) with its bounds at `bounds`, if given.
+boost::json::object array_geometry(int vertex_byte, std::string_view bounds = "")
+{
+	std::string text = R"({"layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[)";
+	for (int i = 0; i < 36; ++i) text += (i ? "," : "") + std::to_string(vertex_byte);
+	text += "]";
+	if (!bounds.empty()) text += ",\"bounds\":" + std::string(bounds);
+	return boost::json::parse(text + "}").as_object();
+}
+
+const ds::bbox parent_box{ { 7.0f, 7.0f }, { 9.0f, 9.0f } };
+constexpr std::string_view parent_bounds = R"([[[{"x":7,"y":7},{"x":9,"y":9}],0]])";
+
+// A child as the adapter reads it (#1180): the parent copied in first, then the child's own JSON over it.
+rnd::geometry_desc child_of(desc::desc_system& descs, const boost::json::object& child_json)
+{
+	rnd::geometry_desc parent;
+	parent.deserialize(descs, array_geometry(1, parent_bounds));
+	rnd::geometry_desc child;
+	parent.copy_to(child);
+	child.deserialize(descs, child_json);
+	return child;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AChildWithItsOwnArraysAndNoBounds_DoesNotKeepTheBoundsOfItsParent)
+{
+	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(), array_geometry(2));
+	BOOST_TEST(child.bounds.empty());
+	BOOST_TEST(child.rtree.query(parent_box).empty());
+}
+
+BOOST_AUTO_TEST_CASE(AChildWithItsOwnBounds_HasOnlyThoseInItsTree)
+{
+	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(),
+		array_geometry(2, R"([[[{"x":0,"y":0},{"x":1,"y":1}],0]])"));
+	BOOST_REQUIRE(child.bounds.size() == 1u);
+	BOOST_TEST(child.rtree.query(parent_box).empty());
+	BOOST_TEST(child.rtree.query(ds::bbox{ { 0.0f, 0.0f }, { 1.0f, 1.0f } }).size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AChildWithoutDataOfItsOwn_KeepsTheDataAndBoundsOfItsParent)
+{
+	const rnd::geometry_desc child = child_of(storage.require<desc::desc_system>(),
+		boost::json::parse(R"({"layout":{"position":"vec3"},"indices":[],"vertices":[]})").as_object());
+	BOOST_TEST(child.vertices.size() == 36u);
+	BOOST_REQUIRE(child.bounds.size() == 1u);
+	BOOST_TEST(child.rtree.query(parent_box).size() == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
