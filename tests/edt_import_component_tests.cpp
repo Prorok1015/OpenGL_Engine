@@ -5,6 +5,7 @@
 #include "edt_editor_layer.h"
 #include "edt_import_component.h"
 #include "edt_import_problems.h"
+#include "edt_model_import_limits.h"
 #include "edt_process_decoder.h"
 #include "edt_scene_document.h"
 #include <snk/command/cmd_registry.h>
@@ -35,6 +36,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -122,6 +124,8 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 			return found;
 		};
 		steps.import = [this](const edt::import_source& source, ds::task_context*) {
+			// As the decoder process does past its deadline: the limit the import gave it, by name.
+			if (import_times_out) throw std::runtime_error(edt::time_limit_refusal("decoding the model", source.time_limit));
 			++imports;
 			edt::import_intermediate result;
 			result.prefab_tag = res::tag{ "memory://" + source.memory_folder + "robot.prefab.desc" };
@@ -218,6 +222,7 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	imgui_ctx imgui;
 	fs::path model;
 	std::string scan_error;
+	bool import_times_out = false;
 	int scans = 0;
 	int imports = 0;
 	std::unique_ptr<edt::import_component> component;
@@ -297,6 +302,36 @@ BOOST_AUTO_TEST_CASE(TheFolderOfAnImportCancelledWithEsc_GoesOnceItsJobStopped)
 	frames_until([this] { return files_of_this_run() == 0u; });
 	BOOST_TEST(no_files_of_this_run_within(std::chrono::seconds(5)));
 	BOOST_TEST(imports == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnImportPastItsTimeLimit_NamesThePersonsLimitAndTheStep_InTheLogProblemsAndTheDialog)
+{
+	import_times_out = true;
+	std::mutex mutex;
+	std::vector<std::string> lines;
+	const engine::log_sink_handle sink = engine::add_log_sink([&](std::string_view category, engine::log_level, std::string_view message) {
+		if (category != "Editor/Import" || !contains(message, "failed")) return;
+		std::lock_guard lock(mutex);
+		lines.emplace_back(message);
+	});
+	make_component();
+	component->start_import(model);
+	frames_until([this] { return !component->person_import_running(); });
+	BOOST_REQUIRE(!component->person_import_running());
+	BOOST_TEST(!component->dialog_open());
+
+	const std::string refusal = "decoding the model exceeds 2 min (decoder time)";
+	{
+		std::lock_guard lock(mutex);
+		BOOST_REQUIRE(lines.size() == 1u);
+		BOOST_TEST(contains(lines.front(), refusal), lines.front());
+	}
+	const std::vector<edt::sourced_problem> rows = context->problems().list();
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST(contains(rows.front().item.message, refusal), rows.front().item.message);
+	BOOST_REQUIRE(!dialog_texts().empty());
+	BOOST_TEST(contains(dialog_texts().back(), refusal), dialog_texts().back());
+	BOOST_TEST(files_of_this_run() == 0u, "a failed import leaves nothing in memory://");
 }
 
 BOOST_AUTO_TEST_CASE(AFailedImport_NamesTheModelAndTheSideFile_OnlyEscaped_InTheLogProblemsAndTheDialog)
