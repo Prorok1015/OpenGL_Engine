@@ -20,6 +20,8 @@
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <format>
 #include <optional>
 #include <utility>
@@ -98,12 +100,14 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	// The preview shows the working copy: an edit changes it, never the desc the resource cache holds.
 	m_working = std::make_unique<scn::prefab_desc>();
 	take_from(*prefab_handle);
+	static std::atomic<std::uint64_t> s_opened{ 0 };
+	m_working_tag = std::format("{}/{}", k_working_tag_base, ++s_opened);
 
 	// Load the prefab into the world
 	m_root = reg.create();
 	// Not under the prefab's own tag: a hot reload of that tag rebuilds an instance from the file and would wipe the edits.
 	// The file is watched by the document itself (changed_on_disk).
-	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_working, m_working->get_root().name, res::tag{ k_working_tag });
+	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_working, m_working->get_root().name, res::tag{ m_working_tag });
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
