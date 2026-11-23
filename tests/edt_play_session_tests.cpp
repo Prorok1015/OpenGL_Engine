@@ -3399,14 +3399,16 @@ BOOST_AUTO_TEST_CASE(an_override_of_a_blob_field_is_a_warning_at_its_pointer)
 		}
 		return out;
 	};
-	const auto range_rows = rows_at(edt::run_play_preflight(state, checks()));
+	const auto with_range = edt::run_play_preflight(state, checks());
+	const auto range_rows = rows_at(with_range);
 	BOOST_REQUIRE_EQUAL(range_rows.size(), 1u);
 	BOOST_TEST((range_rows[0]->item.severity == edt::problem_severity::warning));
 	BOOST_TEST(range_rows[0]->item.message.find("blob field") != std::string::npos, range_rows[0]->item.message);
 
 	// A value that is no range is the schema's error alone, not a warning beside it.
 	crate().components.at("blob").overrides["vertices"] = "not a range";
-	const auto broken_rows = rows_at(edt::run_play_preflight(state, checks()));
+	const auto with_text = edt::run_play_preflight(state, checks());
+	const auto broken_rows = rows_at(with_text);
 	BOOST_REQUIRE_EQUAL(broken_rows.size(), 1u);
 	BOOST_TEST((broken_rows[0]->item.severity == edt::problem_severity::error));
 }
