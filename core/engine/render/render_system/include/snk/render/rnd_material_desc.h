@@ -80,7 +80,7 @@ namespace desc
 		f("defines").tooltip("Shader preprocessor defines"),
 		f("samplers_textures").key("/samplers").kind(field_kind::custom).tooltip("Texture tags by sampler slot; an empty slot is null"),
 		// A reference only: an inline shader_desc is refused by material_desc::deserialize (#1200).
-		f("shader").kind(field_kind::desc_ref).ref("shader_desc").write_if_valid().tooltip("Shader program: a .shader.desc tag"),
+		f("shader").kind(field_kind::desc_ref).ref("shader_desc").write_if_valid().reference_only().tooltip("Shader program: a .shader.desc tag"),
 		f("queue").write_null_if_empty().tooltip("Draw queue: opaque, transparent, or mix for both; null draws in none"),
 		f("albedo").key("/uniforms/albedo").color(),
 		f("emissive").key("/uniforms/emissive").color(),

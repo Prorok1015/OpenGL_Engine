@@ -2,6 +2,8 @@
 #include "test_scene_env.hpp"
 #include <snk/render/rnd_shader_desc.h>
 #include <snk/render/rnd_render_service_init.h>
+#include <snk/desc/desc_json_schema.h>
+#include <snk/desc/desc_schema_ops.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/scene/scn_material_desc.h>
 #include <algorithm>
@@ -328,6 +330,31 @@ BOOST_AUTO_TEST_CASE(AnInlineProgramInAMaterial_RefusesTheLoad)
 	BOOST_TEST((refused->severity == res::diagnostic_severity::error));
 	BOOST_TEST(refused->kind == res::diagnostic_kind::reference);
 	BOOST_TEST(refused->reason.find("inline shader_desc") != std::string::npos);
+}
+
+// An agent is told and checked the same way (#1200): the shader of a material is a reference to a file, never inline.
+BOOST_AUTO_TEST_CASE(TheShaderOfAMaterial_IsAReferenceOnly_InTheSchemaAndItsChecks)
+{
+	const desc::type_schema* material = descs->find_schema("material_desc");
+	BOOST_REQUIRE(material);
+	const desc::field_schema* shader = material->find_field("/shader");
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->reference_only);
+
+	const json::object document = desc::to_json_schema(*material, descs->schemas());
+	const json::object& property = document.at("properties").as_object().at("shader").as_object();
+	BOOST_REQUIRE(property.contains("oneOf"));
+	const json::object& as_object = property.at("oneOf").as_array().at(1).as_object();
+	BOOST_TEST(as_object.at("additionalProperties").as_bool() == false);
+	BOOST_TEST(!as_object.at("properties").as_object().contains("__type"));
+
+	const auto check = [&](std::string_view patch) {
+		return desc::check_override_object(*material, json::parse(patch).as_object(), nullptr, &descs->schemas()).status;
+	};
+	BOOST_TEST((check(R"({"shader":"res://shaders/scene.shader.desc"})") == desc::override_status::valid));
+	BOOST_TEST((check(R"({"shader":{"guid":"77f4fc60-9a12-4df0-8471-9a57d3e400db","path":"res://shaders/scene.shader.desc"}})") == desc::override_status::valid));
+	BOOST_TEST((check(R"({"shader":{"__type":"shader_desc","vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag"}})")
+		== desc::override_status::bad_value));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
