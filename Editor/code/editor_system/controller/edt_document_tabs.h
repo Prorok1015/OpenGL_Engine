@@ -46,7 +46,7 @@ namespace edt
 		document_focus_ports focus;
 		// The window's own close flow: closes at once when clean, else asks Save / Discard / Cancel. Nothing is lost on Cancel.
 		std::function<void(document_id id)> request_close_data;
-		std::function<void()> request_close_prefab;
+		std::function<void(document_id id)> request_close_prefab;
 		// True while a close must not start (a Save All asks its questions: the document it still asks about must not go).
 		std::function<bool()> close_blocked;
 	};

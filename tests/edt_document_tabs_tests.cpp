@@ -58,7 +58,7 @@ struct tabs_fixture
 		out.focus.show_data = [this](const res::tag& source) { shown_data.push_back(std::string(source.relative())); };
 		out.focus.show_prefab = [this] { ++shown_prefab; };
 		out.request_close_data = [this](edt::document_id id) { closed_data.push_back(id); };
-		out.request_close_prefab = [this] { ++closed_prefab; };
+		out.request_close_prefab = [this](edt::document_id) { ++closed_prefab; };
 		return out;
 	}
 

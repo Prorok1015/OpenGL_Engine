@@ -1466,7 +1466,7 @@ BOOST_FIXTURE_TEST_CASE(TheInspectorFollowsARevert, prefab_on_disk_fixture)
 	BOOST_TEST(working_node()->name == "plain");
 }
 
-BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixture)
+BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheShownPrefab, desc_problems_fixture)
 {
 	const res::tag odd = res::tag::make("prefabs/desc_problems_odd.prefab.desc");
 	const res::tag plain = res::tag::make("prefabs/desc_problems_plain.prefab.desc");
@@ -1476,7 +1476,7 @@ BOOST_FIXTURE_TEST_CASE(ThePrefabScope_FollowsTheOpenPreview, desc_problems_fixt
 	open_prefab(odd);
 	BOOST_TEST(has_unknown_component_of("prefabs/desc_problems_odd.prefab.desc"));
 
-	open_prefab(plain); // the preview of the first closes: its rows go
+	open_prefab(plain); // the window shows the second prefab: the rows of the first go
 	BOOST_TEST(desc_rows().empty());
 
 	open_prefab(odd);
@@ -1525,7 +1525,7 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 	BOOST_TEST(document->source_tag() == first);
 }
 
-BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_ReplacesTheWait, desc_problems_fixture)
+BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_LoadsBothAndShowsTheLastOneThatOpened, desc_problems_fixture)
 {
 	const res::tag first = res::tag::make("prefabs/replace_first.prefab.desc");
 	const res::tag second = res::tag::make("prefabs/replace_second.prefab.desc");
@@ -1536,10 +1536,43 @@ BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_ReplacesTheWait, desc_
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), first)); });
 	open_prefab(second);
+	for (int frame = 0; frame < 20; ++frame) {
+		test_util::pump(tasks);
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+	}
 
-	const edt::prefab_document* document = edt::prefab_of(editor().context()->documents());
-	BOOST_REQUIRE(document && document->is_open());
-	BOOST_TEST(document->source_tag() == second);
+	const std::vector<edt::prefab_document*> open = edt::prefabs_of(editor().context()->documents());
+	BOOST_REQUIRE_EQUAL(open.size(), 2u);
+	BOOST_TEST(std::ranges::any_of(open, [&first](const edt::prefab_document* d) { return d->source_tag() == first; }));
+	BOOST_TEST(std::ranges::any_of(open, [&second](const edt::prefab_document* d) { return d->source_tag() == second; }));
+}
+
+BOOST_FIXTURE_TEST_CASE(TwoPrefabs_TheWindowShowsTheActiveOne_AndClosingItShowsTheOther_ProblemsFollowTheShownPrefab, desc_problems_fixture)
+{
+	const res::tag odd = res::tag::make("prefabs/two_odd.prefab.desc");
+	const res::tag plain = res::tag::make("prefabs/two_plain.prefab.desc");
+	store(odd, k_prefab_with_unknown);
+	store(plain, k_clean_prefab);
+	open_prefab(odd);
+	open_prefab(plain);
+	auto& documents = editor().context()->documents();
+	BOOST_REQUIRE_EQUAL(edt::prefabs_of(documents).size(), 2u);
+	BOOST_TEST(desc_rows().empty());
+	BOOST_TEST(edt::prefab_of(documents)->source_tag() == plain);
+
+	edt::prefab_document* odd_document = nullptr;
+	for (edt::prefab_document* candidate : edt::prefabs_of(documents)) {
+		if (candidate->source_tag() == odd) odd_document = candidate;
+	}
+	BOOST_REQUIRE(odd_document);
+	documents.set_active(odd_document->id());
+	BOOST_TEST(has_unknown_component_of("prefabs/two_odd.prefab.desc"));
+
+	documents.close(odd_document->id());
+
+	BOOST_TEST(desc_rows().empty());
+	BOOST_REQUIRE(edt::prefab_of(documents));
+	BOOST_TEST(edt::prefab_of(documents)->source_tag() == plain);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

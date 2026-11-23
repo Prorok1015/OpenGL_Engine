@@ -370,7 +370,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
-			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty());
+			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty_for(tag));
 			if (error.empty()) m_state.reset_history();
 			return error;
 		},
@@ -609,7 +609,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		agent_ports.discard_changes = [this] {
 			m_state.mark_clean();
-			m_prefab->drop_dirty_document();
+			m_prefab->close_dirty();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		// The guard is in place before the server can take a call.

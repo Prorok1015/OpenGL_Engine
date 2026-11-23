@@ -221,6 +221,16 @@ namespace edt
 		}
 	}
 
+	void prefab_editor_panel::park_camera(prefab_document* ctx)
+	{
+		entt::registry* reg = ctx && ctx->is_open() ? ctx->get_registry() : nullptr;
+		if (!reg) return;
+		for (auto ent : reg->view<scn::camera_component>()) {
+			auto& cam = reg->get<scn::camera_component>(ent);
+			if (!cam.color_targets.empty() && cam.color_targets[0] == s_prefab_cam_tag) cam.m_viewport.size = glm::ivec2{ 0 };
+		}
+	}
+
 	void prefab_editor_panel::update_camera_viewport(float width, float height)
 	{
 		entt::registry* reg = m_ctx ? m_ctx->get_registry() : nullptr;

@@ -6,9 +6,11 @@
 #include <snk/editor/edt_editor_events.h>
 #include <boost/json/object.hpp>
 #include <snk/editor/edt_registration.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -60,28 +62,34 @@ namespace edt
 
 		// The action `prefab.create_variant {base, name?}` (#151): a new `<name>.prefab.desc` next to `base` that holds only its `__parent` and `__layer`, opened
 		// in the prefab editor. Also what the asset browser's "Create Variant" runs. Registered by install().
-		// Opens the prefab for editing; asks first when another one has unapplied edits.
+		// Opens the prefab for editing next to the ones already open (#1185): an open one is brought to the front, a prefab still
+		// loading is not asked for twice. Every prefab loads on its own, so opening a second does not cancel the first.
 		void open(const res::tag& tag);
-		// The open prefab when it has unapplied edits, else null.
+		// The first open prefab with unapplied edits, else null.
 		prefab_document* dirty() const;
-		// Applies the prefab with unapplied edits; false (with the reason shown) when it was not applied.
+		// The open prefab of that file when it has unapplied edits, else null.
+		prefab_document* dirty_for(const res::tag& tag) const;
+		// Applies every prefab with unapplied edits, one after the other; false (with the reason shown) at the first one that was
+		// not applied, the rest are left as they are.
 		bool apply_dirty();
 		// The question of the dirty prefab Save All (controller/edt_save_all.h) could not apply: a file that changed on disk
 		// (Reload / Overwrite / Cancel) or a variant whose edits need its base dropped (Save without base / Cancel).
 		// `resolved(true)` once it was reloaded or written, `resolved(false)` after Cancel, a failure or when that prefab is not open.
 		void resolve_unsaved(const save_all_ask& ask, std::function<void(bool resolved)> resolved);
-		// The window's close button and the document tab's: closes at once when the prefab has no unapplied edits, else asks Apply /
-		// Discard / Cancel (Cancel keeps it open).
+		// The window's close button: closes the prefab the window shows (see request_close(id)); the window then shows another open one.
 		void request_close();
-		// Closes the window and the document without asking, the Inspector first: it holds a pointer into the working copy.
+		// The document tab's close: closes at once when that prefab has no unapplied edits, else asks Apply / Discard / Cancel
+		// (Cancel keeps it open). The other prefabs are not touched.
+		void request_close(document_id id);
+		// Closes every prefab document and the window without asking, the Inspector first: it holds a pointer into the working copy.
 		void close();
-		// Ends the wait for a prefab being opened and leaves the window as it was: a prefab that was open stays open.
+		// Ends every wait for a prefab being opened and leaves the window as it was: prefabs that were open stay open.
 		void cancel_open();
-		// Closes the document with unapplied edits, window and Inspector left as they are (quitting).
-		void drop_dirty_document();
+		// Closes each prefab document with unapplied edits without asking (Discard of Exit/New/Open); the window shows another open one, if any.
+		void close_dirty();
 		// The game layer goes: the prefab editor closes, with a WARN when that loses edits.
 		void close_for_layer_change();
-		// The Inspector shows a node of the prefab (Edit > Undo has nothing to undo there, #147).
+		// The Inspector shows a node of a prefab (Edit > Undo has nothing to undo there, #147).
 		bool owns_inspector() const { return m_inspector_target.is_prefab(); }
 		// The window opens (a data window of the host asked for it).
 		void show();
@@ -94,24 +102,46 @@ namespace edt
 		// Weak copies of it keep the callbacks of dialogs from touching this component after it is gone.
 		std::shared_ptr<int> m_alive = std::make_shared<int>();
 		inspector_target m_inspector_target;
-		prefab_open_watch m_open_watch;
+		// A prefab being opened: its own wait (several may load at once).
+		struct pending_open
+		{
+			prefab_open_watch watch;
+			bool depth_warned = false;
+		};
+		std::vector<std::unique_ptr<pending_open>> m_pending;
 		bool m_polling = false;
-		bool m_depth_warned = false;
-		// The document whose diagnostics the scope "prefab" of Problems holds; closing it clears them.
-		document_id m_desc_document{};
+		// The prefab document the window shows: the last one brought to the front.
+		document_id m_shown{};
+		// What each open prefab's load reported: the scope "prefab" of Problems holds the one of the prefab the window shows.
+		std::map<document_id, std::vector<res::diagnostic>> m_diagnostics;
 		// Last member: they go before what they reach.
 		std::vector<connection> m_connections;
 
 		// Waits for the prefab and what it refers to to load in the background (prefab_open_watch), then finish_open(): the window says
 		// "Loading" meanwhile and the rest of the editor keeps drawing.
 		void open_now(const res::tag& tag);
+		// The prefab documents (opened with the built-in 'prefab' preview), in the order they were opened.
+		std::vector<prefab_document*> prefabs() const;
+		prefab_document* prefab_by_id(document_id id) const;
+		prefab_document* prefab_for(const res::tag& tag) const;
+		// The one the window shows, null when none.
+		prefab_document* shown() const;
+		// The window shows `prefab`: the Inspector lets go of the previous one first (its node pointers are into another working copy).
+		void show_document(prefab_document& prefab);
+		// Problems' scope "prefab" shows the diagnostics of the shown prefab, nothing when none is shown.
+		void publish_diagnostics();
+		// A shown prefab went: the window moves to the one opened last, or shows nothing.
+		void leave_shown();
+		bool loading() const { return !m_pending.empty(); }
+		void show_loading_text();
+		void close_document(document_id id);
 		// `loaded`: the handle the wait held (it keeps the prefab cached while the document opens); empty: read it now.
 		void finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded);
 		// One poll of the wait: false while it is still loading; true when it ended (opened, failed or timed out) or is not running.
 		bool settle_open();
 		void report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out);
-		// Runs `proceed` at once, or after Save / Discard when the prefab has unapplied edits (Cancel: never).
-		void confirm_close(std::function<void()> proceed);
+		// Runs `proceed` at once, or after Save / Discard when `prefab` has unapplied edits (Cancel: never).
+		void confirm_close(prefab_document* prefab, std::function<void()> proceed);
 		bool apply(prefab_document& prefab);
 		cmd::result create_variant(const cmd::call& call);
 		void select_node(const std::vector<std::uint64_t>& path);
