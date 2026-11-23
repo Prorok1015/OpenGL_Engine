@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_mesh_bake.h"
+#include "edt_mesh_io.h"
 #include "edt_mesh_shapes.h"
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/model_codec/res_tag.h>
@@ -47,6 +48,10 @@ namespace edt::mesh
 		std::string error;
 	};
 
+	// A poly file as the repository's descs are written (pretty JSON, version after the type): what the shape tools and the mesh
+	// document write, so that one mesh is one text.
+	std::string poly_file_text(const poly_mesh_desc& source);
+
 	// The number of vertices the bake of a shape has, from its parameters alone: what lets a request that cannot fit a file be
 	// refused before a mesh of millions of faces is made. A test keeps it equal to the real count.
 	std::size_t estimate_shape_vertices(const shape_params& params);
@@ -61,6 +66,13 @@ namespace edt::mesh
 	// not compared: a float bake is not bit-for-bit the same on every compiler); else `error` says the geometry is stale. `error` also says
 	// why a poly file has no range: it is no poly file, or its mesh bakes to no triangles or to several materials.
 	std::optional<material_range> poly_text_range(std::string_view poly_text, std::string& error, std::string_view disk_desc = {});
+
+	// `unchecked`: the source could not be parsed, baked or encoded (`error` says why), so nothing is known of the geometry.
+	enum class geometry_match { same, differs, unchecked };
+
+	// Whether `geometry_desc` (the text of an x.geom.desc) holds the offsets, sizes and layouts the bake of `poly_text` would write, whatever
+	// the number of material ranges (the hash is not compared).
+	geometry_match geometry_is_bake_of(std::string_view poly_text, std::string_view geometry_desc, std::string& error);
 
 	// Empty when `scale` is a size for a shape node: every component finite and greater than 0 (a negative one turns the mesh inside out).
 	std::string shape_scale_problem(const glm::vec3& scale);

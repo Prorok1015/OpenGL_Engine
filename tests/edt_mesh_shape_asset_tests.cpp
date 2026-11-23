@@ -691,4 +691,23 @@ BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyI
 	BOOST_TEST(!fs::exists(res_root / "shapes" / "orphan.geom.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(TheGeometryCheck_SaysWhenTheSourceCannotBeBaked_AndWhenTheGeometryIsAnotherMeshs)
+{
+	std::string error;
+	BOOST_TEST((geometry_is_bake_of("{", "{}", error) == geometry_match::unchecked));
+	BOOST_TEST(error == "the source is not a JSON object");
+
+	error.clear();
+	BOOST_TEST((geometry_is_bake_of(R"({"__type":"poly_mesh_desc","vertices":5})", "{}", error) == geometry_match::unchecked));
+	BOOST_TEST(!error.empty());
+
+	error.clear();
+	const shape_asset_files box = built(box_params{});
+	BOOST_TEST((geometry_is_bake_of(box.poly, box.geometry, error) == geometry_match::same));
+	const shape_asset_files sphere = built(small_sphere);
+	BOOST_TEST((geometry_is_bake_of(box.poly, sphere.geometry, error) == geometry_match::differs));
+	BOOST_TEST((geometry_is_bake_of(box.poly, "not json", error) == geometry_match::differs));
+	BOOST_TEST(error.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

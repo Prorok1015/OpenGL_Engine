@@ -63,6 +63,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/play"
 	"${CMAKE_CURRENT_SOURCE_DIR}/live"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mesh"
+	"${CMAKE_CURRENT_SOURCE_DIR}/modeller"
 	"${CMAKE_CURRENT_SOURCE_DIR}/level"
 	"${CMAKE_CURRENT_SOURCE_DIR}/migration"
 	"${CMAKE_CURRENT_SOURCE_DIR}/problems"
