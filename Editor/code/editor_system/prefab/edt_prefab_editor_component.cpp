@@ -6,7 +6,9 @@
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_shape.h"
+#include "edt_prefab_save_all.h"
 #include "edt_prefab_variant_creator.h"
+#include "edt_save_all.h"
 #include "edt_scene_document.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/command/cmd_types.h>
@@ -179,6 +181,22 @@ bool edt::prefab_editor_component::apply_dirty()
 {
 	prefab_document* prefab = dirty();
 	return !prefab || apply(*prefab);
+}
+
+void edt::prefab_editor_component::resolve_unsaved(const save_all_ask& ask, std::function<void(bool resolved)> resolved)
+{
+	prefab_document* prefab = prefab_of(m_ports.context.documents());
+	if (!prefab || prefab->id() != ask.item.id) {
+		if (resolved) resolved(false);
+		return;
+	}
+	const prefab_question_ports question{ m_ports.context.dialogs(),
+		[this, id = prefab->id()]() -> prefab_document* {
+			prefab_document* open = prefab_of(m_ports.context.documents());
+			return open && open->id() == id ? open : nullptr;
+		},
+		m_alive };
+	ask_prefab_question(question, *prefab, ask.question, std::move(resolved));
 }
 
 void edt::prefab_editor_component::close()

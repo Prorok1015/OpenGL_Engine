@@ -51,6 +51,7 @@
 #include <snk/scene/scn_engine_component_list.h>
 #include <snk/scene/scn_event_subscriptions.h>
 #include <snk/scene/scn_time.h>
+#include <snk/window/wnd_window.h>
 
 // The type list of the module layout key (gs_module_layout.h, which says what belongs in it). Its includes are heavy, so
 // only the two places that produce a key take this header: the file of a module that declares it (SNK_DECLARE_MODULE,
@@ -68,7 +69,7 @@ namespace gs
 			ecs::detail::bus_journal_source_abi_revision, ecs::detail::bus_type_abi_revision,
 			ecs::detail::channel_slot_abi_revision, ecs::detail::channel_type_abi_revision,
 			ds::detail::task_state_base_abi_revision, desc::entity_remap_abi_revision, ecs::system_interface_abi_revision,
-			rnd::render_context_abi_revision>;
+			rnd::render_context_abi_revision, wnd::window_abi_revision, rnd::driver::gl_surface_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.

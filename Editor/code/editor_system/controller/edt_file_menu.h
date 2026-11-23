@@ -2,6 +2,7 @@
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include "edt_agent_model_import.h"
+#include "edt_save_all.h"
 #include <snk/project/prj_create.h>
 #include <snk/window/wnd_window_system.h>
 #include <filesystem>
@@ -58,6 +59,12 @@ namespace edt
 		std::function<bool()> other_documents_dirty;
 		std::function<bool()> save_other_documents;
 		std::function<void()> discard_other_documents;
+		// Save All (#1183): writes every document that can be written and goes on after one that cannot (the report says what
+		// happened to each; asks nothing). Left empty, there is no File > Save All.
+		std::function<save_all_report()> save_all;
+		// The question of one document Save All could not write, answered by the person (Reload / Overwrite / Cancel...);
+		// `resolved(true)` once it was settled. Left empty, those documents stay unsaved and are told in the summary.
+		save_all_asker ask_unsaved;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
 		// Starts loading the level at a project-relative path (`levels/a.desc`) without a round trip through a file
 		// system path: what the commands an agent calls use. Null: those commands answer `failed`.
@@ -95,7 +102,7 @@ namespace edt
 
 	// The File menu: New / Open / Save / Save As / Import / New Project / Open Project / Exit, with the "unsaved
 	// changes" flow for everything that leaves the level. Each item is two layers. The action (file.new, file.open,
-	// file.save, file.save_as, file.import_model, file.new_project, file.open_project, file.exit) takes everything as
+	// file.save, file.save_as, file.save_all, file.import_model, file.new_project, file.open_project, file.exit) takes everything as
 	// JSON arguments and works without any UI. The methods below are the
 	// frontend a click or a shortcut runs: they ask through dialog_service and then invoke the action.
 	class file_menu
@@ -105,10 +112,17 @@ namespace edt
 
 		void new_level();
 		void open_level();
-		// Save As: always asks for a path (Ctrl+Shift+S).
+		// Save As: always asks for a path (File > Save Level As..., no chord: Ctrl+Shift+S is Save All).
 		void save_level();
 		// Save: overwrites the saved level, asks for a path if it has none yet (Ctrl+S).
 		void quick_save();
+		// Save All (Ctrl+Shift+S): writes what can be written, then asks about each document that changed on disk (or needs a yes)
+		// one after the other, then tells the person what was saved and what was not. The questions of Exit, New and Open
+		// still stop at the first refusal (save_other_documents).
+		void save_all();
+		// True from a Save All's start until its last question is answered (or cancelled): a second one would queue the same
+		// questions again and ask about a document the first chain has already settled.
+		bool save_all_running() const { return m_save_all_running; }
 		bool anything_dirty() const;
 		void discard_everything();
 		void import_model();
@@ -138,6 +152,8 @@ namespace edt
 		// Checks that `project` (a manifest or its folder) opens, starts another editor on it and exits this one. The
 		// caller already settled the unsaved changes.
 		action_result switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch, bool open_migration = false);
+		// The log line of a Save All and, when something failed, waits or was left out, one message with the reasons.
+		void show_save_all_result(const save_all_report& report);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
 
@@ -149,6 +165,7 @@ namespace edt
 		std::vector<std::function<void()>> m_after_save;
 		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
 		// that must not call back into it (or into the hooks, which capture editor_system).
+		bool m_save_all_running = false;
 		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 		// Last: the actions capture `this` and are removed before the rest is destroyed.
 		std::vector<registration> m_registrations;

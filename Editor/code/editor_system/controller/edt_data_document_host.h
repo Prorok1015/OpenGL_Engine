@@ -55,6 +55,10 @@ namespace edt
 		// changed on disk is asked about (Reload / Overwrite / Cancel) and stops it too: whatever is answered, the person
 		// exits again (the answer comes later, the exit does not wait for it).
 		bool save_all();
+		// The question of a document Save All (edt_save_all.h) could not write: the one about a file that changed on disk (Reload /
+		// Overwrite / Cancel) or about a migrated file's version. `resolved(true)` once it was reloaded or written, `resolved(false)`
+		// after Cancel, a failure or when it has no question (a document that is not ours included).
+		void resolve_unsaved(document_id id, std::function<void(bool resolved)> resolved);
 		// The windows and the subscription go before the documents do.
 		void shutdown();
 
