@@ -126,6 +126,7 @@ void edt::panels_component::wire_scene_callbacks()
 		if (!world) return;
 		if (const std::string error = run_shape_request(m_ports.context.actions(), *world, request); !error.empty()) {
 			egLOG_WARN("editor/shape", "Add shape failed: {}", error);
+			m_ports.context.dialogs().message(message_level::error, std::format("The shape was not added:\n{}", error));
 		}
 	});
 	m_hierarchy->set_on_delete_node([this](uint64_t node_id) {
