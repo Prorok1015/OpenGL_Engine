@@ -50,7 +50,6 @@ rnd::shader_config::constant_data cdata;  // shader_tags + defines + constants
   "name": "PBR Scene",
   "vertex": "res://shaders/scene.vert",
   "fragment": "res://shaders/scene.frag",
-  "geometry": null,
   "parameters": {
     "albedo":    { "type": "color4", "default": [1,1,1,1] },
     "shininess": { "type": "float",  "default": 32.0 },
@@ -103,7 +102,7 @@ namespace rnd {
     public:
         res::tag vertex;
         res::tag fragment;
-        res::tag geometry;                 // пустой пишется как null
+        res::tag geometry;                 // пустой не пишется
         std::vector<std::string> defines;
 
         // Программа и defines, как их собирает default_material_compiler из тех же стадий
@@ -128,7 +127,7 @@ namespace rnd {
 
 **Файлы:**
 - `core/engine/render/render_system/include/snk/render/rnd_material_desc.h` (`rnd::material_desc`; `scn_material_desc.h` — только псевдонимы) — заменить inline shader fields на `res::tag shader`
-- `core/engine/render/render_system/rnd_material_desc.cpp` — десериализация: поддержать оба формата (legacy + новый)
+- `core/engine/render/render_system/rnd_material_desc.cpp` — `material_desc` v1→v2: шаг типа заменяет известные пары `shader_*` ссылкой `shader` на поставляемый `.shader.desc`, неизвестные пары переводит шаг проекта (`tools/project_migration`); legacy-формат не читается
 - `core/engine/render/render_system/shader/rnd_material_compiler.cpp` — собирать программу из `shader_desc::config()`
 - `core/res/*.desc` — обновить material файлы
 
@@ -144,7 +143,7 @@ boost::json::object parameters;       // override'ы параметров
 std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture_desc tag
 ```
 
-**Обратная совместимость:** если в JSON есть `"shader_vertex"` — загружать по-старому (legacy path). Если есть `"shader"` — загружать через `shader_desc`.
+**Обратная совместимость:** миграцией, а не чтением двух форматов. Шаг типа `material_desc` (v1→v2) при загрузке заменяет известные пары `shader_vertex/fragment/geometry` ссылкой `shader` на поставляемый `.shader.desc`; для неизвестных пар `.shader.desc` создаёт шаг проекта (`--migrate`). Как грузится материал с неизвестной парой до `--migrate` — открытый вопрос #1200.
 
 **`get_shader_desc()`** собирает `shader_config` из:
 1. `shader_desc::build_constant_data(parameters)` — GLSL теги + defines
@@ -282,7 +281,7 @@ EPIC-07 (Material Editor) — после EPIC-26
 
 | Проблема | Решение |
 |---|---|
-| Обратная совместимость material JSON | `material_desc::deserialize` поддерживает оба формата (legacy inline + shader_desc ref) |
+| Обратная совместимость material JSON | миграция `material_desc` v1→v2 (шаг типа + шаг проекта), legacy-формат не читается |
 | Шейдер-кеш инвалидация | `ShaderManager` перестраивает кеш-ключ: `shader_desc tag + active defines hash` |
 | Runtime overhead от загрузки shader_desc | `shader_desc` кешируется в resource_system; `material_desc::get_shader_desc()` разрешает один раз |
 | Много `.shader.desc` файлов | На практике 5-10 уникальных шейдерных программ; defines комбинации решаются через параметры |

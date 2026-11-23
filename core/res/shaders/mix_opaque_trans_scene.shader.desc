@@ -4,6 +4,5 @@
     "__guid" : "ecb283a7-19cf-40bd-a394-675b63d0b67c",
     "vertex" : "res://shaders/scene.vert",
     "fragment" : "res://shaders/mix_opaque_trans_scene.frag",
-    "geometry" : null,
     "defines" : []
 }

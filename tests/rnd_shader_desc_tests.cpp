@@ -84,13 +84,13 @@ BOOST_AUTO_TEST_CASE(SerializeThenDeserializeKeepsTheStagesAndTheDefines)
 	BOOST_TEST(json::value(ser(dst)) == json::value(written));
 }
 
-BOOST_AUTO_TEST_CASE(AnEmptyStageIsWrittenAsNull_InTheOrderOfTheFields)
+BOOST_AUTO_TEST_CASE(AnEmptyOptionalStageIsLeftOut_InTheOrderOfTheFields)
 {
 	rnd::shader_desc src;
 	src.vertex = res::tag{ "res://shaders/scene.vert" };
 	src.fragment = res::tag{ "res://shaders/scene.frag" };
 	BOOST_TEST(json::serialize(ser(src))
-		== R"({"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","geometry":null,"defines":[]})");
+		== R"({"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","defines":[]})");
 
 	rnd::shader_desc back;
 	back.deserialize(*descs, ser(src));
@@ -151,13 +151,13 @@ BOOST_AUTO_TEST_CASE(ShippedProgramsLoadAndSaveToTheirOwnBytes)
 BOOST_AUTO_TEST_CASE(ARewrittenFileReloadsIntoANewConfig)
 {
 	const res::tag tag = put("hot.shader.desc", R"({"__type":"shader_desc","__version":1,
-		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","geometry":null,"defines":[]})");
+		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","defines":[]})");
 	const auto before = load<rnd::shader_desc>(tag);
 	BOOST_REQUIRE(before);
 	const rnd::shader_config old_config = before->config();
 
 	put("hot.shader.desc", R"({"__type":"shader_desc","__version":1,
-		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/mix_opaque_trans_scene.frag","geometry":null,
+		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/mix_opaque_trans_scene.frag",
 		"defines":["USE_NORMAL_MAP"]})");
 	rs->signal_changed(tag);
 	pump();

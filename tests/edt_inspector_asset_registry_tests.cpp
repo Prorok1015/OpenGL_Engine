@@ -437,7 +437,7 @@ struct builtin_kinds_fixture : context_fixture
 BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "shader", "desc" }));
+	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "shader_desc", "desc" }));
 	BOOST_CHECK(kinds.open(*context, res::tag::make("prefabs/tree.prefab.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
 }
@@ -448,7 +448,7 @@ BOOST_FIXTURE_TEST_CASE(Builtin_ShaderSuffixIsTheShaderKind_AndOpensAsADataDocum
 	auto& kinds = context->asset_kinds();
 	const auto* kind = kinds.kind_for_open("shaders/x.shader.desc");
 	BOOST_REQUIRE(kind != nullptr);
-	BOOST_CHECK(kind->id == "shader");
+	BOOST_CHECK(kind->id == "shader_desc");
 	BOOST_CHECK(kinds.open(*context, res::tag::make("shaders/x.shader.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "desc:shaders/x.shader.desc" }));
 	// Dropped onto the viewport it is still added through its desc.

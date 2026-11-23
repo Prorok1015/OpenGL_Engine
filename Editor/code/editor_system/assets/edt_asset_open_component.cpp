@@ -37,7 +37,7 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 	asset_hooks.desc_layout = [this] { return desc_layout(); };
 	asset_hooks.edits_locked = m_ports.play_active;
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) { add_to_scene(tag); };
-	asset_hooks.open_desc = [this](const res::tag& tag) { m_data_documents->open(tag, false); };
+	asset_hooks.open_desc = [this](const res::tag& tag) { m_data_documents->open(tag, m_open_quiet); };
 	for (auto& kind : register_builtin_asset_kinds(m_ports.context.asset_kinds(), std::move(asset_hooks))) out.push_back(std::move(kind));
 	m_ports.browser.set_document_creator(
 		std::make_shared<document_creator>(document_creator::ports{
@@ -64,7 +64,10 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 
 bool edt::asset_open_component::open(const res::tag& tag, bool quiet)
 {
-	if (m_ports.context.asset_kinds().open(m_ports.context, tag)) return true;
+	m_open_quiet = quiet;
+	const bool opened_by_kind = m_ports.context.asset_kinds().open(m_ports.context, tag);
+	m_open_quiet = false;
+	if (opened_by_kind) return true;
 	if (!tag.relative().ends_with(".desc")) return false;
 	m_data_documents->open(tag, quiet);
 	return true;

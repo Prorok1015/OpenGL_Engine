@@ -24,8 +24,8 @@ namespace desc
 	inline constexpr auto field_attrs<rnd::shader_desc> = attrs(
 		f("vertex").write_null_if_empty().tooltip("Vertex stage"),
 		f("fragment").write_null_if_empty().tooltip("Fragment stage"),
-		f("geometry").write_null_if_empty().tooltip("Geometry stage; null: none"),
-		f("defines").tooltip("Shader preprocessor defines"));
+		f("geometry").write_if_valid().tooltip("Geometry stage; empty: none"),
+		f("defines").tooltip("Preprocessor defines, one per entry: NAME or NAME VALUE"));
 }
 
 namespace rnd
@@ -42,6 +42,7 @@ namespace rnd
 		res::tag vertex;
 		res::tag fragment;
 		res::tag geometry;
+		// Each entry is written as `#define <entry>`: "NAME" or "NAME VALUE" (not "NAME=VALUE", which defines NAME as "=VALUE").
 		std::vector<std::string> defines;
 
 		BOOST_DESCRIBE_CLASS(shader_desc, (), (vertex, fragment, geometry, defines), (), ())
