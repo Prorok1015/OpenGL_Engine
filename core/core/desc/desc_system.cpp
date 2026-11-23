@@ -50,6 +50,18 @@ namespace
 	{
 		return steps && !steps->empty() ? steps->rbegin()->first + 1 : 1;
 	}
+
+	// A type no layer knows (no factory, schema or steps) has version 1: a higher one is no newer format but a module
+	// that is not loaded (or a misspelt name), and "newer" would send the reader to update the engine (#1226).
+	std::optional<std::string> unregistered_type_problem(const desc::desc_system& descs, std::string_view source,
+		std::string_view type, int version, int current)
+	{
+		if (current > 1 || descs.is_registered(type) || descs.find_schema(type)) {
+			return std::nullopt;
+		}
+		return std::format("{}: '{}' is not a registered desc type (version {}): is the module that registers it loaded?",
+			source, type, version);
+	}
 }
 
 desc::migration_context::migration_context(std::string_view type, int from_version, std::string_view file,
@@ -146,6 +158,9 @@ void desc::desc_system::migrate_typed(json::object& obj, const std::string& type
 	const int current = version_after(steps.get());
 	const int version = static_cast<int>(parsed);
 	if (version > current) {
+		if (auto problem = unregistered_type_problem(*this, context, type, version, current)) {
+			throw std::runtime_error(std::move(*problem));
+		}
 		throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
 	}
 	if (version < current) {
@@ -201,6 +216,18 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema)
 	if (owned_by_parent(schema.name)) {
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
 		return nullptr;
+	}
+	// Every reader takes a field key and an alias as a JSON pointer; a key without the leading '/' was read two ways (#1228).
+	for (const field_schema& field : schema.fields) {
+		std::vector<std::string_view> keys{ field.key };
+		keys.insert(keys.end(), field.read_aliases.begin(), field.read_aliases.end());
+		for (const std::string_view key : keys) {
+			if (!key.starts_with('/')) {
+				egLOG_ERROR("desc/error", "Schema '{}' not registered: field '{}' is read at '{}', which is not a JSON pointer starting with '/'",
+					schema.name, field.name, key);
+				return nullptr;
+			}
+		}
 	}
 	// Refused in every build: a schema registered at a version its steps do not lead to would stamp files with a version
 	// no step brings older ones to.
@@ -317,6 +344,9 @@ std::string desc::desc_system::upgrade_in_memory(json::object& document, std::st
 	}
 	const int supported = current_version(name);
 	if (version > supported) {
+		if (auto problem = unregistered_type_problem(*this, source, name, version, supported)) {
+			return std::move(*problem);
+		}
 		return std::format("{}: '{}' is version {}, newer than the version {} this engine reads", source, name, version, supported);
 	}
 	// Every time, not only for an older root: a typed object inside may be older or newer than this engine reads.
@@ -996,7 +1026,7 @@ namespace
 				}
 				for (const std::string_view key : keys) {
 					if (json::value* value = value_at(data, key)) {
-						field_value(field, *value, where + pointer_of(key), depth);
+						field_value(field, *value, where + std::string(key), depth);
 					}
 				}
 			}
@@ -1042,7 +1072,7 @@ namespace
 					keys.push_back(alias);
 				}
 				for (const std::string_view key : keys) {
-					if (!desc::json_pointer_tokens(pointer_of(key), key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
+					if (!desc::json_pointer_tokens(key, key_tokens) || key_tokens.empty() || key_tokens.size() > tokens.size()
 						|| !std::equal(key_tokens.begin(), key_tokens.end(), tokens.begin())) {
 						continue;
 					}
@@ -1070,17 +1100,8 @@ namespace
 			}
 		}
 
-		static std::string pointer_of(std::string_view key)
-		{
-			return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
-		}
-
 		static json::value* value_at(json::value& root, std::string_view key)
 		{
-			if (!key.starts_with('/')) {
-				json::object* object = root.if_object();
-				return object ? object->if_contains(key) : nullptr;
-			}
 			return const_cast<json::value*>(desc::json_pointer_get(std::as_const(root), key));
 		}
 	};

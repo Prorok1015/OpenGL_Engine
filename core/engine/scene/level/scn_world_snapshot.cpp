@@ -51,7 +51,8 @@ namespace
 	};
 
 	// Desc references are read with an owner desc (desc_ref_traits): its tag names the memory copies of inline descs.
-	// A component has no owner, so the restore stands one in, named after the world.
+	// A component or a blackboard value has no owner, so the restore stands one in, named after the world (or
+	// "blackboard"). One tag serves many values: the name of a memory copy also holds a hash of its content.
 	class snapshot_owner final : public desc::desc_base
 	{
 	public:
@@ -511,6 +512,11 @@ json::array scn::capture_blackboard(const ecs::blackboard_data& board, const bla
 void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& values, const blackboard_catalog& types,
 	const desc::read_context& context, snapshot_report& report)
 {
+	snapshot_owner owner{ "blackboard" };
+	desc::read_context read = context;
+	if (read.system && !read.owner) {
+		read.owner = &owner;
+	}
 	for (const json::value& item : values) {
 		const json::object* saved = item.if_object();
 		const auto field = [saved](std::string_view name) { return saved ? saved->if_contains(name) : nullptr; };
@@ -531,7 +537,7 @@ void scn::restore_blackboard(ecs::blackboard_data& board, const json::array& val
 			continue;
 		}
 		bool fits = true;
-		std::shared_ptr<const void> restored = type->read(*type->schema, *value, context, fits);
+		std::shared_ptr<const void> restored = type->read(*type->schema, *value, read, fits);
 		if (!fits) ++report.partial[type->name];
 		board.restore(std::string_view{ *key }, type->id, type->type_name, std::move(restored));
 	}

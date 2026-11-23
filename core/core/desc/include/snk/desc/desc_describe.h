@@ -234,6 +234,7 @@ namespace desc
 				field_schema field;
 				field.name = std::string{ member };
 				field.key = member_key(attr, member);
+				ASSERT_MSG(field.key.starts_with('/'), "field '{}': key '{}' must be a JSON pointer starting with '/'", member, field.key);
 				field.kind = kind_of<member_type>;
 				field.element = element_kind_of<member_type>();
 				const bool converts = !attr || !attr->has_kind || attr->kind == field.kind;
@@ -247,6 +248,7 @@ namespace desc
 					field.ref_type = std::string{ attr->ref };
 					field.write = attr->write;
 					for (std::size_t i = 0; i < attr->alias_count; ++i) {
+						ASSERT_MSG(attr->aliases[i].starts_with('/'), "field '{}': alias '{}' must be a JSON pointer starting with '/'", member, attr->aliases[i]);
 						field.read_aliases.emplace_back(attr->aliases[i]);
 					}
 					field.optional = attr->optional;

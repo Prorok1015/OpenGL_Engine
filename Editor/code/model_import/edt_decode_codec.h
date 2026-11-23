@@ -63,6 +63,8 @@ namespace edt {
 		model_file_limits limits;
 		// Zero: none. The child's own deadline for the parse; the editor also kills it at the same time.
 		std::uint64_t deadline_ms = 0;
+		// Zero: not known. The limit the deadline comes from, which the child's refusals name (import_source::time_limit).
+		std::uint64_t time_limit_ms = 0;
 		// Zero: none. The child's address space limit on POSIX; the Windows job limit is set by the editor.
 		std::uint64_t memory_limit_bytes = 0;
 		// Empty: the model's folder. The folder side files may come from (import_source::boundary, #925).

@@ -164,6 +164,7 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	request.limits.max_files = 7;
 	request.limits.max_file_bytes = 18446744073709551000ull;
 	request.deadline_ms = 90000;
+	request.time_limit_ms = 120000;
 	request.memory_limit_bytes = 2147483648ull;
 	request.boundary = std::filesystem::path("some") / "content";
 	request.memory_folder = "__models/res/some/model/";
@@ -187,6 +188,7 @@ BOOST_AUTO_TEST_CASE(ARequest_RoundTrips_AndRefusesAWrongForm)
 	BOOST_CHECK_EQUAL(back->limits.max_files, 7u);
 	BOOST_CHECK_EQUAL(back->limits.max_file_bytes, request.limits.max_file_bytes);
 	BOOST_CHECK_EQUAL(back->deadline_ms, 90000u);
+	BOOST_CHECK_EQUAL(back->time_limit_ms, 120000u);
 	BOOST_CHECK_EQUAL(back->memory_limit_bytes, request.memory_limit_bytes);
 	BOOST_CHECK(back->boundary == request.boundary);
 	BOOST_CHECK_EQUAL(back->memory_folder, request.memory_folder);

@@ -373,6 +373,69 @@ BOOST_AUTO_TEST_CASE(BlackboardValuesWithASchemaComeBack_OthersAreReported)
 	BOOST_TEST(kept_default->points == 0);
 }
 
+// #1238: Play hands restore_blackboard a desc system and no owner (edt_play_session), as it does restore_world. An
+// inline desc in a value is read under a stood-in owner, so it comes back instead of keeping an empty handle.
+BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueComesBack)
+{
+	const auto sky_tag = put("board.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	scn::blackboard_catalog types;
+	BOOST_REQUIRE(types.add<scn::material_desc_component>("test.material", catalog.find("scn.material_desc")->schema));
+	ecs::blackboard_data board;
+	board.write("sky.material", entt::type_hash<scn::material_desc_component>::value(), entt::type_name<scn::material_desc_component>::value(),
+		std::make_shared<const scn::material_desc_component>(scn::material_desc_component{ sky->material, false }), 0);
+	board.commit();
+
+	scn::snapshot_report report;
+	const json::array saved = scn::capture_blackboard(board, types, report);
+	BOOST_REQUIRE(saved.size() == 1u);
+	ecs::blackboard_data restored_board;
+	scn::restore_blackboard(restored_board, saved, types, read_context(), report);
+	BOOST_TEST(report.partial.empty());
+	pump();
+
+	const auto* restored = ecs::blackboard_reader{ &restored_board }.find(ecs::bb_key<scn::material_desc_component>{ "sky.material" });
+	BOOST_REQUIRE(restored != nullptr);
+	BOOST_TEST(desc::is_override_tag(restored->mlt_desc.get_tag().view()));
+	BOOST_REQUIRE(restored->mlt_desc.get_sync());
+	BOOST_TEST((restored->mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+	BOOST_TEST(restored->mlt_desc.get_sync()->vertex_shader.string() == "res://shaders/sky.vert");
+}
+
+// #1238 after #1236: the inline desc of a blackboard value is written with the version of its type, so restoring it does
+// not run a step of that type over data of the current format.
+BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueIsNotMigratedAgain)
+{
+	const auto sky_tag = put("board.steps.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
+	BOOST_REQUIRE(sky && sky->material.is_valid());
+	// From here the format of material_desc has one more step; what is loaded is of the format before it.
+	descs->register_migration("material_desc", descs->current_version("material_desc"), [](json::object& o) { o["queue"] = "opaque"; });
+	scn::blackboard_catalog types;
+	BOOST_REQUIRE(types.add<scn::material_desc_component>("test.material", catalog.find("scn.material_desc")->schema));
+	ecs::blackboard_data board;
+	board.write("sky.material", entt::type_hash<scn::material_desc_component>::value(), entt::type_name<scn::material_desc_component>::value(),
+		std::make_shared<const scn::material_desc_component>(scn::material_desc_component{ sky->material, false }), 0);
+	board.commit();
+
+	scn::snapshot_report report;
+	const json::array saved = scn::capture_blackboard(board, types, report);
+	BOOST_REQUIRE(saved.size() == 1u);
+	const std::string text = json::serialize(saved);
+	BOOST_TEST(text.find(std::format(R"("__type":"material_desc","__version":{})", descs->current_version("material_desc"))) != std::string::npos, text);
+	ecs::blackboard_data restored_board;
+	scn::restore_blackboard(restored_board, saved, types, read_context(), report);
+	pump();
+
+	const auto* restored = ecs::blackboard_reader{ &restored_board }.find(ecs::bb_key<scn::material_desc_component>{ "sky.material" });
+	BOOST_REQUIRE(restored != nullptr);
+	BOOST_REQUIRE(restored->mlt_desc.get_sync());
+	BOOST_TEST((restored->mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
+}
+
 BOOST_AUTO_TEST_CASE(AFieldThatChangedItsTypeIsReportedAsPartial)
 {
 	scn::world_context source{ 1, "main" };

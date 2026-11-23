@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesWhatIsNoModelFileOnDisk)
 	const edt::agent_import_plan big = service->resolve({ (dir.path() / "outside" / "big.glb").string(), "", "" });
 	BOOST_CHECK(!big.ok());
 	BOOST_CHECK_EQUAL(big.code, cmd::codes::invalid_args);
-	BOOST_CHECK(big.error.find("too big") != std::string::npos);
+	BOOST_CHECK_MESSAGE(big.error.find("exceeds 4 KiB for an agent's import (source)") != std::string::npos, big.error);
 	BOOST_CHECK(big.error.find("5000") != std::string::npos);
 }
 

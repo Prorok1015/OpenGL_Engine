@@ -720,6 +720,7 @@ int main(int argc, char** argv)
 	import.provided = &files;
 	if (request->deadline_ms != 0) {
 		import.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request->deadline_ms);
+		import.time_limit = std::chrono::milliseconds(request->time_limit_ms);
 	}
 
 	edt::decode_bundle out;

@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_model_import_limits.h"
 #include <boost/json/object.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -26,12 +27,12 @@ namespace edt {
 
 	struct bundle_limits
 	{
-		std::uint64_t max_manifest_bytes = 4ull * 1024ull * 1024ull;
-		std::uint64_t max_blob_bytes = 256ull * 1024ull * 1024ull;
-		std::uint64_t max_total_bytes = 512ull * 1024ull * 1024ull;
-		std::uint64_t max_blobs = 4096;
-		std::size_t max_json_depth = 32;
-		std::size_t max_tag_bytes = 512;
+		std::uint64_t max_manifest_bytes = k_max_bundle_manifest_bytes;
+		std::uint64_t max_blob_bytes = k_max_bundle_blob_bytes;
+		std::uint64_t max_total_bytes = k_max_bundle_total_bytes;
+		std::uint64_t max_blobs = k_max_bundle_blobs;
+		std::size_t max_json_depth = k_max_bundle_json_depth;
+		std::size_t max_tag_bytes = k_max_bundle_tag_bytes;
 	};
 
 	struct bundle_read_result
