@@ -1113,25 +1113,6 @@ namespace {
 		return true;
 	}
 
-	// A field key as the JSON pointer an override names it by: a key without a leading '/' is one plain key.
-	std::string pointer_of_key(std::string_view key)
-	{
-		if (key.starts_with('/')) {
-			return std::string{ key };
-		}
-		std::string pointer = "/";
-		for (const char c : key) {
-			if (c == '~') {
-				pointer += "~0";
-			} else if (c == '/') {
-				pointer += "~1";
-			} else {
-				pointer += c;
-			}
-		}
-		return pointer;
-	}
-
 	// One warning per (type, path): an instance spawned again and again with the same edit says it once.
 	void warn_override_off_the_fields(std::string_view type, std::string_view path)
 	{
@@ -1267,7 +1248,7 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 bool scn::override_names_a_field(const desc::type_schema& schema, std::string_view path)
 {
 	return std::ranges::any_of(schema.fields, [path](const desc::field_schema& field) {
-		const std::string key = pointer_of_key(field.key);
+		const std::string_view key = field.key;
 		return key == path || (path.starts_with(key) && path.size() > key.size() && path[key.size()] == '/')
 			|| (key.starts_with(path) && key.size() > path.size() && key[path.size()] == '/');
 	});

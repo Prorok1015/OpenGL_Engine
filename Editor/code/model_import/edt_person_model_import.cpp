@@ -38,7 +38,7 @@ std::vector<std::byte> read_model(const fs::path& path, std::string& error, ds::
 		return {};
 	}
 	if (size > edt::k_max_person_source_bytes) {
-		error = std::format("the file is too big ({}), the limit is {}", mib_text(size), mib_text(edt::k_max_person_source_bytes));
+		error = std::format("the model file of {} exceeds {} ({})", mib_text(size), edt::limit_text(edt::k_max_person_source_bytes), edt::k_step_source);
 		return {};
 	}
 	std::ifstream in(path, std::ios::binary);
@@ -144,6 +144,7 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 	try {
 		ctx.throw_if_stopped();
 		source.deadline = std::chrono::steady_clock::now() + k_person_parse_time_limit;
+		source.time_limit = k_person_parse_time_limit;
 		found = decoder.scan(source, &ctx);
 	} catch (const std::exception& e) {
 		return failed(listing, e.what());
@@ -162,6 +163,7 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 	import_intermediate imported;
 	try {
 		source.deadline = std::chrono::steady_clock::now() + k_person_parse_time_limit;
+		source.time_limit = k_person_parse_time_limit;
 		imported = decoder.import(source, &ctx);
 	} catch (const std::exception& e) {
 		return failed(importing, e.what());
