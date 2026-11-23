@@ -1,9 +1,15 @@
 #pragma once
+#include <cstdint>
 #include <snk/core_input/inp_input_event.hpp>
 
 namespace wnd
 {
 	using handle = void*;
+
+	// A module fills this vtable and the engine calls it: raised with any change of its bases or virtual functions
+	// (check_vtable_pins.py).
+	inline constexpr std::uint32_t window_listener_interface_abi_revision = 1;
+
 	class window_listener_interface
 	{
 	public:

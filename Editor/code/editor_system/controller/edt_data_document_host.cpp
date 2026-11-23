@@ -205,7 +205,10 @@ void edt::data_document_host::request_save(document_id id)
 void edt::data_document_host::ask_version(document_id id, bool over, std::function<void(bool saved)> done)
 {
 	const auto found = m_windows.find(id);
-	if (found == m_windows.end()) return;
+	if (found == m_windows.end()) {
+		if (done) done(false);
+		return;
+	}
 	const data_document& data = *found->second.data;
 	const bool root_outdated = data.file_version() < data.current_version();
 	const std::string target = root_outdated ? std::format("version {}", data.current_version()) : std::string{ "the current versions" };
@@ -243,7 +246,10 @@ void edt::data_document_host::ask_version(document_id id, bool over, std::functi
 void edt::data_document_host::ask_conflict(document_id id, std::function<void(bool resolved)> done)
 {
 	const auto found = m_windows.find(id);
-	if (found == m_windows.end()) return;
+	if (found == m_windows.end()) {
+		if (done) done(false);
+		return;
+	}
 	m_context.dialogs().choose("File changed on disk",
 		std::format("'{}' was changed on disk since you opened it.\n\nReload reads the file again and drops your unsaved changes. "
 			"Overwrite replaces the file with your version.", found->second.data->title()),
@@ -335,6 +341,24 @@ std::vector<edt::document_id> edt::data_document_host::dirty() const
 	// The ids grow in the order the windows were opened: what is saved first does not depend on the hash table.
 	std::ranges::sort(out);
 	return out;
+}
+
+void edt::data_document_host::resolve_unsaved(document_id id, std::function<void(bool resolved)> resolved)
+{
+	const auto found = m_windows.find(id);
+	if (found == m_windows.end()) {
+		if (resolved) resolved(false);
+		return;
+	}
+	if (in_conflict(id)) {
+		ask_conflict(id, std::move(resolved));
+		return;
+	}
+	if (found->second.data->needs_version_confirmation()) {
+		ask_version(id, false, std::move(resolved));
+		return;
+	}
+	if (resolved) resolved(false);
 }
 
 bool edt::data_document_host::save_all()

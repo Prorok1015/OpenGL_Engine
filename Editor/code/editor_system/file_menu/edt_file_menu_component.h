@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_save_all.h"
 #include "edt_version_notice.h"
 #include <snk/editor/edt_registration.h>
 #include <filesystem>
@@ -70,8 +71,15 @@ namespace edt
 		void attach_window_close(wnd::window_system& windows);
 		// The last save that upgraded a file, for a few seconds in the menu bar (#761); nothing otherwise.
 		void draw_status();
+		// "Unsaved (N)" in the menu bar while any document has unsaved changes; hovering lists them by kind, a click opens the
+		// list as a popup (a row focuses its document, "Save All" runs it) (#1183). Draws nothing (no ImGui call) while all is
+		// saved. One call in the menu bar status: move or drop it there.
+		void draw_unsaved_indicator();
 
 	private:
+		// The rows of the unsaved list, one place (the popup of the menu bar item): a row focuses its document.
+		void draw_unsaved_list(const std::vector<unsaved_group>& groups);
+		void focus_unsaved(document_id id);
 		std::optional<std::string> migration_blocker() const;
 
 		ports m_ports;
