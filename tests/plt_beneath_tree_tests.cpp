@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_temp_dir.hpp"
 #include <snk/platform/plt_beneath.h>
+#include <snk/platform/plt_reparse_tag.h>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -51,6 +53,12 @@ struct tree_fixture {
 
 	fs::path outside() const { return root / "outside"; }
 };
+
+// A name the system call cuts at its NUL: it would open "..".
+fs::path dot_dot_nul()
+{
+	return fs::path{ std::string{ "..\0x", 4 } };
+}
 
 }
 
@@ -151,6 +159,84 @@ BOOST_AUTO_TEST_CASE(remove_tree_removes_a_link_swapped_in_mid_walk_as_the_link)
 		}
 		BOOST_TEST(!fs::exists(root / "tree"));
 		BOOST_TEST(fs::exists(outside() / "keep.txt"), "the walk never entered the link");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(make_folders_refuses_dot_dot_an_absolute_path_and_a_nul)
+{
+	fs::create_directories(root / "inner");
+	platform::beneath::pinned_root inner{ root / "inner" };
+	BOOST_TEST(!platform::beneath::make_folders_beneath(inner, "../made").empty());
+	BOOST_TEST(!platform::beneath::make_folders_beneath(inner, root / "made").empty());
+	BOOST_TEST(!platform::beneath::make_folders_beneath(inner, dot_dot_nul() / "made").empty());
+	BOOST_TEST(!platform::beneath::make_folders_beneath(inner, dot_dot_nul(), true).empty());
+	BOOST_TEST(!fs::exists(root / "made"));
+	BOOST_TEST(!fs::exists(root / "x"));
+}
+
+BOOST_AUTO_TEST_CASE(remove_tree_refuses_dot_dot_an_absolute_path_and_a_nul)
+{
+	fs::create_directories(root / "inner");
+	platform::beneath::pinned_root inner{ root / "inner" };
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, "", "..").empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, "..", "outside").empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, root, "outside").empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, "", root / "outside").empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, "", dot_dot_nul()).empty());
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(inner, dot_dot_nul(), "outside").empty());
+	BOOST_TEST(fs::exists(outside() / "keep.txt"));
+	BOOST_TEST(fs::exists(root / "inner"));
+}
+
+BOOST_AUTO_TEST_CASE(remove_tree_removes_a_file_given_as_the_tree)
+{
+	dir.write("a/file.txt", "x");
+	BOOST_TEST(platform::beneath::remove_tree_beneath(pinned, "a", "file.txt").empty());
+	BOOST_TEST(!fs::exists(root / "a" / "file.txt"));
+	BOOST_TEST(fs::is_directory(root / "a"));
+}
+
+// Windows: a tree this deep is past MAX_PATH for the std::filesystem calls that make and clean it up.
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(remove_tree_refuses_a_tree_nested_past_the_depth_limit)
+{
+	fs::path deep = "tree";
+	for (int level = 0; level < 260; ++level) {
+		deep /= "d";
+	}
+	BOOST_REQUIRE(platform::beneath::make_folders_beneath(pinned, deep).empty());
+
+	const std::string error = platform::beneath::remove_tree_beneath(pinned, "", "tree");
+	BOOST_TEST(error.find("deeper than") != std::string::npos, error);
+	BOOST_TEST(fs::is_directory(root / deep), "nothing on the way down was removed");
+}
+#endif
+
+BOOST_AUTO_TEST_CASE(tree_entries_are_decided_as_the_folders_of_the_walk)
+{
+	using platform::beneath::tree_entry;
+	using platform::beneath::tree_entry_of;
+	constexpr std::uint32_t directory = platform::beneath::k_file_attribute_directory;
+	constexpr std::uint32_t reparse = platform::beneath::k_file_attribute_reparse_point;
+	constexpr std::uint32_t cloud = platform::beneath::k_reparse_tag_cloud;
+	constexpr std::uint32_t junction = platform::beneath::k_reparse_tag_mount_point;
+	constexpr std::uint32_t symlink = platform::beneath::k_reparse_tag_symlink;
+	constexpr std::uint32_t other = 0x80000017u; // IO_REPARSE_TAG_WOF: neither a link nor a filter entered here
+
+	for (const bool top : { true, false }) {
+		BOOST_TEST_INFO("top: " << top);
+		const tree_entry link = top ? tree_entry::refused : tree_entry::remove_itself;
+		BOOST_TEST((tree_entry_of(directory, true, 0, top) == tree_entry::walk));
+		BOOST_TEST((tree_entry_of(directory | reparse, true, cloud, top) == tree_entry::walk_through_filter));
+		BOOST_TEST((tree_entry_of(directory | reparse, true, cloud | 0x3000u, top) == tree_entry::walk_through_filter));
+		BOOST_TEST((tree_entry_of(directory | reparse, true, junction, top) == link));
+		BOOST_TEST((tree_entry_of(directory | reparse, true, symlink, top) == link));
+		BOOST_TEST((tree_entry_of(directory | reparse, true, other, top) == link));
+		BOOST_TEST((tree_entry_of(directory | reparse, false, 0, top) == link));
+		BOOST_TEST((tree_entry_of(0, true, 0, top) == tree_entry::remove_itself));
+		BOOST_TEST((tree_entry_of(reparse, true, cloud, top) == tree_entry::remove_itself));
+		BOOST_TEST((tree_entry_of(reparse, true, symlink, top) == link));
+		BOOST_TEST((tree_entry_of(reparse, true, other, top) == link));
 	}
 }
 

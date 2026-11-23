@@ -41,10 +41,16 @@ namespace fs = std::filesystem;
 
 namespace {
 
+	// The system call stops a name at a NUL: "..\0x" passes as a name here and opens "..".
+	bool has_nul(const fs::path& path)
+	{
+		return path.native().find(fs::path::value_type{}) != fs::path::string_type::npos;
+	}
+
 	// The folders below the root. safe_path never yields an absolute path or "..", but the walk does not rely on it.
 	std::optional<std::vector<fs::path>> folder_parts(const fs::path& folder)
 	{
-		if (folder.has_root_path()) {
+		if (folder.has_root_path() || has_nul(folder)) {
 			return std::nullopt;
 		}
 		std::vector<fs::path> parts;
@@ -62,7 +68,8 @@ namespace {
 
 	bool is_plain_name(const fs::path& name)
 	{
-		return !name.empty() && !name.has_root_path() && name == name.filename() && name != "." && name != "..";
+		return !name.empty() && !has_nul(name) && !name.has_root_path() && name == name.filename() && name != "."
+			&& name != "..";
 	}
 
 	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the root";
@@ -407,16 +414,26 @@ namespace {
 
 	// Empties the folder `name` in `parent` and removes it. The folder is opened with O_NOFOLLOW (a link swapped in at
 	// its name is refused), its entries are listed before any goes and each is looked at without following a link: a
-	// folder is entered the same way, anything else (a link among them) is unlinked as itself.
+	// folder is entered the same way, anything else (a link among them) is unlinked as itself. A folder on another
+	// device than `device` (a mount point) is refused, not emptied.
 	std::string remove_tree_at(int parent, const std::string& name, const fs::path& path,
-		const platform::beneath::tree_hook* hook, int depth)
+		const platform::beneath::tree_hook* hook, int depth, dev_t device)
 	{
 		if (depth > k_tree_depth_limit) {
 			return std::format("'{}' is nested deeper than {} folders", fs_paths::utf8_of(path), k_tree_depth_limit);
 		}
 		const fd_holder folder{ ::openat(parent, name.c_str(), k_dir_flags) };
 		if (folder.get() < 0) {
-			return errno_text("cannot open the folder (a link, or not a folder)", path);
+			// Gone since its parent was listed: as removed as it will be.
+			return errno == ENOENT ? std::string{} : errno_text("cannot open the folder (a link, or not a folder)",
+				path);
+		}
+		struct stat held;
+		if (::fstat(folder.get(), &held) != 0) {
+			return errno_text("cannot inspect", path);
+		}
+		if (held.st_dev != device) {
+			return std::format("'{}' is on another device (a mount point): it is not removed", fs_paths::utf8_of(path));
 		}
 		if (hook && *hook) {
 			(*hook)(path);
@@ -434,7 +451,7 @@ namespace {
 				return errno_text("cannot inspect", path / entry);
 			}
 			if (S_ISDIR(information.st_mode)) {
-				std::string error = remove_tree_at(folder.get(), entry, path / entry, hook, depth + 1);
+				std::string error = remove_tree_at(folder.get(), entry, path / entry, hook, depth + 1, device);
 				if (!error.empty()) {
 					return error;
 				}
@@ -512,7 +529,11 @@ std::string platform::beneath::remove_tree_beneath(pinned_root& root, const fs::
 		const bool removed = ::unlinkat(at.get(), leaf.c_str(), 0) == 0 || errno == ENOENT;
 		return removed ? std::string{} : errno_text("cannot remove", path);
 	}
-	return remove_tree_at(at.get(), leaf.string(), path, hook, 0);
+	struct stat parent;
+	if (::fstat(at.get(), &parent) != 0) {
+		return errno_text("cannot inspect", reached);
+	}
+	return remove_tree_at(at.get(), leaf.string(), path, hook, 0, parent.st_dev);
 }
 
 std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
@@ -1235,9 +1256,9 @@ namespace {
 	constexpr DWORD k_disposition_posix_semantics = 0x2;
 	constexpr DWORD k_disposition_ignore_readonly = 0x10;
 
-	// Marks what `entry` holds for deletion when its handle closes, a read-only file too: with POSIX semantics (the
-	// name goes at once, so its folder is empty for the next step) where Windows has them, else the read-only attribute
-	// is cleared and the classic disposition set.
+	// Marks what `entry` (opened with DELETE) holds for deletion when its handle closes, a read-only file too: with
+	// POSIX semantics (the name goes at once, so its folder is empty for the next step) where Windows has them, else the
+	// read-only attribute is cleared through a handle opened again from `entry` and the classic disposition set.
 	bool delete_entry(HANDLE entry)
 	{
 		DWORD flags = k_disposition_delete | k_disposition_posix_semantics | k_disposition_ignore_readonly;
@@ -1255,23 +1276,46 @@ namespace {
 			if (basic.FileAttributes == 0) {
 				basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
 			}
-			::SetFileInformationByHandle(entry, FileBasicInfo, &basic, sizeof(basic));
+			constexpr ULONG share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+			const handle_holder writable = open_in(entry, fs::path{}, FILE_WRITE_ATTRIBUTES, share, FILE_OPEN, 0);
+			if (writable.valid()) {
+				::SetFileInformationByHandle(writable.get(), FileBasicInfo, &basic, sizeof(basic));
+			}
 		}
 		return set_delete_on_close(entry);
 	}
 
-	// Empties what `name` in `parent` is and removes it. The entry is opened as itself (FILE_OPEN_REPARSE_POINT) and
-	// held without FILE_SHARE_DELETE, so nobody renames or replaces it meanwhile. A real folder is listed through its
-	// handle and each entry handled the same way from it; a link, a junction or any other reparse point is deleted as
-	// itself, never entered, except at the top of the tree (`top`), where it is refused.
+	// The folder `entry` holds, opened again from that handle (no name is looked up) to be listed: as itself for a
+	// plain folder, through its filter for a placeholder. Invalid with the last error set unless it is the same folder.
+	handle_holder reopen_to_list(HANDLE entry, const BY_HANDLE_FILE_INFORMATION& information, bool through_filter)
+	{
+		// FILE_SHARE_DELETE: `entry` itself holds DELETE. Nobody else gets it: `entry` does not share it.
+		constexpr ULONG share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+		handle_holder listed = open_in(entry, fs::path{}, k_folder_access, share, FILE_OPEN, FILE_DIRECTORY_FILE,
+			!through_filter);
+		BY_HANDLE_FILE_INFORMATION after{};
+		if (!listed.valid() || !::GetFileInformationByHandle(listed.get(), &after)) {
+			return handle_holder{};
+		}
+		if (!same_file(information, after) || (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+			::SetLastError(ERROR_CANT_ACCESS_FILE);
+			return handle_holder{};
+		}
+		return listed;
+	}
+
+	// Empties what `name` in `parent` is and removes it. The entry is opened as itself (FILE_OPEN_REPARSE_POINT) with
+	// DELETE alone, so a file locked or unreadable elsewhere is still removed, and held without FILE_SHARE_DELETE, so
+	// nobody renames or replaces it meanwhile. What is done with it is tree_entry_of: a folder is listed through a
+	// handle opened again from it and each entry handled the same way; a link, a junction or an unknown reparse point is
+	// deleted as itself, never entered, except at the top of the tree (`top`), where it is refused.
 	std::string remove_tree_at(HANDLE parent, const fs::path& name, const fs::path& path,
 		const platform::beneath::tree_hook* hook, int depth, bool top)
 	{
 		if (depth > k_tree_depth_limit) {
 			return std::format("'{}' is nested deeper than {} folders", fs_paths::utf8_of(path), k_tree_depth_limit);
 		}
-		constexpr ACCESS_MASK access = DELETE | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_WRITE_ATTRIBUTES;
-		const handle_holder entry = open_in(parent, name, access, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN, 0);
+		const handle_holder entry = open_in(parent, name, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN, 0);
 		if (!entry.valid()) {
 			const DWORD code = ::GetLastError();
 			const bool missing = code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
@@ -1281,37 +1325,48 @@ namespace {
 		if (!::GetFileInformationByHandle(entry.get(), &information)) {
 			return last_error_text("cannot inspect", path);
 		}
-		const bool reparse_point = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-		if (top && reparse_point) {
-			return std::format("'{}' is a link or a junction: only a real folder is removed as a tree",
-				fs_paths::utf8_of(path));
+		FILE_ATTRIBUTE_TAG_INFO tag{};
+		const bool tag_known = (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+			|| ::GetFileInformationByHandleEx(entry.get(), FileAttributeTagInfo, &tag, sizeof(tag)) != 0;
+		const auto what = platform::beneath::tree_entry_of(information.dwFileAttributes, tag_known, tag.ReparseTag, top);
+		if (what == platform::beneath::tree_entry::refused) {
+			return std::format("'{}' is a link, a junction or another reparse point: only a real folder is removed as "
+				"a tree", fs_paths::utf8_of(path));
 		}
-		if (!reparse_point && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+		if (what == platform::beneath::tree_entry::walk || what == platform::beneath::tree_entry::walk_through_filter) {
+			const bool through_filter = what == platform::beneath::tree_entry::walk_through_filter;
+			const handle_holder listed = reopen_to_list(entry.get(), information, through_filter);
+			if (!listed.valid()) {
+				return last_error_text("cannot open the folder to list it", path);
+			}
 			if (hook && *hook) {
 				(*hook)(path);
 			}
 			std::vector<std::wstring> names;
-			if (!list_folder(entry.get(), names)) {
+			if (!list_folder(listed.get(), names)) {
 				return last_error_text("cannot list", path);
 			}
 			for (const auto& child : names) {
 				const fs::path child_name{ child };
-				std::string error = remove_tree_at(entry.get(), child_name, path / child_name, hook, depth + 1, false);
+				std::string error = remove_tree_at(listed.get(), child_name, path / child_name, hook, depth + 1, false);
 				if (!error.empty()) {
 					return error;
 				}
 			}
 		}
 		// A folder whose entries another handle (indexer, antivirus) still holds open is not empty yet for a moment.
+		DWORD code = ERROR_SUCCESS;
 		for (int attempt = 0; attempt < 50; ++attempt) {
 			if (delete_entry(entry.get())) {
 				return {};
 			}
-			if (::GetLastError() != ERROR_DIR_NOT_EMPTY) {
+			code = ::GetLastError();
+			if (code != ERROR_DIR_NOT_EMPTY) {
 				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
+		::SetLastError(code);
 		return last_error_text("cannot remove", path);
 	}
 
