@@ -1114,6 +1114,36 @@ BOOST_AUTO_TEST_CASE(an_inline_mesh_is_refused_in_every_scene_edit)
 	BOOST_TEST(scene.generation() == before);
 }
 
+// #1180: a custom field's codec may load an inline desc from its value (an animation clip, a prefab node's components).
+// An object with a __type there is no mesh either, and one of a type with a schema is checked by that schema.
+BOOST_AUTO_TEST_CASE(an_inline_desc_inside_a_custom_value_is_checked_too)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("component.add", R"({"ref":)" + crate
+		+ R"(,"key":"mesh","type":"mesh_node_desc","fields":{"vx_end":3,"ind_end":3}})").ok);
+	const auto samplers = [&](const std::string& items) {
+		return call("component.set", R"({"ref":)" + crate + R"(,"key":"mesh","patch":{"material":{"__type":"material_desc","samplers":[)"
+			+ items + "]}}}");
+	};
+
+	const auto mesh = samplers(R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[0,0,0,0]})");
+	BOOST_TEST(mesh.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(mesh.error.find("mesh data is written by the editor") != std::string::npos, mesh.error);
+	BOOST_CHECK_MESSAGE(mesh.error.find("material/samplers/0") != std::string::npos, mesh.error);
+
+	const auto nested = samplers(R"({"wrapped":{"__type":"poly_mesh_desc"}})");
+	BOOST_TEST(nested.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(nested.error.find("material/samplers/0/wrapped") != std::string::npos, nested.error);
+
+	const auto parent = samplers(R"({"__type":"material_desc","__parent":"user://m.desc"})");
+	BOOST_TEST(parent.code == cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(parent.error.find("material/samplers/0/__parent") != std::string::npos, parent.error);
+	BOOST_TEST(!child(root(), 0xa4)->components.at("mesh").overrides.contains("material"));
+
+	const auto fine = samplers(R"("res://t.png",{"__type":"material_desc","__parent":"res://base_material.desc"})");
+	BOOST_CHECK_MESSAGE(fine.ok, fine.error);
+}
+
 // #740: a partial patch of an inline material may leave out its __type: the type comes from the component as the patch
 // leaves it, and the material's references are checked by that schema. Over a tag there is no type to take.
 BOOST_AUTO_TEST_CASE(a_partial_patch_of_an_inline_desc_takes_its_type_from_the_component)
