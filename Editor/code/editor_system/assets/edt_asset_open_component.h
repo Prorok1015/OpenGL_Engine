@@ -85,6 +85,8 @@ namespace edt
 
 		ports m_ports;
 		std::unique_ptr<data_document_host> m_data_documents;
+		// The `quiet` of the open() running now: a kind's open callback has no parameter for it.
+		bool m_open_quiet = false;
 		res::res_handle<desc::desc_base> m_pending_handle;
 		res::tag m_pending_tag;
 		std::string m_pending_key;
