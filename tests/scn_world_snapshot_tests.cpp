@@ -377,7 +377,7 @@ BOOST_AUTO_TEST_CASE(BlackboardValuesWithASchemaComeBack_OthersAreReported)
 BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueComesBack)
 {
 	const auto sky_tag = put("board.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
 	BOOST_REQUIRE(sky && sky->material.is_valid());
 	scn::blackboard_catalog types;
@@ -400,7 +400,7 @@ BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueComesBack)
 	BOOST_TEST(desc::is_override_tag(restored->mlt_desc.get_tag().view()));
 	BOOST_REQUIRE(restored->mlt_desc.get_sync());
 	BOOST_TEST((restored->mlt_desc.get_sync()->queue == scn::pass_queue::TRANSPARENT));
-	BOOST_TEST(restored->mlt_desc.get_sync()->vertex_shader.string() == "res://shaders/sky.vert");
+	BOOST_TEST(restored->mlt_desc.get_sync()->shader.get_tag().string() == "res://shaders/sky.shader.desc");
 }
 
 // #1238 after #1236: the inline desc of a blackboard value is written with the version of its type, so restoring it does
@@ -408,7 +408,7 @@ BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueComesBack)
 BOOST_AUTO_TEST_CASE(AnInlineDescInABlackboardValueIsNotMigratedAgain)
 {
 	const auto sky_tag = put("board.steps.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
 	BOOST_REQUIRE(sky && sky->material.is_valid());
 	// From here the format of material_desc has one more step; what is loaded is of the format before it.
@@ -477,7 +477,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 {
 	const auto material_tag = put("plain.material.desc", R"({"__type":"material_desc","queue":"transparent"})");
 	const auto sky_tag = put("sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	const auto clip_tag = put("run.clip.desc", R"({"__type":"animation_clip_desc","name":"Run","duration":2.0,"ticks_per_second":30.0,"channels":{}})");
 	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
 	BOOST_REQUIRE(sky && sky->material.is_valid());
@@ -523,7 +523,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 	BOOST_TEST(desc::is_override_tag(inline_material.mlt_desc.get_tag().view()));
 	BOOST_TEST(inline_material.dirty);
 	BOOST_REQUIRE(inline_material.mlt_desc.get_sync());
-	BOOST_TEST(inline_material.mlt_desc.get_sync()->vertex_shader.string() == "res://shaders/sky.vert");
+	BOOST_TEST(inline_material.mlt_desc.get_sync()->shader.get_tag().string() == "res://shaders/sky.shader.desc");
 
 	const auto& restored_clips = to.get<scn::animation_collection_component>(find_named(to, "Animator")).clips;
 	BOOST_REQUIRE_EQUAL(restored_clips.size(), 1u);
@@ -542,7 +542,7 @@ BOOST_AUTO_TEST_CASE(DescReferencesComeBackThroughTheDescSystem)
 BOOST_AUTO_TEST_CASE(AnInlineDescOfATypeWithSteps_ComesBackUnchanged)
 {
 	const auto sky_tag = put("steps.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
 	BOOST_REQUIRE(sky && sky->material.is_valid());
 	// From here the format of material_desc has one more step; what is loaded is of the format before it.
@@ -571,7 +571,7 @@ BOOST_AUTO_TEST_CASE(AnInlineDescOfATypeWithSteps_ComesBackUnchanged)
 BOOST_AUTO_TEST_CASE(ASnapshotWithoutVersionsInside_ComesBackUnchanged)
 {
 	const auto sky_tag = put("plain.sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	const auto sky = std::dynamic_pointer_cast<scn::skybox_desc>(require_loaded<desc::desc_base>(sky_tag).get_sync());
 	BOOST_REQUIRE(sky && sky->material.is_valid());
 	descs->register_migration("material_desc", descs->current_version("material_desc"), [](json::object& o) { o["queue"] = "opaque"; });

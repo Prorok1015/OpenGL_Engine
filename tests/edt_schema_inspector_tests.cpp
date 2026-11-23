@@ -696,8 +696,7 @@ BOOST_AUTO_TEST_CASE(MaterialInspectorFieldsComeFromTheSchema)
 	BOOST_CHECK(spec_of(*schema, "emissive").kind == ui::widget::color);
 	BOOST_CHECK(spec_of(*schema, "queue").kind == ui::widget::combo);
 	BOOST_CHECK(spec_of(*schema, "render_mode").kind == ui::widget::combo);
-	BOOST_CHECK(spec_of(*schema, "vertex_shader").kind == ui::widget::asset);
-	BOOST_CHECK(spec_of(*schema, "geometry_shader").kind == ui::widget::asset);
+	BOOST_CHECK(spec_of(*schema, "shader").kind == ui::widget::asset);	// a desc reference (#1200)
 	BOOST_CHECK(spec_of(*schema, "defines").kind == ui::widget::list);
 	BOOST_CHECK(spec_of(*schema, "samplers_textures").kind == ui::widget::json);
 
@@ -724,7 +723,7 @@ BOOST_AUTO_TEST_CASE(MaterialInspectorFieldsComeFromTheSchema)
 	BOOST_CHECK(widget_at(drawn, "/uniforms/shininess") == ui::widget::real);
 	BOOST_CHECK(widget_at(drawn, "/uniforms/albedo") == ui::widget::color);
 	BOOST_CHECK(widget_at(drawn, "/queue") == ui::widget::combo);
-	BOOST_CHECK(widget_at(drawn, "/shader_fragment") == ui::widget::asset);
+	BOOST_CHECK(widget_at(drawn, "/shader") == ui::widget::asset);
 	BOOST_CHECK(!was_drawn(drawn, "/uniforms/ambient")); // not a field of the file, so not of the inspector
 }
 

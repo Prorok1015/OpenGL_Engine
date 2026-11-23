@@ -106,8 +106,9 @@ namespace rnd {
         std::vector<std::string> defines;
 
         // Программа и defines, как их собирает default_material_compiler из тех же стадий
-        // (USE_ANIMATION для скиннинга остаётся делом компилятора).
-        shader_config config() const;
+        // (USE_ANIMATION для скиннинга остаётся делом компилятора). extra_defines — defines материала (#1200):
+        // объединение, сортировка, без повторов; при одном имени макроса остаётся запись материала.
+        shader_config config(const std::vector<std::string>& extra_defines = {}) const;
     };
 }
 ```
@@ -126,9 +127,9 @@ namespace rnd {
 ### US-26-2 — Миграция `material_desc` на ссылку `shader_desc`
 
 **Файлы:**
-- `core/engine/render/render_system/include/snk/render/rnd_material_desc.h` (`rnd::material_desc`; `scn_material_desc.h` — только псевдонимы) — заменить inline shader fields на `res::tag shader`
+- `core/engine/render/render_system/include/snk/render/rnd_material_desc.h` (`rnd::material_desc`; `scn_material_desc.h` — только псевдонимы) — заменить inline shader fields на `res::res_handle<shader_desc> shader` (`desc_ref`, ключ `shader`)
 - `core/engine/render/render_system/rnd_material_desc.cpp` — `material_desc` v1→v2: шаг типа заменяет известные пары `shader_*` ссылкой `shader` на поставляемый `.shader.desc`, неизвестные пары переводит шаг проекта (`tools/project_migration`); legacy-формат не читается
-- `core/engine/render/render_system/shader/rnd_material_compiler.cpp` — собирать программу из `shader_desc::config()`
+- `core/engine/render/render_system/shader/rnd_material_compiler.cpp` — собирать программу из `shader_desc::config(mat.defines)`
 - `core/res/*.desc` — обновить material файлы
 
 **Изменения в `material_desc`:**
@@ -144,6 +145,8 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ```
 
 **Обратная совместимость:** миграцией, а не чтением двух форматов. Шаг типа `material_desc` (v1→v2) при загрузке заменяет известные пары `shader_vertex/fragment/geometry` ссылкой `shader` на поставляемый `.shader.desc`; для неизвестных пар `.shader.desc` создаёт шаг проекта (`--migrate`). Как грузится материал с неизвестной парой до `--migrate` — открытый вопрос #1200.
+
+**Решения 2026-11-23 (#1200, первый PR):** в `shader` — только ссылка (тег или `{guid, path}`); inline-объект `shader_desc` отклоняется с предупреждением загрузки по `/shader`, поле остаётся пустым (программа общая, копия в каждом материале её размножила бы). `defines` материала остаются в материале и сливаются с defines шейдера в `config(defines)`; сортировка меняет порядок строк `#define`, это намеренно (один набор — один вариант). Шейдер ещё грузится — материал пересобирается в следующем кадре (`compiled_material::complete = false`); не загрузился — ошибка в лог, материал не рисуется и не пересобирается; шейдера нет — предупреждение, материал не рисуется. `shader_desc` при загрузке предупреждает о пропущенной стадии и о расширении не своей стадии.
 
 **`get_shader_desc()`** собирает `shader_config` из:
 1. `shader_desc::build_constant_data(parameters)` — GLSL теги + defines

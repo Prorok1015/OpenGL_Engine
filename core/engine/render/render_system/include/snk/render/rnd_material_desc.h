@@ -4,6 +4,8 @@
 #include <snk/driver/rnd_render_mode.h>
 #include <snk/resource/res_diagnostics.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/render/rnd_shader_desc.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
 #include <array>
 #include <format>
 #include <string>
@@ -77,9 +79,8 @@ namespace desc
 	inline constexpr auto field_attrs<rnd::material_desc> = attrs(
 		f("defines").tooltip("Shader preprocessor defines"),
 		f("samplers_textures").key("/samplers").kind(field_kind::custom).tooltip("Texture tags by sampler slot; an empty slot is null"),
-		f("vertex_shader").key("/shader_vertex").write_null_if_empty(),
-		f("fragment_shader").key("/shader_fragment").write_null_if_empty(),
-		f("geometry_shader").key("/shader_geometry").write_null_if_empty(),
+		// A reference only: an inline shader_desc is refused by material_desc::deserialize (#1200).
+		f("shader").kind(field_kind::desc_ref).ref("shader_desc").write_if_valid().tooltip("Shader program: a .shader.desc tag"),
 		f("queue").write_null_if_empty().tooltip("Draw queue: opaque, transparent, or mix for both; null draws in none"),
 		f("albedo").key("/uniforms/albedo").color(),
 		f("emissive").key("/uniforms/emissive").color(),
@@ -130,14 +131,12 @@ namespace rnd
 			copy_to_same(*this, other);
 		}
 
-		// Generic read of the schema, after the one legacy form it cannot say: see rnd_material_desc.cpp.
+		// Generic read of the schema, after the forms it cannot say (a legacy queue, an inline shader): see rnd_material_desc.cpp.
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 
 		std::vector<std::string> defines;
 		std::vector<res::tag> samplers_textures;
-		res::tag vertex_shader;
-		res::tag fragment_shader;
-		res::tag geometry_shader;
+		res::res_handle<shader_desc> shader;
 		pass_queue queue = pass_queue::OPAQUE;
 		ds::color albedo = ds::color(1.0f);
 		ds::color emissive = ds::color(0.0f);
@@ -148,7 +147,6 @@ namespace rnd
 		ds::color specular = ds::color(1.0f);
 		ds::color ambient = ds::color(1.0f);
 
-		BOOST_DESCRIBE_CLASS(material_desc, (), (defines, samplers_textures, vertex_shader, fragment_shader, geometry_shader,
-			queue, albedo, emissive, shininess, render_mode), (), ())
+		BOOST_DESCRIBE_CLASS(material_desc, (), (defines, samplers_textures, shader, queue, albedo, emissive, shininess, render_mode), (), ())
 	};
 }

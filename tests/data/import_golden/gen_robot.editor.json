@@ -3053,7 +3053,7 @@
 				"USE_TXM_AS_DIFFUSE"
 			],
 			"queue": "mix",
-			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+			"shader": "res://shaders/mix_opaque_trans_scene.shader.desc"
 		}
 	},
 	"(import result)": {

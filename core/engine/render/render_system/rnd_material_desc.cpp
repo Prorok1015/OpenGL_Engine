@@ -1,5 +1,6 @@
 #include <snk/render/rnd_material_desc.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_diagnostics.h>
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,18 @@ void rnd::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	const auto* queue_value = rest.if_contains("queue");
 	if (queue_value && !queue_value->is_string() && !queue_value->is_null()) {
 		rest["queue"] = json::value();
+	}
+
+	// The generic desc_ref reader would store an inline shader as a memory copy of this material: a program is shared by
+	// the materials that draw with it, so only a reference to a .shader.desc is taken.
+	if (const auto* shader = rest.if_contains("shader"); shader && shader->is_object()) {
+		const auto* type = shader->as_object().if_contains("__type");
+		if (type && type->is_string()) {
+			constexpr std::string_view why = "an inline shader_desc is not allowed in a material: refer to a .shader.desc file";
+			egLOG_WARN("render/material", "'{}': {}, the material has no shader", get_tag().view(), why);
+			res::report_load_warning(res::diagnostic_kind::reference, "/shader", std::string{ why });
+			rest["shader"] = "";
+		}
 	}
 
 	// The topologies RHI R4 removed from the driver: files written before it may still name them.

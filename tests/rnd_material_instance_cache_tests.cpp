@@ -6,6 +6,7 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_material_desc.h>
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
@@ -21,15 +22,20 @@ struct instance_cache_fixture : test_util::null_engine_fixture
 {
 	rnd::texture_manager& textures() { return storage.require<rnd::render_system>().get_texture_manager(); }
 	rnd::material_compiler_interface* compiler() { return storage.require<rnd::render_system>().get_material_compiler(); }
+	res::resource_system& resources() { return storage.require<res::resource_system>(); }
 
 	std::shared_ptr<scn::material_desc> make_desc(float shininess = 32.f, std::vector<res::tag> samplers = {})
 	{
 		auto desc = std::make_shared<scn::material_desc>();
 		desc->shininess = shininess;
-		desc->vertex_shader = res::tag::make("shaders/scene.vert");
-		desc->fragment_shader = res::tag::make("shaders/scene.frag");
+		desc->shader = resources().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 		desc->samplers_textures = std::move(samplers);
 		return desc;
+	}
+
+	static bool has_no_stage(const rnd::shader_config::constant_data& cdata)
+	{
+		return std::ranges::none_of(cdata.program, [](const res::tag& stage) { return stage.is_valid(); });
 	}
 
 	// A new frame of the cache under test.
@@ -224,6 +230,63 @@ BOOST_AUTO_TEST_CASE(AnInstanceNobodyAsksForIsDroppedAfterTheGracePeriodAndItsSl
 	BOOST_TEST(cache.compilations() == compilations + 1);
 	BOOST_CHECK(comeback_id == unused_id);
 	BOOST_TEST(cache.get(comeback_id).source.get() == comeback.get());
+}
+
+// #1200: the program comes from the shader desc the material refers to. While it loads the instance is built again each
+// frame, like a map still loading; once it has loaded it is the shader's program.
+BOOST_AUTO_TEST_CASE(AShaderStillLoadingLeavesTheInstanceIncompleteUntilItLoads)
+{
+	const res::tag tag{ res::tag::memory, "t/pending.shader.desc" };
+	BOOST_REQUIRE(resources().store(tag, test_util::to_bytes(R"({"__type":"shader_desc","__version":1,
+		"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","defines":[]})")));
+	const auto desc = make_desc();
+	desc->shader = resources().require<rnd::shader_desc>(tag);
+	BOOST_REQUIRE(!desc->shader.is_ready());
+	BOOST_REQUIRE(!desc->shader.has_error());
+
+	rnd::shader_config_cache variants;
+	const auto pending = rnd::build_compiled_material(*compiler(), variants, textures(), desc, false);
+	BOOST_TEST(!pending->complete);
+	BOOST_TEST(has_no_stage(variants.resolve(pending->base)));
+
+	test_util::pump(tasks);
+	BOOST_REQUIRE(desc->shader.is_ready());
+	const auto loaded = rnd::build_compiled_material(*compiler(), variants, textures(), desc, false);
+	BOOST_TEST(loaded->complete);
+	BOOST_TEST(variants.resolve(loaded->base).program.get_vertex_shader().string() == "res://shaders/scene.vert");
+	BOOST_TEST(variants.resolve(loaded->base).program.get_fragment_shader().string() == "res://shaders/scene.frag");
+}
+
+// A shader that failed is final: the instance is complete with no program (not drawn) and is not compiled again.
+BOOST_AUTO_TEST_CASE(AShaderThatFailedToLoadIsNotDrawnAndNotRetried)
+{
+	const auto desc = make_desc();
+	desc->shader = resources().require<rnd::shader_desc>(res::tag::make("shaders/__material_instance_cache_missing__.shader.desc"));
+	test_util::pump(tasks);
+	BOOST_REQUIRE(desc->shader.has_error());
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures());
+	next_frame(cache);
+	const auto id = cache.acquire(desc, false, false);
+	BOOST_TEST(cache.get(id).complete);
+	BOOST_TEST(has_no_stage(variants.resolve(cache.get(id).base)));
+	for (int frame = 0; frame < 3; ++frame) {
+		next_frame(cache);
+		BOOST_CHECK(cache.acquire(desc, false, false) == id);
+	}
+	BOOST_TEST(cache.compilations() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AMaterialWithoutAShaderIsNotDrawn)
+{
+	const auto desc = make_desc();
+	desc->shader = {};
+
+	rnd::shader_config_cache variants;
+	const auto built = rnd::build_compiled_material(*compiler(), variants, textures(), desc, false);
+	BOOST_TEST(built->complete);
+	BOOST_TEST(has_no_stage(variants.resolve(built->base)));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

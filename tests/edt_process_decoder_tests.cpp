@@ -86,7 +86,7 @@ edt::decode_bundle import_answer(boost::json::object prefab_json = {})
 	bundle.manifest["import"] = edt::to_json(imported);
 	bundle.blobs.push_back(blob_of(k_prefab, text_bytes(R"json({"__type":"prefab_desc","geometry":"memory://m/m.geom.desc"})json")));
 	bundle.blobs.push_back(blob_of(k_geom, text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc"})json")));
-	bundle.blobs.push_back(blob_of(k_material, text_bytes(R"json({"__type":"material_desc","__parent":"res://base_material.desc","name":"x","shader_fragment":"res://shaders/mix_opaque_trans_scene.frag"})json")));
+	bundle.blobs.push_back(blob_of(k_material, text_bytes(R"json({"__type":"material_desc","__parent":"res://base_material.desc","name":"x","shader":"res://shaders/mix_opaque_trans_scene.shader.desc"})json")));
 	bundle.blobs.push_back(blob_of(k_texture, png_bytes()));
 	bundle.blobs.push_back(blob_of(k_texture_desc, text_bytes(R"json({"__type":"texture_2d_desc","__parent":"res://base_texture.desc","data":"memory://m/textures/t.png"})json")));
 	return bundle;

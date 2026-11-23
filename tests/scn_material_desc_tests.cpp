@@ -15,9 +15,10 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_TypeConstant)
 }
 
 // material_desc::deserialize only hands its desc_system argument on to the schema reader as the context of desc_ref
-// fields, and material_desc has none (it only reads JSON into POD members after EPIC-49 US-49-5). Constructing a real desc_system here is impossible — the project's
-// tests deliberately avoid resource_system, which asserts on a real resources path. So we pass a
-// reference that is never dereferenced. Keep deserialize free of desc_system use or this breaks.
+// fields, and its one desc_ref (shader, #1200) is only read when the key is there: these cases never write it. Constructing
+// a real desc_system here is impossible — the project's tests deliberately avoid resource_system, which asserts on a real
+// resources path. So we pass a reference that is never dereferenced; the shader reference is tested in
+// rnd_shader_desc_tests.cpp and scn_desc_roundtrip_tests.cpp.
 static desc::desc_system& shared_desc_system()
 {
 	// Aligned, non-null storage (never constructed or dereferenced): binding a reference to null trips UBSan.
@@ -26,12 +27,9 @@ static desc::desc_system& shared_desc_system()
 	return *reinterpret_cast<desc::desc_system*>(dummy_bytes);
 }
 
-BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
+BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_Scalars)
 {
 	scn::material_desc src;
-	src.vertex_shader = res::tag{ "res://shaders/obj.vert" };
-	src.fragment_shader = res::tag{ "res://shaders/obj.frag" };
-	src.geometry_shader = res::tag{ "res://shaders/obj.geom" };
 	src.defines = { "USE_NORMAL_MAP", "USE_SPECULAR_MAP" };
 	src.queue = scn::pass_queue::MIX;
 	src.albedo = ds::color{ 0.1f, 0.2f, 0.3f, 0.4f };
@@ -45,9 +43,8 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
 	scn::material_desc dst;
 	dst.deserialize(shared_desc_system(), data);
 
-	BOOST_TEST(dst.vertex_shader == src.vertex_shader);
-	BOOST_TEST(dst.fragment_shader == src.fragment_shader);
-	BOOST_TEST(dst.geometry_shader == src.geometry_shader);
+	BOOST_TEST(!data.contains("shader"));
+	BOOST_TEST(!dst.shader.is_valid());
 	BOOST_TEST(dst.defines == src.defines);
 	BOOST_TEST((dst.queue == scn::pass_queue::MIX));
 	BOOST_TEST(dst.albedo == src.albedo);

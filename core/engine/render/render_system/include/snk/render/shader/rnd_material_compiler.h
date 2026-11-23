@@ -33,7 +33,8 @@ namespace rnd
 	};
 
 	// Compiles `mat` once for reuse across frames: the pass variants are interned into `variants`. The result is `complete` only
-	// when every sampler texture was resolved; a texture still loading leaves it to be rebuilt next frame.
+	// when every sampler texture was resolved and the shader desc has loaded; a texture or the shader still loading leaves it
+	// to be rebuilt next frame. A shader that failed to load is complete with an empty program: it is not drawn, not retried.
 	SNK_API std::shared_ptr<compiled_material> build_compiled_material(
 		material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
 		std::shared_ptr<const material_desc> mat, bool skinned);

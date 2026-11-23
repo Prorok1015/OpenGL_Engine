@@ -73,6 +73,21 @@ desc::migration_context::migration_context(std::string_view type, int from_versi
 {
 }
 
+desc::migration_context::migration_context(std::string_view type, int from_version, std::string_view file,
+	std::vector<migration_warning>* sink, migration_id_lookup id_of)
+	: m_type(type)
+	, m_from_version(from_version)
+	, m_file(file)
+	, m_sink(sink)
+	, m_id_of(std::move(id_of))
+{
+}
+
+std::optional<res::asset_id> desc::migration_context::id_of(std::string_view path) const
+{
+	return m_id_of ? m_id_of(path) : std::nullopt;
+}
+
 void desc::migration_context::warn(std::string message)
 {
 	if (m_file.empty()) {
@@ -453,7 +468,14 @@ int desc::desc_system::current_version(std::string_view type) const
 
 void desc::desc_system::migrate_tree(json::object& root, std::string_view context) const
 {
-	migrate_object(root, context, [](const migration_step_fn& step, json::object& obj, const std::string&, int) { step(obj); });
+	migrate_object(root, context, [this](const migration_step_fn& step, json::object& obj, const std::string& type, int from) {
+		if (const auto* described = step.target<described_step>()) {
+			migration_context step_context(type, from, {}, nullptr, migration_ids());
+			described->fn(obj, step_context);
+		} else {
+			step(obj);
+		}
+	});
 }
 
 void desc::desc_system::stamp_header(json::object& obj) const
@@ -742,9 +764,9 @@ bool desc::desc_system::add_desc_entry(std::string_view type_name, schema_kind k
 
 void desc::desc_system::migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const
 {
-	migrate_object(root, file, [file, &warnings](const migration_step_fn& step, json::object& obj, const std::string& type, int from) {
+	migrate_object(root, file, [this, file, &warnings](const migration_step_fn& step, json::object& obj, const std::string& type, int from) {
 		if (const auto* described = step.target<described_step>()) {
-			migration_context context(type, from, file, &warnings);
+			migration_context context(type, from, file, &warnings, migration_ids());
 			described->fn(obj, context);
 		} else {
 			step(obj);
@@ -1201,6 +1223,11 @@ desc::reference_counts desc::write_references_with(json::value& root, const sche
 	const reference_writer writer{ schema_of, ids, true, nullptr, nullptr, &counts };
 	writer.tree(root, {});
 	return counts;
+}
+
+desc::migration_id_lookup desc::desc_system::migration_ids() const
+{
+	return [this](std::string_view path) { return m_res_system.asset_id_of(res::tag{ path }); };
 }
 
 desc::reference_ids desc::asset_index_ids(const res::resource_system& resources)
