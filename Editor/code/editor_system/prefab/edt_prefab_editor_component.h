@@ -89,6 +89,8 @@ namespace edt
 		void close_dirty();
 		// The game layer goes: the prefab editor closes, with a WARN when that loses edits.
 		void close_for_layer_change();
+		// The prefab the window shows, null when none (what the Inspector's shape section rebuilds into).
+		prefab_document* shown_prefab() const { return shown(); }
 		// The Inspector shows a node of a prefab (Edit > Undo has nothing to undo there, #147).
 		bool owns_inspector() const { return m_inspector_target.is_prefab(); }
 		// The window opens (a data window of the host asked for it).

@@ -20,6 +20,7 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 	: m_ports(std::move(from))
 {
 	shape_parameters_section::ports section;
+	const auto shown_prefab = [this]() -> prefab_document* { return m_ports.shown_prefab ? m_ports.shown_prefab() : nullptr; };
 	section.read_poly = [this](const std::string& poly_path) {
 		const desc::desc_system* descs = m_ports.services.descs();
 		if (!descs || !m_ports.desc_layout) return desc_file_read{};
@@ -32,7 +33,7 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 		facts.level_dirty = m_ports.state.is_dirty();
 		facts.level_agent_changes = m_ports.state.has_agent_changes();
 		for (auto& world : m_ports.state.world_descs) facts.level_nodes += mesh::count_stale_shape_nodes(world.get_root(), geometry, range);
-		if (const prefab_document* prefab = prefab_of(m_ports.context.documents()); prefab && prefab->working()) {
+		if (const prefab_document* prefab = shown_prefab(); prefab && prefab->working()) {
 			facts.prefab_open = true;
 			facts.prefab_dirty = prefab->is_dirty();
 			facts.prefab_blocker = prefab_rebuild_blocker(*prefab);
@@ -47,7 +48,7 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 			});
 	};
 	section.rebuild = [this](const json::object& arguments, std::string_view geometry) {
-		return rebuild_shape(m_ports.context.actions(), prefab_of(m_ports.context.documents()), arguments, geometry);
+		return rebuild_shape(m_ports.context.actions(), shown_prefab(), arguments, geometry);
 	};
 	section.report_error = [this](std::string text) {
 		egLOG_WARN("editor/shape", "{}", text);
@@ -55,7 +56,7 @@ edt::shape_parameters_component::shape_parameters_component(ports from)
 	};
 	section.locked = [this] {
 		if (m_ports.state.edits_locked()) return true;
-		const prefab_document* prefab = prefab_of(m_ports.context.documents());
+		const prefab_document* prefab = shown_prefab();
 		return prefab && prefab->edits_locked();
 	};
 	m_section = std::make_unique<shape_parameters_section>(std::move(section));
