@@ -742,6 +742,15 @@ namespace desc
 			return {};
 		}
 
+		bool is_inline_desc(const json::value& value)
+		{
+			if (!value.is_object()) {
+				return false;
+			}
+			const json::value* type = value.as_object().if_contains("__type");
+			return type && type->is_string();
+		}
+
 		// `where` (when given) gets the full pointer of what failed: the pointer itself, or the item and the field inside it;
 		// `base` is what the outer levels have consumed of it.
 		override_status check_override(const type_schema& schema, std::string_view pointer, const json::value& value, const schema_registry* resolve,
@@ -775,6 +784,9 @@ namespace desc
 								return inside(std::string(pointer), failure);
 							}
 						}
+					}
+					if (field.kind == field_kind::desc_ref && field.reference_only && is_inline_desc(value)) {
+						return override_status::bad_value;
 					}
 					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}

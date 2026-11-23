@@ -110,7 +110,7 @@
 				"LIGHTS_ENABLED"
 			],
 			"queue": "mix",
-			"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+			"shader": "res://shaders/mix_opaque_trans_scene.shader.desc"
 		}
 	},
 	"(import result)": {

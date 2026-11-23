@@ -32,11 +32,11 @@ std::shared_ptr<scn::skybox_desc> make_skybox(test_util::scene_env& env, std::st
 
 // core/res/skybox/sky_material.desc, header keys as they are on disk.
 constexpr const char* k_sky_material = R"({"__type":"material_desc","__version":1,"__guid":"ef0eb176-c36e-4b82-b6df-4e2c8dca625c",
-	"defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],"shader_vertex":"res://shaders/sky.vert",
-	"shader_fragment":"res://shaders/sky.frag","shader_geometry":null,"queue":"opaque",
+	"defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],"shader":"res://shaders/sky.shader.desc",
+	"queue":"opaque",
 	"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})";
 
-constexpr const char* k_inline_material = R"({"__type":"material_desc","queue":"transparent","shader_vertex":"res://shaders/sky.vert",
+constexpr const char* k_inline_material = R"({"__type":"material_desc","queue":"transparent","shader":"res://shaders/sky.shader.desc",
 	"uniforms":{"albedo":[0.5,0.25,0.5,1.0]}})";
 
 std::string with_material(const std::string& value)
@@ -74,7 +74,7 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_ShippedFileResavesToTheSameBytes)
 	pump();
 	const auto material = sky->material.get_sync();
 	BOOST_REQUIRE(material);
-	BOOST_TEST(material->vertex_shader.string() == "res://shaders/sky.vert");
+	BOOST_TEST(material->shader.get_tag().string() == "res://shaders/sky.shader.desc");
 	BOOST_TEST((material->queue == scn::pass_queue::OPAQUE));
 }
 
@@ -89,7 +89,7 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_ReadsTheMaterialAsATag)
 	pump();
 	const auto loaded = sky->material.get_sync();
 	BOOST_REQUIRE(loaded);
-	BOOST_TEST(loaded->fragment_shader.string() == "res://shaders/sky.frag");
+	BOOST_TEST(loaded->shader.get_tag().string() == "res://shaders/sky.shader.desc");
 	// a tag is written as a tag
 	BOOST_TEST(std::string_view{ ser(*sky).at("material").as_string() } == material.view());
 }
@@ -157,7 +157,7 @@ BOOST_AUTO_TEST_CASE(SkyboxDesc_ReadsTheMaterialAsAnInlineObjectAndWritesItInlin
 	const auto& written = saved.at("material").as_object();
 	BOOST_TEST(written.at("__type").as_string() == "material_desc");
 	BOOST_TEST(written.at("queue").as_string() == "transparent");
-	BOOST_TEST(written.at("shader_vertex").as_string() == "res://shaders/sky.vert");
+	BOOST_TEST(written.at("shader").as_string() == "res://shaders/sky.shader.desc");
 }
 
 // #1236: an inline desc written from memory carries the current version of its type, so read back (through the memory

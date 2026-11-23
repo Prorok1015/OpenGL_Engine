@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/resource/res_diagnostics.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -36,6 +38,17 @@ public:
 };
 
 constexpr std::string_view k_closed[] = { "user", "cache", "code", "edt", "x-y" };
+
+// shader_desc is a render desc, which the scene environment does not register.
+struct render_descs
+{
+	explicit render_descs(desc::desc_system& system) : descs(system) { engine::render::register_render_descs(descs); }
+	~render_descs() { engine::render::unregister_render_descs(descs); }
+	render_descs(const render_descs&) = delete;
+	render_descs& operator=(const render_descs&) = delete;
+
+	desc::desc_system& descs;
+};
 
 struct reference_fixture : test_util::scene_env
 {
@@ -104,19 +117,36 @@ BOOST_AUTO_TEST_CASE(ReferenceProblem_AllowsResEngineMemoryAndTheOwnersProtocolO
 
 BOOST_AUTO_TEST_CASE(ATagField_IsEmptied_WithAWarningAtTheField)
 {
+	const render_descs registered(*descs);
 	for (const std::string_view protocol : k_closed) {
 		BOOST_TEST_CONTEXT(protocol) {
-			const res::tag tag = put(std::format("tag_{}.desc", protocol),
-				std::format(R"json({{"__type":"material_desc","shader_fragment":"{}://x.frag","shader_vertex":"engine://v.vert"}})json", protocol));
-			const auto handle = require_loaded<scn::material_desc>(tag);
+			const res::tag tag = put(std::format("tag_{}.shader.desc", protocol),
+				std::format(R"json({{"__type":"shader_desc","fragment":"{}://x.frag","vertex":"engine://v.vert"}})json", protocol));
+			const auto handle = require_loaded<rnd::shader_desc>(tag);
 			BOOST_REQUIRE(handle.is_ready());
-			BOOST_TEST(!handle.get()->fragment_shader.is_valid());
-			BOOST_TEST(handle.get()->vertex_shader.string() == "engine://v.vert");
+			BOOST_TEST(!handle.get()->fragment.is_valid());
+			BOOST_TEST(handle.get()->vertex.string() == "engine://v.vert");
 			const auto items = diagnostics_of(handle);
-			const res::diagnostic* refused = at(items, res::diagnostic_kind::reference, "/shader_fragment");
+			const res::diagnostic* refused = at(items, res::diagnostic_kind::reference, "/fragment");
 			BOOST_REQUIRE(refused);
 			BOOST_TEST((refused->severity == res::diagnostic_severity::warning));
 			BOOST_TEST(refused->reason.find(std::format("not '{}://'", protocol)) != std::string::npos);
+		}
+	}
+	BOOST_TEST(reads() == 0u);
+}
+
+// #1200: the shader of a material is a desc field like the material of a sky.
+BOOST_AUTO_TEST_CASE(AMaterialsShader_LoadsNothing_TheHandleFails_WithAWarningAtTheField)
+{
+	for (const std::string_view protocol : k_closed) {
+		BOOST_TEST_CONTEXT(protocol) {
+			const res::tag tag = put(std::format("shader_ref_{}.desc", protocol),
+				std::format(R"json({{"__type":"material_desc","shader":"{}://m.desc"}})json", protocol));
+			const auto handle = require_loaded<scn::material_desc>(tag);
+			BOOST_REQUIRE(handle.is_ready());
+			BOOST_TEST(handle.get()->shader.has_error());
+			BOOST_TEST((at(diagnostics_of(handle), res::diagnostic_kind::reference, "/shader") != nullptr));
 		}
 	}
 	BOOST_TEST(reads() == 0u);
@@ -275,14 +305,23 @@ BOOST_AUTO_TEST_CASE(ADescOfAProtocol_MayReferToItsOwnProtocol)
 
 BOOST_AUTO_TEST_CASE(ResEngineAndMemoryReferences_StayAsTheyWere)
 {
-	const res::tag tag = put("open.desc", R"json({"__type":"material_desc","shader_fragment":"res://shaders/a.frag",
-		"shader_vertex":"engine://shaders/a.vert","samplers":["memory://t/a.png","res://b.png"]})json");
+	const render_descs registered(*descs);
+	const res::tag tag = put("open.desc", R"json({"__type":"material_desc","shader":"res://shaders/a.shader.desc",
+		"samplers":["memory://t/a.png","res://b.png"]})json");
 	const auto handle = require_loaded<scn::material_desc>(tag);
 	BOOST_REQUIRE(handle.is_ready());
-	BOOST_TEST(handle.get()->fragment_shader.string() == "res://shaders/a.frag");
-	BOOST_TEST(handle.get()->vertex_shader.string() == "engine://shaders/a.vert");
+	BOOST_TEST(handle.get()->shader.get_tag().string() == "res://shaders/a.shader.desc");
 	BOOST_TEST(handle.get()->samplers_textures.size() == 2u);
-	BOOST_TEST((at(diagnostics_of(handle), res::diagnostic_kind::reference, "/samplers/0") == nullptr));
+	const auto items = diagnostics_of(handle);
+	BOOST_TEST((at(items, res::diagnostic_kind::reference, "/samplers/0") == nullptr));
+	BOOST_TEST((at(items, res::diagnostic_kind::reference, "/shader") == nullptr));
+
+	const res::tag program = put("open.shader.desc", R"json({"__type":"shader_desc","fragment":"res://shaders/a.frag",
+		"vertex":"engine://shaders/a.vert"})json");
+	const auto shader = require_loaded<rnd::shader_desc>(program);
+	BOOST_REQUIRE(shader.is_ready());
+	BOOST_TEST(shader.get()->fragment.string() == "res://shaders/a.frag");
+	BOOST_TEST(shader.get()->vertex.string() == "engine://shaders/a.vert");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

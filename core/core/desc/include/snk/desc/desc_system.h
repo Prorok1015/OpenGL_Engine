@@ -58,13 +58,18 @@ namespace desc
 		std::string message;
 	};
 
+	// The one question a step may ask about the project (EPIC-58 3.2, #1200): the asset ID of the file a path names now.
+	using migration_id_lookup = std::function<std::optional<res::asset_id>(std::string_view path)>;
+
 	// Handed to a step registered with a summary. A step sees only the JSON of its object, never the project: it does not
-	// rewrite references or create files (EPIC-58 3.2).
+	// rewrite references or create files (EPIC-58 3.2). The one exception is id_of.
 	class SNK_API migration_context
 	{
 	public:
 		// `sink` null: warn() only logs.
 		migration_context(std::string_view type, int from_version, std::string_view file, std::vector<migration_warning>* sink);
+		migration_context(std::string_view type, int from_version, std::string_view file, std::vector<migration_warning>* sink,
+			migration_id_lookup id_of);
 
 		std::string_view type() const { return m_type; }
 		int from_version() const { return m_from_version; }
@@ -74,11 +79,16 @@ namespace desc
 		// Logged as a warning, and kept for the report when the migration collects them.
 		void warn(std::string message);
 
+		// The asset ID of the file `path` names in the project now (none: no such file, no ID, or nobody to ask). A step may
+		// let it choose only between converting and refusing; what it writes must not depend on it.
+		std::optional<res::asset_id> id_of(std::string_view path) const;
+
 	private:
 		std::string_view m_type;
 		int m_from_version = 0;
 		std::string_view m_file;
 		std::vector<migration_warning>* m_sink = nullptr;
+		migration_id_lookup m_id_of;
 	};
 
 	// The asset index a writer of references asks (write_references_with): the ID of the file a res:// path names (none
@@ -252,6 +262,9 @@ namespace desc
 
 		// migrate_tree that also collects what the steps with a summary warned about; `file` names the source in them.
 		void migrate_tree(json::object& root, std::string_view file, std::vector<migration_warning>& warnings) const;
+
+		// What migration_context::id_of asks: the asset index of the resource system of this desc system.
+		migration_id_lookup migration_ids() const;
 
 		// Writes the current __version into an object that has a string __type, and moves the header keys
 		// (__type, __version, __guid) to the front so saved files read the same way everywhere.

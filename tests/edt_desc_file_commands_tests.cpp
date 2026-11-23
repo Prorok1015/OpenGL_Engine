@@ -906,13 +906,13 @@ BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagFie
 		R"({"__type":"material_desc","__parent":"res://a/../../x.desc"})",
 		R"({"__type":"material_desc","__parent":"res://a/x.png"})",
 		R"({"__type":"material_desc","__parent":5})",
-		R"({"__type":"material_desc","shader_fragment":"user://x.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"engine://x.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"cache://x.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"cache/xa.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"shaders/a.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"../../x.frag"})",
-		R"({"__type":"material_desc","shader_fragment":"C:/x.frag"})",
+		R"({"__type":"material_desc","shader":"user://x.shader.desc"})",
+		R"({"__type":"material_desc","shader":"engine://x.shader.desc"})",
+		R"({"__type":"material_desc","shader":"cache://x.shader.desc"})",
+		R"({"__type":"material_desc","shader":"cache/xa.shader.desc"})",
+		R"({"__type":"material_desc","shader":"shaders/a.shader.desc"})",
+		R"({"__type":"material_desc","shader":"../../x.shader.desc"})",
+		R"({"__type":"material_desc","shader":"C:/x.shader.desc"})",
 		R"({"__type":"material_desc","defines":["code://x"]})",
 		R"({"__type":"material_desc","samplers":["../../x.png"]})",
 		R"({"__type":"material_desc","samplers":["user://x.png"]})",
@@ -933,7 +933,7 @@ BOOST_AUTO_TEST_CASE(ATagThatLeavesTheProject_IsRefused_InParentAndInEveryTagFie
 	for (const char* content : {
 		R"({"__type":"material_desc","__parent":"res://base_material.desc"})",
 		R"({"__type":"material_desc","__parent":"res://materials/other.mat.desc"})",
-		R"({"__type":"material_desc","shader_fragment":"res://shaders/a.frag"})",
+		R"({"__type":"material_desc","shader":"res://shaders/a.shader.desc"})",
 		R"({"__type":"material_desc","samplers":["res://textures/a.png",null]})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto made = call("desc.create", desc_args("materials/ok.mat.desc", content));
@@ -1254,12 +1254,12 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 {
 	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
 	for (const std::string& content : {
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"user://x.frag"}})",
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"shaders/a.frag"}})",
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag","extra":1}})",
-		std::string(R"({"__type":"material_desc","shader_fragment":{"guid":"00000000-0000-0000-0000-000000000000"}})"),
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":5}})",
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}",
+		R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":"user://x.shader.desc"}})",
+		R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":"shaders/a.shader.desc"}})",
+		R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":"res://shaders/a.shader.desc","extra":1}})",
+		std::string(R"({"__type":"material_desc","shader":{"guid":"00000000-0000-0000-0000-000000000000"}})"),
+		R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":5}})",
+		R"({"__type":"material_desc","shader":{)" + guid + "}}",
 		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"edt://x.png"}}})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto refused = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
@@ -1268,7 +1268,7 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 		}
 	}
 	for (const std::string& content : {
-		R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag"}})",
+		R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":"res://shaders/a.shader.desc"}})",
 		R"({"__type":"test.texture_table","textures":{"a":{)" + guid + R"(,"path":"res://ok.png"}}})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto made = call("desc.create", desc_args("materials/r.mat.desc", content.c_str()));
@@ -1280,13 +1280,13 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 
 	// With an asset index a guid alone is refused the same way, known or not.
 	auto index = std::make_shared<paths_index>();
-	index->paths.emplace(*res::asset_id_from_text("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"), res::tag{ "res://shaders/b.frag" });
+	index->paths.emplace(*res::asset_id_from_text("0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"), res::tag{ "res://shaders/b.shader.desc" });
 	rs->set_asset_index(index);
-	const std::string unknown_guid = R"({"__type":"material_desc","shader_fragment":{)" + guid + "}}";
+	const std::string unknown_guid = R"({"__type":"material_desc","shader":{)" + guid + "}}";
 	const auto unknown = call("desc.create", desc_args("materials/r.mat.desc", unknown_guid.c_str()));
 	const auto known = call("desc.create", desc_args("materials/k.mat.desc",
-		R"({"__type":"material_desc","shader_fragment":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"}})"));
-	const std::string unknown_with_path = R"({"__type":"material_desc","shader_fragment":{)" + guid + R"(,"path":"res://shaders/a.frag"}})";
+		R"({"__type":"material_desc","shader":{"guid":"0b6c1d2e-3f40-4a51-8b62-7c83d94ea5f6"}})"));
+	const std::string unknown_with_path = R"({"__type":"material_desc","shader":{)" + guid + R"(,"path":"res://shaders/a.shader.desc"}})";
 	const auto by_path = call("desc.create", desc_args("materials/p.mat.desc", unknown_with_path.c_str()));
 	rs->set_asset_index(nullptr);
 	// A guid no file holds, with a path: the path is what loads, and the agent is told so.
@@ -1294,12 +1294,12 @@ BOOST_AUTO_TEST_CASE(AReferenceObject_InATagField_FollowsTheRuleOfATag)
 	const json::array& warned = by_path.value.at("warnings").as_array();
 	BOOST_REQUIRE_EQUAL(warned.size(), 1u);
 	BOOST_TEST(std::string(warned[0].at("kind").as_string()) == std::string("reference"));
-	BOOST_TEST(std::string(warned[0].at("json_path").as_string()) == std::string("/shader_fragment/guid"));
+	BOOST_TEST(std::string(warned[0].at("json_path").as_string()) == std::string("/shader/guid"));
 	for (const cmd::result* alone : { &unknown, &known }) {
 		BOOST_TEST(alone->code == cmd::codes::invalid_args);
 		BOOST_REQUIRE(alone->value.is_object());
 		const json::value& error = alone->value.at("errors").as_array()[0];
-		BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader_fragment"));
+		BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader"));
 		BOOST_TEST(std::string(error.at("reason").as_string()).find("a \"guid\" alone is not accepted here") != std::string::npos);
 	}
 	BOOST_TEST(!fs::exists(res_root / "materials" / "k.mat.desc"));
@@ -1336,14 +1336,14 @@ struct ids_index final : res::asset_index
 // without an asset index the path stays a string. Writing the file again gives the same bytes.
 BOOST_AUTO_TEST_CASE(AWrittenReference_CarriesTheIdOfItsTarget)
 {
-	const char* const content = R"({"__type":"material_desc","shader_fragment":"res://shaders/a.frag"})";
+	const char* const content = R"({"__type":"material_desc","shader":"res://shaders/a.shader.desc"})";
 	make_material("materials/plain.mat.desc", content);
-	BOOST_TEST(json::parse(read_file(res_root / "materials" / "plain.mat.desc")).at_pointer("/shader_fragment")
-		== json::value("res://shaders/a.frag"));
+	BOOST_TEST(json::parse(read_file(res_root / "materials" / "plain.mat.desc")).at_pointer("/shader")
+		== json::value("res://shaders/a.shader.desc"));
 
 	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
 	auto index = std::make_shared<ids_index>();
-	index->hold(id, "res://shaders/a.frag");
+	index->hold(id, "res://shaders/a.shader.desc");
 	rs->set_asset_index(index);
 	make_material("materials/with_id.mat.desc", content);
 	const std::string first = read_file(res_root / "materials" / "with_id.mat.desc");
@@ -1351,8 +1351,8 @@ BOOST_AUTO_TEST_CASE(AWrittenReference_CarriesTheIdOfItsTarget)
 	const std::string second = read_file(res_root / "materials" / "with_id.mat.desc");
 	rs->set_asset_index(nullptr);
 
-	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://shaders/a.frag" } };
-	BOOST_TEST(json::parse(first).at_pointer("/shader_fragment") == expected);
+	const json::value expected = json::object{ { "guid", res::to_text(id) }, { "path", "res://shaders/a.shader.desc" } };
+	BOOST_TEST(json::parse(first).at_pointer("/shader") == expected);
 	BOOST_REQUIRE_MESSAGE(rewritten.ok, rewritten.error);
 	BOOST_TEST(second == first);
 }
@@ -1398,19 +1398,19 @@ BOOST_AUTO_TEST_CASE(AParentWithAGuidOfAnotherFile_IsRefused_AndNothingIsWritten
 
 BOOST_AUTO_TEST_CASE(AReferenceFieldWithAGuidOfAnotherFile_IsRefused_OfTheSameFile_IsWritten)
 {
-	const char* content = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	const char* content = R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.shader.desc"}})";
 	make_material("materials/f.mat.desc");
 	const std::string before = read_file(res_root / "materials" / "f.mat.desc");
 	const std::string version = version_of("materials/f.mat.desc");
 	const res::asset_id id = *res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f");
 
 	auto elsewhere = std::make_shared<paths_index>();
-	elsewhere->paths.emplace(id, res::tag{ "res://shaders/b.frag" });
+	elsewhere->paths.emplace(id, res::tag{ "res://shaders/b.shader.desc" });
 	rs->set_asset_index(elsewhere);
 	const auto diverging = call("desc.write", write_args("materials/f.mat.desc", version, content));
 	const std::string kept = read_file(res_root / "materials" / "f.mat.desc");
 	auto same = std::make_shared<paths_index>();
-	same->paths.emplace(id, res::tag{ "res://shaders/a.frag" });
+	same->paths.emplace(id, res::tag{ "res://shaders/a.shader.desc" });
 	rs->set_asset_index(same);
 	const auto consistent = call("desc.write", write_args("materials/f.mat.desc", version, content));
 	rs->set_asset_index(nullptr);
@@ -1418,21 +1418,21 @@ BOOST_AUTO_TEST_CASE(AReferenceFieldWithAGuidOfAnotherFile_IsRefused_OfTheSameFi
 	BOOST_TEST(diverging.code == cmd::codes::invalid_args);
 	BOOST_REQUIRE(diverging.value.is_object());
 	const json::value& error = diverging.value.at("errors").as_array()[0];
-	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader_fragment"));
+	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/shader"));
 	BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") != std::string::npos);
 	BOOST_TEST(kept == before);
 	BOOST_REQUIRE_MESSAGE(consistent.ok, consistent.error);
-	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc").find("res://shaders/a.frag") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc").find("res://shaders/a.shader.desc") != std::string::npos);
 }
 
 // A path that is no place a file may refer to is named as that, also when the guid is another file's.
 BOOST_AUTO_TEST_CASE(ABadPath_IsReportedBeforeAGuidOfAnotherFile)
 {
 	auto index = std::make_shared<paths_index>();
-	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	index->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.shader.desc" });
 	rs->set_asset_index(index);
 	const auto field = call("desc.create", desc_args("materials/o.mat.desc",
-		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})"));
+		R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.shader.desc"}})"));
 	const auto parent = call("desc.create", desc_args("materials/q.mat.desc",
 		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://secret.desc"}})"));
 	rs->set_asset_index(nullptr);
@@ -1441,7 +1441,7 @@ BOOST_AUTO_TEST_CASE(ABadPath_IsReportedBeforeAGuidOfAnotherFile)
 	BOOST_REQUIRE(field.value.is_object());
 	const json::array& errors = field.value.at("errors").as_array();
 	BOOST_REQUIRE(!errors.empty());
-	BOOST_TEST(std::string(errors[0].at("json_path").as_string()) == std::string("/shader_fragment/path"));
+	BOOST_TEST(std::string(errors[0].at("json_path").as_string()) == std::string("/shader/path"));
 	for (const json::value& error : errors) {
 		BOOST_TEST(std::string(error.at("reason").as_string()).find("name different files") == std::string::npos);
 	}
@@ -1527,7 +1527,7 @@ BOOST_AUTO_TEST_CASE(AnObjectWithAGuidThatIsNoUuid_InAPrefabComponent_IsPlainDat
 // write runs once the index is ready: an approved busy call is retried, so the person approves the write itself.
 BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_ContentWithAGuidIsBusy_AndNothingIsWritten)
 {
-	const char* const with_guid = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	const char* const with_guid = R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.shader.desc"}})";
 	const char* const with_parent = R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://base_material.desc"}})";
 	make_material("materials/w.mat.desc");
 	const std::string before = read_file(res_root / "materials" / "w.mat.desc");
@@ -1570,10 +1570,10 @@ BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_AFormErrorIsStillRefused)
 {
 	index_pending = true;
 	for (const char* content : {
-		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
-		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.frag"}})",
+		R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
+		R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"user://x.shader.desc"}})",
 		R"({"__type":"material_desc","__parent":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}})",
-		R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"},"bogus":1})" }) {
+		R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.shader.desc"},"bogus":1})" }) {
 		BOOST_TEST_CONTEXT(content) {
 			const auto refused = call("desc.create", desc_args("materials/f.mat.desc", content));
 			BOOST_TEST(refused.code == cmd::codes::invalid_args);
@@ -1586,12 +1586,12 @@ BOOST_AUTO_TEST_CASE(WhileTheAssetIndexIsPending_AFormErrorIsStillRefused)
 // against an incomplete index; once it is ready the ordinary refusal comes.
 BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedOnceItIsReady)
 {
-	const char* const content = R"({"__type":"material_desc","shader_fragment":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.frag"}})";
+	const char* const content = R"({"__type":"material_desc","shader":{"guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f","path":"res://shaders/a.shader.desc"}})";
 	make_material("materials/f.mat.desc");
 	const std::string before = read_file(res_root / "materials" / "f.mat.desc");
 	const std::string version = version_of("materials/f.mat.desc");
 	auto elsewhere = std::make_shared<paths_index>();
-	elsewhere->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.frag" });
+	elsewhere->paths.emplace(*res::asset_id_from_text("3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"), res::tag{ "res://shaders/b.shader.desc" });
 	rs->set_asset_index(elsewhere);
 
 	index_pending = true;
