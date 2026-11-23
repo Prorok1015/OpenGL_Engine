@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_code.h>
+#include <snk/project/prj_link_check.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resolvers/res_write_policy.h>
 #include "test_temp_dir.hpp"
@@ -9,6 +10,9 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 // What counts as code in code:// (#450): categories, ignored folders, the write patterns and the project's code/ folder.
 namespace {
@@ -221,6 +225,138 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesAJunctionAsTheCodeFolder)
 	const auto problem = prj::verify_project_mounts(project);
 	BOOST_REQUIRE(problem.has_value());
 	BOOST_TEST(problem->find("is a link") != std::string::npos);
+}
+#endif
+
+// #1241: a link anywhere in .cache, shipped with the project, would take the cache's plain file writes along.
+BOOST_AUTO_TEST_CASE(Verify_AcceptsARealCacheWithFoldersAndFiles)
+{
+	test_util::temp_dir dir("prj_cache_real");
+	const auto project = open_game(dir);
+	fs::create_directories(project.cache_dir() / "asset_ops");
+	fs::create_directories(project.cache_dir() / "modules" / "1-0");
+	dir.write("game/.cache/asset_ops/journal.json", "{}");
+
+	BOOST_TEST(!prj::verify_project_mounts(project).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesASymlinkedCache)
+{
+	test_util::temp_dir dir("prj_cache_link");
+	const auto project = open_game(dir);
+	fs::create_directories(dir.path() / "elsewhere");
+
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "elsewhere", project.cache_dir(), ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	const auto problem = prj::verify_project_mounts(project);
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("is a link") != std::string::npos);
+	BOOST_TEST(problem->find("remove it") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesALinkInsideTheCacheThatLeadsIntoTheProject)
+{
+	test_util::temp_dir dir("prj_cache_inner_link");
+	const auto project = open_game(dir);
+	fs::create_directories(project.cache_dir());
+
+	std::error_code ec;
+	fs::create_directory_symlink(project.root / "res", project.cache_dir() / "asset_ops", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	// The cheap check of the folders themselves leaves the depth to link_below, walked once by the resource init.
+	BOOST_TEST(!prj::verify_project_mounts(project).has_value());
+	const auto problem = prj::link_below(project.cache_dir());
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("asset_ops") != std::string::npos);
+	BOOST_TEST(problem->find("remove it and open the project again") != std::string::npos);
+	BOOST_TEST(fs::exists(project.cache_dir() / "asset_ops"), "nothing is removed by the check");
+}
+
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAFileLinkDeepInTheCache)
+{
+	test_util::temp_dir dir("prj_cache_file_link");
+	const auto project = open_game(dir);
+	fs::create_directories(project.memory_dir() / "models");
+	dir.write("game/res/target.desc", "{}");
+
+	std::error_code ec;
+	fs::create_symlink(project.root / "res" / "target.desc", project.memory_dir() / "models" / "link.desc", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	const auto problem = prj::link_below(project.cache_dir());
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("link.desc") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAWalkPastItsLimit)
+{
+	test_util::temp_dir dir("prj_cache_limit");
+	for (int i = 0; i < 5; ++i) {
+		dir.write("cache/f" + std::to_string(i), "x");
+	}
+
+	const auto problem = prj::link_below(dir.path() / "cache", 3);
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("more than 3 entries") != std::string::npos);
+	BOOST_TEST(!prj::link_below(dir.path() / "cache", 5).has_value());
+	BOOST_TEST(!prj::link_below(dir.path() / "missing").has_value());
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAnEntryItCannotRead)
+{
+	if (::geteuid() == 0) {
+		BOOST_TEST_MESSAGE("root reads every folder: nothing to refuse");
+		return;
+	}
+	test_util::temp_dir dir("prj_cache_unreadable");
+	dir.write("cache/locked/inside.txt", "x");
+	const fs::path locked = dir.path() / "cache" / "locked";
+	fs::permissions(locked, fs::perms::none);
+	struct restore_on_exit {
+		fs::path path;
+		~restore_on_exit() { std::error_code ec; fs::permissions(path, fs::perms::owner_all, ec); }
+	} restore{ locked };
+
+	const auto problem = prj::link_below(dir.path() / "cache");
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("cannot be checked for links") != std::string::npos);
+}
+#endif
+
+#ifdef _WIN32
+BOOST_AUTO_TEST_CASE(Refuses_AJunctionAsTheCacheOrInsideIt)
+{
+	for (const bool inside : { false, true }) {
+		BOOST_TEST_INFO("junction inside .cache: " << inside);
+		test_util::temp_dir dir(inside ? "prj_cache_junction_in" : "prj_cache_junction");
+		const auto project = open_game(dir);
+		fs::create_directories(project.root / "inner");
+		if (inside) {
+			fs::create_directories(project.cache_dir());
+		}
+		const fs::path link = inside ? project.cache_dir() / "modules" : project.cache_dir();
+
+		const std::string target = (project.root / "inner").string();
+		const std::string command = "mklink /J \"" + link.string() + "\" \"" + target + "\" >nul";
+		if (std::system(("cmd /c " + command).c_str()) != 0 || !fs::exists(link)) {
+			BOOST_TEST_MESSAGE("junctions unavailable");
+			return;
+		}
+		const auto problem = inside ? prj::link_below(project.cache_dir()) : prj::verify_project_mounts(project);
+		BOOST_REQUIRE(problem.has_value());
+		BOOST_TEST(problem->find("is a link") != std::string::npos);
+		BOOST_TEST_MESSAGE("junction refused: " << *problem);
+	}
 }
 #endif
 

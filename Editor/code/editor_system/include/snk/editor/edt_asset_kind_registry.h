@@ -45,6 +45,13 @@ namespace edt
 		// Makes the document; called the first time a preview of this id opens, the document is kept until the preview
 		// is removed. Required.
 		std::function<std::unique_ptr<previewable_document>(editor_services&)> make_preview{};
+		// False: one document for the whole kind, kept until the kind is removed; opening another source reopens it, and any
+		// other single-kind preview closes (a model preview replaces a module's). True (#1185): every source opened gets a
+		// document of its own, made by make_preview, which lives while it is open, and opening one closes no other document.
+		// Only the editor builds an asset_preview_desc (a module hands module_asset_preview_desc to
+		// editor_module_context::add_asset_preview, which keeps this false), so the field sits at the end and no module is
+		// affected.
+		bool multiple = false;
 	};
 
 	// Asset kinds in registration order. For a path the kind with the longest matching suffix that has the

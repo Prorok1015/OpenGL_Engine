@@ -1118,8 +1118,9 @@ namespace desc
 			});
 		case field_kind::custom: return true;
 		case field_kind::binary_ref: {
-			// An array is the inline data of a file written before the binary file (EPIC-79), read as before.
-			if (value.is_array()) {
+			// An array is the inline data of a file written before the binary file (EPIC-79), read as before. A null is "no
+			// range", what an empty slot reads as (#1180).
+			if (value.is_null() || value.is_array()) {
 				return true;
 			}
 			std::string error;

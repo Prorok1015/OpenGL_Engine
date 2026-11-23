@@ -262,6 +262,155 @@ BOOST_AUTO_TEST_CASE(RemovingAnotherPreview_LeavesTheOpenPreviewAlone)
 	BOOST_CHECK_EQUAL(model_counters.destroyed, 0);
 }
 
+// A preview kind whose every source gets a document of its own (#1185).
+BOOST_AUTO_TEST_CASE(AMultipleKind_GivesEverySourceItsOwnDocument_NoneReplacesAnother_TheLastOpenedIsActive)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+
+	edt::previewable_document* first = documents.open_preview(res::tag::make("a.prefab.desc"));
+	edt::previewable_document* second = documents.open_preview(res::tag::make("b.prefab.desc"));
+
+	BOOST_REQUIRE(first != nullptr && second != nullptr);
+	BOOST_CHECK(first != second);
+	BOOST_CHECK(first->is_open() && second->is_open());
+	BOOST_CHECK(first->id() != second->id());
+	BOOST_CHECK_EQUAL(prefab_counters.made, 2);
+	BOOST_CHECK_EQUAL(prefab_counters.closed, 0);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+	BOOST_CHECK(documents.active() == second);
+	BOOST_CHECK(documents.preview() == second);
+
+	documents.set_active(first->id());
+	BOOST_CHECK(documents.preview() == first);
+	documents.set_active(scene.id());
+	BOOST_CHECK(documents.preview() == second);
+
+	std::vector<edt::document_id> order;
+	documents.for_each([&order](edt::document& open) { order.push_back(open.id()); });
+	BOOST_CHECK((order == std::vector<edt::document_id>{ scene.id(), first->id(), second->id() }));
+}
+
+BOOST_AUTO_TEST_CASE(AMultipleKind_OpeningAnOpenSourceFocusesItAndMakesNoSecondDocument)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	edt::previewable_document* first = documents.open_preview(res::tag::make("a.prefab.desc"));
+	documents.open_preview(res::tag::make("b.prefab.desc"));
+
+	edt::previewable_document* again = documents.open_preview(res::tag::make("a.prefab.desc"));
+
+	BOOST_CHECK(again == first);
+	BOOST_CHECK_EQUAL(prefab_counters.made, 2);
+	BOOST_CHECK(documents.active() == first);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AMultipleKind_AListenerThatClosesTheOpenedDocument_LeavesNoDanglingPointer)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	edt::connection closer = events.document_opened.subscribe([this](edt::document_id id) { documents.close(id); });
+
+	edt::previewable_document* opened = documents.open_preview(res::tag::make("a.prefab.desc"));
+
+	BOOST_CHECK(opened == nullptr);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 0u);
+	BOOST_CHECK_EQUAL(prefab_counters.destroyed, 1);
+}
+
+BOOST_AUTO_TEST_CASE(AMultipleKind_ClosingOneDocumentDestroysIt_TheOthersStay_AndTheSceneBecomesActiveWhenItWasTheActiveOne)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	edt::previewable_document* first = documents.open_preview(res::tag::make("a.prefab.desc"));
+	edt::previewable_document* second = documents.open_preview(res::tag::make("b.prefab.desc"));
+	const edt::document_id first_id = first->id();
+	const edt::document_id second_id = second->id();
+
+	documents.close(second_id);
+
+	BOOST_CHECK_EQUAL(prefab_counters.closed, 1);
+	BOOST_CHECK_EQUAL(prefab_counters.destroyed, 1);
+	BOOST_CHECK(documents.find(second_id) == nullptr);
+	BOOST_CHECK(documents.find(first_id) == first);
+	BOOST_CHECK(documents.active() == &scene);
+	BOOST_CHECK(documents.preview() == first);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 1u);
+
+	edt::previewable_document* reopened = documents.open_preview(res::tag::make("b.prefab.desc"));
+	BOOST_CHECK(reopened->is_open());
+	BOOST_CHECK_EQUAL(prefab_counters.made, 3);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ASingleKindReplacesTheOtherSingleKinds_ButNeverTheDocumentsOfAMultipleKind)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	preview_counters other_counters;
+	auto model = kinds.add_preview(preview_kind("model", ".glb", model_counters));
+	auto mod_kind = kinds.add_preview(preview_kind("module", ".mod", other_counters));
+	documents.set_preview_kinds(kinds, services, &problems);
+	documents.open_preview(res::tag::make("a.prefab.desc"));
+
+	documents.open_preview(res::tag::make("c.glb"));
+	BOOST_CHECK_EQUAL(prefab_counters.closed, 0);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+
+	documents.open_preview(res::tag::make("d.mod"));
+	BOOST_CHECK_EQUAL(model_counters.closed, 1);
+	BOOST_CHECK_EQUAL(prefab_counters.closed, 0);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AMultipleKind_ADocumentThatDoesNotOpenIsNotAnnounced_AndTheOtherDocumentsAreUntouched)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	documents.open_preview(res::tag::make("a.prefab.desc"));
+
+	edt::previewable_document* failed = documents.open_preview(res::tag::make("missing.prefab.desc"));
+
+	BOOST_REQUIRE(failed != nullptr);
+	BOOST_CHECK(!failed->is_open());
+	BOOST_CHECK_EQUAL(documents.previews().size(), 1u);
+	BOOST_CHECK_EQUAL(closed_events(), 0u);
+	BOOST_CHECK(documents.open_preview(res::tag::make("b.prefab.desc"))->is_open());
+	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(RemovingAMultipleKind_ClosesAndDestroysEveryOpenDocument_AndWarnsOfEachOneWithUnsavedChanges)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	documents.open_preview(res::tag::make("a.prefab.desc"));
+	documents.open_preview(res::tag::make("b.prefab.desc"));
+	dirty = true;
+
+	prefab = edt::registration{};
+
+	BOOST_CHECK(documents.previews().empty());
+	BOOST_CHECK_EQUAL(prefab_counters.closed, 2);
+	BOOST_CHECK_EQUAL(prefab_counters.destroyed, 2);
+	BOOST_CHECK_EQUAL(closed_events(), 2u);
+	BOOST_CHECK(documents.active() == &scene);
+	BOOST_CHECK_EQUAL(problems.list().size(), 2u);
+}
+
 BOOST_AUTO_TEST_CASE(ARegistryThatIsGoneFirst_LeavesTheManagerSafe)
 {
 	auto registry = std::make_unique<edt::asset_kind_registry>();

@@ -45,7 +45,7 @@ namespace edt
 		// The one list of the key, in order.
 		using editor_layout_types = scn::type_list<
 			// What a module builds and hands to editor_module_context (by value or moved in).
-			panel_desc, action_desc, action_ui, shortcut, module_asset_kind_desc, module_asset_preview_desc, problem,
+			panel_desc, action_desc, action_ui, shortcut, module_asset_kind_desc, module_asset_preview_desc, asset_preview_desc, problem,
 			// What it gets back or copies out: the selection, the problems, the jobs, a document's history and save.
 			selection, sourced_problem, job_progress, job_service::job_info, save_result, history_entry,
 			// Handles it keeps, and the signal machinery subscribe() instantiates in module code. The members of signal,

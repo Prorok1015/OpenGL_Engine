@@ -433,6 +433,36 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesASymlinkedCacheWithAProjectError, la
 	BOOST_TEST(!fs::exists(outside / "memory"));
 }
 
+// #1241: a link deep in .cache, shipped with the project, refuses the project once the folders above it are checked.
+BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesALinkDeepInTheCacheWithAProjectError, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside);
+	fs::create_directories(opened.context->cache_dir() / "asset_ops");
+	std::error_code ec;
+	fs::create_directory_symlink(outside, opened.context->cache_dir() / "asset_ops" / "originals", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	try {
+		core::res::resource_init(data);
+		BOOST_ERROR("the project was opened with a link in its cache");
+	} catch (const prj::project_error& error) {
+		BOOST_TEST(std::string(error.what()).find("originals") != std::string::npos);
+	}
+	BOOST_TEST(!data.has_value<res::resource_system>());
+	BOOST_TEST(fs::is_symlink(opened.context->cache_dir() / "asset_ops" / "originals"), "nothing is removed");
+}
+
 namespace {
 // res/read_only_project and resource/user_path for one test, as the game host sets them.
 struct read_only_project_config

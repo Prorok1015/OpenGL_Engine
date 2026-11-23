@@ -103,6 +103,14 @@ std::optional<res::binary_range> res::binary_range_from_json(const boost::json::
 		error = "a binary range is not an object";
 		return std::nullopt;
 	}
+	// The format is closed (#1180): to_json writes these four, and a member the reader skipped would be lost on the next write.
+	for (const auto& member : *object) {
+		const std::string_view key(member.key().data(), member.key().size());
+		if (key != "offset" && key != "size" && key != "sha256" && key != "layout") {
+			error = std::format("a binary range has an unknown member '{}'", key);
+			return std::nullopt;
+		}
+	}
 	const auto unsigned_of = [&](std::string_view key) -> std::optional<std::uint64_t> {
 		const auto* field = object->if_contains(key);
 		if (field == nullptr) {
