@@ -278,6 +278,7 @@
     "rnd_render_service_init.h",
     "rnd_render_system.h",
     "rnd_shader_desc.h",
+    "rnd_shader_problem.h",
     "rnd_state_helper.h",
     "shader/rnd_material_compiler.h",
     "shader/rnd_material_params.h",
@@ -297,6 +298,7 @@
     "rnd_gpu_profiler.h",
     "rnd_pass_pipelines.h",
     "shader/rnd_shader_manager.h",
+    "shader/rnd_shader_source_map.h",
     "texture/rnd_texture_2d_desc.h",
     "texture/rnd_texture_cubemap_desc.h"
    ],

@@ -11,6 +11,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/resource/res_system.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -135,8 +136,22 @@ void edt::problems_component::follow_input_actions(const gs::input_actions& acti
 	else m_ports.context.problems().set("input", std::move(problems));
 }
 
+void edt::problems_component::follow_shaders()
+{
+	m_shader.follow(m_ports.context.problems(), m_ports.context.render());
+}
+
 void edt::problems_component::go_to_problem(const std::string& source, const problem& item)
 {
+	if (source == shader_problem_publisher::source) {
+		// The file opens in the app the system gives it, at its top: going to the line is #1291.
+		const auto disk_path = [this](const res::tag& file) -> std::optional<std::filesystem::path> {
+			const std::optional<res::disk_file> on_disk = m_ports.context.resources().disk_file_of(file);
+			return on_disk ? std::optional<std::filesystem::path>{ on_disk->file } : std::nullopt;
+		};
+		open_shader_problem_file(item, disk_path, m_ports.open_file);
+		return;
+	}
 	if (source == desc_problem_publisher::source) {
 		if (const auto target = m_desc.target_of(item)) go_to(*target);
 		return;

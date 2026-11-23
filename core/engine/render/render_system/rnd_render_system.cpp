@@ -309,3 +309,12 @@ void rnd::render_system::render_frame(frame_context& context) const
 
 	gpu.end_frame();
 }
+std::uint64_t rnd::render_system::shader_problems_generation() const
+{
+	return m_shaders->problems_generation();
+}
+
+std::vector<rnd::shader_problem> rnd::render_system::shader_problems() const
+{
+	return m_shaders->problems();
+}

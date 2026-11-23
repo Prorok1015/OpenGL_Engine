@@ -324,7 +324,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.services = m_services, .worlds = m_world_ctrl,
 		.assets = [this] { return m_asset_component.get(); },
 		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
-		.play_active = [this] { return m_play && m_play->active(); } });
+		.play_active = [this] { return m_play && m_play->active(); },
+		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); } });
 
 	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
 	// Create panels
@@ -718,10 +719,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	editor_layer->set_modal_probe([this] {
 		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
 	});
-	// Bindings two actions share are Problems (source "input"), whether or not the panel is open.
+	// Bindings two actions share and the shaders that did not build are Problems (sources "input", "shader"), whether or not
+	// the panel is open.
 	editor_layer->set_frame_hook([this, &data] {
 		// Before the shortcuts of the frame: Ctrl+Z goes to the document of the window the person is in.
 		if (m_asset_open) m_asset_open->data_documents().follow_focus();
+		if (m_context) m_problems->follow_shaders();
 		if (!m_context || !data.has_value<gs::input_actions>()) return;
 		const auto& actions = data.require<gs::input_actions>();
 		m_problems->follow_input_actions(actions);

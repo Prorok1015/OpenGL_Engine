@@ -2,6 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/common/snk_api.h>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -13,6 +14,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_gpu_blocks.h>
+#include <snk/render/rnd_shader_problem.h>
 
 namespace rnd
 {
@@ -29,9 +31,7 @@ namespace rnd
 		ShaderManager& operator= (const ShaderManager&) = delete;
 		ShaderManager& operator= (ShaderManager&&) = delete;
 
-		void clear_cache() const {
-			m_programs.clear();
-		}
+		void clear_cache() const;
 
 		shader_config_cache& variants() const { return m_variants; }
 
@@ -47,6 +47,12 @@ namespace rnd
 
 		const set_layouts& layouts() const { return m_layouts; }
 
+		// Why the programs that did not build last time did not (#1201): a program that builds drops its problems, one
+		// that does not replaces them, also when the program it had before stays in place.
+		std::vector<shader_problem> problems() const;
+		// Changes whenever problems() does.
+		std::uint64_t problems_generation() const { return m_problems_generation; }
+
 		void update_global_uniform(const global_params& val) const;
 		void update_global_sun(const lights_params& val) const;
 		// Binds set 0 (Matrices, GlobalLights); inside a render pass, before its draws.
@@ -57,6 +63,7 @@ namespace rnd
 			std::unique_ptr<rnd::driver::shader_interface> program;
 			bool failed = false;
 			bool stale = false;	// a file of its source changed since it was compiled
+			std::vector<shader_problem> problems;
 		};
 
 		driver::driver_interface* drv = nullptr;
@@ -69,11 +76,13 @@ namespace rnd
 		// Remembers that `variant` is made of `files` and starts watching the ones not watched yet.
 		void track_files(variant_id variant, const std::vector<res::tag>& files) const;
 		void on_file_changed(const res::tag& file) const;
+		void set_problems(program_slot& slot, std::vector<shader_problem> problems) const;
 
 		mutable shader_config_cache m_variants;
 		mutable std::vector<program_slot> m_programs;
 		mutable std::unordered_map<res::tag, std::vector<std::uint32_t>> m_users;	// file -> the variants made of it
 		// A replaced program waits here for begin_frame: a pass may still draw with it in the frame it was replaced in.
 		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_retired;
+		mutable std::uint64_t m_problems_generation = 0;
 	};
 }
