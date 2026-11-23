@@ -3351,6 +3351,29 @@ BOOST_AUTO_TEST_CASE(a_field_the_schema_does_not_know_is_an_error_at_its_pointer
 	BOOST_TEST((found[0].target.path == std::vector<std::uint64_t>{ cam_id }));
 }
 
+// #1180: component.set never writes a blob field (binary_ref), the engine reads one all the same: an override holding a
+// range is a warning, Play is not held back.
+BOOST_AUTO_TEST_CASE(an_override_of_a_blob_field_is_a_warning_at_its_pointer)
+{
+	open_level();
+	BOOST_REQUIRE(descs->find_schema("geometry_desc") != nullptr);
+	scn::prefab_desc::prefab_comp_node blob;
+	blob.type_name = "geometry_desc";
+	blob.overrides["vertices"] = boost::json::parse(
+		R"({"offset":16,"size":12,"layout":"f32x3","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})");
+	crate().components["blob"] = std::move(blob);
+
+	const auto found = edt::run_play_preflight(state, checks());
+	const edt::preflight_problem* row = with_note(found, "/worlds/0/children/1/components/blob/vertices", "schema");
+	BOOST_REQUIRE(row != nullptr);
+	BOOST_TEST((row->item.severity == edt::problem_severity::warning));
+	BOOST_TEST(row->item.message.find("blob field") != std::string::npos, row->item.message);
+	for (const edt::preflight_problem& p : found) {
+		const bool about_blob = !p.item.notes.empty() && p.item.notes.front().starts_with("/worlds/0/children/1/components/blob");
+		BOOST_TEST(!(about_blob && p.item.severity == edt::problem_severity::error), p.item.message);
+	}
+}
+
 // A component of #606 (#703): described only by a schema, registered in the game layer. The editor's services are the
 // layer's, so the checks of any component apply to it: the type is registered, its schema judges the fields, it spawns.
 BOOST_AUTO_TEST_CASE(a_component_described_only_by_a_schema_is_checked_by_its_schema)
