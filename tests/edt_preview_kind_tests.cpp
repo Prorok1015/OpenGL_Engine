@@ -310,6 +310,21 @@ BOOST_AUTO_TEST_CASE(AMultipleKind_OpeningAnOpenSourceFocusesItAndMakesNoSecondD
 	BOOST_CHECK_EQUAL(documents.previews().size(), 2u);
 }
 
+BOOST_AUTO_TEST_CASE(AMultipleKind_AListenerThatClosesTheOpenedDocument_LeavesNoDanglingPointer)
+{
+	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);
+	multi.multiple = true;
+	auto prefab = kinds.add_preview(std::move(multi));
+	documents.set_preview_kinds(kinds, services, &problems);
+	edt::connection closer = events.document_opened.subscribe([this](edt::document_id id) { documents.close(id); });
+
+	edt::previewable_document* opened = documents.open_preview(res::tag::make("a.prefab.desc"));
+
+	BOOST_CHECK(opened == nullptr);
+	BOOST_CHECK_EQUAL(documents.previews().size(), 0u);
+	BOOST_CHECK_EQUAL(prefab_counters.destroyed, 1);
+}
+
 BOOST_AUTO_TEST_CASE(AMultipleKind_ClosingOneDocumentDestroysIt_TheOthersStay_AndTheSceneBecomesActiveWhenItWasTheActiveOne)
 {
 	edt::asset_preview_desc multi = preview_kind("prefab", ".prefab.desc", prefab_counters);

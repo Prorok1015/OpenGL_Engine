@@ -84,12 +84,6 @@ namespace edt
 		void for_each(const std::function<void(document&)>& fn);
 
 	private:
-		struct kept_preview
-		{
-			std::string preview_id;
-			std::unique_ptr<previewable_document> instance;
-		};
-
 		// The previews of one asset_preview_desc: its one document (single kind) or the documents opened with it (multiple).
 		struct kept_preview
 		{

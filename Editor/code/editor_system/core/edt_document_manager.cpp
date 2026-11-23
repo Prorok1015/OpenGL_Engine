@@ -197,10 +197,13 @@ edt::previewable_document* edt::document_manager::open_with(const asset_preview_
 
 	next->open(source);
 	if (next->is_open()) {
-		next->assign_id(m_next_id++);
+		const document_id id = m_next_id++;
+		next->assign_id(id);
 		m_open_previews.push_back(next);
-		m_events.document_opened.emit(next->id());
-		set_active(next->id());
+		m_events.document_opened.emit(id);
+		set_active(id);
+		// A listener may have closed it, and a multiple kind destroys a closed document.
+		return multiple ? preview_by_id(id) : next;
 	} else if (multiple) {
 		// Nothing was announced; the document that did not open is kept until the next open_preview, so the pointer given back is valid.
 		kept_preview& kind = kind_of(preview);
