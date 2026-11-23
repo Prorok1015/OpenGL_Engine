@@ -39,13 +39,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uint64_t k_mib = 1024ull * 1024ull;
-constexpr std::uint64_t k_default_memory_mb = 2048;
-constexpr std::uint64_t k_min_memory_mb = 256;
-constexpr std::uint64_t k_max_memory_mb = 8192;
 constexpr std::size_t k_max_error_bytes = 300;
-constexpr std::size_t k_max_scan_requests = 256;
-constexpr std::size_t k_max_request_name_bytes = 1024;
-constexpr int k_max_scan_rounds = 3;
 
 // What the child says about itself goes to an agent and into a log: cut on a code point boundary, and escaped like the
 // rest of what it prints (control characters, bidi marks, separators).
@@ -75,7 +69,7 @@ std::string shown_name(const fs::path& path)
 
 std::string too_many_names(std::string_view name)
 {
-	return std::format("the model names '{}' in more than {} ways", text_escape::escaped_text(name, 256), edt::k_max_names_per_file);
+	return std::format("the model names '{}' in more than {} ways ({})", text_escape::escaped_text(name, 256), edt::k_max_names_per_file, edt::k_step_side_files);
 }
 
 const boost::json::string* string_of(const boost::json::object& object, const char* key)
@@ -111,7 +105,7 @@ std::vector<edt::provided_entry> edt::provided_entries(const std::vector<provide
 			if (added) {
 				total += file.bytes->size();
 				if (total > max_total_bytes) {
-					throw std::runtime_error(std::format("the files of the model together are bigger than {} bytes", max_total_bytes));
+					throw std::runtime_error(std::format("the side files exceed {} in total ({})", limit_text(max_total_bytes), k_step_side_files));
 				}
 				names_of.push_back(0);
 			}
@@ -132,7 +126,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 {
 	const bool has_deadline = source.deadline != std::chrono::steady_clock::time_point{};
 	const auto past_deadline = [&] { return has_deadline && std::chrono::steady_clock::now() >= source.deadline; };
-	constexpr const char* k_too_long = "the model took too long to read";
+	const std::string too_long = time_limit_refusal("reading the model", source.time_limit);
 
 	// One access for every round: what the model may read, and how much, is counted over the whole scan.
 	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
@@ -142,7 +136,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 	std::map<fs::path, std::shared_ptr<const std::vector<std::byte>>> side_bytes;
 	std::map<fs::path, std::size_t> side_names;
 	for (int round_index = 0;; ++round_index) {
-		if (past_deadline()) return failed_scan(k_too_long);
+		if (past_deadline()) return failed_scan(too_long);
 		scan_requests answer = run_round(provided);
 		if (!answer.error.empty()) return failed_scan(std::move(answer.error));
 
@@ -162,7 +156,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 				provided.push_back({ wanted.name, {}, model_file_kind::side_file, nullptr });
 				continue;
 			}
-			if (past_deadline()) return failed_scan(k_too_long);
+			if (past_deadline()) return failed_scan(too_long);
 			try {
 				// A texture changes nothing in the parse: the editor only reads and hashes it for the import.
 				if (wanted.kind == model_file_kind::texture) {
@@ -189,7 +183,7 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 			}
 		}
 		if (!new_side_file) break;
-		if (round_index + 1 == k_max_scan_rounds) return failed_scan(std::format("the model asks for its files in more than {} rounds", k_max_scan_rounds));
+		if (round_index + 1 == k_max_scan_rounds) return failed_scan(std::format("the model asks for its files in more than {} rounds ({})", k_max_scan_rounds, k_step_side_files));
 		if (task != nullptr) task->throw_if_stopped();
 	}
 	model_file_scan out;
@@ -222,7 +216,7 @@ std::optional<edt::scan_requests> edt::accept_scan_answer(const decode_bundle& b
 		return std::nullopt;
 	}
 	if (list->is_array() && list->as_array().size() > k_max_scan_requests) {
-		problem = "the scan asks for more files than it may";
+		problem = std::format("the scan asks for more than {} files ({})", k_max_scan_requests, k_step_decoder_answer);
 		return std::nullopt;
 	}
 	std::optional<scan_requests> scan = scan_requests_from_json(manifest);
@@ -231,7 +225,7 @@ std::optional<edt::scan_requests> edt::accept_scan_answer(const decode_bundle& b
 		return std::nullopt;
 	}
 	for (const requested_file& file : scan->requested) {
-		const bool readable = !file.name.empty() && file.name.size() <= k_max_request_name_bytes
+		const bool readable = !file.name.empty() && file.name.size() <= k_max_scan_request_name_bytes
 			&& std::none_of(file.name.begin(), file.name.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20; });
 		if (!readable) {
 			problem = "the scan asks for a file by a name that cannot be one";
@@ -612,8 +606,8 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 
 	// What the request allows, not only what a bundle can hold: a blob is at most twice the biggest file of a model and the
 	// resources together twice what a model may read; one blob cannot take the editor's memory before the exporter copies it.
-	const std::uint64_t blob_limit = static_cast<std::uint64_t>(request.limits.max_file_bytes) * 2;
-	const std::uint64_t total_limit = static_cast<std::uint64_t>(request.limits.max_total_bytes) * 2;
+	const std::uint64_t blob_limit = static_cast<std::uint64_t>(request.limits.max_file_bytes) * k_decoder_answer_factor;
+	const std::uint64_t total_limit = static_cast<std::uint64_t>(request.limits.max_total_bytes) * k_decoder_answer_factor;
 	std::uint64_t total = 0;
 	for (const bundle_blob& blob : bundle.blobs) {
 		if (!created.contains(blob.tag) || !blob.tag.starts_with(prefix)) {
@@ -636,8 +630,12 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 			problem = "the import of a model that is not a file on the disk carries the image file '" + cleaned(relative) + "'";
 			return std::nullopt;
 		}
-		if (blob.bytes.size() > blob_limit || (total += blob.bytes.size()) > total_limit) {
-			problem = "the resources of the import are bigger than the request allows";
+		if (blob.bytes.size() > blob_limit) {
+			problem = std::format("a resource of the import exceeds {} per resource ({})", limit_text(blob_limit), k_step_decoder_answer);
+			return std::nullopt;
+		}
+		if ((total += blob.bytes.size()) > total_limit) {
+			problem = std::format("the resources of the import exceed {} in total ({})", limit_text(total_limit), k_step_decoder_answer);
 			return std::nullopt;
 		}
 		if (!content_matches(*what, relative, blob.bytes)) {
@@ -679,14 +677,14 @@ std::optional<edt::import_intermediate> edt::accept_import_answer(const decode_b
 std::uint64_t edt::decoder_memory_limit(std::int64_t configured_mb, std::string& warning)
 {
 	warning.clear();
-	if (configured_mb <= 0) return k_default_memory_mb * k_mib;
+	if (configured_mb <= 0) return k_default_decoder_memory_mb * k_mib;
 	std::uint64_t mb = static_cast<std::uint64_t>(configured_mb);
-	if (mb < k_min_memory_mb) {
-		warning = std::format("import/decoder_memory_mb {} is below the lowest value, {} MiB is used", configured_mb, k_min_memory_mb);
-		mb = k_min_memory_mb;
-	} else if (mb > k_max_memory_mb) {
-		warning = std::format("import/decoder_memory_mb {} is above the highest value, {} MiB is used", configured_mb, k_max_memory_mb);
-		mb = k_max_memory_mb;
+	if (mb < k_min_decoder_memory_mb) {
+		warning = std::format("import/decoder_memory_mb {} is below the lowest value, {} MiB is used", configured_mb, k_min_decoder_memory_mb);
+		mb = k_min_decoder_memory_mb;
+	} else if (mb > k_max_decoder_memory_mb) {
+		warning = std::format("import/decoder_memory_mb {} is above the highest value, {} MiB is used", configured_mb, k_max_decoder_memory_mb);
+		mb = k_max_decoder_memory_mb;
 	}
 	return mb * k_mib;
 }
@@ -801,12 +799,15 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 {
 	if (source.preloaded == nullptr) throw std::runtime_error("the decoder needs the bytes of the model");
 	decode_runner_config config = m_config;
+	config.time_limit = m_config.timeout;
 	if (source.deadline != std::chrono::steady_clock::time_point{}) {
 		// The scan's rounds and the editor's reads share the one deadline: no round gets time of its own.
 		const auto left = std::chrono::ceil<std::chrono::milliseconds>(source.deadline - std::chrono::steady_clock::now());
-		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error("the model took too long to decode");
+		if (left <= std::chrono::milliseconds::zero()) throw std::runtime_error(time_limit_refusal("decoding the model", source.time_limit));
+		if (left < m_config.timeout) config.time_limit = source.time_limit;
 		config.timeout = std::min(left, m_config.timeout);
 	}
+	const std::chrono::milliseconds time_limit = config.time_limit;
 	config.sandbox = effective_sandbox_mode(m_config.sandbox, source.sandbox);
 	const sandbox_mode mode = config.sandbox;
 	decode_outcome outcome = launch(std::move(config), request, files, source, task != nullptr ? task->stop : std::stop_token{});
@@ -821,7 +822,7 @@ edt::decode_outcome edt::process_decoder::run(const decode_request& request, con
 		if (m_on_sandbox) m_on_sandbox(outcome.sandbox);
 	}
 	if (outcome.cancelled) throw ds::task_cancelled{};
-	if (outcome.timed_out) throw std::runtime_error("the model took too long to decode");
+	if (outcome.timed_out) throw std::runtime_error(time_limit_refusal("decoding the model", time_limit));
 	if (outcome.sandbox_refused) {
 		// Outside `required` the child refuses only when a sandbox the system has failed to set up: a defect, so the person
 		// is told how to go on without it.

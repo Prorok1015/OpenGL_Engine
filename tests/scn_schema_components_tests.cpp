@@ -980,7 +980,8 @@ BOOST_AUTO_TEST_CASE(a_schema_with_migrations_registers_its_steps_and_drops_them
 	layer->descs().unregister_migrations("mod.migrated");
 }
 
-// EPIC-58 #763: an override is warned about only when it reaches no field; a field key need not start with '/'.
+// EPIC-58 #763: an override is warned about only when it reaches no field. A field key is a JSON pointer (#1228), escapes
+// included.
 BOOST_AUTO_TEST_CASE(an_override_path_is_matched_to_the_field_keys_of_the_schema)
 {
 	const auto field = [](const char* name, const char* key) {
@@ -991,7 +992,7 @@ BOOST_AUTO_TEST_CASE(an_override_path_is_matched_to_the_field_keys_of_the_schema
 	};
 	desc::type_schema schema;
 	schema.name = "mod.keys";
-	schema.fields = { field("hp", "hp"), field("pos", "/pos"), field("armor", "/stats/armor"), field("odd", "a/b~c") };
+	schema.fields = { field("hp", "/hp"), field("pos", "/pos"), field("armor", "/stats/armor"), field("odd", "/a~1b~0c") };
 
 	BOOST_TEST(scn::override_names_a_field(schema, "/hp"));
 	BOOST_TEST(scn::override_names_a_field(schema, "/pos"));

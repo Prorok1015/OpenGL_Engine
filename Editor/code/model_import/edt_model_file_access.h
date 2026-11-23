@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_decoder_sandbox.h"
 #include "edt_file_identity.h"
+#include "edt_model_import_limits.h"
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -56,9 +57,9 @@ namespace edt {
 
 	struct model_file_limits
 	{
-		std::uintmax_t max_total_bytes = 128ull * 1024ull * 1024ull;
-		std::uintmax_t max_file_bytes = 64ull * 1024ull * 1024ull;
-		std::size_t max_files = 64;
+		std::uintmax_t max_total_bytes = k_max_side_files_total_bytes;
+		std::uintmax_t max_file_bytes = k_max_side_file_bytes;
+		std::size_t max_files = k_max_side_files;
 	};
 
 	struct model_file_scan
@@ -75,9 +76,6 @@ namespace edt {
 	// spelling the rule does not allow, a model that is no file on the disk); `limit`: a count or size limit; `other`:
 	// the file on the disk cannot be trusted (not a plain file, its size, time or identity unreadable).
 	enum class refusal_kind { none, rule, limit, other };
-
-	// How many names one file may be asked for by: each name hands the decoder process its bytes again.
-	inline constexpr std::size_t k_max_names_per_file = 8;
 
 	struct resolved_reference
 	{

@@ -80,11 +80,6 @@ namespace
 		return kind == desc::field_kind::res_tag || kind == desc::field_kind::desc_ref;
 	}
 
-	std::string pointer_of(std::string_view key)
-	{
-		return key.starts_with('/') ? std::string(key) : "/" + std::string(key);
-	}
-
 	std::string token_of(const json::string& key)
 	{
 		return res::json_pointer_token(std::string_view(key.data(), key.size()));
@@ -105,8 +100,8 @@ namespace
 			into();
 		};
 		for (const desc::field_schema& field : schema.fields) {
-			std::vector<std::string> pointers{ pointer_of(field.key) };
-			for (const std::string& alias : field.read_aliases) pointers.push_back(pointer_of(alias));
+			std::vector<std::string> pointers{ field.key };
+			for (const std::string& alias : field.read_aliases) pointers.push_back(alias);
 			for (const std::string& pointer : pointers) {
 				const std::string where = at + pointer;
 				const json::value* held = desc::json_pointer_get(edited, where);

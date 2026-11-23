@@ -107,6 +107,7 @@ BOOST_AUTO_TEST_CASE(TheModelGoesThroughTheDecoder_ScanThenImportWithTheListedFi
 	for (const edt::import_source* step : { &scanned, &imported }) {
 		BOOST_TEST((step->deadline > before));
 		BOOST_TEST((step->deadline <= std::chrono::steady_clock::now() + edt::k_person_parse_time_limit));
+		BOOST_TEST((step->time_limit == edt::k_person_parse_time_limit));
 	}
 	BOOST_TEST(result.prefab_tag.view() == "memory://__imports/1/robot/robot.prefab.desc");
 	BOOST_TEST(result.source_path == model);

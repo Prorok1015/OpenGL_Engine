@@ -2,6 +2,7 @@
 #include "edt_asset_exporter.h"
 #include "edt_async_import_task.h"
 #include "edt_model_file_access.h"
+#include "edt_model_import_limits.h"
 #include "edt_model_importer.h"
 #include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_task_system.hpp>
@@ -84,7 +85,7 @@ namespace edt {
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
 		// The largest model file an agent may import: the job reads it into memory and parses it.
-		std::uintmax_t max_source_bytes = 64ull * 1024ull * 1024ull;
+		std::uintmax_t max_source_bytes = k_max_agent_source_bytes;
 		// How long the job may parse a model before it fails.
 		std::chrono::seconds parse_time_limit{ k_agent_parse_time_limit };
 		// What the model may make the import read besides itself.
