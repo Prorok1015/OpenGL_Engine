@@ -197,14 +197,21 @@ namespace
 
 	// The journal's files are reached from the folder that holds journal_root (the project's cache), so a link at
 	// journal_root itself is refused like one below it (#1294): journal_base is that root, in_journal the path below it.
+	fs::path journal_folder(const fs::path& journal_root)
+	{
+		const fs::path normal = journal_root.lexically_normal();
+		// "x/asset_ops/" has no filename: it is the folder "x/asset_ops".
+		return normal.has_filename() || !normal.has_relative_path() ? normal : normal.parent_path();
+	}
+
 	fs::path journal_base(const fs::path& journal_root)
 	{
-		return journal_root.parent_path();
+		return journal_folder(journal_root).parent_path();
 	}
 
 	std::string in_journal(const fs::path& journal_root, const std::string& id, std::string_view relative)
 	{
-		return std::format("{}/{}/{}", utf8(journal_root.filename()), id, relative);
+		return std::format("{}/{}/{}", utf8(journal_folder(journal_root).filename()), id, relative);
 	}
 
 	// What a test may take over (asset_ops_ports::fail_step, force_copy); both empty in production.

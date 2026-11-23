@@ -78,6 +78,13 @@ namespace
 		return out;
 	}
 
+	// "x/asset_ops/" has no filename: the journal folder would be the empty name, every set-aside and removal refused.
+	fs::path without_trailing_separator(fs::path path)
+	{
+		path = path.lexically_normal();
+		return path.has_filename() || !path.has_relative_path() ? path : path.parent_path();
+	}
+
 	bool same_folder(const fs::path& a, const fs::path& b)
 	{
 		std::error_code ec;
@@ -111,7 +118,7 @@ fs::path edt::asset_history_file(const std::vector<fs::path>& edt_roots, const f
 }
 
 edt::asset_history::asset_history(fs::path journal_root, fs::path list_file, std::function<std::uint64_t()> serial)
-	: m_root(std::move(journal_root))
+	: m_root(without_trailing_separator(std::move(journal_root)))
 	, m_list_file(std::move(list_file))
 	, m_serial(std::move(serial))
 {

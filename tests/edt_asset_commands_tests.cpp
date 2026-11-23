@@ -715,6 +715,47 @@ BOOST_AUTO_TEST_CASE(AnUndoThroughTheHistory_RemovesALinkInTheJournalFolderAsThe
 	BOOST_TEST(fs::is_regular_file(outside.path() / "keep.txt"), "what the link led to is untouched");
 }
 
+BOOST_AUTO_TEST_CASE(OnlyTheFolderNamedByTheJournalsOwnIdBelowTheRoot_IsTheJournalsFolder)
+{
+	const auto journal_at = [](const std::string& id, const fs::path& directory) {
+		edt::operation_journal made;
+		made.id = id;
+		made.directory = fs_paths::utf8_of(directory);
+		return made;
+	};
+	test_util::temp_dir other("asset_cmd_other_journal");
+	BOOST_TEST(history.is_journal_folder(journal_at("abc", journal.path() / "abc")));
+	BOOST_TEST(!history.is_journal_folder(journal_at("abc", journal.path() / "def")), "another id of the same root");
+	BOOST_TEST(!history.is_journal_folder(journal_at("abc", journal.path() / "ABC")), "the id in another case");
+	BOOST_TEST(!history.is_journal_folder(journal_at("", journal.path())), "an empty id");
+	BOOST_TEST(!history.is_journal_folder(journal_at("", journal.path() / "")), "an empty name");
+	BOOST_TEST(!history.is_journal_folder(journal_at("abc", other.path() / "abc")), "another root");
+	BOOST_TEST(!history.is_journal_folder(journal_at("abc", journal.path() / "abc" / "abc")), "a folder deeper down");
+
+	const edt::asset_history trailing{ journal.path() / "", {}, {} };
+	BOOST_TEST(trailing.is_journal_folder(journal_at("abc", journal.path() / "abc")),
+		"a root given with a trailing separator is the same root");
+}
+
+BOOST_AUTO_TEST_CASE(ARootGivenWithATrailingSeparator_StillDeletesTheJournalFolderAfterAnUndo)
+{
+	open();
+	edt::asset_history trailing{ journal.path() / "", {}, {} };
+	const cmd::result result = call("asset.rename", json::object{ { "path", "sky.desc" }, { "to", "clouds.desc" } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	const std::string id = text_of(result.value.at("operation"));
+	std::ifstream in(journal.path() / id / "journal.json", std::ios::binary);
+	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	const json::value written = json::parse(text);
+	std::string reason;
+	const std::optional<edt::operation_journal> read = edt::journal_from_json(written, reason);
+	BOOST_REQUIRE_MESSAGE(read, reason);
+	trailing.record(*read);
+	const edt::asset_fix_result undone = trailing.undo_last(operations);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(!fs::exists(journal.path() / id));
+}
+
 BOOST_AUTO_TEST_CASE(AnUndoThatFindsAFileChanged_SaysWhichOnes_KeepsTheEntry_AndWorksAgainOnceItIsFixed)
 {
 	open();
