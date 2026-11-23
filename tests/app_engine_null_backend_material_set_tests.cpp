@@ -409,7 +409,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	desc.shader = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 	desc.samplers_textures = { res::tag{}, res::tag{} };	// two slots without a texture
 
-	const auto config = compiler->compile(desc, rnd::material_compile_context{ &render.get_texture_manager(), false });
+	const auto config = compiler->compile(desc, rnd::material_compile_context{ &render.get_texture_manager(), false, std::nullopt });
 
 	rnd::material_params expected;
 	expected.diffuse_color = desc.albedo;
@@ -441,7 +441,7 @@ BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStage
 
 	for (const bool skinned : { false, true }) {
 		BOOST_TEST_CONTEXT("skinned " << skinned) {
-			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned });
+			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned, std::nullopt });
 			const rnd::shader_config config = shader->config(material.defines);
 			BOOST_CHECK(config.cdata.program == compiled.cdata.program);
 			// The skinning define stays the compiler's.
