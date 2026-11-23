@@ -1,5 +1,6 @@
 #include "edt_prefab_document.h"
 #include "edt_code_commands.h"
+#include "edt_file_write_check.h"
 #include "edt_prefab_file_edit.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
@@ -290,23 +291,14 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 	if (!descs || !reader || !writer) {
 		return save_result::failure("the project resources are not available");
 	}
-	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
-	if (!on_disk.error.empty() && !on_disk.located) {
-		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
-	}
-	if (!on_disk.top_layer) {
-		return save_result::failure(std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", m_source_tag.view()));
-	}
-	if (on_disk.in_open_level) {
-		return save_result::failure(std::format("{} belongs to the open level now: nothing was written", m_source_tag.view()));
-	}
-	if (on_disk.version != m_disk_version) {
+	const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_source_tag, m_disk_version);
+	if (allowed.changed_on_disk && !m_changed_on_disk) {
 		// The watcher may not have said so yet: the file is known to differ now, and Save All's question depends on the flag.
-		if (!m_changed_on_disk) {
-			m_changed_on_disk = true;
-			announce();
-		}
-		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", m_source_tag.view()));
+		m_changed_on_disk = true;
+		announce();
+	}
+	if (!allowed.error.empty()) {
+		return save_result::failure(allowed.error);
 	}
 	std::string why;
 	std::vector<std::byte> bytes;

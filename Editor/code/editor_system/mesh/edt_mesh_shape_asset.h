@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_mesh_bake.h"
+#include "edt_mesh_io.h"
 #include "edt_mesh_shapes.h"
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/model_codec/res_tag.h>
@@ -46,6 +47,10 @@ namespace edt::mesh
 		std::optional<shape_asset_files> files;
 		std::string error;
 	};
+
+	// A poly file as the repository's descs are written (pretty JSON, version after the type): what the shape tools and the mesh
+	// document write, so that one mesh is one text.
+	std::string poly_file_text(const poly_mesh_desc& source);
 
 	// The number of vertices the bake of a shape has, from its parameters alone: what lets a request that cannot fit a file be
 	// refused before a mesh of millions of faces is made. A test keeps it equal to the real count.

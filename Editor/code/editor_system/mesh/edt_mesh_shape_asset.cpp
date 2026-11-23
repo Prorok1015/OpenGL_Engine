@@ -46,6 +46,11 @@ namespace edt::mesh
 		}
 	}
 
+	std::string poly_file_text(const poly_mesh_desc& source)
+	{
+		return repository_text(poly_mesh_to_json(source), poly_file_version);
+	}
+
 	std::size_t estimate_shape_vertices(const shape_params& params)
 	{
 		struct counter
