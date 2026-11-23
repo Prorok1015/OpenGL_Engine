@@ -72,7 +72,7 @@
 	"memory://bare/bare.prefab.desc": {
 		"json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "a22f314ee1c4605e",
 			"children": [
 				{
@@ -143,7 +143,7 @@
 		],
 		"prefab_json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "a22f314ee1c4605e",
 			"children": [
 				{

@@ -5,7 +5,7 @@
     "worlds" : [
         {
             "__type" : "world_desc",
-            "__version" : 4,
+            "__version" : 5,
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
@@ -71,7 +71,7 @@
         },
         {
             "__type" : "world_desc",
-            "__version" : 4,
+            "__version" : 5,
             "name" : "overlay",
             "systems" : [
                 "inp::update_input_state",

@@ -2,7 +2,7 @@
 	"memory://models/gltf_with_bin/tri.desc": {
 		"json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "4eb514ebcb80553d",
 			"transform": {
 				"position": [

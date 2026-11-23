@@ -18,7 +18,7 @@ struct instance_problems_fixture : test_util::scene_env
 {
 	std::shared_ptr<scn::world_desc> world_with(std::string_view children, std::string_view file_name = "w.desc")
 	{
-		std::string text = R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)";
+		std::string text = R"({"__type":"world_desc","__version":5,"name":"w","systems":[],"children":[)";
 		text += children;
 		text += "]}";
 		return load<scn::world_desc>(put(file_name, text));
@@ -26,9 +26,9 @@ struct instance_problems_fixture : test_util::scene_env
 
 	void put_cycle()
 	{
-		put("first.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		put("first.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 			{"__id":"00000000000000a1","name":"x","components":{"ref":"memory://t/second.prefab.desc"}}]})");
-		put("second.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+		put("second.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 			{"__id":"00000000000000b1","name":"y","components":{"ref":"memory://t/first.prefab.desc"}}]})");
 	}
 
@@ -68,7 +68,7 @@ BOOST_FIXTURE_TEST_SUITE(EdtInstanceProblemsTests, instance_problems_fixture)
 
 BOOST_AUTO_TEST_CASE(ALevelWithoutAnythingOdd_HasNoRows)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
 	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},
 		"overrides":[{"target":["00000000000000f1"],"component":"transform","path":"/position","value":[0,1,0]}]})");
 	BOOST_REQUIRE(world);
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(ALevelWithoutAnythingOdd_HasNoRows)
 
 BOOST_AUTO_TEST_CASE(ARemoveNodeRecord_IsAWarningAtItsNode_NamingTheRecord)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
 	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},
 		"overrides":[{"op":"remove","target":["00000000000000f1"]}]})");
 	BOOST_REQUIRE(world);
@@ -95,7 +95,7 @@ BOOST_AUTO_TEST_CASE(ARemoveNodeRecord_IsAWarningAtItsNode_NamingTheRecord)
 
 BOOST_AUTO_TEST_CASE(ARemoveComponentRecordAndAnAddNodeRecord_AreRowsAtTheirNodes_ASetRecordIsNone)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
 	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},
 		"overrides":[{"op":"remove","target":["00000000000000f1"],"component":"stat"},
 			{"op":"add_node","target":[],"value":{"__id":"00000000000000d9","name":"extra"}},
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(TheTextOfACycle_IsSaidFromThePrefabOfTheNode_WhateverNodeCa
 
 BOOST_AUTO_TEST_CASE(APrefabThatReferencesItsOwnFile_IsAnErrorWithoutAChain)
 {
-	put("self.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	put("self.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"again","components":{"ref":"memory://t/self.prefab.desc"}}]})");
 	const auto world = world_with(R"({"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/self.prefab.desc"}})");
 	BOOST_REQUIRE(world);

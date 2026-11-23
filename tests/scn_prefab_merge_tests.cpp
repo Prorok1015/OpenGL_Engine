@@ -1487,7 +1487,7 @@ namespace {
 // A prefab whose children instantiate prefabs: `children` is the text between the brackets of "children".
 std::string prefab_with_children(std::string_view children)
 {
-	return std::string(R"({"__type":"prefab_desc","__version":4,"children":[)") + std::string(children) + "]}";
+	return std::string(R"({"__type":"prefab_desc","__version":5,"children":[)") + std::string(children) + "]}";
 }
 
 std::string instance_child(std::string_view name, std::string_view prefab_file)
@@ -2368,7 +2368,7 @@ BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseRecordInstantiatesItsPrefab
 BOOST_AUTO_TEST_CASE(Reconcile_WithAFileOpenInTheRunningSpawn_IsRefused_AndBuildsNothing)
 {
 	const auto file_tag = put("outer.prefab.desc",
-		R"({"__type":"prefab_desc","__version":4,"components":{"stat":{"__type":"stat_desc","hp":1}}})");
+		R"({"__type":"prefab_desc","__version":5,"components":{"stat":{"__type":"stat_desc","hp":1}}})");
 	auto outer = load<scn::prefab_desc>(file_tag);
 	BOOST_REQUIRE(outer);
 
@@ -2441,7 +2441,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiates
 {
 	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
 	const auto world_tag = put("grown.world.desc",
-		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__type":"world_desc","__version":5,"name":"w","systems":[],"children":[)"
 		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
 		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
 	auto world = load<scn::world_desc>(world_tag);
@@ -2462,7 +2462,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiates
 	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
 	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == world_tag);
 
-	put("grown.world.desc", R"({"__type":"world_desc","__version":4,"name":"w","systems":[]})");
+	put("grown.world.desc", R"({"__type":"world_desc","__version":5,"name":"w","systems":[]})");
 	rs->signal_changed(world_tag);
 	pump();
 	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(world_tag));
@@ -2488,7 +2488,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_OfADescWhoseOwnTagIsTheFile_BuildsItAsALevelLoad
 {
 	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
 	const auto world_tag = put("tagged.world.desc",
-		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__type":"world_desc","__version":5,"name":"w","systems":[],"children":[)"
 		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
 	auto world = load<scn::world_desc>(world_tag);
 	BOOST_REQUIRE(world);

@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(TheCameraStepOfAWorld_WarnsAboutAPartialPoseItDrops)
 			{"target":["00000000000000c1"],"component":"camera","value":{"fov":50,"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}},
 			{"target":["00000000000000c2"],"component":"camera","value":{"transform":{"position":[4,5,6]}}},
 			{"target":["00000000000000c3"],"component":"camera","path":"/transform/position","value":[1,2,3]}]}]})", warnings);
-	BOOST_TEST(world.at("__version").as_int64() == 4);
+	BOOST_TEST(world.at("__version").as_int64() == 5);
 	BOOST_REQUIRE(warnings.size() == 2u);
 	for (const auto& warning : warnings) {
 		BOOST_TEST(warning.type == "world_desc");

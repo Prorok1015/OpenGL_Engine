@@ -139,6 +139,12 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	// Parent first: the node step runs before the camera objects below it are visited, and stamps them v2.
 	scope.migration("prefab_desc", 3, v3_summary, v3);
 	scope.migration(world_desc::__type, 3, v3_summary, v3);
+	// A step sees only its own file, not the prefab an instance instantiates, so it cannot tell the type an override record
+	// edits: the editor stamps the version of a record without one when it loads the document (#1255).
+	constexpr std::string_view v4_summary = "an override record names the version of its component's type (old ones get it in the editor)";
+	const auto v4 = [](json::object&, desc::migration_context&) {};
+	scope.migration("prefab_desc", 4, v4_summary, v4);
+	scope.migration(world_desc::__type, 4, v4_summary, v4);
 	scope.migration(camera_desc::__type, 1, "a camera outside a node drops its pose (the node's transform is the pose)",
 		[](json::object& obj, desc::migration_context& context) { migrate_camera_v1(obj, context); });
 	scope.migration("level_desc", 1, "nothing: the worlds are typed objects and migrate on their own",

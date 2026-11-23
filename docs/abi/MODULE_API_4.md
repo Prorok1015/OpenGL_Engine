@@ -32,6 +32,7 @@
 | `wnd::gl_surface` → `rnd::driver::gl_surface` (#1161) | те же виртуальные функции в том же порядке; `layout_revision` 17 поднят в #1217 | [1161](changes/1161-gl-surface.md) |
 | `desc::field_kind::binary_ref`; `rnd::geometry_desc` держит двоичное состояние членом (#1068) | `layout_revision` 16, ключ получает `rnd::geometry_desc`, `res::binary_range`, `rnd::geometry_view`, `rnd::geometry_file_options`; модули пересобираются | [1068](changes/1068.md), [PR5](changes/1068-pr5.md) |
 | `register_schema` отказывает ключу поля не-JSON-pointer (#1228) | схема с ключом без `/` не регистрируется | [1228](changes/1228.md) |
+| `scn::override_record` получает `type_version` в конце (#1255) | `layout_revision` 21 (поле может лечь в паддинг, ключ сам не меняется); модули пересобираются | [1255](changes/1255.md) |
 
 Минорные добавления (новые экспорты без смены типов: ключ раскладки остаётся) в таблицу не входят, они только в [`changes/`](changes/README.md).
 

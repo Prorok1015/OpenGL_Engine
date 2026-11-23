@@ -42,7 +42,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr const char* PREVIEW_TEMPLATE = R"({
-	"__type": "world_desc", "__version": 4, "name": "__prefab_preview", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "__prefab_preview", "systems": [],
 	"components": { "anchor": { "__type": "anchor_desc", "__version": 1 } },
 	"children": [
 		{ "__id": "09705f78a49797f0", "name": "PrefabLight",
@@ -150,7 +150,7 @@ struct prefab_edit_fixture : test_util::scene_env
 		document->open(tag);
 		BOOST_REQUIRE(document->is_open());
 		BOOST_REQUIRE(rename_arm("arm2"));
-		write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+		write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 		rs->signal_changed(tag);
 		pump();
 		BOOST_REQUIRE(document->changed_on_disk());
@@ -222,9 +222,9 @@ BOOST_AUTO_TEST_CASE(Edit_ChangesTheWorkingCopyAndThePreview_NotTheCacheOrTheFil
 // that file itself is refused after open as after an edit, as when the saved file is spawned.
 BOOST_AUTO_TEST_CASE(Open_RefusesARecordThatInstantiatesTheEditedPrefab_AsAnEditDoes)
 {
-	write(res_root, "prefabs/leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"name":"tip"}]})");
+	write(res_root, "prefabs/leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"name":"tip"}]})");
 	const res::tag self = res::tag::make("prefabs/self.prefab.desc");
-	write(res_root, "prefabs/self.prefab.desc", std::string(R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/self.prefab.desc", std::string(R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000c1","name":"n","components":{"ref":")") + std::string(res::tag::make("prefabs/leaf.prefab.desc").view())
 		+ R"("},"overrides":[{"op":"add_node","target":[],"value":{"__id":"00000000000000e1","name":"added",
 			"components":{"ref":")" + std::string(self.view()) + R"("}}}]}]})");
@@ -309,7 +309,7 @@ BOOST_AUTO_TEST_CASE(Apply_ToAFileThatChangedOnDisk_IsRefusedAndWritesNothing)
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
 	BOOST_REQUIRE(rename_arm("arm2"));
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"other"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"other"}]})");
 	const std::string outside = text_of(res_root, "prefabs/a.prefab.desc");
 
 	const edt::save_result saved = document->save();
@@ -415,7 +415,7 @@ BOOST_AUTO_TEST_CASE(Revert_TakesTheFileAsItIsNow_NotTheCachedRead)
 {
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 
 	const std::string error = document->revert();
 
@@ -456,7 +456,7 @@ BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileEdited_IsFlagged_AndReloadTakesIt)
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
 	BOOST_REQUIRE(rename_arm("arm2"));
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 	rs->signal_changed(tag);
 	pump();
 
@@ -475,7 +475,7 @@ BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileEdited_OverwriteWritesTheEdits)
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
 	BOOST_REQUIRE(rename_arm("arm2"));
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 	rs->signal_changed(tag);
 	pump();
 	BOOST_REQUIRE(document->changed_on_disk());
@@ -493,7 +493,7 @@ BOOST_AUTO_TEST_CASE(Overwrite_ThatFails_KeepsTheFileMarkedAsChanged_AndApplySta
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
 	BOOST_REQUIRE(rename_arm("arm2"));
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 	rs->signal_changed(tag);
 	pump();
 	BOOST_REQUIRE(document->changed_on_disk());
@@ -513,7 +513,7 @@ BOOST_AUTO_TEST_CASE(Overwrite_OfACleanDocument_TakesTheFileInsteadOfClaimingSuc
 {
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 
 	const edt::save_result done = document->overwrite();
 
@@ -526,7 +526,7 @@ BOOST_AUTO_TEST_CASE(FileChangedOnDisk_WhileClean_IsTakenWithoutAsking)
 {
 	document->open(tag);
 	BOOST_REQUIRE(document->is_open());
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 	rs->signal_changed(tag);
 	pump();
 
@@ -583,9 +583,9 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_KeepsItsParent_AndTheEdit)
 
 BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatChangesAValueTheBaseAlreadyOverrides_WritesAnAddedRecord_AndReadsBackTheNewValue)
 {
-	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
-	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})");
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":5,"__parent":"res://prefabs/base.prefab.desc","__layer":2})");
 	document->open(res::tag::make("prefabs/v.prefab.desc"));
 	BOOST_REQUIRE(document->is_open());
 	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) {
@@ -607,9 +607,9 @@ BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatChangesAValueTheBaseAlreadyOverrides_W
 
 BOOST_AUTO_TEST_CASE(Apply_OfAVariant_ThatTakesOutAnInheritedRecord_IsRefused_AndSaveWithoutBaseWritesItWhole)
 {
-	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
-	const std::string variant = R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
+	const std::string variant = R"({"__type":"prefab_desc","__version":5,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
 	write(res_root, "prefabs/v.prefab.desc", variant);
 	document->open(res::tag::make("prefabs/v.prefab.desc"));
 	BOOST_REQUIRE(document->is_open());
@@ -906,7 +906,7 @@ BOOST_AUTO_TEST_CASE(ToolbarState_FollowsTheDocument)
 	BOOST_TEST(state.apply_enabled);
 	BOOST_TEST(state.apply_hint.empty());
 
-	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
 	rs->signal_changed(tag);
 	pump();
 	state = edt::toolbar_state_of(*document);
@@ -932,7 +932,7 @@ BOOST_AUTO_TEST_CASE(Close_UnwatchesTheFile)
 
 BOOST_AUTO_TEST_CASE(AnOverrideOnADeletedNode_IsSkippedWithAWarning_WhenAnInstanceIsBuilt)
 {
-	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}},
 		 "overrides":[{"target":["00000000000000ff"],"component":"stat","path":"/hp","value":9}]}]})");
 	std::vector<std::string> warnings;
@@ -998,7 +998,7 @@ BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_ALowerLayerPrefab_IsNotWritten)
 
 BOOST_AUTO_TEST_CASE(FoldRecord_BelowANestedInstance_BecomesARecordOfThatInstanceNode)
 {
-	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
 	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
 	pump();
@@ -1074,7 +1074,7 @@ BOOST_AUTO_TEST_CASE(ApplyOverrideRecords_IsAllOrNone_AFailingRecordLeavesTheFil
 
 BOOST_AUTO_TEST_CASE(FoldRecord_TheSameFieldTwice_IsOneRecordOfTheInstanceNodeWithTheLaterValue)
 {
-	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/user.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000b1","name":"Inst","components":{"inst":{"__type":"prefab_desc","__parent":"res://prefabs/a.prefab.desc"}}}]})");
 	auto user = require_loaded<scn::prefab_desc>(res::tag::make("prefabs/user.prefab.desc"));
 	pump();
@@ -1176,7 +1176,7 @@ BOOST_AUTO_TEST_CASE(AVariantOfAVariantOfAVariant_LoadsWithTheContentOfTheBase)
 
 BOOST_AUTO_TEST_CASE(AVariantThatNamesItselfAsItsParent_ReadsAsTheOwnerWantsIt_InProblems)
 {
-	write(res_root, "prefabs/loop.prefab.desc", R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/loop.prefab.desc"})");
+	write(res_root, "prefabs/loop.prefab.desc", R"({"__type":"prefab_desc","__version":5,"__parent":"res://prefabs/loop.prefab.desc"})");
 	const res::tag loop = res::tag::make("prefabs/loop.prefab.desc");
 	auto handle = rs->require_sync<scn::prefab_desc>(loop);
 	pump();
@@ -1403,9 +1403,9 @@ BOOST_AUTO_TEST_CASE(SaveAll_ChangedOnDiskPrefab_ReloadTakesTheFile_CancelChange
 
 BOOST_AUTO_TEST_CASE(SaveAll_AVariantThatNeedsItsBaseDropped_IsAskedAndSavesWholeOnlyOnAYes)
 {
-	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
-	const std::string variant = R"({"__type":"prefab_desc","__version":4,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
+	const std::string variant = R"({"__type":"prefab_desc","__version":5,"__parent":"res://prefabs/base.prefab.desc","__layer":2})";
 	write(res_root, "prefabs/v.prefab.desc", variant);
 	document->open(res::tag::make("prefabs/v.prefab.desc"));
 	BOOST_REQUIRE(document->is_open());
