@@ -96,7 +96,7 @@ namespace desc
 		std::string tooltip;
 		std::string filter;
 		std::uint32_t offset = 0; // in the blob; runtime schemas only, not part of equality
-		// desc_ref only: a reference to a file, never an inline desc object (#1200). Last, after offset: layout_revision 19.
+		// desc_ref only: a reference to a file, never an inline desc object (#1200). Last, after offset: layout_revision 20.
 		bool reference_only = false;
 	};
 

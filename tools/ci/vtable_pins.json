@@ -1,5 +1,5 @@
 {
-  "layout_revision": 19,
+  "layout_revision": 20,
   "editor_layout_revision": 1,
   "interfaces": [
     {
@@ -257,6 +257,45 @@
         "void swap_buffers()",
         "void set_swap_interval(int)",
         "void* get_proc_address(const char*) const"
+      ]
+    },
+    {
+      "class": "window_system",
+      "header": "core/core/windows/window_service/include/snk/window/wnd_window_system.h",
+      "constant": "window_system_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~window_system()",
+        "void init()",
+        "std::shared_ptr<window> get_active_window()",
+        "float get_active_content_scale() const",
+        "bool is_stop_running()",
+        "void pool_events() const",
+        "void init_windows_frame_time() const",
+        "void process_windows() const"
+      ]
+    },
+    {
+      "class": "window_listener_interface",
+      "header": "core/core/windows/window_service/include/snk/window/wnd_window_event_listener_interface.h",
+      "constant": "window_listener_interface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~window_listener_interface()",
+        "void on_input_event(wnd::handle, const inp::input_event&)",
+        "void on_window_focus_gained(wnd::handle)",
+        "void on_window_focus_lost(wnd::handle)",
+        "void on_window_resize(wnd::handle, int, int)",
+        "void on_window_moved(wnd::handle, int, int)",
+        "void on_window_close(wnd::handle)",
+        "void on_window_refresh(wnd::handle)",
+        "void on_window_minimized(wnd::handle)",
+        "void on_window_restored(wnd::handle)",
+        "void on_window_maximized(wnd::handle)",
+        "void on_window_created(wnd::handle)",
+        "void on_window_destroyed(wnd::handle)"
       ]
     },
     {
