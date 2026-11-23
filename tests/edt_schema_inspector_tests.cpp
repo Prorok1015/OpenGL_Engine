@@ -1589,6 +1589,7 @@ BOOST_AUTO_TEST_CASE(ABinaryRef_IsAReadOnlyLabel_ThatSumsTheRangeUp)
 	BOOST_TEST(ui::binary_ref_summary(range) == "1024 bytes, f32x8, sha256 0123456789ab");
 	BOOST_TEST(ui::binary_ref_summary(json::parse("[1, 2, 3]")) == "inline, 3 values");
 	BOOST_TEST(ui::binary_ref_summary(json::parse(R"({ "offset": 1 })")) == "not a range");
+	BOOST_TEST(ui::binary_ref_summary(json::value()) == "no range");
 	BOOST_TEST(ui::zero_value(field, desc::schema_registry{}).is_null());
 }
 

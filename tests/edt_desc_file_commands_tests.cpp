@@ -1085,6 +1085,15 @@ BOOST_AUTO_TEST_CASE(ABinaryRefField_IsCheckedAsARange_AndItsStringsAreNoTags)
 	BOOST_TEST(broken[0].find("/vertices") == 0u, broken[0]);
 	BOOST_TEST(broken[0].find("not a range of the binary file") != std::string::npos, broken[0]);
 	BOOST_TEST(broken[1].find("/indices") == 0u, broken[1]);
+
+	// #1180: null is no range; a range with a member of its own is not a range.
+	const auto empty = errors_of(R"({"__type":"test.blob_mesh","vertices":null,"indices":null})");
+	BOOST_TEST(empty.empty(), (empty.empty() ? std::string{} : empty.front()));
+	const std::string extra = range.substr(0, range.size() - 1) + R"(,"stride":12})";
+	const auto with_extra = errors_of(R"({"__type":"test.blob_mesh","vertices":)" + extra + "}");
+	BOOST_REQUIRE_EQUAL(with_extra.size(), 1u);
+	BOOST_TEST(with_extra[0].find("/vertices") == 0u, with_extra[0]);
+	BOOST_TEST(with_extra[0].find("unknown member 'stride'") != std::string::npos, with_extra[0]);
 }
 
 BOOST_AUTO_TEST_CASE(ALinkUnderRes_IsNeitherReadNorWritten_NorALinkedFolder)

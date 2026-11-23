@@ -1272,6 +1272,9 @@ std::string edt::schema_ui::binary_ref_summary(const json::value& value)
 	if (value.is_array()) {
 		return std::format("inline, {} values", value.as_array().size());
 	}
+	if (value.is_null()) {
+		return "no range";
+	}
 	std::string error;
 	const std::optional<res::binary_range> range = res::binary_range_from_json(value, error);
 	if (!range) {
