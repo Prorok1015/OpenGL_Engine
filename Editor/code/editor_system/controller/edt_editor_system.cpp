@@ -20,6 +20,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/text_escape.h>
 #include "edt_selection_wiring.h"
+#include "edt_modeller_component.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_prefab_file_edit.h"
@@ -237,6 +238,10 @@ edt::editor_system::~editor_system()
 		m_prefab->detach_document();
 		m_prefab.reset();
 	}
+	if (m_modeller) {
+		m_modeller->detach_document();
+		m_modeller.reset();
+	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
 		ctx_mgr->set_on_reload_result(nullptr);
@@ -369,6 +374,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[this] { return m_asset_open->desc_layout(); },
 		[this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); } });
 
+	// The mesh modeller (EPIC-77, #1011).
+	m_modeller = std::make_unique<modeller_component>(modeller_component::ports{
+		.context = *m_context, .services = m_services, .rnd = m_rnd, .gui = m_gui, .input_router = m_input_router,
+		.desc_layout = [this] { return m_asset_open->desc_layout(); },
+		.edits_locked = [this] { return m_play && m_play->active(); } });
+
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
@@ -395,7 +406,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); } });
 
 	// Registration order is the render order and the View menu order (panels_component::install).
-	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
+	m_panels->install(m_registrations, [this] {
+		m_prefab->install(m_registrations);
+		m_modeller->install(m_registrations);
+	});
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -432,7 +446,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.migration_blocker = [this] { return migration_blocker(); },
 		.migration_stopped_reason = [this]() -> std::optional<std::string> { return m_migration ? m_migration->stopped_reason() : std::nullopt; },
 		.startup_pending = [this] { return m_modes && m_modes->startup_pending(); },
-		.assets = [this] { return m_asset_component.get(); } });
+		.assets = [this] { return m_asset_component.get(); },
+		.meshes_dirty = [this] { return m_modeller->dirty(); },
+		.save_meshes = [this] { return m_modeller->save_dirty(); },
+		.discard_meshes = [this] { m_modeller->drop_dirty(); },
+		.show_mesh = [this](document_id id) { m_modeller->show(id); },
+		.request_close_mesh = [this](document_id id) { m_modeller->request_close(id); } });
 	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
 	m_file_menu->install_edit_actions(m_registrations);
@@ -525,7 +544,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			const auto contexts = m_services.ctx_manager.lock();
 			return contexts && contexts->level_switch_pending();
 		},
-		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty(); },
+		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty() || m_modeller->dirty(); },
 		.live_mode_enabled = [this] { return m_live && m_live->enabled(); },
 		.play = [this] { return m_play; } };
 	m_build = std::make_unique<game_build_component>(std::move(build_ports));
@@ -616,6 +635,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		agent_ports.discard_changes = [this] {
 			m_state.mark_clean();
 			m_prefab->drop_dirty_document();
+			m_modeller->drop_dirty();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		// The guard is in place before the server can take a call.

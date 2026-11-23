@@ -1,13 +1,27 @@
 #include "edt_mesh_document.h"
 #include "edt_code_commands.h"
 #include "edt_file_write_check.h"
+#include "edt_editor_camera.h"
 #include "edt_mesh_shape_asset.h"
+#include "edt_prefab_document.h"
+#include "edt_shape_menu_model.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_model.h>
+#include <snk/common/eng_transform_3d.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 #include <format>
@@ -81,12 +95,14 @@ void edt::mesh_document::open(const res::tag& source)
 	}
 
 	static std::atomic<std::uint64_t> s_opened{ 0 };
-	m_preview_tag = res::tag(std::format("memory://editor/mesh/{}.geom.desc", ++s_opened));
+	m_serial = ++s_opened;
+	m_preview_tag = res::tag(std::format("memory://editor/mesh/{}.geom.desc", m_serial));
 	m_title = std::string(stem.substr(stem.rfind('/') == std::string_view::npos ? 0 : stem.rfind('/') + 1));
 	m_geometry_stale = false;
 	m_stale_message.clear();
 	m_open = true;
 	rebake();
+	open_preview_world();
 	watch_source();
 	egLOG("Editor/Mesh", "Opened mesh '{}' for editing", m_poly_tag.view());
 }
@@ -121,7 +137,30 @@ bool edt::mesh_document::load_source(std::string& error)
 	m_disk_version = file.version;
 	m_dirty = false;
 	m_changed_on_disk = false;
+	check_geometry_match();
 	return true;
+}
+
+void edt::mesh_document::check_geometry_match()
+{
+	m_geometry_mismatch = false;
+	m_mismatch_message.clear();
+	const desc_file_read geometry = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, m_geometry_tag);
+	if (geometry.missing || !geometry.error.empty()) return;
+	const std::string existing(reinterpret_cast<const char*>(geometry.bytes.data()), geometry.bytes.size());
+	std::string why;
+	switch (mesh::geometry_is_bake_of(m_saved_text, existing, why)) {
+	case mesh::geometry_match::same:
+		return;
+	case mesh::geometry_match::differs:
+		m_mismatch_message = std::format("{} is not the bake of {} (the source changed after the geometry was written, or the file is another mesh's). The game draws the geometry file. Overwrite geometry writes it from the source.",
+			m_geometry_tag.view(), m_poly_tag.view());
+		break;
+	case mesh::geometry_match::unchecked:
+		m_mismatch_message = std::format("{} cannot be compared with {}: {}", m_geometry_tag.view(), m_poly_tag.view(), why);
+		break;
+	}
+	m_geometry_mismatch = true;
 }
 
 std::string edt::mesh_document::working_text() const
@@ -133,12 +172,15 @@ void edt::mesh_document::close()
 {
 	if (!m_open) return;
 	unwatch_source();
+	close_preview_world();
 	if (res::resource_system* writer = m_services.writable_resources()) {
 		writer->erase(m_preview_tag);
 	}
 	m_open = false;
 	m_dirty = false;
 	m_geometry_stale = false;
+	m_geometry_mismatch = false;
+	m_mismatch_message.clear();
 	m_changed_on_disk = false;
 	m_stale_message.clear();
 	m_working = {};
@@ -165,6 +207,7 @@ void edt::mesh_document::rebake()
 		m_preview_problem = "the mesh has no triangle to draw";
 		writer->erase(m_preview_tag);
 		writer->signal_changed(m_preview_tag);
+		sync_preview_node();
 		return;
 	}
 	try {
@@ -174,6 +217,7 @@ void edt::mesh_document::rebake()
 		return;
 	}
 	writer->signal_changed(m_preview_tag);
+	sync_preview_node();
 }
 
 void edt::mesh_document::announce()
@@ -198,7 +242,7 @@ bool edt::mesh_document::edit(const std::function<bool(mesh::poly_mesh&)>& chang
 	return true;
 }
 
-std::string edt::mesh_document::geometry_file_problem() const
+std::string edt::mesh_document::geometry_file_problem(bool replace_foreign_geometry) const
 {
 	const desc_file_read geometry = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, m_geometry_tag);
 	if (geometry.in_open_level) {
@@ -211,14 +255,14 @@ std::string edt::mesh_document::geometry_file_problem() const
 		return std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", m_geometry_tag.view());
 	}
 	// Only while the source is about to change, and not after a failed pair: that file is ours and older than the source on purpose.
-	if (m_dirty && !m_geometry_stale && !geometry.missing) {
+	if (!replace_foreign_geometry && m_dirty && !m_geometry_stale && !geometry.missing) {
 		const std::string existing(reinterpret_cast<const char*>(geometry.bytes.data()), geometry.bytes.size());
 		std::string why;
 		switch (mesh::geometry_is_bake_of(m_saved_text, existing, why)) {
 		case mesh::geometry_match::same:
 			break;
 		case mesh::geometry_match::differs:
-			return std::format("{} exists and was not made from {} (an imported mesh or another source): nothing was written. Rename one of the files or delete the geometry file.",
+			return std::format("{} exists and was not made from {} (an imported mesh or another source): nothing was written. Rename one of the files, or use Overwrite geometry to replace it.",
 				m_geometry_tag.view(), m_poly_tag.view());
 		case mesh::geometry_match::unchecked:
 			return std::format("{} cannot be compared with {}: {}. Nothing was written.", m_geometry_tag.view(), m_poly_tag.view(), why);
@@ -229,13 +273,23 @@ std::string edt::mesh_document::geometry_file_problem() const
 
 edt::save_result edt::mesh_document::save()
 {
+	return save_impl(false);
+}
+
+edt::save_result edt::mesh_document::overwrite_geometry()
+{
+	return save_impl(true);
+}
+
+edt::save_result edt::mesh_document::save_impl(bool replace_foreign_geometry)
+{
 	if (!m_open) {
 		return save_result::failure("the mesh is not open");
 	}
 	if (edits_locked()) {
 		return save_result::failure("Stop Play to save the mesh");
 	}
-	if (!is_dirty()) {
+	if (!is_dirty() && !(replace_foreign_geometry && m_geometry_mismatch)) {
 		return save_result::ok();
 	}
 	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
@@ -251,10 +305,11 @@ edt::save_result edt::mesh_document::save()
 		return save_result::failure("the project resources are not available");
 	}
 
-	const std::string geometry_problem = geometry_file_problem();
+	const std::string geometry_problem = geometry_file_problem(replace_foreign_geometry);
 	if (!geometry_problem.empty()) {
 		return save_result::failure(geometry_problem);
 	}
+	bool source_written = false;
 	if (m_dirty) {
 		const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_poly_tag, m_disk_version);
 		if (allowed.changed_on_disk && !m_changed_on_disk) {
@@ -274,10 +329,14 @@ edt::save_result edt::mesh_document::save()
 		m_dirty = false;
 		m_changed_on_disk = false;
 		m_geometry_stale = true;
+		source_written = true;
 	}
 
 	const std::string written = m_write_geometry ? m_write_geometry(*writer, m_geometry_tag, m_baked.geometry)
 		: mesh::write_mesh_geometry(*writer, m_geometry_tag, m_baked.geometry);
+	if (!written.empty() && !source_written && !m_geometry_stale) {
+		return save_result::failure(std::format("{} could not be written: {}", m_geometry_tag.view(), written));
+	}
 	if (!written.empty()) {
 		m_stale_message = std::format("{} was saved, but {} could not be written ({}). The game still loads the old geometry: press Save again.",
 			m_poly_tag.view(), m_geometry_tag.view(), written);
@@ -285,6 +344,8 @@ edt::save_result edt::mesh_document::save()
 		return save_result::failure(m_stale_message);
 	}
 	m_geometry_stale = false;
+	m_geometry_mismatch = false;
+	m_mismatch_message.clear();
 	m_stale_message.clear();
 	announce();
 	return save_result::ok();
@@ -375,4 +436,157 @@ void edt::mesh_document::on_source_changed(const res::tag& changed)
 		m_changed_on_disk = true;
 		announce();
 	}
+}
+
+namespace
+{
+	const res::tag k_template_tag{ "edt://templates/prefab_preview.desc" };
+
+	float frame_distance(const edt::mesh::poly_mesh& mesh)
+	{
+		float radius = 0.f;
+		for (const auto& entry : mesh.vertices()) radius = std::max(radius, glm::length(entry.second.position));
+		return std::max(radius * 2.5f, 1.f);
+	}
+}
+
+entt::registry* edt::mesh_document::registry()
+{
+	if (!m_open || !m_has_world) return nullptr;
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return nullptr;
+	scn::world_context* preview = ctx_mgr->find_preview(m_poly_tag.view());
+	return preview ? &preview->state() : nullptr;
+}
+
+scn::camera_component* edt::mesh_document::camera()
+{
+	entt::registry* reg = registry();
+	if (!reg) return nullptr;
+	for (const entt::entity entity : reg->view<scn::camera_component>()) {
+		scn::camera_component& found = reg->get<scn::camera_component>(entity);
+		if (!found.color_targets.empty() && found.color_targets.front().view() == m_rt_color) return &found;
+	}
+	return nullptr;
+}
+
+void edt::mesh_document::park_camera()
+{
+	if (scn::camera_component* shown = camera()) {
+		shown->m_viewport.size = decltype(shown->m_viewport.size){};
+	}
+}
+
+void edt::mesh_document::open_preview_world()
+{
+	m_has_world = false;
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return;
+
+	const auto template_text = m_services.resources()->require_sync<res::text_resource>(k_template_tag);
+	if (!template_text.is_ready()) {
+		egLOG_ERROR("Editor/Mesh", "Cannot show the mesh: the preview template could not be loaded");
+		return;
+	}
+	json::object world_json;
+	try {
+		json::parse_options options;
+		options.max_depth = 128;
+		world_json = json::parse(template_text->str(), {}, options).as_object();
+	} catch (const std::exception&) {
+		egLOG_ERROR("Editor/Mesh", "Cannot show the mesh: the preview template is not JSON");
+		return;
+	}
+	const res::tag world_tag{ std::format("memory://editor/__mesh_preview/{}.desc", m_serial) };
+	m_services.writable_resources()->store(world_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
+	m_services.resources()->signal_changed(world_tag);
+	const auto world_res = m_services.resources()->require_sync<scn::world_desc>(world_tag);
+	if (!world_res.is_ready()) {
+		egLOG_ERROR("Editor/Mesh", "Cannot show the mesh: the preview world could not be made");
+		return;
+	}
+
+	scn::world_context& preview = ctx_mgr->create_preview(m_poly_tag.view(), context_name(), world_res->get_systems());
+	m_set_name = scn::context_manager::preview_set_name(m_poly_tag.view());
+	entt::registry& reg = preview.state();
+	const entt::entity template_root = reg.create();
+	m_services.assembler()->spawn_from_desc(reg, template_root, *world_res, context_name());
+
+	const std::uint64_t suffix = m_serial;
+	m_rt_color = std::format("memory://__mesh_camera_rt/{}", suffix);
+	m_rt_depth = std::format("memory://__mesh_depth_rt/{}", suffix);
+	m_rt_accum = std::format("memory://__mesh_tp_accum_rt/{}", suffix);
+	m_rt_reveal = std::format("memory://__mesh_tp_reveal_rt/{}", suffix);
+
+	editor_camera_state view;
+	view.position = glm::vec3{ 0.f };
+	view.distance = frame_distance(m_working.mesh);
+	const entt::entity cam = reg.create();
+	reg.emplace<prefab_camera_tag>(cam);
+	scn::camera_component cam_comp;
+	cam_comp.fov = view.fov;
+	cam_comp.near_distance = view.near_distance;
+	cam_comp.far_distance = view.far_distance;
+	cam_comp.color_targets.push_back(res::tag{ m_rt_color });
+	cam_comp.depth_target = res::tag{ m_rt_depth };
+	cam_comp.tp_accum_target = res::tag{ m_rt_accum };
+	cam_comp.tp_reveal_target = res::tag{ m_rt_reveal };
+	reg.emplace<scn::camera_component>(cam, cam_comp);
+	scn::mouse_controller_component ctrl;
+	ctrl.position = view.position;
+	ctrl.rotation = view.rotation;
+	ctrl.distance = view.distance;
+	ctrl.movement_speed = view.movement_speed;
+	ctrl.rotating_speed = view.rotating_speed;
+	reg.emplace<scn::mouse_controller_component>(cam, ctrl);
+	const glm::mat4 cam_matrix = glm::translate(glm::mat4(1.0f), ctrl.position) * glm::toMat4(glm::quat(ctrl.rotation))
+		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl.distance));
+	reg.emplace<scn::local_transform>(cam, scn::local_transform{ cam_matrix });
+	reg.emplace<scn::world_transform>(cam, scn::world_transform{ cam_matrix });
+	reg.emplace<scn::name_component>(cam, "Mesh Camera");
+	reg.emplace<scn::depth_level>(cam);
+
+	static std::atomic<std::uint64_t> s_worlds{ 0 };
+	m_working_tag = std::format("memory://editor/__mesh_working/{}", ++s_worlds);
+	m_preview_prefab = std::make_unique<scn::prefab_desc>();
+	m_preview_prefab->get_root().name = "mesh";
+	m_preview_prefab->get_root().children.push_back(mesh::mesh_node("mesh", mesh::mesh_fields(m_preview_tag.view(), {})));
+	m_root = reg.create();
+	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_preview_prefab, m_preview_prefab->get_root().name, res::tag{ m_working_tag });
+	m_has_world = true;
+	sync_preview_node();
+}
+
+void edt::mesh_document::close_preview_world()
+{
+	if (m_has_world) {
+		if (auto ctx_mgr = m_services.ctx_manager.lock()) ctx_mgr->destroy_preview(m_poly_tag.view());
+	}
+	m_has_world = false;
+	m_root = entt::null;
+	m_preview_prefab.reset();
+	m_set_name.clear();
+}
+
+void edt::mesh_document::sync_preview_node()
+{
+	entt::registry* reg = registry();
+	scn::ecs_assembler* assembler = m_services.assembler();
+	if (!reg || !assembler || !m_preview_prefab || m_root == entt::null || !reg->valid(m_root)) return;
+	mesh::material_range whole;
+	bool first = true;
+	for (const mesh::material_range& range : m_baked.ranges) {
+		if (first) {
+			whole = range;
+			first = false;
+			continue;
+		}
+		whole.vx_begin = std::min(whole.vx_begin, range.vx_begin);
+		whole.vx_end = std::max(whole.vx_end, range.vx_end);
+		whole.ind_begin = std::min(whole.ind_begin, range.ind_begin);
+		whole.ind_end = std::max(whole.ind_end, range.ind_end);
+	}
+	scn::prefab_desc::prefab_node& node = m_preview_prefab->get_root().children.front();
+	node.components["mesh"].overrides = mesh::mesh_fields(m_preview_tag.view(), whole);
+	scn::reconcile(*assembler, *reg, m_root, m_preview_prefab->get_root(), scn::reconcile_mode::reload, m_poly_tag);
 }

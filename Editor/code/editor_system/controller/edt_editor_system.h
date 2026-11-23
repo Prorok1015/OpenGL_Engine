@@ -81,6 +81,7 @@ namespace edt {
 	class world_systems_panel;
 	class asset_browser_panel;
 	class prefab_editor_component;
+	class modeller_component;
 	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
@@ -191,6 +192,9 @@ namespace edt {
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
 		std::unique_ptr<prefab_editor_component> m_prefab;
+
+		// The mesh modeller (EPIC-77, #1011): its window, its asset kinds and close question; the mesh documents belong to the document_manager.
+		std::unique_ptr<modeller_component> m_modeller;
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;

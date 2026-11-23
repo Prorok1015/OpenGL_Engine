@@ -91,7 +91,8 @@ edt::file_menu_component::file_menu_component(ports from)
 {
 	m_tabs = std::make_unique<document_tabs>(m_ports.context.documents(),
 		document_tab_ports{ focus_ports(), [this](document_id id) { m_ports.asset_open.data_documents().request_close(id); },
-			[this] { m_ports.prefab.request_close(); }, [this] { return m_menu && m_menu->save_all_running(); } });
+			[this] { m_ports.prefab.request_close(); }, [this] { return m_menu && m_menu->save_all_running(); },
+			[this](document_id id) { if (m_ports.request_close_mesh) m_ports.request_close_mesh(id); } });
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_ports.state.editor_tag.is_valid(); };
 	hooks.is_dirty = [this] { return m_ports.state.is_dirty(); };
@@ -113,14 +114,18 @@ edt::file_menu_component::file_menu_component(ports from)
 		return m_ports.state.save_as(res::tag::make(rel_path)).saved;
 	};
 	hooks.discard_changes = [this] { m_ports.state.mark_clean(); };
-	hooks.other_documents_dirty = [this] { return !m_ports.asset_open.data_documents().dirty().empty() || m_ports.prefab.dirty() != nullptr; };
+	hooks.other_documents_dirty = [this] {
+		return !m_ports.asset_open.data_documents().dirty().empty() || m_ports.prefab.dirty() != nullptr || (m_ports.meshes_dirty && m_ports.meshes_dirty());
+	};
 	hooks.save_other_documents = [this] {
 		if (!m_ports.prefab.apply_dirty()) return false;
+		if (m_ports.save_meshes && !m_ports.save_meshes()) return false;
 		return m_ports.asset_open.data_documents().save_all();
 	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_ports.asset_open.data_documents().dirty()) m_ports.asset_open.data_documents().close(id);
 		if (m_ports.prefab.dirty()) m_ports.prefab.close();
+		if (m_ports.discard_meshes) m_ports.discard_meshes();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_ports.resources.get_resources_path());
@@ -231,7 +236,8 @@ void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
 edt::document_focus_ports edt::file_menu_component::focus_ports()
 {
 	return { [this](const res::tag& source) { m_ports.asset_open.data_documents().open(source, false); },
-		[this] { m_ports.prefab.show(); } };
+		[this] { m_ports.prefab.show(); },
+		[this](document_id id) { if (m_ports.show_mesh) m_ports.show_mesh(id); } };
 }
 
 void edt::file_menu_component::focus_unsaved(document_id id)

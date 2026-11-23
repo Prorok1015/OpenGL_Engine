@@ -35,6 +35,8 @@ namespace edt
 		std::function<void(const res::tag& source)> show_data;
 		// The prefab editor's window.
 		std::function<void()> show_prefab;
+		// The mesh modeller's window, showing the mesh document `id` (EPIC-77, #1011).
+		std::function<void(document_id id)> show_mesh = {};
 	};
 
 	// Makes `id` the active document and brings its window to the front. An id that names no open document is ignored. The one
@@ -49,6 +51,8 @@ namespace edt
 		std::function<void()> request_close_prefab;
 		// True while a close must not start (a Save All asks its questions: the document it still asks about must not go).
 		std::function<bool()> close_blocked;
+		// A mesh document's own close flow (EPIC-77, #1011).
+		std::function<void(document_id id)> request_close_mesh = {};
 	};
 
 	class document_tabs

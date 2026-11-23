@@ -59,6 +59,8 @@ struct tabs_fixture
 		out.focus.show_prefab = [this] { ++shown_prefab; };
 		out.request_close_data = [this](edt::document_id id) { closed_data.push_back(id); };
 		out.request_close_prefab = [this] { ++closed_prefab; };
+		out.focus.show_mesh = [this](edt::document_id id) { shown_mesh.push_back(id); };
+		out.request_close_mesh = [this](edt::document_id id) { closed_mesh.push_back(id); };
 		return out;
 	}
 
@@ -72,6 +74,8 @@ struct tabs_fixture
 	int shown_prefab = 0;
 	std::vector<edt::document_id> closed_data;
 	int closed_prefab = 0;
+	std::vector<edt::document_id> shown_mesh;
+	std::vector<edt::document_id> closed_mesh;
 };
 
 struct imgui_frame
@@ -204,6 +208,28 @@ BOOST_AUTO_TEST_CASE(ADocumentOfAnotherKind_HasNoCloseFlow_ItsTabIsNotClosableAn
 	BOOST_TEST(!tabs.close(other->id()));
 	BOOST_TEST(closed_data.empty());
 	BOOST_TEST(closed_prefab == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AMeshTab_IsClosableThroughTheModellersQuestion_AndAClickShowsItsWindow)
+{
+	fake_document* mesh = new fake_document("mesh", "crate", true);
+	documents.adopt(std::unique_ptr<edt::document>(mesh));
+	edt::document_tabs tabs(documents, ports());
+
+	const std::vector<edt::document_tab> shown = tabs.tabs();
+	BOOST_REQUIRE(shown.size() == 5u);
+	BOOST_TEST(shown.back().kind == "mesh");
+	BOOST_TEST(shown.back().closable);
+	BOOST_TEST(shown.back().dirty);
+
+	tabs.activate(mesh->id());
+	BOOST_REQUIRE_EQUAL(shown_mesh.size(), 1u);
+	BOOST_TEST(shown_mesh.front() == mesh->id());
+
+	BOOST_TEST(tabs.close(mesh->id()));
+	BOOST_REQUIRE_EQUAL(closed_mesh.size(), 1u);
+	BOOST_TEST(closed_mesh.front() == mesh->id());
+	BOOST_TEST(documents.find(mesh->id()) == mesh);
 }
 
 BOOST_AUTO_TEST_CASE(WhileClosingIsBlocked_NoTabIsClosable_AndCloseAsksNothing)

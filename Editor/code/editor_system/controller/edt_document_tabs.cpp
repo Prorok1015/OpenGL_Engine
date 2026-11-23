@@ -7,7 +7,7 @@ namespace
 {
 	bool has_close_flow(std::string_view kind)
 	{
-		return kind == "data" || kind == "prefab";
+		return kind == "data" || kind == "prefab" || kind == "mesh";
 	}
 }
 
@@ -33,6 +33,10 @@ void edt::focus_document(document_manager& documents, document_id id, const docu
 		return;
 	}
 	if (open->kind() == "prefab" && ports.show_prefab) ports.show_prefab();
+	if (open->kind() == "mesh" && ports.show_mesh) {
+		ports.show_mesh(id);
+		return;
+	}
 	documents.set_active(id);
 }
 
@@ -71,6 +75,10 @@ bool edt::document_tabs::close(document_id id)
 	}
 	if (open->kind() == "prefab" && m_ports.request_close_prefab) {
 		m_ports.request_close_prefab();
+		return true;
+	}
+	if (open->kind() == "mesh" && m_ports.request_close_mesh) {
+		m_ports.request_close_mesh(id);
 		return true;
 	}
 	return false;

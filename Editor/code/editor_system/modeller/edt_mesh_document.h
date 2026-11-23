@@ -7,13 +7,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <entt/entt.hpp>
 
 namespace res
 {
 	class resource_system;
+}
+
+namespace scn
+{
+	class prefab_desc;
+	struct camera_component;
 }
 
 namespace edt
@@ -69,6 +77,14 @@ namespace edt
 		// The text of the Problems row for that case; empty when the geometry is current.
 		const std::string& stale_geometry_message() const { return m_stale_message; }
 
+		// A geometry file is there and is not the bake of the source as the file holds it (found when the source was read: a Discard or a
+		// crash between the two writes, or another mesh's file). Save refuses to write over it; overwrite_geometry() does.
+		bool geometry_mismatch() const { return m_open && m_geometry_mismatch; }
+		const std::string& geometry_mismatch_message() const { return m_mismatch_message; }
+		// Save, replacing a geometry file that is not the bake of the source: the person's decision (the window's "Overwrite geometry").
+		// Also writes the geometry alone when only the file is out of date.
+		save_result overwrite_geometry();
+
 		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
 		// Takes the source as the file holds it now and drops the edits. The error text, empty when it worked.
 		std::string revert();
@@ -94,7 +110,22 @@ namespace edt
 		const std::string& preview_problem() const { return m_preview_problem; }
 		const mesh_stats& stats() const { return m_stats; }
 
+		// The preview's world: its own set, the camera that draws into render_target(), one node with the mesh. Null / empty where no
+		// context manager exists (tests of the document alone).
+		entt::registry* registry();
+		const std::string& set_name() const { return m_set_name; }
+		static constexpr std::string_view context_name() { return "__mesh_preview"; }
+		const std::string& render_target() const { return m_rt_color; }
+		scn::camera_component* camera();
+		// The window stops showing this document: its camera draws nothing until it is shown again.
+		void park_camera();
+
 	private:
+		save_result save_impl(bool replace_foreign_geometry);
+		void check_geometry_match();
+		void open_preview_world();
+		void close_preview_world();
+		void sync_preview_node();
 		bool load_source(std::string& error);
 		void rebake();
 		std::string working_text() const;
@@ -102,7 +133,7 @@ namespace edt
 		void watch_source();
 		void unwatch_source();
 		void on_source_changed(const res::tag& changed);
-		std::string geometry_file_problem() const;
+		std::string geometry_file_problem(bool replace_foreign_geometry) const;
 
 		editor_services& m_services;
 		editor_events* m_events = nullptr;
@@ -128,5 +159,18 @@ namespace edt
 		bool m_dirty = false;
 		bool m_geometry_stale = false;
 		bool m_changed_on_disk = false;
+		bool m_geometry_mismatch = false;
+		std::string m_mismatch_message;
+
+		std::uint64_t m_serial = 0;
+		std::string m_set_name;
+		std::string m_rt_color;
+		std::string m_rt_depth;
+		std::string m_rt_accum;
+		std::string m_rt_reveal;
+		std::string m_working_tag;
+		std::unique_ptr<scn::prefab_desc> m_preview_prefab;
+		entt::entity m_root = entt::null;
+		bool m_has_world = false;
 	};
 }
