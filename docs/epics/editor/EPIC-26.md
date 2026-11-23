@@ -85,61 +85,52 @@ rnd::shader_config::constant_data cdata;  // shader_tags + defines + constants
 
 ### US-26-1 — `shader_desc` как desc-ресурс
 
-**Файлы:**
-- Новый `core/engine/scene/scn_shader_desc.h/.cpp`
-- `core/engine/game_system/gs_game_init.cpp` — регистрация типа
-- Новые файлы `Editor/res/shaders/*.shader.desc`
+**Issue:** [#1199](https://github.com/Prorok1015/OpenGL_Engine/issues/1199)
 
-**Структура:**
+**Решение 2026-11-23:** первый шаг поставляет только стадии и defines. `parameters`, `samplers` и `name` отложены до отдельной истории (после перевода материала на `shader_desc`, #1200): их форма зависит от того, как материал будет передавать параметры.
+
+**Файлы:**
+- Новый `core/engine/render/render_system/include/snk/render/rnd_shader_desc.h` + `rnd_shader_desc.cpp` — класс `rnd::shader_desc` (в render, рядом с `rnd::material_desc`: его потребляет рендер, а scene и так зависит от render)
+- `core/engine/render/render_system/rnd_render_service_init.cpp` — регистрация типа в `engine::render::register_render_descs` (`register_document`, чтобы редактор открывал файл как документ данных)
+- Новые файлы `core/res/shaders/*.shader.desc` (+ `.resource`)
+- `Editor/code/editor_system/controller/edt_builtin_asset_kinds.cpp` — вид ассета `shader` для `.shader.desc` (двойной клик открывает документ данных)
+
+**Структура (поставлено):**
 
 ```cpp
-namespace scn {
-    struct shader_parameter_info {
-        std::string name;
-        enum class param_type { float_val, vec2, vec3, color4, int_val, define };
-        param_type type;
-        rnd::driver::uniform_data default_value;  // для uniform'ов
-        bool default_enabled = false;              // для define'ов
-    };
-
-    struct shader_sampler_info {
-        std::string name;
-        int slot;
-    };
-
-    class shader_desc : public desc::desc_base {
+namespace rnd {
+    class shader_desc : public desc::schema_desc<shader_desc, desc::schema_kind::desc> {
     public:
-        res::tag vertex_shader;
-        res::tag fragment_shader;
-        res::tag geometry_shader;  // optional
+        res::tag vertex;
+        res::tag fragment;
+        res::tag geometry;                 // пустой пишется как null
+        std::vector<std::string> defines;
 
-        std::vector<shader_parameter_info> parameters;
-        std::vector<shader_sampler_info> samplers;
-
-        // Собрать shader_config::constant_data из desc + material overrides
-        rnd::shader_config::constant_data build_constant_data(
-            const boost::json::object& material_params) const;
+        // Программа и defines, как их собирает default_material_compiler из тех же стадий
+        // (USE_ANIMATION для скиннинга остаётся делом компилятора).
+        shader_config config() const;
     };
 }
 ```
 
-**Регистрация:** `gs_game_init.cpp` → `desc_system.register_type<shader_desc>("shader_desc")`.
+Ключи файла: `vertex`, `fragment`, `geometry`, `defines`; чтение и запись — через схему (`desc::field_attrs`), отдельного адаптера нет: любой `*.desc` грузится через `core::desc::desc_adapter_t`.
 
-**Файлы на диске:** конвертировать существующие шейдеры в `.shader.desc`:
-- `Editor/res/shaders/scene.shader.desc` (scene.vert + scene.frag)
-- `Editor/res/shaders/sky.shader.desc`
-- `Editor/res/shaders/transparent.shader.desc`
-- `Editor/res/shaders/z_prepass.shader.desc`
-- и т.д.
+**Отложено (будущая история):** `parameters` (uniform'ы и define-переключатели с значениями по умолчанию), `samplers` (имя → слот), `name`.
+
+**Файлы на диске:**
+- `core/res/shaders/scene.shader.desc` (scene.vert + scene.frag)
+- `core/res/shaders/sky.shader.desc` (sky.vert + sky.frag)
+- `core/res/shaders/mix_opaque_trans_scene.shader.desc` (scene.vert + mix_opaque_trans_scene.frag)
 
 ---
 
 ### US-26-2 — Миграция `material_desc` на ссылку `shader_desc`
 
 **Файлы:**
-- `core/engine/scene/include/snk/scene/scn_material_desc.h/.cpp` — заменить inline shader fields на `res::tag shader`
-- `core/engine/scene/scn_material_desc.cpp` — десериализация: поддержать оба формата (legacy + новый)
-- `Editor/res/*.desc` — обновить material файлы
+- `core/engine/render/render_system/include/snk/render/rnd_material_desc.h` (`rnd::material_desc`; `scn_material_desc.h` — только псевдонимы) — заменить inline shader fields на `res::tag shader`
+- `core/engine/render/render_system/rnd_material_desc.cpp` — десериализация: поддержать оба формата (legacy + новый)
+- `core/engine/render/render_system/shader/rnd_material_compiler.cpp` — собирать программу из `shader_desc::config()`
+- `core/res/*.desc` — обновить material файлы
 
 **Изменения в `material_desc`:**
 
@@ -165,8 +156,8 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ### US-26-3 — Рефакторинг `shader_config` и `ShaderManager`
 
 **Файлы:**
-- `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h/.cpp`
-- `core/engine/render/render_system/include/snk/render/shader/rnd_shader_manager.h/.cpp`
+- `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h`
+- `core/engine/render/render_system/include/snk/render/shader/rnd_shader_config_cache.h` (кеш вариантов; прежнего `ShaderManager` больше нет)
 
 **Изменения:**
 - `shader_config::constant_data::program` теперь может инициализироваться из `shader_desc` (удобный конструктор)
@@ -178,9 +169,9 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ### US-26-4 — Конвертация существующих материалов
 
 **Файлы:**
-- `Editor/res/shaders/*.shader.desc` — новые файлы
-- `Editor/res/*.desc` — обновить material файлы
-- `Editor/res/objects/**/*.mat.desc` — обновить импортированные материалы
+- `core/res/shaders/*.shader.desc` — новые файлы
+- `core/res/*.desc`, `projects/sandbox/res/**/*.desc` — обновить material файлы
+- импортированные материалы (`*.mat.desc` в ресурсах проектов)
 
 **Скрипт/утилита:** ручная или полуавтоматическая конвертация:
 1. Для каждой уникальной пары (vertex, fragment) → создать `.shader.desc`
@@ -222,9 +213,9 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ### US-26-6 — Модельный импорт: генерация shader_desc ссылок
 
 **Файлы:**
-- `Editor/code/editor_system/edt_model_importer.cpp` — `process_material()`
+- `core/model_import/mdl_import.cpp` — сборка `material_desc` при импорте
 
-**Изменения:** при импорте модели `process_material()` создаёт `material_desc` со ссылкой на подходящий `shader_desc` вместо inline `shader_vertex`/`shader_fragment`:
+**Изменения:** при импорте модели импортёр создаёт `material_desc` со ссылкой на подходящий `shader_desc` вместо inline `shader_vertex`/`shader_fragment`:
 
 ```cpp
 // Выбор shader_desc по свойствам материала:
@@ -241,18 +232,19 @@ else
 ## Новые файлы
 
 ```
-core/engine/scene/
-└── scn_shader_desc.h/.cpp              # US-26-1: shader_desc класс
+core/engine/render/render_system/
+├── include/snk/render/rnd_shader_desc.h  # US-26-1: shader_desc класс
+└── rnd_shader_desc.cpp
 
 Editor/code/editor_system/
 └── edt_component_renderers/
     └── edt_cr_shader.cpp               # US-26-5: Inspector UI
 
-Editor/res/shaders/
-├── scene.shader.desc                    # US-26-4: PBR scene shader
+core/res/shaders/
+├── scene.shader.desc                    # US-26-1: scene.vert + scene.frag
 ├── scene_skinned.shader.desc            # скелетная анимация
-├── sky.shader.desc                      # skybox
-├── transparent.shader.desc              # прозрачные объекты
+├── sky.shader.desc                      # US-26-1: skybox
+├── mix_opaque_trans_scene.shader.desc   # US-26-1: смешанная очередь
 ├── z_prepass.shader.desc                # depth prepass
 └── ...
 ```

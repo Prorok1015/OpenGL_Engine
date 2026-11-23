@@ -3,6 +3,7 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <snk/model_codec/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -740,11 +741,13 @@ BOOST_AUTO_TEST_CASE(DescAdapter_SerializeThenDeserializeRoundTripsMaterialAndWo
 BOOST_AUTO_TEST_CASE(DescAdapter_SerializeKeepsTypeForEveryDescType)
 {
 	core::desc::desc_adapter_t adapter(*rs, *descs);
+	// shader_desc is a render desc, which the scene environment does not register.
+	engine::render::register_render_descs(*descs);
 	std::vector<std::string> missing;
 	for (const char* type : { "prefab_desc", "world_desc", "level_desc", "anchor_desc", "camera_desc",
 			"directional_light_desc", "skybox_desc", "mesh_node_desc", "object_desc", "bone_desc",
 			"skinning_desc", "skin_weights_desc", "animation_controller_desc", "animated_node_desc",
-			"animation_clip_desc", "animation_collection_desc", "material_desc" }) {
+			"animation_clip_desc", "animation_collection_desc", "material_desc", "shader_desc" }) {
 		auto inst = descs->create_instance(type, tag_of("saved.desc"));
 		auto bytes = adapter.serialize(tag_of("saved.desc"), inst);
 		auto parsed = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
@@ -753,6 +756,7 @@ BOOST_AUTO_TEST_CASE(DescAdapter_SerializeKeepsTypeForEveryDescType)
 	std::string joined;
 	for (auto& m : missing) joined += m + " ";
 	BOOST_TEST(missing.empty(), "types whose adapter output has no __type: " << joined);
+	engine::render::unregister_render_descs(*descs);
 }
 
 // ---------------------------------------------------------------- desc_system itself

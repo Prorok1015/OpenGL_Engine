@@ -37,6 +37,7 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 	asset_hooks.desc_layout = [this] { return desc_layout(); };
 	asset_hooks.edits_locked = m_ports.play_active;
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) { add_to_scene(tag); };
+	asset_hooks.open_desc = [this](const res::tag& tag) { m_data_documents->open(tag, false); };
 	for (auto& kind : register_builtin_asset_kinds(m_ports.context.asset_kinds(), std::move(asset_hooks))) out.push_back(std::move(kind));
 	m_ports.browser.set_document_creator(
 		std::make_shared<document_creator>(document_creator::ports{

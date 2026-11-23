@@ -1,0 +1,9 @@
+{
+    "__type" : "shader_desc",
+    "__version" : 1,
+    "__guid" : "e0df66d4-e01f-43a6-81e4-c035dc7efd6a",
+    "vertex" : "res://shaders/sky.vert",
+    "fragment" : "res://shaders/sky.frag",
+    "geometry" : null,
+    "defines" : []
+}

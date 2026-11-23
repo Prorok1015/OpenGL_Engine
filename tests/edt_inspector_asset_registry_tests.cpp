@@ -426,6 +426,7 @@ struct builtin_kinds_fixture : context_fixture
 		edt::asset_kind_hooks hooks;
 		hooks.open_prefab = [this](const res::tag& tag) { log.push_back("prefab:" + std::string(tag.relative())); };
 		hooks.add_desc_to_scene = [this](const res::tag& tag) { log.push_back("add:" + std::string(tag.relative())); };
+		hooks.open_desc = [this](const res::tag& tag) { log.push_back("desc:" + std::string(tag.relative())); };
 		registrations = edt::register_builtin_asset_kinds(context->asset_kinds(), std::move(hooks));
 	}
 
@@ -436,9 +437,24 @@ struct builtin_kinds_fixture : context_fixture
 BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "desc" }));
+	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "shader", "desc" }));
 	BOOST_CHECK(kinds.open(*context, res::tag::make("prefabs/tree.prefab.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
+}
+
+// #1199: a shader program opens as a data document, the way a desc without a kind of its own is opened.
+BOOST_FIXTURE_TEST_CASE(Builtin_ShaderSuffixIsTheShaderKind_AndOpensAsADataDocument, builtin_kinds_fixture)
+{
+	auto& kinds = context->asset_kinds();
+	const auto* kind = kinds.kind_for_open("shaders/x.shader.desc");
+	BOOST_REQUIRE(kind != nullptr);
+	BOOST_CHECK(kind->id == "shader");
+	BOOST_CHECK(kinds.open(*context, res::tag::make("shaders/x.shader.desc")));
+	BOOST_CHECK((log == std::vector<std::string>{ "desc:shaders/x.shader.desc" }));
+	// Dropped onto the viewport it is still added through its desc.
+	BOOST_REQUIRE(kinds.kind_for_drop("shaders/x.shader.desc") != nullptr);
+	BOOST_CHECK(kinds.kind_for_drop("shaders/x.shader.desc")->id == "desc");
+	BOOST_CHECK(kinds.kind_for_open("shaders/x.shader") == nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesHaveNoKindToOpen_SoAModulesDescKindIsNotBeaten, builtin_kinds_fixture)
