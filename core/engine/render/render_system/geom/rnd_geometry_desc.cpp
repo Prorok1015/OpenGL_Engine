@@ -102,8 +102,13 @@ namespace
 	// A range object: recorded for the adapter. Anything else is not a range (an array, read as before).
 	std::optional<res::binary_range> range_at(const json::value& value, std::string_view path)
 	{
-		if (!value.is_object()) {
+		if (value.is_array()) {
 			return std::nullopt;
+		}
+		// A null fits a binary_ref field ("no range", #1180), but a geometry has no data without it.
+		if (!value.is_object()) {
+			throw res::load_error(res::diagnostic_kind::load, path, std::format("{}: a geometry holds a range of its binary file or an array "
+				"here, not {}", path, value.is_null() ? "null" : "a scalar"));
 		}
 		std::string error;
 		auto range = res::binary_range_from_json(value, error);
