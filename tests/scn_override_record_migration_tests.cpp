@@ -132,9 +132,11 @@ BOOST_AUTO_TEST_CASE(AStepThatCopiesTheFieldToTwoPlaces_IsDuplicated)
 {
 	step(1, [](json::object& o) {
 		if (const auto* hp = o.if_contains("hp")) {
-			o["health"] = *hp;
-			o["max_health"] = *hp;
+			// Copied first: inserting into the object may move its members.
+			const json::value value = *hp;
 			o.erase("hp");
+			o["health"] = value;
+			o["max_health"] = value;
 		}
 	});
 	auto written = record("/hp", 5, 1);
