@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include <optional>
 #include <shared_mutex>
 #include <span>
@@ -126,12 +127,33 @@ namespace
 		return desc::is_field_container(schema, pointer, &resolve);
 	}
 
+	// A module reloaded again and again registers the same steps each time: the warning is said once.
+	void warn_once_per_process(std::string_view type, std::string_view warning)
+	{
+		static std::mutex mutex;
+		static std::unordered_set<std::string> said;
+		{
+			std::lock_guard lock(mutex);
+			if (!said.insert(std::format("{}\n{}", type, warning)).second) return;
+		}
+		egLOG_WARN("desc", "Schema '{}': {}", type, warning);
+	}
+
 	// What the steps put where the schema they lead to has no field, or a default value that does not fit its field
 	// (#1228): such a step would write data the current version drops or misreads. Empty when nothing is wrong. The schemas
-	// of the versions in between are not known, so only where a value ends up after the last step is checked.
+	// of the versions in between are not known, so only where a value ends up after the last step is checked. A staging place
+	// later steps take parts out of is not refused (what else lies there is unknown), but when no later step removes it and
+	// it is no field, `warnings` gets a line: anything left there is dropped on read (#1270).
 	std::string steps_against_schema(const std::vector<desc::detail::schema_migration>& steps, const desc::type_schema& schema,
-		const desc::schema_registry& resolve)
+		const desc::schema_registry& resolve, std::vector<std::string>* warnings = nullptr)
 	{
+		const auto staging_left = [&](std::size_t i, const carried_pointer& last) {
+			if (warnings && last.pointer && last.emptied && !reaches_a_field(schema, *last.pointer, resolve)) {
+				warnings->push_back(std::format("migration #{} leaves {} after the later steps move parts of it out; whatever else is "
+					"there has no field of version {} and is dropped on read (add \"remove\": [\"{}\"] to say so)", i + 1, *last.pointer,
+					schema.version, *last.pointer));
+			}
+		};
 		for (std::size_t i = 0; i < steps.size(); ++i) {
 			const desc::detail::schema_migration& step = steps[i];
 			const auto ends_at = [&](const std::string& pointer, const carried_pointer& last) {
@@ -139,6 +161,7 @@ namespace
 			};
 			for (const auto& [source, target] : step.renames) {
 				const carried_pointer last = pointer_after(steps, i, target, true);
+				staging_left(i, last);
 				if (last.pointer && !last.emptied && !reaches_a_field(schema, *last.pointer, resolve)) {
 					return std::format("migration #{}: rename {} -> {} reaches no field of version {}", i + 1, source, ends_at(target, last),
 						schema.version);
@@ -146,6 +169,7 @@ namespace
 			}
 			for (const auto& [pointer, value] : step.defaults) {
 				const carried_pointer last = pointer_after(steps, i, pointer, false);
+				staging_left(i, last);
 				if (!last.pointer || last.emptied) continue;
 				json::value patch = json::object{};
 				desc::json_pointer_set(patch, *last.pointer, value);
@@ -407,13 +431,17 @@ const desc::type_schema* desc::desc_system::register_schema(type_schema schema, 
 		return nullptr;
 	}
 	std::string problem;
+	std::vector<std::string> warnings;
 	{
 		std::shared_lock lock(m_registry_mutex);
-		problem = steps_against_schema(steps, schema, m_schemas);
+		problem = steps_against_schema(steps, schema, m_schemas, &warnings);
 	}
 	if (!problem.empty()) {
 		egLOG_ERROR("desc/error", "Schema '{}' not registered: {}", name, problem);
 		return nullptr;
+	}
+	for (const std::string& warning : warnings) {
+		warn_once_per_process(name, warning);
 	}
 	{
 		std::shared_lock lock(m_registry_mutex);
