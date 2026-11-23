@@ -1634,7 +1634,7 @@ BOOST_AUTO_TEST_CASE(Open_MovesARecordOfAnOlderTypeVersion_ToWhereTheRenameStepP
 	document->open(res::tag::make("prefabs/user.prefab.desc"));
 	BOOST_REQUIRE(document->is_open());
 
-	scn::prefab_desc::prefab_node& inst = document->working()->get_root().children[0];
+	const scn::prefab_desc::prefab_node& inst = document->working()->get_root().children[0];
 	BOOST_REQUIRE(inst.overrides.size() == 1u);
 	BOOST_TEST(inst.overrides[0].path == "/hp");
 	BOOST_TEST(inst.overrides[0].type_version == 2);
