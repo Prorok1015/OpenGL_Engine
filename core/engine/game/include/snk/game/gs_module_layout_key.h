@@ -41,6 +41,7 @@
 #include <snk/render/rnd_render_context.h>
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/render/shader/rnd_material_compiler.h>
+#include <snk/render/texture/rnd_texture_id.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/model_codec/res_tag.h>
@@ -80,7 +81,8 @@ namespace gs
 			wnd::window_system_abi_revision, wnd::window_listener_interface_abi_revision,
 			rnd::driver::driver_interface_abi_revision, rnd::driver::shader_interface_abi_revision,
 			rnd::driver::vertex_array_interface_abi_revision, rnd::driver::buffer_interface_abi_revision,
-			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision>;
+			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision,
+			rnd::texture_resolver_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.
