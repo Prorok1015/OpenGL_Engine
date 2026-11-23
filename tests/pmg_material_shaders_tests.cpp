@@ -2,18 +2,26 @@
 #include "test_fixture_project.hpp"
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_apply.h>
+#include <snk/project_migration/pmg_assets.h>
+#include <snk/project_migration/pmg_command.h>
 #include <snk/project_migration/pmg_project_steps.h>
+#include <snk/model_codec/res_asset_id.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace json = boost::json;
@@ -33,6 +41,38 @@ constexpr std::string_view k_custom_pair = R"({
 	"shader_fragment": "res://shaders/custom.frag",
 	"defines": ["USE_FOG"]
 })";
+
+// A shader_desc that is no output of the step: what stands at a name it must not take.
+constexpr std::string_view k_foreign_shader = R"({
+	"__type": "shader_desc",
+	"__version": 1,
+	"vertex": "res://shaders/foreign.vert",
+	"fragment": "res://shaders/foreign.frag",
+	"defines": []
+})";
+
+constexpr std::string_view k_engine_base_guid = "f90d3c03-865c-4193-aa09-cb2f98315634";
+
+// A folder outside the project, removed with the object: a read-only layer of res:// such as the engine's core/res.
+struct outside_folder
+{
+	outside_folder()
+	{
+		static std::atomic<int> counter{ 0 };
+		path = fs::temp_directory_path()
+			/ std::format("snk_shaders_layer_{}_{}", std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
+		fs::create_directories(path);
+	}
+	~outside_folder()
+	{
+		std::error_code ignored;
+		fs::remove_all(path, ignored);
+	}
+	outside_folder(const outside_folder&) = delete;
+	outside_folder& operator=(const outside_folder&) = delete;
+
+	fs::path path;
+};
 
 std::string read_text(const fs::path& path)
 {
@@ -101,10 +141,12 @@ struct shaders_fixture : test_util::scene_env
 		engine::render::unregister_render_descs(*descs);
 	}
 
-	pmg::migration_plan plan(const fs::path& root)
+	pmg::migration_plan plan(const fs::path& root, bool force = false)
 	{
 		pmg::plan_options options;
 		options.project_steps = &registry;
+		options.force = force;
+		options.scan.read_only_layers = read_only;
 		return pmg::plan_migration(root, pmg::scan_project(root, *descs, options.scan), *descs, options);
 	}
 
@@ -133,11 +175,52 @@ struct shaders_fixture : test_util::scene_env
 
 	json::object read_json(std::string_view path) const { return json::parse(read_text(at(path))).as_object(); }
 
+	// The engine's base material in a read-only layer of res://, with its real ID, as the engine ships it after #1200.
+	void serve_engine_base()
+	{
+		write_text(engine.path / "base_material.desc", R"({
+			"__type": "material_desc",
+			"__version": 2,
+			"shader": "res://shaders/scene.shader.desc",
+			"queue": "opaque"
+		})");
+		res::asset_meta meta;
+		meta.guid = *res::asset_id_from_text(k_engine_base_guid);
+		write_text(engine.path / "base_material.desc.resource", res::write_asset_meta(meta));
+		write_text(engine.path / "shaders/scene.shader.desc", R"({
+			"__type": "shader_desc",
+			"__version": 1,
+			"vertex": "res://shaders/scene.vert",
+			"fragment": "res://shaders/scene.frag",
+			"defines": []
+		})");
+		BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { engine.path, copy.res() }));
+		read_only = { engine.path };
+	}
+
 	test_util::fixture_copy copy{ "migration_v1" };
 	// A second project for the runs that are compared with the first.
 	test_util::fixture_copy other{ "migration_v1" };
 	pmg::project_step_registry registry;
+	outside_folder engine;
+	// scan_options::read_only_layers of plan().
+	std::vector<fs::path> read_only;
 };
+
+const json::object* find_material(const json::value& value)
+{
+	if (const json::object* object = value.if_object()) {
+		if (const json::value* type = object->if_contains("__type"); type && type->is_string() && type->as_string() == "material_desc") return object;
+		for (const auto& member : *object) {
+			if (const json::object* found = find_material(member.value())) return found;
+		}
+	} else if (const json::array* array = value.if_array()) {
+		for (const json::value& item : *array) {
+			if (const json::object* found = find_material(item)) return found;
+		}
+	}
+	return nullptr;
+}
 
 void check_material_v2(const json::object& material, std::string_view shader)
 {
@@ -262,12 +345,136 @@ BOOST_AUTO_TEST_CASE(TheDryRun_ListsTheStep_AndNoFailure_AndWritesNothing)
 BOOST_AUTO_TEST_CASE(ATakenName_GetsADashSuffix_AndTheFileThereStays)
 {
 	write_text(at("res/materials/rock.desc"), k_custom_pair);
-	write_text(at("res/materials/rock.shader.desc"), "not ours");
+	write_text(at("res/materials/rock.shader.desc"), k_foreign_shader);
 
 	const pmg::migration_report report = migrate();
 	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
-	BOOST_TEST(read_text(at("res/materials/rock.shader.desc")) == "not ours");
+	BOOST_TEST(read_text(at("res/materials/rock.shader.desc")) == k_foreign_shader);
 	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// The name is unique by its res:// path: a file of another content root at that path would shadow the new file (or be
+// shadowed by it), so the new one gets -2 too.
+BOOST_AUTO_TEST_CASE(ANameTakenInAnotherContentRoot_GetsADashSuffix)
+{
+	json::object manifest = json::parse(read_text(at("project.snkproj"))).as_object();
+	manifest["content_roots"] = json::array{ "res", "extra" };
+	write_text(at("project.snkproj"), json::serialize(manifest));
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	write_text(at("extra/materials/rock.shader.desc"), k_foreign_shader);
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
+	BOOST_TEST(read_text(at("extra/materials/rock.shader.desc")) == k_foreign_shader);
+	BOOST_TEST(!fs::exists(at("res/materials/rock.shader.desc")));
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// The same for a file of a read-only layer (the engine's): the project's file would hide it.
+BOOST_AUTO_TEST_CASE(ANameTakenInAReadOnlyLayer_GetsADashSuffix)
+{
+	serve_engine_base();
+	write_text(engine.path / "materials/rock.shader.desc", k_foreign_shader);
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// A material the step could not convert (its parent is missing) is invalid in the plan, as a file whose type step fails:
+// the plan is refused without --force, and with it the other material migrates and this one stays as it is.
+BOOST_AUTO_TEST_CASE(AMaterialTheStepCannotConvert_IsInvalid_AndForceMigratesTheRest)
+{
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	constexpr std::string_view orphan = R"({
+		"__type": "material_desc",
+		"__parent": "res://materials/missing.desc",
+		"shader_fragment": "res://shaders/glow.frag"
+	})";
+	write_text(at("res/materials/orphan.desc"), orphan);
+
+	const pmg::migration_plan strict = plan();
+	const pmg::scanned_file* bad = strict.scan.find("res/materials/orphan.desc");
+	BOOST_REQUIRE(bad);
+	BOOST_TEST((bad->kind == pmg::file_class::invalid));
+	BOOST_TEST(!bad->material_stages);
+	BOOST_TEST(bad->reason.find("res://materials/missing.desc") != std::string::npos, bad->reason);
+	BOOST_TEST(!pmg::plan_refusal(strict).empty());
+	BOOST_TEST(strict.scan.find("res/materials/rock.desc")->material_stages);
+
+	const pmg::migration_plan forced = plan(copy.root(), true);
+	BOOST_REQUIRE(pmg::plan_refusal(forced).empty());
+	const pmg::apply_outcome outcome = pmg::apply_migration(forced, context(copy.root()));
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::partial), outcome.report.error);
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock.shader.desc");
+	BOOST_TEST(read_text(at("res/materials/orphan.desc")) == orphan);
+}
+
+// A material of the old importer (the engine's base as its parent, a fragment only) is the type step's: --migrate gives
+// resource_system the project's index, so the plan's and the apply's type step see the engine's base as the scan does.
+BOOST_AUTO_TEST_CASE(AnImportedMaterialOverTheEnginesBase_IsConvertedByTheTypeStep_InTheCommand)
+{
+	serve_engine_base();
+	write_text(at("res/materials/imported.desc"), R"({
+		"__type": "material_desc",
+		"__parent": "res://base_material.desc",
+		"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+	})");
+
+	{
+		const pmg::scoped_project_index index(*rs, copy.root(), read_only);
+		BOOST_REQUIRE(rs->has_asset_index());
+		const pmg::migration_plan planned_now = plan();
+		const pmg::scanned_file* file = planned_now.scan.find("res/materials/imported.desc");
+		BOOST_REQUIRE(file);
+		BOOST_TEST((file->kind == pmg::file_class::outdated), file->reason);
+		BOOST_TEST(!file->material_stages);
+		BOOST_TEST(!planned(planned_now));
+		BOOST_TEST(pmg::plan_refusal(planned_now).empty(), pmg::plan_refusal(planned_now));
+	}
+	BOOST_TEST(!rs->has_asset_index());
+
+	pmg::command_context command{ copy.root(), *descs, *rs, &registry, {}, [] { return std::string{ "test-migration" }; }, {}, {}, {} };
+	std::string printed;
+	command.print = [&printed](std::string_view text) { printed += text; };
+	const int code = pmg::run_migrate(pmg::migrate_command{}, command);
+	BOOST_TEST(code == pmg::k_exit_done, printed);
+	BOOST_TEST(!rs->has_asset_index());
+	check_material_v2(read_json("res/materials/imported.desc"), "res://shaders/mix_opaque_trans_scene.shader.desc");
+}
+
+// An inline material (a mesh node's in a prefab) is converted like a file: its file is named after the prefab.
+BOOST_AUTO_TEST_CASE(AnInlineMaterialInAPrefab_GetsAShaderDescNamedAfterThePrefab)
+{
+	json::object material = json::parse(k_custom_pair).as_object();
+	json::object mesh{ { "__type", "mesh_node_desc" }, { "__version", 1 }, { "material", material } };
+	json::object node{ { "__id", "00000000000000c1" }, { "name", "mesh" }, { "components", json::object{ { "mesh_node_desc", mesh } } } };
+	json::object prefab{ { "__type", "prefab_desc" }, { "__version", 4 }, { "children", json::array{ node } } };
+	write_text(at("res/prefabs/rock.prefab.desc"), json::serialize(prefab));
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/prefabs/rock.prefab.shader.desc" }));
+	BOOST_TEST(any_note(report, "res/prefabs/rock.prefab.shader.desc: created, referenced by res/prefabs/rock.prefab.desc at "
+		"/children/0/components/mesh_node_desc/material"));
+	// Wherever the engine's save of the prefab puts its components, the material is there once, at v2.
+	const json::value migrated = json::parse(read_text(at("res/prefabs/rock.prefab.desc")));
+	const json::object* found = find_material(migrated);
+	BOOST_REQUIRE(found);
+	check_material_v2(*found, "res://prefabs/rock.prefab.shader.desc");
+}
+
+// A stage written as {guid, path} keeps its guid in the new .shader.desc.
+BOOST_AUTO_TEST_CASE(AGuidAndPathStage_IsKeptAsWritten)
+{
+	json::object material = json::parse(k_custom_pair).as_object();
+	const json::object vertex{ { "guid", "6a0e2f1c-3b5d-4e7f-9a1b-2c3d4e5f6a7b" }, { "path", "res://shaders/custom.vert" } };
+	material["shader_vertex"] = vertex;
+	write_text(at("res/materials/rock.desc"), json::serialize(material));
+
+	migrate();
+	BOOST_TEST(read_json("res/materials/rock.shader.desc").at("vertex") == json::value(vertex));
 }
 
 // The same project gives the same names whatever order its files were written in (and the folder lists them in).

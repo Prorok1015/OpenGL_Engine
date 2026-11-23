@@ -3,6 +3,7 @@
 #include <snk/model_codec/res_tag.h>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -11,6 +12,7 @@
 
 namespace res
 {
+	class asset_index;
 	class resource_system;
 }
 
@@ -84,6 +86,8 @@ namespace prj::migration
 		const std::vector<read_only_resource>& read_only_resources() const { return m_read_only_resources; }
 		// The read-only layers it was made with, lowest first.
 		const std::vector<std::filesystem::path>& read_only_layers() const { return m_read_only_layers; }
+		// The content roots it was made with, relative to the project root, as project.snkproj lists them.
+		const std::vector<std::filesystem::path>& content_roots() const { return m_content_roots; }
 
 	private:
 		std::filesystem::path m_root;
@@ -98,5 +102,25 @@ namespace prj::migration
 		std::set<res::asset_id> m_held_below;
 		std::vector<std::string> m_problems;
 		std::vector<read_only_resource> m_read_only_resources;
+	};
+
+	// `assets` as a res::asset_index (id_of(tag), path_of): what resource_system::asset_id_of answers with it, and so what
+	// a type step's migration_context::id_of asks (desc_system::migration_ids, #1200).
+	std::shared_ptr<const res::asset_index> make_asset_index(project_assets assets);
+
+	// For its lifetime, `resources` (a root, on the main thread) answers asset_id_of from the project's own index, as the
+	// editor's asset database makes it answer: the scan, the project steps and the type steps then decide by one index.
+	// Nothing is set when it already has an index (the editor's) or the project.snkproj under `root` does not read; a
+	// layer (a resource_system with a parent) is logged and left as it is.
+	class scoped_project_index
+	{
+	public:
+		scoped_project_index(res::resource_system& resources, const std::filesystem::path& root, std::vector<std::filesystem::path> read_only_layers);
+		~scoped_project_index();
+		scoped_project_index(const scoped_project_index&) = delete;
+		scoped_project_index& operator=(const scoped_project_index&) = delete;
+
+	private:
+		res::resource_system* m_resources = nullptr;
 	};
 }

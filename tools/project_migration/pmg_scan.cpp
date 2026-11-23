@@ -746,8 +746,10 @@ namespace
 namespace
 {
 	// scanned_file::material_stages, by the type step itself over the scan's index: what it refuses, engine.material_shaders
-	// converts first (#1200).
-	void mark_material_stages(prj::migration::scan_result& result, const prj::migration::project_assets& assets, const reference_texts& materials)
+	// converts first (#1200). A material the step could not convert either makes its file invalid, as a type step that
+	// fails in the plan does: --force leaves it, and it does not stop the rest of the project.
+	void mark_material_stages(prj::migration::scan_result& result, const fs::path& project, const prj::migration::project_assets& assets,
+		const reference_texts& materials)
 	{
 		const desc::migration_id_lookup id_of = [&assets](std::string_view path) { return assets.id_of(res::tag{ path }); };
 		for (prj::migration::scanned_file& file : result.files) {
@@ -757,7 +759,20 @@ namespace
 			boost::system::error_code error;
 			const json::value root = parse_desc_json(without_bom(text->second), error);
 			if (error || !root.is_object()) continue;
-			file.material_stages = !prj::migration::refused_material_stages(root.as_object(), id_of).empty();
+			const std::vector<std::string> refused = prj::migration::refused_material_stages(root.as_object(), id_of);
+			std::string problem;
+			for (const std::string& pointer : refused) {
+				const std::string why = prj::migration::material_shaders_problem(project, assets, file.path, root.at_pointer(pointer).as_object());
+				if (why.empty()) continue;
+				problem = std::format("the material{} cannot be migrated: {}", pointer.empty() ? std::string{} : " at " + pointer, why);
+				break;
+			}
+			if (!problem.empty()) {
+				egLOG_WARN("project/migrate", "{}: {}", file.path, problem);
+				set_invalid(file, std::move(problem));
+				continue;
+			}
+			file.material_stages = !refused.empty();
 		}
 	}
 }
@@ -943,7 +958,7 @@ prj::migration::scan_result prj::migration::scan_project(const fs::path& root, c
 		}
 	}
 	count_reference_fixes(result, types, assets, texts, options);
-	mark_material_stages(result, assets, materials);
+	mark_material_stages(result, project, assets, materials);
 	result.read_only_resources = assets.read_only_resources();
 	std::ranges::sort(result.read_only_resources, {}, [](const read_only_resource& file) {
 		return std::pair{ fs_paths::generic_utf8_of(file.layer), file.path };

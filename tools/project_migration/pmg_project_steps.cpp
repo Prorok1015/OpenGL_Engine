@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -297,18 +298,24 @@ namespace
 		return root;
 	}
 
-	// The descs a material's stages come from, as res:// stacks them: the project's files as this migration left them, then
-	// the read-only layers (the engine's), highest first; engine:// names the lowest layer only.
+	// A project file by its project-relative path: as this migration left it (the step), or as it is on the disk (the scan).
+	using project_reader = std::function<std::string(const std::string& path)>;
+
+	// The descs a material's stages come from, as res:// stacks them: the project's files, then the read-only layers (the
+	// engine's), highest first; engine:// names the lowest layer only.
 	class desc_finder
 	{
 	public:
-		explicit desc_finder(project_step_context& context)
-			: m_context(context)
+		desc_finder(const project_assets& assets, project_reader read)
+			: m_assets(assets)
+			, m_read(std::move(read))
 		{
-			for (const auto& [path, asset] : context.assets.assets()) {
-				m_project.emplace(res::asset_name_key(asset.res_path, res::asset_names_case_insensitive), path);
-			}
+			for (const auto& [path, asset] : assets.assets()) m_project.emplace(key_of(asset.res_path), path);
 		}
+
+		static std::string key_of(std::string_view res_path) { return res::asset_name_key(res_path, res::asset_names_case_insensitive); }
+
+		const project_assets& assets() const { return m_assets; }
 
 		// A {guid, path} names the file that holds its guid now, else its path.
 		res::tag tag_of(const boost::json::value& value) const
@@ -317,7 +324,7 @@ namespace
 			const std::optional<res::reference> reference = res::reference_from_json(value);
 			if (!reference) throw std::runtime_error(std::format("{} is no reference", boost::json::serialize(value)));
 			if (!reference->guid.is_nil()) {
-				if (std::optional<res::tag> held = m_context.assets.path_of(reference->guid)) return *held;
+				if (std::optional<res::tag> held = m_assets.path_of(reference->guid)) return *held;
 			}
 			if (reference->path.view().empty()) {
 				throw std::runtime_error(std::format("{} names an ID no file holds", boost::json::serialize(value)));
@@ -325,8 +332,8 @@ namespace
 			return reference->path;
 		}
 
-		// A stage as the material writes it: a text as it is, {guid, path} by its path (by its guid's file without one).
-		std::string stage_text(const boost::json::value& value) const
+		// The path text a stage compares by: a text as it is, {guid, path} by its path (by its guid's file without one).
+		std::string stage_path(const boost::json::value& value) const
 		{
 			if (value.is_null()) return {};
 			if (value.is_string()) return std::string(value.as_string());
@@ -336,18 +343,17 @@ namespace
 			return tag_of(value).string();
 		}
 
-		boost::json::object read(const res::tag& tag)
+		boost::json::object read(const res::tag& tag) const
 		{
 			const std::string_view protocol = tag.protocol();
 			const std::string relative(tag.relative());
 			if (protocol == res::tag::default_protocol()) {
-				const auto in_project = m_project.find(res::asset_name_key(relative, res::asset_names_case_insensitive));
-				if (in_project != m_project.end()) {
-					return parse_desc_text(m_context.files.read(in_project->second), in_project->second).as_object();
+				if (const auto in_project = m_project.find(key_of(relative)); in_project != m_project.end()) {
+					return parse_desc_text(m_read(in_project->second), in_project->second).as_object();
 				}
 			}
 			if (protocol == res::tag::default_protocol() || protocol == res::tag::engine) {
-				const std::vector<std::filesystem::path>& layers = m_context.assets.read_only_layers();
+				const std::vector<std::filesystem::path>& layers = m_assets.read_only_layers();
 				const std::size_t count = protocol == res::tag::engine ? std::min<std::size_t>(layers.size(), 1) : layers.size();
 				for (std::size_t i = count; i-- > 0;) {
 					const std::filesystem::path& layer = protocol == res::tag::engine ? layers.front() : layers[i];
@@ -359,36 +365,46 @@ namespace
 			throw std::runtime_error(std::format("{} is neither in the project nor in the engine's files", tag.view()));
 		}
 
-		// Whether a read-only layer has a file at `relative` (below res://): a project file there would hide it.
-		bool below(std::string_view relative) const
+		// Whether a file the asset walk lists, or a read-only layer, is at `res_path` (below res://).
+		bool logical_exists(std::string_view res_path) const
 		{
-			for (const std::filesystem::path& layer : m_context.assets.read_only_layers()) {
-				const prj::project_file_text found = prj::read_project_file(layer, fs_paths::path_from_utf8(relative), k_max_desc_bytes);
+			if (m_project.contains(key_of(res_path))) return true;
+			for (const std::filesystem::path& layer : m_assets.read_only_layers()) {
+				const prj::project_file_text found = prj::read_project_file(layer, fs_paths::path_from_utf8(res_path), k_max_desc_bytes);
 				if (found.exists || !found.error.empty()) return true;
 			}
 			return false;
 		}
 
 	private:
-		project_step_context& m_context;
-		// res::asset_name_key of a res path -> the project file the walk lists for it.
+		const project_assets& m_assets;
+		project_reader m_read;
+		// key_of a res path -> the project file the walk lists for it.
 		std::map<std::string, std::string> m_project;
 	};
 
-	// The stages a v1 material compiles with: its own shader_* keys (an empty one included), the others from its
-	// __parent chain; a parent at v2 gives every stage still open from its "shader".
-	stage_triple effective_stages(desc_finder& finder, const boost::json::object& material)
+	// A material's stages: the paths it is compared by, and each stage as the material (or a parent) wrote it.
+	struct material_stages
 	{
-		std::array<std::optional<std::string>, 3> stages;
-		const auto take_own = [&](const boost::json::object& object) {
-			for (std::size_t i = 0; i < stages.size(); ++i) {
-				if (stages[i]) continue;
-				if (const boost::json::value* value = object.if_contains(k_stage_keys[i])) stages[i] = finder.stage_text(*value);
+		stage_triple paths;
+		std::array<boost::json::value, 3> written;
+	};
+
+	// The stages a v1 material compiles with: its own shader_* keys (an empty one included), the others from its
+	// __parent chain; a parent at v2 gives every stage still open from its "shader". Throws when they cannot be completed
+	// or a vertex or a fragment stage is missing, which a .shader.desc needs.
+	material_stages resolve_stages(const desc_finder& finder, const boost::json::object& material)
+	{
+		std::array<std::optional<boost::json::value>, 3> found;
+		const auto take = [&](const boost::json::object& object, const std::array<std::string_view, 3>& keys) {
+			for (std::size_t i = 0; i < found.size(); ++i) {
+				if (found[i]) continue;
+				if (const boost::json::value* value = object.if_contains(keys[i])) found[i] = *value;
 			}
 		};
-		const auto complete = [&] { return std::ranges::all_of(stages, [](const auto& stage) { return stage.has_value(); }); };
+		const auto complete = [&] { return std::ranges::all_of(found, [](const auto& stage) { return stage.has_value(); }); };
 
-		take_own(material);
+		take(material, k_stage_keys);
 		boost::json::object parent;
 		const boost::json::object* current = &material;
 		for (int depth = 0; !complete(); ++depth) {
@@ -401,16 +417,22 @@ namespace
 			current = &parent;
 			if (const boost::json::value* shader = parent.if_contains("shader"); shader && !shader->is_null()) {
 				const boost::json::object program = finder.read(finder.tag_of(*shader));
-				for (std::size_t i = 0; i < stages.size(); ++i) {
-					if (stages[i]) continue;
-					const boost::json::value* value = program.if_contains(k_shader_keys[i]);
-					stages[i] = value ? finder.stage_text(*value) : std::string{};
-				}
+				take(program, k_shader_keys);
 				break;
 			}
-			take_own(parent);
+			take(parent, k_stage_keys);
 		}
-		return { stages[0].value_or(""), stages[1].value_or(""), stages[2].value_or("") };
+
+		material_stages out;
+		for (std::size_t i = 0; i < found.size(); ++i) {
+			out.written[i] = found[i].value_or(boost::json::value{});
+			out.paths[i] = finder.stage_path(out.written[i]);
+		}
+		if (out.paths[0].empty() || out.paths[1].empty()) {
+			throw std::runtime_error(std::format("its stages have {}: a .shader.desc needs both a vertex and a fragment stage",
+				out.paths[0].empty() ? "no vertex" : "no fragment"));
+		}
+		return out;
 	}
 
 	std::string where_of(const std::string& path, const std::string& pointer)
@@ -430,6 +452,21 @@ namespace
 		return std::string(path);
 	}
 
+	// Why the step could not convert the material: its stages, or (for a triple the engine has no file for) no res://
+	// path to name a file beside it. Empty when it converts.
+	std::string conversion_problem(const desc_finder& finder, const std::string& path, const boost::json::object& material)
+	{
+		try {
+			const material_stages stages = resolve_stages(finder, material);
+			if (!engine_shader_of(stages.paths) && !finder.assets().assets().contains(path)) {
+				return "the asset walk does not list it (a higher content root covers it): no res:// path to name a .shader.desc beside it";
+			}
+		} catch (const std::exception& e) {
+			return e.what();
+		}
+		return {};
+	}
+
 	bool material_shaders_needed(const scan_result& scan)
 	{
 		return std::ranges::any_of(scan.files, &scanned_file::material_stages);
@@ -439,7 +476,7 @@ namespace
 	{
 		std::string file;
 		std::string pointer;
-		stage_triple stages;
+		material_stages stages;
 	};
 
 	struct shader_target
@@ -447,32 +484,36 @@ namespace
 		// Project-relative; empty for an engine file.
 		std::string path;
 		std::string tag;
+		std::array<boost::json::value, 3> written;
 		std::vector<std::string> users;
 	};
 
-	std::string shader_text(const stage_triple& stages)
+	std::string shader_text(const shader_target& target)
 	{
 		boost::json::object shader;
 		shader["__type"] = "shader_desc";
 		shader["__version"] = 1;
-		shader["vertex"] = stages[0];
-		shader["fragment"] = stages[1];
-		if (!stages[2].empty()) shader["geometry"] = stages[2];
+		shader["vertex"] = target.written[0];
+		shader["fragment"] = target.written[1];
+		const boost::json::value& geometry = target.written[2];
+		if (!geometry.is_null() && !(geometry.is_string() && geometry.as_string().empty())) shader["geometry"] = geometry;
 		shader["defines"] = boost::json::array{};
 		const std::vector<std::byte> bytes = desc::pretty_json_bytes(shader);
 		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
+	// Names are unique by the logical res:// path: no content root and no read-only layer may have the file or its
+	// .resource, so the new file neither shadows one nor is shadowed, and nothing is overwritten.
 	class shader_namer
 	{
 	public:
-		shader_namer(project_step_context& context, desc_finder& finder)
+		shader_namer(project_step_context& context, const desc_finder& finder)
 			: m_context(context)
 			, m_finder(finder)
 		{
 		}
 
-		// The new .shader.desc beside `material` (project-relative): <stem>.shader.desc, else <stem>-2.shader.desc, ...
+		// <stem>.shader.desc beside `material` (project-relative), else <stem>-2.shader.desc, ...
 		shader_target name_beside(const std::string& material)
 		{
 			const auto listed = m_context.assets.assets().find(material);
@@ -483,40 +524,42 @@ namespace
 			const std::string res_stem = stem_of(listed->second.res_path);
 			for (int number = 1; number < 1000; ++number) {
 				const std::string suffix = number == 1 ? std::string{} : std::format("-{}", number);
+				const std::string res_path = res_stem + suffix + std::string(k_shader_suffix);
+				if (taken(res_path)) continue;
+				m_assigned.insert(desc_finder::key_of(res_path));
 				shader_target target;
 				target.path = stem + suffix + std::string(k_shader_suffix);
-				const std::string res_path = res_stem + suffix + std::string(k_shader_suffix);
 				target.tag = "res://" + res_path;
-				if (taken(target.path, res_path)) continue;
-				m_assigned.insert(key_of(target.path));
 				return target;
 			}
 			throw std::runtime_error(std::format("no free name for {}{} up to -999", stem, k_shader_suffix));
 		}
 
 	private:
-		static std::string key_of(std::string_view path) { return res::asset_name_key(path, res::asset_names_case_insensitive); }
-
-		// A name that cannot be checked counts as taken: the step only creates, it never overwrites.
-		bool taken(const std::string& path, const std::string& res_path)
+		// A name that cannot be checked counts as taken.
+		bool taken(const std::string& res_path)
 		{
-			if (m_assigned.contains(key_of(path))) return true;
-			if (m_context.assets.assets().contains(path) || m_finder.below(res_path)) return true;
-			try {
-				return m_context.files.exists(path) || m_context.files.exists(path + ".resource");
-			} catch (const std::exception&) {
-				return true;
+			if (m_assigned.contains(desc_finder::key_of(res_path))) return true;
+			if (m_finder.logical_exists(res_path) || m_finder.logical_exists(res_path + ".resource")) return true;
+			for (const std::filesystem::path& root : m_context.assets.content_roots()) {
+				const std::string in_root = fs_paths::generic_utf8_of((root / fs_paths::path_from_utf8(res_path)).lexically_normal());
+				try {
+					if (m_context.files.exists(in_root) || m_context.files.exists(in_root + ".resource")) return true;
+				} catch (const std::exception&) {
+					return true;
+				}
 			}
+			return false;
 		}
 
 		project_step_context& m_context;
-		desc_finder& m_finder;
+		const desc_finder& m_finder;
 		std::set<std::string> m_assigned;
 	};
 
 	void material_shaders_apply(project_step_context& context)
 	{
-		desc_finder finder(context);
+		const desc_finder finder(context.assets, [&context](const std::string& path) { return context.files.read(path); });
 		const desc::migration_id_lookup id_of = [&context](std::string_view path) { return context.assets.id_of(res::tag{ path }); };
 
 		std::vector<std::string> paths;
@@ -540,12 +583,7 @@ namespace
 			}
 			for (const std::string& pointer : refused_material_stages(root.as_object(), id_of)) {
 				try {
-					stage_triple stages = effective_stages(finder, root.at_pointer(pointer).as_object());
-					if (stages[0].empty() || stages[1].empty()) {
-						throw std::runtime_error(std::format("its stages have {}: a .shader.desc needs both a vertex and a fragment stage",
-							stages[0].empty() ? "no vertex" : "no fragment"));
-					}
-					uses.push_back(material_use{ path, pointer, std::move(stages) });
+					uses.push_back(material_use{ path, pointer, resolve_stages(finder, root.at_pointer(pointer).as_object()) });
 				} catch (const std::exception& e) {
 					context.warn(std::format("{}: not migrated: {}", where_of(path, pointer), e.what()));
 					++left;
@@ -557,14 +595,13 @@ namespace
 		shader_namer namer(context, finder);
 		std::map<stage_triple, std::size_t> by_stages;
 		std::vector<shader_target> targets;
-		std::vector<stage_triple> target_stages;
 		std::set<std::string> changed;
 		std::size_t migrated = 0;
 		for (const material_use& use : uses) {
-			auto found = by_stages.find(use.stages);
+			auto found = by_stages.find(use.stages.paths);
 			if (found == by_stages.end()) {
 				shader_target target;
-				if (std::optional<std::string> engine = engine_shader_of(use.stages)) {
+				if (std::optional<std::string> engine = engine_shader_of(use.stages.paths)) {
 					target.tag = std::move(*engine);
 				} else {
 					try {
@@ -575,9 +612,9 @@ namespace
 						continue;
 					}
 				}
-				found = by_stages.emplace(use.stages, targets.size()).first;
+				target.written = use.stages.written;
+				found = by_stages.emplace(use.stages.paths, targets.size()).first;
 				targets.push_back(std::move(target));
-				target_stages.push_back(use.stages);
 			}
 			shader_target& target = targets[found->second];
 			target.users.push_back(where_of(use.file, use.pointer));
@@ -589,8 +626,7 @@ namespace
 		}
 
 		std::size_t created = 0;
-		for (std::size_t i = 0; i < targets.size(); ++i) {
-			shader_target& target = targets[i];
+		for (shader_target& target : targets) {
 			std::ranges::sort(target.users);
 			std::string users;
 			for (const std::string& user : target.users) users += (users.empty() ? "" : ", ") + user;
@@ -598,7 +634,7 @@ namespace
 				context.warn(std::format("{}: the engine's shader, now referenced by {}", target.tag, users));
 				continue;
 			}
-			context.files.create(target.path, shader_text(target_stages[i]));
+			context.files.create(target.path, shader_text(target));
 			// A new ID now, so the material's reference gets one from assets.refs of this run.
 			res::asset_meta meta;
 			meta.guid = res::generate_asset_id();
@@ -635,6 +671,18 @@ std::vector<std::string> prj::migration::refused_material_stages(const boost::js
 		if (type_step_refuses(*material, id_of)) pointers.push_back(pointer);
 	}
 	return pointers;
+}
+
+std::string prj::migration::material_shaders_problem(const std::filesystem::path& root, const project_assets& assets, const std::string& path,
+	const boost::json::object& material)
+{
+	const desc_finder finder(assets, [&root](const std::string& file) {
+		const prj::project_file_text read = prj::read_project_file(root, fs_paths::path_from_utf8(file), k_max_desc_bytes);
+		if (!read.error.empty()) throw std::runtime_error(std::format("{}: {}", file, read.error));
+		if (!read.exists) throw std::runtime_error(std::format("{} is gone", file));
+		return read.text;
+	});
+	return conversion_problem(finder, path, material);
 }
 
 std::string prj::migration::geometry_conversion_problem(std::string_view path, const boost::json::object& root)

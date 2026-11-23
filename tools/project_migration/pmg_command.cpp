@@ -143,6 +143,14 @@ std::string prj::migration::plan_text(const migration_plan& plan)
 		const std::optional<res::tag> binary = res::desc_binary::binary_tag(res::tag{ file.path });
 		text += std::format("- {} -> {}\n", file.path, binary ? binary->view() : std::string_view{});
 	}
+	bool shaders = false;
+	for (const scanned_file& file : plan.scan.files) {
+		if (!file.material_stages) continue;
+		if (!std::exchange(shaders, true)) {
+			text += "Material shader stages to a .shader.desc (engine.material_shaders; the file names are chosen when it runs):\n";
+		}
+		text += std::format("- {}\n", file.path);
+	}
 	const std::vector<skipped_file> skipped = skipped_by(plan);
 	if (!skipped.empty()) {
 		text += "Not migrated:\n";
@@ -169,6 +177,8 @@ int prj::migration::run_migrate(const migrate_command& command, const command_co
 	options.project_steps = context.project_steps;
 	options.force = command.force;
 	options.scan.read_only_layers = read_only_layers(context.resources, context.root);
+	// Through the plan and the apply: the type steps ask resource_system::asset_id_of what the scan asked the tool's index.
+	const scoped_project_index index(context.index_root ? *context.index_root : context.resources, context.root, options.scan.read_only_layers);
 	const migration_plan plan = plan_migration(context.root, scan_project(context.root, context.descs, options.scan), context.descs, options);
 	if (const std::string refused = plan_refusal(plan); !refused.empty()) {
 		print_error(context, std::format("refused: {}", refused));
