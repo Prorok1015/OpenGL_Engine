@@ -53,6 +53,9 @@ namespace wnd
 		TYPE type = TYPE::LOGO;
 	};
 
+	// Module code calls this vtable: raised with any change of its bases or virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t window_abi_revision = 1;
+
 	// Backend-agnostic window: concrete implementations live behind this interface.
 	class SNK_API window
 	{

@@ -52,6 +52,7 @@
 #include "edt_scene_commands.h"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_mesh_shape_commands.h"
 #include "edt_migration_commands.h"
 #include "edt_migration_component.h"
 #include "edt_migration_window_model.h"
@@ -453,6 +454,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_registrations.push_back(std::move(command));
 		}
 	}
+	// #746: parametric shapes (shape.create, shape.rebuild) as .poly.desc + .geom.desc files of res/.
+	for (auto& command : mesh::register_shape_commands(m_context->actions().commands(), { m_res, desc_system, m_asset_open->desc_layout(), m_context->actions().commands(), &m_context->events() })) {
+		m_registrations.push_back(std::move(command));
+	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
 	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs (busy), and
 	// with an uncommitted edit or any dirty document (needs_input).
@@ -726,6 +731,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (m_agent_ui) m_agent_ui->draw_status();
 		m_play_component->draw_status();
 		m_file_menu->draw_status();
+		m_file_menu->draw_unsaved_indicator();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
 				ImGui::TextColored(m_context->colors().warning, "%s", held->c_str());

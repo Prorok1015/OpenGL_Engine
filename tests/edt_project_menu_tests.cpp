@@ -1,12 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
+#include "edt_save_all.h"
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_project.h>
 #include "test_temp_dir.hpp"
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,6 +63,18 @@ namespace {
 				return other_save_ok;
 			};
 			hooks.discard_other_documents = [this] { other_dirty = false; other_discarded = true; };
+			hooks.save_all = [this] {
+				++save_all_runs;
+				return save_all_result;
+			};
+			hooks.ask_unsaved = [this](const edt::save_all_ask& ask, std::function<void(bool)> resolved) {
+				asked_about.push_back(ask.item.title);
+				if (hold_answers) {
+					held_answers.push_back(std::move(resolved));
+					return;
+				}
+				resolved(answer_resolves);
+			};
 			hooks.load_level = [](const fs::path&) {};
 			hooks.exit = [this] { ++exits; };
 			hooks.open_project = [this](const fs::path& manifest, bool allow, bool migration) -> std::optional<std::string> {
@@ -100,6 +115,12 @@ namespace {
 		bool other_save_ok = true;
 		bool other_discarded = false;
 		int other_saves = 0;
+		int save_all_runs = 0;
+		edt::save_all_report save_all_result;
+		bool answer_resolves = false;
+		bool hold_answers = false;
+		std::vector<std::function<void(bool)>> held_answers;
+		std::vector<std::string> asked_about;
 		int exits = 0;
 		std::vector<fs::path> started;
 		bool allowed_mismatch = false;
@@ -107,6 +128,11 @@ namespace {
 		std::optional<std::string> start_error;
 		std::optional<std::string> exit_blocked;
 	};
+
+	edt::unsaved_item item_of(edt::document_id id, std::string kind, std::string title)
+	{
+		return edt::unsaved_item{ id, std::move(kind), std::move(title) };
+	}
 
 	std::string path_args(const fs::path& path, std::string_view more = {})
 	{
@@ -367,6 +393,159 @@ BOOST_AUTO_TEST_CASE(RecentProject_ThatIsGone_IsDisabled)
 	BOOST_TEST(!invoke("file.recent_project.0", "{}").ok);
 	BOOST_TEST(started.empty());
 	BOOST_TEST(exits == 0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_SavesTheLevelAndTheOtherDocuments)
+{
+	dirty = true;
+	other_dirty = true;
+	save_all_result.saved = { item_of(1, "scene", "level"), item_of(2, "data", "config") };
+
+	BOOST_TEST(actions.is_enabled("file.save_all"));
+	const auto result = invoke("file.save_all", "{}");
+
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST(save_all_runs == 1);
+	BOOST_TEST(result.value.as_object().at("saved").as_array().size() == 2u);
+	BOOST_TEST(result.value.as_object().at("failed").as_array().empty());
+	BOOST_TEST(dialogs.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_FromTheMenu_AsksAboutEachConflictAfterTheWriteAndSaysItOnce)
+{
+	dirty = true;
+	save_all_result.saved = { item_of(1, "scene", "level") };
+	save_all_result.asked = { { item_of(2, "data", "a"), edt::save_all_question::disk_changed },
+		{ item_of(3, "prefab", "b"), edt::save_all_question::disk_changed } };
+	save_all_result.failed = { { item_of(4, "data", "c"), "no space" } };
+
+	BOOST_TEST(actions.activate("file.save_all"));
+
+	BOOST_TEST(save_all_runs == 1);
+	BOOST_TEST((asked_about == std::vector<std::string>{ "a", "b" }));
+	// One message after the last answer; both were cancelled, so they stay listed as unsaved.
+	const auto shown = dialogs.list();
+	BOOST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown[0].kind == "message");
+	BOOST_TEST(shown[0].text.find("no space") != std::string::npos);
+	BOOST_TEST(shown[0].text.find("Still unsaved") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_AnAgentIsAskedToConfirmAndNeverOverwrites)
+{
+	dirty = true;
+	save_all_result.saved = { item_of(1, "scene", "level") };
+	save_all_result.asked = { { item_of(2, "data", "config"), edt::save_all_question::disk_changed } };
+
+	const cmd::command_desc* desc = actions.commands().find("file.save_all");
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_TEST((desc->risk == cmd::danger::confirm));
+	BOOST_TEST((desc->category == cmd::agent_category::scene_edit));
+
+	cmd::call request;
+	request.args = json::object{};
+	request.from = cmd::origin::agent("session-1");
+	const auto result = actions.invoke("file.save_all", request);
+
+	BOOST_TEST(!result.ok);
+	BOOST_TEST(result.code == "needs_input");
+	BOOST_TEST(result.error.find("config") != std::string::npos);
+	BOOST_TEST(asked_about.empty());
+	BOOST_TEST(dialogs.pending() == 0u);
+	BOOST_TEST(result.value.as_object().at("saved").as_array().size() == 1u);
+	BOOST_TEST(result.value.as_object().at("needs_input").as_array().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_WhileItsQuestionsWait_AnotherRunQueuesNothing_AndEndsWithTheLastAnswer)
+{
+	dirty = true;
+	hold_answers = true;
+	save_all_result.asked = { { item_of(2, "data", "a"), edt::save_all_question::disk_changed } };
+
+	BOOST_TEST(actions.activate("file.save_all"));
+	BOOST_REQUIRE(held_answers.size() == 1u);
+	BOOST_TEST(!actions.is_enabled("file.save_all"));
+
+	BOOST_TEST(!actions.activate("file.save_all"));
+	cmd::call agent_call;
+	agent_call.args = json::object{};
+	agent_call.from = cmd::origin::agent("session-1");
+	BOOST_TEST(!actions.invoke("file.save_all", agent_call).ok);
+	BOOST_TEST(save_all_runs == 1);
+	BOOST_TEST(held_answers.size() == 1u);
+
+	held_answers.front()(false);
+
+	BOOST_TEST(actions.is_enabled("file.save_all"));
+	BOOST_TEST(actions.activate("file.save_all"));
+	BOOST_TEST(save_all_runs == 2);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_WhenNothingIsDirty_IsDisabledAndWritesNothing)
+{
+	BOOST_TEST(!actions.is_enabled("file.save_all"));
+	BOOST_TEST(!actions.invoke("file.save_all", json::object{}).ok);
+	BOOST_TEST(save_all_runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_HasTheChordOfSaveAs_RightAfterSaveLevelAs_WhichHasNone)
+{
+	const auto parsed = edt::shortcut::parse(edt::k_save_all_shortcut);
+	BOOST_REQUIRE(parsed.has_value());
+	BOOST_TEST((parsed->ctrl && parsed->shift && !parsed->alt));
+	BOOST_TEST(parsed->key == "S");
+
+	dirty = true;
+	BOOST_TEST(actions.dispatch(*parsed));
+	BOOST_TEST(save_all_runs == 1);
+
+	std::vector<std::string> ids;
+	for (const auto& item : actions.items("File")) {
+		ids.push_back(item.id);
+		if (item.id == "file.save_as") {
+			BOOST_TEST(item.shortcut_text.empty());
+		}
+		if (item.id == "file.save_all") {
+			BOOST_TEST(item.shortcut_text == "Ctrl+Shift+S");
+		}
+	}
+	const auto save_as = std::ranges::find(ids, std::string{ "file.save_as" });
+	BOOST_REQUIRE(save_as != ids.end());
+	BOOST_REQUIRE(std::next(save_as) != ids.end());
+	BOOST_TEST(*std::next(save_as) == "file.save_all");
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_TheUnsavedList_IsGroupedByKindWithItsReasons_AndIsTheMessageAfterTheRun)
+{
+	const std::vector<edt::unsaved_item> dirty_now{ item_of(3, "data", "b"), item_of(1, "scene", "level"), item_of(2, "data", "a") };
+	const std::vector<edt::unsaved_group> groups = edt::unsaved_groups(dirty_now);
+	BOOST_REQUIRE(groups.size() == 2u);
+	BOOST_TEST(groups[0].kind == "scene");
+	BOOST_TEST(groups[0].heading == "Level");
+	BOOST_REQUIRE(groups[1].rows.size() == 2u);
+	BOOST_TEST(groups[1].rows[0].title == "b");
+	BOOST_TEST(groups[1].rows[1].id == 2u);
+	BOOST_TEST(groups[1].rows[0].note.empty());
+
+	edt::save_all_report report;
+	report.saved = { item_of(1, "scene", "level") };
+	report.failed = { { item_of(4, "data", "c"), "no space" } };
+	report.asked = { { item_of(5, "prefab", "p"), edt::save_all_question::disk_changed } };
+	report.skipped = { { item_of(6, "scene", "untitled"), "untitled: use Save Level As" } };
+	const std::vector<edt::unsaved_group> left = edt::unsaved_groups(report);
+	BOOST_REQUIRE(left.size() == 3u);
+	BOOST_TEST(left[0].kind == "scene");
+	BOOST_TEST(left[1].kind == "prefab");
+	BOOST_TEST(left[2].kind == "data");
+	BOOST_TEST(left[2].rows[0].note == "not saved: no space");
+	BOOST_TEST(left[1].rows[0].note == "still unsaved: changed on disk");
+
+	const std::string summary = edt::save_all_summary(report);
+	BOOST_TEST(summary.find("Still unsaved:") != std::string::npos);
+	BOOST_TEST(summary.find("Prefab\n  p: still unsaved: changed on disk") != std::string::npos);
+	BOOST_TEST(summary.find("Data\n  c: not saved: no space") != std::string::npos);
+	BOOST_TEST(summary.find("untitled: use Save Level As") != std::string::npos);
+	BOOST_TEST(edt::unsaved_groups_text(groups, "Unsaved:") == "Unsaved:\nLevel\n  level\nData\n  b\n  a");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

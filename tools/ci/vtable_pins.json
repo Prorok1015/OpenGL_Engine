@@ -1,5 +1,5 @@
 {
-  "layout_revision": 18,
+  "layout_revision": 19,
   "editor_layout_revision": 1,
   "interfaces": [
     {
@@ -221,6 +221,42 @@
         "void upload_objects(std::span<const object_data>, std::span<const glm::mat4>)",
         "void bind_object(std::uint32_t, const res::tag&)",
         "bool draw_fits(const res::tag&, std::uint32_t, std::uint32_t, std::uint32_t)"
+      ]
+    },
+    {
+      "class": "window",
+      "header": "core/core/windows/window_service/include/snk/window/wnd_window.h",
+      "constant": "window_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~window()",
+        "bool is_shutdown() const",
+        "void shutdown(bool)",
+        "void set_cursor_mode(CURSOR_MODE)",
+        "void set_logo(const ds::fixed_vector<window_image, 2>&)",
+        "void set_title(std::string_view)",
+        "void set_cursor_shape(cursor_shape)",
+        "std::string get_clipboard_text() const",
+        "void set_clipboard_text(std::string_view)",
+        "glm::ivec2 get_backbuffer_size() const",
+        "const glm::ivec2& get_size() const",
+        "float get_content_scale() const",
+        "rnd::driver::gl_surface* gl_surface_ptr() const"
+      ]
+    },
+    {
+      "class": "gl_surface",
+      "header": "core/core/video/drivers/interface/include/snk/driver/rnd_driver_gl_surface.h",
+      "constant": "gl_surface_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~gl_surface()",
+        "void make_current()",
+        "void swap_buffers()",
+        "void set_swap_interval(int)",
+        "void* get_proc_address(const char*) const"
       ]
     },
     {

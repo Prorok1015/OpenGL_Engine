@@ -120,6 +120,36 @@ namespace {
 			{ "additionalProperties", false } };
 	}
 
+	// {saved, failed, needs_input, skipped}: what edt::save_all_json gives.
+	json::value save_all_result_schema()
+	{
+		json::object properties;
+		for (const char* key : { "saved", "failed", "needs_input", "skipped" }) properties[key] = json::object{ { "type", "array" } };
+		return json::object{
+			{ "type", "object" },
+			{ "properties", std::move(properties) },
+			{ "additionalProperties", false } };
+	}
+
+	// A document that waits for an answer is `needs_input` (the result still lists what was written), any other refusal is `failed`.
+	edt::action_result save_all_action_result(const edt::save_all_report& report)
+	{
+		if (report.asked.empty() && report.failed.empty()) return edt::action_result::success(edt::save_all_json(report));
+		std::string message;
+		if (!report.asked.empty()) {
+			message = "these documents wait for a person's answer in the editor (Reload or Overwrite): ";
+			for (const edt::save_all_ask& ask : report.asked) {
+				message += std::format("'{}' ({}) ", ask.item.title, edt::save_all_question_text(ask.question));
+			}
+			message += "- everything else that could be written was; the result lists each document";
+		} else {
+			message = "some documents were not written: " + edt::save_all_summary(report);
+		}
+		edt::action_result out = edt::action_result::failure(report.asked.empty() ? "failed" : "needs_input", std::move(message));
+		out.value = edt::save_all_json(report);
+		return out;
+	}
+
 	bool flag(const json::value& args, std::string_view key)
 	{
 		const json::value* value = args.as_object().if_contains(key);
@@ -416,6 +446,36 @@ void edt::file_menu::quick_save()
 	}
 }
 
+void edt::file_menu::save_all()
+{
+	if (!m_hooks.save_all || m_save_all_running) return;
+	m_save_all_running = true;
+	save_all_report written;
+	try {
+		written = m_hooks.save_all();
+	} catch (...) {
+		m_save_all_running = false;
+		throw;
+	}
+	save_all_resolve(std::move(written), m_hooks.ask_unsaved, [this, alive = std::weak_ptr<void>(m_alive)](save_all_report report) {
+		if (!alive.lock()) return;
+		m_save_all_running = false;
+		show_save_all_result(report);
+	});
+}
+
+void edt::file_menu::show_save_all_result(const save_all_report& report)
+{
+	if (report.empty()) {
+		egLOG_INFO("Editor/Save", "Save All: nothing to save.");
+		return;
+	}
+	egLOG_INFO("Editor/Save", "Save All: saved {}, failed {}, still unsaved {}, left out {}, settled by an answer {}", report.saved.size(),
+		report.failed.size(), report.asked.size(), report.skipped.size(), report.settled.size());
+	if (!report.needs_attention()) return;
+	m_dialogs.message(report.failed.empty() ? message_level::warning : message_level::error, save_all_summary(report));
+}
+
 void edt::file_menu::register_actions()
 {
 	const auto add = [this](action_desc desc) {
@@ -502,7 +562,7 @@ void edt::file_menu::register_actions()
 		.activate = [this] { quick_save(); },
 		.category = cmd::agent_category::scene_edit });
 
-	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
+	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File",
 		.execute_call = [this, restricted, file_state, level_write_busy](const cmd::call& request) {
 			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
@@ -527,6 +587,24 @@ void edt::file_menu::register_actions()
 		.args_schema = path_schema(false, LEVEL_PATH_DESCRIPTION),
 		.activate = [this] { save_level(); },
 		.category = cmd::agent_category::scene_edit });
+
+	// Never asks a question: a document that waits for an answer is told to the caller, which is a person's business (an agent
+	// never overwrites a file that changed on disk nor drops edits).
+	if (m_hooks.save_all) {
+		add({ .id = "file.save_all", .label = "Save All", .menu_path = "File", .shortcut = std::string(k_save_all_shortcut),
+			.disabled_reason = [this] {
+				return m_save_all_running ? std::string("Save All is waiting for an answer about a document") : std::string("Nothing to save");
+			},
+			.execute = [this](const json::value&) {
+				const save_all_report report = m_hooks.save_all();
+				return save_all_action_result(report);
+			},
+			.result_schema = save_all_result_schema(),
+			.activate = [this] { save_all(); },
+			.enabled = [this] { return anything_dirty() && !m_save_all_running; },
+			.category = cmd::agent_category::scene_edit,
+			.risk = cmd::danger::confirm });
+	}
 
 	const auto import_request_of = [](const json::object& args) {
 		const auto text_of = [&args](const char* key) {
