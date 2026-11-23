@@ -61,8 +61,7 @@ struct texture_reload_fixture : test_util::null_engine_fixture
 	std::shared_ptr<scn::material_desc> material(const res::tag& texture)
 	{
 		auto desc = std::make_shared<scn::material_desc>();
-		desc->vertex_shader = res::tag::make("shaders/scene.vert");
-		desc->fragment_shader = res::tag::make("shaders/scene.frag");
+		desc->shader = resources().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 		desc->samplers_textures = { texture };
 		return desc;
 	}

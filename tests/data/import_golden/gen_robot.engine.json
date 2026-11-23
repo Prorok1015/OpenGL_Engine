@@ -43,7 +43,7 @@
 											"ind_end": 42696,
 											"material": {
 												"__type": "material_desc",
-												"__version": 1,
+												"__version": 2,
 												"__parent": "res://base_material.desc",
 												"name": "Material_0",
 												"samplers": [
@@ -69,7 +69,7 @@
 													"USE_TXM_AS_DIFFUSE"
 												],
 												"queue": "mix",
-												"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+												"shader": "res://shaders/mix_opaque_trans_scene.shader.desc"
 											}
 										},
 										"skinning_desc": {

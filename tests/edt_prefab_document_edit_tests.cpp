@@ -1425,4 +1425,35 @@ BOOST_AUTO_TEST_CASE(SaveAll_AVariantThatNeedsItsBaseDropped_IsAskedAndSavesWhol
 	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc").find("__parent") == std::string::npos);
 }
 
+// #746: a prefab with a shape survives Apply and a fresh read: the mesh node keeps its geometry file and its range.
+
+BOOST_AUTO_TEST_CASE(AddShape_ThenApply_WritesTheMeshNode_AndARevertReadsItBack)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	const edt::mesh::material_range range = edt::mesh::base_shape_range(shape);
+	BOOST_REQUIRE(edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } }) == "");
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+
+	const std::string written = text_of(res_root, "prefabs/a.prefab.desc");
+	BOOST_TEST(written.find(edt::mesh::base_shape_path(shape)) != std::string::npos);
+	BOOST_TEST(written.find("mesh_node_desc") != std::string::npos);
+
+	BOOST_REQUIRE(document->revert() == "");
+	BOOST_TEST(!document->is_dirty());
+	const auto& arm = document->working()->get_root().children.at(0);
+	BOOST_REQUIRE(arm.children.size() == 1);
+	BOOST_TEST(arm.children[0].name == std::string(shape.name));
+	const boost::json::object& fields = mesh_fields_of(arm.children[0]);
+	BOOST_TEST(fields.at("geometry").as_string() == edt::mesh::base_shape_path(shape));
+	BOOST_TEST(fields.at("vx_begin").to_number<std::uint64_t>() == range.vx_begin);
+	BOOST_TEST(fields.at("vx_end").to_number<std::uint64_t>() == range.vx_end);
+	BOOST_TEST(fields.at("ind_begin").to_number<std::uint64_t>() == range.ind_begin);
+	BOOST_TEST(fields.at("ind_end").to_number<std::uint64_t>() == range.ind_end);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -147,7 +147,7 @@ BOOST_AUTO_TEST_CASE(AssembleAndApply_OverridesLayerOverParentCopy)
 BOOST_AUTO_TEST_CASE(AssembleAndApply_SkyboxWithAnInlineMaterialKeepsItUnderAnUnrelatedOverride)
 {
 	auto tag = put("sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
-		"shader_vertex":"res://shaders/sky.vert"}})");
+		"shader":"res://shaders/sky.shader.desc"}})");
 	auto parent = handle(tag);
 	auto parent_sky = std::dynamic_pointer_cast<scn::skybox_desc>(parent.get_sync());
 	BOOST_REQUIRE(parent_sky);
@@ -171,7 +171,7 @@ BOOST_AUTO_TEST_CASE(AssembleAndApply_SkyboxWithAnInlineMaterialKeepsItUnderAnUn
 			const auto material = component->mlt_desc.get_sync();
 			BOOST_REQUIRE(material);
 			BOOST_TEST((material->queue == scn::pass_queue::TRANSPARENT));
-			BOOST_TEST(material->vertex_shader.string() == "res://shaders/sky.vert");
+			BOOST_TEST(material->shader.get_tag().string() == "res://shaders/sky.shader.desc");
 		}
 	}
 }

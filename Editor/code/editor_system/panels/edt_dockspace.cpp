@@ -35,6 +35,8 @@ namespace edt
 			ImGui::EndMenuBar();
 		}
 
+		if (m_tabs_bar) m_tabs_bar();
+
 		ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
 		m_dockspace_id = dockspace_id;
 		ImGui::DockSpace(dockspace_id, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_PassthruCentralNode);

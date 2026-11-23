@@ -508,7 +508,7 @@ private:
 
 		jsmaterial["defines"] = defines;
 		jsmaterial["queue"] = "mix";
-		jsmaterial["shader_fragment"] = "res://shaders/mix_opaque_trans_scene.frag";
+		jsmaterial["shader"] = "res://shaders/mix_opaque_trans_scene.shader.desc";
 		if (m_options.materials == mdl::material_mode::inline_desc) {
 			return jsmaterial;
 		}

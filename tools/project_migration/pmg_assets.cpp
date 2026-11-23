@@ -1,5 +1,8 @@
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/common/fs_paths.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_manifest.h>
+#include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_system.h>
 #include <cstdint>
@@ -26,6 +29,52 @@ namespace
 		if (!out.has_filename() && out.has_parent_path()) out = out.parent_path();
 		return out;
 	}
+}
+
+namespace
+{
+	// An immutable copy: resource_system asks it from any thread.
+	class project_asset_index final : public res::asset_index
+	{
+	public:
+		explicit project_asset_index(prj::migration::project_assets assets)
+			: m_assets(std::move(assets))
+		{
+		}
+
+		std::optional<res::asset_id> id_of(const res::tag& tag) const override { return m_assets.id_of(tag); }
+		std::optional<res::tag> path_of(const res::asset_id& id) const override { return m_assets.path_of(id); }
+
+	private:
+		const prj::migration::project_assets m_assets;
+	};
+}
+
+std::shared_ptr<const res::asset_index> prj::migration::make_asset_index(project_assets assets)
+{
+	return std::make_shared<const project_asset_index>(std::move(assets));
+}
+
+prj::migration::scoped_project_index::scoped_project_index(res::resource_system& resources, const fs::path& root,
+	std::vector<fs::path> read_only_layers)
+{
+	if (resources.has_asset_index()) return;
+	if (resources.parent()) {
+		egLOG_WARN("project/migrate", "the resource system is a layer: its root gets no project index, type steps that ask "
+			"for an asset ID get none");
+		return;
+	}
+	const prj::manifest_result manifest = prj::load_manifest(root);
+	if (!manifest.data) return;
+	project_assets assets(root, manifest.data->content_roots, std::move(read_only_layers));
+	assets.rebuild();
+	resources.set_asset_index(make_asset_index(std::move(assets)));
+	m_resources = &resources;
+}
+
+prj::migration::scoped_project_index::~scoped_project_index()
+{
+	if (m_resources) m_resources->set_asset_index(nullptr);
 }
 
 std::vector<fs::path> prj::migration::read_only_layers(const res::resource_system& resources, const fs::path& root)

@@ -23,7 +23,7 @@
 									"ind_end": 3,
 									"material": {
 										"__type": "material_desc",
-										"__version": 1,
+										"__version": 2,
 										"__parent": "res://base_material.desc",
 										"name": "skin",
 										"samplers": [
@@ -49,7 +49,7 @@
 											"USE_TXM_AS_DIFFUSE"
 										],
 										"queue": "mix",
-										"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+										"shader": "res://shaders/mix_opaque_trans_scene.shader.desc"
 									}
 								}
 							}
@@ -74,7 +74,7 @@
 									"ind_end": 6,
 									"material": {
 										"__type": "material_desc",
-										"__version": 1,
+										"__version": 2,
 										"__parent": "res://base_material.desc",
 										"name": "red",
 										"uniforms": {
@@ -96,7 +96,7 @@
 											"LIGHTS_ENABLED"
 										],
 										"queue": "mix",
-										"shader_fragment": "res://shaders/mix_opaque_trans_scene.frag"
+										"shader": "res://shaders/mix_opaque_trans_scene.shader.desc"
 									}
 								}
 							}
