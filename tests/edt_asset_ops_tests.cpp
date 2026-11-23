@@ -751,7 +751,12 @@ BOOST_AUTO_TEST_CASE(ARollbackOfADelete_WithAnotherFileAtItsPlace_KeepsTheStepAn
 	std::ifstream in(folder / "journal.json", std::ios::binary);
 	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 	const json::value written = json::parse(text);
-	BOOST_TEST(!written.at("steps").as_array().empty(), "the journal still holds the step that could not be taken back");
+	const json::array& left = written.at("steps").as_array();
+	BOOST_REQUIRE(left.size() == 1u);
+	const json::object& step = left.front().as_object();
+	BOOST_TEST(json::value_to<std::string>(step.at("kind")) == "stash");
+	BOOST_TEST(json::value_to<std::string>(step.at("from")) == "lonely.desc");
+	BOOST_TEST(json::value_to<std::string>(step.at("to")) == "files/lonely.desc", "the step still names the kept file");
 }
 
 BOOST_AUTO_TEST_CASE(AnUndoOfARename_WithAnotherFileAtTheOldName_FailsAndLeavesTheMovedFile)
@@ -773,6 +778,26 @@ BOOST_AUTO_TEST_CASE(AnUndoOfARename_WithAnotherFileAtTheOldName_FailsAndLeavesT
 	BOOST_TEST(named);
 	BOOST_TEST(text_of("sky.desc") == "someone else's file");
 	BOOST_TEST(text_of("clouds.desc") == moved, "the moved file stays where the rename put it");
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfARename_WhoseOldNameIsBackWhileTheNewOneIsStillThere_Fails_AndRemovesNeither)
+{
+	open();
+	const std::string original = text_of("sky.desc");
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:sky.desc") write("sky.desc", original);
+	};
+
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	const bool named = std::ranges::any_of(failed.failures, [](const std::string& failure) {
+		return failure.find("clouds.desc") != std::string::npos && failure.find("then undo again") != std::string::npos;
+	});
+	BOOST_TEST(named);
+	BOOST_TEST(text_of("sky.desc") == original);
+	BOOST_TEST(has("clouds.desc"), "the file at the new name is not taken away");
 }
 
 BOOST_AUTO_TEST_CASE(ADeleteOrAMoveOfAFileOpenWithUnsavedChanges_IsRefused_AsIsARename)

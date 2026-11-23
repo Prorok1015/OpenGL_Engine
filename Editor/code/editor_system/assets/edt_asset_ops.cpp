@@ -462,8 +462,6 @@ namespace
 		return std::ranges::none_of(path_of(root), [](const fs::path& part) { return part == ".."; });
 	}
 
-	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as it was
-	// before the step is left alone. Empty: done.
 	// A file at the step's source counts as put back only when it is the file the step moved (#1309): another file there
 	// fails the step, so the moved or kept file is never given up for it. Empty: it is the step's file.
 	std::string source_in_the_way(const edt::journal_step& step, const fs::path& root, std::string_view kept_where)
@@ -476,6 +474,8 @@ namespace
 			step.from, kept_where);
 	}
 
+	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as
+	// it was before the step is left alone. Empty: done.
 	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, const move_seams& seams)
 	{
 		std::vector<std::byte> bytes;
@@ -485,7 +485,14 @@ namespace
 		switch (step.kind) {
 		case edt::journal_step_kind::move:
 			if (exists_on_disk(root, step.from)) {
-				return source_in_the_way(step, root, std::format("the moved file stays at '{}'", step.to));
+				const std::string kept_where = std::format("the moved file stays at '{}'", step.to);
+				if (std::string error = source_in_the_way(step, root, kept_where); !error.empty()) return error;
+				// The source is back as it was, so a file still at the target is not the moved one: it stays.
+				if (exists_on_disk(root, step.to)) {
+					return std::format("'{}' is back but '{}' is there too: rename or delete '{}', then undo again",
+						step.from, step.to, step.to);
+				}
+				return {};
 			}
 			return move_file(root, step.to, step.from);
 		case edt::journal_step_kind::rewrite: {
