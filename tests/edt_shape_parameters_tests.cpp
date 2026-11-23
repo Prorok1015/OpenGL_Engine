@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_code_commands.h"
+#include "edt_mesh_io.h"
 #include "edt_shape_menu_model.h"
 #include "edt_shape_parameters.h"
 #include "edt_mesh_shape_asset.h"
