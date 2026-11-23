@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <snk/common/common.h>
@@ -33,6 +34,10 @@ namespace rnd
 
 	// Turns a POD material_desc into a render-ready rnd::shader_config (samplers resolved,
 	// per-draw uniforms/defines/constants baked).
+	// A module fills this vtable (render_system::set_material_compiler) or calls it (get_material_compiler) (#1298): raised
+	// with any change of its bases or virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t material_compiler_interface_abi_revision = 1;
+
 	struct material_compiler_interface
 	{
 		virtual ~material_compiler_interface() = default;

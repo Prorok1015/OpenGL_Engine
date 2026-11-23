@@ -46,6 +46,11 @@ namespace edt::mesh
 		}
 	}
 
+	std::string poly_file_text(const poly_mesh_desc& source)
+	{
+		return repository_text(poly_mesh_to_json(source), poly_file_version);
+	}
+
 	std::size_t estimate_shape_vertices(const shape_params& params)
 	{
 		struct counter
@@ -95,6 +100,32 @@ namespace edt::mesh
 			}
 		}
 		return baked.ranges.front();
+	}
+
+	geometry_match geometry_is_bake_of(std::string_view poly_text, std::string_view geometry_desc, std::string& error)
+	{
+		boost::system::error_code parse_error;
+		const json::value parsed = json::parse(poly_text, parse_error);
+		if (parse_error || !parsed.is_object()) {
+			error = "the source is not a JSON object";
+			return geometry_match::unchecked;
+		}
+		poly_mesh_desc source;
+		try {
+			poly_mesh_from_json(parsed.get_object(), source);
+		} catch (const std::exception& failure) {
+			error = failure.what();
+			return geometry_match::unchecked;
+		}
+		const baked_mesh baked = bake(source.mesh);
+		const geometry_pair made = encode_geometry_pair(res::tag{ std::string("res://") + "check.geom.desc" }, baked.geometry, error);
+		if (!error.empty()) return geometry_match::unchecked;
+		boost::system::error_code disk_error;
+		const json::value disk = json::parse(geometry_desc, disk_error);
+		if (disk_error || !disk.is_object() || !same_chunks(json::parse(made.desc), geometry_desc)) {
+			return geometry_match::differs;
+		}
+		return geometry_match::same;
 	}
 
 	std::string shape_scale_problem(const glm::vec3& scale)

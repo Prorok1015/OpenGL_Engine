@@ -22,6 +22,10 @@ namespace rnd::driver
 	class vertex_array_interface;
 	class buffer_interface;
 
+	// Module code calls this vtable through render_system::get_driver() (#1298): raised with any change of its bases or
+	// virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t driver_interface_abi_revision = 1;
+
 	// A box of a texture to write to: texels {x, y, z} .. +{width, height, depth} of one mip level, layer and cube face.
 	struct texture_region
 	{

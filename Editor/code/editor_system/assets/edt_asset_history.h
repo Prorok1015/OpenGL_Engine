@@ -58,6 +58,8 @@ namespace edt
 		}
 		// The id of the operation undo_last would take back.
 		std::optional<std::string> next_operation_id() const;
+		// The journal's folder is <root>/<its id>, the id spelled exactly: the only folder set aside or deleted.
+		bool is_journal_folder(const operation_journal& journal) const;
 		// Takes back the newest operation. Put back: forgotten, its journal folder deleted. Refused (a file changed since or is open
 		// with unsaved changes: nothing was touched) or stopped half way (the error says which files): the entry stays, with
 		// `keep` set, and the next call tries it again, the steps already put back being skipped; after max_undo_attempts failures

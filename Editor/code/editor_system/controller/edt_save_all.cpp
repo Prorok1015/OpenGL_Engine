@@ -15,6 +15,7 @@ namespace {
 	{
 		if (kind == "scene") return "Level";
 		if (kind == "prefab") return "Prefab";
+		if (kind == "mesh") return "Mesh";
 		if (kind == "data") return "Data";
 		return kind;
 	}

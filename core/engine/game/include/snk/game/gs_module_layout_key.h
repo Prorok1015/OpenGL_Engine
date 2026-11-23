@@ -14,6 +14,10 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_shader_interface.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_command_buffer.hpp>
@@ -35,6 +39,8 @@
 #include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/rnd_render_context.h>
+#include <snk/render/rnd_render_pass_interface.h>
+#include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/model_codec/res_tag.h>
@@ -71,7 +77,10 @@ namespace gs
 			ecs::detail::channel_slot_abi_revision, ecs::detail::channel_type_abi_revision,
 			ds::detail::task_state_base_abi_revision, desc::entity_remap_abi_revision, ecs::system_interface_abi_revision,
 			rnd::render_context_abi_revision, wnd::window_abi_revision, rnd::driver::gl_surface_abi_revision,
-			wnd::window_system_abi_revision, wnd::window_listener_interface_abi_revision>;
+			wnd::window_system_abi_revision, wnd::window_listener_interface_abi_revision,
+			rnd::driver::driver_interface_abi_revision, rnd::driver::shader_interface_abi_revision,
+			rnd::driver::vertex_array_interface_abi_revision, rnd::driver::buffer_interface_abi_revision,
+			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.
