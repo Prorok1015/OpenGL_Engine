@@ -649,10 +649,11 @@ BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyI
 		}
 	}
 	BOOST_REQUIRE(create_sphere().ok);
+	const std::string poly_before = read_file(res_root / "shapes" / "ball.poly.desc");
 	const auto folded = call("shape.create", json::object{ { "name", "Ball" }, { "kind", "box" } });
 	if constexpr (res::asset_names_case_insensitive) {
 		BOOST_TEST(folded.code == cmd::codes::needs_input);
-		BOOST_TEST(!fs::exists(res_root / "shapes" / "Ball.poly.desc"));
+		BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
 	} else {
 		BOOST_TEST(folded.ok);
 	}
