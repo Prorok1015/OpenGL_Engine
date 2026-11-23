@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/desc/desc_system.h>
 #include <snk/project_migration/pmg_assets.h>
+#include <snk/project_migration/pmg_geometry_check_cache.h>
 #include <snk/project/prj_version.h>
 #include <snk/resource/res_asset_meta.h>
 #include <cstddef>
@@ -123,6 +124,9 @@ namespace prj::migration
 		// The layers of res:// below the project, lowest first (prj::migration::read_only_layers, taken on the main
 		// thread): their .resource files give IDs to references, nothing in them is scanned or written (#776).
 		std::vector<std::filesystem::path> read_only_layers;
+		// What geometry_conversion_problem said of a desc text in an earlier scan (#1155), kept by the caller between
+		// scans; null: every desc that holds geometry arrays is encoded again.
+		geometry_check_cache* geometry_checks = nullptr;
 	};
 
 	struct scan_result

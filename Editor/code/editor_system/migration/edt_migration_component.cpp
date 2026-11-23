@@ -54,6 +54,7 @@ void edt::migration_component::install(std::vector<registration>& out, const std
 	// then attaches the level and loads it again from disk.
 	{
 		migration_deps migration{ m_ports.context.jobs() };
+		migration.geometry_checks = m_geometry_checks;
 		migration.log_filter = m_ports.log_filter;
 		const prj::project_context* project = m_ports.project;
 		migration.project_root = [project]() -> std::optional<std::filesystem::path> {
@@ -254,10 +255,11 @@ void edt::migration_component::start_scan(const std::filesystem::path& root)
 	// Stopped by its token (job.cancel, cancel_all_and_wait when the editor quits) between any two files: a stopped scan is
 	// dropped, never shown.
 	auto work = [root, catalog = prj::migration::type_catalog::from(*m_ports.services.descs()),
-					read_only = prj::migration::read_only_layers(m_ports.resources, root)](ds::task_context& task) {
+					read_only = prj::migration::read_only_layers(m_ports.resources, root), checks = m_geometry_checks](ds::task_context& task) {
 		prj::migration::scan_options options;
 		options.stop = [&task] { return task.stop.stop_requested(); };
 		options.read_only_layers = read_only;
+		options.geometry_checks = checks.get();
 		const prj::migration::scan_result scan = prj::migration::scan_project(root, catalog, options);
 		if (scan.incomplete) throw ds::task_cancelled{};
 		prj::migration::project_step_registry steps;

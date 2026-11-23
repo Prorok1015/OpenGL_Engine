@@ -11,6 +11,9 @@ namespace edt
 {
 	using mesh::shape_request;
 
+	// The inputs of a shape's parameters, one row per parameter (the Parametric dialog and the Inspector's section).
+	void draw_shape_fields(mesh::parametric_shape_form& form);
+
 	// "Add shape" for the scene hierarchy and the prefab editor's tree: the submenu and the "Parametric..." dialog. It makes no node:
 	// the owner turns the request into the commands (levels) or an edit of the working copy (prefab editor).
 	class shape_menu
