@@ -393,6 +393,7 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_ThatPutAValueWhereTheSchemaHasNoField_AreRefuse
 
 // Review of #1269 (Fable): a place a later step empties is a staging place, not where a field must be; only a field that
 // holds keys (a structure, a map, a custom value) takes a path below it; a rename target its own step removes is dropped.
+// A runtime schema has no map field (it needs a C++ type), so a structure stands for the fields that hold keys below.
 BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
 {
 	const auto problem_of = [this](const char* fields, const char* migrations) {
@@ -402,10 +403,9 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
 	constexpr const char* points = R"([ { "name": "hp", "kind": "f32" }, { "name": "mp", "kind": "f32" } ])";
 	BOOST_TEST(problem_of(points, R"([{"from":1,"rename":{"/stats_old":"/stats"}},{"from":2,"rename":{"/stats/hp":"/hp","/stats/mp":"/mp"}}])").empty());
 
-	constexpr const char* health = R"([ { "name": "health", "kind": "f32" }, { "name": "tags", "kind": "map", "element": "i32" } ])";
+	constexpr const char* health = R"([ { "name": "health", "kind": "f32" } ])";
 	const std::string below_a_number = problem_of(health, R"([{"from":1,"rename":{"/hp":"/health/points"}},{"from":2,"remove":["/x"]}])");
 	BOOST_TEST(below_a_number.find("reaches no field") != std::string::npos, below_a_number);
-	BOOST_TEST(problem_of(health, R"([{"from":1,"rename":{"/hp":"/tags/hp"}},{"from":2,"remove":["/x"]}])").empty());
 
 	BOOST_TEST(problem_of(health, R"([{"from":1,"rename":{"/a":"/tmp"},"remove":["/tmp"]},{"from":2,"remove":["/x"]}])").empty());
 
@@ -422,7 +422,7 @@ BOOST_AUTO_TEST_CASE(SchemaSteps_StagingPlacesAndPlacesBelowAField)
 
 BOOST_AUTO_TEST_CASE(AFailingSchemaStep_NamesItsTypeAndVersion)
 {
-	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [],
+	const json::object text = parse(R"({ "name": "test_migr_desc", "version": 2, "fields": [ { "name": "b", "kind": "i32" } ],
 		"migrations": [ { "from": 1, "rename": { "/a": "/b" } } ] })");
 	BOOST_REQUIRE((ds.register_schema(desc::parse_type_schema(text), text.at("migrations").as_array()) != nullptr));
 	auto o = parse(R"({"__type":"test_migr_desc","a":1,"b":2})");
