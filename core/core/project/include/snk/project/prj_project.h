@@ -85,7 +85,8 @@ namespace prj
 	//   token, write the test profile or serve build output. Compared with letter case folded and, where both exist, by
 	//   fs::equivalent: on Windows and macOS .SNK is .snk;
 	// - the path of each content root, symlinks resolved, passes content_root_error: a link to .git is refused too;
-	// - each writable dir, and .snk, that exists is a real directory (not a symlink) inside the project;
+	// - each writable dir, and .snk, that exists is a real directory (not a symlink or junction) inside the project,
+	//   and nothing at any depth in .cache is a link either (prj::link_below; past its limit the project is refused);
 	// - code/, when it exists, is a real directory (not a symlink or junction) inside the project that no content root
 	//   contains or lies inside, and that is none of the private dirs: code:// would otherwise write through a link or
 	//   serve assets.
