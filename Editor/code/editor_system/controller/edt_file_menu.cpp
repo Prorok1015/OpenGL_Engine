@@ -592,14 +592,14 @@ void edt::file_menu::register_actions()
 	// never overwrites a file that changed on disk nor drops edits).
 	if (m_hooks.save_all) {
 		add({ .id = "file.save_all", .label = "Save All", .menu_path = "File", .shortcut = std::string(k_save_all_shortcut),
+			.disabled_reason = [this] {
+				return m_save_all_running ? std::string("Save All is waiting for an answer about a document") : std::string("Nothing to save");
+			},
 			.execute = [this](const json::value&) {
 				const save_all_report report = m_hooks.save_all();
 				return save_all_action_result(report);
 			},
 			.result_schema = save_all_result_schema(),
-			.disabled_reason = [this] {
-				return m_save_all_running ? std::string("Save All is waiting for an answer about a document") : std::string("Nothing to save");
-			},
 			.activate = [this] { save_all(); },
 			.enabled = [this] { return anything_dirty() && !m_save_all_running; },
 			.category = cmd::agent_category::scene_edit,
