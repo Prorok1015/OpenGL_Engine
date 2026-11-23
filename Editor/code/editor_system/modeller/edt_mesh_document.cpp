@@ -45,7 +45,7 @@ edt::mesh_document::mesh_document(editor_services& services)
 
 edt::mesh_document::~mesh_document()
 {
-	unwatch_source();
+	close();
 }
 
 void edt::mesh_document::open(const res::tag& source)
@@ -157,9 +157,14 @@ void edt::mesh_document::rebake()
 	m_preview_problem.clear();
 
 	res::resource_system* writer = m_services.writable_resources();
+	if (!writer) {
+		m_preview_problem = "the project resources are not available";
+		return;
+	}
 	if (m_baked.geometry.indices.empty()) {
 		m_preview_problem = "the mesh has no triangle to draw";
 		writer->erase(m_preview_tag);
+		writer->signal_changed(m_preview_tag);
 		return;
 	}
 	try {
@@ -204,6 +209,15 @@ std::string edt::mesh_document::geometry_file_problem() const
 	}
 	if (!geometry.missing && !geometry.top_layer) {
 		return std::format("{} belongs to a lower layer (the engine or a package), not to the project's own res/: nothing was written", m_geometry_tag.view());
+	}
+	// Only while the source is about to change: after a failed pair the file is ours and older than the source on purpose.
+	if (m_dirty && !geometry.missing) {
+		const std::string existing(reinterpret_cast<const char*>(geometry.bytes.data()), geometry.bytes.size());
+		std::string unused;
+		if (!mesh::poly_text_range(m_saved_text, unused, existing)) {
+			return std::format("{} exists and was not made from {} (an imported mesh or another source): nothing was written. Rename one of the files or delete the geometry file.",
+				m_geometry_tag.view(), m_poly_tag.view());
+		}
 	}
 	return {};
 }
@@ -307,7 +321,8 @@ edt::save_result edt::mesh_document::overwrite()
 	}
 	const std::string previous_version = std::exchange(m_disk_version, on_disk.version);
 	const save_result saved = save();
-	if (!saved.saved) {
+	// Still dirty means the source was not written (a written source makes it clean even when the geometry pair failed).
+	if (!saved.saved && m_dirty) {
 		m_disk_version = previous_version;
 		m_changed_on_disk = true;
 	}

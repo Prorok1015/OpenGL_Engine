@@ -60,7 +60,7 @@ struct mesh_document_fixture : test_util::scene_env
 		edt::desc_file_layout out;
 		out.top_layer = [this] { return res_root; };
 		out.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
-		out.open_level_files = [] { return std::vector<std::string>{}; };
+		out.open_level_files = [this] { return open_files; };
 		out.write_blocker = [this] { return blocked; };
 		return out;
 	}
@@ -98,6 +98,7 @@ struct mesh_document_fixture : test_util::scene_env
 	std::unique_ptr<edt::mesh_document> document;
 	std::string box_text;
 	std::optional<std::string> blocked;
+	std::vector<std::string> open_files;
 };
 
 }
@@ -329,6 +330,93 @@ BOOST_AUTO_TEST_CASE(SaveAll_WritesADirtyMeshDocument_AndListsItWithTheOtherUnsa
 	BOOST_TEST(report.failed.empty());
 	BOOST_TEST(!adopted.is_dirty());
 	BOOST_TEST(text_of(res_root / "shapes/crate.poly.desc") != box_text);
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_WhenTheGeometryFails_KeepsTheWrittenSource_SoTheNextSaveIsNotRefused)
+{
+	open_crate();
+	std::string failure = "the disk is full";
+	document->set_geometry_writer([&failure](res::resource_system& system, const res::tag& file, const rnd::geometry_desc& geometry) {
+		return failure.empty() ? write_mesh_geometry(system, file, geometry) : failure;
+	});
+	write(res_root, "shapes/crate.poly.desc", box_text + "\n");
+	BOOST_REQUIRE(move_first_vertex());
+	BOOST_TEST(!document->save().saved);
+	BOOST_REQUIRE(document->changed_on_disk());
+
+	const edt::save_result forced = document->overwrite();
+
+	BOOST_TEST(!forced.saved);
+	BOOST_TEST(document->geometry_stale());
+	BOOST_TEST(!document->changed_on_disk());
+	failure.clear();
+	const edt::save_result again = document->save();
+	BOOST_REQUIRE_MESSAGE(again.saved, again.error);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(Save_OverAGeometryFileThatIsNotMadeFromTheSource_IsRefusedAndNamesTheFile)
+{
+	const shape_asset_result sphere = build_shape_asset(sphere_params{ 0.5f, 8, 4 }, res::tag{ "res://shapes/crate.geom.desc" });
+	BOOST_REQUIRE(sphere.files.has_value());
+	BOOST_REQUIRE(write_mesh_geometry(*rs, res::tag{ "res://shapes/crate.geom.desc" }, sphere.files->data).empty());
+	const std::string imported = text_of(res_root / "shapes/crate.geom.desc");
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+
+	const edt::save_result refused = document->save();
+
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("crate.geom.desc") != std::string::npos);
+	BOOST_TEST(refused.error.find("nothing was written") != std::string::npos);
+	BOOST_TEST(text_of(res_root / "shapes/crate.poly.desc") == box_text);
+	BOOST_TEST(text_of(res_root / "shapes/crate.geom.desc") == imported);
+}
+
+BOOST_AUTO_TEST_CASE(Save_OverTheGeometryPairTheSourceMade_IsAllowed)
+{
+	const shape_asset_result box = build_shape_asset(box_params{}, res::tag{ "res://shapes/crate.geom.desc" });
+	BOOST_REQUIRE(box.files.has_value());
+	BOOST_REQUIRE(write_mesh_geometry(*rs, res::tag{ "res://shapes/crate.geom.desc" }, box.files->data).empty());
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+
+	const edt::save_result saved = document->save();
+
+	BOOST_TEST_REQUIRE(saved.saved, saved.error);
+}
+
+BOOST_AUTO_TEST_CASE(Save_TheGeometryFileOfALowerLayerOrOfTheOpenLevel_IsRefused)
+{
+	write(lower, "shapes/crate.geom.desc", "{}");
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	edt::save_result refused = document->save();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("lower layer") != std::string::npos);
+	fs::remove(lower / "shapes/crate.geom.desc");
+
+	open_files = { "shapes/crate.geom.desc" };
+	refused = document->save();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("open level") != std::string::npos);
+	BOOST_TEST(text_of(res_root / "shapes/crate.poly.desc") == box_text);
+}
+
+BOOST_AUTO_TEST_CASE(Close_ErasesThePreviewGeometry_AndTheDestructorDoesToo)
+{
+	open_crate();
+	const res::tag preview = document->preview_geometry();
+	BOOST_TEST(rs->exists(preview));
+
+	document->close();
+	BOOST_TEST(!rs->exists(preview));
+
+	open_crate();
+	const res::tag second = document->preview_geometry();
+	BOOST_TEST(rs->exists(second));
+	document.reset();
+	BOOST_TEST(!rs->exists(second));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
