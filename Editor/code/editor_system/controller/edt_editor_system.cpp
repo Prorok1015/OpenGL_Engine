@@ -731,6 +731,7 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		if (m_agent_ui) m_agent_ui->draw_status();
 		m_play_component->draw_status();
 		m_file_menu->draw_status();
+		m_file_menu->draw_unsaved_indicator();
 		if (const auto trust = m_trust.lock()) {
 			if (const auto held = held_modules_status(trust->held_modules())) {
 				ImGui::TextColored(m_context->colors().warning, "%s", held->c_str());

@@ -12,6 +12,7 @@
 #include "edt_prefab_editor_component.h"
 #include "edt_problems_component.h"
 #include "edt_recent_projects.h"
+#include "edt_save_all.h"
 #include "edt_scene_document.h"
 #include "edt_template_ids.h"
 #include <snk/common/logger/engine_log.h>
@@ -128,13 +129,31 @@ edt::file_menu_component::file_menu_component(ports from)
 		return std::nullopt;
 	};
 	hooks.inspect_level = [this](const std::string& relative) { return inspect_level_in_layers(m_ports.resources, relative); };
-	hooks.level_write_blocker = [this]() -> std::optional<std::string> {
+	const std::function<std::optional<std::string>()> level_write_blocker = [this]() -> std::optional<std::string> {
 		if (auto migrating = migration_blocker()) return migrating;
 		if (m_ports.level_load.in_progress()) return std::string{ "a level is loading" };
 		// Whatever lifted a migration's block: a detached level has no worlds, so a save would write an empty level (#761).
 		std::optional<std::string> stopped = m_ports.migration_stopped_reason ? m_ports.migration_stopped_reason() : std::nullopt;
 		if (m_ports.level_ctrl.is_detached()) return stopped ? *stopped : std::string{ "the level is detached: it is not loaded from disk again yet" };
 		return stopped;
+	};
+	hooks.level_write_blocker = level_write_blocker;
+	// Save All (#1183): every document that can be written, then the questions about the ones that cannot (controller/edt_save_all.h).
+	hooks.save_all = [this, level_write_blocker] {
+		save_all_scene_ports scene;
+		scene.write_blocker = level_write_blocker;
+		scene.level_path = [this] { return m_ports.state.level_tag.is_valid() ? std::string(m_ports.state.level_tag.relative()) : std::string{}; };
+		scene.quick_save = [this] { return m_ports.state.save().saved; };
+		return save_all_write(m_ports.context.documents(), scene);
+	};
+	hooks.ask_unsaved = [this](const save_all_ask& ask, std::function<void(bool resolved)> resolved) {
+		if (ask.item.kind == "data") {
+			m_ports.asset_open.data_documents().resolve_unsaved(ask.item.id, std::move(resolved));
+		} else if (ask.item.kind == "prefab") {
+			m_ports.prefab.resolve_unsaved(ask, std::move(resolved));
+		} else if (resolved) {
+			resolved(false);
+		}
 	};
 	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
 	// its level (#518). A person has no menu or shortcut then.
@@ -204,6 +223,58 @@ void edt::file_menu_component::install_edit_actions(std::vector<registration>& o
 void edt::file_menu_component::attach_window_close(wnd::window_system& windows)
 {
 	m_menu->attach_window_close(windows);
+}
+
+void edt::file_menu_component::focus_unsaved(document_id id)
+{
+	document_manager& documents = m_ports.context.documents();
+	const document* open = documents.find(id);
+	if (!open) return;
+	if (open->kind() == "data") {
+		// Opening what is open moves the focus to its window.
+		m_ports.asset_open.data_documents().open(open->source(), false);
+		return;
+	}
+	if (open->kind() == "prefab") m_ports.prefab.show();
+	documents.set_active(id);
+}
+
+void edt::file_menu_component::draw_unsaved_list(const std::vector<unsaved_group>& groups)
+{
+	const gui::theme_semantic_colors& colors = m_ports.context.colors();
+	for (const unsaved_group& group : groups) {
+		ImGui::TextColored(colors.text_secondary, "%s", group.heading.c_str());
+		ImGui::Indent();
+		for (const unsaved_row& row : group.rows) {
+			ImGui::PushID(static_cast<int>(row.id));
+			if (ImGui::Selectable(row.title.c_str())) focus_unsaved(row.id);
+			ImGui::PopID();
+		}
+		ImGui::Unindent();
+	}
+}
+
+void edt::file_menu_component::draw_unsaved_indicator()
+{
+	constexpr const char* popup_id = "unsaved_documents";
+	document_manager& documents = m_ports.context.documents();
+	const std::size_t count = count_unsaved(documents);
+	if (count == 0) return;
+	ImGui::TextColored(m_ports.context.colors().warning, "Unsaved (%zu)", count);
+	if (ImGui::IsItemClicked()) ImGui::OpenPopup(popup_id);
+	if (ImGui::IsItemHovered() && !ImGui::IsPopupOpen(popup_id)) {
+		const std::string text = unsaved_text(list_unsaved(documents)) + "\n\nClick for the list. File > Save All (" + std::string(k_save_all_shortcut) + ") writes them.";
+		ImGui::SetTooltip("%s", text.c_str());
+	}
+	if (ImGui::BeginPopup(popup_id)) {
+		draw_unsaved_list(unsaved_groups(list_unsaved(documents)));
+		ImGui::Separator();
+		if (ImGui::Button("Save All")) {
+			ImGui::CloseCurrentPopup();
+			m_menu->save_all();
+		}
+		ImGui::EndPopup();
+	}
 }
 
 void edt::file_menu_component::draw_status()
