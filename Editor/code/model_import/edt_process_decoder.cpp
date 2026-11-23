@@ -320,7 +320,7 @@ bool content_matches(blob_kind kind, std::string_view relative, const std::vecto
 // bundle. Every other string that reads as a tag (a protocol, or a "://" in it) is refused, so a desc cannot send hot
 // reload, the exporter or an agent's node.get to edt://, user://, cache://, engine://, code:// or a file of the project.
 const std::unordered_set<std::string_view> k_res_references = {
-	"res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc", "res://shaders/mix_opaque_trans_scene.frag" };
+	"res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc", "res://shaders/mix_opaque_trans_scene.shader.desc" };
 const std::unordered_set<std::string_view> k_parent_references = { "res://base_geometry.desc", "res://base_material.desc", "res://base_texture.desc" };
 // No __guid: the ID of an imported file is the .resource the editor gives it (EPIC-57, #772).
 const std::unordered_set<std::string_view> k_header_keys = { "__type", "__version", "__id", "__parent" };

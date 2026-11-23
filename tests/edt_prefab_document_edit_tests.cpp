@@ -1425,4 +1425,175 @@ BOOST_AUTO_TEST_CASE(SaveAll_AVariantThatNeedsItsBaseDropped_IsAskedAndSavesWhol
 	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc").find("__parent") == std::string::npos);
 }
 
+// #746: a prefab with a shape survives Apply and a fresh read: the mesh node keeps its geometry file and its range.
+
+BOOST_AUTO_TEST_CASE(AddShape_ThenApply_WritesTheMeshNode_AndARevertReadsItBack)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	const edt::mesh::material_range range = edt::mesh::base_shape_range(shape);
+	BOOST_REQUIRE(edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } }) == "");
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+
+	const std::string written = text_of(res_root, "prefabs/a.prefab.desc");
+	BOOST_TEST(written.find(edt::mesh::base_shape_path(shape)) != std::string::npos);
+	BOOST_TEST(written.find("mesh_node_desc") != std::string::npos);
+
+	BOOST_REQUIRE(document->revert() == "");
+	BOOST_TEST(!document->is_dirty());
+	const auto& arm = document->working()->get_root().children.at(0);
+	BOOST_REQUIRE(arm.children.size() == 1);
+	BOOST_TEST(arm.children[0].name == std::string(shape.name));
+	const boost::json::object& fields = mesh_fields_of(arm.children[0]);
+	BOOST_TEST(fields.at("geometry").as_string() == edt::mesh::base_shape_path(shape));
+	BOOST_TEST(fields.at("vx_begin").to_number<std::uint64_t>() == range.vx_begin);
+	BOOST_TEST(fields.at("vx_end").to_number<std::uint64_t>() == range.vx_end);
+	BOOST_TEST(fields.at("ind_begin").to_number<std::uint64_t>() == range.ind_begin);
+	BOOST_TEST(fields.at("ind_end").to_number<std::uint64_t>() == range.ind_end);
+}
+
+// #746 S5: Rebuild from the Inspector rebuilds the shape (the command), then the open prefab's working copy follows or says why not.
+
+namespace {
+
+struct rebuild_stub
+{
+	boost::json::object answer;
+	cmd::result refusal = cmd::result::success();
+	bool refuses = false;
+	int calls = 0;
+	edt::registration registration;
+
+	void install(edt::action_registry& actions)
+	{
+		cmd::command_desc rebuild;
+		rebuild.id = "shape.rebuild";
+		rebuild.summary = "stub";
+		rebuild.args_schema = boost::json::parse(R"({"type":"object"})");
+		rebuild.result_schema = boost::json::parse(R"({"type":"object"})");
+		rebuild.mutates = true;
+		rebuild.category = cmd::agent_category::scene_edit;
+		rebuild.invoke = [this](const cmd::call&) {
+			++calls;
+			return refuses ? refusal : cmd::result::success(answer);
+		};
+		registration = actions.commands().add(std::move(rebuild));
+	}
+};
+
+boost::json::object range_answer(int vx_end, int ind_end)
+{
+	return boost::json::object{ { "vx_begin", 0 }, { "vx_end", vx_end }, { "ind_begin", 0 }, { "ind_end", ind_end } };
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(RebuildShape_RetargetsTheNodesOfTheOpenPrefab_AndSaysNothingMore)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	rebuild_stub stub;
+	stub.answer = range_answer(500, 900);
+	stub.install(actions);
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	BOOST_REQUIRE(edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } }) == "");
+	const std::string geometry = edt::mesh::base_shape_path(shape);
+
+	const edt::rebuild_report report = edt::rebuild_shape(actions, document.get(), boost::json::object{ { "path", "x" } }, geometry);
+
+	BOOST_TEST(report.error == "");
+	BOOST_TEST(report.notes.empty());
+	BOOST_TEST(mesh_fields_of(document->working()->get_root().children[0].children.at(0)).at("vx_end").to_number<int>() == 500);
+}
+
+BOOST_AUTO_TEST_CASE(RebuildShape_ThatTheCommandRefuses_ReportsItAndTouchesNoNode_AlsoTheStalePath)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	rebuild_stub stub;
+	stub.refuses = true;
+	stub.refusal = cmd::result::failure(cmd::codes::stale, "the file changed since it was read");
+	stub.install(actions);
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	BOOST_REQUIRE(edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } }) == "");
+	const std::string geometry = edt::mesh::base_shape_path(shape);
+	const boost::json::object before = mesh_fields_of(document->working()->get_root().children[0].children.at(0));
+
+	const edt::rebuild_report report = edt::rebuild_shape(actions, document.get(), boost::json::object{}, geometry);
+
+	BOOST_TEST(report.error.find("stale") != std::string::npos);
+	BOOST_TEST(report.error.find("the file changed since it was read") != std::string::npos);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
+}
+
+BOOST_AUTO_TEST_CASE(RebuildShape_WhenTheLevelCouldNotFollow_SaysSo)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	rebuild_stub stub;
+	stub.answer = range_answer(500, 900);
+	stub.answer["scene_update"] = "the scene is playing: stop play first";
+	stub.install(actions);
+
+	const edt::rebuild_report report = edt::rebuild_shape(actions, document.get(), boost::json::object{}, "shapes/none.geom.desc");
+
+	BOOST_TEST(report.error == "");
+	BOOST_REQUIRE(report.notes.size() == 1u);
+	BOOST_TEST(report.notes[0].find("the scene is playing") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(RebuildShape_InPlay_LeavesTheOpenPrefabAsItIs_AndSaysWhy)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	rebuild_stub stub;
+	stub.answer = range_answer(500, 900);
+	stub.install(actions);
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	BOOST_REQUIRE(edt::add_shape_to_prefab(actions, *document, { std::string(shape.name), {}, { 0xa1 } }) == "");
+	document->set_lock_source([] { return true; });
+	const std::string geometry = edt::mesh::base_shape_path(shape);
+	const boost::json::object before = mesh_fields_of(document->working()->get_root().children[0].children.at(0));
+
+	const edt::rebuild_report report = edt::rebuild_shape(actions, document.get(), boost::json::object{}, geometry);
+
+	BOOST_REQUIRE(report.notes.size() == 1u);
+	BOOST_TEST(report.notes[0].find("Play is running") != std::string::npos);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
+	BOOST_TEST(!edt::prefab_rebuild_blocker(*document).empty());
+}
+
+BOOST_AUTO_TEST_CASE(RebuildShape_ForAPrefabOfALowerLayer_LeavesItAsItIsAndSaysWhy)
+{
+	write(lower, "prefabs/low.prefab.desc", PREFAB);
+	fs::remove(res_root / "prefabs" / "a.prefab.desc");
+	document->open(res::tag::make("prefabs/low.prefab.desc"));
+	BOOST_REQUIRE(document->is_open());
+	edt::action_registry actions;
+	rebuild_stub stub;
+	stub.answer = range_answer(500, 900);
+	stub.install(actions);
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	const std::string geometry = edt::mesh::base_shape_path(shape);
+	BOOST_REQUIRE(document->edit([&](scn::prefab_desc& working) {
+		working.get_root().children[0].children.push_back(edt::mesh::base_shape_node(shape));
+		return true;
+	}));
+	const boost::json::object before = mesh_fields_of(document->working()->get_root().children[0].children.at(0));
+
+	const edt::rebuild_report report = edt::rebuild_shape(actions, document.get(), boost::json::object{}, geometry);
+
+	BOOST_REQUIRE(report.notes.size() == 1u);
+	BOOST_TEST(report.notes[0].find("lower") != std::string::npos);
+	BOOST_TEST((mesh_fields_of(document->working()->get_root().children[0].children.at(0)) == before));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

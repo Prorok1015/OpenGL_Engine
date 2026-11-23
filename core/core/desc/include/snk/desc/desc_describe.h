@@ -256,6 +256,7 @@ namespace desc
 					field.read_only = attr->read_only;
 					field.color = attr->color;
 					field.degrees = attr->degrees;
+					field.reference_only = attr->reference_only;
 					field.tooltip = std::string{ attr->tooltip };
 					field.filter = std::string{ attr->filter };
 				}

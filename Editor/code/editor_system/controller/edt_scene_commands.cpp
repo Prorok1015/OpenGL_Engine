@@ -768,7 +768,7 @@ namespace {
 	// shape.update_nodes (#746): after a shape was rebuilt, every mesh node of the scene that draws its geometry takes the new range.
 	cmd::result shape_update_nodes(context& ctx, const cmd::call& call)
 	{
-		return ctx.run(call, "Rebuild shape", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
+		cmd::result result = ctx.run(call, "Rebuild shape", [](edt::scene_document& scene, const json::object& args, json::object& out, const auto& changing) {
 			const json::value* geometry = args.if_contains("geometry");
 			if (!geometry || !geometry->is_string()) return failure(cmd::codes::invalid_args, "geometry is a res:// tag");
 			const std::string wanted = geometry_key(std::string_view(geometry->as_string()));
@@ -787,6 +787,13 @@ namespace {
 			for (auto& world : scene.world_descs) retarget_nodes(world.get_root(), wanted, range);
 			return cmd::result::success();
 		});
+		// The shape's files were written again and cannot be taken back: an undo would give the nodes their old range over the new mesh.
+		const json::object* answer = result.ok ? result.value.if_object() : nullptr;
+		const json::value* updated = answer ? answer->if_contains("updated") : nullptr;
+		if (updated && updated->is_number() && updated->to_number<std::uint64_t>() > 0) {
+			edt::scene_of(ctx.sources.documents).reset_history();
+		}
+		return result;
 	}
 
 	cmd::result node_delete(context& ctx, const cmd::call& call)

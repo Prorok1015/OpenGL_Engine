@@ -1,6 +1,7 @@
 #include <snk/project/prj_project.h>
 #include <snk/common/fs_paths.h>
 #include <snk/project/prj_code.h>
+#include <snk/project/prj_link_check.h>
 #include <algorithm>
 #include <format>
 #include <system_error>
@@ -145,6 +146,11 @@ namespace {
 #endif
 	}
 
+	bool is_link(const fs::file_status& status)
+	{
+		return fs::is_symlink(status) || is_junction(status);
+	}
+
 	// A link at code/ (a symlink or a junction) would send every code:// write wherever it leads.
 	std::optional<std::string> verify_code_dir(const prj::project_context& project, const fs::path& root,
 		const std::vector<fs::path>& content_roots)
@@ -158,8 +164,9 @@ namespace {
 		if (ec) {
 			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
 		}
-		if (fs::is_symlink(status) || is_junction(status)) {
-			return std::format("'{}' is a link; the project's code folder must be a real folder", fs_paths::generic_utf8_of(dir));
+		if (is_link(status)) {
+			return std::format("'{}' is a link (symlink or junction): replace it with a real folder and open the "
+				"project again", fs_paths::generic_utf8_of(dir));
 		}
 		if (!fs::is_directory(status)) {
 			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
@@ -243,8 +250,8 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		}
 	}
 
-	// A project that ships .cache (or a folder in it) as a symlink would send every memory:// write elsewhere; a
-	// symlinked .snk would put the agent token elsewhere.
+	// A project that ships .cache (or a folder in it) as a link would send every memory:// write elsewhere; a linked
+	// .snk would put the agent token elsewhere.
 	auto real_dirs = project.writable_dirs();
 	real_dirs.push_back(project.snk_dir());
 	for (const auto& dir : real_dirs) {
@@ -255,8 +262,9 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		if (ec) {
 			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
 		}
-		if (fs::is_symlink(status)) {
-			return std::format("'{}' is a symlink; the project's writable folders must be real folders", fs_paths::generic_utf8_of(dir));
+		if (is_link(status)) {
+			return std::format("'{}' is a link (symlink or junction): remove it and open the project again; the "
+				"project's own folders must be real folders", fs_paths::generic_utf8_of(dir));
 		}
 		if (!fs::is_directory(status)) {
 			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
@@ -269,6 +277,51 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 
 	if (const auto problem = verify_code_dir(project, root, roots)) {
 		return problem;
+	}
+	return std::nullopt;
+}
+
+std::optional<std::string> prj::link_below(const fs::path& dir, std::size_t max_entries)
+{
+	std::error_code ec;
+	const auto own = fs::symlink_status(dir, ec);
+	if (own.type() == fs::file_type::not_found) {
+		return std::nullopt;
+	}
+	if (!ec && is_link(own)) {
+		return std::format("'{}' is a link (symlink or junction): remove it and open the project again",
+			fs_paths::generic_utf8_of(dir));
+	}
+	const auto unreadable = [&dir](const std::error_code& error) {
+		return std::format("'{}' cannot be checked for links: {}; the project is not opened",
+			fs_paths::generic_utf8_of(dir), error.message());
+	};
+	// directory_options::none: a link is reported, never entered.
+	fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec);
+	if (ec) {
+		return unreadable(ec);
+	}
+	std::size_t entries = 0;
+	for (const fs::recursive_directory_iterator end{}; it != end; it.increment(ec)) {
+		if (ec) {
+			return unreadable(ec);
+		}
+		if (++entries > max_entries) {
+			return std::format("'{}' holds more than {} entries, so it was not checked for links to the end; the "
+				"project is not opened: empty that folder (it is the project's cache) and open the project again",
+				fs_paths::generic_utf8_of(dir), max_entries);
+		}
+		const auto status = it->symlink_status(ec);
+		if (ec) {
+			return unreadable(ec);
+		}
+		if (is_link(status)) {
+			return std::format("'{}' is a link (symlink or junction) in the project's cache: remove it and open the "
+				"project again", fs_paths::generic_utf8_of(it->path()));
+		}
+	}
+	if (ec) {
+		return unreadable(ec);
 	}
 	return std::nullopt;
 }

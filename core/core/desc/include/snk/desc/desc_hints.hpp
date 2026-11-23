@@ -35,6 +35,7 @@ namespace desc
 		bool read_only = false;
 		bool color = false;
 		bool degrees = false;
+		bool reference_only = false;
 	};
 
 	class field_attr
@@ -77,6 +78,8 @@ namespace desc
 		constexpr field_attr read_only() const { auto c = *this; c.m_data.read_only = true; return c; }
 		constexpr field_attr color() const { auto c = *this; c.m_data.color = true; return c; }
 		constexpr field_attr degrees() const { auto c = *this; c.m_data.degrees = true; return c; }
+		// A desc_ref that takes only a reference to a file (a tag or {guid, path}), never an inline desc object.
+		constexpr field_attr reference_only() const { auto c = *this; c.m_data.reference_only = true; return c; }
 
 		constexpr const field_attr_data& data() const { return m_data; }
 

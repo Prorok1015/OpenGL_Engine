@@ -2006,7 +2006,11 @@ BOOST_AUTO_TEST_CASE(ABinaryRefFitsARangeOrTheOldInlineArray)
 	BOOST_TEST(!fits(json::parse(R"({ "offset": 16, "size": 48, "layout": "f32x3" })")));
 	BOOST_TEST(!fits(json::parse(R"({ "offset": -1, "size": 48, "layout": "f32x3", "sha256": "00" })")));
 	BOOST_TEST(!fits(json::value("res://mesh.geom.bin")));
-	BOOST_TEST(!fits(json::value()));
+	// #1180: null is "no range", what an empty slot is written as; a range is closed, an extra member is not one.
+	BOOST_TEST(fits(json::value()));
+	json::object extra = json::parse(k_mesh_range).as_object();
+	extra["stride"] = 12;
+	BOOST_TEST(!fits(json::value(extra)));
 }
 
 BOOST_AUTO_TEST_CASE(TheJsonSchemaOfABinaryRefIsAReadOnlyRange)
@@ -2016,13 +2020,15 @@ BOOST_AUTO_TEST_CASE(TheJsonSchemaOfABinaryRefIsAReadOnlyRange)
 	const json::object& vertices = generated.at("properties").as_object().at("vertices").as_object();
 	BOOST_TEST(vertices.at("readOnly").as_bool());
 	const json::array& forms = vertices.at("oneOf").as_array();
-	BOOST_REQUIRE_EQUAL(forms.size(), 2u);
+	BOOST_REQUIRE_EQUAL(forms.size(), 3u);
 	const json::object& range = forms[0].as_object();
 	BOOST_TEST(range.at("type").as_string() == "object");
 	BOOST_TEST(range.at("required").as_array().size() == 4u);
+	BOOST_TEST(range.at("additionalProperties").as_bool() == false);
 	BOOST_TEST(range.at("properties").as_object().at("offset").as_object().at("type").as_string() == "integer");
 	BOOST_TEST(range.at("properties").as_object().at("sha256").as_object().contains("pattern"));
 	BOOST_TEST(forms[1].as_object().at("type").as_string() == "array");
+	BOOST_TEST(forms[2].as_object().at("type").as_string() == "null");
 }
 
 BOOST_AUTO_TEST_CASE(ABinaryRefIsCheckedWholeAndNeverInPart)
@@ -2034,6 +2040,7 @@ BOOST_AUTO_TEST_CASE(ABinaryRefIsCheckedWholeAndNeverInPart)
 	BOOST_TEST((status_of("/vertices", json::parse(k_mesh_range)) == desc::override_status::valid));
 	BOOST_TEST((status_of("/vertices/size", json::value(4)) == desc::override_status::bad_value));
 	BOOST_TEST((status_of("/vertices", json::value("res://a.bin")) == desc::override_status::bad_value));
+	BOOST_TEST((status_of("/vertices", json::value()) == desc::override_status::valid));
 
 	const desc::override_failure failure = desc::check_override_object(schema, json::parse(R"({ "vertices": { "offset": 1 } })").as_object());
 	BOOST_TEST((failure.status == desc::override_status::bad_value));

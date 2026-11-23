@@ -8,6 +8,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <array>
 #include <cstddef>
@@ -506,6 +507,24 @@ BOOST_AUTO_TEST_CASE(AChildWithoutDataOfItsOwn_KeepsTheDataAndBoundsOfItsParent)
 	BOOST_TEST(child.vertices.size() == 36u);
 	BOOST_REQUIRE(child.bounds.size() == 1u);
 	BOOST_TEST(child.rtree.query(parent_box).size() == 1u);
+}
+
+// Review of #1293 (Fable): null fits a binary_ref field ("no range"), but a geometry cannot be read without its data; the
+// load fails naming the member, not with a JSON exception.
+BOOST_AUTO_TEST_CASE(AGeometryWithNullVerticesOrIndices_DoesNotLoad_AndNamesTheMember)
+{
+	for (const char* member : { "vertices", "indices" }) {
+		boost::json::object text = boost::json::parse(R"({"layout":{"position":"vec3"},"vertices":[],"indices":[]})").as_object();
+		text[member] = nullptr;
+		rnd::geometry_desc geometry;
+		try {
+			geometry.deserialize(storage.require<desc::desc_system>(), text);
+			BOOST_ERROR(std::string(member) + ": a null was read");
+		} catch (const res::load_error& error) {
+			BOOST_TEST(error.what_diagnostic().json_path == std::string("/") + member);
+			BOOST_TEST(std::string(error.what()).find("not null") != std::string::npos, error.what());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

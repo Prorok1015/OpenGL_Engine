@@ -146,7 +146,9 @@ namespace edt
 		bool m_layer_refused = false;
 		editor_camera_state m_camera_state;
 
-		static constexpr std::string_view k_working_tag = "memory://editor/__prefab_working";
+		// The tag the working copy is assembled under: one per open, so several prefab documents never share it (#1185).
+		static constexpr std::string_view k_working_tag_base = "memory://editor/__prefab_working";
+		std::string m_working_tag;
 		static constexpr std::string_view CONTEXT_NAME = "__prefab_preview";
 	};
 }

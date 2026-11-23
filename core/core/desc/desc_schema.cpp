@@ -268,7 +268,7 @@ namespace desc
 			}
 			const json::object& object = raw.as_object();
 			check_keys(object, { "name", "key", "kind", "element", "ref_type", "default", "range", "write", "read_aliases",
-				"optional", "editor_hidden", "read_only", "color", "degrees", "tooltip", "filter" }, path);
+				"optional", "editor_hidden", "read_only", "color", "degrees", "tooltip", "filter", "reference_only" }, path);
 
 			field_schema field;
 			field.name = read_string(object, "name", path, true);
@@ -317,6 +317,7 @@ namespace desc
 			field.read_only = read_bool(object, "read_only", where, false);
 			field.color = read_bool(object, "color", where, false);
 			field.degrees = read_bool(object, "degrees", where, false);
+			field.reference_only = read_bool(object, "reference_only", where, false);
 
 			if (const json::value* value = find_value(object, "default")) {
 				// In the default resource: the schema may come from JSON in a resource of the caller's that is gone before the

@@ -34,6 +34,8 @@ namespace edt::mesh
 		std::string_view kind() const { return m_kind; }
 		// Takes the kind's default parameters; the name and the folder stay.
 		void set_kind(std::string_view kind);
+		// The fields of a shape that exists: its stored generator's kind and params. False, with `error`, when the kind or a parameter is not one.
+		bool load(std::string_view kind, const boost::json::object& params, std::string& error);
 		std::vector<shape_field>& fields() { return m_fields; }
 		const std::vector<shape_field>& fields() const { return m_fields; }
 
@@ -42,6 +44,10 @@ namespace edt::mesh
 
 		// Empty when shape.create would take it; else why not. Bakes the mesh once, so ask on Create, not every frame.
 		std::string problem() const;
+		// The same for a shape that is rebuilt: no name is needed.
+		std::string parameters_problem() const;
+		// The kind and the params as shape.rebuild takes them.
+		boost::json::object params() const { return params_json(); }
 		// The arguments of shape.create; call after problem() is empty.
 		boost::json::object create_args() const;
 

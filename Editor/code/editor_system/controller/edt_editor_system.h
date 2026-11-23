@@ -81,6 +81,7 @@ namespace edt {
 	class world_systems_panel;
 	class asset_browser_panel;
 	class prefab_editor_component;
+	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
 
@@ -193,6 +194,8 @@ namespace edt {
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
+		// Hangs on the Inspector: declared after m_asset_open (its layout) so it goes first.
+		std::unique_ptr<shape_parameters_component> m_shape_parameters;
 
 		std::optional<std::string> migration_blocker() const;
 		// What refuses a write into the project: a migration that runs, else one that stopped half way and is not rolled back.

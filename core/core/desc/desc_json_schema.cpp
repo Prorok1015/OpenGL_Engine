@@ -56,6 +56,7 @@ namespace {
 		out["properties"] = boost::json::object{ { "offset", std::move(offset) }, { "size", std::move(size) },
 			{ "sha256", std::move(sha256) }, { "layout", typed("string") } };
 		out["required"] = boost::json::array{ "offset", "size", "sha256", "layout" };
+		out["additionalProperties"] = false;
 		return out;
 	}
 
@@ -134,8 +135,9 @@ namespace {
 			boost::json::array forms;
 			forms.emplace_back(binary_range_object());
 			forms.emplace_back(typed("array"));
+			forms.emplace_back(typed("null"));
 			boost::json::object out{ { "oneOf", std::move(forms) } };
-			out["description"] = "a range of the binary file beside the desc, written only by saving the mesh; an array is the inline data of an older file";
+			out["description"] = "a range of the binary file beside the desc, written only by saving the mesh; an array is the inline data of an older file; null is no range";
 			return out;
 		}
 		case field_kind::array:
@@ -154,6 +156,12 @@ namespace {
 		} else if (field.kind == desc::field_kind::map) {
 			out = typed("object");
 			out["additionalProperties"] = value_schema(field.element, field.ref_type, resolve, depth, budget);
+		} else if (field.kind == desc::field_kind::desc_ref && field.reference_only) {
+			boost::json::array forms;
+			forms.emplace_back(typed("string"));
+			forms.emplace_back(reference_object());
+			out = boost::json::object{ { "oneOf", std::move(forms) } };
+			out["description"] = "a tag of a desc file, or the {guid, path} reference the editor writes; never an inline desc object";
 		} else {
 			out = value_schema(field.kind, field.ref_type, resolve, depth, budget);
 		}

@@ -96,6 +96,8 @@ namespace desc
 		std::string tooltip;
 		std::string filter;
 		std::uint32_t offset = 0; // in the blob; runtime schemas only, not part of equality
+		// desc_ref only: a reference to a file, never an inline desc object (#1200). Last, after offset: layout_revision 20.
+		bool reference_only = false;
 	};
 
 	struct type_schema
@@ -127,7 +129,8 @@ namespace desc
 			&& a.ref_type == b.ref_type && a.default_value == b.default_value && a.range == b.range
 			&& a.write == b.write && a.read_aliases == b.read_aliases && a.optional == b.optional
 			&& a.editor_hidden == b.editor_hidden && a.read_only == b.read_only && a.color == b.color
-			&& a.degrees == b.degrees && a.nullable == b.nullable && a.tooltip == b.tooltip && a.filter == b.filter;
+			&& a.degrees == b.degrees && a.nullable == b.nullable && a.tooltip == b.tooltip && a.filter == b.filter
+			&& a.reference_only == b.reference_only;
 	}
 
 	inline bool operator==(const type_schema& a, const type_schema& b)

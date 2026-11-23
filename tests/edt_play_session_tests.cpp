@@ -11,6 +11,7 @@
 #include "edt_game_view_logic.h"
 #include "edt_input_target.h"
 #include "edt_level_controller.h"
+#include "edt_shape_menu_model.h"
 #include "edt_module_swap_gate.h"
 #include "edt_play_commands.h"
 #include "edt_play_preflight.h"
@@ -3563,6 +3564,25 @@ BOOST_AUTO_TEST_CASE(the_tag_fields_of_a_mesh_are_checked_by_its_schema)
 	BOOST_TEST((refused->item.severity == edt::problem_severity::error));
 	BOOST_TEST(!with_note(found, "/worlds/0/children/1/components/mesh/vx_end"));
 	BOOST_TEST(edt::has_errors(found));
+}
+
+// #746: a mesh node of a ready-made shape (its geometry file and the range of the one mesh in it) stops nothing in Play.
+BOOST_AUTO_TEST_CASE(a_mesh_node_of_a_base_shape_passes_the_preflight)
+{
+	open_level();
+	const edt::mesh::base_shape& shape = edt::mesh::base_shapes().front();
+	const edt::mesh::base_shape_pair files = edt::mesh::base_shape_files(shape);
+	const res::tag geometry = put("a_shape.geom.desc", files.desc);
+	put("a_shape.geom.bin", std::string(reinterpret_cast<const char*>(files.binary.data()), files.binary.size()));
+	scn::prefab_desc::prefab_comp_node mesh;
+	mesh.type_name = "mesh_node_desc";
+	mesh.overrides = edt::mesh::mesh_fields(geometry.string(), edt::mesh::base_shape_range(shape));
+	crate().components["mesh"] = std::move(mesh);
+
+	const auto found = edt::run_play_preflight(state, checks());
+
+	BOOST_TEST(!edt::has_errors(found));
+	BOOST_TEST(!with_note(found, "/worlds/0/children/1/components/mesh/geometry"));
 }
 
 BOOST_AUTO_TEST_CASE(a_web_address_in_a_text_field_does_not_stop_an_agent)
