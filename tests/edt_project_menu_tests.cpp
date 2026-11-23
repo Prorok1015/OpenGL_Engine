@@ -69,6 +69,10 @@ namespace {
 			};
 			hooks.ask_unsaved = [this](const edt::save_all_ask& ask, std::function<void(bool)> resolved) {
 				asked_about.push_back(ask.item.title);
+				if (hold_answers) {
+					held_answers.push_back(std::move(resolved));
+					return;
+				}
 				resolved(answer_resolves);
 			};
 			hooks.load_level = [](const fs::path&) {};
@@ -114,6 +118,8 @@ namespace {
 		int save_all_runs = 0;
 		edt::save_all_report save_all_result;
 		bool answer_resolves = false;
+		bool hold_answers = false;
+		std::vector<std::function<void(bool)>> held_answers;
 		std::vector<std::string> asked_about;
 		int exits = 0;
 		std::vector<fs::path> started;
@@ -448,6 +454,31 @@ BOOST_AUTO_TEST_CASE(SaveAll_AnAgentIsAskedToConfirmAndNeverOverwrites)
 	BOOST_TEST(dialogs.pending() == 0u);
 	BOOST_TEST(result.value.as_object().at("saved").as_array().size() == 1u);
 	BOOST_TEST(result.value.as_object().at("needs_input").as_array().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_WhileItsQuestionsWait_AnotherRunQueuesNothing_AndEndsWithTheLastAnswer)
+{
+	dirty = true;
+	hold_answers = true;
+	save_all_result.asked = { { item_of(2, "data", "a"), edt::save_all_question::disk_changed } };
+
+	BOOST_TEST(actions.activate("file.save_all"));
+	BOOST_REQUIRE(held_answers.size() == 1u);
+	BOOST_TEST(!actions.is_enabled("file.save_all"));
+
+	BOOST_TEST(!actions.activate("file.save_all"));
+	cmd::call agent_call;
+	agent_call.args = json::object{};
+	agent_call.from = cmd::origin::agent("session-1");
+	BOOST_TEST(!actions.invoke("file.save_all", agent_call).ok);
+	BOOST_TEST(save_all_runs == 1);
+	BOOST_TEST(held_answers.size() == 1u);
+
+	held_answers.front()(false);
+
+	BOOST_TEST(actions.is_enabled("file.save_all"));
+	BOOST_TEST(actions.activate("file.save_all"));
+	BOOST_TEST(save_all_runs == 2);
 }
 
 BOOST_AUTO_TEST_CASE(SaveAll_WhenNothingIsDirty_IsDisabledAndWritesNothing)

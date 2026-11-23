@@ -120,6 +120,9 @@ namespace edt
 		// one after the other, then tells the person what was saved and what was not. The questions of Exit, New and Open
 		// still stop at the first refusal (save_other_documents).
 		void save_all();
+		// True from a Save All's start until its last question is answered (or cancelled): a second one would queue the same
+		// questions again and ask about a document the first chain has already settled.
+		bool save_all_running() const { return m_save_all_running; }
 		bool anything_dirty() const;
 		void discard_everything();
 		void import_model();
@@ -162,6 +165,7 @@ namespace edt
 		std::vector<std::function<void()>> m_after_save;
 		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
 		// that must not call back into it (or into the hooks, which capture editor_system).
+		bool m_save_all_running = false;
 		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 		// Last: the actions capture `this` and are removed before the rest is destroyed.
 		std::vector<registration> m_registrations;

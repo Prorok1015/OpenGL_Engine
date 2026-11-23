@@ -316,6 +316,8 @@ BOOST_AUTO_TEST_CASE(Apply_ToAFileThatChangedOnDisk_IsRefusedAndWritesNothing)
 	BOOST_TEST(saved.error.find("changed on disk") != std::string::npos);
 	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == outside);
 	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST((edt::save_all_question_of(*document) == edt::save_all_question::disk_changed));
 }
 
 BOOST_AUTO_TEST_CASE(Apply_OfAPrefabOfALowerLayer_IsRefusedAndWritesNothing)

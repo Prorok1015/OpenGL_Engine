@@ -448,9 +448,12 @@ void edt::file_menu::quick_save()
 
 void edt::file_menu::save_all()
 {
-	if (!m_hooks.save_all) return;
+	if (!m_hooks.save_all || m_save_all_running) return;
+	m_save_all_running = true;
 	save_all_resolve(m_hooks.save_all(), m_hooks.ask_unsaved, [this, alive = std::weak_ptr<void>(m_alive)](save_all_report report) {
-		if (alive.lock()) show_save_all_result(report);
+		if (!alive.lock()) return;
+		m_save_all_running = false;
+		show_save_all_result(report);
 	});
 }
 
@@ -587,8 +590,11 @@ void edt::file_menu::register_actions()
 				return save_all_action_result(report);
 			},
 			.result_schema = save_all_result_schema(),
+			.disabled_reason = [this] {
+				return m_save_all_running ? std::string("Save All is waiting for an answer about a document") : std::string("Nothing to save");
+			},
 			.activate = [this] { save_all(); },
-			.enabled = [this] { return anything_dirty(); },
+			.enabled = [this] { return anything_dirty() && !m_save_all_running; },
 			.category = cmd::agent_category::scene_edit,
 			.risk = cmd::danger::confirm });
 	}
