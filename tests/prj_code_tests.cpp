@@ -10,6 +10,9 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 // What counts as code in code:// (#450): categories, ignored folders, the write patterns and the project's code/ folder.
 namespace {
@@ -255,7 +258,7 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesASymlinkedCache)
 	BOOST_TEST(problem->find("remove it") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(Verify_RefusesALinkInsideTheCacheThatLeadsIntoTheProject)
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesALinkInsideTheCacheThatLeadsIntoTheProject)
 {
 	test_util::temp_dir dir("prj_cache_inner_link");
 	const auto project = open_game(dir);
@@ -267,14 +270,16 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesALinkInsideTheCacheThatLeadsIntoTheProject)
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
 		return;
 	}
-	const auto problem = prj::verify_project_mounts(project);
+	// The cheap check of the folders themselves leaves the depth to link_below, walked once by the resource init.
+	BOOST_TEST(!prj::verify_project_mounts(project).has_value());
+	const auto problem = prj::link_below(project.cache_dir());
 	BOOST_REQUIRE(problem.has_value());
 	BOOST_TEST(problem->find("asset_ops") != std::string::npos);
 	BOOST_TEST(problem->find("remove it and open the project again") != std::string::npos);
 	BOOST_TEST(fs::exists(project.cache_dir() / "asset_ops"), "nothing is removed by the check");
 }
 
-BOOST_AUTO_TEST_CASE(Verify_RefusesAFileLinkDeepInTheCache)
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAFileLinkDeepInTheCache)
 {
 	test_util::temp_dir dir("prj_cache_file_link");
 	const auto project = open_game(dir);
@@ -287,7 +292,7 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesAFileLinkDeepInTheCache)
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
 		return;
 	}
-	const auto problem = prj::verify_project_mounts(project);
+	const auto problem = prj::link_below(project.cache_dir());
 	BOOST_REQUIRE(problem.has_value());
 	BOOST_TEST(problem->find("link.desc") != std::string::npos);
 }
@@ -306,8 +311,30 @@ BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAWalkPastItsLimit)
 	BOOST_TEST(!prj::link_below(dir.path() / "missing").has_value());
 }
 
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(LinkBelow_RefusesAnEntryItCannotRead)
+{
+	if (::geteuid() == 0) {
+		BOOST_TEST_MESSAGE("root reads every folder: nothing to refuse");
+		return;
+	}
+	test_util::temp_dir dir("prj_cache_unreadable");
+	dir.write("cache/locked/inside.txt", "x");
+	const fs::path locked = dir.path() / "cache" / "locked";
+	fs::permissions(locked, fs::perms::none);
+	struct restore_on_exit {
+		fs::path path;
+		~restore_on_exit() { std::error_code ec; fs::permissions(path, fs::perms::owner_all, ec); }
+	} restore{ locked };
+
+	const auto problem = prj::link_below(dir.path() / "cache");
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("cannot be checked for links") != std::string::npos);
+}
+#endif
+
 #ifdef _WIN32
-BOOST_AUTO_TEST_CASE(Verify_RefusesAJunctionAsTheCacheOrInsideIt)
+BOOST_AUTO_TEST_CASE(Refuses_AJunctionAsTheCacheOrInsideIt)
 {
 	for (const bool inside : { false, true }) {
 		BOOST_TEST_INFO("junction inside .cache: " << inside);
@@ -325,9 +352,10 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesAJunctionAsTheCacheOrInsideIt)
 			BOOST_TEST_MESSAGE("junctions unavailable");
 			return;
 		}
-		const auto problem = prj::verify_project_mounts(project);
+		const auto problem = inside ? prj::link_below(project.cache_dir()) : prj::verify_project_mounts(project);
 		BOOST_REQUIRE(problem.has_value());
 		BOOST_TEST(problem->find("is a link") != std::string::npos);
+		BOOST_TEST_MESSAGE("junction refused: " << *problem);
 	}
 }
 #endif

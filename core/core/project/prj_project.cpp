@@ -275,13 +275,6 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		}
 	}
 
-	// The asset journal, the module copies and the rest write below .cache with plain file calls: one link anywhere in
-	// it, shipped with the project, would take those writes along (#1241). A link made there during the session is
-	// not seen here (#1294).
-	if (const auto problem = link_below(project.cache_dir())) {
-		return problem;
-	}
-
 	if (const auto problem = verify_code_dir(project, root, roots)) {
 		return problem;
 	}

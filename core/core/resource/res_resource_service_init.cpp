@@ -5,6 +5,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/project/prj_project.h>
+#include <snk/project/prj_link_check.h>
 #include <snk/common/logger/engine_log.h>
 #include <filesystem>
 #include <format>
@@ -79,8 +80,17 @@ void core::res::resource_init(ds::app_data_storage& data)
 				throw prj::project_error(std::format("project '{}': {}", project.data.name, *problem));
 			}
 		};
+		// The asset journal, the module copies and the rest write below .cache with plain file calls: one link anywhere
+		// in it, shipped with the project, would take those writes along (#1241). Walked once, after the last check of
+		// the folders above; a link made there during the session is not seen (#1294).
+		const auto refuse_cache_links = [&project] {
+			if (auto problem = prj::link_below(project.cache_dir())) {
+				throw prj::project_error(std::format("project '{}': {}", project.data.name, *problem));
+			}
+		};
 		verify();
 		if (::res::resource_system::read_only_project()) {
+			refuse_cache_links();
 			mount_read_only_project(data, project, engine_base);
 			return;
 		}
@@ -91,6 +101,7 @@ void core::res::resource_init(ds::app_data_storage& data)
 			}
 		}
 		verify();
+		refuse_cache_links();
 
 		std::filesystem::path code_dir = project.code_dir();
 		if (!std::filesystem::is_directory(code_dir, ec)) {
