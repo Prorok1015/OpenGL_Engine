@@ -6,9 +6,11 @@
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/scn_geometry_holds.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_spatial.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <entt/entt.hpp>
 #include <cmath>
+#include <limits>
 
 // #1189: the pixel of the editor camera's image -> the node under it, over the engine's raycast.
 
@@ -158,6 +160,97 @@ BOOST_AUTO_TEST_CASE(AnEmptyImageOrASingularMatrix_PicksNothing)
 	edt::pick_point singular = at_pixel({ 50.f, 25.f });
 	singular.view = glm::mat4{ 0.f };
 	BOOST_TEST(!edt::pick_node(reg, singular).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheTopOfTheImageIsUp_APixelNearTheTopPicksTheMeshAbove_NearTheBottomTheOneBelow)
+{
+	const auto above = node_mesh_at({ 0.f, 4.5f, 0.f }, 1);
+	const auto below = node_mesh_at({ 0.f, -4.5f, 0.f }, 2);
+	const auto top = edt::pick_node(reg, at_pixel({ 50.f, 5.5f }));
+	const auto bottom = edt::pick_node(reg, at_pixel({ 50.f, 44.5f }));
+	BOOST_REQUIRE(top);
+	BOOST_REQUIRE(bottom);
+	BOOST_TEST((top->entity == above));
+	BOOST_TEST((bottom->entity == below));
+}
+
+BOOST_AUTO_TEST_CASE(ANodeBehindANonNodeIntermediate_ResolvesThroughTheChain_AndTheNearestNodeWins)
+{
+	const auto root = reg.create();
+	reg.emplace<scn::node_id_component>(root, scn::node_id_component{ { 1 } });
+	const auto middle = reg.create();
+	reg.emplace<scn::parent_component>(middle, scn::parent_component{ root });
+	const auto leaf = mesh_at({ 0.f, 0.f, 0.f });
+	reg.emplace<scn::parent_component>(leaf, scn::parent_component{ middle });
+	const auto picked = edt::pick_node(reg, at_pixel({ 50.f, 25.f }));
+	BOOST_REQUIRE(picked);
+	BOOST_TEST((picked->entity == root));
+
+	reg.emplace<scn::node_id_component>(middle, scn::node_id_component{ { 1, 2 } });
+	const auto nearer = edt::pick_node(reg, at_pixel({ 50.f, 25.f }));
+	BOOST_REQUIRE(nearer);
+	BOOST_TEST((nearer->entity == middle));
+}
+
+BOOST_AUTO_TEST_CASE(AParentCycle_IsAMiss_AndDoesNotHang)
+{
+	const auto a = mesh_at({ 0.f, 0.f, 0.f });
+	const auto b = reg.create();
+	reg.emplace<scn::parent_component>(a, scn::parent_component{ b });
+	reg.emplace<scn::parent_component>(b, scn::parent_component{ a });
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 50.f, 25.f })).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AHelperMeshUnderARealNode_IsNotPicked_TheMeshBehindIs)
+{
+	const auto real = node_mesh_at({ 0.f, 0.f, -3.f }, 2);
+	const auto owner = reg.create();
+	reg.emplace<scn::node_id_component>(owner, scn::node_id_component{ { 1 } });
+	const auto icon = mesh_at({ 0.f, 0.f, 3.f });
+	reg.emplace<scn::parent_component>(icon, scn::parent_component{ owner });
+
+	const auto with_icon_picked = edt::pick_node(reg, at_pixel({ 50.f, 25.f }));
+	BOOST_REQUIRE(with_icon_picked);
+	BOOST_TEST((with_icon_picked->entity == owner));
+
+	reg.emplace<scn::spatial_layers>(icon, scn::spatial_layers{ scn::spatial_mask{ edt::k_editor_helper_layer } });
+	const auto picked = edt::pick_node(reg, at_pixel({ 50.f, 25.f }));
+	BOOST_REQUIRE(picked);
+	BOOST_TEST((picked->entity == real));
+}
+
+BOOST_AUTO_TEST_CASE(ASceneWithoutASpatialWorld_PicksNothing)
+{
+	entt::registry empty;
+	BOOST_TEST(!edt::pick_node(empty, at_pixel({ 50.f, 25.f })).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(WhatLiesBetweenTheEyeAndTheNearPlane_IsNotHit_WhatLiesJustPastItIs)
+{
+	node_mesh_at({ 0.f, 0.f, 9.95f }, 1);
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 50.f, 25.f })).has_value());
+	const auto past = node_mesh_at({ 0.f, 0.f, 9.8f }, 2);
+	const auto picked = edt::pick_node(reg, at_pixel({ 50.f, 25.f }));
+	BOOST_REQUIRE(picked);
+	BOOST_TEST((picked->entity == past));
+}
+
+BOOST_AUTO_TEST_CASE(ANonFinitePixelImageOrMatrix_AndAPixelOutsideTheImage_PickNothing)
+{
+	node_mesh_at({ 0.f, 0.f, 0.f }, 7);
+	const float nan = std::numeric_limits<float>::quiet_NaN();
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ nan, 25.f })).has_value());
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 50.f, std::numeric_limits<float>::infinity() })).has_value());
+	edt::pick_point bad_image = at_pixel({ 50.f, 25.f });
+	bad_image.image_size = { nan, 50.f };
+	BOOST_TEST(!edt::pick_node(reg, bad_image).has_value());
+	edt::pick_point bad_matrix = at_pixel({ 50.f, 25.f });
+	bad_matrix.projection[1][1] = nan;
+	BOOST_TEST(!edt::pick_node(reg, bad_matrix).has_value());
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ -1.f, 25.f })).has_value());
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 100.f, 25.f })).has_value());
+	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 50.f, 50.f })).has_value());
+	BOOST_TEST(edt::pick_node(reg, at_pixel({ 50.f, 25.f })).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
