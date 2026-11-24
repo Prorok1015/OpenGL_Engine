@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/test/unit_test.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -18,6 +19,12 @@ namespace test_util {
 		std::filesystem::create_directory_symlink(target, link, ec);
 		return !ec;
 #endif
+	}
+
+	// link_folder that fails the test when no link can be made: the check it stands for would be vacuous.
+	inline void make_folder_link(const std::filesystem::path& link, const std::filesystem::path& target)
+	{
+		BOOST_REQUIRE_MESSAGE(link_folder(target, link), "no folder link could be made at " << link.string());
 	}
 
 }

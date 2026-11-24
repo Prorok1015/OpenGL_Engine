@@ -37,6 +37,7 @@
 #include "edt_panels_component.h"
 #include "edt_shape_parameters_component.h"
 #include "edt_problems_component.h"
+#include "edt_project_links.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
 #include "edt_input_actions_panel.h"
@@ -336,6 +337,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
 		.play_active = [this] { return m_play && m_play->active(); },
 		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); } });
+
+	// A link in code/ that leaves the project: the project opens, the person is told (#1300).
+	if (data.has_value<prj::project_context>()) {
+		m_context->problems().set(k_project_problem_source, code_link_problems(data.require<prj::project_context>()));
+	}
 
 	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
 	// Create panels
