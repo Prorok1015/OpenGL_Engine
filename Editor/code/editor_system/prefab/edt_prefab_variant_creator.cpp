@@ -1,10 +1,13 @@
 #include "edt_prefab_variant_creator.h"
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_free_name.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
+#include <filesystem>
 #include <format>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -25,11 +28,14 @@ std::string edt::prefab_variant_creator::suggested_name(const res::tag& base) co
 {
 	std::string folder, stem;
 	if (!split(base, folder, stem)) return {};
-	for (int number = 1; number < 1000; ++number) {
-		std::string candidate = number == 1 ? std::format("{}_variant", stem) : std::format("{}_variant{}", stem, number);
-		if (check(base, candidate).empty()) return candidate;
-	}
-	return {};
+	const std::vector<std::filesystem::path> layers = m_ports.layers ? m_ports.layers() : std::vector<std::filesystem::path>{};
+	// "hero_variant", "hero_variant2", ...: no separator before the number.
+	const res::free_name_result found = res::free_name(layers, folder, std::format("{}_variant", stem), file_suffix, "");
+	if (!found.ok()) return {};
+	std::string candidate = found.name.substr(0, found.name.size() - file_suffix.size());
+	// The editor's own name rules, which the layers do not know.
+	if (!check(base, candidate).empty()) return {};
+	return candidate;
 }
 
 std::string edt::prefab_variant_creator::check(const res::tag& base, std::string_view stem) const
