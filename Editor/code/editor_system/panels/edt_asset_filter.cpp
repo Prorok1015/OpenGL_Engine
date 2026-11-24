@@ -83,20 +83,53 @@ std::string edt::asset_kind_of(const asset_kind_registry* kinds, std::string_vie
 
 std::string edt::desc_type_in(std::string_view head)
 {
-	constexpr std::string_view key = "\"__type\"";
-	const std::size_t at = head.find(key);
-	if (at == std::string_view::npos) {
-		return {};
+	if (head.starts_with("\xEF\xBB\xBF")) {
+		head.remove_prefix(3);
 	}
-	std::size_t i = at + key.size();
-	while (i < head.size() && (head[i] == ' ' || head[i] == '\t' || head[i] == '\r' || head[i] == '\n' || head[i] == ':')) {
-		++i;
+	const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+	// The end of the string whose opening quote is at `open` (the index of its closing quote), npos when the text ends first.
+	const auto string_end = [&head](std::size_t open) {
+		for (std::size_t i = open + 1; i < head.size(); ++i) {
+			if (head[i] == '\\') {
+				++i;
+			} else if (head[i] == '"') {
+				return i;
+			}
+		}
+		return std::string_view::npos;
+	};
+	int depth = 0;
+	for (std::size_t i = 0; i < head.size(); ++i) {
+		const char c = head[i];
+		if (c == '{' || c == '[') {
+			++depth;
+		} else if (c == '}' || c == ']') {
+			--depth;
+		} else if (c == '"') {
+			const std::size_t end = string_end(i);
+			if (end == std::string_view::npos) {
+				return {};
+			}
+			std::size_t after = end + 1;
+			while (after < head.size() && blank(head[after])) {
+				++after;
+			}
+			const bool is_key = after < head.size() && head[after] == ':';
+			if (depth == 1 && is_key && head.substr(i + 1, end - i - 1) == "__type") {
+				++after;
+				while (after < head.size() && blank(head[after])) {
+					++after;
+				}
+				if (after >= head.size() || head[after] != '"') {
+					return {};
+				}
+				const std::size_t value_end = string_end(after);
+				return value_end == std::string_view::npos ? std::string{} : std::string{ head.substr(after + 1, value_end - after - 1) };
+			}
+			i = end;
+		}
 	}
-	if (i >= head.size() || head[i] != '"') {
-		return {};
-	}
-	const std::size_t end = head.find('"', i + 1);
-	return end == std::string_view::npos ? std::string{} : std::string{ head.substr(i + 1, end - i - 1) };
+	return {};
 }
 
 bool edt::asset_kind_needs_desc_type(const asset_kind_registry* kinds, std::string_view path)
@@ -128,7 +161,7 @@ namespace {
 		return edt::desc_type_cache::stamp{ result.stamp->size, result.stamp->write_time_ns, result.stamp->file_id };
 	}
 
-	std::string read_head_beneath(const std::filesystem::path& root, const std::filesystem::path& relative)
+	std::optional<std::string> read_head_beneath(const std::filesystem::path& root, const std::filesystem::path& relative)
 	{
 		std::string head;
 		const auto result = platform::beneath::read_beneath_stream(request_of(root, relative),
@@ -137,7 +170,10 @@ namespace {
 				head.append(reinterpret_cast<const char*>(chunk.data()), (std::min)(room, chunk.size()));
 				return head.size() < edt::k_desc_sniff_bytes;
 			});
-		return result.status == platform::beneath::read_status::ok ? head : std::string{};
+		if (result.status != platform::beneath::read_status::ok) {
+			return std::nullopt;
+		}
+		return head;
 	}
 
 }
@@ -162,7 +198,11 @@ std::optional<std::string> edt::desc_type_cache::type_of(const std::filesystem::
 	}
 	--budget;
 	++m_reads;
-	std::string type = desc_type_in(m_ports.read_head(root, relative));
+	const std::optional<std::string> head = m_ports.read_head(root, relative);
+	if (!head) {
+		return std::string{};
+	}
+	std::string type = desc_type_in(*head);
 	m_entries[key] = entry{ *now, type };
 	return type;
 }
@@ -177,8 +217,10 @@ std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_reg
 	}
 	if (kinds) {
 		for (const std::string& id : kinds->ids()) {
+			const asset_kind_desc* registered = kinds->find(id);
+			const bool opens = registered && registered->open;
 			const bool known = id == "poly" || id == "desc" || std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
-			if (!known) {
+			if (opens && !known) {
 				out.push_back({ id, id });
 			}
 		}
@@ -200,15 +242,24 @@ void edt::asset_filter::set_kind(std::string_view id, bool on)
 	}
 }
 
+bool edt::asset_filter::accepts_name(std::string_view name) const
+{
+	return m_name.empty() || lowered(name).find(m_name) != std::string::npos;
+}
+
 bool edt::asset_filter::accepts(bool is_dir, std::string_view name, std::string_view kind) const
 {
 	if (is_dir) {
 		return true;
 	}
-	if (!m_name.empty() && lowered(name).find(m_name) == std::string::npos) {
-		return false;
-	}
-	return m_kinds.empty() || m_kinds.contains(kind);
+	return accepts_name(name) && (m_kinds.empty() || m_kinds.contains(kind));
+}
+
+void edt::asset_filter::keep_only(const std::vector<asset_filter_kind>& offered)
+{
+	std::erase_if(m_kinds, [&offered](const std::string& id) {
+		return std::ranges::none_of(offered, [&id](const asset_filter_kind& kind) { return kind.id == id; });
+	});
 }
 
 std::string edt::asset_filter::summary() const

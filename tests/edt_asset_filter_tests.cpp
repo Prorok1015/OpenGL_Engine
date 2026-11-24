@@ -62,6 +62,24 @@ BOOST_AUTO_TEST_CASE(TheTypeOfADescIsReadFromItsFirstBytes)
 	BOOST_TEST(edt::desc_type_in("").empty());
 }
 
+BOOST_AUTO_TEST_CASE(OnlyTheTopLevelTypeCounts)
+{
+	BOOST_TEST(edt::desc_type_in(R"({ "child": { "__type": "world_desc" }, "__type": "level_desc" })") == "level_desc");
+	BOOST_TEST(edt::desc_type_in(R"({ "list": [ { "__type": "world_desc" } ] })").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "note": "\"__type\": \"world_desc\"", "__type": "level_desc" })") == "level_desc");
+	BOOST_TEST(edt::desc_type_in(R"({ "a": 1, "b": { "c": [1, 2, { "__type": "x" }] }, "__type" : "prefab_desc" })") == "prefab_desc");
+	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_desc" })") == "level_desc");
+}
+
+BOOST_AUTO_TEST_CASE(ABomIsSkipped_ATruncatedTextHasNoType)
+{
+	BOOST_TEST(edt::desc_type_in("\xEF\xBB\xBF{ \"__type\": \"level_desc\" }") == "level_desc");
+	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_de)").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "__typ)").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "__type":)").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "name": "unfinished)").empty());
+}
+
 BOOST_AUTO_TEST_CASE(OnlyAPlainDescNeedsItsType)
 {
 	BOOST_TEST(edt::asset_kind_needs_desc_type(nullptr, "levels/a.desc"));
@@ -79,9 +97,11 @@ struct counting_ports
 				if (found == stamps.end()) return std::nullopt;
 				return found->second;
 			},
-			[this](const std::filesystem::path&, const std::filesystem::path& relative) {
+			[this](const std::filesystem::path&, const std::filesystem::path& relative) -> std::optional<std::string> {
 				++reads;
-				return heads[relative.generic_string()];
+				const auto found = heads.find(relative.generic_string());
+				if (found == heads.end()) return std::nullopt;
+				return found->second;
 			} });
 	}
 
@@ -134,6 +154,21 @@ BOOST_AUTO_TEST_CASE(TheBudgetBoundsTheReadsOfAPass_TheRestFillsInOnTheNextOnes)
 	BOOST_TEST(budget == 1);
 }
 
+BOOST_AUTO_TEST_CASE(AFailedRead_IsDataNotPending_AndIsNotKept)
+{
+	counting_ports env;
+	env.stamps["a.desc"] = { 5, 1, 1 };
+	auto cache = env.make();
+	int budget = 5;
+	const auto failed = cache.type_of("r", "a.desc", budget);
+	BOOST_REQUIRE(failed.has_value());
+	BOOST_TEST(failed->empty());
+	BOOST_TEST(edt::asset_kind_of(nullptr, "a.desc", *failed) == "data");
+	env.heads["a.desc"] = R"({ "__type": "level_desc" })";
+	BOOST_TEST(cache.type_of("r", "a.desc", budget).value() == "level_desc");
+	BOOST_TEST(env.reads == 2);
+}
+
 BOOST_AUTO_TEST_CASE(AFileThatIsNoRegularFile_HasNoTypeAndIsNeverRead)
 {
 	counting_ports env;
@@ -179,6 +214,55 @@ BOOST_AUTO_TEST_CASE(AKindOfAModule_IsTheKindOfItsFiles_ThePolyKindIsTheMeshKind
 	BOOST_TEST(std::ranges::count(offered, "lens") == 1);
 	BOOST_TEST(std::ranges::count(offered, "poly") == 0);
 	BOOST_TEST(std::ranges::count(offered, "mesh") == 1);
+}
+
+BOOST_AUTO_TEST_CASE(OnlyAKindThatOpensIsOffered)
+{
+	edt::asset_kind_registry kinds;
+	const auto opens = kinds.add({ .id = "lens", .suffix = ".lens", .open = [](edt::editor_context&, const res::tag&) {} });
+	const auto drops = kinds.add({ .id = "dropper", .suffix = ".drop", .drop_into_scene = [](edt::editor_context&, const res::tag&) {} });
+	const auto offered = ids_of(edt::asset_filter_kinds(&kinds));
+	BOOST_TEST(std::ranges::count(offered, "lens") == 1);
+	BOOST_TEST(std::ranges::count(offered, "dropper") == 0);
+}
+
+BOOST_AUTO_TEST_CASE(APickedKindThatIsNoLongerOffered_IsDropped)
+{
+	edt::asset_filter filter;
+	filter.set_kind("lens", true);
+	filter.set_kind("texture", true);
+	{
+		edt::asset_kind_registry kinds;
+		const auto lens = kinds.add({ .id = "lens", .suffix = ".lens", .open = [](edt::editor_context&, const res::tag&) {} });
+		filter.keep_only(edt::asset_filter_kinds(&kinds));
+		BOOST_TEST(filter.kind_picked("lens"));
+	}
+	filter.keep_only(edt::asset_filter_kinds(nullptr));
+	BOOST_TEST(!filter.kind_picked("lens"));
+	BOOST_TEST(filter.kind_picked("texture"));
+	filter.set_kind("texture", false);
+	BOOST_TEST(!filter.needs_kind());
+	BOOST_TEST(filter.accepts(false, "a.png", "texture"));
+}
+
+BOOST_AUTO_TEST_CASE(TickingEveryKindShowsEveryOfferedFile)
+{
+	edt::asset_filter every;
+	for (const auto& kind : edt::asset_filter_kinds(nullptr)) every.set_kind(kind.id, true);
+	const edt::asset_filter none;
+	for (const char* name : { "a.png", "b.glb", "c.prefab.desc", "d.geom.desc", "e.desc", "f.frag", "g.txt", "h.level.desc", "i.world.desc", "j.shader.desc" }) {
+		const std::string kind = edt::asset_kind_of(nullptr, name);
+		BOOST_TEST(every.accepts(false, name, kind) == none.accepts(false, name, kind));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheNameIsCheckedBeforeAnythingElse)
+{
+	edt::asset_filter filter;
+	filter.set_name("rock");
+	BOOST_TEST(filter.accepts_name("Rock.png"));
+	BOOST_TEST(!filter.accepts_name("sand.png"));
+	BOOST_TEST(edt::asset_filter{}.accepts_name("anything"));
 }
 
 BOOST_AUTO_TEST_CASE(TheFixedKindsAreOfferedOnceEach)

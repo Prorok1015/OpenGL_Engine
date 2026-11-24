@@ -68,6 +68,7 @@ namespace edt
 	{
 		m_layers = std::move(layers);
 		m_current_rel.clear();
+		m_desc_types.clear();
 		m_needs_refresh = true;
 	}
 
@@ -235,6 +236,7 @@ namespace edt
 		m_labels_have_icons = gui::ui_font_has_icons();
 
 		m_filter.set_name(m_search);
+		m_filter.keep_only(asset_filter_kinds(m_kinds));
 
 		// A desc's `__type` is read for a few files per pass; the rest of a big folder appears over the next frames.
 		constexpr int k_type_reads_per_pass = 32;
@@ -243,6 +245,8 @@ namespace edt
 
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
 			if (!src.is_dir) {
+				if (!m_filter.accepts_name(src.name))
+					continue;
 				std::string kind;
 				if (m_filter.needs_kind()) {
 					const std::string relative = fs_paths::utf8_of(src.relative);
@@ -314,7 +318,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
-		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search"});
+		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search", "asset_browser_kinds"});
 		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;
@@ -348,7 +352,7 @@ namespace edt
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(-1.f);
 		if (ImGui::BeginCombo("##kinds", m_filter.summary().c_str())) {
-			if (ImGui::Selectable("All", !m_filter.needs_kind(), ImGuiSelectableFlags_DontClosePopups)) {
+			if (ImGui::Selectable("All", !m_filter.needs_kind(), ImGuiSelectableFlags_NoAutoClosePopups)) {
 				m_filter.clear_kinds();
 				m_needs_refresh = true;
 			}
@@ -356,7 +360,7 @@ namespace edt
 			for (const asset_filter_kind& kind : asset_filter_kinds(m_kinds)) {
 				const bool picked = m_filter.kind_picked(kind.id);
 				const std::string label = kind.label + "###kind_" + kind.id;
-				if (ImGui::Selectable(label.c_str(), picked, ImGuiSelectableFlags_DontClosePopups)) {
+				if (ImGui::Selectable(label.c_str(), picked, ImGuiSelectableFlags_NoAutoClosePopups)) {
 					m_filter.set_kind(kind.id, !picked);
 					m_needs_refresh = true;
 				}
