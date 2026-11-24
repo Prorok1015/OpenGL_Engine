@@ -770,6 +770,7 @@ BOOST_AUTO_TEST_CASE(ThePrefabPreviewWindowGivesItsDocument_TheViewportGivesTheS
 	const edt::registration prefab_registration = context->panels().add({
 		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = prefab_window });
+	host->set_shown_prefab([preview] { return preview->id(); });
 
 	const auto frame = [&] {
 		ImGui::NewFrame();
@@ -823,6 +824,7 @@ BOOST_AUTO_TEST_CASE(ThePrefabWindowWithItsDocumentAndMarkInTheTitle_StillGivesI
 	const edt::registration prefab_registration = context->panels().add({
 		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = prefab_window });
+	host->set_shown_prefab([preview] { return preview->id(); });
 	prefab_window->show_title("Prefab: arm [*]###prefab_editor");
 
 	const auto frame = [&] {
@@ -856,6 +858,60 @@ BOOST_AUTO_TEST_CASE(ThePrefabWindowWithItsDocumentAndMarkInTheTitle_StillGivesI
 	frame();
 	frame();
 	BOOST_TEST(documents.active() == &data);
+}
+
+BOOST_AUTO_TEST_CASE(ThePrefabAndModellerWindows_GiveTheirOwnShownDocument_NotTheActivePreview)
+{
+	imgui_context imgui;
+	edt::document_manager& documents = context->documents();
+	edt::asset_preview_desc kind;
+	kind.id = "test.preview";
+	kind.suffix = ".preview";
+	kind.multiple = true;
+	kind.make_preview = [](edt::editor_services&) -> std::unique_ptr<edt::previewable_document> { return std::make_unique<fake_preview>(); };
+	const edt::registration kind_registration = context->asset_kinds().add_preview(std::move(kind));
+	edt::previewable_document* prefab_like = documents.open_preview("test.preview", res::tag::make("a.preview"));
+	edt::previewable_document* mesh_like = documents.open_preview("test.preview", res::tag::make("b.preview"));
+	BOOST_REQUIRE(prefab_like != nullptr && mesh_like != nullptr && prefab_like != mesh_like);
+	BOOST_REQUIRE(documents.active() == mesh_like);
+	host->set_shown_prefab([prefab_like] { return prefab_like->id(); });
+	host->set_shown_mesh([mesh_like] { return mesh_like->id(); });
+	auto prefab_window = std::make_shared<window_panel>("prefab_editor", "Prefab Editor");
+	auto mesh_window = std::make_shared<window_panel>("mesh_editor", "Mesh Modeller");
+	const edt::registration prefab_registration = context->panels().add({
+		.id = "prefab_editor", .title = "Prefab Editor", .slot = edt::dock_slot::floating, .open_by_default = true,
+		.show_in_view_menu = false, .panel = prefab_window });
+	const edt::registration mesh_registration = context->panels().add({
+		.id = "mesh_editor", .title = "Mesh Modeller", .slot = edt::dock_slot::floating, .open_by_default = true,
+		.show_in_view_menu = false, .panel = mesh_window });
+
+	const auto frame = [&] {
+		ImGui::NewFrame();
+		prefab_window->render();
+		mesh_window->render();
+		if (ImGui::Begin("Viewport")) {
+		}
+		ImGui::End();
+		host->follow_focus();
+		ImGui::EndFrame();
+	};
+	frame();
+	frame();
+
+	ImGui::SetWindowFocus("Prefab Editor");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == prefab_like);
+
+	ImGui::SetWindowFocus("Mesh Modeller");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == mesh_like);
+
+	ImGui::SetWindowFocus("Viewport");
+	frame();
+	frame();
+	BOOST_TEST(documents.active() == &documents.scene());
 }
 
 BOOST_AUTO_TEST_CASE(AQuietlyOpenedWindow_TakesNeitherTheFocusNorTheActivity_InAnyNumberOfFrames)
