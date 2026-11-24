@@ -530,15 +530,15 @@ BOOST_AUTO_TEST_CASE(ALockFileSystemWithoutLocks_IsUnverifiable_LaterFirst_AndLa
 
 BOOST_AUTO_TEST_CASE(AnotherHost_OrASessionWithoutALock_IsUnverifiable)
 {
-	const std::string far = other_session(true, "build-machine-7");
-	put_record(far, "data", "settings.desc", bytes_of("{}"));
+	const std::string remote_session = other_session(true, "build-machine-7");
+	put_record(remote_session, "data", "settings.desc", bytes_of("{}"));
 	run();
 	BOOST_REQUIRE(asked.size() == 1u);
 	BOOST_TEST(asked[0].options[0] == std::string(edt::autosave_recovery::k_later));
 	BOOST_TEST(asked[0].text.find("may still be running on build-machine-7") != std::string::npos);
 	asked[0].answer(std::nullopt);
 	asked.clear();
-	fs::remove_all(cache / edt::autosave_session_folder(far));
+	fs::remove_all(cache / edt::autosave_session_folder(remote_session));
 
 	const std::string unlocked = other_session(true, edt::this_host_name(), false);
 	put_record(unlocked, "data", "settings.desc", bytes_of("{}"));
