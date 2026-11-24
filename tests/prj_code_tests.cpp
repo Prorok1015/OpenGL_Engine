@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_code.h>
 #include <snk/project/prj_link_check.h>
+#include "test_folder_link.hpp"
 #include <snk/project/prj_project.h>
 #include <snk/resource/resolvers/res_write_policy.h>
 #include "test_temp_dir.hpp"
@@ -320,21 +321,16 @@ BOOST_AUTO_TEST_CASE(LinkBelow_SnkWalk_RefusesALinkAnywhereInSnk_ExceptInsideAMi
 {
 	test_util::temp_dir dir("prj_snk_links");
 	const auto project = open_game(dir);
-	fs::create_directories(project.snk_dir() / "migrations" / "m1" / "backup" / "res");
+	const fs::path backup = project.snk_dir() / "migrations" / "m1" / "backup";
+	fs::create_directories(backup / "res");
 	fs::create_directories(project.snk_dir() / "mcp");
-	dir.write("game/res/target.desc", "{}");
 	dir.write("game/.snk/migrations/m1/report.json", "{}");
-	std::error_code ec;
 
-	fs::create_symlink(project.root / "res" / "target.desc", project.snk_dir() / "migrations" / "m1" / "backup" / "res" / "copy.desc", ec);
-	if (ec) {
-		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
-		return;
-	}
+	// A folder link (a junction on Windows) inside a backup is not walked.
+	test_util::make_folder_link(backup / "res" / "inner", project.root / "res");
 	BOOST_TEST(!prj::link_below(project.snk_dir(), snk_walk()).has_value(), "inside a backup nothing is walked");
 
-	fs::create_symlink(project.root / "res", project.snk_dir() / "mcp" / "deep", ec);
-	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	test_util::make_folder_link(project.snk_dir() / "mcp" / "deep", project.root / "res");
 	const auto deep = prj::link_below(project.snk_dir(), snk_walk());
 	BOOST_REQUIRE(deep.has_value());
 	BOOST_TEST(deep->find("deep") != std::string::npos);
@@ -342,16 +338,20 @@ BOOST_AUTO_TEST_CASE(LinkBelow_SnkWalk_RefusesALinkAnywhereInSnk_ExceptInsideAMi
 	BOOST_TEST(deep->find("remove it and open the project again") != std::string::npos);
 	fs::remove(project.snk_dir() / "mcp" / "deep");
 
+#ifndef _WIN32
+	// A file link needs a privilege on Windows: the case runs where it can be made.
+	dir.write("game/res/target.desc", "{}");
+	std::error_code ec;
 	fs::create_symlink(project.root / "res" / "target.desc", project.snk_dir() / "migrations" / "m1" / "journal.json", ec);
 	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
 	const auto journal = prj::link_below(project.snk_dir(), snk_walk());
 	BOOST_REQUIRE(journal.has_value());
 	BOOST_TEST(journal->find("journal.json") != std::string::npos);
 	fs::remove(project.snk_dir() / "migrations" / "m1" / "journal.json");
+#endif
 
-	fs::remove_all(project.snk_dir() / "migrations" / "m1" / "backup");
-	fs::create_directory_symlink(project.root / "res", project.snk_dir() / "migrations" / "m1" / "backup", ec);
-	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	fs::remove_all(backup);
+	test_util::make_folder_link(backup, project.root / "res");
 	const auto backup_itself = prj::link_below(project.snk_dir(), snk_walk());
 	BOOST_REQUIRE_MESSAGE(backup_itself.has_value(), "a link AT the backup folder is still refused");
 	BOOST_TEST(backup_itself->find("backup") != std::string::npos);
@@ -379,28 +379,50 @@ BOOST_AUTO_TEST_CASE(LinksLeavingProject_ReportsOnlyTheLinksThatLeaveIt)
 	const auto project = open_game(dir);
 	fs::create_directories(project.code_dir() / "src");
 	fs::create_directories(dir.path() / "elsewhere");
-	dir.write("elsewhere/outside.cpp", "x");
+	test_util::make_folder_link(project.code_dir() / "vendor", dir.path() / "elsewhere");
+	test_util::make_folder_link(project.code_dir() / "inner", project.code_dir() / "src");
+	std::vector<std::string> expected{ "vendor" };
+#ifndef _WIN32
 	dir.write("game/code/src/inside.cpp", "x");
 	std::error_code ec;
 	fs::create_symlink(project.code_dir() / "src" / "inside.cpp", project.code_dir() / "src" / "stays_in.cpp", ec);
-	if (ec) {
-		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
-		return;
-	}
-	fs::create_directory_symlink(dir.path() / "elsewhere", project.code_dir() / "vendor", ec);
 	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
 	fs::create_symlink(dir.path() / "gone.cpp", project.code_dir() / "src" / "dangling.cpp", ec);
 	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	expected.push_back("dangling.cpp");
+#endif
 
 	const prj::leaving_links found = prj::links_leaving_project(project.code_dir(), project.root);
 
 	BOOST_TEST(found.complete);
-	BOOST_REQUIRE_EQUAL(found.found.size(), 2u);
 	std::vector<std::string> names;
 	for (const prj::leaving_link& link : found.found) names.push_back(link.link.filename().string());
 	std::ranges::sort(names);
-	BOOST_TEST((names == std::vector<std::string>{ "dangling.cpp", "vendor" }));
+	std::ranges::sort(expected);
+	BOOST_TEST((names == expected));
 	BOOST_TEST(fs::exists(project.code_dir() / "vendor"), "nothing is removed by the check");
+}
+
+BOOST_AUTO_TEST_CASE(LinksLeavingProject_ALinkIntoSnkOrCache_CountsAsLeavingWhenTheyAreNamed)
+{
+	test_util::temp_dir dir("prj_code_leaving_private");
+	const auto project = open_game(dir);
+	fs::create_directories(project.snk_dir());
+	fs::create_directories(project.cache_dir());
+	fs::create_directories(project.code_dir());
+	test_util::make_folder_link(project.code_dir() / "snk_link", project.snk_dir());
+	test_util::make_folder_link(project.code_dir() / "cache_link", project.cache_dir());
+	test_util::make_folder_link(project.code_dir() / "res_link", project.root / "res");
+
+	const prj::leaving_links plain = prj::links_leaving_project(project.code_dir(), project.root);
+	const prj::leaving_links named = prj::links_leaving_project(project.code_dir(), project.root, prj::k_link_walk_limit,
+		{ project.snk_dir(), project.cache_dir() });
+
+	BOOST_TEST(plain.found.empty(), "inside the project, and no private folder is named");
+	std::vector<std::string> names;
+	for (const prj::leaving_link& link : named.found) names.push_back(link.link.filename().string());
+	std::ranges::sort(names);
+	BOOST_TEST((names == std::vector<std::string>{ "cache_link", "snk_link" }));
 }
 
 BOOST_AUTO_TEST_CASE(LinksLeavingProject_SaysWhenTheWalkDidNotFinish_AndAMissingFolderHasNone)

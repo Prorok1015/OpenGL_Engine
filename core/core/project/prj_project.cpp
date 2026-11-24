@@ -337,7 +337,8 @@ std::optional<std::string> prj::link_below(const fs::path& dir, const link_walk_
 	return std::nullopt;
 }
 
-prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::path& root, std::size_t max_entries)
+prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::path& root, std::size_t max_entries,
+	const std::vector<fs::path>& private_dirs)
 {
 	leaving_links out;
 	std::error_code ec;
@@ -349,6 +350,13 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 	if (ec) {
 		out.complete = false;
 		return out;
+	}
+	std::vector<fs::path> real_private;
+	real_private.reserve(private_dirs.size());
+	for (const fs::path& private_dir : private_dirs) {
+		std::error_code private_error;
+		fs::path real = fs::weakly_canonical(private_dir, private_error);
+		if (!private_error) real_private.push_back(std::move(real));
 	}
 	fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec);
 	if (ec) {
@@ -371,7 +379,9 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 		}
 		std::error_code resolve_error;
 		const fs::path target = fs::weakly_canonical(it->path(), resolve_error);
-		if (resolve_error || !is_inside(real_root, target)) {
+		const bool into_private = !resolve_error
+			&& std::ranges::any_of(real_private, [&target](const fs::path& private_dir) { return is_inside(private_dir, target); });
+		if (resolve_error || !is_inside(real_root, target) || into_private) {
 			out.found.push_back({ it->path(), resolve_error ? fs::path{} : target });
 		}
 	}

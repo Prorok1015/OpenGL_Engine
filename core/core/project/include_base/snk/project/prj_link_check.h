@@ -26,7 +26,8 @@ namespace prj
 		std::function<bool(const std::string& relative)> skip_folder;
 	};
 
-	// `.snk/migrations/<id>/backup`: copies of the project's own files, many and none of them read through a path of `.snk`.
+	// `.snk/migrations/<id>/backup`: copies of the project's own files, many; a rollback reads them through
+	// `prj::read_project_file`, which follows no link, so a link planted there is refused when it is read, not walked at open.
 	inline bool is_migration_backup_folder(const std::string& relative)
 	{
 		constexpr std::string_view head = "migrations/";
@@ -59,8 +60,9 @@ namespace prj
 		bool complete = true;
 	};
 
-	// The links below `dir` (any depth, none followed) whose target, resolved as far as it exists, is not inside `root`.
-	// Reads nothing but names; changes nothing.
+	// The links below `dir` (any depth, none followed) whose target, resolved as far as it exists, is not inside `root`, or is
+	// inside one of `private_dirs` (the project's own `.snk` and `.cache`: a link into them reads or writes what no path of the
+	// project's content should reach). Reads nothing but names; changes nothing.
 	SNK_API leaving_links links_leaving_project(const std::filesystem::path& dir, const std::filesystem::path& root,
-		std::size_t max_entries = k_link_walk_limit);
+		std::size_t max_entries = k_link_walk_limit, const std::vector<std::filesystem::path>& private_dirs = {});
 }

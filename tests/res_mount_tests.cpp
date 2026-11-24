@@ -3,6 +3,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_resource_service_init.h>
+#include "test_folder_link.hpp"
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/platform/plt_process.h>
@@ -461,6 +462,41 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesALinkDeepInTheCacheWithAProjectError
 	}
 	BOOST_TEST(!data.has_value<res::resource_system>());
 	BOOST_TEST(fs::is_symlink(opened.context->cache_dir() / "asset_ops" / "originals"), "nothing is removed");
+}
+
+// #1300: a link anywhere in .snk refuses the project too, except inside a migration's backup copies.
+BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesALinkDeepInSnkWithAProjectError_ButNotOneInsideAMigrationBackup, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside);
+	fs::create_directories(opened.context->snk_dir() / "migrations" / "m1" / "backup" / "res");
+	fs::create_directories(opened.context->snk_dir() / "mcp");
+	test_util::make_folder_link(opened.context->snk_dir() / "migrations" / "m1" / "backup" / "res" / "planted", outside);
+
+	{
+		ds::app_data_storage data;
+		data.construct<ds::task_system>(test_util::manual_tasks());
+		data.construct<prj::project_context>(*opened.context);
+		BOOST_CHECK_NO_THROW(core::res::resource_init(data));
+		core::res::resource_term(data);
+	}
+
+	test_util::make_folder_link(opened.context->snk_dir() / "mcp" / "deep", outside);
+	ds::app_data_storage refused;
+	refused.construct<ds::task_system>(test_util::manual_tasks());
+	refused.construct<prj::project_context>(*opened.context);
+	try {
+		core::res::resource_init(refused);
+		BOOST_ERROR("the project was opened with a link in its .snk folder");
+	} catch (const prj::project_error& error) {
+		BOOST_TEST(std::string(error.what()).find("deep") != std::string::npos);
+		BOOST_TEST(std::string(error.what()).find(".snk") != std::string::npos);
+	}
+	BOOST_TEST(!refused.has_value<res::resource_system>());
+	BOOST_TEST(fs::exists(opened.context->snk_dir() / "mcp" / "deep"), "nothing is removed");
 }
 
 namespace {

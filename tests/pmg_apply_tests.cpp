@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_fixture_project.hpp"
+#include "test_folder_link.hpp"
+#include "test_temp_dir.hpp"
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_apply.h>
 #include <snk/desc/desc_json_ops.h>
@@ -244,6 +246,28 @@ BOOST_AUTO_TEST_CASE(ARollback_RestoresTheBackup_AndDeletesTheCreatedFiles)
 	BOOST_TEST((content_of(copy.root()) == before));
 	BOOST_TEST(!fs::exists(copy.res() / "created.resource"));
 	BOOST_TEST(json::parse(read_text(journal_path)).at("status").as_string() == "rolled_back");
+}
+
+// #1300: a rollback reads the backup through prj::read_project_file, which follows no link: a folder of the backup replaced by a
+// link (a junction on Windows) to a folder that holds another file of the same name restores nothing from it.
+BOOST_AUTO_TEST_CASE(ARollback_DoesNotReadTheBackupThroughALink)
+{
+	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
+	BOOST_REQUIRE(outcome.refused.empty());
+	const fs::path migrated = copy.res() / "cameras/cam_v1.desc";
+	const std::string after_migration = read_text(migrated);
+	const fs::path backup_folder = copy.root() / ".snk/migrations/test-migration/backup/res/cameras";
+	test_util::temp_dir outside("pmg_rollback_link_target");
+	outside.write("cam_v1.desc", "evil");
+	fs::rename(backup_folder, backup_folder.parent_path() / "cameras.real");
+	test_util::make_folder_link(backup_folder, outside.path());
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+
+	BOOST_TEST(error.has_value());
+	BOOST_TEST(read_text(migrated).find("evil") == std::string::npos);
+	BOOST_TEST(read_text(migrated) == after_migration);
+	BOOST_TEST(read_text(outside.path() / "cam_v1.desc") == "evil");
 }
 
 BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileChangedAfterTheMigration)
