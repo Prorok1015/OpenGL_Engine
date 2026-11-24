@@ -82,6 +82,7 @@ namespace edt {
 	class world_systems_panel;
 	class asset_browser_panel;
 	class prefab_editor_component;
+	class modeller_component;
 	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
@@ -99,6 +100,7 @@ namespace edt {
 		editor_context* context() const { return m_context; }
 		// The prefab editor (tests drive its close/apply/open flows through it).
 		prefab_editor_component& prefab_editor() const { return *m_prefab; }
+		modeller_component& modeller() const { return *m_modeller; }
 		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
@@ -196,6 +198,9 @@ namespace edt {
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
 		std::unique_ptr<prefab_editor_component> m_prefab;
+
+		// The mesh modeller (EPIC-77, #1011): its window, its asset kinds and close question; the mesh documents belong to the document_manager.
+		std::unique_ptr<modeller_component> m_modeller;
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
