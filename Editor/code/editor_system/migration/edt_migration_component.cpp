@@ -66,6 +66,7 @@ void edt::migration_component::install(std::vector<registration>& out, const std
 		migration.descs = [this]() -> desc::desc_system& { return *m_ports.services.descs(); };
 		migration.resources = [this]() -> res::resource_system& { return *m_ports.services.resources(); };
 		migration.busy_reason = m_ports.busy_reason;
+		migration.index_wait = m_ports.index_wait;
 		migration.unsaved_reason = m_ports.unsaved_reason;
 		migration.close_documents_and_detach_level = [this] {
 			m_ports.prefab.close();
@@ -157,6 +158,7 @@ void edt::migration_component::install(std::vector<registration>& out, const std
 			if (project == nullptr) return rollback_listing{ "no project is open", {}, {} };
 			return rollback_listing_of(project->root, id);
 		};
+		window.index_wait = m_ports.index_wait;
 		m_panel = std::make_shared<migration_panel>(m_ports.context.events(), std::move(window));
 		add_panel(m_panel);
 		out.push_back(register_migration_window_action(m_ports.context.actions(),

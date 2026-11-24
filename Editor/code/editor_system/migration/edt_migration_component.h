@@ -56,6 +56,8 @@ namespace edt
 			cmd::log_read_filter* log_filter;
 			// Why a migration cannot start now: Play, a load, a build, a reload, an import, the export dialog, a git write. Null: none.
 			std::function<std::optional<std::string>()> busy_reason;
+			// Why the asset index is not ready yet (asset_index_wait, #1278): the plan waits for it too. Null: ready.
+			std::function<std::optional<std::string>()> index_wait;
 			// A person is in the middle of an edit, or a document has unsaved changes. Null: none.
 			std::function<std::optional<std::string>()> unsaved_reason;
 			// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.

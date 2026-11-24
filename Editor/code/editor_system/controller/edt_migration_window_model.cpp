@@ -132,6 +132,13 @@ namespace {
 		return out;
 	}
 
+	bool waits_for_index(const cmd::result& answer)
+	{
+		const json::object* value = answer.value.if_object();
+		const json::value* flag = value ? value->if_contains(edt::k_index_wait_key) : nullptr;
+		return answer.code == cmd::codes::busy && flag && flag->is_bool() && flag->as_bool();
+	}
+
 	edt::migration_window_model::report_view report_of(const json::object& answer)
 	{
 		edt::migration_window_model::report_view out;
@@ -306,10 +313,18 @@ void edt::migration_window_model::request_plan()
 	m_phase = phase::planning;
 }
 
+void edt::migration_window_model::poll_index()
+{
+	if (m_phase != phase::idle || !m_waiting_for_index || !m_ports.index_wait || m_ports.index_wait()) return;
+	m_waiting_for_index = false;
+	request_plan();
+}
+
 void edt::migration_window_model::tick()
 {
 	if (m_phase != phase::planning) return;
 	clear_error();
+	m_waiting_for_index = false;
 	m_plan.reset();
 	m_report.reset();
 	if (!m_ports.invoke) {
@@ -321,6 +336,10 @@ void edt::migration_window_model::tick()
 	if (!answer.ok || !answer.value.is_object()) {
 		m_phase = phase::idle;
 		fail(answer.ok || answer.code.empty() ? std::string("failed") : answer.code, answer.ok ? std::string_view("the plan has no answer") : answer.error);
+		if (!answer.ok && waits_for_index(answer)) {
+			m_error_hint = k_index_wait_hint;
+			m_waiting_for_index = true;
+		}
 		return;
 	}
 	m_plan = plan_of(answer.value.as_object());
@@ -338,6 +357,7 @@ void edt::migration_window_model::migrate()
 	const cmd::result started = m_ports.invoke("project.migrate", std::move(args));
 	if (!started.ok) {
 		fail(started.code.empty() ? std::string("failed") : started.code, started.error);
+		if (waits_for_index(started)) m_error_hint = k_index_wait_hint;
 		return;
 	}
 	const json::value* job = started.value.is_object() ? started.value.as_object().if_contains("job") : nullptr;
@@ -354,6 +374,7 @@ void edt::migration_window_model::close()
 {
 	if (m_phase == phase::running) return;
 	m_phase = phase::idle;
+	m_waiting_for_index = false;
 	m_plan.reset();
 	m_report.reset();
 	m_notice.clear();
