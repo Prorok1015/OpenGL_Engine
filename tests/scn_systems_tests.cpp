@@ -196,6 +196,8 @@ BOOST_AUTO_TEST_CASE(TransformSystem_TellsTheSpatialWorld_SoARayFindsAChildWhere
 	reg.emplace<scn::renderable>(child);
 	reg.emplace<scn::mesh_component>(child, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 6 } });
 	reg.emplace<scn::geometry_component>(child, scn::geometry_component{ .geom_tag = geometry.get_tag() });
+	// The set made without resources holds nothing by itself: hold what the mesh draws, as an assembly does.
+	scn::geometry_holds::of(reg).hold(child, geometry);
 	emit_hierarchy(reg, root);
 	emit_transform(reg, root);
 	step(0.016f);
