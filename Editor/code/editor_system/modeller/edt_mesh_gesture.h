@@ -41,6 +41,9 @@ namespace edt::mesh
 		// `drag_threshold` in pixels, above zero.
 		explicit select_gesture(float drag_threshold = 4.f);
 
+		// The threshold may follow the font size and the DPI: set it every frame. Above zero.
+		void set_drag_threshold(float pixels);
+
 		// A press that comes while a gesture runs is ignored.
 		void begin(const glm::vec2& pixel, const key_modifiers& modifiers);
 		void move(const glm::vec2& pixel);

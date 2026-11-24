@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_mesh_adjacency.h"
 #include "edt_mesh_overlay.h"
+#include "edt_mesh_picking.h"
 #include "edt_mesh_selection.h"
 #include "edt_mesh_shapes.h"
 #include <algorithm>
@@ -111,6 +112,7 @@ BOOST_AUTO_TEST_CASE(ASelectedFace_IsAPolygon_AndItsEdgesAreSelected)
 	BOOST_REQUIRE_EQUAL(frame.polygons.size(), 1u);
 	BOOST_TEST((frame.polygons.front().kind == overlay_kind::selected));
 	BOOST_TEST(frame.polygons.front().corners.size() == 4u);
+	BOOST_TEST(frame.polygons.front().triangles.size() == 2u);
 	BOOST_TEST(count(frame, overlay_kind::selected) == 4u);
 }
 
@@ -249,6 +251,27 @@ BOOST_AUTO_TEST_CASE(AHoveredEdge_IsShownInEdgeModeOnly)
 	BOOST_TEST(count(build(true), overlay_kind::hover) == 0u);
 	selection.set_mode(select_mode::edge, mesh, *adjacency);
 	BOOST_TEST(count(build(true), overlay_kind::hover) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(WithAPicker_TheTrianglesOfAFaceComeFromIt_AndAFaceItHasNoneOfHasNoPolygon)
+{
+	selection.set_mode(select_mode::face, mesh, *adjacency);
+	selection.apply_face(front_face(), select_op::replace);
+	const mesh_picker picker(mesh);
+	BOOST_REQUIRE(picker.face_triangles(front_face()) != nullptr);
+	BOOST_TEST(picker.face_triangles(front_face())->size() == 2u);
+	BOOST_TEST(picker.face_triangles(9999u) == nullptr);
+
+	overlay_options options;
+	options.picker = &picker;
+	const overlay_frame frame = build_overlay(mesh, *adjacency, selection, hover, view, options);
+	BOOST_REQUIRE_EQUAL(frame.polygons.size(), 1u);
+	BOOST_TEST(frame.polygons.front().triangles.size() == 2u);
+
+	poly_mesh other;
+	const mesh_picker other_picker(other);
+	options.picker = &other_picker;
+	BOOST_TEST(build_overlay(mesh, *adjacency, selection, hover, view, options).polygons.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -16,6 +16,7 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/level/scn_screen_anchor.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/eng_transform_3d.hpp>
@@ -473,15 +474,40 @@ entt::registry* edt::mesh_document::registry()
 	return preview ? &preview->state() : nullptr;
 }
 
-scn::camera_component* edt::mesh_document::camera()
+entt::entity edt::mesh_document::camera_entity()
 {
 	entt::registry* reg = registry();
-	if (!reg) return nullptr;
+	if (!reg) return entt::null;
 	for (const entt::entity entity : reg->view<scn::camera_component>()) {
-		scn::camera_component& found = reg->get<scn::camera_component>(entity);
-		if (!found.color_targets.empty() && found.color_targets.front().view() == m_rt_color) return &found;
+		const scn::camera_component& found = reg->get<scn::camera_component>(entity);
+		if (!found.color_targets.empty() && found.color_targets.front().view() == m_rt_color) return entity;
 	}
-	return nullptr;
+	return entt::null;
+}
+
+scn::camera_component* edt::mesh_document::camera()
+{
+	const entt::entity entity = camera_entity();
+	return entity == entt::null ? nullptr : &registry()->get<scn::camera_component>(entity);
+}
+
+scn::mouse_controller_component* edt::mesh_document::camera_controller()
+{
+	const entt::entity entity = camera_entity();
+	return entity == entt::null ? nullptr : registry()->try_get<scn::mouse_controller_component>(entity);
+}
+
+std::optional<glm::mat4> edt::mesh_document::view_projection()
+{
+	const entt::entity entity = camera_entity();
+	if (entity == entt::null) return std::nullopt;
+	entt::registry& reg = *registry();
+	const scn::camera_component& cam = reg.get<scn::camera_component>(entity);
+	if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1) return std::nullopt;
+	glm::mat4 view{ 1.f };
+	if (const auto* transform = reg.try_get<scn::world_transform>(entity)) view = glm::inverse(transform->world);
+	const glm::ivec4 viewport = cam.m_viewport;
+	return scn::camera_projection_matrix(cam, viewport) * view;
 }
 
 void edt::mesh_document::park_camera()

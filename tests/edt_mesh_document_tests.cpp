@@ -14,6 +14,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <filesystem>
@@ -689,6 +690,69 @@ BOOST_AUTO_TEST_CASE(TheOverwriteQuestion_NamesBothWritesForAnEditedSource_AndSa
 	const std::string foreign = document->overwrite_geometry_question();
 	BOOST_TEST(foreign.find("not made from this source") != std::string::npos);
 	BOOST_TEST(foreign.find("it is replaced") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ViewProjection_NeedsTheCamerasSize_AndPutsTheMeshInTheMiddleOfTheImage)
+{
+	open_crate();
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+	scn::camera_component* camera = document->camera();
+	BOOST_REQUIRE(camera != nullptr);
+	camera->m_viewport.size = decltype(camera->m_viewport.size){};
+	BOOST_TEST(!document->view_projection().has_value());
+
+	camera->m_viewport.size = decltype(camera->m_viewport.size){ 200, 200 };
+	const std::optional<glm::mat4> matrix = document->view_projection();
+	BOOST_REQUIRE(matrix.has_value());
+	const edt::mesh::screen_view screen(*matrix, { 0.f, 0.f }, { 200.f, 200.f });
+	const std::optional<glm::vec2> middle = screen.project({ 0.f, 0.f, 0.f });
+	BOOST_REQUIRE(middle.has_value());
+	BOOST_TEST(middle->x == 100.f, boost::test_tools::tolerance(1e-2f));
+	BOOST_TEST(middle->y == 100.f, boost::test_tools::tolerance(1e-2f));
+	const std::optional<glm::vec2> above = screen.project({ 0.f, 0.5f, 0.f });
+	BOOST_REQUIRE(above.has_value());
+	BOOST_TEST(above->y < middle->y);
+
+	document->park_camera();
+	BOOST_TEST(!document->view_projection().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheCameraController_CanBeTurnedOff_AndBackOn)
+{
+	open_crate();
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+	scn::mouse_controller_component* controller = document->camera_controller();
+	BOOST_REQUIRE(controller != nullptr);
+	BOOST_TEST(controller->input_enabled);
+	controller->input_enabled = false;
+	BOOST_TEST(!document->camera_controller()->input_enabled);
+	document->camera_controller()->input_enabled = true;
+	BOOST_TEST(document->camera_controller()->input_enabled);
+}
+
+BOOST_AUTO_TEST_CASE(TheView_IsEditorState_AnEditThatRemovesAFacePrunesIt_AndARevertForgetsTheSelection)
+{
+	open_crate();
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+	const edt::mesh::poly_mesh& working = *document->working();
+	edt::mesh::mesh_view& view = document->view();
+	view.set_mode(edt::mesh::select_mode::face, working);
+	const auto first = working.faces().begin()->first;
+	const auto second = std::next(working.faces().begin())->first;
+	view.selection().apply_face(first, edt::mesh::select_op::replace);
+	view.selection().apply_face(second, edt::mesh::select_op::add);
+	BOOST_REQUIRE_EQUAL(view.selection().size(), 2u);
+	BOOST_TEST(!document->is_dirty());
+
+	BOOST_REQUIRE(document->edit([first](edt::mesh::poly_mesh& mesh) { return mesh.remove_face(first); }));
+	const edt::mesh::mesh_selection& after = view.current_selection(*document->working());
+	BOOST_TEST(after.size() == 1u);
+	BOOST_TEST(!after.faces().contains(first));
+	BOOST_TEST(after.faces().contains(second));
+
+	BOOST_REQUIRE(document->revert().empty());
+	BOOST_TEST(view.selection().empty());
+	BOOST_TEST((view.mode() == edt::mesh::select_mode::face));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
