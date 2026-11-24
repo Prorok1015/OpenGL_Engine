@@ -42,8 +42,12 @@ void release_on_destroy(entt::registry& reg, entt::entity entity)
 scn::geometry_holds& scn::geometry_holds::attach(entt::registry& reg, res::resource_system* resources)
 {
 	if (auto* holds = reg.ctx().find<geometry_holds>()) {
-		if (!holds->m_resources) {
+		if (!holds->m_resources && resources) {
 			holds->m_resources = resources;
+			// Holds made before the resources were known are watched now, so the counts match what is watched.
+			for (const auto& [entity, held] : holds->m_held) {
+				holds->watch_tag(held.get_tag());
+			}
 		}
 		return *holds;
 	}
@@ -73,7 +77,8 @@ void scn::geometry_holds::watch_tag(const res::tag& tag)
 	}
 	if (m_watching[tag]++ == 0) {
 		// keep_dependencies: a change of the .bin beside the desc reaches the hold too, as it reaches the renderer's.
-		m_resources->watch(tag, this, [this](const res::tag& changed) { on_changed(changed); }, true);
+		// The tag the hold was made under: a rename reports the new name to the callback, the holders keep the old one.
+		m_resources->watch(tag, this, [this, tag](const res::tag&) { on_changed(tag); }, true);
 	}
 }
 
