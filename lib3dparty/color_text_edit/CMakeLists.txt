@@ -8,6 +8,9 @@ project(color_text_edit)
 # Move the pin only together with the ImGui submodule. The upstream ships no CMakeLists, so the target is defined here,
 # in a tracked sibling folder (the same arrangement as stb_image and glad).
 set(_cte_dir "${CMAKE_CURRENT_SOURCE_DIR}/../ImGuiColorTextEdit")
+if(NOT EXISTS "${_cte_dir}/TextEditor.cpp")
+	message(FATAL_ERROR "lib3dparty/ImGuiColorTextEdit is empty: run `git submodule update --init --recursive`")
+endif()
 
 add_library(color_text_edit STATIC "${_cte_dir}/TextEditor.cpp")
 add_library(color_text_edit::color_text_edit ALIAS color_text_edit)

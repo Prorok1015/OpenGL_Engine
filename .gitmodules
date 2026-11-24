@@ -1,6 +1,7 @@
 [submodule "lib3dparty/glfw"]
 	path = lib3dparty/glfw
 	url = https://github.com/glfw/glfw.git
+# Bump lib3dparty/ImGuiColorTextEdit together with this one: its pin is the last commit that builds against this Dear ImGui (#1202).
 [submodule "lib3dparty/imgui"]
 	path = lib3dparty/imgui
 	url = https://github.com/ocornut/imgui.git
