@@ -1208,7 +1208,8 @@ BOOST_AUTO_TEST_CASE(a_build_loaded_after_the_unload_of_another_is_the_new_one)
 	core::project_module_host second(loader, root, test_util::trusting_options());
 	BOOST_REQUIRE(second.load_all().loaded.size() == 1u);
 
-	BOOST_TEST(resident(project.copy(0)));
+	// A new name too: the copy folder names never repeat for one copies folder in a process.
+	BOOST_TEST(resident(project.copy(1)));
 	BOOST_TEST(moved_value(*this) == 4);
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();

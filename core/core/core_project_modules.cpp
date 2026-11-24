@@ -17,11 +17,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <atomic>
 #include <filesystem>
 #include <format>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -37,9 +37,15 @@ namespace {
 
 	constexpr int k_max_copies = 1000;
 
-	// The <n> of the next copy folder <pid>-<n>: never the same twice in a process, so a name the loader saw once never
-	// names another copy (#1304).
-	std::atomic<std::uint64_t> g_next_copy{ 0 };
+	// The <n> of the next copy folder <pid>-<n> in the copies folder `cache`: never the same twice in a process for that
+	// folder, so a path the loader saw once never names another copy (#1304).
+	std::uint64_t next_copy_number(const fs::path& cache)
+	{
+		static std::mutex lock;
+		static std::map<fs::path, std::uint64_t> next;
+		const std::lock_guard guard{ lock };
+		return next[cache]++;
+	}
 
 	// path::string() throws on Windows for a name outside the ANSI code page.
 	std::string utf8(const fs::path& path)
@@ -298,7 +304,7 @@ namespace {
 		fs::path folder;
 		platform::beneath::folder_identity made;
 		for (int attempt = 0; attempt < k_max_copies && folder.empty(); ++attempt) {
-			const fs::path candidate = cache / std::format("{}-{}", pid, g_next_copy.fetch_add(1));
+			const fs::path candidate = cache / std::format("{}-{}", pid, next_copy_number(cache));
 			std::error_code status_ec;
 			if (fs::symlink_status(candidate, status_ec).type() != fs::file_type::not_found) {
 				continue;
