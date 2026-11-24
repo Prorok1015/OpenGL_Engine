@@ -232,21 +232,22 @@ namespace {
 				report(std::format("include depth exceeded ({} files deep) {}", max_include_depth, chain_text(ctx, key)));
 				continue;
 			}
-			if (ctx.expanded_bytes > max_expanded_bytes) {
-				if (ctx.too_large_reported) {
-					drop_line();
-				} else {
-					ctx.too_large_reported = true;
-					report(std::format("the includes expand to more than {} bytes; is a file included again and again?", max_expanded_bytes));
-				}
-				continue;
-			}
 			if (ctx.files && ctx.listed.insert(key).second) {
 				ctx.files->push_back(target);
 			}
 			const auto included = ctx.res_sys.require_sync<res::text_resource>(target).get_sync();
 			if (!included) {
 				report(std::format("cannot read include \"{}\" ({})", include.name, key));
+				continue;
+			}
+			// Checked after the read so one huge file counts as well as a file included again and again.
+			if (ctx.expanded_bytes + included->str().size() > max_expanded_bytes) {
+				if (ctx.too_large_reported) {
+					drop_line();
+				} else {
+					ctx.too_large_reported = true;
+					report(std::format("the includes expand to more than {} bytes: a file too large, or included again and again", max_expanded_bytes));
+				}
 				continue;
 			}
 			std::string body = included->str();
