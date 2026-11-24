@@ -129,6 +129,17 @@ std::string edt::mesh_document::working_text() const
 	return mesh::poly_file_text(m_working);
 }
 
+edt::autosave_snapshot edt::mesh_document::autosave_capture() const
+{
+	autosave_snapshot out;
+	if (!m_open) {
+		out.error = "the mesh is not open";
+		return out;
+	}
+	out.bytes = bytes_of(working_text());
+	return out;
+}
+
 void edt::mesh_document::close()
 {
 	if (!m_open) return;

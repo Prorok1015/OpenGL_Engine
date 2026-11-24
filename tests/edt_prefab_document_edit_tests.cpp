@@ -1753,4 +1753,25 @@ BOOST_AUTO_TEST_CASE(WriteComponent_StampsTheRecordsWithTheCurrentTypeVersion)
 	BOOST_TEST(scn::override_record_to_json(owner.overrides[0]).at("version").to_number<int>() == 2);
 }
 
+// #1186: what autosave writes for the working copy is what Apply writes for it, and taking it changes nothing.
+BOOST_AUTO_TEST_CASE(AutosaveCapture_IsWhatApplyWrites_AndChangesNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	const std::string before = text_of(res_root, "prefabs/a.prefab.desc");
+	const std::uint64_t generation = document->generation();
+
+	const edt::autosave_snapshot snapshot = document->autosave_capture();
+	BOOST_REQUIRE_MESSAGE(snapshot.error.empty(), snapshot.error);
+	const std::vector<std::byte> captured = edt::autosave_bytes(snapshot);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->generation() == generation);
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc") == before);
+
+	BOOST_REQUIRE(document->save().saved);
+	const std::string written = text_of(res_root, "prefabs/a.prefab.desc");
+	BOOST_TEST(std::string(reinterpret_cast<const char*>(captured.data()), captured.size()) == written);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

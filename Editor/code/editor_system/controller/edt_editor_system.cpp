@@ -85,6 +85,9 @@
 #include "edt_agent_component.h"
 #include "edt_agent_ui_component.h"
 #include "../settings/edt_theme_settings_component.h"
+#include "../settings/edt_editor_settings_panel.h"
+#include "../autosave/edt_autosave_component.h"
+#include "../autosave/edt_autosave_settings.h"
 #include <snk/gui/gui_theme_service.h>
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
@@ -229,6 +232,8 @@ edt::editor_system::~editor_system()
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
 		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
 		context->jobs().cancel_all_and_wait();
+		// A clean exit: no autosave is left to recover. Before the documents go, after the writes stopped.
+		if (m_autosave) m_autosave->shutdown();
 		if (m_asset_open) m_asset_open->data_documents().shutdown();
 		context->documents().shutdown();
 	}
@@ -632,6 +637,33 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.layer = *editor_layer, .resources = m_res, .descs = desc_system,
 		.themes = data.has_value<::gui::theme_service>() ? &data.require<::gui::theme_service>() : nullptr });
 	m_theme_settings->install(m_registrations);
+
+	// #1186: the dirty documents into the project's cache://autosave/; the settings are a section of Editor Settings.
+	m_autosave = std::make_unique<autosave_component>(autosave_component::ports{ .documents = m_context->documents(),
+		.events = m_context->events(), .resources = m_res, .jobs = &m_context->jobs(),
+		.gesture_active = [this] { return person_is_editing(); } });
+	m_autosave->set_settings(load_autosave_settings(m_res));
+	m_autosave->set_allowed(autosave_allowed_by_config());
+	m_state.set_autosave_capture([this] { return m_level_ctrl.capture_autosave(); });
+	m_theme_settings->settings_panel().set_autosave(autosave_settings_port{
+		.get = [this] { return m_autosave ? m_autosave->settings() : autosave_settings{}; },
+		.set = [this](const autosave_settings& settings) -> std::string {
+			if (!m_autosave) return "autosave is not available";
+			m_autosave->set_settings(settings);
+			return save_autosave_settings(m_res, settings) ? std::string{}
+				: std::string{ "The settings could not be written: they apply until the editor closes." };
+		},
+		.blocked = [this]() -> std::string {
+			if (!m_autosave) return {};
+			if (!m_autosave->allowed()) return "Off for this run: cfg editor/autosave is false.";
+			if (m_autosave->cache_root().empty()) return "No project is open: autosave has nowhere to write.";
+			return {};
+		} });
+}
+
+void edt::editor_system::tick_autosave()
+{
+	if (m_autosave && m_context) m_autosave->tick();
 }
 
 edt::agent_server* edt::editor_system::agent_server_object()

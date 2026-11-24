@@ -37,6 +37,8 @@ namespace edt
 		theme_settings_component& operator=(const theme_settings_component&) = delete;
 
 		void install(std::vector<registration>& out);
+		// The Editor Settings window, for the sections other components add to it (Autosave, #1186).
+		editor_settings_panel& settings_panel() const;
 
 	private:
 		ports m_ports;

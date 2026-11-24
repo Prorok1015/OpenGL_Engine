@@ -1,4 +1,5 @@
 #pragma once
+#include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
 #include "edt_mesh_bake.h"
 #include "edt_mesh_io.h"
@@ -34,7 +35,7 @@ namespace edt
 	// the preview draws, and the save that writes both the source and the `x.geom.desc` + `x.geom.bin` pair the game loads.
 	// No new file format: the files are the ones the shape tools make. A previewable_document, so the document_manager opens
 	// it like the prefab editor's and Save All, the Unsaved list and the close questions see it.
-	class mesh_document final : public previewable_document
+	class mesh_document final : public previewable_document, public autosave_source
 	{
 	public:
 		explicit mesh_document(editor_services& services);
@@ -61,6 +62,8 @@ namespace edt
 		// of a lower layer or of the open level, for a file changed on disk since it was read and for a mesh with no triangle. When the
 		// source was written and the geometry was not, the document stays dirty and geometry_stale() says what the game still loads.
 		save_result save() override;
+		// The source's bytes Save would write (#1186): the poly file only, the geometry pair is derived from it.
+		autosave_snapshot autosave_capture() const override;
 		bool edits_locked() const override { return m_locked && m_locked(); }
 		void bind_events(editor_events* events) override { m_events = events; }
 

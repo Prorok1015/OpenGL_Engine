@@ -1,4 +1,5 @@
 #pragma once
+#include "../autosave/edt_autosave_source.h"
 #include "edt_editor_camera.h"
 #include "edt_scene_history.h"
 #include <snk/command/cmd_types.h>
@@ -28,7 +29,7 @@ namespace edt
 
 	// The level being edited: its identity, its world descs, the dirty flag and the single entry point for edits
 	// (commit). The level's context set belongs to the context_manager (editor_services::level_set()).
-	class scene_document final : public document
+	class scene_document final : public document, public autosave_source
 	{
 	public:
 		// Level identity
@@ -140,6 +141,9 @@ namespace edt
 		bool can_save() const override { return editor_tag.is_valid() && m_save != nullptr; }
 		save_result save() override;
 		save_result save_as(const res::tag& target) override;
+		// What the level controller would write for the level as it is (#1186); empty with an error until the editor sets it.
+		void set_autosave_capture(std::function<autosave_snapshot()> capture) { m_autosave_capture = std::move(capture); }
+		autosave_snapshot autosave_capture() const override;
 
 	private:
 		scene_history_index::diff_result record_edit(std::string_view label);
@@ -164,6 +168,7 @@ namespace edt
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
 		std::function<bool(std::size_t)> m_world_reloader;
+		std::function<autosave_snapshot()> m_autosave_capture;
 
 		// Where the agent's edits a person has not looked at begin: the serial of the newest applied edit at the last save
 		// or accept. An edit folded into an older record after it (undo, then the session edits again) is still newer.

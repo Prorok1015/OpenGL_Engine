@@ -1,4 +1,5 @@
 #pragma once
+#include "../autosave/edt_autosave_source.h"
 #include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/desc/desc_base.hpp>
@@ -11,6 +12,7 @@
 #include <vector>
 #include <functional>
 #include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
 
 namespace res { class resource_system; }
 namespace scn { class level_desc; }
@@ -115,6 +117,13 @@ namespace edt
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;
 		bool write_level_to_disk(const std::string& rel_path);
+		// The file form of a level of `worlds` written as `target`, before it is printed (serialize_to_bytes): what Save
+		// writes. Reads the descs and the level's parent, changes nothing. Main thread (schemas).
+		boost::json::value level_file_json(const std::vector<scn::world_desc>& worlds, std::string_view level_name,
+			std::string_view guid, const res::tag& target) const;
+		// What autosave writes for the level (#1186): the same form, of a copy of the worlds with the live transforms
+		// written into it; the document, its history and its save point stay as they are. An untitled level is "untitled".
+		autosave_snapshot capture_autosave() const;
 		// Returns how many records of the worlds' prefab instances it moved to the current versions of their types (#1255).
 		std::size_t populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res);
 		// The level manager rebuilt the desc worlds on a hot reload: realign the world arrays with the level.
