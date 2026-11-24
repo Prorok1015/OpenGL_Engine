@@ -69,22 +69,14 @@ BOOST_AUTO_TEST_CASE(ABinaryFile_AnInvalidOneAndAHugeOne_AreRefusedWithAReason)
 	error.clear();
 	BOOST_TEST(!read("caf\xE9", error).has_value());
 	BOOST_TEST(error.find("UTF-8") != std::string::npos);
+	// Strict UTF-8 (edt::is_valid_utf8): an overlong form and a surrogate are refused too.
+	BOOST_TEST(!read("\xC0\xAF", error).has_value());
+	BOOST_TEST(!read("\xED\xA0\x80", error).has_value());
+	BOOST_TEST(read("caf\xC3\xA9 \xE2\x82\xAC", error).has_value());
 
 	error.clear();
 	BOOST_TEST(!read(std::string(k_max_shader_text_bytes + 1, 'a'), error).has_value());
 	BOOST_TEST(error.find("4 MiB") != std::string::npos);
-}
-
-BOOST_AUTO_TEST_CASE(Utf8_AcceptsRealText_AndRefusesTheBrokenForms)
-{
-	BOOST_TEST(is_valid_utf8("plain"));
-	BOOST_TEST(is_valid_utf8("caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x98\x80"));
-	BOOST_TEST(!is_valid_utf8("\xC3"));
-	BOOST_TEST(!is_valid_utf8("\xC0\xAF"));
-	BOOST_TEST(!is_valid_utf8("\xED\xA0\x80"));
-	BOOST_TEST(!is_valid_utf8("\xF4\x90\x80\x80"));
-	BOOST_TEST(!is_valid_utf8("a\x80"));
-	BOOST_TEST(!is_valid_utf8("\xE2\x82"));
 }
 
 BOOST_AUTO_TEST_CASE(WithLineEnding_Lf_IsTheIdentity_Crlf_DoublesEveryBreak)

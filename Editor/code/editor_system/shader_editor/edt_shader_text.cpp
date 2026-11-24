@@ -1,4 +1,5 @@
 #include "edt_shader_text.h"
+#include "edt_code_commands.h"
 #include <algorithm>
 #include <cstring>
 
@@ -7,46 +8,6 @@ namespace edt
 	namespace
 	{
 		constexpr std::string_view k_bom = "\xEF\xBB\xBF";
-	}
-
-	bool is_valid_utf8(std::string_view text)
-	{
-		std::size_t i = 0;
-		const std::size_t size = text.size();
-		while (i < size) {
-			const unsigned char lead = static_cast<unsigned char>(text[i]);
-			std::size_t extra = 0;
-			unsigned min_code = 0;
-			unsigned code = 0;
-			if (lead < 0x80) {
-				++i;
-				continue;
-			}
-			if ((lead & 0xE0) == 0xC0) {
-				extra = 1;
-				min_code = 0x80;
-				code = lead & 0x1F;
-			} else if ((lead & 0xF0) == 0xE0) {
-				extra = 2;
-				min_code = 0x800;
-				code = lead & 0x0F;
-			} else if ((lead & 0xF8) == 0xF0) {
-				extra = 3;
-				min_code = 0x10000;
-				code = lead & 0x07;
-			} else {
-				return false;
-			}
-			if (i + extra >= size) return false;
-			for (std::size_t k = 1; k <= extra; ++k) {
-				const unsigned char next = static_cast<unsigned char>(text[i + k]);
-				if ((next & 0xC0) != 0x80) return false;
-				code = (code << 6) | (next & 0x3F);
-			}
-			if (code < min_code || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return false;
-			i += extra + 1;
-		}
-		return true;
 	}
 
 	std::optional<shader_text_file> read_shader_text(std::span<const std::byte> bytes, std::string& error)

@@ -39,6 +39,4 @@ namespace edt
 
 	// The same text with `ending` for every line break (the text is LF).
 	std::string with_line_ending(std::string_view text, line_ending ending);
-
-	bool is_valid_utf8(std::string_view text);
 }
