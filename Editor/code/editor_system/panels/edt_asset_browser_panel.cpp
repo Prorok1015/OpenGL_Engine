@@ -419,6 +419,13 @@ namespace edt
 
 					// Context menu
 					if (ImGui::BeginPopupContextItem()) {
+						if (ImGui::IsWindowAppearing()) {
+							m_offers_open_as_data = m_open_as_data_offered && m_open_as_data
+								&& m_open_as_data_offered(res::tag::make(e.src.relative.generic_string()));
+						}
+						if (m_offers_open_as_data && ImGui::MenuItem("Open as data")) {
+							m_open_as_data(res::tag::make(e.src.relative.generic_string()));
+						}
 						if (m_operation_form) {
 							if (ImGui::MenuItem("Rename...")) ask_operation(asset_operation::rename, e.src.relative);
 							if (ImGui::MenuItem("Move...")) ask_operation(asset_operation::move, e.src.relative);

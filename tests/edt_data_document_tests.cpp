@@ -1678,7 +1678,8 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Types_AreTheDocumentTypesOnly)
 {
 	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
 		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
-	BOOST_TEST((creator.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+	// material_desc is the engine's (#1196): the scene types are registered here too.
+	BOOST_TEST((creator.types() == std::vector<std::string>{ "material_desc", "test.config", "test.linked", "test.tagged" }));
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
@@ -1852,7 +1853,7 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	edt::document_create_form form(creator);
 	form.open("configs");
 	BOOST_TEST(form.folder() == "configs");
-	BOOST_TEST(form.types().size() == 3u);
+	BOOST_TEST(form.types().size() == 4u);
 	BOOST_TEST(!form.can_submit());
 	BOOST_TEST(form.problem().empty());
 	BOOST_TEST(!form.submit().has_value());
@@ -1861,7 +1862,7 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	BOOST_TEST(form.problem().size() > 0u);
 	BOOST_TEST(!form.can_submit());
 
-	form.set_type_index(2);
+	form.set_type_index(3);
 	form.set_name("game");
 	BOOST_TEST(form.can_submit());
 	const std::optional<res::tag> made = form.submit();

@@ -59,6 +59,13 @@ namespace edt
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
 		}
+		// "Open as data" in the context menu of a file `offered` says yes to (a material, #1196): `open` opens it in the generic
+		// data window instead of the window of its type. `offered` is asked once, when the menu opens. Null: no item.
+		void set_open_as_data(std::function<bool(const res::tag&)> offered, std::function<void(const res::tag&)> open)
+		{
+			m_open_as_data_offered = std::move(offered);
+			m_open_as_data = std::move(open);
+		}
 
 	protected:
 		void on_render() override;
@@ -103,6 +110,10 @@ namespace edt
 		// The labels were built with icon glyphs; a theme that loads or drops the icon font rebuilds them.
 		bool m_labels_have_icons = false;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
+		std::function<bool(const res::tag&)> m_open_as_data_offered;
+		std::function<void(const res::tag&)> m_open_as_data;
+		// What `m_open_as_data_offered` said for the file whose context menu is open.
+		bool m_offers_open_as_data = false;
 		std::shared_ptr<prefab_variant_creator> m_variant_creator;
 		std::unique_ptr<prefab_variant_form> m_variant_form;
 		std::function<void(const res::tag&)> m_on_variant_created;
