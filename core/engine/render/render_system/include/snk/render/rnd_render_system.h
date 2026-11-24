@@ -73,8 +73,9 @@ namespace rnd
 		// The cache the draws' material ids refer to (valid between begin_frame and the next one).
 		SNK_API material_instance_cache& material_instances();
 
-		// Why the shader programs that did not build last time did not, at their files and lines (#1201); main thread,
-		// as the frames that build them. The generation changes whenever the problems do.
+		// Why the shader programs that did not build last time did not, at their files and lines (#1201), then the shader
+		// descs that materials could not load (#1272); main thread, as the frames that build them. The generation changes
+		// whenever the problems do.
 		SNK_API std::uint64_t shader_problems_generation() const;
 		SNK_API std::vector<rnd::shader_problem> shader_problems() const;
 

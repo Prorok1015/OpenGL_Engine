@@ -116,4 +116,19 @@ BOOST_AUTO_TEST_CASE(AMeshWithoutGeometry_HoldsNothing)
 	BOOST_TEST(!reg.ctx().contains<scn::geometry_holds>());
 }
 
+BOOST_AUTO_TEST_CASE(HoldsMadeWithoutResources_KeepTheirHandle_AndDoNotFollowAReload)
+{
+	entt::registry reg;
+	scn::geometry_holds::attach(reg, nullptr);
+	const scn::mesh_node_desc stored = mesh_of("bare.geom.desc");
+	const auto entity = reg.create();
+	scn::geometry_holds::of(reg).hold(entity, stored.geometry);
+	const auto revision = scn::geometry_holds::of(reg).revision();
+
+	rs->signal_changed(stored.geometry.get_tag());
+	pump();
+	BOOST_TEST(scn::geometry_holds::of(reg).revision() == revision);
+	BOOST_TEST(scn::geometry_holds::of(reg).find(entity));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

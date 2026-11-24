@@ -224,17 +224,10 @@ namespace edt::mesh
 		}
 
 		using vertex_key = std::tuple<vertex_id, std::size_t, float, float>;
-	}
 
-	baked_mesh bake(const poly_mesh& mesh, const bake_settings& settings)
-	{
-		baked_mesh result;
-		const mesh_adjacency adjacency(mesh);
-		const float min_dot = std::cos(settings.smooth_angle_degrees * std::numbers::pi_v<float> / 180.f);
-
-		std::map<face_id, face_info> infos;
-		for (const auto& [id, f] : mesh.faces()) {
-			face_info& info = infos[id];
+		// nullopt for a face bake() leaves out: no area, a position that is not finite, a vertex twice, not a simple polygon.
+		std::optional<face_info> analyse_face(const poly_mesh& mesh, const face& f)
+		{
 			std::vector<glm::vec3> points;
 			points.reserve(f.corners.size());
 			std::vector<vertex_id> ids;
@@ -250,18 +243,36 @@ namespace edt::mesh
 			const glm::vec3 area_normal = finite ? newell_normal(points) : glm::vec3{ 0.f };
 			const float area_length = glm::length(area_normal);
 			if (!std::isfinite(area_length) || area_length < 1e-12f || std::ranges::adjacent_find(ids) != ids.end()) {
-				result.skipped_faces.push_back(id);
-				continue;
+				return std::nullopt;
 			}
 			const glm::vec3 normal = area_normal / area_length;
 			std::optional<triangle_list> triangles = triangulate(points, normal);
 			if (!triangles || triangles->empty()) {
-				result.skipped_faces.push_back(id);
-				continue;
+				return std::nullopt;
 			}
+			face_info info;
 			info.has_area = true;
 			info.normal = normal;
 			info.triangles = std::move(*triangles);
+			return info;
+		}
+	}
+
+	baked_mesh bake(const poly_mesh& mesh, const bake_settings& settings)
+	{
+		baked_mesh result;
+		const mesh_adjacency adjacency(mesh);
+		const float min_dot = std::cos(settings.smooth_angle_degrees * std::numbers::pi_v<float> / 180.f);
+
+		std::map<face_id, face_info> infos;
+		for (const auto& [id, f] : mesh.faces()) {
+			std::optional<face_info> info = analyse_face(mesh, f);
+			if (!info) {
+				result.skipped_faces.push_back(id);
+				infos[id];
+				continue;
+			}
+			infos[id] = std::move(*info);
 		}
 
 		std::map<vertex_id, std::vector<corner_ref>> corners_at;
@@ -400,5 +411,14 @@ namespace edt::mesh
 			out += sizeof(packed);
 		}
 		return result;
+	}
+
+	std::optional<std::vector<std::array<std::uint32_t, 3>>> triangulate_face(const poly_mesh& mesh, face_id id)
+	{
+		const face* f = mesh.find_face(id);
+		if (!f) return std::nullopt;
+		std::optional<face_info> info = analyse_face(mesh, *f);
+		if (!info) return std::nullopt;
+		return std::move(info->triangles);
 	}
 }

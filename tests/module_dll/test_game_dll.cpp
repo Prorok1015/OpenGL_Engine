@@ -390,3 +390,14 @@ SNK_MODULE_EXPORT std::uint64_t snk_module_layout_key() { return ::gs::module_la
 #else
 SNK_DECLARE_MODULE(test_game_dll_module)
 #endif
+
+#if defined(TEST_DLL_SIBLING)
+// #1304: a build that needs test_sibling_dll, found beside the module's copy ($ORIGIN on Linux, the DLL's folder on
+// Windows).
+extern "C" int snk_test_sibling_value();
+extern "C" SNK_MODULE_EXPORT int snk_test_sibling_probe();
+extern "C" SNK_MODULE_EXPORT int snk_test_sibling_probe()
+{
+	return snk_test_sibling_value();
+}
+#endif

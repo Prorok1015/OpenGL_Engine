@@ -61,6 +61,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_engine_component_list.h>
 #include <snk/scene/scn_event_subscriptions.h>
+#include <snk/scene/scn_spatial.h>
 #include <snk/scene/scn_time.h>
 #include <snk/window/wnd_window.h>
 #include <snk/window/wnd_window_system.h>
@@ -136,6 +137,8 @@ namespace gs
 			ecs::entity_spawner, inp::action_state, inp::fixed_action_state, inp::action_map_ref, inp::action_trace,
 			inp::action_trace::edge, inp::action_input, inp::action_reach, inp::action_injection, inp::injected_edge,
 			inp::input_capture, scn::node_index, ecs::event<int>,
+			// Passed by value to and from the exports of scn::spatial_world and the raycast functions.
+			scn::ray, scn::ray_filter, scn::ray_hit,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
 			// The module constructs and moves it, so its size stays in the key; its logic is behind exports since #922 PR 3.

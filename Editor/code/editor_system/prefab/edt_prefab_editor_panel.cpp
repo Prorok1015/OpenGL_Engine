@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_close.h"
@@ -47,20 +48,18 @@ namespace edt
 
 	void prefab_editor_panel::on_render()
 	{
-		if (!m_loading.empty() || !m_ctx || !m_ctx->is_open()) {
+		if (!m_ctx || !m_ctx->is_open()) {
 			m_shape_menu.reset();
 			m_pending_shape.reset();
 		}
-		if (!m_loading.empty()) {
-			ImGui::TextUnformatted(m_loading.c_str());
-			if (m_on_cancel_loading && ImGui::Button("Cancel")) m_on_cancel_loading();
-			return;
-		}
+		render_loading_banner();
 		if (!m_ctx || !m_ctx->is_open()) {
-			ImGui::TextDisabled("(no prefab open)");
-			// If context was closed externally, close the panel
-			if (m_open && m_ctx && !m_ctx->is_open()) {
-				m_open = false;
+			if (m_loadings.empty()) {
+				ImGui::TextDisabled("(no prefab open)");
+				// If context was closed externally, close the panel
+				if (m_open && m_ctx && !m_ctx->is_open()) {
+					m_open = false;
+				}
 			}
 			return;
 		}
@@ -222,6 +221,28 @@ namespace edt
 		} else {
 			ImGui::TextDisabled("(waiting for render target...)");
 		}
+	}
+
+	void prefab_editor_panel::render_loading_banner()
+	{
+		if (m_loadings.empty()) return;
+		// A Cancel runs the callback, which sets the list again: the rows are drawn from a copy.
+		const std::vector<loading_item> items = m_loadings;
+		// Many loads scroll in a region of a capped height instead of squeezing the tree and the viewport.
+		const float rows_height = static_cast<float>(items.size()) * ImGui::GetFrameHeightWithSpacing();
+		if (ImGui::BeginChild("##prefab_loadings", ImVec2(0.f, std::min(rows_height, em(8.f))), ImGuiChildFlags_None)) {
+			for (const loading_item& item : items) {
+				ImGui::PushID(static_cast<int>(item.id));
+				ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
+				ImGui::TextUnformatted(item.text.c_str());
+				ImGui::PopStyleColor();
+				ImGui::SameLine();
+				if (m_on_cancel_loading && ImGui::SmallButton("Cancel")) m_on_cancel_loading(item.id);
+				ImGui::PopID();
+			}
+		}
+		ImGui::EndChild();
+		ImGui::Separator();
 	}
 
 	void prefab_editor_panel::park_camera(prefab_document* ctx)
