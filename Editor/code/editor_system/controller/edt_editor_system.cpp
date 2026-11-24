@@ -759,7 +759,7 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 				done({ "the prefab did not open", {}, 0 });
 				return false;
 			}
-			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.leaf) };
+			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.working_name) };
 			const std::string error = restore_prefab_bytes(*m_services.writable_resources(), *m_services.resources(), *prefab, copy, *request.bytes);
 			done(error.empty() ? autosave_recovery::restore_outcome{ {}, prefab->id(), prefab->generation() }
 				: autosave_recovery::restore_outcome{ error, {}, 0 });

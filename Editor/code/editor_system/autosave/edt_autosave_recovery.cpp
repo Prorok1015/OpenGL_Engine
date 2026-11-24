@@ -219,9 +219,11 @@ namespace
 			}
 			// A session that says it holds no lock, or runs on another machine, is never judged by its lock file alone.
 			const bool unjudgeable = usable_info && (!info->locked || session.other_host);
+			// Taken before any probe: making the lock file below writes into the folder and makes it look young.
+			const bool fresh = young(id);
 			platform::lock_attempt attempt = lock(id, platform::lock_open::existing_only);
 			if (attempt.outcome == platform::lock_outcome::missing && !unjudgeable) {
-				if (young(id)) {
+				if (fresh) {
 					session.state = edt::recovery_state::starting;
 					return session;
 				}
@@ -233,7 +235,7 @@ namespace
 				return session;
 			case platform::lock_outcome::acquired:
 				// A lock file without session.json in a young folder: that editor is between its lock and its session.json.
-				if (file.missing && young(id)) {
+				if (file.missing && fresh) {
 					session.state = edt::recovery_state::starting;
 					return session;
 				}
@@ -505,6 +507,17 @@ std::string edt::recovery_shown_text(std::string_view text)
 		++shown;
 	}
 	return out;
+}
+
+std::string edt::recovery_working_name(std::string_view kind, std::string_view leaf)
+{
+	const std::string_view extension = kind == k_autosave_kind_prefab ? k_prefab_suffix : kind == k_autosave_kind_mesh ? k_poly_suffix : k_desc_suffix;
+	std::string name(leaf);
+	if (kind == k_autosave_kind_scene && (name.ends_with(k_prefab_suffix) || name.ends_with(k_poly_suffix) || name.ends_with(k_geometry_suffix))) {
+		name += ".level";
+	}
+	if (!name.ends_with(extension)) name += extension;
+	return name;
 }
 
 std::string_view edt::recovery_kind_label(std::string_view kind)
@@ -888,6 +901,7 @@ void edt::autosave_recovery::restore_next()
 	if (!found.meta.source.empty()) request.source = autosave_source_tag(found.meta.source).value_or(res::tag{});
 	request.bytes = found.bytes;
 	request.leaf = std::string(autosave_leaf_of(found.file));
+	request.working_name = recovery_working_name(request.kind, request.leaf);
 	request.serial = ++m_serial;
 	const restore_port port = port_of(request.kind);
 	if (!port) {

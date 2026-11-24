@@ -129,6 +129,8 @@ namespace edt
 	// A text from a file shown as data: control characters, invalid UTF-8 and other non-printables as \xNN, at most
 	// k_recovery_max_text characters, then "...".
 	std::string recovery_shown_text(std::string_view text);
+	// `leaf` ending in the extension of `kind` (scene and data ".desc", prefab ".prefab.desc", mesh ".poly.desc").
+	std::string recovery_working_name(std::string_view kind, std::string_view leaf);
 	// "Level", "Prefab", "Data", "Mesh".
 	std::string_view recovery_kind_label(std::string_view kind);
 	// The question about the sessions, one line per record (at most k_recovery_max_lines).
@@ -148,8 +150,11 @@ namespace edt
 			// Invalid for an untitled level.
 			res::tag source;
 			std::shared_ptr<const std::vector<std::byte>> bytes;
-			// The payload's file name (the encoded source): the name of a memory:// working copy.
+			// The payload's file name (the encoded source).
 			std::string leaf;
+			// The name of a memory:// working copy of the bytes: the leaf with the kind's own extension, so the resource
+			// system reads it with the kind's adapter (recovery_working_name).
+			std::string working_name;
 			std::uint64_t serial = 0;
 		};
 		struct restore_outcome

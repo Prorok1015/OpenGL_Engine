@@ -139,7 +139,7 @@ std::optional<res::tag> edt::autosave_source_tag(std::string_view text)
 	}
 	std::size_t start = 0;
 	while (start <= text.size()) {
-		const std::size_t end = std::min(text.find('/', start), text.size());
+		const std::size_t end = (std::min)(text.find('/', start), text.size());
 		const std::string_view part = text.substr(start, end - start);
 		if (part.empty() || part == "." || part == "..") return std::nullopt;
 		start = end + 1;

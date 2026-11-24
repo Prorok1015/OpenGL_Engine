@@ -266,7 +266,7 @@ struct recovery_fixture : test_util::scene_env
 		};
 		ports.restore_scene = [this](const edt::autosave_recovery::restore_request& request, std::function<void(edt::autosave_recovery::restore_outcome)> done) {
 			++scene_restores;
-			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.leaf) };
+			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.working_name) };
 			rs->store(copy, *request.bytes);
 			auto handle = rs->require_sync<scn::level_desc>(copy);
 			if (!level_ctrl.take_loaded_level(handle, request.source, copy)) {
@@ -281,7 +281,7 @@ struct recovery_fixture : test_util::scene_env
 			prefab = std::make_unique<edt::prefab_document>(services);
 			prefab->assign_id(70);
 			prefab->open(request.source);
-			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.leaf) };
+			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.working_name) };
 			const std::string error = edt::restore_prefab_bytes(*rs, *rs, *prefab, copy, *request.bytes);
 			done({ error, {}, prefab->generation() });
 		};
@@ -289,6 +289,7 @@ struct recovery_fixture : test_util::scene_env
 			++other_restores;
 			mesh = std::make_unique<edt::mesh_document>(mesh_services);
 			mesh->assign_id(90);
+			mesh->set_files(layout());
 			mesh->open(request.source);
 			const std::string error = edt::restore_mesh_bytes(*mesh, *request.bytes);
 			done({ error, {}, mesh->generation() });
@@ -390,6 +391,8 @@ BOOST_AUTO_TEST_CASE(TheOwnSession_IsMadeBeforeTheFirstRecord_AndACleanExitLeave
 	BOOST_TEST(info->locked == autosave->session_locked());
 	BOOST_TEST(!fs::exists(folder / "scene"));
 
+	// A level has nothing to capture without its working copy's tag.
+	state.editor_tag = tag_of("level.desc");
 	state.commit("edit", edt::commit_mode::state_only);
 	now += 1s;
 	autosave->tick();
@@ -851,6 +854,7 @@ BOOST_AUTO_TEST_CASE(AMesh_IsRestoredDirty_ItsFileUnchanged)
 	{
 		edt::mesh_document edited(mesh_services);
 		edited.assign_id(91);
+		edited.set_files(layout());
 		edited.open(res::tag::make("shapes/crate.poly.desc"));
 		BOOST_REQUIRE(edited.is_open());
 		BOOST_REQUIRE(edited.edit([](edt::mesh::poly_mesh& working) {
@@ -1023,6 +1027,16 @@ BOOST_AUTO_TEST_CASE(ALevelRecord_WhoseSourceIsAnotherDescType_IsNotRestored)
 	BOOST_TEST(read_file(content / "materials" / "m.desc") == on_disk);
 	BOOST_TEST(fs::exists(cache / file));
 	BOOST_TEST(fs::exists(cache / untyped));
+}
+
+BOOST_AUTO_TEST_CASE(TheWorkingCopy_EndsWithTheKindsExtension)
+{
+	BOOST_TEST(edt::recovery_working_name("scene", "untitled") == "untitled.desc");
+	BOOST_TEST(edt::recovery_working_name("scene", "levels%2Fa.desc") == "levels%2Fa.desc");
+	BOOST_TEST(edt::recovery_working_name("prefab", "x~0123456789abcdef") == "x~0123456789abcdef.prefab.desc");
+	BOOST_TEST(edt::recovery_working_name("prefab", "p%2Fa.prefab.desc") == "p%2Fa.prefab.desc");
+	BOOST_TEST(edt::recovery_working_name("mesh", "m~0123456789abcdef") == "m~0123456789abcdef.poly.desc");
+	BOOST_TEST(edt::recovery_working_name("data", "s~0123456789abcdef") == "s~0123456789abcdef.desc");
 }
 
 BOOST_AUTO_TEST_CASE(FilesNoMetaAccountsFor_KeepAnEmptyLookingSession)
