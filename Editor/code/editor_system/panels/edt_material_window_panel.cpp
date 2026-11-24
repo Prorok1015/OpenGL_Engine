@@ -16,6 +16,14 @@ void edt::material_window_panel::draw_after_fields()
 {
 	ImGui::Spacing();
 	ImGui::SeparatorText("Defines");
+	ImGui::BeginDisabled(!m_model.can_reset_to_inherited());
+	if (ImGui::SmallButton("Reset to inherited")) {
+		m_model.reset_to_inherited();
+	}
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+		ImGui::SetTooltip("Drop this material's own defines: the parent's list applies again.");
+	}
 	const material_shader& shader = m_model.shader();
 	if (shader.shader.is_valid()) {
 		ImGui::TextDisabled("shader: %s", std::string{ shader.shader.view() }.c_str());

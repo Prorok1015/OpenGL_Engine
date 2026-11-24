@@ -109,6 +109,11 @@ struct material_fixture : test_util::scene_env
 		return field ? *field : json::value{};
 	}
 
+	static std::string text_of(const std::vector<std::byte>& bytes)
+	{
+		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
+	}
+
 	test_util::temp_dir dir{ "edt_material_window_model" };
 	const fs::path res_root = dir.path() / "res";
 	const fs::path lower = dir.path() / "lower";
@@ -117,6 +122,7 @@ struct material_fixture : test_util::scene_env
 };
 
 constexpr const char* k_plain_material = R"({"__type":"material_desc","__version":2,"queue":"opaque"})";
+constexpr const char* k_lit_material = R"({"__type":"material_desc","__version":2,"shader":"res://shaders/m.shader.desc"})";
 
 }
 
@@ -308,6 +314,173 @@ BOOST_AUTO_TEST_CASE(TheShippedBaseAndDerivedMaterials_OpenAsDocuments_AndSaveUn
 	const edt::data_document::save_form form = derived.save_bytes();
 	BOOST_REQUIRE_MESSAGE(form.error.empty(), form.error);
 	BOOST_TEST((form.content == json::parse(derived_text)));
+}
+
+BOOST_AUTO_TEST_CASE(InheritedDefines_OffThenOn_InAnyOrder_LeaveNoOwnField)
+{
+	write(lower, "parent.desc", R"({"__type":"material_desc","__version":2,"defines":["A_ONE","B_TWO"]})");
+	edt::data_document& data = open(put("child.desc", R"({"__type":"material_desc","__version":2,"__parent":"res://parent.desc"})"));
+	edt::material_window_model model(data, services);
+
+	// B_TWO off and on: the list it would write is the parent's.
+	BOOST_REQUIRE(model.toggle("B_TWO"));
+	BOOST_TEST((own_defines(data) == json::value(json::array{ "A_ONE" })));
+	BOOST_REQUIRE(model.toggle("B_TWO"));
+	BOOST_TEST(!data.own().contains("defines"));
+
+	// A_ONE off and on: on again appends it, ["B_TWO", "A_ONE"], the parent's entries in another order.
+	BOOST_REQUIRE(model.toggle("A_ONE"));
+	BOOST_TEST((own_defines(data) == json::value(json::array{ "B_TWO" })));
+	BOOST_REQUIRE(model.toggle("A_ONE"));
+	BOOST_TEST(!data.own().contains("defines"));
+	BOOST_TEST(!data.is_dirty());
+	for (const edt::define_row& row : model.rows()) {
+		BOOST_TEST_CONTEXT(row.name) { BOOST_TEST((row.state == edt::define_state::inherited_on)); }
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ResetToInherited_DropsTheOwnDefines_InOneRecord)
+{
+	write(lower, "parent.desc", R"({"__type":"material_desc","__version":2,"defines":["USE_SPECULAR_MAP"]})");
+	edt::data_document& data = open(put("child.desc", R"({"__type":"material_desc","__version":2,"__parent":"res://parent.desc"})"));
+	edt::material_window_model model(data, services);
+	BOOST_TEST(!model.can_reset_to_inherited());
+	BOOST_TEST(!model.reset_to_inherited());
+
+	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	BOOST_TEST((own_defines(data) == json::value(json::array{ "USE_SPECULAR_MAP", "USE_FOG" })));
+	BOOST_REQUIRE(model.can_reset_to_inherited());
+
+	BOOST_REQUIRE(model.reset_to_inherited());
+	BOOST_TEST(!data.own().contains("defines"));
+	BOOST_TEST(!model.can_reset_to_inherited());
+	const std::vector<edt::define_row> rows = model.rows();
+	BOOST_TEST((names_of(rows) == std::vector<std::string>{ "USE_SPECULAR_MAP" }));
+	BOOST_TEST((rows.at(0).state == edt::define_state::inherited_on));
+
+	BOOST_REQUIRE(data.undo());
+	BOOST_TEST((own_defines(data) == json::value(json::array{ "USE_SPECULAR_MAP", "USE_FOG" })));
+}
+
+BOOST_AUTO_TEST_CASE(ADefineWithAValue_OffThenOn_GetsItsValueBack)
+{
+	edt::data_document& data = open(put("plain.desc", R"({"__type":"material_desc","__version":2,"defines":["MAX_LIGHT_COUNT 4"]})"));
+	edt::material_window_model model(data, services);
+	BOOST_TEST((row_of(model.rows(), "MAX_LIGHT_COUNT")->state == edt::define_state::own_on));
+
+	BOOST_REQUIRE(model.toggle("MAX_LIGHT_COUNT"));
+	BOOST_TEST(!data.own().contains("defines"));
+	BOOST_REQUIRE(model.toggle("MAX_LIGHT_COUNT"));
+	BOOST_TEST((own_defines(data) == json::value(json::array{ "MAX_LIGHT_COUNT 4" })));
+	BOOST_TEST(!data.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ScanDefineNames_SkipsBlockComments_AndWhatTheSourceDefines)
+{
+	BOOST_TEST((edt::scan_define_names("/* #ifdef HIDDEN\n#ifdef ALSO_HIDDEN */\n#ifdef SHOWN\n#endif\n/* #if defined(INLINE_HIDDEN) */\n")
+		== std::vector<std::string>{ "SHOWN" }));
+	BOOST_TEST((edt::scan_define_names("#ifndef MY_GUARD\n#define MY_GUARD\n#ifdef REAL\n#endif\n#if defined(GL_ES)\n#endif\n#define GL_ES 1\n#endif\n")
+		== std::vector<std::string>{ "REAL" }));
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludedFilesDefines_AreRows_WithoutItsGuard)
+{
+	put("shaders/lib/common.glsl", "#ifdef FROM_INCLUDE\n#endif\n");
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n#include \"lib/common.glsl\"\n#ifdef OWN_STAGE\n#endif\n");
+	put("shaders/m.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/m.vert","fragment":"res://shaders/m.frag"})");
+	edt::data_document& data = open(put("lit.desc", k_lit_material));
+	edt::material_window_model model(data, services);
+
+	BOOST_TEST_MESSAGE(model.shader().error);
+	BOOST_TEST(model.shader().error.empty());
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "FROM_INCLUDE", "OWN_STAGE" }));
+
+	// The included file is watched like the stages: a change of it is read again.
+	const res::tag library = put("shaders/lib/common.glsl", "#ifdef CHANGED_INCLUDE\n#endif\n");
+	rs->signal_changed(library);
+	pump();
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "CHANGED_INCLUDE", "OWN_STAGE" }));
+}
+
+BOOST_AUTO_TEST_CASE(AMissingStage_IsAnError_TheOtherStagesStillGiveRows_AndItIsReadOnceItAppears)
+{
+	put("shaders/m.frag", "#ifdef KEPT\n#endif\n");
+	put("shaders/m.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/gone.vert","fragment":"res://shaders/m.frag"})");
+	edt::data_document& data = open(put("lit.desc", k_lit_material));
+	edt::material_window_model model(data, services);
+
+	BOOST_TEST(model.shader().error.find("gone.vert") != std::string::npos);
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "KEPT" }));
+
+	const res::tag vertex = put("shaders/gone.vert", "#ifdef BACK\n#endif\n");
+	rs->signal_changed(vertex);
+	pump();
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "BACK", "KEPT" }));
+	BOOST_TEST(model.shader().error.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AStageThatChanges_IsReadAgain_AndATypedShaderOnlyOnceCommitted)
+{
+	put("shaders/m.vert", "#version 450\n");
+	const res::tag fragment = put("shaders/m.frag", "#ifdef FIRST\n#endif\n");
+	put("shaders/m.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/m.vert","fragment":"res://shaders/m.frag"})");
+	put("shaders/o.frag", "#ifdef OTHER\n#endif\n");
+	put("shaders/o.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/m.vert","fragment":"res://shaders/o.frag"})");
+	edt::data_document& data = open(put("lit.desc", k_lit_material));
+	edt::material_window_model model(data, services);
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "FIRST" }));
+
+	put("shaders/m.frag", "#ifdef SECOND\n#endif\n");
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "FIRST" }));
+	rs->signal_changed(fragment);
+	pump();
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "SECOND" }));
+
+	// A value typed in and not committed yet (a field still active) is not read.
+	BOOST_REQUIRE(data.edit([](json::value& shown) {
+		shown.as_object()["shader"] = "res://shaders/o.shader.desc";
+		return true;
+	}));
+	BOOST_REQUIRE(data.has_pending_edit());
+	BOOST_TEST(model.shader().shader.string() == "res://shaders/m.shader.desc");
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "SECOND" }));
+
+	data.commit_pending();
+	BOOST_TEST(model.shader().shader.string() == "res://shaders/o.shader.desc");
+	BOOST_TEST((names_of(model.rows()) == std::vector<std::string>{ "OTHER" }));
+}
+
+// A toggle on and off again leaves the file as it was, the fields the window does not know included (#1196).
+BOOST_AUTO_TEST_CASE(ADefineOnAndOffAgain_SavesTheFileByteForByte)
+{
+	put("textures/spec.png", "not really a png");
+	const auto canonical = [this](std::string_view text) { return text_of(descs->serialize_to_bytes(json::parse(text))); };
+	const std::string known = canonical(R"({"__type":"material_desc","__version":2,"__guid":"5d3c1a0e-8f7b-4c2d-9e61-0a4b3c2d1e0f",)"
+		R"("samplers":[null,"res://textures/spec.png"],"queue":"opaque"})");
+	const std::string unknown = canonical(R"({"__type":"material_desc","__version":2,"__guid":"5d3c1a0e-8f7b-4c2d-9e61-0a4b3c2d1e0f",)"
+		R"("samplers":[null,"res://textures/spec.png"],"queue":"opaque","not_a_field":{"kept":true}})");
+
+	for (const std::string& original : { known, unknown }) {
+		BOOST_TEST_CONTEXT(original) {
+			const res::tag tag = put("round.desc", original);
+			edt::data_document& data = open(tag);
+			edt::material_window_model model(data, services);
+			BOOST_REQUIRE(model.toggle("USE_FOG"));
+			BOOST_TEST(data.is_dirty());
+			BOOST_REQUIRE(model.toggle("USE_FOG"));
+			BOOST_TEST(!data.is_dirty());
+			const edt::save_result saved = data.save();
+			BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+			BOOST_TEST(read(res_root / "round.desc") == original);
+			// What a forced write would give is the same bytes (a field the schema does not know is refused by design).
+			if (original == known) {
+				const edt::data_document::save_form form = data.save_bytes();
+				BOOST_REQUIRE_MESSAGE(form.error.empty(), form.error);
+				BOOST_TEST(text_of(form.bytes) == original);
+			}
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
