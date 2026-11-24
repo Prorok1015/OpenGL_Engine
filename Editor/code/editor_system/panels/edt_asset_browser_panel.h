@@ -16,6 +16,8 @@ namespace edt
 	class code_section;
 	class document_creator;
 	class document_create_form;
+	class image_import_form;
+	class image_importer;
 	class prefab_variant_creator;
 	class prefab_variant_form;
 
@@ -37,6 +39,12 @@ namespace edt
 		// window to pick a document type and a name; `on_created` gets the tag of the new file. Without a creator the menu has no
 		// such item.
 		void set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created);
+
+		// "Import Image..." in the same menus (#1193): `pick_file` shows the native file picker and calls back with the
+		// picked file, then a window takes wrap, filter, mips and the file name. `importer` outlives the panel. Null: no
+		// item.
+		using image_picker = std::function<void(std::function<void(const std::filesystem::path&)> picked)>;
+		void set_image_importer(image_importer* importer, image_picker pick_file);
 
 		~asset_browser_panel() override;
 
@@ -112,11 +120,19 @@ namespace edt
 		void draw_create_menu_item(const std::filesystem::path& folder);
 		void draw_create_window();
 		void draw_variant_window();
+		void draw_image_window();
+		bool has_folder_menu() const { return m_create_form || m_image_form; }
 
 		std::shared_ptr<document_creator> m_creator;
 		std::unique_ptr<document_create_form> m_create_form;
 		std::function<void(const res::tag&)> m_on_document_created;
 		bool m_create_requested = false;
+
+		std::unique_ptr<image_import_form> m_image_form;
+		image_picker m_pick_image;
+		bool m_image_requested = false;
+		// A picker's answer that comes after the panel is gone does nothing.
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 
 		std::unique_ptr<asset_operation_form> m_operation_form;
 		bool m_operation_requested = false;

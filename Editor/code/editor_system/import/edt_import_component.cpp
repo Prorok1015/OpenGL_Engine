@@ -4,6 +4,7 @@
 #include "edt_asset_exporter.h"
 #include "edt_decoder_sandbox_notice.h"
 #include "edt_editor_layer.h"
+#include "edt_image_import.h"
 #include "edt_import_problems.h"
 #include "edt_model_importer.h"
 #include "edt_play_session.h"
@@ -128,6 +129,27 @@ void edt::import_component::build()
 	};
 #endif
 	m_agent_import = std::make_unique<agent_model_import>(*m_exporter, m_ports.context.jobs(), resources, std::move(import_options));
+
+	image_import_options image_options;
+	image_options.resource_layers = [&resources] { return resources.get_resource_layers(); };
+	image_options.resources_path = [&resources] { return resources.get_resources_path(); };
+	image_options.blocker = [this]() -> std::optional<std::string> {
+		if (m_ports.write_blocker) {
+			if (std::optional<std::string> why = m_ports.write_blocker()) return why;
+		}
+		const play_session* play = m_ports.play ? m_ports.play() : nullptr;
+		if (play && play->active()) return std::string{ "Stop Play to import." };
+		if (m_dialog_open) return std::string{ "an import is waiting in the editor's export dialog" };
+		if (person_import_running()) return std::string{ "a model import is running in the editor" };
+		if (agent_import_running()) return std::string{ "a model import asked for by an agent is running" };
+		return std::nullopt;
+	};
+	image_options.written = [this](const std::vector<res::tag>& tags) {
+		// What the cache knew of these names (nothing there) goes.
+		for (const res::tag& tag : tags) m_ports.resources.signal_changed(tag);
+		if (m_ports.assets_written) m_ports.assets_written(tags);
+	};
+	m_image_import = std::make_unique<image_importer>(m_ports.context.jobs(), std::move(image_options));
 }
 
 edt::import_component::~import_component()

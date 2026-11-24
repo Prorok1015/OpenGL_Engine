@@ -16,6 +16,8 @@
 
 namespace edt
 {
+	class image_importer;
+
 	// What a level file below the resource root is: an agent may open or overwrite only a plain file.
 	enum class level_file_state : std::uint8_t
 	{
@@ -79,6 +81,8 @@ namespace edt
 		std::function<std::optional<std::string>()> level_write_blocker;
 		// The import of a model an agent asks for, without a dialog (#548). Null: model import is not built in.
 		agent_model_import* agent_import = nullptr;
+		// The import of a picture (#1193): file.import_image. Null: the command is not registered.
+		image_importer* image_import = nullptr;
 		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
 		// answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_change_blocker;
@@ -156,6 +160,8 @@ namespace edt
 		void show_save_all_result(const save_all_report& report);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
+		// file.import_image (#1193): an agent's or a script's import of a picture, over m_hooks.image_import.
+		void register_image_import();
 
 		dialog_service& m_dialogs;
 		action_registry& m_actions;

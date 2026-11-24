@@ -175,6 +175,7 @@ edt::file_menu_component::file_menu_component(ports from)
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_ports.import.start_import(abs_path); };
 #endif
 	hooks.agent_import = m_ports.import.agent_import();
+	hooks.image_import = m_ports.import.image_import();
 	hooks.exit = m_ports.exit;
 	hooks.exit_blocker = [this] { return migration_blocker(); };
 	hooks.resources_path = m_ports.resources.get_resources_path();

@@ -47,6 +47,7 @@
 #include "edt_data_document_host.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
+#include "edt_image_import.h"
 #include "edt_import_component.h"
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
@@ -300,6 +301,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.play = [this]() -> const play_session* { return m_play; },
 		.exported = [this](const res::tag& tag) {
 			if (m_state.editor_tag.is_valid()) m_asset_open->add_exported_to_scene(tag);
+		},
+		.write_blocker = [this] { return project_write_blocker(); },
+		.assets_written = [this](const std::vector<res::tag>& tags) {
+			if (!m_asset_component) return;
+			std::vector<res::file_change> changes;
+			changes.reserve(tags.size());
+			for (const res::tag& tag : tags) {
+				res::file_change change;
+				change.tag = tag;
+				change.kind = res::change_kind::created;
+				changes.push_back(std::move(change));
+			}
+			m_asset_component->database().report_self_change(changes);
 		} });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
@@ -426,6 +440,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },
 		[this] { return m_prefab->shown_prefab(); } });
+
+	// The asset browser's "Import Image..." (#1193): the native file picker, then a window over the importer.
+	if (image_importer* images = m_import->image_import()) {
+		const auto pick = [this](std::function<void(const std::filesystem::path&)> picked) {
+			pick_file_options options;
+			options.title = "Import Image";
+			options.start_path = std::filesystem::current_path();
+			options.extensions = { ".png", ".jpg", ".jpeg" };
+			m_context->dialogs().pick_file(std::move(options), std::move(picked));
+		};
+		m_panels->asset_browser()->set_image_importer(images, pick);
+	}
 
 	// Registration order is the render order and the View menu order (panels_component::install).
 	m_panels->install(m_registrations, [this] {
