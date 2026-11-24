@@ -41,7 +41,7 @@ namespace
 	constexpr std::array<std::string_view, 4> k_wrap_names = {
 		"clamp_to_edge", "repeat", "repeat_mirror", "clamp_to_border" };
 	constexpr std::array<std::string_view, 2> k_filter_names = { "nearest", "linear" };
-	// The only mipmap minification the texture desc knows: the loader maps it to GL_LINEAR_MIPMAP_LINEAR.
+	// The only mipmap minification the texture desc knows: the driver filters it trilinearly.
 	constexpr std::string_view k_mipmap_min = "linear_mipmap_nearest";
 
 	fs::path from_utf8(const std::string& text)
