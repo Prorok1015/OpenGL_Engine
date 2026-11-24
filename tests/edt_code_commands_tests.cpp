@@ -9,6 +9,7 @@
 #include <snk/resource/res_system.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>.
 #include "test_manual_tasks.hpp"
+#include "test_reparse_tag.hpp"
 #include "test_temp_dir.hpp"
 #include <boost/json.hpp>
 #include <algorithm>
@@ -504,6 +505,54 @@ BOOST_AUTO_TEST_CASE(AFileLinkedToTheCMakeLists_IsNeitherWrittenNorDeleted)
 	BOOST_TEST(call("code.delete", json::object{ { "path", "src/a.cpp" }, { "version", cmake_version } }).code == cmd::codes::failed);
 	BOOST_TEST(read_file(code / "CMakeLists.txt") == "project(x)\n");
 	BOOST_TEST(fs::is_symlink(fs::symlink_status(code / "src" / "a.cpp")));
+}
+#endif
+
+#ifdef _WIN32
+// #1343: a file or a folder of code/ with a third-party reparse tag is a link to every code.* call and every origin,
+// named as one, never taken for a plain entry nor for a missing one; code.list leaves it out.
+BOOST_AUTO_TEST_CASE(AThirdPartyReparsePoint_IsRefusedAsALink_ToEveryOrigin)
+{
+	dir.write("project/code/src/tagged.cpp", "");
+	const fs::path file = code / "src" / "tagged.cpp";
+	const fs::path folder = code / "src" / "tagged_folder";
+	fs::create_directories(folder);
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(file).empty(), "file");
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(folder).empty(), "folder");
+	struct remove_on_exit {
+		fs::path file;
+		fs::path folder;
+		~remove_on_exit()
+		{
+			DeleteFileW(file.c_str());
+			RemoveDirectoryW(folder.c_str());
+		}
+	} remove{ file, folder };
+	const std::string empty_version = edt::code_version_of({});
+	const auto refused_as_link = [](const cmd::result& result) {
+		BOOST_TEST(result.code == cmd::codes::failed);
+		BOOST_TEST(result.error.find("link or an unsupported entry") != std::string::npos, result.error);
+	};
+
+	for (const cmd::origin& from : { cmd::origin::agent("s1"), cmd::origin::ui(), cmd::origin::test() }) {
+		refused_as_link(call("code.read", json::object{ { "path", "src/tagged.cpp" } }, from));
+		refused_as_link(call("code.read", json::object{ { "path", "src/tagged_folder/inner.cpp" } }, from));
+		refused_as_link(call("code.write",
+			json::object{ { "path", "src/tagged.cpp" }, { "version", empty_version }, { "text", "x" } }, from));
+		refused_as_link(call("code.list", json::object{ { "dir", "src/tagged_folder" } }, from));
+		const json::object create_inside{ { "path", "src/tagged_folder/new.cpp" }, { "text", "x" } };
+		BOOST_TEST(call("code.create", create_inside, from).code == cmd::codes::failed);
+		const json::object remove_tagged{ { "path", "src/tagged.cpp" }, { "version", empty_version } };
+		BOOST_TEST(call("code.delete", remove_tagged, from).code == cmd::codes::failed);
+		const json::object move_inside{ { "from", "src/game.cpp" }, { "to", "src/tagged_folder/game.cpp" } };
+		BOOST_TEST(call("code.rename", move_inside, from).code == cmd::codes::failed);
+	}
+	const auto listed = call("code.list", json::object{ { "dir", "src" } });
+	BOOST_REQUIRE_MESSAGE(listed.ok, listed.error);
+	const std::string text = json::serialize(listed.value);
+	BOOST_TEST(text.find("tagged") == std::string::npos, text);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	BOOST_TEST(fs::is_empty(folder));
 }
 #endif
 
