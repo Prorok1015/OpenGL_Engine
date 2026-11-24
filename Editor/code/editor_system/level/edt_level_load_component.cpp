@@ -73,14 +73,16 @@ void edt::level_load_component::install(std::vector<registration>& out)
 		.category = cmd::agent_category::scene_edit }));
 }
 
-bool edt::level_load_component::begin(const res::tag& original_tag)
+bool edt::level_load_component::begin(const res::tag& original_tag, std::optional<std::vector<std::byte>> bytes)
 {
 	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
 	auto& game_resources = *m_ports.services.resources();
-	std::optional<std::vector<std::byte>> level_bytes;
-	if (const auto raw = game_resources.fetch_data(original_tag)) {
-		raw->wait();
-		if (raw->is_ready()) level_bytes = raw->data;
+	std::optional<std::vector<std::byte>> level_bytes = std::move(bytes);
+	if (!level_bytes) {
+		if (const auto raw = game_resources.fetch_data(original_tag)) {
+			raw->wait();
+			if (raw->is_ready()) level_bytes = raw->data;
+		}
 	}
 	if (level_bytes && names_another_desc_type(*level_bytes)) {
 		egLOG_ERROR("Editor/Load", "'{}' is not a level file (its __type is not '{}')", original_tag.view(), scn::level_desc::__type);
@@ -91,7 +93,8 @@ bool edt::level_load_component::begin(const res::tag& original_tag)
 	m_ports.stop_play();
 	m_ports.level_ctrl.unwatch_level();
 
-	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
+	std::string stem = original_tag.is_valid() ? std::filesystem::path(std::string(original_tag.relative())).stem().string() : std::string{};
+	if (stem.empty()) stem = "untitled";
 	// A load that was never finished (begin called again): its copy goes.
 	if (m_loading) abandon();
 	cancel_settle();
@@ -107,9 +110,10 @@ bool edt::level_load_component::begin(const res::tag& original_tag)
 	return true;
 }
 
-bool edt::level_load_component::begin_and_watch(const res::tag& original_tag, std::function<void(bool)> ended)
+bool edt::level_load_component::begin_and_watch(const res::tag& original_tag, std::function<void(bool)> ended,
+	std::optional<std::vector<std::byte>> bytes)
 {
-	if (!begin(original_tag)) return false;
+	if (!begin(original_tag, std::move(bytes))) return false;
 	m_ports.layer.register_implicit("edt/load_level", [this, ended = std::move(ended)] {
 		bool done = false;
 		const bool loading = poll(&done);
