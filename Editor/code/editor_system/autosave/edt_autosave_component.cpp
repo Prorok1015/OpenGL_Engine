@@ -6,7 +6,10 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_problem_list.h>
+#include <snk/common/fs_paths.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/platform/plt_beneath.h>
+#include <snk/platform/plt_process.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
 #include <exception>
@@ -67,8 +70,16 @@ namespace
 	}
 }
 
+fs::path edt::autosave_cache_root(const res::resource_system& resources)
+{
+	const std::vector<fs::path> roots = resources.mount_roots(res::tag::cache);
+	return roots.empty() ? fs::path{} : roots.back();
+}
+
 edt::autosave_component::autosave_component(ports from)
 	: m_ports(std::move(from))
+	, m_session(autosave_session_id())
+	, m_host(this_host_name())
 	, m_clock([] { return clock::now(); })
 {
 	m_closed = m_ports.events.document_closed.subscribe([this](document_id id) { forget(id); });
@@ -87,8 +98,7 @@ std::string edt::autosave_component::written_file(document_id id) const
 
 void edt::autosave_component::refresh_root()
 {
-	const std::vector<fs::path> roots = m_ports.resources.mount_roots(res::tag::cache);
-	const fs::path root = roots.empty() ? fs::path{} : roots.back();
+	const fs::path root = autosave_cache_root(m_ports.resources);
 	if (root == m_root) {
 		return;
 	}
@@ -98,7 +108,9 @@ void edt::autosave_component::refresh_root()
 		record.due.reset();
 		record.written_generation.reset();
 	}
+	end_session();
 	m_root = root;
+	m_session_failed = false;
 	if (m_root.empty() && !m_reported_no_project) {
 		m_reported_no_project = true;
 		egLOG_INFO("editor/autosave", "no project is open (no cache:// folder): autosave is off");
@@ -119,7 +131,7 @@ void edt::autosave_component::tick()
 			record.written_generation.reset();
 		}
 	}
-	const bool can_write = on && !m_root.empty();
+	const bool can_write = on && !m_root.empty() && ensure_session();
 	std::optional<bool> gesture;
 	std::vector<document_id> seen;
 	seen.reserve(m_tracked.size() + 1);
@@ -141,7 +153,7 @@ void edt::autosave_component::follow(document& doc, clock::time_point now, bool 
 	const document_id id = doc.id();
 	tracked& record = m_tracked[id];
 	if (record.closed) return;
-	std::string file = autosave_file_of(doc.kind(), doc.source());
+	std::string file = autosave_file_of(m_session, doc.kind(), doc.source());
 	if (record.file != file) {
 		// Another source (another level, a Save As): the files of the old one go.
 		discard(record);
@@ -194,7 +206,8 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 		return;
 	}
 	order.root = m_root;
-	order.meta.session = autosave_session_id();
+	order.meta.session = m_session;
+	order.meta.host = m_host;
 	order.file = record.file;
 	order.meta.source = autosave_source_text(doc.source());
 	order.meta.kind = std::string(doc.kind());
@@ -304,6 +317,111 @@ void edt::autosave_component::shutdown()
 		discard(record);
 	}
 	m_tracked.clear();
+	end_session();
+}
+
+bool edt::autosave_component::ensure_session()
+{
+	if (m_shut || m_root.empty()) return false;
+	if (m_session_root == m_root) return true;
+	if (m_session_failed) return false;
+	if (start_session()) return true;
+	m_session_failed = true;
+	return false;
+}
+
+bool edt::autosave_component::start_session()
+{
+	namespace pb = platform::beneath;
+	try {
+		pb::pinned_root root{ m_root };
+		// Folders of format 1 ("autosave/<kind>/") were never released: what is in them is ours and goes.
+		const pb::list_result listed = pb::list_beneath(root, fs::path(std::string(k_autosave_folder)), 4096);
+		for (const pb::folder_entry& entry : listed.entries) {
+			const std::string name = fs_paths::generic_utf8_of(entry.name);
+			if (entry.kind != pb::entry_kind::folder || !is_autosave_kind(name)) continue;
+			if (const std::string error = remove_autosave_tree(m_root, name); !error.empty()) {
+				egLOG_WARN("editor/autosave", "cache://{}/{} (an autosave of an older format) could not be removed: {}", k_autosave_folder, name, error);
+			}
+		}
+		std::string error;
+		for (int attempt = 0; attempt < 8; ++attempt) {
+			error = pb::make_folders_beneath(root, fs_paths::path_from_utf8(autosave_session_folder(m_session)), true);
+			if (error.empty()) break;
+			std::error_code ec;
+			if (!fs::exists(m_root / fs_paths::path_from_utf8(autosave_session_folder(m_session)), ec)) break;
+			m_session = autosave_new_session_id();
+		}
+		if (!error.empty()) {
+			egLOG_WARN("editor/autosave", "the autosave folder cache://{} could not be made: {}; autosave is off for this project",
+				autosave_session_folder(m_session), error);
+			return false;
+		}
+		const std::string lock_file = autosave_session_folder(m_session) + "/" + std::string(k_autosave_lock_file);
+		platform::lock_attempt attempt = platform::file_lock::acquire(m_root, fs_paths::path_from_utf8(lock_file), platform::lock_open::create);
+		if (attempt.outcome == platform::lock_outcome::acquired && attempt.lock) {
+			m_lock = std::move(attempt.lock);
+		} else {
+			egLOG_WARN("editor/autosave", "cache://{} could not be locked ({}): another editor cannot tell whether this one still runs",
+				lock_file, attempt.error.empty() ? std::string{ "held" } : attempt.error);
+		}
+		autosave_session_info info;
+		info.session = m_session;
+		info.host = m_host;
+		info.pid = platform::current_process_id();
+		info.started_at = autosave_time_now();
+		info.locked = m_lock.has_value();
+		const std::string session_file = autosave_session_folder(m_session) + "/" + std::string(k_autosave_session_file);
+		if (const std::string written = write_autosave_file(m_root, session_file, autosave_session_text(info)); !written.empty()) {
+			egLOG_WARN("editor/autosave", "cache://{} could not be written: {}; autosave is off for this project", session_file, written);
+			m_session_root = m_root;
+			end_session();
+			return false;
+		}
+		m_session_root = m_root;
+		return true;
+	} catch (const std::exception& error) {
+		egLOG_WARN("editor/autosave", "the autosave session could not be started: {}", error.what());
+		m_lock.reset();
+		return false;
+	}
+}
+
+void edt::autosave_component::end_session() noexcept
+{
+	if (m_session_root.empty()) return;
+	const fs::path root = std::exchange(m_session_root, fs::path{});
+	try {
+		const std::string folder = autosave_session_folder(m_session);
+		static_cast<void>(remove_autosave_file(root, folder + "/" + std::string(k_autosave_session_file)));
+		m_lock.reset();
+		if (const std::string error = remove_autosave_tree(root, m_session); !error.empty()) {
+			egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
+		}
+	} catch (...) {
+		// Called from shutdown() in a destructor: a failed log line must not end the program.
+		m_lock.reset();
+	}
+}
+
+void edt::autosave_component::adopt(document_id id)
+{
+	document* doc = nullptr;
+	m_ports.documents.for_each([&doc, id](document& open) {
+		if (open.id() == id) doc = &open;
+	});
+	if (!doc || m_root.empty() || m_session_root != m_root) return;
+	tracked& record = m_tracked[id];
+	std::string file = autosave_file_of(m_session, doc->kind(), doc->source());
+	if (record.on_disk && !record.in_flight && record.disk_file != file) discard(record);
+	record.file = file;
+	if (!record.in_flight) {
+		record.root = m_root;
+		record.disk_file = std::move(file);
+		record.on_disk = true;
+	}
+	record.due.reset();
+	record.written_generation = doc->generation();
 }
 
 void edt::autosave_component::report(document_id id, std::string file, std::string message)

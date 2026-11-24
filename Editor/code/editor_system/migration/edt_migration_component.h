@@ -88,13 +88,14 @@ namespace edt
 		std::optional<std::string> project_write_blocker();
 		// Why a level of the project is not saved (a migration stopped half way and is not rolled back); nullopt: none.
 		std::optional<std::string> stopped_reason() { return m_stopped.reason(); }
+		// No level is loading or settling and the start level is not pending: startup questions may be asked (#1187 too).
+		bool start_level_settled() const;
 
 	private:
 		void open_rollback(const std::string& id);
 		void offer_rollback(const journal_offer& offer);
 		void start_scan(const std::filesystem::path& root);
 		bool draw_notice();
-		bool start_level_settled() const;
 
 		ports m_ports;
 		std::shared_ptr<migration_panel> m_panel;

@@ -180,6 +180,11 @@ void edt::prefab_editor_component::open(const res::tag& tag)
 	open_now(tag);
 }
 
+bool edt::prefab_editor_component::opening(const res::tag& tag) const
+{
+	return std::ranges::any_of(m_pending, [&tag](const std::unique_ptr<pending_open>& open) { return open->watch.tag() == tag; });
+}
+
 edt::prefab_document* edt::prefab_editor_component::dirty() const
 {
 	return dirty_prefab_of(m_ports.context.documents());
