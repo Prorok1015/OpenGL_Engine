@@ -105,8 +105,8 @@ namespace edt
 		// The file the document gets (the name with the type's suffix); empty while nothing is typed.
 		const std::string& file_name() const { return m_file; }
 		// The name ended with another suffix that the type's replaced ("a.prefab.desc" -> "a.shader.desc"), so the
-		// window shows both before anything is made.
-		bool suffix_replaced() const;
+		// window shows both before anything is made. Taken with file_name() at the last change of the name or type.
+		bool suffix_replaced() const { return m_replaced; }
 
 		// What is wrong with the name as of the last change of it (the folders are walked then, not at every frame); empty while
 		// nothing is typed yet.
@@ -115,7 +115,8 @@ namespace edt
 		// What the last submit said when it failed.
 		const std::string& error() const { return m_error; }
 
-		// Makes the document (the name is checked again, fresh); the tag comes back on success, else error() says why.
+		// Makes the document (the name is checked again, fresh); the tag comes back on success, else error() says why. A
+		// file name that is no longer the one shown (the asset kinds changed meanwhile) is shown anew, nothing is made.
 		std::optional<res::tag> submit();
 
 	private:
@@ -127,6 +128,7 @@ namespace edt
 		std::size_t m_type_index = 0;
 		std::string m_name;
 		std::string m_file;
+		bool m_replaced = false;
 		std::string m_problem;
 		std::string m_error;
 	};

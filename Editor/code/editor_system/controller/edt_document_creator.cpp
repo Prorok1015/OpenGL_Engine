@@ -6,6 +6,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_free_name.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cctype>
@@ -96,6 +97,10 @@ std::string edt::document_creator::check_file(std::string_view folder, std::stri
 	if (name.empty() || file.size() <= suffix.size()) {
 		return "give the document a name";
 	}
+	if (file.size() > res::max_sanitized_part_length) {
+		return std::format("the name is too long: '{}...' has {} bytes, a file name has at most {}", file.substr(0, 32),
+			file.size(), res::max_sanitized_part_length);
+	}
 	if (name.back() == '.' || name.back() == ' ') {
 		return "a name does not end with '.' or ' '";
 	}
@@ -185,19 +190,15 @@ void edt::document_create_form::recheck()
 	const bool named = !m_name.empty() && !m_types.empty();
 	m_file = named ? m_creator.file_name_of(m_types[m_type_index], m_name) : std::string{};
 	m_problem = named ? m_creator.check(m_folder, m_types[m_type_index], m_name) : std::string{};
-	m_error.clear();
-}
-
-bool edt::document_create_form::suffix_replaced() const
-{
-	if (m_file.empty()) {
-		return false;
+	m_replaced = false;
+	if (named) {
+		const std::string suffix = lowered(m_creator.suffix_of(m_types[m_type_index]));
+		const std::size_t stem = m_file.size() - suffix.size();
+		const std::string removed = lowered(std::string_view{ m_name }.substr(std::min(stem, m_name.size())));
+		const std::string own_stem = suffix.substr(0, suffix.size() - k_desc_extension.size());
+		m_replaced = !removed.empty() && removed != suffix && removed != own_stem;
 	}
-	const std::string suffix = m_creator.suffix_of(m_types[m_type_index]);
-	const std::size_t stem = m_file.size() - suffix.size();
-	const std::string removed = lowered(std::string_view{ m_name }.substr(std::min(stem, m_name.size())));
-	const std::string own = lowered(suffix);
-	return !removed.empty() && removed != own && removed != own.substr(0, own.size() - k_desc_extension.size());
+	m_error.clear();
 }
 
 void edt::document_create_form::set_name(std::string name)
@@ -212,6 +213,12 @@ void edt::document_create_form::set_name(std::string name)
 std::optional<res::tag> edt::document_create_form::submit()
 {
 	if (!can_submit()) {
+		return std::nullopt;
+	}
+	if (const std::string shown = m_file; m_creator.file_name_of(m_types[m_type_index], m_name) != shown) {
+		recheck();
+		m_error = std::format(
+			"the file would now be '{}', not '{}' (the asset kinds changed): check it and create again", m_file, shown);
 		return std::nullopt;
 	}
 	const document_creation made = m_creator.create(m_folder, m_types[m_type_index], m_name);

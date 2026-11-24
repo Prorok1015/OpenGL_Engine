@@ -10,7 +10,6 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include <snk/common/logger/engine_log.h>
-#include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
@@ -21,21 +20,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-namespace {
-	// The suffixes Create Document gives the types (#1263): a kind whose id names a desc type, e.g. "shader_desc".
-	std::vector<std::pair<std::string, std::string>> desc_kind_suffixes(const edt::asset_kind_registry& kinds)
-	{
-		std::vector<std::pair<std::string, std::string>> out;
-		for (const std::string& id : kinds.ids()) {
-			const edt::asset_kind_desc* kind = kinds.find(id);
-			if (kind && kind->suffix.ends_with(".desc")) {
-				out.emplace_back(id, kind->suffix);
-			}
-		}
-		return out;
-	}
-}
 
 edt::asset_open_component::asset_open_component(ports from)
 	: m_ports(std::move(from))
@@ -64,7 +48,7 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 			[this] { return m_ports.services.writable_resources(); },
 			[this] { return m_ports.resources.get_resource_layers(); },
 			[this] { return m_ports.write_blocker(); },
-			[this] { return desc_kind_suffixes(m_ports.context.asset_kinds()); } }),
+			[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); } }),
 		[this](const res::tag& tag) { open(tag, false); });
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);
