@@ -5,6 +5,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/scene/level/scn_node_index.h>
+#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
@@ -160,8 +161,16 @@ BOOST_AUTO_TEST_CASE(APatchedField_SurvivesAHotReloadOfItsParentDesc_ARebuild_An
 	scn::spawn_world(*assembler, rebuilt, rebuilt_root, scene.world_descs[0], "w0", res::tag{});
 	BOOST_TEST(rebuilt.get<scn::camera_component>(live(rebuilt, BOX_ID)).fov == 65.f);
 
+	// Boost.JSON writes 65.0 as 6.5E1: the saved value is read back as a number, not searched as text.
 	const auto saved = scn::level_desc::build_json("lvl", scene.world_descs, *descs);
-	BOOST_TEST(boost::json::serialize(saved).find("65") != std::string::npos);
+	const auto saved_text = boost::json::serialize(saved);
+	const auto reread = boost::json::parse(saved_text);
+	const auto& children = reread.at("worlds").as_array().at(0).as_object().at("children").as_array();
+	const auto saved_box = std::ranges::find_if(children, [](const boost::json::value& child) {
+		return child.as_object().at("__id").as_string() == "00000000000000c2";
+	});
+	BOOST_REQUIRE(saved_box != children.end());
+	BOOST_TEST(saved_box->at("components").at("lens").at("fov").to_number<double>() == 65.0);
 }
 
 BOOST_AUTO_TEST_CASE(ANodeWithAComponentThatMayBeAPrefabRef_IsNeverPatched_EvenForItsTransform)
