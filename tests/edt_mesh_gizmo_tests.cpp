@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE(Layout_AnAxisPointingAtTheCamera_FadesOut)
 	BOOST_TEST(made->find(gizmo_part::xy)->visibility > 0.99f);
 	BOOST_TEST(made->find(gizmo_part::yz)->visibility < 0.01f);
 	BOOST_TEST(made->find(gizmo_part::zx)->visibility < 0.01f);
-	BOOST_TEST(pick_gizmo_part(*made, made->find(gizmo_part::z)->anchor, metrics) != gizmo_part::z);
+	BOOST_TEST((pick_gizmo_part(*made, made->find(gizmo_part::z)->anchor, metrics) != gizmo_part::z));
 }
 
 BOOST_AUTO_TEST_CASE(Pick_TheTipOfAnArrow_TheCentre_AndEmptySpace)
