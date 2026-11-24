@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include "edt_autosave_restore.h"
 #include "edt_mesh_document.h"
 #include "edt_mesh_documents.h"
 #include "edt_mesh_shape_asset.h"
@@ -642,6 +643,83 @@ BOOST_AUTO_TEST_CASE(History_ALimitOf100_DropsTheOldest)
 		BOOST_REQUIRE(document->edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(static_cast<float>(i))); }));
 	}
 	BOOST_TEST(document->history().size() == 100u);
+}
+
+BOOST_AUTO_TEST_CASE(History_AMirrorThroughZero_UndoesToACleanDocument)
+{
+	open_crate();
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.set_position(mesh.vertices().begin()->first, glm::vec3(0.f)); }));
+	BOOST_REQUIRE(document->save().saved);
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.set_position(mesh.vertices().begin()->first, glm::vec3(-0.f, 1.f, 0.f)); }));
+	BOOST_TEST(document->is_dirty());
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_AChangeThatFailsAfterChangingTheMesh_LeavesTheMeshAsItWas)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	const glm::vec3 start = document->working()->vertices().at(first).position;
+	document->view().selection().apply_vertex(first, select_op::replace);
+
+	BOOST_TEST(!document->edit([&](poly_mesh& mesh) {
+		mesh.set_position(first, glm::vec3(8.f));
+		return false;
+	}));
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->view().selection().vertices().count(first) == 1u);
+
+	BOOST_REQUIRE(document->begin_gesture("Move"));
+	BOOST_TEST(!document->gesture_edit([&](poly_mesh& mesh) {
+		mesh.set_position(first, glm::vec3(8.f));
+		return false;
+	}));
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+	document->cancel_gesture();
+}
+
+BOOST_AUTO_TEST_CASE(History_ATopologyEditThenAPositionsEdit_UndoAndRedoAcrossBoth)
+{
+	open_crate();
+	const std::size_t faces = document->working()->faces().size();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	const glm::vec3 start = document->working()->vertices().at(first).position;
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.remove_face(mesh.faces().begin()->first); }, "Delete face"));
+	BOOST_REQUIRE(document->edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(4.f)); }, "Move"));
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->working()->faces().size() == faces - 1);
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->working()->faces().size() == faces);
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+	BOOST_TEST(!document->is_dirty());
+	BOOST_REQUIRE(document->redo());
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(document->working()->faces().size() == faces - 1);
+	BOOST_TEST((document->working()->vertices().at(first).position == glm::vec3(4.f)));
+}
+
+BOOST_AUTO_TEST_CASE(History_ARestoredAutosave_IsOneRecordThatUndoes_AndKeepsTheSelection)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	const glm::vec3 start = document->working()->vertices().at(first).position;
+	BOOST_REQUIRE(move_first_vertex());
+	const edt::autosave_snapshot snapshot = document->autosave_capture();
+	BOOST_REQUIRE(document->revert().empty());
+	document->view().selection().apply_vertex(first, select_op::replace);
+
+	BOOST_TEST(edt::restore_mesh_bytes(*document, snapshot.bytes).empty());
+	BOOST_TEST(document->history().size() == 1u);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST((document->working()->vertices().at(first).position == glm::vec3(5.f)));
+	BOOST_TEST(document->view().current_selection(*document->working()).vertices().count(first) == 1u);
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+	BOOST_TEST(!document->is_dirty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

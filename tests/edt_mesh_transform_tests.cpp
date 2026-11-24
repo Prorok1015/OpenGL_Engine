@@ -126,4 +126,81 @@ BOOST_AUTO_TEST_CASE(MovesBetween_ATopologyChange_IsNothing)
 	BOOST_TEST(!moves_between(mesh, changed).has_value());
 }
 
+BOOST_AUTO_TEST_CASE(MovesBetween_AMinusZeroToAPlusZero_IsAMove)
+{
+	poly_mesh a = mesh;
+	poly_mesh b = mesh;
+	const vertex_id first = a.vertices().begin()->first;
+	a.set_position(first, glm::vec3(-0.f, 1.f, 1.f));
+	b.set_position(first, glm::vec3(0.f, 1.f, 1.f));
+	const auto moves = moves_between(a, b);
+	BOOST_REQUIRE(moves.has_value());
+	BOOST_TEST(moves->size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(MovesBetween_DifferentIdCounters_IsNothing)
+{
+	poly_mesh a = mesh;
+	poly_mesh b = mesh;
+	const vertex_id extra = b.add_vertex(glm::vec3(9.f));
+	b.remove_vertex(extra);
+	BOOST_TEST(!moves_between(a, b).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ApplyTransform_AMirrorThroughZero_WritesNoMinusZero)
+{
+	const auto snapshot = capture_vertices(mesh, selected_vertices(mesh, selection));
+	pivot_frame frame;
+	apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(-1.f, 1.f, 1.f)));
+	for (const auto& entry : mesh.vertices()) {
+		BOOST_TEST(!std::signbit(entry.second.position.x) == (entry.second.position.x >= 0.f));
+		BOOST_TEST(!(entry.second.position.x == 0.f && std::signbit(entry.second.position.x)));
+	}
+	poly_mesh flat = mesh;
+	const vertex_id first = flat.vertices().begin()->first;
+	flat.set_position(first, glm::vec3(0.f, 0.f, 0.f));
+	vertex_snapshot one = capture_vertices(flat, { first });
+	apply_transform(flat, one, scale_matrix(frame, glm::vec3(-1.f, -1.f, -1.f)));
+	const glm::vec3 position = flat.vertices().at(first).position;
+	BOOST_TEST(!std::signbit(position.x));
+	BOOST_TEST(!std::signbit(position.y));
+	BOOST_TEST(!std::signbit(position.z));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyTransform_OnlyTheNonFiniteVertexIsSkipped)
+{
+	auto snapshot = capture_vertices(mesh, selected_vertices(mesh, selection));
+	snapshot.positions[0].second = glm::vec3(std::numeric_limits<float>::infinity(), 0.f, 0.f);
+	const glm::vec3 untouched = mesh.vertices().at(snapshot.positions[0].first).position;
+	const std::size_t count = apply_transform(mesh, snapshot, glm::mat4(1.f));
+	BOOST_TEST(count == snapshot.positions.size() - 1);
+	BOOST_TEST(near(mesh.vertices().at(snapshot.positions[0].first).position, untouched));
+}
+
+BOOST_AUTO_TEST_CASE(Scale_ByZero_CollapsesToThePivot_AndBackByOneReturns)
+{
+	const auto snapshot = capture_vertices(mesh, selected_vertices(mesh, selection));
+	pivot_frame frame;
+	frame.origin = glm::vec3(0.5f, 0.f, 0.f);
+	BOOST_TEST(apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(0.f))) == snapshot.positions.size());
+	for (const auto& entry : mesh.vertices()) {
+		BOOST_TEST(near(entry.second.position, frame.origin));
+	}
+	apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(1.f)));
+	for (const auto& [id, position] : snapshot.positions) {
+		BOOST_TEST(near(mesh.vertices().at(id).position, position));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Scale_AboutAVertex_KeepsThatVertex)
+{
+	const vertex_id id = mesh.vertices().begin()->first;
+	const glm::vec3 pivot = mesh.vertices().at(id).position;
+	pivot_frame frame;
+	frame.origin = pivot;
+	const auto snapshot = capture_vertices(mesh, selected_vertices(mesh, selection));
+	apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(3.f, 2.f, 0.5f)));
+	BOOST_TEST(near(mesh.vertices().at(id).position, pivot));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

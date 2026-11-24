@@ -268,8 +268,13 @@ bool edt::mesh_document::edit(const std::function<bool(mesh::poly_mesh&)>& chang
 	const std::optional<mesh::shape_params> generator_before = m_working.generator;
 	const mesh::mesh_selection selection_before = m_view.selection();
 	if (!change(m_working.mesh)) {
+		history_replace(before, generator_before);
+		m_view.selection() = selection_before;
 		return false;
 	}
+	// The change may have assigned a whole mesh, whose generation a cache of the old one can share.
+	m_view.reset();
+	m_view.selection() = selection_before;
 	record_change(before, generator_before, selection_before, std::move(label), origin);
 	++m_generation;
 	rebake();
@@ -292,12 +297,21 @@ bool edt::mesh_document::gesture_edit(const std::function<bool(mesh::poly_mesh&)
 	if (!m_open || !m_gesture || edits_locked()) {
 		return false;
 	}
-	if (!change(m_working.mesh)) {
+	const mesh::poly_mesh before = m_working.mesh;
+	const std::optional<mesh::shape_params> generator_before = m_working.generator;
+	const mesh::mesh_selection selection = m_view.selection();
+	const bool changed = change(m_working.mesh);
+	if (!changed) {
+		history_replace(before, generator_before);
+		m_view.selection() = selection;
 		return false;
 	}
+	m_view.reset();
+	m_view.selection() = selection;
 	++m_generation;
 	rebake();
-	m_dirty = working_text() != m_saved_text;
+	// The exact comparison is the text of the whole mesh: it waits for the end of the gesture.
+	m_dirty = true;
 	announce();
 	return true;
 }
@@ -309,7 +323,10 @@ bool edt::mesh_document::end_gesture()
 	}
 	const gesture_state started = std::move(*m_gesture);
 	m_gesture.reset();
-	return record_change(started.mesh, started.generator, started.selection, started.label, started.origin);
+	const bool recorded = record_change(started.mesh, started.generator, started.selection, started.label, started.origin);
+	m_dirty = working_text() != m_saved_text;
+	announce();
+	return recorded;
 }
 
 void edt::mesh_document::cancel_gesture()

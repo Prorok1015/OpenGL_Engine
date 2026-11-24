@@ -88,7 +88,8 @@ namespace edt::mesh
 	{
 		std::size_t set = 0;
 		for (const auto& [id, original] : snapshot.positions) {
-			const glm::vec3 moved = glm::vec3(transform * glm::vec4(original, 1.f));
+			// + 0 turns a -0 into +0: a mirror through zero must not leave a sign in the file that undo cannot give back.
+			const glm::vec3 moved = glm::vec3(transform * glm::vec4(original, 1.f)) + glm::vec3(0.f);
 			if (!finite(moved)) continue;
 			if (mesh.set_position(id, moved)) ++set;
 		}

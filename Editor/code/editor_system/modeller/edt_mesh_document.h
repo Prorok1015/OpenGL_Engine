@@ -112,7 +112,7 @@ namespace edt
 		// What the window shows and picks of the working mesh (mode, selection, hover, x-ray). Editor state: not saved, not an edit.
 		mesh::mesh_view& view() { return m_view; }
 		// Changes the working mesh: `change` gets it and says whether it changed anything. The preview follows. False: closed,
-		// locked, or nothing changed.
+		// locked, or `change` returned false (the mesh is put back as it was before the call, whatever it did).
 		// One record of the undo history, labelled and by `origin`: the moves of vertices, or the whole mesh before and after when anything else changed. The
 		// selection at the time comes back with an undo or a redo. Refused during a gesture.
 		bool edit(const std::function<bool(mesh::poly_mesh&)>& change, std::string label = "Edit mesh", cmd::origin origin = cmd::origin::ui());
@@ -120,7 +120,8 @@ namespace edt
 		// A gesture (a drag of the gizmo): its edits show at once but are one record, made when it ends. `begin_gesture` is refused while another runs, while
 		// the document is closed or locked.
 		bool begin_gesture(std::string label, cmd::origin origin = cmd::origin::ui());
-		// Changes the working mesh as `edit` does, without a record. False: no gesture, or nothing changed.
+		// Changes the working mesh as `edit` does, without a record; the dirty mark is exact only when the gesture ends. False: no gesture, or `change` returned false (the mesh is put back as it was
+		// before the call, as with `edit`).
 		bool gesture_edit(const std::function<bool(mesh::poly_mesh&)>& change);
 		// Records the gesture as one change; false (and nothing recorded) when the mesh is as it was at the start.
 		bool end_gesture();
