@@ -5,6 +5,7 @@
 #include <snk/project_migration/pmg_assets.h>
 #include <snk/project_migration/pmg_command.h>
 #include <snk/project_migration/pmg_project_steps.h>
+#include <snk/desc/desc_schema.h>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/render/rnd_render_service_init.h>
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -49,6 +51,15 @@ constexpr std::string_view k_foreign_shader = R"({
 	"vertex": "res://shaders/foreign.vert",
 	"fragment": "res://shaders/foreign.frag",
 	"defines": []
+})";
+
+// A material of its own pair that holds an object of the test type pmg_shaders_test_desc (register_test_type).
+constexpr std::string_view k_with_other_type = R"({
+	"__type": "material_desc",
+	"__version": 1,
+	"shader_vertex": "res://shaders/other.vert",
+	"shader_fragment": "res://shaders/other.frag",
+	"extra": { "__type": "pmg_shaders_test_desc", "hp": 1 }
 })";
 
 constexpr std::string_view k_engine_base_guid = "f90d3c03-865c-4193-aa09-cb2f98315634";
@@ -151,6 +162,14 @@ struct shaders_fixture : test_util::scene_env
 	}
 
 	pmg::migration_plan plan() { return plan(copy.root()); }
+
+	// pmg_shaders_test_desc at version 1, with a step to 2 that does what `step` does.
+	void register_test_type(std::function<void(json::object&, desc::migration_context&)> step)
+	{
+		descs->register_schema(desc::parse_type_schema(json::parse(R"({"name": "pmg_shaders_test_desc", "kind": "component",
+			"fields": [{ "name": "hp", "kind": "i32", "default": 0 }]})").as_object()));
+		descs->register_migration("pmg_shaders_test_desc", 1, "a test step", std::move(step));
+	}
 
 	pmg::apply_context context(const fs::path& root)
 	{
@@ -445,6 +464,45 @@ BOOST_AUTO_TEST_CASE(AnImportedMaterialOverTheEnginesBase_IsConvertedByTheTypeSt
 	check_material_v2(read_json("res/materials/imported.desc"), "res://shaders/mix_opaque_trans_scene.shader.desc");
 }
 
+// A material over the engine's base with a fragment of its own (no engine pair): the type step refuses its stages, so
+// it has material_stages. --migrate --dry-run checks it on a placeholder copy: it is planned, not invalid, and nothing
+// is written.
+BOOST_AUTO_TEST_CASE(AMaterialWithStagesOverTheEnginesBase_IsPlanned_InTheDryRunCommand)
+{
+	serve_engine_base();
+	constexpr std::string_view glow = R"({
+		"__type": "material_desc",
+		"__parent": "res://base_material.desc",
+		"shader_fragment": "res://shaders/glow.frag"
+	})";
+	write_text(at("res/materials/glow.desc"), glow);
+	const auto before = content_of(copy.root());
+
+	{
+		const pmg::scoped_project_index index(*rs, copy.root(), read_only);
+		const pmg::migration_plan planned_now = plan();
+		const pmg::scanned_file* file = planned_now.scan.find("res/materials/glow.desc");
+		BOOST_REQUIRE(file);
+		BOOST_TEST((file->kind == pmg::file_class::outdated), file->reason);
+		BOOST_TEST(file->material_stages);
+	}
+
+	pmg::command_context command{ copy.root(), *descs, *rs, &registry, {}, [] { return std::string{ "test-migration" }; }, {}, {}, {} };
+	std::string printed;
+	command.print = [&printed](std::string_view text) { printed += text; };
+	pmg::migrate_command dry_run;
+	dry_run.dry_run = true;
+	const int code = pmg::run_migrate(dry_run, command);
+	BOOST_TEST(code == pmg::k_exit_migration_needed, printed);
+	BOOST_TEST(printed.find("Material shader stages to a .shader.desc") != std::string::npos, printed);
+	BOOST_TEST(printed.find("- res/materials/glow.desc\n") != std::string::npos, printed);
+	BOOST_TEST(printed.find("invalid") == std::string::npos, printed);
+	BOOST_TEST(printed.find("Not migrated") == std::string::npos, printed);
+	BOOST_TEST(read_text(at("res/materials/glow.desc")) == glow);
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
+}
+
 // An inline material (a mesh node's in a prefab) is converted like a file: its file is named after the prefab.
 BOOST_AUTO_TEST_CASE(AnInlineMaterialInAPrefab_GetsAShaderDescNamedAfterThePrefab)
 {
@@ -519,6 +577,93 @@ BOOST_AUTO_TEST_CASE(AStepFailingAfterIt_RemovesTheCreatedFiles)
 	BOOST_TEST((content_of(copy.root()) == before));
 	BOOST_TEST(!fs::exists(at("res/materials/rock.shader.desc")));
 	BOOST_TEST(!fs::exists(at("res/materials/rock.shader.desc.resource")));
+}
+
+// #1278: a file whose material the step rewrites is still dry-run, on a copy with a placeholder "shader" for it: the type
+// steps of its other objects run, and the plan shows no diff for it (the copy's is not what is written).
+BOOST_AUTO_TEST_CASE(AFileWithMaterialStages_IsDryRunOnAPlaceholderCopy_AndShowsNoDiff)
+{
+	int dry_runs = 0;
+	register_test_type([&dry_runs](json::object& object, desc::migration_context&) {
+		++dry_runs;
+		object["hp"] = 2;
+	});
+	write_text(at("res/materials/mixed.desc"), k_with_other_type);
+	const auto before = content_of(copy.root());
+
+	pmg::plan_options options;
+	options.project_steps = &registry;
+	options.full_diff = true;
+	const pmg::migration_plan planned_now = pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
+	BOOST_TEST(dry_runs > 0);
+	BOOST_TEST(pmg::plan_refusal(planned_now).empty(), pmg::plan_refusal(planned_now));
+	const pmg::scanned_file* file = planned_now.scan.find("res/materials/mixed.desc");
+	BOOST_REQUIRE(file);
+	BOOST_TEST((file->kind == pmg::file_class::outdated), file->reason);
+	BOOST_TEST(file->material_stages);
+	BOOST_TEST((file->material_stage_pointers == std::vector<std::string>{ "" }));
+
+	const auto mixed = std::ranges::find(planned_now.files, std::string("res/materials/mixed.desc"), &pmg::file_plan::path);
+	BOOST_REQUIRE((mixed != planned_now.files.end()));
+	BOOST_TEST(mixed->diff.added == 0u);
+	BOOST_TEST(mixed->diff.removed == 0u);
+	BOOST_TEST(mixed->diff.changed == 0u);
+	BOOST_TEST(!mixed->full_diff.has_value());
+	BOOST_TEST(std::ranges::any_of(mixed->warnings, [](const desc::migration_warning& warning) {
+		return warning.message.find("no diff in this plan") != std::string::npos;
+	}));
+	BOOST_TEST(std::ranges::any_of(mixed->steps, [](const pmg::step_use& step) { return step.type == "pmg_shaders_test_desc"; }));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #1278: the other type of such a file fails on the copy: the file is invalid with that reason and no longer marked for
+// the step, so --force leaves it whole (no .shader.desc for it) and the rest of the project migrates.
+BOOST_AUTO_TEST_CASE(AFileWithMaterialStagesWhoseOtherTypeFails_IsInvalid_AndForceLeavesItWhole)
+{
+	register_test_type([](json::object&, desc::migration_context&) { throw std::runtime_error("injected type failure"); });
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	write_text(at("res/materials/mixed.desc"), k_with_other_type);
+
+	const pmg::migration_plan strict = plan();
+	const pmg::scanned_file* bad = strict.scan.find("res/materials/mixed.desc");
+	BOOST_REQUIRE(bad);
+	BOOST_TEST((bad->kind == pmg::file_class::invalid));
+	BOOST_TEST(bad->reason.find("injected type failure") != std::string::npos, bad->reason);
+	BOOST_TEST(!bad->material_stages);
+	BOOST_TEST(bad->material_stage_pointers.empty());
+	BOOST_TEST(!pmg::plan_refusal(strict).empty());
+	BOOST_TEST(strict.scan.find("res/materials/rock.desc")->material_stages);
+
+	const pmg::migration_plan forced = plan(copy.root(), true);
+	BOOST_REQUIRE(pmg::plan_refusal(forced).empty());
+	const pmg::apply_outcome outcome = pmg::apply_migration(forced, context(copy.root()));
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::partial), outcome.report.error);
+	BOOST_TEST((created_shaders(outcome.report) == std::vector<std::string>{ "res/materials/rock.shader.desc" }));
+	BOOST_TEST(!fs::exists(at("res/materials/mixed.shader.desc")));
+	BOOST_TEST(read_text(at("res/materials/mixed.desc")) == k_with_other_type);
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock.shader.desc");
+}
+
+// #1278: one checker serves the whole scan and answers as the one-shot check does, every time it is asked.
+BOOST_AUTO_TEST_CASE(OneChecker_AnswersAsTheOneShotCheck)
+{
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	write_text(at("res/materials/orphan.desc"), R"({
+		"__type": "material_desc",
+		"__parent": "res://materials/missing.desc",
+		"shader_fragment": "res://shaders/glow.frag"
+	})");
+	pmg::project_assets assets(copy.root(), { "res" }, {});
+	assets.rebuild();
+	const pmg::material_shaders_checker checker(copy.root(), assets);
+	for (const std::string path : { "res/materials/rock.desc", "res/materials/orphan.desc", "res/materials/rock.desc" }) {
+		const json::object material = read_json(path);
+		BOOST_TEST(checker.problem(path, material) == pmg::material_shaders_problem(copy.root(), assets, path, material), path);
+	}
+	BOOST_TEST(checker.problem("res/materials/rock.desc", read_json("res/materials/rock.desc")).empty());
+	const std::string orphan = checker.problem("res/materials/orphan.desc", read_json("res/materials/orphan.desc"));
+	BOOST_TEST(orphan.find("res://materials/missing.desc") != std::string::npos, orphan);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -5,12 +5,12 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -33,8 +33,6 @@ namespace {
 	constexpr std::size_t k_max_listed = 5000;
 	// `old` of a replace: the search stays linear (Boyer-Moore) and small next to the file.
 	constexpr std::size_t k_max_replace_old = 64 * 1024;
-	// The read cannot block on what it reads (#484), but a slow file system or a long io queue must not hold the editor.
-	constexpr std::chrono::seconds k_read_timeout{ 5 };
 	constexpr const char* k_no_project = "no_project";
 
 	json::value parse_schema(std::string_view text)
@@ -73,6 +71,32 @@ namespace {
 		return edt::check_code_file_path(relative);
 	}
 
+	// The entries of `relative` below code/, each looked at as itself before anything follows it (#1343): a link of
+	// any kind (on Windows by its reparse tag, so not only a symlink or a junction) refuses, and so does an entry that
+	// cannot be opened to be looked at. The first one missing ends the walk: what is missing is the operation's to
+	// report.
+	std::string link_on_the_way(const fs::path& root, std::string_view relative)
+	{
+		fs::path at = root;
+		std::size_t begin = 0;
+		while (begin < relative.size()) {
+			const std::size_t end = relative.find('/', begin);
+			const std::string_view reached = relative.substr(0, end);
+			at /= fs_paths::path_from_utf8(relative.substr(begin, end == std::string_view::npos ? end : end - begin));
+			std::error_code ec;
+			const auto entry = platform::beneath::link_entry_at(at, ec);
+			if (ec) return std::format("'{}' in code/ cannot be checked for links: {}", reached, ec.message());
+			if (!entry) return {};
+			if (*entry == platform::beneath::link_entry::link) {
+				return std::format("'{}' is a link or an unsupported entry in code/ (a symlink, a junction or another "
+					"reparse point)", reached);
+			}
+			if (end == std::string_view::npos) break;
+			begin = end + 1;
+		}
+		return {};
+	}
+
 	// A folder of code/ to list: the same name rules as a file, and every segment a real folder, never a link.
 	std::string check_folder(const fs::path& root, std::string_view relative)
 	{
@@ -82,6 +106,7 @@ namespace {
 			return "the path must be relative to code/ and '/' separated";
 		}
 		if (std::string problem = res::portable_path_problem(relative); !problem.empty()) return problem;
+		if (std::string problem = link_on_the_way(root, relative); !problem.empty()) return problem;
 		fs::path at = root;
 		std::size_t begin = 0;
 		while (begin <= relative.size()) {
@@ -104,6 +129,7 @@ namespace {
 	// A path that does not exist (yet) is the operation's to report.
 	std::string on_disk_problem(const fs::path& root, std::string_view relative, bool ends_in_file)
 	{
+		if (std::string problem = link_on_the_way(root, relative); !problem.empty()) return problem;
 		std::error_code ec;
 		const fs::path base = fs::canonical(root, ec);
 		if (ec) return "code/ cannot be resolved";
@@ -134,30 +160,37 @@ namespace {
 
 	// The bytes on disk now, through the resolver (its safe path), never the resource cache. A file over the limit is
 	// refused before it is read into memory.
-	file_read read_fresh(res::resource_system& res, const fs::path& root, const res::tag& tag)
+	// The bytes on disk now, never the resource cache: type, size and bytes from one read through read_beneath relative
+	// to code/ (#1349), every folder and the file opened without following a link, a file over the limit never read.
+	// Nothing is asked of a path by name after the checks, so a component swapped for a link meanwhile is refused, and
+	// every refusal reads like a missing file: nothing about what lies outside code/ comes back.
+	file_read read_fresh(res::resource_system& res, const fs::path& root, const res::tag& tag,
+		const std::function<void(platform::beneath::read_stage)>* hook)
 	{
-		if (!res.exists(tag)) return { {}, std::format("no file '{}' in code/", tag.relative()) };
+		const std::string missing = std::format("no file '{}' in code/", tag.relative());
+		if (std::string problem = link_on_the_way(root, tag.relative()); !problem.empty()) {
+			return { {}, std::move(problem) };
+		}
+		if (!res.exists(tag)) return { {}, missing };
 		if (std::string problem = on_disk_problem(root, tag.relative(), true); !problem.empty()) return { {}, std::move(problem) };
-		const fs::path file = root / fs_paths::path_from_utf8(tag.relative());
-		std::error_code ec;
-		// A plain file only, with a message of its own: the resolver refuses a link, a folder or a FIFO too (#484).
-		if (!fs::is_regular_file(fs::symlink_status(file, ec)) || ec) return { {}, std::format("'{}' is not a regular file", tag.relative()) };
-		const auto size = fs::file_size(file, ec);
-		if (ec) return { {}, std::format("'{}' could not be read", tag.relative()) };
-		if (size > edt::k_code_file_limit) {
-			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), size, edt::k_code_file_limit) };
+		const fs::path relative = fs_paths::path_from_utf8(tag.relative());
+		platform::beneath::read_request request;
+		request.root = root;
+		request.folder = relative.parent_path();
+		request.leaf = relative.filename();
+		request.max_bytes = edt::k_code_file_limit;
+		request.hook = hook;
+		std::vector<std::byte> bytes;
+		const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+		switch (read.status) {
+		case platform::beneath::read_status::ok:
+			return { std::move(bytes), {} };
+		case platform::beneath::read_status::too_large:
+			return { {}, std::format("'{}' is larger than {} bytes: at most {} go through code.* in one call",
+				tag.relative(), edt::k_code_file_limit, edt::k_code_file_limit) };
+		default:
+			return { {}, missing };
 		}
-		const auto raw = res.fetch_data(tag);
-		if (!raw) return { {}, "code:// is not mounted" };
-		// A file swapped after the checks above is still refused by the resolver, which reads without following a link and
-		// without blocking on a FIFO (#484).
-		if (!raw->wait_for(k_read_timeout)) return { {}, std::format("'{}' could not be read in {} s", tag.relative(), k_read_timeout.count()) };
-		if (!raw->is_ready()) return { {}, std::format("'{}' could not be read", tag.relative()) };
-		// The file may have grown since its size was checked.
-		if (raw->data.size() > edt::k_code_file_limit) {
-			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), raw->data.size(), edt::k_code_file_limit) };
-		}
-		return { raw->data, {} };
 	}
 
 	cmd::result stale(std::string_view path, const std::string& version)
@@ -342,7 +375,7 @@ namespace {
 			if (!code_root) return cmd::result::failure(k_no_project, "the project has no code/ folder");
 			const std::string_view path = string_arg(call, "path");
 			if (std::string problem = check_file(path); !problem.empty()) return cmd::result::failure(cmd::codes::failed, std::move(problem));
-			const file_read file = read_fresh(m_deps.res, *code_root, edt::code_actions::tag_of(path));
+			const file_read file = read_fresh(m_deps.res, *code_root, edt::code_actions::tag_of(path), m_deps.read_hook);
 			if (!file.ok()) return cmd::result::failure(cmd::codes::failed, file.error);
 			if (file.bytes.size() > edt::k_code_file_limit) return too_big(path, file.bytes.size());
 			const std::string text = text_of(file.bytes);
@@ -401,7 +434,7 @@ namespace {
 			}
 			if (std::string problem = check_file(path); !problem.empty()) return cmd::result::failure(cmd::codes::failed, std::move(problem));
 			const res::tag tag = edt::code_actions::tag_of(path);
-			const file_read file = read_fresh(m_deps.res, *code_root, tag);
+			const file_read file = read_fresh(m_deps.res, *code_root, tag, m_deps.read_hook);
 			if (!file.ok()) return cmd::result::failure(cmd::codes::failed, file.error);
 			// Compared and written in one main-thread call: an agent cannot slip in between. Another program writing the
 			// file right then still can (the store has no compare-and-swap): accepted (#451).
@@ -533,7 +566,7 @@ namespace {
 			const std::string_view path = string_arg(call, "path");
 			if (std::string problem = check_file(path); !problem.empty()) return refuse(cmd::result::failure(cmd::codes::failed, std::move(problem)));
 			plan.tag = edt::code_actions::tag_of(path);
-			const file_read file = read_fresh(m_deps.res, *code_root, plan.tag);
+			const file_read file = read_fresh(m_deps.res, *code_root, plan.tag, m_deps.read_hook);
 			if (!file.ok()) return refuse(cmd::result::failure(cmd::codes::failed, file.error));
 			if (const std::string current = edt::code_version_of(file.bytes); string_arg(call, "version") != current) {
 				return refuse(stale(path, current));
@@ -555,6 +588,9 @@ namespace {
 			const std::size_t slash = to.rfind('/');
 			if (slash != std::string_view::npos) {
 				const std::string_view folder = to.substr(0, slash);
+				if (std::string problem = link_on_the_way(*root(), folder); !problem.empty()) {
+					return cmd::result::failure(cmd::codes::failed, std::format("'{}': {}", to, problem));
+				}
 				std::error_code ec;
 				const auto status = fs::symlink_status(*root() / fs_paths::path_from_utf8(folder), ec);
 				if (ec || !fs::is_directory(status)) {

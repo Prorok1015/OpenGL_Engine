@@ -5,15 +5,19 @@
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>.
+#include "test_folder_link.hpp"
 #include "test_manual_tasks.hpp"
+#include "test_reparse_tag.hpp"
 #include "test_temp_dir.hpp"
 #include <boost/json.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -53,6 +57,8 @@ struct code_fixture
 	edt::editor_events events;
 	std::vector<edt::agent_action_info> actions;
 	edt::connection seen;
+	// Handed to every read of the commands (code_commands_deps::read_hook); empty: nothing happens.
+	std::function<void(platform::beneath::read_stage)> read_hook;
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 
@@ -70,7 +76,7 @@ struct code_fixture
 		sys = std::make_unique<res::resource_system>(tasks,
 			res::resource_system::project_mount_table({}, { content }, cache, cache / "user_profile", code));
 		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
-		registrations = edt::register_code_commands(commands, { *sys, &events });
+		registrations = edt::register_code_commands(commands, { *sys, &events, &read_hook });
 	}
 
 	cmd::result call(const std::string& id, json::value args, cmd::origin from = cmd::origin::agent("s1"))
@@ -217,6 +223,44 @@ BOOST_AUTO_TEST_CASE(Write_OverTheLimit_IsRefused)
 	const std::string big(edt::k_code_file_limit + 1, 'x');
 	const auto written = call("code.write", json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") }, { "text", big } });
 	BOOST_TEST(written.code == cmd::codes::failed);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
+}
+
+// #1349: a file over the limit is refused before it is read, and the answer gives the limit, never the file's size.
+BOOST_AUTO_TEST_CASE(Read_OverTheLimit_IsRefused_WithoutSayingItsSize)
+{
+	dir.write("project/code/src/big.cpp", std::string(edt::k_code_file_limit + 1, 'x'));
+	const auto read = call("code.read", json::object{ { "path", "src/big.cpp" } });
+	BOOST_TEST(read.code == cmd::codes::failed);
+	BOOST_TEST(read.error.find("larger than") != std::string::npos, read.error);
+	BOOST_TEST(read.error.find(std::to_string(edt::k_code_file_limit + 1)) == std::string::npos, read.error);
+	BOOST_TEST(read.value.as_object().if_contains("text") == nullptr);
+}
+
+// #1349: a folder swapped for a link after every check, right before the read walks to the file, is refused by the read
+// itself, and the answer is that of a missing file: nothing of what the link leads to comes back.
+BOOST_AUTO_TEST_CASE(Read_AFolderSwappedForALinkAfterTheChecks_IsRefusedLikeAMissingFile)
+{
+	dir.write("outside/game.cpp", "secret");
+	const fs::path moved = code / "src_moved";
+	bool swapped = false;
+	read_hook = [&](platform::beneath::read_stage stage) {
+		if (stage != platform::beneath::read_stage::before_walk || swapped) return;
+		swapped = true;
+		fs::rename(code / "src", moved);
+		test_util::make_folder_link(code / "src", dir.path() / "outside");
+	};
+
+	const auto read = call("code.read", json::object{ { "path", "src/game.cpp" } });
+
+	read_hook = nullptr;
+	BOOST_REQUIRE(swapped);
+	std::error_code ec;
+	fs::remove(code / "src", ec);
+	fs::rename(moved, code / "src", ec);
+	BOOST_TEST(read.code == cmd::codes::failed);
+	BOOST_TEST(read.error == "no file 'src/game.cpp' in code/", read.error);
+	BOOST_TEST(json::serialize(read.value).find("secret") == std::string::npos);
 	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
 }
 
@@ -507,6 +551,61 @@ BOOST_AUTO_TEST_CASE(AFileLinkedToTheCMakeLists_IsNeitherWrittenNorDeleted)
 }
 #endif
 
+#ifdef _WIN32
+// #1343: a file or a folder of code/ with a third-party reparse tag is a link to every code.* call and every origin,
+// named as one, never taken for a plain entry nor for a missing one; code.list leaves it out.
+BOOST_AUTO_TEST_CASE(AThirdPartyReparsePoint_IsRefusedAsALink_ToEveryOrigin)
+{
+	dir.write("project/code/src/tagged.cpp", "");
+	const fs::path file = code / "src" / "tagged.cpp";
+	const fs::path folder = code / "src" / "tagged_folder";
+	fs::create_directories(folder);
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(file).empty(), "file");
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(folder).empty(), "folder");
+	struct remove_on_exit {
+		fs::path file;
+		fs::path folder;
+		~remove_on_exit()
+		{
+			DeleteFileW(file.c_str());
+			RemoveDirectoryW(folder.c_str());
+		}
+	} remove{ file, folder };
+	const std::string empty_version = edt::code_version_of({});
+	const auto refused_as_link = [](const cmd::result& result) {
+		BOOST_TEST(result.code == cmd::codes::failed);
+		BOOST_TEST(result.error.find("link or an unsupported entry") != std::string::npos, result.error);
+	};
+
+	for (const cmd::origin& from : { cmd::origin::agent("s1"), cmd::origin::ui(), cmd::origin::test() }) {
+		refused_as_link(call("code.read", json::object{ { "path", "src/tagged.cpp" } }, from));
+		refused_as_link(call("code.read", json::object{ { "path", "src/tagged_folder/inner.cpp" } }, from));
+		refused_as_link(call("code.write",
+			json::object{ { "path", "src/tagged.cpp" }, { "version", empty_version }, { "text", "x" } }, from));
+		refused_as_link(call("code.list", json::object{ { "dir", "src/tagged_folder" } }, from));
+		const json::object create_inside{ { "path", "src/tagged_folder/new.cpp" }, { "text", "x" } };
+		BOOST_TEST(call("code.create", create_inside, from).code == cmd::codes::failed);
+		const json::object remove_tagged{ { "path", "src/tagged.cpp" }, { "version", empty_version } };
+		BOOST_TEST(call("code.delete", remove_tagged, from).code == cmd::codes::failed);
+		const json::object move_inside{ { "from", "src/game.cpp" }, { "to", "src/tagged_folder/game.cpp" } };
+		BOOST_TEST(call("code.rename", move_inside, from).code == cmd::codes::failed);
+	}
+	const auto listed = call("code.list", json::object{ { "dir", "src" } });
+	BOOST_REQUIRE_MESSAGE(listed.ok, listed.error);
+	const std::string text = json::serialize(listed.value);
+	BOOST_TEST(text.find("tagged") == std::string::npos, text);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	// Windows opens neither entry without a filter for the tag: what is checked is that both are still the tagged
+	// entries they were, not replaced by a plain file or folder.
+	for (const fs::path& tagged : { file, folder }) {
+		std::error_code ec;
+		const auto kind = platform::beneath::link_entry_at(tagged, ec);
+		BOOST_TEST(!ec, ec.message());
+		BOOST_TEST((kind == platform::beneath::link_entry::link), tagged.string());
+	}
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(DeletingAFolder_IsRefused)
 {
 	fs::create_directories(code / "src" / "folder.cpp");
@@ -689,7 +788,7 @@ BOOST_AUTO_TEST_CASE(EdtCodeCommands_WithoutACodeFolder_SayNoProject)
 	ds::task_system tasks{ test_util::manual_tasks() };
 	res::resource_system sys{ tasks, res::resource_system::project_mount_table({}, { content }, cache, cache / "user_profile") };
 	cmd::command_registry commands;
-	const auto registrations = edt::register_code_commands(commands, { sys, nullptr });
+	const auto registrations = edt::register_code_commands(commands, { sys, nullptr, nullptr });
 	BOOST_TEST(commands.invoke("code.list", json::object{}, cmd::origin::agent("s1")).code == "no_project");
 	BOOST_TEST(commands.invoke("code.read", json::object{ { "path", "a.cpp" } }, cmd::origin::agent("s1")).code == "no_project");
 }

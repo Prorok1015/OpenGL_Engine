@@ -2,6 +2,7 @@
 #include <snk/project/prj_code.h>
 #include <snk/project/prj_link_check.h>
 #include "test_folder_link.hpp"
+#include "test_reparse_tag.hpp"
 #include <snk/project/prj_project.h>
 #include <snk/platform/plt_beneath.h>
 #include <snk/resource/resolvers/res_write_policy.h>
@@ -41,29 +42,6 @@ prj::project_context open_game(test_util::temp_dir& dir)
 	return *opened.context;
 }
 
-#ifdef _WIN32
-// The empty folder `folder` made a reparse point with a name-surrogate tag of a third party (#1295): std::filesystem
-// calls it neither a symlink nor a junction. Needs no privilege. Empty on success, else why not.
-std::string set_third_party_surrogate_tag(const fs::path& folder)
-{
-	const HANDLE handle = CreateFileW(folder.c_str(), GENERIC_WRITE,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-	if (handle == INVALID_HANDLE_VALUE) {
-		return "cannot open the folder: error " + std::to_string(GetLastError());
-	}
-	REPARSE_GUID_DATA_BUFFER buffer{};
-	buffer.ReparseTag = 0x2000ABCDu;
-	buffer.ReparseDataLength = 0;
-	buffer.ReparseGuid = { 0x1295ABCDu, 0x1295, 0x4295, { 0x12, 0x95, 0x12, 0x95, 0x12, 0x95, 0x12, 0x95 } };
-	DWORD returned = 0;
-	const BOOL set = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, &buffer, REPARSE_GUID_DATA_BUFFER_HEADER_SIZE,
-		nullptr, 0, &returned, nullptr);
-	const DWORD code = GetLastError();
-	CloseHandle(handle);
-	return set ? std::string{} : "FSCTL_SET_REPARSE_POINT failed: error " + std::to_string(code);
-}
-#endif
 
 }
 
@@ -542,7 +520,7 @@ BOOST_AUTO_TEST_CASE(Refuses_AnotherNameSurrogateAsTheCacheOrInsideIt)
 		const auto project = open_game(dir);
 		const fs::path planted = inside ? project.cache_dir() / "modules" : project.cache_dir();
 		fs::create_directories(planted);
-		const std::string error = set_third_party_surrogate_tag(planted);
+		const std::string error = test_util::set_third_party_surrogate_tag(planted);
 		BOOST_REQUIRE_MESSAGE(error.empty(), error);
 		struct remove_on_exit {
 			fs::path path;
@@ -582,13 +560,81 @@ BOOST_AUTO_TEST_CASE(LinkBelow_ChecksEntriesPastMaxPath)
 
 	const fs::path planted = fs::path{ deep } / "planted";
 	BOOST_REQUIRE(fs::create_directory(planted, made));
-	const std::string error = set_third_party_surrogate_tag(planted);
+	const std::string error = test_util::set_third_party_surrogate_tag(planted);
 	BOOST_REQUIRE_MESSAGE(error.empty(), error);
 	const auto problem = prj::link_below(project.cache_dir());
 	BOOST_REQUIRE(problem.has_value());
 	BOOST_TEST(problem->find("is a link") != std::string::npos, *problem);
 	BOOST_TEST(problem->find("planted") != std::string::npos, *problem);
 	BOOST_TEST(problem->find("//?/") == std::string::npos, *problem);
+}
+
+// #1343: a folder or a file in code/ with a third-party name-surrogate tag is a link whose target nobody can read: it
+// is reported, with no target, and never resolved to its own (inside) place.
+BOOST_AUTO_TEST_CASE(LinksLeavingProject_AThirdPartySurrogate_IsReportedWithNoTarget)
+{
+	test_util::temp_dir dir("prj_code_leaving_surrogate");
+	const auto project = open_game(dir);
+	const fs::path folder = project.code_dir() / "tagged_folder";
+	const fs::path file = project.code_dir() / "src" / "tagged.cpp";
+	fs::create_directories(folder);
+	dir.write("game/code/src/tagged.cpp", "");
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(folder).empty(), "folder");
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(file).empty(), "file");
+	struct remove_on_exit {
+		fs::path folder;
+		fs::path file;
+		~remove_on_exit()
+		{
+			RemoveDirectoryW(folder.c_str());
+			DeleteFileW(file.c_str());
+		}
+	} remove{ folder, file };
+
+	const prj::leaving_links found = prj::links_leaving_project(project.code_dir(), project.root);
+
+	BOOST_TEST(found.complete);
+	std::vector<std::string> names;
+	for (const prj::leaving_link& link : found.found) {
+		names.push_back(link.link.filename().string());
+		BOOST_TEST(link.target.empty(), link.target.string());
+		BOOST_TEST(link.link.native().find(L"\\\\?\\") == std::wstring::npos, link.link.string());
+	}
+	std::ranges::sort(names);
+	BOOST_TEST((names == std::vector<std::string>{ "tagged.cpp", "tagged_folder" }));
+}
+
+// #1343: the walk of code/ reaches an entry past MAX_PATH and reports it spelled as code/ was given.
+BOOST_AUTO_TEST_CASE(LinksLeavingProject_SeesEntriesPastMaxPath)
+{
+	test_util::temp_dir dir("prj_code_leaving_long");
+	const auto project = open_game(dir);
+	std::wstring deep = L"\\\\?\\" + project.code_dir().lexically_normal().make_preferred().wstring();
+	while (deep.size() < MAX_PATH + 60) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	std::error_code made;
+	fs::create_directories(fs::path{ deep }, made);
+	BOOST_REQUIRE_MESSAGE(!made, made.message());
+	struct remove_on_exit {
+		fs::path root;
+		~remove_on_exit()
+		{
+			platform::beneath::pinned_root pinned{ root };
+			platform::beneath::remove_tree_beneath(pinned, "", "code");
+		}
+	} remove{ project.root };
+	const fs::path planted = fs::path{ deep } / "planted";
+	BOOST_REQUIRE(fs::create_directory(planted, made));
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(planted).empty(), "planted");
+
+	const prj::leaving_links found = prj::links_leaving_project(project.code_dir(), project.root);
+
+	BOOST_TEST(found.complete);
+	BOOST_REQUIRE_EQUAL(found.found.size(), 1u);
+	BOOST_TEST(found.found[0].link.filename() == fs::path{ "planted" });
+	BOOST_TEST(found.found[0].link.native().starts_with(project.code_dir().native()), found.found[0].link.string());
+	BOOST_TEST(found.found[0].target.empty());
 }
 #endif
 

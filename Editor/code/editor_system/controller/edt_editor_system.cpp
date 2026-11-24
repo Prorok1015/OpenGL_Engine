@@ -500,7 +500,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	// A7 (#451): the agent's edits of code/ through code://; without a code folder they answer no_project.
-	for (auto& command : register_code_commands(m_context->actions().commands(), { m_res, &m_context->events() })) {
+	const code_commands_deps code_deps{ m_res, &m_context->events(), nullptr };
+	for (auto& command : register_code_commands(m_context->actions().commands(), code_deps)) {
 		m_registrations.push_back(std::move(command));
 	}
 	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
@@ -524,8 +525,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
-	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs (busy), and
-	// with an uncommitted edit or any dirty document (needs_input).
+	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs, or (not the
+	// rollback) before the asset index is ready (busy), and with an uncommitted edit or any dirty document (needs_input).
 	m_migration = std::make_unique<migration_component>(migration_component::ports{
 		.context = *m_context, .services = m_services, .resources = m_res, .layer = *editor_layer, .level_ctrl = m_level_ctrl,
 		.state = m_state, .prefab = *m_prefab, .asset_open = *m_asset_open, .level_load = *m_level_load,
@@ -547,6 +548,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_import->person_import_running()) return std::string{ "a model import is running" };
 			return std::nullopt;
 		},
+		.index_wait = [this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); },
 		.unsaved_reason = [this]() -> std::optional<std::string> {
 			if (person_is_editing()) return std::string{ "a person is editing a value (an inspector field or a gizmo drag): commit it first" };
 			if (m_state.is_dirty()) return std::string{ "the level has unsaved changes: save or discard them first" };

@@ -138,6 +138,7 @@ namespace edt::mesh
 		for (const auto& [id, f] : mesh.faces()) {
 			const std::optional<std::vector<std::array<std::uint32_t, 3>>> cut = triangulate_face(mesh, id);
 			if (!cut) continue;
+			m_face_triangles[id] = *cut;
 			float largest = -1.f;
 			for (const std::array<std::uint32_t, 3>& corners : *cut) {
 				triangle tri;
@@ -186,6 +187,12 @@ namespace edt::mesh
 			return ds::bvh_ray_action{ distance, false };
 		});
 		return found;
+	}
+
+	const std::vector<std::array<std::uint32_t, 3>>* mesh_picker::face_triangles(face_id id) const
+	{
+		const auto found = m_face_triangles.find(id);
+		return found == m_face_triangles.end() ? nullptr : &found->second;
 	}
 
 	std::optional<glm::vec3> mesh_picker::face_point(face_id id) const

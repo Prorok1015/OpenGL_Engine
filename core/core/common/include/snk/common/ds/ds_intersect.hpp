@@ -11,6 +11,14 @@
 // Pure intersection math: no ECS, no render, no allocation. Distances are in units of the ray's direction vector, so a
 // unit direction gives world distances.
 namespace ds {
+	// 1/x, with +-inf for +-0 as IEEE gives it. No division ever has a zero divisor, even once a constant x is
+	// inlined: MSVC Release folds 1.f / 0.f into C4723 (an error under /WX, #1350).
+	inline float reciprocal(float x)
+	{
+		const float divisor = x != 0.f ? x : 1.f;
+		return x != 0.f ? 1.f / divisor : std::copysign(std::numeric_limits<float>::infinity(), x);
+	}
+
 	// A ray with the reciprocal of its direction kept for the slab test (an axis the direction does not move along has an
 	// infinite reciprocal, which ray_aabb never multiplies with: it checks the origin against that slab instead).
 	struct ray3 final
@@ -21,7 +29,7 @@ namespace ds {
 
 		ray3() = default;
 		ray3(const glm::vec3& from, const glm::vec3& dir)
-			: origin(from), direction(dir), inv_direction(1.f / dir.x, 1.f / dir.y, 1.f / dir.z) {}
+			: origin(from), direction(dir), inv_direction(reciprocal(dir.x), reciprocal(dir.y), reciprocal(dir.z)) {}
 
 		glm::vec3 at(float t) const { return origin + direction * t; }
 	};
@@ -73,7 +81,9 @@ namespace ds {
 		const float det = glm::dot(edge1, p);
 		const float limit = k_parallel * glm::length(edge1) * glm::length(p);
 		if (cull_back_faces ? det <= limit : std::abs(det) <= limit) return std::nullopt;
-		const float inv_det = 1.f / det;
+		// det is not 0 past the check above; the divisor says so too, for MSVC, which folds a constant degenerate
+		// triangle into 1.f / 0.f before it drops the code that return makes unreachable (C4723, #1350).
+		const float inv_det = 1.f / (det != 0.f ? det : 1.f);
 		const glm::vec3 s = origin - a;
 		const float u = glm::dot(s, p) * inv_det;
 		if (u < 0.f || u > 1.f) return std::nullopt;

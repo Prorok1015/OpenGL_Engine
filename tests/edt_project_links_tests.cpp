@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_project_links.h"
 #include "test_folder_link.hpp"
+#include "test_reparse_tag.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/project/prj_project.h>
 #include <filesystem>
@@ -58,6 +59,30 @@ BOOST_AUTO_TEST_CASE(ALinkInCodeIntoSnkOrCache_IsAWarningToo_ALinkToResIsNot)
 	BOOST_TEST(problems[0].file != "code/res_link");
 	BOOST_TEST(problems[1].file != "code/res_link");
 }
+
+#ifdef _WIN32
+// #1343: a folder of code/ with a third-party reparse tag leads where only its file system filter knows: a warning that
+// says so, never no row.
+BOOST_AUTO_TEST_CASE(AThirdPartyReparsePointInCode_IsAWarningThatItLeadsToAnUnknownPlace)
+{
+	test_util::temp_dir dir("edt_project_links_surrogate");
+	const auto project = open_game(dir);
+	const fs::path folder = project.code_dir() / "tagged";
+	fs::create_directories(folder);
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(folder).empty(), "tagged");
+	struct remove_on_exit {
+		fs::path folder;
+		~remove_on_exit() { RemoveDirectoryW(folder.c_str()); }
+	} remove{ folder };
+
+	const std::vector<edt::problem> problems = edt::code_link_problems(project);
+
+	BOOST_REQUIRE_EQUAL(problems.size(), 1u);
+	BOOST_TEST((problems[0].severity == edt::problem_severity::warning));
+	BOOST_TEST(problems[0].file == "code/tagged");
+	BOOST_TEST(problems[0].message.find("unknown place") != std::string::npos, problems[0].message);
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(ACodeFolderWithoutLinks_OrWithoutAnyFolder_HasNoProblems)
 {

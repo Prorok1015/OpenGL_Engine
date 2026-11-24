@@ -19,6 +19,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -188,6 +189,9 @@ namespace
 		file.reason = std::move(reason);
 		file.objects.clear();
 		file.unknown_types.clear();
+		// engine.material_shaders picks its files by this flag alone: --force must leave an invalid file as it is.
+		file.material_stages = false;
+		file.material_stage_pointers.clear();
 	}
 
 	// Reads and parses a desc file; on a refusal `file` is invalid and the result is null. `text` (may be null) gets the
@@ -753,6 +757,7 @@ namespace
 		const reference_texts& materials)
 	{
 		const desc::migration_id_lookup id_of = [&assets](std::string_view path) { return assets.id_of(res::tag{ path }); };
+		const prj::migration::material_shaders_checker checker(project, assets);
 		for (prj::migration::scanned_file& file : result.files) {
 			if (file.kind != file_class::outdated) continue;
 			const auto text = materials.find(file.path);
@@ -760,10 +765,10 @@ namespace
 			boost::system::error_code error;
 			const json::value root = parse_desc_json(without_bom(text->second), error);
 			if (error || !root.is_object()) continue;
-			const std::vector<std::string> refused = prj::migration::refused_material_stages(root.as_object(), id_of);
+			std::vector<std::string> refused = prj::migration::refused_material_stages(root.as_object(), id_of);
 			std::string problem;
 			for (const std::string& pointer : refused) {
-				const std::string why = prj::migration::material_shaders_problem(project, assets, file.path, root.at_pointer(pointer).as_object());
+				const std::string why = checker.problem(file.path, root.at_pointer(pointer).as_object());
 				if (why.empty()) continue;
 				problem = std::format("the material{} cannot be migrated: {}", pointer.empty() ? std::string{} : " at " + pointer, why);
 				break;
@@ -774,6 +779,25 @@ namespace
 				continue;
 			}
 			file.material_stages = !refused.empty();
+			file.material_stage_pointers = std::move(refused);
+		}
+	}
+
+	// `root` as engine.material_shaders leaves it, for the dry run only: each refused material gets a "shader" in place of
+	// its shader_* keys, which the type step does not resolve, so the rest of the file is checked by the type steps. Throws
+	// when a pointer no longer names an object (the file changed since the scan).
+	void put_placeholder_shaders(json::value& root, const std::vector<std::string>& pointers)
+	{
+		constexpr std::string_view placeholder = "res://material_shaders.placeholder.shader.desc";
+		for (const std::string& pointer : pointers) {
+			boost::system::error_code error;
+			json::value* found = root.find_pointer(pointer, error);
+			if (!found || !found->is_object()) {
+				throw std::runtime_error(std::format("changed since the scan: no material at '{}'", pointer));
+			}
+			json::object& material = found->as_object();
+			for (const std::string_view key : { "shader_vertex", "shader_fragment", "shader_geometry" }) material.erase(key);
+			material["shader"] = placeholder;
 		}
 	}
 }
@@ -1010,9 +1034,18 @@ prj::migration::migration_plan prj::migration::plan_migration(const fs::path& ro
 
 		file_plan planned;
 		planned.path = file.path;
-		// The type step refuses its stages until engine.material_shaders (pre) rewrote them: its dry run would fail here,
-		// so the file is planned with its steps and no diff, and the type migration runs on what the step leaves.
+		// The type step refuses its stages until engine.material_shaders (pre) rewrote them: the dry run goes over a copy
+		// with placeholders for them, and the file is planned with its steps and no diff (the copy's is not what is written).
 		if (file.material_stages) {
+			try {
+				json::value checked = before;
+				put_placeholder_shaders(checked, file.material_stage_pointers);
+				std::vector<desc::migration_warning> ignored;
+				game_layer.migrate_tree(checked.as_object(), file.path, ignored);
+			} catch (const std::exception& e) {
+				set_invalid(file, e.what());
+				continue;
+			}
 			planned.warnings.push_back(desc::migration_warning{ "material_desc", 1, file.path,
 				"its shader stages are written to a .shader.desc by the project step engine.material_shaders first; "
 				"the type migration runs after it (no diff in this plan)" });

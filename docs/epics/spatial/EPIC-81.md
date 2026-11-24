@@ -27,3 +27,6 @@
 
 ## ABI
 Записи: `docs/abi/changes/1326.md` (layout_revision 26) и `1326-async.md` (layout_revision 27: типы `ray_request`, `ray_result`, `ray_batch` в ключе).
+
+## Зарезервированные слои
+Слой 31 (`scn::spatial_layer{31}`) зарезервирован за редактором: `edt::k_editor_helper_layer` (иконки света и камеры, вспомогательные меши). `edt::pick_node` его не попадает; игровой код слой 31 не занимает.
