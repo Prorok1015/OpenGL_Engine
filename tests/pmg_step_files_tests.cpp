@@ -776,14 +776,22 @@ BOOST_AUTO_TEST_CASE(AJournalThatCannotDropTheEntry_StopsTheRun_EvenWhenTheStepG
 		}
 		return prj::write_project_file(root, relative, text);
 	};
-	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	const pmg::migration_plan planned = plan();
+	// The engine's pre steps the plan puts before test.pre ran and are listed; test.pre and everything after it are not.
+	std::vector<std::string> ran_before;
+	for (const pmg::planned_project_step& step : planned.project_steps) {
+		if (step.id == "test.pre") break;
+		if (step.phase == "pre") ran_before.push_back(step.id);
+	}
+	BOOST_REQUIRE((std::ranges::find(planned.project_steps, std::string{ "test.pre" }, &pmg::planned_project_step::id) != planned.project_steps.end()));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned, hooked);
 	BOOST_REQUIRE(outcome.refused.empty());
 	BOOST_TEST(failed);
 	BOOST_TEST(refusals.size() == 1u);
 	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
 	BOOST_TEST(outcome.report.error.find("something is at its name") != std::string::npos, outcome.report.error);
 	BOOST_TEST(outcome.report.error.find("injected journal failure") != std::string::npos, outcome.report.error);
-	BOOST_TEST(outcome.report.project_steps.empty());
+	BOOST_TEST(outcome.report.project_steps == ran_before, boost::test_tools::per_element());
 	BOOST_TEST(outcome.report.created_files.empty());
 	BOOST_TEST((content_of(copy.root()) == expected));
 }
