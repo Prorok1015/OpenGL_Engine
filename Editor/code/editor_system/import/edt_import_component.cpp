@@ -133,6 +133,7 @@ void edt::import_component::build()
 	image_import_options image_options;
 	image_options.resource_layers = [&resources] { return resources.get_resource_layers(); };
 	image_options.resources_path = [&resources] { return resources.get_resources_path(); };
+	image_options.project_open = [this] { return m_ports.project_open && m_ports.project_open(); };
 	image_options.blocker = [this]() -> std::optional<std::string> {
 		if (m_ports.write_blocker) {
 			if (std::optional<std::string> why = m_ports.write_blocker()) return why;

@@ -314,7 +314,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				changes.push_back(std::move(change));
 			}
 			m_asset_component->database().report_self_change(changes);
-		} });
+		},
+		.project_open = [&data] { return data.has_value<prj::project_context>(); } });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});

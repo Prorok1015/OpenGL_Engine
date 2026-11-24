@@ -52,6 +52,8 @@ namespace edt
 			std::function<std::optional<std::string>()> write_blocker = {};
 			// An image import wrote these files (main thread): the asset database is told. Null: nobody is.
 			std::function<void(const std::vector<res::tag>&)> assets_written = {};
+			// Whether a project is open: without one no image import starts. Null: none is.
+			std::function<bool()> project_open = {};
 		};
 
 		explicit import_component(ports from);

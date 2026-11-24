@@ -9,9 +9,11 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/command/cmd_policy.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_file_change.h>
 #include <boost/json.hpp>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -24,9 +26,10 @@
 #include <system_error>
 #include <vector>
 
-// The import of a picture with its settings (#1193): three new files in the project's top layer (the `.resource` first,
-// the bytes as they are, the texture desc), the asset database keeps the sidecar's ID, and nothing stays when a write
-// fails.
+// The import of a picture with its settings (#1193): four new files in the project's top layer (the picture's
+// `.resource`, the texture desc's `.resource`, the bytes as they are, the texture desc), the asset database keeps both
+// IDs, nothing stays when a write fails, and an agent's source is looked at only after approval and only on a local
+// disk.
 
 namespace {
 
@@ -70,6 +73,15 @@ struct image_fixture
 		edt::image_import_options result;
 		result.resource_layers = [this] { return std::vector<fs::path>{ lower(), top() }; };
 		result.resources_path = [this] { return top(); };
+		result.project_open = [this] { return project_open; };
+		result.drive_type = [this](char letter) {
+			++drive_type_calls;
+			return std::toupper(static_cast<unsigned char>(letter)) == remote_drive ? 4u : edt::k_drive_fixed;
+		};
+		result.mount_table = [this]() -> std::optional<std::string> {
+			++mount_table_calls;
+			return mounts;
+		};
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.written = [this](const std::vector<res::tag>& tags) {
 			reported = tags;
@@ -104,7 +116,7 @@ struct image_fixture
 	// The job of a person's import, run to its end.
 	std::optional<edt::job_service::job_info> run(const edt::image_import_request& wanted)
 	{
-		const edt::image_importer::started started = importer->start(wanted, cmd::origin::ui(), false);
+		const edt::image_importer::started started = importer->start(wanted, cmd::origin::ui());
 		BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 		test_util::pump(tasks);
 		return jobs.info(started.job);
@@ -146,7 +158,25 @@ struct image_fixture
 	std::vector<res::tag> reported;
 	std::chrono::steady_clock::time_point clock{};
 	const cmd::origin agent = cmd::origin::agent("session-1");
+	bool project_open = true;
+	// The classifier of an agent's source: every drive a fixed disk but this one, a local root file system.
+	int remote_drive = 0;
+	std::string mounts = "/dev/sda1 / ext4 rw 0 0\n";
+	int drive_type_calls = 0;
+	int mount_table_calls = 0;
 };
+
+// A path on a network volume as the classifier is faked for this platform.
+std::string remote_volume_path(image_fixture& fixture)
+{
+#if defined(_WIN32)
+	fixture.remote_drive = 'Z';
+	return "Z:\\pictures\\rock.png";
+#else
+	fixture.mounts += "nas:/export /mnt/nas nfs4 rw 0 0\n";
+	return "/mnt/nas/pictures/rock.png";
+#endif
+}
 
 }
 
@@ -217,16 +247,70 @@ BOOST_AUTO_TEST_CASE(TheTextureHeader_FollowsTheSettings_AndNamesNoTypeUsageExte
 	BOOST_CHECK_EQUAL(mip_header.at("data").as_object().at("mip_levels").as_int64(), edt::k_image_full_mip_chain);
 }
 
+BOOST_AUTO_TEST_CASE(AnAgentsSource_IsToldLocalOrNot_ByItsTextAndTheVolumeTables)
+{
+	int asked = 0;
+	edt::source_volume_ports windows;
+	windows.windows = true;
+	unsigned type = edt::k_drive_fixed;
+	windows.drive_type = [&](char letter) {
+		++asked;
+		BOOST_CHECK_EQUAL(letter, 'D');
+		return type;
+	};
+	windows.mount_table = {};
+	const auto refused = [](const std::string& why) { return !why.empty(); };
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\pictures\\rock.png", windows)));
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:/pictures/rock.png", windows)));
+	type = edt::k_drive_removable;
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\rock.png", windows)));
+	for (const unsigned other : { 0u, 1u, 4u, 5u, 6u }) {
+		type = other;
+		BOOST_CHECK(refused(edt::agent_source_path_problem("D:\\rock.png", windows)));
+	}
+	asked = 0;
+	for (const char* path : { "\\\\server\\share\\x.png", "//server/share/x.png", "\\\\?\\UNC\\server\\share\\x.png",
+		"\\\\?\\D:\\x.png", "\\\\.\\D:\\x.png", "\\??\\D:\\x.png", "/\\server\\x.png", "\\pictures\\x.png",
+		"pictures\\x.png", "D:x.png", "D:\\a\\..\\x.png", "D:\\.\\x.png", "D:\\x.png:stream" }) {
+		BOOST_TEST_CONTEXT(path)
+		{
+			BOOST_CHECK(refused(edt::agent_source_path_problem(path, windows)));
+		}
+	}
+	BOOST_CHECK_EQUAL(asked, 0);
+
+	edt::source_volume_ports posix;
+	posix.windows = false;
+	posix.drive_type = {};
+	std::optional<std::string> table = std::string("/dev/sda1 / ext4 rw 0 0\nnas:/x /mnt/nas nfs4 rw 0 0\n"
+		"/dev/sdb1 /mnt/nas/local ext4 rw 0 0\nhost:/y /media/net\\040share cifs rw 0 0\n");
+	posix.mount_table = [&] { return table; };
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("/home/user/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt/nas/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt//nas/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt/nas", posix)));
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("/mnt/nasty/rock.png", posix)));
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("/mnt/nas/local/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/media/net share/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/home/../mnt/nas/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("//server/share/rock.png", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("rock.png", posix)));
+	table.reset();
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/home/user/rock.png", posix)));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtImageImportTests, image_fixture)
 
-BOOST_AUTO_TEST_CASE(AnImport_WritesTheSidecarThePictureAndTheTextureDesc)
+BOOST_AUTO_TEST_CASE(AnImport_WritesBothSidecarsThePictureAndTheTextureDesc)
 {
 	const json::object done = imported(request(json::parse(R"({"wrap":"repeat","filter":"linear","mips":true})")));
 	BOOST_CHECK_EQUAL(text_of(done.at("image")), "res://textures/rock.png");
 	BOOST_CHECK_EQUAL(text_of(done.at("resource")), "res://textures/rock.png.resource");
 	BOOST_CHECK_EQUAL(text_of(done.at("texture")), "res://textures/rock.png.txm.desc");
+	BOOST_CHECK_EQUAL(text_of(done.at("texture_resource")), "res://textures/rock.png.txm.desc.resource");
+	BOOST_CHECK_NE(text_of(done.at("guid")), text_of(done.at("texture_guid")));
 
 	// The sidecar: importer texture, the settings, canonical bytes.
 	const std::string meta_text = read_file(top() / "textures" / "rock.png.resource");
@@ -255,9 +339,23 @@ BOOST_AUTO_TEST_CASE(AnImport_WritesTheSidecarThePictureAndTheTextureDesc)
 	BOOST_CHECK(!header.at("data").as_object().contains("extent"));
 	BOOST_CHECK(!header.at("data").as_object().contains("format"));
 
-	// Nothing in the lower layer; the main thread was told of the three files.
+	// The desc's own sidecar: its ID, no importer, no settings, canonical bytes.
+	const std::string desc_meta_text = read_file(top() / "textures" / "rock.png.txm.desc.resource");
+	const res::asset_meta_result desc_meta = res::read_asset_meta(desc_meta_text);
+	BOOST_REQUIRE(desc_meta);
+	BOOST_CHECK(desc_meta.meta->importer.empty());
+	BOOST_CHECK(desc_meta.meta->settings.empty());
+	BOOST_CHECK(desc_meta.meta->flags.empty());
+	BOOST_CHECK_EQUAL(res::to_text(desc_meta.meta->guid), text_of(done.at("texture_guid")));
+	BOOST_CHECK_EQUAL(res::write_asset_meta(*desc_meta.meta), desc_meta_text);
+
+	// Nothing in the lower layer; the main thread was told of the four files, in the order they were written.
 	BOOST_CHECK(fs::is_empty(lower()));
-	BOOST_CHECK_EQUAL(reported.size(), 3u);
+	BOOST_REQUIRE_EQUAL(reported.size(), 4u);
+	BOOST_CHECK_EQUAL(reported[0].view(), "res://textures/rock.png.resource");
+	BOOST_CHECK_EQUAL(reported[1].view(), "res://textures/rock.png.txm.desc.resource");
+	BOOST_CHECK_EQUAL(reported[2].view(), "res://textures/rock.png");
+	BOOST_CHECK_EQUAL(reported[3].view(), "res://textures/rock.png.txm.desc");
 }
 
 BOOST_AUTO_TEST_CASE(AFolderAndAName_AreTheOnesAsked_TheExtensionIsAdded)
@@ -267,7 +365,7 @@ BOOST_AUTO_TEST_CASE(AFolderAndAName_AreTheOnesAsked_TheExtensionIsAdded)
 	BOOST_CHECK(fs::exists(top() / "materials" / "stone" / "granite.png.txm.desc"));
 }
 
-BOOST_AUTO_TEST_CASE(TheAssetDatabase_KeepsTheSidecarsId_ReportedOrWalked)
+BOOST_AUTO_TEST_CASE(TheAssetDatabase_KeepsBothSidecarsIds_ReportedOrWalked)
 {
 	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), top() });
 	db->rebuild();
@@ -278,11 +376,17 @@ BOOST_AUTO_TEST_CASE(TheAssetDatabase_KeepsTheSidecarsId_ReportedOrWalked)
 	db->poll(true);
 	test_util::pump(tasks);
 	const std::string sidecar = read_file(top() / "textures" / "rock.png.resource");
+	const std::string desc_sidecar = read_file(top() / "textures" / "rock.png.txm.desc.resource");
 	const edt::asset_record* record = db->find(res::tag::make("textures/rock.png"));
 	BOOST_REQUIRE(record != nullptr);
 	BOOST_REQUIRE(record->id.has_value());
 	BOOST_CHECK_EQUAL(res::to_text(*record->id), text_of(done.at("guid")));
+	const edt::asset_record* desc = db->find(res::tag::make("textures/rock.png.txm.desc"));
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_REQUIRE(desc->id.has_value());
+	BOOST_CHECK_EQUAL(res::to_text(*desc->id), text_of(done.at("texture_guid")));
 	BOOST_CHECK_EQUAL(read_file(top() / "textures" / "rock.png.resource"), sidecar);
+	BOOST_CHECK_EQUAL(read_file(top() / "textures" / "rock.png.txm.desc.resource"), desc_sidecar);
 
 	// A database made afterwards reads the same ID from the walk.
 	edt::asset_database walked(jobs, &events, std::vector<fs::path>{ lower(), top() });
@@ -291,18 +395,22 @@ BOOST_AUTO_TEST_CASE(TheAssetDatabase_KeepsTheSidecarsId_ReportedOrWalked)
 	const edt::asset_record* again = walked.find(res::tag::make("textures/rock.png"));
 	BOOST_REQUIRE(again != nullptr && again->id.has_value());
 	BOOST_CHECK_EQUAL(res::to_text(*again->id), text_of(done.at("guid")));
+	const edt::asset_record* desc_again = walked.find(res::tag::make("textures/rock.png.txm.desc"));
+	BOOST_REQUIRE(desc_again != nullptr && desc_again->id.has_value());
+	BOOST_CHECK_EQUAL(res::to_text(*desc_again->id), text_of(done.at("texture_guid")));
 }
 
-BOOST_AUTO_TEST_CASE(ANameTakenInAnyLayer_IsRefused_ForEachOfTheThreeFiles)
+BOOST_AUTO_TEST_CASE(ANameTakenInAnyLayer_IsRefused_ForEachOfTheFourFiles)
 {
-	for (const char* taken : { "textures/rock.png", "textures/rock.png.resource", "textures/rock.png.txm.desc" }) {
+	for (const char* taken : { "textures/rock.png", "textures/rock.png.resource", "textures/rock.png.txm.desc",
+		"textures/rock.png.txm.desc.resource" }) {
 		BOOST_TEST_CONTEXT(taken)
 		{
 			const fs::path holder = lower() / taken;
 			fs::create_directories(holder.parent_path());
 			std::ofstream(holder) << "{}";
 			BOOST_CHECK_EQUAL(refusal_code(request()), cmd::codes::needs_input);
-			const edt::image_importer::started started = importer->start(request(), cmd::origin::ui(), false);
+			const edt::image_importer::started started = importer->start(request(), cmd::origin::ui());
 			BOOST_CHECK(!started.ok());
 			BOOST_CHECK_EQUAL(started.code, cmd::codes::needs_input);
 			fs::remove(holder);
@@ -403,7 +511,7 @@ BOOST_AUTO_TEST_CASE(ABlocker_OrARunningImport_IsBusy)
 	BOOST_CHECK_EQUAL(refusal_code(request()), cmd::codes::busy);
 	blocked.reset();
 
-	const edt::image_importer::started first = importer->start(request(), cmd::origin::ui(), false);
+	const edt::image_importer::started first = importer->start(request(), cmd::origin::ui());
 	BOOST_REQUIRE(first.ok());
 	BOOST_CHECK(importer->running());
 	BOOST_CHECK_EQUAL(refusal_code(request(nullptr, std::string{ "other" })), cmd::codes::busy);
@@ -411,9 +519,9 @@ BOOST_AUTO_TEST_CASE(ABlocker_OrARunningImport_IsBusy)
 	BOOST_CHECK(!importer->running());
 }
 
-BOOST_AUTO_TEST_CASE(ASecondOrThirdWriteThatFails_LeavesNothing)
+BOOST_AUTO_TEST_CASE(ASecondThirdOrFourthWriteThatFails_LeavesNothing)
 {
-	for (const char* step : { "image", "texture" }) {
+	for (const char* step : { "texture_meta", "image", "texture" }) {
 		BOOST_TEST_CONTEXT(step)
 		{
 			failing_step = step;
@@ -435,37 +543,135 @@ BOOST_AUTO_TEST_CASE(ATargetThatAppearsBeforeTheWrite_IsNotOverwritten_AndTheRes
 		edt::image_importer::write_files(top(), plan, std::as_bytes(std::span(png_text)));
 	BOOST_CHECK(!written.ok());
 	BOOST_CHECK(!fs::exists(top() / "textures" / "rock.png.resource"));
+	BOOST_CHECK(!fs::exists(top() / "textures" / "rock.png.txm.desc.resource"));
 	BOOST_CHECK(!fs::exists(top() / "textures" / "rock.png"));
 	BOOST_CHECK_EQUAL(read_file(top() / "textures" / "rock.png.txm.desc"), "someone else's");
+	// The error names the file as res:// and holds nothing of this machine's folders.
+	BOOST_CHECK_MESSAGE(written.error.find("unit_test_tmp") == std::string::npos, written.error);
+	BOOST_CHECK_MESSAGE(written.error.find(dir.path().generic_string()) == std::string::npos, written.error);
 }
 
-BOOST_AUTO_TEST_CASE(AnAgent_NeedsAPersonsApproval_OfThePlanShown)
+BOOST_AUTO_TEST_CASE(AFailingWritesError_HoldsNoAbsolutePath)
 {
-	const edt::image_importer::started unapproved = importer->start(request(), agent, false);
-	BOOST_CHECK_EQUAL(unapproved.code, cmd::codes::denied);
-	const edt::image_importer::started not_shown = importer->start(request(), agent, true);
-	BOOST_CHECK_EQUAL(not_shown.code, cmd::codes::denied);
+	const edt::image_import_plan plan = importer->resolve(request(), true);
+	BOOST_REQUIRE_MESSAGE(plan.ok(), plan.error);
+	// A file where the folder must be made: the folder cannot be made.
+	dir.write("project/res/textures", "a file");
+	const edt::image_import_written written =
+		edt::image_importer::write_files(top(), plan, std::as_bytes(std::span(png_text)));
+	BOOST_REQUIRE(!written.ok());
+	for (const std::string& part : { std::string("unit_test_tmp"), dir.path().string(), dir.path().generic_string(),
+		top().string(), top().generic_string() }) {
+		BOOST_CHECK_MESSAGE(written.error.find(part) == std::string::npos, written.error);
+	}
+
+	const std::string text = top().string() + "/textures/x.png, " + top().generic_string() + " and " + source.string();
+	const std::string clean = edt::image_importer::without_paths(text, { top() }, source);
+	BOOST_CHECK_MESSAGE(clean.find("unit_test_tmp") == std::string::npos, clean);
+	BOOST_CHECK_MESSAGE(clean.find("res://textures/x.png") != std::string::npos, clean);
+	BOOST_CHECK_MESSAGE(clean.find("rock.png") != std::string::npos, clean);
+}
+
+BOOST_AUTO_TEST_CASE(WithNoProjectOpen_NothingIsImported)
+{
+	project_open = false;
+	BOOST_CHECK_EQUAL(refusal_code(request()), cmd::codes::disabled);
+	const edt::image_importer::started person = importer->start(request(), cmd::origin::ui());
+	BOOST_CHECK_EQUAL(person.code, cmd::codes::disabled);
+	const std::optional<std::string> question = importer->describe(request(), agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->find("no project is open") != std::string::npos, *question);
+	edt::image_import_form form(*importer);
+	form.open("art", source);
+	BOOST_CHECK(!form.can_submit());
+	BOOST_CHECK(fs::is_empty(lower()));
+	BOOST_CHECK(fs::is_empty(top()));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_NeedsThePlanDescribedForThatVeryCall)
+{
+	const edt::image_importer::started never_described = importer->start(request(), agent);
+	BOOST_CHECK_EQUAL(never_described.code, cmd::codes::denied);
 
 	const std::optional<std::string> question = importer->describe(request(), agent);
 	BOOST_REQUIRE(question.has_value());
 	BOOST_CHECK(question->find("res://textures/rock.png.txm.desc") != std::string::npos);
+	BOOST_CHECK(question->find("res://textures/rock.png.txm.desc.resource") != std::string::npos);
 	BOOST_CHECK(question->find("rock.png") != std::string::npos);
-	const edt::image_importer::started approved = importer->start(request(), agent, true);
-	BOOST_REQUIRE_MESSAGE(approved.ok(), approved.error);
+	// Another call of the same session was not described.
+	BOOST_CHECK_EQUAL(importer->start(request(nullptr, std::string{ "other" }), agent).code, cmd::codes::denied);
+	const edt::image_importer::started described = importer->start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(described.ok(), described.error);
 	test_util::pump(tasks);
 	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
+	// The plan is spent.
+	BOOST_CHECK_EQUAL(importer->start(request(nullptr, std::nullopt, "again"), agent).code, cmd::codes::denied);
 }
 
-BOOST_AUTO_TEST_CASE(AnAgentsFileChangedAfterTheQuestion_IsDenied)
+BOOST_AUTO_TEST_CASE(AnAgentsQuestion_DoesNotLookAtTheSource)
+{
+	// A file that is not there: the question is made from the text, the start (after approval) finds it missing.
+	edt::image_import_request missing = request();
+	missing.path = (dir.path() / "outside" / "missing.png").string();
+	const std::optional<std::string> question = importer->describe(missing, agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->find("This request will be refused") == std::string::npos, *question);
+	BOOST_CHECK_MESSAGE(question->find("approved") != std::string::npos, *question);
+	BOOST_CHECK_EQUAL(importer->start(missing, agent).code, cmd::codes::not_found);
+	BOOST_CHECK(nothing_written());
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsFileChangedAfterTheStart_FailsTheJob)
 {
 	BOOST_REQUIRE(importer->describe(request(), agent).has_value());
+	const edt::image_importer::started started = importer->start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	{
 		std::ofstream out(source, std::ios::binary | std::ios::app);
 		out << "more";
 	}
-	const edt::image_importer::started started = importer->start(request(), agent, true);
-	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	test_util::pump(tasks);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
 	BOOST_CHECK(nothing_written());
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsNetworkSource_IsRefusedBeforeAnyDiskAccess)
+{
+	for (const std::string& path : { std::string("\\\\server\\share\\x.png"), std::string("//server/share/x.png"),
+		std::string("\\\\?\\UNC\\server\\share\\x.png"), std::string("\\\\.\\C:\\x.png"),
+		std::string("\\??\\C:\\x.png") }) {
+		BOOST_TEST_CONTEXT(path)
+		{
+			edt::image_import_request wanted = request();
+			wanted.path = path;
+			const std::optional<std::string> question = importer->describe(wanted, agent);
+			BOOST_REQUIRE(question.has_value());
+			BOOST_CHECK_MESSAGE(question->find("network share or a device path") != std::string::npos, *question);
+			const edt::image_import_plan plan = importer->resolve(wanted, false);
+			BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+			BOOST_CHECK_MESSAGE(plan.error.find("no such file") == std::string::npos, plan.error);
+			BOOST_CHECK_EQUAL(importer->start(wanted, agent).code, cmd::codes::denied);
+		}
+	}
+	// Told from the text alone: neither the drive table nor the mount table was asked.
+	BOOST_CHECK_EQUAL(drive_type_calls, 0);
+	BOOST_CHECK_EQUAL(mount_table_calls, 0);
+
+	// A mapped network drive (Windows) or a network mount (POSIX): the classifier says so, the path is not looked at.
+	edt::image_import_request remote = request();
+	remote.path = remote_volume_path(*this);
+	const std::optional<std::string> question = importer->describe(remote, agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->find("This request will be refused") != std::string::npos, *question);
+	BOOST_CHECK_MESSAGE(question->find("network") != std::string::npos, *question);
+	const edt::image_import_plan plan = importer->resolve(remote, false);
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(plan.error.find("no such file") == std::string::npos, plan.error);
+	BOOST_CHECK_GT(drive_type_calls + mount_table_calls, 0);
+	// A person may pick a file on a share: the rule is not theirs (the file is simply missing here).
+	BOOST_CHECK_EQUAL(importer->resolve(remote, true).code, cmd::codes::not_found);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -481,10 +687,11 @@ BOOST_AUTO_TEST_CASE(TheForm_StartsWithTheDefaultsAndTheSourcesName)
 	BOOST_CHECK_EQUAL(form.folder(), "art");
 	BOOST_CHECK_MESSAGE(form.can_submit(), form.problem());
 	const std::vector<std::string> names = form.final_names();
-	BOOST_REQUIRE_EQUAL(names.size(), 3u);
+	BOOST_REQUIRE_EQUAL(names.size(), 4u);
 	BOOST_CHECK_EQUAL(names[0], "res://art/rock.png");
 	BOOST_CHECK_EQUAL(names[1], "res://art/rock.png.resource");
 	BOOST_CHECK_EQUAL(names[2], "res://art/rock.png.txm.desc");
+	BOOST_CHECK_EQUAL(names[3], "res://art/rock.png.txm.desc.resource");
 }
 
 BOOST_AUTO_TEST_CASE(TheForm_ChangesSettingsAndNames_AndImports)
@@ -530,11 +737,12 @@ struct image_action_fixture : image_fixture
 
 	~image_action_fixture() { menu.reset(); }
 
-	cmd::result call(const cmd::origin& from, const json::object& args)
+	cmd::result call(const cmd::origin& from, const json::object& args, std::string ticket = {})
 	{
 		cmd::call request;
 		request.args = args;
 		request.from = from;
+		request.confirmation = std::move(ticket);
 		return actions.invoke("file.import_image", request);
 	}
 
@@ -542,6 +750,18 @@ struct image_action_fixture : image_fixture
 	edt::action_registry actions;
 	edt::file_menu_hooks hooks;
 	std::unique_ptr<edt::file_menu> menu;
+};
+
+// A policy that says the same to every call, and a person who can be asked.
+struct fixed_gate final : cmd::policy_gate
+{
+	explicit fixed_gate(cmd::policy_mode answer) : mode(answer) {}
+	cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override
+	{
+		return { mode, "test policy", cmd::agent_category::unset };
+	}
+	bool can_ask() const override { return true; }
+	cmd::policy_mode mode;
 };
 
 }
@@ -556,6 +776,7 @@ BOOST_AUTO_TEST_CASE(TheCommand_AsksAPersonAndStartsAJob)
 	BOOST_CHECK(command->starts_job);
 	BOOST_CHECK(command->mutates);
 	BOOST_CHECK(static_cast<bool>(command->describe));
+	BOOST_CHECK(command->describe_before_allowed_invoke);
 	BOOST_CHECK(!command->args_schema.as_object().at("additionalProperties").as_bool());
 }
 
@@ -579,6 +800,51 @@ BOOST_AUTO_TEST_CASE(APersonsCall_StartsTheJob)
 	BOOST_CHECK_GT(result.value.as_object().at("job").as_int64(), 0);
 	test_util::pump(tasks);
 	BOOST_CHECK(fs::exists(top() / "art" / "rock.png.txm.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCallThePolicyAllows_IsDescribedByTheRegistry_AndRuns)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::allow));
+	const cmd::result result = call(agent, json::object{ { "path", source.string() } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	test_util::pump(tasks);
+	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
+	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc.resource"));
+	actions.commands().set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCall_WithATicketNotApprovedOrRejected_IsDenied_AnApprovedOneRuns)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const json::object args{ { "path", source.string() } };
+	const cmd::result asked = call(agent, args);
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	const std::string ticket(asked.value.at("ticket").as_string());
+	BOOST_CHECK_EQUAL(call(agent, args, ticket).code, cmd::codes::denied);
+
+	actions.commands().discard(ticket);
+	BOOST_CHECK_EQUAL(call(agent, args, ticket).code, cmd::codes::denied);
+	test_util::pump(tasks);
+	BOOST_CHECK(nothing_written());
+
+	const cmd::result again = call(agent, args);
+	BOOST_REQUIRE_EQUAL(again.code, cmd::codes::confirmation_required);
+	const std::string approved(again.value.at("ticket").as_string());
+	BOOST_REQUIRE(actions.commands().approve(approved));
+	const cmd::result ran = call(agent, args, approved);
+	BOOST_REQUIRE_MESSAGE(ran.ok, ran.error);
+	test_util::pump(tasks);
+	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
+	actions.commands().set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ACallNeverDescribed_IsDenied)
+{
+	// No gate judges a test's call and nothing describes it: the import refuses it.
+	const cmd::result result = call(cmd::origin::test(), json::object{ { "path", source.string() } });
+	BOOST_CHECK(!result.ok);
+	BOOST_CHECK_EQUAL(result.code, cmd::codes::denied);
+	BOOST_CHECK(nothing_written());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

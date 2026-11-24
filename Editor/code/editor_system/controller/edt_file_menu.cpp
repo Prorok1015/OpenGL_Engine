@@ -508,40 +508,51 @@ void edt::file_menu::register_image_import()
 				{ "description", "Generate the full mip chain and filter between levels (default false)." } } } } },
 		{ "additionalProperties", false } };
 
-	m_registrations.push_back(m_actions.add({ .id = "file.import_image", .label = "Import Image",
-		.execute_call = [this, request_of](const cmd::call& request) {
-			const image_importer::started started = m_hooks.image_import->start(request_of(request.args.as_object()),
-				request.from, !request.confirmation.empty());
-			if (!started.ok()) return action_result::failure(started.code, started.error);
-			return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
-		},
-		.args_schema = json::object{
-			{ "type", "object" },
-			{ "properties", json::object{
-				{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Absolute path of the picture (.png, .jpg, .jpeg); a regular file, not a link. "
-						"Copied into the project as it is. An agent's import asks a person first." } } },
-				{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Folder below res:// (default: textures). Nothing is ever overwritten." } } },
-				{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "File name in the project (default: the source's name); the source's extension "
-						"is added when it has none." } } },
-				{ "settings", settings_schema } } },
-			{ "required", json::array{ "path" } },
-			{ "additionalProperties", false } },
-		.result_schema = json::object{
-			{ "type", "object" },
-			{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
-				{ "description", "The import job: job.get shows its progress and, when done, {image, resource, texture, "
-					"guid} (res:// tags of the picture, its .resource and its <name>.txm.desc, and the picture's asset "
-					"ID)." } } } } },
-			{ "additionalProperties", false } },
-		.category = cmd::agent_category::scene_edit,
-		.risk = cmd::danger::confirm,
-		.describe = [this, request_of](const cmd::call& request) -> std::optional<std::string> {
-			return m_hooks.image_import->describe(request_of(request.args.as_object()), request.from);
-		},
-		.starts_job = true }));
+	cmd::command_desc command;
+	command.id = "file.import_image";
+	command.summary = "Import Image";
+	command.mutates = true;
+	command.invoke = [this, request_of](const cmd::call& request) {
+		const image_importer::started started =
+			m_hooks.image_import->start(request_of(request.args.as_object()), request.from);
+		if (!started.ok()) return action_result::failure(started.code, started.error);
+		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
+	};
+	command.args_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{
+			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Absolute path of the picture (.png, .jpg, .jpeg); a regular file, not a link. "
+					"Copied into the project as it is. An agent's import asks a person first, and its source must lie "
+					"on a local fixed or removable disk (no share, network drive or mount, no '.' or '..')." } } },
+			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Folder below res:// (default: textures). Nothing is ever overwritten." } } },
+			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "File name in the project (default: the source's name); the source's extension "
+					"is added when it has none." } } },
+			{ "settings", settings_schema } } },
+		{ "required", json::array{ "path" } },
+		{ "additionalProperties", false } };
+	command.result_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
+			{ "description", "The import job: job.get shows its progress and, when done, {image, resource, texture, "
+				"texture_resource, guid, texture_guid} (res:// tags of the picture, its .resource, its "
+				"<name>.txm.desc and that desc's .resource, and the asset IDs of the picture and of the "
+				"desc)." } } } } },
+		{ "additionalProperties", false } };
+	command.category = cmd::agent_category::scene_edit;
+	command.risk = cmd::danger::confirm;
+	command.describe = [this, request_of](const cmd::call& request) -> std::optional<std::string> {
+		return m_hooks.image_import->describe(request_of(request.args.as_object()), request.from);
+	};
+	// The registry describes a call the policy allows only with this set (cmd_registry.cpp, apply_policy), and the
+	// import runs an agent's call only with the plan describe remembered for it.
+	command.describe_before_allowed_invoke = true;
+	command.starts_job = true;
+	action_ui ui;
+	ui.label = "Import Image";
+	m_registrations.push_back(m_actions.add(std::move(command), std::move(ui)));
 }
 
 void edt::file_menu::register_actions()

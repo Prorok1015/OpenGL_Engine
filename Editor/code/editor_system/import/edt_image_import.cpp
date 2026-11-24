@@ -1,4 +1,5 @@
 #include "edt_image_import.h"
+#include "edt_agent_log_filter.h"
 #include "edt_asset_picker.h"
 #include "edt_file_menu.h"
 #include <snk/common/fs_paths.h>
@@ -21,6 +22,16 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
@@ -88,8 +99,9 @@ namespace
 		const std::string layer = edt::picker::layer_label(taken->layer, layers.size());
 		const std::string tag = shown(res::tag::make(relative).view());
 		if (!taken->error.empty()) {
+			const std::string why = edt::image_importer::without_paths(taken->error, layers, {});
 			return std::pair{ cmd::codes::invalid_args,
-				std::format("the folder of {} cannot be read in the {} layer: {}", tag, layer, shown(taken->error)) };
+				std::format("the folder of {} cannot be read in the {} layer: {}", tag, layer, shown(why)) };
 		}
 		if (taken->meta_left) {
 			return std::pair{ cmd::codes::needs_input,
@@ -153,10 +165,11 @@ namespace
 		return platform::beneath::write_beneath(pinned, request);
 	}
 
+	// In the order they are written.
 	std::vector<std::string> relatives_of(const edt::image_import_plan& plan)
 	{
-		return { std::string(plan.meta.relative()), std::string(plan.image.relative()),
-			std::string(plan.texture.relative()) };
+		return { std::string(plan.meta.relative()), std::string(plan.texture_meta.relative()),
+			std::string(plan.image.relative()), std::string(plan.texture.relative()) };
 	}
 
 	struct job_inputs
@@ -165,11 +178,17 @@ namespace
 		std::vector<fs::path> layers;
 		fs::path top;
 		std::function<bool(std::string_view)> fail_step;
+		bool agent = false;
+		edt::source_volume_ports volumes;
 	};
 
 	json::value run_import(const job_inputs& in, ds::task_context& ctx)
 	{
 		ctx.throw_if_stopped();
+		if (in.agent) {
+			const std::string why = edt::agent_source_path_problem(fs_paths::utf8_of(in.plan.source), in.volumes);
+			if (!why.empty()) throw std::runtime_error(why);
+		}
 		ctx.set_progress(0.f, "Reading the picture");
 		const std::vector<std::byte> bytes = read_checked_source(in.plan);
 		ctx.set_progress(0.3f, "Decoding the picture");
@@ -189,8 +208,163 @@ namespace
 		if (!written.ok()) throw std::runtime_error(written.error);
 		return json::object{ { "image", std::string(written.image.view()) },
 			{ "resource", std::string(written.meta.view()) }, { "texture", std::string(written.texture.view()) },
-			{ "guid", res::to_text(written.guid) } };
+			{ "texture_resource", std::string(written.texture_meta.view()) }, { "guid", res::to_text(written.guid) },
+			{ "texture_guid", res::to_text(written.texture_guid) } };
 	}
+
+	bool is_separator(char c, bool windows)
+	{
+		return c == '/' || (windows && c == '\\');
+	}
+
+	// The components of `path` between separators, empty ones left out.
+	std::vector<std::string_view> components_of(std::string_view path, bool windows)
+	{
+		std::vector<std::string_view> out;
+		std::size_t begin = 0;
+		for (std::size_t at = 0; at <= path.size(); ++at) {
+			if (at < path.size() && !is_separator(path[at], windows)) continue;
+			if (at > begin) out.push_back(path.substr(begin, at - begin));
+			begin = at + 1;
+		}
+		return out;
+	}
+
+	std::string windows_volume_problem(std::string_view path, const edt::source_volume_ports& ports)
+	{
+		const char letter = path.size() >= 3 ? path[0] : '\0';
+		const bool lettered = (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
+		if (!lettered || path[1] != ':' || !is_separator(path[2], true)) {
+			return "the source must start with a drive letter (C:/...): an agent may import only from a local disk";
+		}
+		if (path.find(':', 2) != std::string_view::npos) return "the source path holds a ':' after its drive";
+		// Only the drive's root, built from the letter: the drive table answers, the path is not looked at.
+		const unsigned type = ports.drive_type ? ports.drive_type(letter) : 0;
+		if (type != edt::k_drive_fixed && type != edt::k_drive_removable) {
+			return std::format("the drive {}: is no local fixed or removable disk (a network drive, a CD, a RAM disk or "
+				"none): an agent may import only from a local disk", letter);
+		}
+		return {};
+	}
+
+	std::string posix_volume_problem(std::span<const std::string_view> parts, const edt::source_volume_ports& ports)
+	{
+		const std::optional<std::string> table = ports.mount_table ? ports.mount_table() : std::nullopt;
+		if (!table) return "the mount table cannot be read: an agent's source cannot be told to be on a local disk";
+		std::string normal;
+		for (const std::string_view part : parts) normal += "/" + std::string(part);
+		if (normal.empty()) normal = "/";
+		// The longest mount point on component boundaries holds the path; a later line over the same point wins.
+		const edt::agent_log_mount* holder = nullptr;
+		const std::vector<edt::agent_log_mount> mounts = edt::agent_log_mounts(*table);
+		for (const edt::agent_log_mount& mount : mounts) {
+			const std::string& point = mount.point;
+			const bool under = point == "/" || normal == point
+				|| (normal.size() > point.size() && normal.starts_with(point) && normal[point.size()] == '/');
+			if (under && (holder == nullptr || point.size() >= holder->point.size())) holder = &mount;
+		}
+		if (holder == nullptr) return "no mount of the mount table holds the source";
+		if (holder->remote) {
+			return "the source is on a network or automount file system: an agent may import only from a local disk";
+		}
+		return {};
+	}
+
+	void replace_all(std::string& text, std::string_view from, std::string_view to)
+	{
+		if (from.empty()) return;
+		for (std::size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) {
+			text.replace(at, from.size(), to);
+		}
+	}
+
+	// The spellings of `path` a message may hold, longest first, without a trailing separator.
+	std::vector<std::string> spellings_of(const fs::path& path)
+	{
+		std::vector<std::string> bases{ fs_paths::utf8_of(path), fs_paths::generic_utf8_of(path) };
+		std::error_code ec;
+		const fs::path resolved = fs::weakly_canonical(path, ec);
+		if (!ec) {
+			bases.push_back(fs_paths::utf8_of(resolved));
+			bases.push_back(fs_paths::generic_utf8_of(resolved));
+		}
+		std::vector<std::string> out;
+		for (std::string base : bases) {
+			while (base.size() > 1 && (base.back() == '/' || base.back() == '\\')) base.pop_back();
+			if (base.empty()) continue;
+			out.push_back("\\\\?\\" + base);
+			out.push_back(std::move(base));
+		}
+		std::ranges::sort(out, [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+		return out;
+	}
+}
+
+#if defined(_WIN32)
+static_assert(static_cast<unsigned>(DRIVE_FIXED) == edt::k_drive_fixed);
+static_assert(static_cast<unsigned>(DRIVE_REMOVABLE) == edt::k_drive_removable);
+#endif
+
+unsigned edt::system_drive_type(char letter)
+{
+#if defined(_WIN32)
+	const wchar_t root[4]{ static_cast<wchar_t>(letter), L':', L'\\', L'\0' };
+	return static_cast<unsigned>(GetDriveTypeW(root));
+#else
+	static_cast<void>(letter);
+	return 0;
+#endif
+}
+
+std::optional<std::string> edt::system_mount_table()
+{
+#if defined(_WIN32)
+	return std::nullopt;
+#else
+	std::ifstream in("/proc/self/mounts", std::ios::binary);
+	if (!in) return std::nullopt;
+	std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	if (text.empty()) return std::nullopt;
+	return text;
+#endif
+}
+
+std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)
+{
+	if (path.empty()) return "the source path is empty";
+	if (path.starts_with("\\??\\") || (path.size() >= 2 && is_separator(path[0], true) && is_separator(path[1], true))) {
+		return "the source is a network share or a device path: an agent may import only from a local disk";
+	}
+	const std::vector<std::string_view> parts = components_of(path, ports.windows);
+	if (std::ranges::any_of(parts, [](std::string_view part) { return part == "." || part == ".."; })) {
+		return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
+	}
+	if (ports.windows) return windows_volume_problem(path, ports);
+	if (path.front() != '/') return "the source must be an absolute path to a picture";
+	return posix_volume_problem(parts, ports);
+}
+
+std::string edt::agent_source_path_problem(std::string_view path)
+{
+	return agent_source_path_problem(path, source_volume_ports{});
+}
+
+std::string edt::image_importer::without_paths(std::string text, const std::vector<fs::path>& roots,
+	const fs::path& source)
+{
+	if (!source.empty()) {
+		const std::string name = fs_paths::utf8_of(source.filename());
+		for (const std::string& spelling : spellings_of(source)) replace_all(text, spelling, name);
+	}
+	for (const fs::path& root : roots) {
+		if (root.empty()) continue;
+		for (const std::string& spelling : spellings_of(root)) {
+			replace_all(text, spelling + "/", "res://");
+			replace_all(text, spelling + "\\", "res://");
+			replace_all(text, spelling, "res://");
+		}
+	}
+	return text;
 }
 
 std::string_view edt::image_wrap_name(image_wrap wrap)
@@ -282,8 +456,8 @@ json::object edt::image_texture_desc_json(const res::tag& image, std::string_vie
 
 bool edt::image_import_plan::same_as(const image_import_plan& other) const
 {
-	return source == other.source && size == other.size && modified == other.modified && id.same_as(other.id)
-		&& image == other.image && settings == other.settings;
+	return folder == other.folder && name == other.name && image == other.image && meta == other.meta
+		&& texture == other.texture && texture_meta == other.texture_meta && settings == other.settings;
 }
 
 edt::image_importer::image_importer(job_service& jobs, image_import_options options)
@@ -301,6 +475,14 @@ bool edt::image_importer::running() const
 std::chrono::steady_clock::time_point edt::image_importer::now() const
 {
 	return m_options.now ? m_options.now() : std::chrono::steady_clock::now();
+}
+
+edt::source_volume_ports edt::image_importer::volumes() const
+{
+	source_volume_ports ports;
+	ports.drive_type = m_options.drive_type;
+	ports.mount_table = m_options.mount_table;
+	return ports;
 }
 
 void edt::image_importer::remember(std::string key, std::string session, image_import_plan plan)
@@ -344,7 +526,14 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 		plan.error = std::move(why);
 		return plan;
 	};
+	if (!m_options.project_open || !m_options.project_open()) return refuse(cmd::codes::disabled, "no project is open");
 	if (request.path.empty()) return refuse(cmd::codes::invalid_args, "the source path is empty");
+	// A person may pick a file on a share in the native dialog; an agent's source stays on a local disk.
+	if (!person) {
+		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, std::move(why));
+		}
+	}
 	const fs::path given = from_utf8(request.path);
 	if (!given.is_absolute()) {
 		return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a picture");
@@ -360,16 +549,21 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	if (status.type() != fs::file_type::regular) {
 		return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 	}
-	const std::string source_extension = extension_of(fs_paths::utf8_of(given.filename()));
-	if (!known_extension(source_extension)) {
+	if (!known_extension(extension_of(fs_paths::utf8_of(given.filename())))) {
 		return refuse(cmd::codes::invalid_args, "the source is not a picture this import takes (.png, .jpg or .jpeg)");
 	}
 	const fs::path resolved = fs::canonical(given, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the source path cannot be resolved");
+	if (!person) {
+		if (std::string why = agent_source_path_problem(fs_paths::utf8_of(resolved), volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, "the source resolves to a path an agent may not read: " + why);
+		}
+	}
 	if (fs::symlink_status(resolved, ec).type() != fs::file_type::regular) {
 		return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 	}
 	plan.source = resolved;
+	plan.on_disk = true;
 	plan.size = fs::file_size(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the size of the source cannot be read");
 	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
@@ -382,12 +576,48 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	if (ec) return refuse(cmd::codes::invalid_args, "the time of the source cannot be read");
 	plan.id = file_id_of(resolved);
 	if (!plan.id.valid) return refuse(cmd::codes::invalid_args, "the identity of the source on the disk cannot be read");
+	plan_targets(request, fs_paths::utf8_of(resolved.filename()), plan);
+	return plan;
+}
 
+edt::image_import_plan edt::image_importer::text_plan(const image_import_request& request) const
+{
+	image_import_plan plan;
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	if (!m_options.project_open || !m_options.project_open()) return refuse(cmd::codes::disabled, "no project is open");
+	if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+		return refuse(cmd::codes::invalid_args, std::move(why));
+	}
+	const fs::path given = from_utf8(request.path);
+	if (!given.is_absolute()) {
+		return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a picture");
+	}
+	const std::string source_name = fs_paths::utf8_of(given.filename());
+	if (!known_extension(extension_of(source_name))) {
+		return refuse(cmd::codes::invalid_args, "the source is not a picture this import takes (.png, .jpg or .jpeg)");
+	}
+	plan.source = given;
+	plan_targets(request, source_name, plan);
+	return plan;
+}
+
+void edt::image_importer::plan_targets(const image_import_request& request, std::string_view source_name,
+	image_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+	};
 	const image_settings_parse parsed = parse_image_settings(request.settings);
 	if (!parsed.ok()) return refuse(cmd::codes::invalid_args, parsed.error);
 	plan.settings = parsed.settings;
 
-	std::string name = request.name.empty() ? fs_paths::utf8_of(resolved.filename()) : request.name;
+	const std::string source_extension = extension_of(source_name);
+	std::string name = request.name.empty() ? std::string(source_name) : request.name;
 	if (!request.name.empty() && !known_extension(extension_of(name))) name += source_extension;
 	if (is_png_extension(extension_of(name)) != is_png_extension(source_extension)) {
 		return refuse(cmd::codes::invalid_args,
@@ -409,14 +639,17 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 		plan.folder = folder.path;
 	}
 	const std::string relative = joined(plan.folder, plan.name);
-	const agent_level_path whole = check_agent_level_path(relative + std::string(k_image_texture_suffix));
+	const std::string texture = relative + std::string(k_image_texture_suffix);
+	const agent_level_path whole = check_agent_level_path(texture);
 	if (!whole.ok()) {
 		return refuse(cmd::codes::invalid_args, "the path: " + whole.error);
 	}
 	plan.image = res::tag::make(relative);
 	plan.meta = res::tag::make(relative + std::string(res::asset_meta_suffix));
-	plan.texture = res::tag::make(relative + std::string(k_image_texture_suffix));
+	plan.texture = res::tag::make(texture);
+	plan.texture_meta = res::tag::make(texture + std::string(res::asset_meta_suffix));
 
+	// The project's own layers: looking at them is no look at the source.
 	const std::vector<fs::path> layers =
 		m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	for (const std::string& target : relatives_of(plan)) {
@@ -426,49 +659,55 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 		if (std::optional<std::string> why = m_options.blocker()) return refuse(cmd::codes::busy, *why);
 	}
 	if (running()) return refuse(cmd::codes::busy, "an image import is already running");
-	return plan;
 }
 
 std::optional<std::string> edt::image_importer::describe(const image_import_request& request, const cmd::origin& caller)
 {
-	image_import_plan plan = resolve(request, caller.kind == cmd::origin_kind::ui);
+	const bool person = caller.kind == cmd::origin_kind::ui;
+	image_import_plan plan = person ? resolve(request, true) : text_plan(request);
 	if (!plan.ok()) return "This request will be refused: " + text_escape::escaped_message(plan.error, 1024);
+	const std::string size = plan.on_disk ? size_text(plan.size) : std::string{ "(its size is read once approved)" };
 	std::string text = std::format("Import the picture\n  {}\n  {}\ninto the project as\n  {}  (the bytes as they are)\n"
-		"  {}  (importer texture: wrap {}, filter {}, mips {})\n  {}\nNothing is overwritten.",
-		shown(fs_paths::generic_utf8_of(plan.source)), size_text(plan.size), shown(plan.image.view()),
-		shown(plan.meta.view()), image_wrap_name(plan.settings.wrap), image_filter_name(plan.settings.filter),
-		plan.settings.mips ? "on" : "off", shown(plan.texture.view()));
+		"  {}  (importer texture: wrap {}, filter {}, mips {})\n  {}\n  {}  (the texture's ID)\nNothing is overwritten.",
+		shown(fs_paths::generic_utf8_of(plan.source)), size, shown(plan.image.view()), shown(plan.meta.view()),
+		image_wrap_name(plan.settings.wrap), image_filter_name(plan.settings.filter), plan.settings.mips ? "on" : "off",
+		shown(plan.texture.view()), shown(plan.texture_meta.view()));
 	remember(call_key(request, caller), caller.session, std::move(plan));
 	return text;
 }
 
-edt::image_importer::started edt::image_importer::start(const image_import_request& request, const cmd::origin& caller,
-	bool confirmed)
+edt::image_importer::started edt::image_importer::start(const image_import_request& request, const cmd::origin& caller)
 {
-	// A person's own call is the approval; anyone else needs one, for exactly the plan shown. Nothing on the disk is
-	// looked at before that, so an unapproved call cannot probe paths.
+	// A person's own call is the approval. Anyone else needs the plan describe remembered for exactly this call: the
+	// registry invokes an agent's call the policy asks about only after a person approved its ticket, and describes a
+	// call the policy allows right before it runs (describe_before_allowed_invoke). Without that plan nothing is looked
+	// at; with it, the source is looked at on the disk here for the first time, after the text rule once more.
 	const bool person = caller.kind == cmd::origin_kind::ui;
 	std::optional<image_import_plan> shown_plan;
 	if (!person) {
-		if (!confirmed) return { 0, cmd::codes::denied, "an import needs a person's approval" };
 		shown_plan = take(call_key(request, caller));
 		if (!shown_plan) {
 			return { 0, cmd::codes::denied,
-				"this import was not shown to a person, or the approval is too old: ask again" };
+				"this import was not shown to a person or described before it ran, or that is too old: ask again" };
+		}
+		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+			return { 0, cmd::codes::invalid_args, std::move(why) };
 		}
 	}
 	image_import_plan plan = resolve(request, person);
 	if (!plan.ok()) return { 0, plan.code, plan.error };
 	if (shown_plan && !shown_plan->same_as(plan)) {
-		return { 0, cmd::codes::denied, "the file changed since a person was shown it: ask again" };
+		return { 0, cmd::codes::denied, "the files to write are not the ones a person was shown: ask again" };
 	}
 	job_inputs inputs;
 	inputs.layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	inputs.top = m_options.resources_path ? m_options.resources_path() : fs::path{};
 	inputs.fail_step = m_options.fail_step;
+	inputs.agent = !person;
+	inputs.volumes = volumes();
 	inputs.plan = std::move(plan);
 	if (inputs.top.empty()) return { 0, cmd::codes::disabled, "no project is open" };
-	std::vector<res::tag> tags{ inputs.plan.meta, inputs.plan.image, inputs.plan.texture };
+	std::vector<res::tag> tags{ inputs.plan.meta, inputs.plan.texture_meta, inputs.plan.image, inputs.plan.texture };
 	std::string label = "Import " + inputs.plan.name;
 	m_job = m_jobs.start_with_result(ds::lane::compute, { std::move(label), "import" }, m_lifetime,
 		[inputs = std::move(inputs)](ds::task_context& ctx) -> json::value { return run_import(inputs, ctx); },
@@ -507,7 +746,9 @@ edt::image_import_written edt::image_importer::write_files(const fs::path& top, 
 	out.image = plan.image;
 	out.meta = plan.meta;
 	out.texture = plan.texture;
+	out.texture_meta = plan.texture_meta;
 	out.guid = res::generate_asset_id();
+	out.texture_guid = res::generate_asset_id();
 	if (top.empty()) {
 		out.error = "no project is open";
 		return out;
@@ -518,14 +759,22 @@ edt::image_import_written edt::image_importer::write_files(const fs::path& top, 
 	meta.importer = std::string(k_image_importer);
 	meta.settings = image_settings_json(plan.settings);
 	const std::string meta_text = res::write_asset_meta(meta);
+	// The texture desc's own ID: an output of the import, not a recipe, so no importer and no settings.
+	res::asset_meta texture_meta;
+	texture_meta.guid = out.texture_guid;
+	const std::string texture_meta_text = res::write_asset_meta(texture_meta);
 	const std::vector<std::byte> texture_bytes =
 		res::pretty_json_bytes(image_texture_desc_json(plan.image, plan.name, plan.settings));
 
+	const std::vector<fs::path> roots{ top };
+	const auto private_text = [&](std::string text) {
+		return shown(without_paths(std::move(text), roots, plan.source));
+	};
 	const fs::path folder = fs_paths::path_from_utf8(plan.folder);
 	platform::beneath::pinned_root pinned{ top };
 	if (!plan.folder.empty()) {
 		if (std::string error = platform::beneath::make_folders_beneath(pinned, folder); !error.empty()) {
-			out.error = std::format("the folder res://{} cannot be made: {}", plan.folder, error);
+			out.error = std::format("the folder res://{} cannot be made: {}", shown(plan.folder), private_text(error));
 			return out;
 		}
 	}
@@ -535,8 +784,9 @@ edt::image_import_written edt::image_importer::write_files(const fs::path& top, 
 		const res::tag* tag;
 		std::span<const std::byte> data;
 	};
-	// The sidecar first: the asset database, seeing the picture, finds its ID and makes none.
-	const std::array<step, 3> steps = { step{ "meta", &plan.meta, std::as_bytes(std::span(meta_text)) },
+	// The sidecars first: the asset database, seeing the picture or the desc, finds its ID and makes none.
+	const std::array<step, 4> steps = { step{ "meta", &plan.meta, std::as_bytes(std::span(meta_text)) },
+		step{ "texture_meta", &plan.texture_meta, std::as_bytes(std::span(texture_meta_text)) },
 		step{ "image", &plan.image, bytes }, step{ "texture", &plan.texture, texture_bytes } };
 	std::vector<fs::path> written;
 	for (const step& item : steps) {
@@ -544,10 +794,11 @@ edt::image_import_written edt::image_importer::write_files(const fs::path& top, 
 		std::string error = fail_step && fail_step(item.name) ? std::string{ "a test failed this write" }
 			: write_new(pinned, top, folder, leaf, item.data);
 		if (!error.empty()) {
-			out.error = std::format("{} was not written: {}", item.tag->view(), error);
+			out.error = std::format("{} was not written: {}", shown(item.tag->view()), private_text(error));
 			for (auto made = written.rbegin(); made != written.rend(); ++made) {
 				if (std::string left = platform::beneath::remove_beneath(pinned, folder, *made, true); !left.empty()) {
-					out.error += std::format("; {} could not be taken back: {}", fs_paths::utf8_of(*made), left);
+					out.error += std::format("; {} could not be taken back: {}", shown(fs_paths::utf8_of(*made)),
+						private_text(left));
 				}
 			}
 			return out;
@@ -598,7 +849,8 @@ std::vector<std::string> edt::image_import_form::final_names() const
 	if (!m_plan.image.is_valid()) {
 		return {};
 	}
-	return { std::string(m_plan.image.view()), std::string(m_plan.meta.view()), std::string(m_plan.texture.view()) };
+	return { std::string(m_plan.image.view()), std::string(m_plan.meta.view()), std::string(m_plan.texture.view()),
+		std::string(m_plan.texture_meta.view()) };
 }
 
 std::optional<std::uint64_t> edt::image_import_form::submit()
@@ -606,7 +858,7 @@ std::optional<std::uint64_t> edt::image_import_form::submit()
 	if (m_source.empty()) {
 		return std::nullopt;
 	}
-	const image_importer::started started = m_importer.start(request(), cmd::origin::ui(), false);
+	const image_importer::started started = m_importer.start(request(), cmd::origin::ui());
 	if (!started.ok()) {
 		m_error = started.error;
 		check();

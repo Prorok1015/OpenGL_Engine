@@ -19,8 +19,9 @@
 #include <vector>
 
 // The import of a picture into the project (#1193, docs/epics/editor/EPIC-62.md): the file is copied as it is,
-// its `.resource` carries importer "texture" and the settings, and a `<name>.txm.desc` beside it holds the texture
-// header the settings make. No ImGui here: the agent's command, the asset browser's window and the tests share it.
+// its `.resource` carries importer "texture" and the settings, and a `<name>.txm.desc` beside it (with a `.resource`
+// of its own) holds the texture header the settings make. No ImGui here: the agent's command, the asset browser's
+// window and the tests share it.
 namespace edt
 {
 	class job_service;
@@ -65,6 +66,37 @@ namespace edt
 	boost::json::object image_texture_desc_json(const res::tag& image, std::string_view name,
 		const image_import_settings& settings);
 
+	// DRIVE_REMOVABLE and DRIVE_FIXED of GetDriveTypeW: the only drive types an agent's source may lie on.
+	inline constexpr unsigned k_drive_removable = 2;
+	inline constexpr unsigned k_drive_fixed = 3;
+
+	// GetDriveTypeW of "X:\" (the local drive table only, no network round trip); 0 (DRIVE_UNKNOWN) off Windows.
+	unsigned system_drive_type(char letter);
+	// The text of /proc/self/mounts; nullopt when it cannot be read (and on Windows).
+	std::optional<std::string> system_mount_table();
+
+	// How agent_source_path_problem tells a local volume from another one, without touching the path.
+	struct source_volume_ports
+	{
+#if defined(_WIN32)
+		bool windows = true;
+#else
+		bool windows = false;
+#endif
+		// Windows rules: the type of a drive by its letter; null: unknown.
+		std::function<unsigned(char letter)> drive_type = system_drive_type;
+		// POSIX rules: the mount table; null or nullopt: it cannot be read, every path is refused.
+		std::function<std::optional<std::string>()> mount_table = system_mount_table;
+	};
+
+	// The allowed source roots of an agent's import: only local fixed or removable volumes. Why `path` (as an agent
+	// gave it) may not be read for an agent; empty when it may. The text alone decides, plus the drive table or the
+	// mount table: the path itself is never looked at. Refused: UNC and device paths (two leading separators,
+	// `\??\`), a `.` or `..` component; Windows: no drive letter, a drive that is not DRIVE_FIXED/DRIVE_REMOVABLE;
+	// POSIX: a path whose longest mount point is a network or automount one (agent_log_mounts).
+	std::string agent_source_path_problem(std::string_view path, const source_volume_ports& ports);
+	std::string agent_source_path_problem(std::string_view path);
+
 	// What a caller asks for: the person's window or file.import_image.
 	struct image_import_request
 	{
@@ -77,10 +109,12 @@ namespace edt
 		boost::json::value settings;
 	};
 
-	// The request resolved: the file a person approves and the three files the import writes.
+	// The request resolved: the file a person approves and the four files the import writes. An agent's plan made
+	// for the question holds the source as given and no size, time or identity: nothing on its disk was looked at.
 	struct image_import_plan
 	{
-		std::filesystem::path source;	// absolute, no link on the way
+		std::filesystem::path source;	// absolute; on the disk: resolved, no link on the way
+		bool on_disk = false;
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
@@ -89,12 +123,14 @@ namespace edt
 		res::tag image;
 		res::tag meta;
 		res::tag texture;
+		res::tag texture_meta;	// the texture desc's own `.resource`
 		image_import_settings settings;
 		// Set when refused: the command code (invalid_args, not_found, needs_input, busy) and why.
 		std::string code;
 		std::string error;
 
 		bool ok() const { return error.empty(); }
+		// The same files with the same settings.
 		bool same_as(const image_import_plan& other) const;
 	};
 
@@ -103,7 +139,9 @@ namespace edt
 		res::tag image;
 		res::tag meta;
 		res::tag texture;
+		res::tag texture_meta;
 		res::asset_id guid;
+		res::asset_id texture_guid;
 		std::string error;
 		bool ok() const { return error.empty(); }
 	};
@@ -114,16 +152,21 @@ namespace edt
 		std::function<std::vector<std::filesystem::path>()> resource_layers;
 		// The project's own (top) layer: the files are written there.
 		std::function<std::filesystem::path()> resources_path;
+		// Whether a project is open; null or false: every import is refused (never into the engine's layer).
+		std::function<bool()> project_open;
 		// Why nothing may be imported now (Play, a migration, the model import's dialog); null or nullopt: it may.
 		std::function<std::optional<std::string>()> blocker;
-		// Main thread, after a job wrote the three files: the asset database and the resource cache are told.
+		// Main thread, after a job wrote the four files: the asset database and the resource cache are told.
 		std::function<void(const std::vector<res::tag>&)> written;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
 		// The largest picture an agent may import; a person's call may bring k_max_person_source_bytes.
 		std::uintmax_t max_agent_bytes = k_max_agent_source_bytes;
 		std::uintmax_t max_person_bytes = k_max_person_source_bytes;
-		// Tests only: called before each write ("meta", "image", "texture"); true fails that write.
+		// Where an agent's source may lie (agent_source_path_problem); tests fake a remote drive or mount.
+		std::function<unsigned(char letter)> drive_type = system_drive_type;
+		std::function<std::optional<std::string>()> mount_table = system_mount_table;
+		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"); true fails that write.
 		std::function<bool(std::string_view step)> fail_step;
 	};
 
@@ -138,11 +181,14 @@ namespace edt
 		bool running() const;
 
 		// Resolves the request without reading the picture (a stat and the folders of every layer): the source, the
-		// settings, the names and whether they are free. `person`: the person's own size limit.
+		// settings, the names and whether they are free. `person`: the person's own size limit and no source rule;
+		// else agent_source_path_problem first, on the path given and on the path resolved. It looks at the source on
+		// the disk: for an agent's call only once a person approved it (start).
 		image_import_plan resolve(const image_import_request& request, bool person) const;
 
-		// What the person is asked for an agent's call: the source, its size, the three files and the settings; or why
-		// the call will be refused. Remembers the plan for the start that follows the answer.
+		// What the person is asked for an agent's call: the source as given, the four files and the settings; or why
+		// the call will be refused. Never looks at the source on the disk (only the project's layers). Remembers the
+		// plan for the start that follows. A person's call is described from the disk.
 		std::optional<std::string> describe(const image_import_request& request, const cmd::origin& caller);
 
 		struct started
@@ -152,18 +198,26 @@ namespace edt
 			std::string error;
 			bool ok() const { return code.empty(); }
 		};
-		// `confirmed`: a person approved this very call. Anyone but a person needs it, for the plan describe showed. The
-		// job reads the picture, proves it decodes and writes the files; its result is {image, resource, texture, guid}.
-		started start(const image_import_request& request, const cmd::origin& caller, bool confirmed);
+		// Anyone but a person needs the plan describe remembered for exactly this call: the command registry runs a
+		// call the policy asks about only with an approved ticket, and describes every allowed call first
+		// (describe_before_allowed_invoke). The job reads the picture, proves it decodes and writes the files; its
+		// result is {image, resource, texture, texture_resource, guid, texture_guid}.
+		started start(const image_import_request& request, const cmd::origin& caller);
 
 		// Empty when `bytes` are a png or jpeg (matching `extension`) that decodes within the picture adapter's limits.
 		static std::string image_problem(std::span<const std::byte> bytes, std::string_view extension);
 
-		// Writes `.resource` (a new guid), the picture's bytes and the texture desc, in that order, below `top`; each
-		// one new (never over a file) and never through a link. On a failure the files already written are removed,
-		// newest first.
+		// Writes the picture's `.resource` (a new guid, the recipe), the texture desc's `.resource` (another new guid,
+		// no importer: an output), the picture's bytes and the texture desc, in that order, below `top`; each one new
+		// (never over a file) and never through a link. On a failure the files already written are removed, newest
+		// first. An error names a file below `top` as res:// and holds no absolute path.
 		static image_import_written write_files(const std::filesystem::path& top, const image_import_plan& plan,
 			std::span<const std::byte> bytes, const std::function<bool(std::string_view)>& fail_step = {});
+
+		// `text` with every spelling of each of `roots` read as res:// and of `source` as its file name: what an error
+		// that reaches an agent may hold of this machine's paths.
+		static std::string without_paths(std::string text, const std::vector<std::filesystem::path>& roots,
+			const std::filesystem::path& source);
 
 		static constexpr std::string_view k_extensions[] = { ".png", ".jpg", ".jpeg" };
 		static constexpr std::size_t k_max_shown = 32;
@@ -179,6 +233,12 @@ namespace edt
 		};
 
 		std::chrono::steady_clock::time_point now() const;
+		source_volume_ports volumes() const;
+		// Everything of a plan but the source: settings, names, free names, the blockers.
+		void plan_targets(const image_import_request& request, std::string_view source_name,
+			image_import_plan& plan) const;
+		// An agent's plan for the question, from the text of the request only.
+		image_import_plan text_plan(const image_import_request& request) const;
 		void remember(std::string key, std::string session, image_import_plan plan);
 		std::optional<image_import_plan> take(const std::string& key);
 
@@ -210,7 +270,7 @@ namespace edt
 		// Checks the names again (the folders are walked then, not at every frame).
 		void set_name(std::string name);
 
-		// The three files the import writes, as res:// tags; empty while the name is refused.
+		// The four files the import writes, as res:// tags; empty while the name is refused.
 		std::vector<std::string> final_names() const;
 		const std::string& problem() const { return m_problem; }
 		bool can_submit() const { return !m_source.empty() && m_problem.empty(); }
