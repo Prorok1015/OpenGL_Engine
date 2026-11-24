@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_project_steps.h>
+#include <snk/project_migration/pmg_apply.h>
 #include <snk/common/fs_paths.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/project/prj_json_text.h>
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <map>
@@ -26,6 +28,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -132,14 +135,49 @@ namespace
 		}
 	}
 
-	// The .bin is new but its name is the desc's (res::desc_binary::binary_tag), so it cannot step aside: refused when
-	// any other layer of res:// holds that name (#1279). Its own content root is checked through the step's files.
-	std::optional<std::string> held_in_another_layer(const project_assets& assets, const std::string& binary_path)
+	// A report names no absolute path: report.json and report.md may be committed, and the path would show the user name
+	// and the disk layout (#1279). A content root goes by its path in the project, a read-only layer by a label and res://.
+	std::string layer_place(const project_assets& assets, std::size_t layer, const std::filesystem::path& at)
+	{
+		const std::vector<std::filesystem::path> layers = assets.res_layers();
+		if (layer >= layers.size()) return "a layer of res://";
+		const std::filesystem::path below = at.lexically_relative(layers[layer]);
+		const bool inside = !below.empty() && *below.begin() != "..";
+		const std::string res_path = inside && below != "." ? fs_paths::generic_utf8_of(below) : std::string{};
+		const std::size_t read_only = assets.read_only_layers().size();
+		if (layer < read_only) {
+			// read_only_layers gives the engine's own layer lowest.
+			const std::string label = layer == 0 ? std::string{ "the engine layer" } : std::format("read-only layer {}", layer + 1);
+			return std::format("{}: res://{}", label, journal_path_text(res_path));
+		}
+		const std::vector<std::filesystem::path>& roots = assets.content_roots();
+		const std::filesystem::path root = roots[roots.size() - 1 - (layer - read_only)].lexically_normal();
+		const std::filesystem::path in_project = res_path.empty() ? root : (root / fs_paths::path_from_utf8(res_path)).lexically_normal();
+		return journal_path_text(fs_paths::generic_utf8_of(in_project));
+	}
+
+	// The reason of a read error without the absolute path it quotes ('...', as platform::beneath and read_project_file
+	// write it): what follows the closing quote. A text without a quote names no path.
+	std::string reason_of(std::string_view text)
+	{
+		const std::size_t quote = text.rfind('\'');
+		if (quote == std::string_view::npos) return journal_path_text(text);
+		std::string_view rest = text.substr(quote + 1);
+		while (!rest.empty() && (rest.front() == ':' || rest.front() == ' ')) rest.remove_prefix(1);
+		return journal_path_text(rest.empty() ? std::string_view{ "it cannot be read" } : rest);
+	}
+
+	// The .bin is new but its name is the desc's (res::desc_binary::binary_tag), so it cannot step aside: refused when a
+	// layer of res:// above the desc's own content root holds that name, which would shadow the new file (#1279). A lower
+	// layer (the engine's file the desc overrides) is shadowed by it as the desc is. The own root is checked through the
+	// step's files.
+	std::optional<std::string> held_above(const project_assets& assets, const std::string& binary_path)
 	{
 		// Lowest first: the read-only layers, then the content roots from the last.
-		std::vector<std::filesystem::path> others = assets.res_layers();
-		std::optional<std::string> res_path;
+		const std::vector<std::filesystem::path> layers = assets.res_layers();
 		const std::vector<std::filesystem::path>& roots = assets.content_roots();
+		std::optional<std::string> res_path;
+		std::size_t own = 0;
 		// The first content root that holds the file is its own, as res:// sees it.
 		for (std::size_t i = 0; i < roots.size(); ++i) {
 			std::string prefix = fs_paths::generic_utf8_of(roots[i].lexically_normal());
@@ -151,16 +189,19 @@ namespace
 			} else {
 				continue;
 			}
-			others.erase(others.begin() + static_cast<std::ptrdiff_t>(others.size() - 1 - i));
+			own = layers.size() - 1 - i;
 			break;
 		}
 		if (!res_path) return std::format("{} is in no content root", binary_path);
-		const std::optional<res::name_refusal> refusal = res::name_taken(others, *res_path);
+		const std::vector<std::filesystem::path> above(layers.begin() + static_cast<std::ptrdiff_t>(own + 1), layers.end());
+		const std::optional<res::name_refusal> refusal = res::name_taken(above, *res_path);
 		if (!refusal) return std::nullopt;
+		const std::string place = layer_place(assets, own + 1 + refusal->layer, refusal->existing);
 		if (!refusal->error.empty()) {
-			return std::format("res://{} cannot be checked in every layer: {}: {}", *res_path, fs_paths::utf8_of(refusal->existing), refusal->error);
+			return std::format("res://{} cannot be checked in the layers above its own: {} cannot be read: {}", *res_path, place,
+				reason_of(refusal->error));
 		}
-		return std::format("{} holds the name of its binary file res://{} in another layer of res://", fs_paths::utf8_of(refusal->existing), *res_path);
+		return std::format("{} holds the name of its binary file res://{} in a layer of res:// above its own", place, *res_path);
 	}
 
 	enum class geometry_outcome { converted, binary_kept };
@@ -182,7 +223,7 @@ namespace
 		if (!binary || !staged) return { {}, "not named <name>.<ext>.desc: no binary file can stand beside it" };
 		const std::string binary_path(binary->view());
 		if (std::optional<std::string> reason = taken(files, std::string(staged->view()))) return { {}, *reason };
-		if (std::optional<std::string> reason = held_in_another_layer(context.assets, binary_path)) return { {}, *reason };
+		if (std::optional<std::string> reason = held_above(context.assets, binary_path)) return { {}, *reason };
 
 		const std::string read = files.read(path);
 		std::string_view text = read;
@@ -551,7 +592,7 @@ namespace
 				[this](std::string_view res_path) { return in_run(res_path); });
 			// An overlay that could not answer: no name may be called free past it.
 			if (!m_error.empty()) throw std::runtime_error(m_error);
-			if (!found.ok()) throw std::runtime_error(found.error);
+			if (!found.ok()) throw std::runtime_error(free_name_problem(folder, found.error));
 			const std::string res_path = folder.empty() ? found.name : std::format("{}/{}", folder, found.name);
 			m_assigned.insert(res::asset_name_key(res_path, true));
 			const std::string material_folder(split_folder(material).first);
@@ -569,6 +610,26 @@ namespace
 			return { path.substr(0, slash), path.substr(slash + 1) };
 		}
 
+		// res::free_name names a folder it cannot read by its absolute path: that layer is found again to name it as a
+		// report may (layer_place).
+		std::string free_name_problem(std::string_view folder, const std::string& error) const
+		{
+			const std::string probe = folder.empty() ? std::string{ "-" } : std::format("{}/-", folder);
+			for (std::size_t i = m_layers.size(); i-- > 0;) {
+				const std::optional<res::name_refusal> refusal = res::name_taken({ m_layers[i] }, probe);
+				if (refusal && !refusal->error.empty()) {
+					return std::format("{} cannot be read: {}", layer_place(m_context.assets, i, refusal->existing), reason_of(refusal->error));
+				}
+			}
+			// Readable again since: the error may still quote a layer's path.
+			for (const std::filesystem::path& layer : m_layers) {
+				if (error.find(fs_paths::utf8_of(layer)) != std::string::npos) {
+					return std::format("a folder of res://{} cannot be read", journal_path_text(folder));
+				}
+			}
+			return journal_path_text(error);
+		}
+
 		// Handed out before in this run, or at that path (or its .resource) in a content root as this run left it.
 		bool in_run(std::string_view res_path)
 		{
@@ -577,8 +638,11 @@ namespace
 				const std::string in_root = fs_paths::generic_utf8_of((root / fs_paths::path_from_utf8(res_path)).lexically_normal());
 				try {
 					if (m_context.files.exists(in_root) || m_context.files.exists(in_root + std::string{ res::asset_meta_suffix })) return true;
+				} catch (const std::filesystem::filesystem_error& e) {
+					if (m_error.empty()) m_error = std::format("{} cannot be checked: {}", journal_path_text(in_root), e.code().message());
+					return true;
 				} catch (const std::exception& e) {
-					if (m_error.empty()) m_error = e.what();
+					if (m_error.empty()) m_error = std::format("{} cannot be checked: {}", journal_path_text(in_root), reason_of(e.what()));
 					return true;
 				}
 			}

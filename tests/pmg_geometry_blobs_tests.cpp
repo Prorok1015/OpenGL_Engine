@@ -12,10 +12,13 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -23,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace json = boost::json;
@@ -98,6 +102,34 @@ bool any_note(const pmg::migration_report& report, std::string_view part)
 	return std::ranges::any_of(report.project_notes, [part](const std::string& note) { return note.find(part) != std::string::npos; });
 }
 
+// Neither the notes nor report.md nor report.json name a path by `absolute` (#1279): a project may commit its reports.
+bool names_no_absolute_path(const pmg::migration_report& report, const fs::path& absolute)
+{
+	const std::string texts = pmg::report_text(report) + json::serialize(pmg::report_to_json(report));
+	return texts.find(absolute.string()) == std::string::npos && texts.find(absolute.generic_string()) == std::string::npos;
+}
+
+// A folder outside the project, removed with the object: a read-only layer of res:// such as the engine's core/res.
+struct outside_folder
+{
+	outside_folder()
+	{
+		static std::atomic<int> counter{ 0 };
+		path = fs::temp_directory_path()
+			/ std::format("snk_blobs_layer_{}_{}", std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
+		fs::create_directories(path);
+	}
+	~outside_folder()
+	{
+		std::error_code ignored;
+		fs::remove_all(path, ignored);
+	}
+	outside_folder(const outside_folder&) = delete;
+	outside_folder& operator=(const outside_folder&) = delete;
+
+	fs::path path;
+};
+
 bool planned(const pmg::migration_plan& plan)
 {
 	return std::ranges::find(plan.project_steps, "engine.geometry_blobs", &pmg::planned_project_step::id) != plan.project_steps.end();
@@ -130,6 +162,7 @@ struct blobs_fixture : test_util::scene_env
 		options.project_steps = &registry;
 		options.scan.max_file_bytes = max_file_bytes;
 		options.scan.geometry_checks = checks;
+		options.scan.read_only_layers = read_only;
 		return pmg::plan_migration(copy.root(), pmg::scan_project(copy.root(), *descs, options.scan), *descs, options);
 	}
 
@@ -190,6 +223,8 @@ struct blobs_fixture : test_util::scene_env
 
 	test_util::fixture_copy copy{ "migration_v1" };
 	pmg::project_step_registry registry;
+	// scan_options::read_only_layers of plan().
+	std::vector<fs::path> read_only;
 };
 
 }
@@ -394,12 +429,13 @@ BOOST_AUTO_TEST_CASE(ABinaryFileOneByteOff_IsNotTaken_AndLeavesTheDescAsItIs)
 	BOOST_TEST(outcome.report.created_files.empty());
 }
 
-// #1279: the .bin is new but cannot take another name (its desc names it), so a file of another layer of res:// at that
-// name leaves the desc as it is: the new .bin would shadow it or be shadowed by it.
-BOOST_AUTO_TEST_CASE(ABinaryNameHeldInAnotherContentRoot_LeavesTheDescAsItIs)
+// #1279: the .bin is new but cannot take another name (its desc names it), so a file of a higher layer of res:// at that
+// name leaves the desc as it is: it would shadow the new .bin. The first content root of project.snkproj is the highest,
+// so "extra" listed first is above the desc's "res".
+BOOST_AUTO_TEST_CASE(ABinaryNameHeldInAHigherContentRoot_LeavesTheDescAsItIs)
 {
 	json::object manifest = json::parse(read_text(at("project.snkproj"))).as_object();
-	manifest["content_roots"] = json::array{ "res", "extra" };
+	manifest["content_roots"] = json::array{ "extra", "res" };
 	write_text(at("project.snkproj"), json::serialize(manifest));
 	const std::string arrays = arrays_desc({ 0, 1, 2 });
 	write_text(at(k_desc), arrays);
@@ -409,11 +445,35 @@ BOOST_AUTO_TEST_CASE(ABinaryNameHeldInAnotherContentRoot_LeavesTheDescAsItIs)
 	BOOST_REQUIRE(planned(planned_now));
 	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
 	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
-	BOOST_TEST(any_note(outcome.report, std::string(k_desc) + ": not migrated: "));
-	BOOST_TEST(any_note(outcome.report, "holds the name of its binary file res://geom/tri.geom.bin in another layer of res://"));
+	BOOST_TEST(any_note(outcome.report, std::string(k_desc)
+		+ ": not migrated: extra/geom/tri.geom.bin holds the name of its binary file res://geom/tri.geom.bin in a layer of res:// above its own"));
+	BOOST_TEST(names_no_absolute_path(outcome.report, copy.root()));
 	BOOST_TEST(read_text(at(k_desc)) == arrays);
 	BOOST_TEST(!fs::exists(at(k_binary)));
 	BOOST_TEST(read_text(at("extra/geom/tri.geom.bin")) == "not ours");
+}
+
+// A lower layer cannot shadow the new .bin: the engine's geometry the project's desc overrides, with its .bin, does not
+// stop the migration, and the engine's files stay as they are.
+BOOST_AUTO_TEST_CASE(ABinaryNameHeldInTheEngineLayerBelow_IsMigrated)
+{
+	outside_folder engine;
+	write_text(engine.path / "geom/tri.geom.desc", R"({"__type": "geometry_desc", "__version": 3})");
+	write_text(engine.path / "geom/tri.geom.bin", "the engine's");
+	BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), { engine.path, copy.res() }));
+	read_only = { engine.path };
+	write_text(at(k_desc), arrays_desc({ 0, 1, 2 }));
+
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned(planned_now));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
+	BOOST_TEST(any_note(outcome.report, std::string(k_desc) + ": vertices and indices moved to " + std::string(k_binary)));
+	BOOST_TEST((std::ranges::find(outcome.report.created_files, k_binary) != outcome.report.created_files.end()));
+	BOOST_TEST(fs::exists(at(k_binary)));
+	BOOST_TEST(read_text(engine.path / "geom/tri.geom.bin") == "the engine's");
+	BOOST_TEST(read_text(engine.path / "geom/tri.geom.desc") == R"({"__type": "geometry_desc", "__version": 3})");
 }
 
 // A geometry desc over the scan's limit is not read: it is listed as not migrated, and the migration is not refused for
