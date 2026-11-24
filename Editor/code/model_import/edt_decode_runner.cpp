@@ -34,7 +34,11 @@ struct folder_guard
 	~folder_guard()
 	{
 		if (before_cleanup) {
-			before_cleanup(path);
+			try {
+				before_cleanup(path);
+			} catch (...) {
+				egLOG_WARN("edt/decoder", "the test hook before the run folder's removal threw");
+			}
 		}
 		// The child wrote this folder: a link it planted is removed as the link, never followed (#1316).
 		if (const std::string problem = core::res::remove_scratch_dir(path); !problem.empty()) {

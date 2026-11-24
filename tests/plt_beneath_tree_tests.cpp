@@ -11,6 +11,9 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -261,6 +264,43 @@ BOOST_AUTO_TEST_CASE(windows_refuses_names_it_cannot_remove_later)
 	BOOST_TEST(!platform::beneath::remove_tree_beneath(pinned, "", "CON").empty());
 #endif
 }
+
+// #1316: nothing there is success, and a removal makes nothing, not even its root.
+BOOST_AUTO_TEST_CASE(remove_tree_of_nothing_is_success_and_makes_no_root)
+{
+	BOOST_TEST(platform::beneath::remove_tree_beneath(pinned, "", "absent").empty());
+	BOOST_TEST(platform::beneath::remove_tree_beneath(pinned, "no/such/folder", "absent").empty());
+	platform::beneath::pinned_root missing{ root / "missing_root" };
+	BOOST_TEST(platform::beneath::remove_tree_beneath(missing, "", "tree").empty());
+	BOOST_TEST(!fs::exists(root / "missing_root"));
+	BOOST_TEST(!fs::exists(root / "no"));
+}
+
+#ifndef _WIN32
+// #1316: the walk stops at what it cannot remove and names it; what was removed before stays removed.
+BOOST_AUTO_TEST_CASE(remove_tree_names_what_it_could_not_remove)
+{
+	dir.write("tree/locked/inside.txt", "stays");
+	fs::permissions(root / "tree" / "locked", fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+	struct unlock_on_exit {
+		fs::path path;
+		~unlock_on_exit()
+		{
+			std::error_code ec;
+			fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
+		}
+	} unlock{ root / "tree" / "locked" };
+
+	const std::string error = platform::beneath::remove_tree_beneath(pinned, "", "tree");
+	if (::geteuid() == 0) {
+		BOOST_TEST(error.empty(), "root removes a read-only folder's entries: " << error);
+		return;
+	}
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(error.find("inside.txt") != std::string::npos, error);
+	BOOST_TEST(fs::exists(root / "tree" / "locked" / "inside.txt"));
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(remove_tree_removes_a_file_given_as_the_tree)
 {
