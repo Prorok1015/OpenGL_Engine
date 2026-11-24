@@ -3,6 +3,8 @@
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <algorithm>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,12 +55,117 @@ BOOST_AUTO_TEST_CASE(ALevelWithoutALevelSuffix_IsKnownByTheTypeOfItsDesc)
 
 BOOST_AUTO_TEST_CASE(TheTypeOfADescIsReadFromItsFirstBytes)
 {
-	test_util::temp_dir dir("asset_filter_sniff");
-	BOOST_TEST(edt::sniff_desc_type(dir.write("a.desc", R"({ "__type": "level_desc", "__version": 3, "worlds": [] })")) == "level_desc");
-	BOOST_TEST(edt::sniff_desc_type(dir.write("b.desc", "{\n\t\"__version\": 1,\n\t\"__type\":\"world_desc\"\n}")) == "world_desc");
-	BOOST_TEST(edt::sniff_desc_type(dir.write("c.desc", R"({ "name": "x" })")).empty());
-	BOOST_TEST(edt::sniff_desc_type(dir.write("d.desc", R"({ "__type": 5 })")).empty());
-	BOOST_TEST(edt::sniff_desc_type(dir.path() / "missing.desc").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_desc", "__version": 3, "worlds": [] })") == "level_desc");
+	BOOST_TEST(edt::desc_type_in("{\n\t\"__version\": 1,\n\t\"__type\":\"world_desc\"\n}") == "world_desc");
+	BOOST_TEST(edt::desc_type_in(R"({ "name": "x" })").empty());
+	BOOST_TEST(edt::desc_type_in(R"({ "__type": 5 })").empty());
+	BOOST_TEST(edt::desc_type_in("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(OnlyAPlainDescNeedsItsType)
+{
+	BOOST_TEST(edt::asset_kind_needs_desc_type(nullptr, "levels/a.desc"));
+	BOOST_TEST(!edt::asset_kind_needs_desc_type(nullptr, "levels/a.prefab.desc"));
+	BOOST_TEST(!edt::asset_kind_needs_desc_type(nullptr, "a.png"));
+}
+
+struct counting_ports
+{
+	edt::desc_type_cache make()
+	{
+		return edt::desc_type_cache({
+			[this](const std::filesystem::path&, const std::filesystem::path& relative) -> std::optional<edt::desc_type_cache::stamp> {
+				const auto found = stamps.find(relative.generic_string());
+				if (found == stamps.end()) return std::nullopt;
+				return found->second;
+			},
+			[this](const std::filesystem::path&, const std::filesystem::path& relative) {
+				++reads;
+				return heads[relative.generic_string()];
+			} });
+	}
+
+	std::map<std::string, edt::desc_type_cache::stamp> stamps;
+	std::map<std::string, std::string> heads;
+	int reads = 0;
+};
+
+BOOST_AUTO_TEST_CASE(ACachedTypeIsNotReadAgain_UntilTheFileChanges)
+{
+	counting_ports env;
+	env.stamps["a.desc"] = { 10, 100, 1 };
+	env.heads["a.desc"] = R"({ "__type": "level_desc" })";
+	auto cache = env.make();
+	int budget = 10;
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "level_desc");
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "level_desc");
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "level_desc");
+	BOOST_TEST(env.reads == 1);
+	BOOST_TEST(budget == 9);
+
+	env.stamps["a.desc"] = { 11, 100, 1 };
+	env.heads["a.desc"] = R"({ "__type": "world_desc" })";
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "world_desc");
+	env.stamps["a.desc"] = { 11, 200, 1 };
+	env.heads["a.desc"] = R"({ "__type": "prefab_desc" })";
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "prefab_desc");
+	env.stamps["a.desc"] = { 11, 200, 2 };
+	BOOST_TEST(cache.type_of("root", "a.desc", budget).value() == "prefab_desc");
+	BOOST_TEST(env.reads == 4);
+}
+
+BOOST_AUTO_TEST_CASE(TheBudgetBoundsTheReadsOfAPass_TheRestFillsInOnTheNextOnes)
+{
+	counting_ports env;
+	for (const char* name : { "a.desc", "b.desc", "c.desc" }) {
+		env.stamps[name] = { 5, 1, 1 };
+		env.heads[name] = R"({ "__type": "level_desc" })";
+	}
+	auto cache = env.make();
+	int budget = 2;
+	BOOST_TEST(cache.type_of("r", "a.desc", budget).has_value());
+	BOOST_TEST(cache.type_of("r", "b.desc", budget).has_value());
+	BOOST_TEST(!cache.type_of("r", "c.desc", budget).has_value());
+	BOOST_TEST(env.reads == 2);
+	budget = 2;
+	BOOST_TEST(cache.type_of("r", "a.desc", budget).has_value());
+	BOOST_TEST(cache.type_of("r", "c.desc", budget).value() == "level_desc");
+	BOOST_TEST(env.reads == 3);
+	BOOST_TEST(budget == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatIsNoRegularFile_HasNoTypeAndIsNeverRead)
+{
+	counting_ports env;
+	auto cache = env.make();
+	int budget = 5;
+	BOOST_TEST(cache.type_of("r", "link.desc", budget).value().empty());
+	BOOST_TEST(env.reads == 0);
+	BOOST_TEST(budget == 5);
+}
+
+BOOST_AUTO_TEST_CASE(TheRealPorts_ReadAtMost4KiB_AndNotThroughALink)
+{
+	test_util::temp_dir dir("asset_filter_beneath");
+	const std::filesystem::path root = std::filesystem::weakly_canonical(dir.path());
+	dir.write("levels/a.desc", R"({ "__type": "level_desc", "__version": 3 })");
+	dir.write("levels/big.desc", std::string(20000, ' ') + R"({ "__type": "level_desc" })");
+	dir.write("levels/late.desc", std::string(5000, ' ') + R"({ "__type": "level_desc" })");
+	edt::desc_type_cache cache;
+	int budget = 10;
+	BOOST_TEST(cache.type_of(root, "levels/a.desc", budget).value() == "level_desc");
+	BOOST_TEST(cache.type_of(root, "levels/big.desc", budget).value().empty());
+	BOOST_TEST(cache.type_of(root, "levels/late.desc", budget).value().empty());
+	BOOST_TEST(cache.type_of(root, "levels/missing.desc", budget).value().empty());
+	BOOST_TEST(cache.reads() == 3u);
+#ifndef _WIN32
+	std::error_code ec;
+	std::filesystem::create_symlink(dir.path() / "levels/a.desc", dir.path() / "levels/link.desc", ec);
+	if (!ec) {
+		BOOST_TEST(cache.type_of(root, "levels/link.desc", budget).value().empty());
+		BOOST_TEST(cache.reads() == 3u);
+	}
+#endif
 }
 
 BOOST_AUTO_TEST_CASE(AKindOfAModule_IsTheKindOfItsFiles_ThePolyKindIsTheMeshKind)

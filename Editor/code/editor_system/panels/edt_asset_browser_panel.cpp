@@ -236,13 +236,26 @@ namespace edt
 
 		m_filter.set_name(m_search);
 
+		// A desc's `__type` is read for a few files per pass; the rest of a big folder appears over the next frames.
+		constexpr int k_type_reads_per_pass = 32;
+		int type_reads_left = k_type_reads_per_pass;
+		bool types_pending = false;
+
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
 			if (!src.is_dir) {
 				std::string kind;
 				if (m_filter.needs_kind()) {
 					const std::string relative = fs_paths::utf8_of(src.relative);
-					const bool is_desc = to_lower(relative).ends_with(".desc");
-					kind = asset_kind_of(m_kinds, relative, is_desc ? sniff_desc_type(src.path) : std::string{});
+					std::string desc_type;
+					if (asset_kind_needs_desc_type(m_kinds, relative) && src.layer < m_layers.size()) {
+						const auto known = m_desc_types.type_of(m_layers[src.layer], src.relative, type_reads_left);
+						if (!known) {
+							types_pending = true;
+							continue;
+						}
+						desc_type = *known;
+					}
+					kind = asset_kind_of(m_kinds, relative, desc_type);
 				}
 				if (!m_filter.accepts(false, src.name, kind))
 					continue;
@@ -252,6 +265,8 @@ namespace edt
 				: std::string(get_file_icon(src.path)) + " " + src.name;
 			m_entries.push_back({std::move(src), std::move(label)});
 		}
+		if (types_pending)
+			m_needs_refresh = true;
 	}
 
 	// ─── left panel: directory tree ───────────────────────────────────────────

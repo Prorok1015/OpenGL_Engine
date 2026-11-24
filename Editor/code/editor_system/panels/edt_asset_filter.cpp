@@ -1,11 +1,13 @@
 #include "edt_asset_filter.h"
 #include "edt_asset_database.h"
 #include <snk/editor/edt_asset_kind_registry.h>
+#include <snk/platform/plt_beneath.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <format>
-#include <fstream>
+#include <limits>
+#include <span>
 
 namespace {
 
@@ -79,18 +81,11 @@ std::string edt::asset_kind_of(const asset_kind_registry* kinds, std::string_vie
 	return type;
 }
 
-std::string edt::sniff_desc_type(const std::filesystem::path& file)
+std::string edt::desc_type_in(std::string_view head)
 {
-	std::ifstream in(file, std::ios::binary);
-	if (!in) {
-		return {};
-	}
-	std::string head(4096, '\0');
-	in.read(head.data(), static_cast<std::streamsize>(head.size()));
-	head.resize(static_cast<std::size_t>(in.gcount()));
 	constexpr std::string_view key = "\"__type\"";
 	const std::size_t at = head.find(key);
-	if (at == std::string::npos) {
+	if (at == std::string_view::npos) {
 		return {};
 	}
 	std::size_t i = at + key.size();
@@ -101,7 +96,75 @@ std::string edt::sniff_desc_type(const std::filesystem::path& file)
 		return {};
 	}
 	const std::size_t end = head.find('"', i + 1);
-	return end == std::string::npos ? std::string{} : head.substr(i + 1, end - i - 1);
+	return end == std::string_view::npos ? std::string{} : std::string{ head.substr(i + 1, end - i - 1) };
+}
+
+bool edt::asset_kind_needs_desc_type(const asset_kind_registry* kinds, std::string_view path)
+{
+	return lowered(path).ends_with(".desc") && asset_kind_of(kinds, path) == k_asset_kind_data;
+}
+
+namespace {
+
+	platform::beneath::read_request request_of(const std::filesystem::path& root, const std::filesystem::path& relative)
+	{
+		platform::beneath::read_request request;
+		request.root = root;
+		request.folder = relative.parent_path();
+		request.leaf = relative.filename();
+		request.max_bytes = (std::numeric_limits<std::uint64_t>::max)();
+		return request;
+	}
+
+	std::optional<edt::desc_type_cache::stamp> stat_beneath(const std::filesystem::path& root, const std::filesystem::path& relative)
+	{
+		platform::beneath::read_request request = request_of(root, relative);
+		request.stamp_only = true;
+		std::vector<std::byte> unused;
+		const auto result = platform::beneath::read_beneath(request, unused);
+		if (result.status != platform::beneath::read_status::ok || !result.stamp) {
+			return std::nullopt;
+		}
+		return edt::desc_type_cache::stamp{ result.stamp->size, result.stamp->write_time_ns, result.stamp->file_id };
+	}
+
+	std::string read_head_beneath(const std::filesystem::path& root, const std::filesystem::path& relative)
+	{
+		std::string head;
+		const auto result = platform::beneath::read_beneath_stream(request_of(root, relative),
+			[&head](std::span<const std::byte> chunk) {
+				const std::size_t room = edt::k_desc_sniff_bytes - head.size();
+				head.append(reinterpret_cast<const char*>(chunk.data()), (std::min)(room, chunk.size()));
+				return head.size() < edt::k_desc_sniff_bytes;
+			});
+		return result.status == platform::beneath::read_status::ok ? head : std::string{};
+	}
+
+}
+
+edt::desc_type_cache::desc_type_cache()
+	: m_ports{ &stat_beneath, &read_head_beneath }
+{
+}
+
+std::optional<std::string> edt::desc_type_cache::type_of(const std::filesystem::path& root, const std::filesystem::path& relative, int& budget)
+{
+	const std::optional<stamp> now = m_ports.stat(root, relative);
+	if (!now) {
+		return std::string{};
+	}
+	const std::string key = (root / relative).generic_string();
+	if (const auto found = m_entries.find(key); found != m_entries.end() && found->second.seen == *now) {
+		return found->second.type;
+	}
+	if (budget <= 0) {
+		return std::nullopt;
+	}
+	--budget;
+	++m_reads;
+	std::string type = desc_type_in(m_ports.read_head(root, relative));
+	m_entries[key] = entry{ *now, type };
+	return type;
 }
 
 std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_registry* kinds)

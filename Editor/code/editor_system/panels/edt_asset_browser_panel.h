@@ -99,6 +99,7 @@ namespace edt
 		usage_list m_usages;
 		char m_search[128] = {};
 		asset_filter m_filter;
+		desc_type_cache m_desc_types;
 		const asset_kind_registry* m_kinds = nullptr;
 
 		struct entry {

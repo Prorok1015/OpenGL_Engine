@@ -1,5 +1,10 @@
 #pragma once
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -28,8 +33,57 @@ namespace edt
 	// (`sniff_desc_type`), empty otherwise; it tells a level from other data where the suffix does not. `kinds` may be null.
 	std::string asset_kind_of(const asset_kind_registry* kinds, std::string_view path, std::string_view desc_type = {});
 
-	// The `__type` value near the start of a .desc file (the first 4 KiB), empty when there is none or the file cannot be read.
-	std::string sniff_desc_type(const std::filesystem::path& file);
+	// The `__type` value in the start of a .desc file's text (what `desc_type_cache` reads, at most 4 KiB); empty when there is none.
+	std::string desc_type_in(std::string_view head);
+
+	// Whether the kind of `path` depends on the `__type` of its desc: a .desc no suffix and no registry kind decides.
+	bool asset_kind_needs_desc_type(const asset_kind_registry* kinds, std::string_view path);
+
+	inline constexpr std::size_t k_desc_sniff_bytes = 4096;
+
+	// The `__type` of .desc files, read at most 4 KiB each, once: a file is read again only when its size, write time or
+	// identity changed. Reads go below the layer's root without following a link (platform::beneath), and the caller
+	// gives a budget of reads per pass, so a big folder fills in over several frames instead of stalling one.
+	class desc_type_cache
+	{
+	public:
+		struct stamp
+		{
+			std::uint64_t size = 0;
+			std::int64_t write_time_ns = 0;
+			std::uint64_t file_id = 0;
+			bool operator==(const stamp&) const = default;
+		};
+
+		struct ports
+		{
+			// The stamp of root/relative as it is (a link, a missing file, anything but a regular file: nullopt); reads nothing.
+			std::function<std::optional<stamp>(const std::filesystem::path& root, const std::filesystem::path& relative)> stat;
+			// The first bytes of the file, at most k_desc_sniff_bytes.
+			std::function<std::string(const std::filesystem::path& root, const std::filesystem::path& relative)> read_head;
+		};
+
+		desc_type_cache();
+		explicit desc_type_cache(ports from) : m_ports(std::move(from)) {}
+
+		// The type from the cache while the stamp is the same; else read (one of `budget`). nullopt: not known yet, the
+		// budget is used up. A file that is no regular file has the type "" without a read.
+		std::optional<std::string> type_of(const std::filesystem::path& root, const std::filesystem::path& relative, int& budget);
+
+		std::size_t reads() const { return m_reads; }
+		void clear() { m_entries.clear(); }
+
+	private:
+		struct entry
+		{
+			stamp seen;
+			std::string type;
+		};
+
+		ports m_ports;
+		std::map<std::string, entry> m_entries;
+		std::size_t m_reads = 0;
+	};
 
 	// What the "Kinds" list offers: the fixed kinds, then the registry's kinds that are none of them.
 	std::vector<asset_filter_kind> asset_filter_kinds(const asset_kind_registry* kinds);
