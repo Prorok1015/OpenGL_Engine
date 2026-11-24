@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -102,15 +103,19 @@ namespace rnd
 			bool shader_changed = false;
 			// The last reload failed: the instance keeps the old shader, and its problem stays until a reload succeeds.
 			bool reload_failed = false;
+			// The desc's tag at the last compile: what its problem is filed under, also once the instance is dropped.
+			std::string material_tag;
 		};
 
 		void compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned);
 		// True when the changed shader has loaded and the slot must be compiled with it.
-		bool reload_shader(slot& s, const material_desc& desc);
+		bool reload_shader(slot& s);
 		void set_shader(slot& s, res::res_handle<shader_desc> shader);
 		void on_shader_changed(const res::tag& shader);
-		void report_problem(const res::tag& shader, const material_desc& desc, const std::string& error, bool reload);
-		void clear_problem(const res::tag& shader, const material_desc& desc);
+		void report_problem(const res::tag& shader, std::string_view material, const std::string& error, bool reload);
+		void clear_problem(const res::tag& shader, std::string_view material);
+		// Whether a live slot compiles `material` with `shader` (and, with reload_failed_only, its last reload failed).
+		bool any_slot(const res::tag& shader, std::string_view material, bool reload_failed_only) const;
 
 		shader_config_cache& m_variants;
 		texture_manager& m_textures;

@@ -6,6 +6,7 @@
 #include <snk/common/logger/engine_log.h>
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace
@@ -29,9 +30,11 @@ void rnd::material_instance_cache::begin_frame(material_compiler_interface* comp
 {
 	m_compiler = compiler;
 	++m_frame;
+	std::vector<std::pair<res::tag, std::string>> dropped;
 	for (auto it = m_by_key.begin(); it != m_by_key.end();) {
 		slot& s = m_slots[it->second];
 		if (s.last_used + grace_frames < m_frame) {
+			dropped.emplace_back(s.shader.get_tag(), std::move(s.material_tag));
 			set_shader(s, {});
 			s = slot{};
 			m_free.push_back(it->second);
@@ -40,6 +43,20 @@ void rnd::material_instance_cache::begin_frame(material_compiler_interface* comp
 			++it;
 		}
 	}
+	// A material nobody draws any more has no problem to show; its static and skinned instances share the entry.
+	for (const auto& [shader, material] : dropped) {
+		if (!any_slot(shader, material, false)) {
+			clear_problem(shader, material);
+		}
+	}
+}
+
+bool rnd::material_instance_cache::any_slot(const res::tag& shader, std::string_view material, bool reload_failed_only) const
+{
+	return std::ranges::any_of(m_by_key, [&](const auto& entry) {
+		const slot& s = m_slots[entry.second];
+		return s.shader.get_tag() == shader && s.material_tag == material && (!reload_failed_only || s.reload_failed);
+	});
 }
 
 void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned)
@@ -47,19 +64,20 @@ void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<materi
 	if (!s.shader.is_valid() || desc->shader.get_tag() != s.shader.get_tag()) {
 		set_shader(s, desc->shader);
 	}
+	s.material_tag = desc->get_tag().view();
 	const material_shader_state shader = read_shader(s.shader);
 	// The compiler resolves the maps (texture_manager::require, which gives the id): the only place a material asks for a texture.
 	s.material = build_compiled_material(*m_compiler, m_variants, m_textures, desc, skinned, shader);
 	s.built_frame = m_frame;
 	++m_compilations;
 	if (shader.failed) {
-		report_problem(s.shader.get_tag(), *desc, s.shader.error_text(), false);
-	} else if (shader.desc && !s.reload_failed) {
-		clear_problem(s.shader.get_tag(), *desc);
+		report_problem(s.shader.get_tag(), s.material_tag, s.shader.error_text(), false);
+	} else if (shader.desc && !s.reload_failed && !any_slot(s.shader.get_tag(), s.material_tag, true)) {
+		clear_problem(s.shader.get_tag(), s.material_tag);
 	}
 }
 
-bool rnd::material_instance_cache::reload_shader(slot& s, const material_desc& desc)
+bool rnd::material_instance_cache::reload_shader(slot& s)
 {
 	if (!s.pending.is_valid()) {
 		s.pending = m_resources->require<shader_desc>(s.shader.get_tag());
@@ -71,7 +89,7 @@ bool rnd::material_instance_cache::reload_shader(slot& s, const material_desc& d
 		return true;
 	}
 	if (s.pending.has_error()) {
-		report_problem(s.shader.get_tag(), desc, s.pending.error_text(), true);
+		report_problem(s.shader.get_tag(), s.material_tag, s.pending.error_text(), true);
 		s.pending = {};
 		s.shader_changed = false;
 		s.reload_failed = true;
@@ -111,11 +129,15 @@ void rnd::material_instance_cache::on_shader_changed(const res::tag& shader)
 	}
 }
 
-void rnd::material_instance_cache::report_problem(const res::tag& shader, const material_desc& desc, const std::string& error, bool reload)
+void rnd::material_instance_cache::report_problem(const res::tag& shader, std::string_view material, const std::string& error, bool reload)
 {
-	const std::string_view material = desc.get_tag().view();
-	const bool known = std::ranges::any_of(m_problems, [&](const shader_problem& p) { return p.file == shader && p.program == material; });
-	if (known) {
+	const auto known = std::ranges::find_if(m_problems, [&](const shader_problem& p) { return p.file == shader && p.program == material; });
+	if (known != m_problems.end()) {
+		// Logged once per pair; the panel still shows the latest reason.
+		if (known->message != error) {
+			known->message = error;
+			++m_problems_generation;
+		}
 		return;
 	}
 	if (reload) {
@@ -129,9 +151,8 @@ void rnd::material_instance_cache::report_problem(const res::tag& shader, const 
 	++m_problems_generation;
 }
 
-void rnd::material_instance_cache::clear_problem(const res::tag& shader, const material_desc& desc)
+void rnd::material_instance_cache::clear_problem(const res::tag& shader, std::string_view material)
 {
-	const std::string_view material = desc.get_tag().view();
 	if (std::erase_if(m_problems, [&](const shader_problem& p) { return p.file == shader && p.program == material; }) != 0) {
 		++m_problems_generation;
 	}
@@ -159,7 +180,7 @@ rnd::material_instance_id rnd::material_instance_cache::acquire(const std::share
 		s.last_used = m_frame;
 		if (s.built_frame != m_frame) {
 			// While a changed shader loads, or after it failed, the instance stays as it is unless something else stales it.
-			const bool reloaded = s.shader_changed && reload_shader(s, *desc);
+			const bool reloaded = s.shader_changed && reload_shader(s);
 			const bool stale = !s.material->is_current(desc.get(), skinned, m_textures.generation());
 			if (reloaded || stale || desc_changed) {
 				compile(s, desc, skinned);

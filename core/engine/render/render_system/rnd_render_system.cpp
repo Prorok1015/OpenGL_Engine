@@ -311,7 +311,7 @@ void rnd::render_system::render_frame(frame_context& context) const
 }
 std::uint64_t rnd::render_system::shader_problems_generation() const
 {
-	// Both only grow, so the sum moves whenever either does.
+	// A valid change signal only because neither generation ever decreases.
 	return m_shaders->problems_generation() + m_instances->problems_generation();
 }
 

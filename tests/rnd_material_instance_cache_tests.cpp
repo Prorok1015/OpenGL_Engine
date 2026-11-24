@@ -488,4 +488,122 @@ BOOST_AUTO_TEST_CASE(AFailedShaderIsReportedOnceThoughTheInstanceIsRebuiltEveryF
 	BOOST_TEST(errors.count.load() == 1);
 }
 
+BOOST_AUTO_TEST_CASE(AnInstanceDroppedWhileItsShaderReloadsLetsItsWatchGo)
+{
+	const res::tag tag{ res::tag::memory, "t/evict_pending.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+	const std::size_t watched = resources().watched_tag_count();
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	write_file(tag, "{ not json");
+	signal(tag);
+	next_frame(cache);
+	cache.acquire(desc, false, false);	// the failing reload is asked for and stays queued
+	for (std::uint64_t frame = 0; frame <= rnd::material_instance_cache::grace_frames; ++frame) {
+		next_frame(cache);
+	}
+	BOOST_TEST(cache.size() == 0u);
+	test_util::pump(tasks);
+	next_frame(cache);
+	BOOST_TEST(resources().watched_tag_count() == watched);
+	BOOST_TEST(cache.problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AShaderThatFailsAgainAfterAFixIsReportedAgain)
+{
+	const res::tag tag{ res::tag::memory, "t/fail_fix_fail.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	// Signal, then two frames: the first asks for the changed shader, the second sees how its load ended.
+	auto reload = [&](const std::string& body) {
+		write_file(tag, body);
+		signal(tag);
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		test_util::pump(tasks);
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+	};
+	const std::string valid = R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag","defines":[]})";
+
+	std::uint64_t generation = cache.problems_generation();
+	reload("{ not json");
+	BOOST_TEST(cache.problems().size() == 1u);
+	BOOST_TEST(cache.problems_generation() > generation);
+	generation = cache.problems_generation();
+
+	reload(valid);
+	BOOST_TEST(cache.problems().empty());
+	BOOST_TEST(cache.problems_generation() > generation);
+	generation = cache.problems_generation();
+
+	reload("{ not json");
+	BOOST_TEST(cache.problems().size() == 1u);
+	BOOST_TEST(cache.problems_generation() > generation);
+}
+
+// A second failure with another reason updates the row the panel shows without logging the pair again.
+BOOST_AUTO_TEST_CASE(ASecondFailureWithAnotherReasonUpdatesTheProblemWithoutLoggingAgain)
+{
+	const res::tag tag{ res::tag::memory, "t/fail_twice.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	error_count errors("the shader '" + std::string(tag.view()) + "'");
+	auto reload = [&](const std::string& body) {
+		write_file(tag, body);
+		signal(tag);
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		test_util::pump(tasks);
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+	};
+
+	reload("{ not json");
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	const std::string first = cache.problems()[0].message;
+	const std::uint64_t generation = cache.problems_generation();
+
+	reload(R"({"__type":"__no_such_desc__","__version":1})");
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	BOOST_TEST(cache.problems()[0].message != first);
+	BOOST_TEST(cache.problems_generation() > generation);
+	BOOST_TEST(errors.count.load() == 1);
+}
+
+BOOST_AUTO_TEST_CASE(TheProblemOfAMaterialNobodyDrawsGoesWithItsInstance)
+{
+	const auto desc = make_desc_with_shader(res::tag::make("shaders/__material_instance_cache_missing__.shader.desc"));
+	BOOST_REQUIRE(desc->shader.has_error());
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	cache.acquire(desc, true, false);	// the skinned sibling shares the entry
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	const std::uint64_t generation = cache.problems_generation();
+
+	for (std::uint64_t frame = 0; frame <= rnd::material_instance_cache::grace_frames; ++frame) {
+		next_frame(cache);
+	}
+	BOOST_TEST(cache.size() == 0u);
+	BOOST_TEST(cache.problems().empty());
+	BOOST_TEST(cache.problems_generation() > generation);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
