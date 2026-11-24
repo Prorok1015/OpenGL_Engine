@@ -2,6 +2,8 @@
 #include "edt_mesh_adjacency.h"
 #include "edt_mesh_selection.h"
 #include "edt_mesh_shapes.h"
+#include <iterator>
+#include <optional>
 
 namespace {
 

@@ -2,6 +2,7 @@
 #include "edt_mesh_adjacency.h"
 #include "edt_mesh_model.h"
 #include <cstddef>
+#include <cstdint>
 #include <set>
 
 namespace edt::mesh
