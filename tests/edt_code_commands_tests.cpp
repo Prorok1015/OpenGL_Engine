@@ -5,6 +5,7 @@
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>.
@@ -552,7 +553,14 @@ BOOST_AUTO_TEST_CASE(AThirdPartyReparsePoint_IsRefusedAsALink_ToEveryOrigin)
 	const std::string text = json::serialize(listed.value);
 	BOOST_TEST(text.find("tagged") == std::string::npos, text);
 	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
-	BOOST_TEST(fs::is_empty(folder));
+	// Windows opens neither entry without a filter for the tag: what is checked is that both are still the tagged
+	// entries they were, not replaced by a plain file or folder.
+	for (const fs::path& tagged : { file, folder }) {
+		std::error_code ec;
+		const auto kind = platform::beneath::link_entry_at(tagged, ec);
+		BOOST_TEST(!ec, ec.message());
+		BOOST_TEST((kind == platform::beneath::link_entry::link), tagged.string());
+	}
 }
 #endif
 

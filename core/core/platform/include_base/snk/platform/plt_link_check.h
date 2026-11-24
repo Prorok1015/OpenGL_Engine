@@ -15,8 +15,8 @@ namespace platform::beneath {
 	// nothing is there. nullopt with `ec` set: something is there that could not be opened or inspected.
 	SNK_API std::optional<link_entry> link_entry_at(const std::filesystem::path& path, std::error_code& ec);
 
-	// `path` in the form that reaches an entry past MAX_PATH: on Windows absolute, normalized and prefixed with \\?\
-	// (\\?\UNC\ for a share), unchanged when it already is or cannot be made absolute; unchanged elsewhere.
+	// `path` in the form that reaches an entry past MAX_PATH: on Windows absolute, normalized and prefixed with
+	// \\?\ (or \\?\UNC\ for a share), unchanged when it already is or cannot be made absolute; unchanged elsewhere.
 	SNK_API std::filesystem::path long_path(const std::filesystem::path& path);
 
 }
