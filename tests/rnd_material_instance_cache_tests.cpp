@@ -606,4 +606,130 @@ BOOST_AUTO_TEST_CASE(TheProblemOfAMaterialNobodyDrawsGoesWithItsInstance)
 	BOOST_TEST(cache.problems_generation() > generation);
 }
 
+BOOST_AUTO_TEST_CASE(EachFailedShaderAndMaterialPairIsReportedOnce)
+{
+	const res::tag first = res::tag::make("shaders/__material_instance_cache_missing_a__.shader.desc");
+	const res::tag second = res::tag::make("shaders/__material_instance_cache_missing_b__.shader.desc");
+	const res::tag map = res::tag::make("textures/__material_instance_cache_missing__.desc");
+	const auto a = make_desc_with_shader(first, { map });
+	const auto b = make_desc_with_shader(second, { map });
+	BOOST_REQUIRE(a->shader.has_error());
+	BOOST_REQUIRE(b->shader.has_error());
+
+	error_count errors("the material is not drawn");
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	for (int frame = 0; frame < 3; ++frame) {
+		next_frame(cache);
+		cache.acquire(a, false, false);
+		cache.acquire(a, true, false);
+		cache.acquire(b, false, false);
+	}
+	BOOST_TEST(cache.compilations() == 9u);	// rebuilt every frame: the map never loads
+	const auto problems = cache.problems();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(std::ranges::count_if(problems, [&](const rnd::shader_problem& p) { return p.file == first; }) == 1);
+	BOOST_TEST(std::ranges::count_if(problems, [&](const rnd::shader_problem& p) { return p.file == second; }) == 1);
+	BOOST_TEST(errors.count.load() == 2);
+}
+
+// The material is pointed at another shader: the failed one's problem is not the material's any more.
+BOOST_AUTO_TEST_CASE(AMaterialRetargetedToAGoodShaderLosesTheOldShadersProblem)
+{
+	const res::tag good{ res::tag::memory, "t/retarget_good.shader.desc" };
+	write_shader(good, "[]");
+	const auto desc = make_desc_with_shader(res::tag::make("shaders/__material_instance_cache_missing__.shader.desc"));
+	BOOST_REQUIRE(desc->shader.has_error());
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	const auto id = cache.acquire(desc, false, false);
+	cache.acquire(desc, true, false);
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	const std::uint64_t generation = cache.problems_generation();
+
+	desc->shader = resources().require<rnd::shader_desc>(good);
+	test_util::pump(tasks);
+	BOOST_REQUIRE(desc->shader.is_ready());
+	next_frame(cache);
+	BOOST_CHECK(cache.acquire(desc, false, true) == id);	// an edit in place: the same instance
+	BOOST_TEST(cache.problems().empty());
+	BOOST_TEST(cache.problems_generation() > generation);
+	BOOST_TEST(!has_no_stage(variants.resolve(cache.get(id).base)));
+}
+
+BOOST_AUTO_TEST_CASE(ACacheDestroyedWithAChangeStillQueuedLetsItsWatchGo)
+{
+	const res::tag tag{ res::tag::memory, "t/destroyed_queued.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+	const std::size_t watched = resources().watched_tag_count();
+	{
+		rnd::shader_config_cache variants;
+		rnd::material_instance_cache cache(variants, textures(), &resources());
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		write_shader(tag, R"(["USE_NORMAL_MAP"])");
+		resources().signal_changed(tag);	// the watchers are told on the next pump, after the cache is gone
+	}
+	test_util::pump(tasks);
+	BOOST_TEST(resources().watched_tag_count() == watched);
+}
+
+// The render system's own cache: its problems reach shader_problems() and move its generation.
+BOOST_AUTO_TEST_CASE(TheRenderSystemReportsTheMaterialCachesProblems)
+{
+	auto& render = storage.require<rnd::render_system>();
+	rnd::material_instance_cache& cache = render.material_instances();
+	const res::tag shader = res::tag::make("shaders/__material_instance_cache_render_missing__.shader.desc");
+	const auto desc = make_desc_with_shader(shader);
+	BOOST_REQUIRE(desc->shader.has_error());
+	const std::uint64_t generation = render.shader_problems_generation();
+	const std::size_t before = render.shader_problems().size();
+
+	// No frame runs in this fixture, so the case drives the cache's frame itself.
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	BOOST_TEST(render.shader_problems_generation() > generation);
+	const auto problems = render.shader_problems();
+	BOOST_REQUIRE(problems.size() == before + 1);
+	BOOST_TEST(problems.back().file == shader);
+	BOOST_TEST(problems.back().code == "shader/load");
+}
+
+// One sibling's reload failed: the other's good compile, with the old shader, must not take the shared problem away.
+BOOST_AUTO_TEST_CASE(ASiblingsGoodCompileKeepsTheProblemOfAFailedReload)
+{
+	const res::tag tag{ res::tag::memory, "t/sibling_reload.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	const auto plain = cache.acquire(desc, false, false);
+	cache.acquire(desc, true, false);
+	const std::uint64_t compiled = cache.compilations();
+
+	write_file(tag, "{ not json");
+	signal(tag);
+	// Only the skinned instance is asked for: its reload starts, then fails.
+	next_frame(cache);
+	cache.acquire(desc, true, false);
+	test_util::pump(tasks);
+	next_frame(cache);
+	cache.acquire(desc, true, false);
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+
+	// The edit reaches the static sibling through the skinned one: compiled right away, not through its own reload.
+	desc->shininess = 7.f;
+	const std::uint64_t serial = cache.get(plain).serial;
+	next_frame(cache);
+	cache.acquire(desc, true, true);
+	BOOST_TEST(cache.get(plain).serial != serial);
+	BOOST_TEST(cache.compilations() == compiled + 2);
+	BOOST_TEST(cache.problems().size() == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
