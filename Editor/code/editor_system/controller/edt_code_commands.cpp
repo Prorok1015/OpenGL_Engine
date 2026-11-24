@@ -5,6 +5,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/project/prj_code.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
@@ -73,6 +74,32 @@ namespace {
 		return edt::check_code_file_path(relative);
 	}
 
+	// The entries of `relative` below code/, each looked at as itself before anything follows it (#1343): a link of
+	// any kind (on Windows by its reparse tag, so not only a symlink or a junction) refuses, and so does an entry that
+	// cannot be opened to be looked at. The first one missing ends the walk: what is missing is the operation's to
+	// report.
+	std::string link_on_the_way(const fs::path& root, std::string_view relative)
+	{
+		fs::path at = root;
+		std::size_t begin = 0;
+		while (begin < relative.size()) {
+			const std::size_t end = relative.find('/', begin);
+			const std::string_view reached = relative.substr(0, end);
+			at /= fs_paths::path_from_utf8(relative.substr(begin, end == std::string_view::npos ? end : end - begin));
+			std::error_code ec;
+			const auto entry = platform::beneath::link_entry_at(at, ec);
+			if (ec) return std::format("'{}' in code/ cannot be checked for links: {}", reached, ec.message());
+			if (!entry) return {};
+			if (*entry == platform::beneath::link_entry::link) {
+				return std::format("'{}' is a link or an unsupported entry in code/ (a symlink, a junction or another "
+					"reparse point)", reached);
+			}
+			if (end == std::string_view::npos) break;
+			begin = end + 1;
+		}
+		return {};
+	}
+
 	// A folder of code/ to list: the same name rules as a file, and every segment a real folder, never a link.
 	std::string check_folder(const fs::path& root, std::string_view relative)
 	{
@@ -82,6 +109,7 @@ namespace {
 			return "the path must be relative to code/ and '/' separated";
 		}
 		if (std::string problem = res::portable_path_problem(relative); !problem.empty()) return problem;
+		if (std::string problem = link_on_the_way(root, relative); !problem.empty()) return problem;
 		fs::path at = root;
 		std::size_t begin = 0;
 		while (begin <= relative.size()) {
@@ -104,6 +132,7 @@ namespace {
 	// A path that does not exist (yet) is the operation's to report.
 	std::string on_disk_problem(const fs::path& root, std::string_view relative, bool ends_in_file)
 	{
+		if (std::string problem = link_on_the_way(root, relative); !problem.empty()) return problem;
 		std::error_code ec;
 		const fs::path base = fs::canonical(root, ec);
 		if (ec) return "code/ cannot be resolved";
@@ -136,6 +165,10 @@ namespace {
 	// refused before it is read into memory.
 	file_read read_fresh(res::resource_system& res, const fs::path& root, const res::tag& tag)
 	{
+		// Before the resolver, which refuses a link as if nothing were there.
+		if (std::string problem = link_on_the_way(root, tag.relative()); !problem.empty()) {
+			return { {}, std::move(problem) };
+		}
 		if (!res.exists(tag)) return { {}, std::format("no file '{}' in code/", tag.relative()) };
 		if (std::string problem = on_disk_problem(root, tag.relative(), true); !problem.empty()) return { {}, std::move(problem) };
 		const fs::path file = root / fs_paths::path_from_utf8(tag.relative());
@@ -555,6 +588,9 @@ namespace {
 			const std::size_t slash = to.rfind('/');
 			if (slash != std::string_view::npos) {
 				const std::string_view folder = to.substr(0, slash);
+				if (std::string problem = link_on_the_way(*root(), folder); !problem.empty()) {
+					return cmd::result::failure(cmd::codes::failed, std::format("'{}': {}", to, problem));
+				}
 				std::error_code ec;
 				const auto status = fs::symlink_status(*root() / fs_paths::path_from_utf8(folder), ec);
 				if (ec || !fs::is_directory(status)) {

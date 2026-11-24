@@ -137,26 +137,7 @@ namespace {
 		return out;
 	}
 
-	// The \\?\ form of `path` on Windows (absolute, normalized), which reaches an entry past MAX_PATH; `path` elsewhere.
-	fs::path long_form(const fs::path& path)
-	{
-#ifdef _WIN32
-		const std::wstring& text = path.native();
-		if (text.starts_with(L"\\\\?\\")) {
-			return path;
-		}
-		std::error_code ec;
-		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().native();
-		if (ec) {
-			return path;
-		}
-		return fs::path{ whole.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + whole.substr(2) : L"\\\\?\\" + whole };
-#else
-		return path;
-#endif
-	}
-
-	// `path` as the person wrote it, without the \\?\ prefix of long_form.
+	// `path` as the person wrote it, without the \\?\ prefix of platform::beneath::long_path.
 	std::string shown(const fs::path& path)
 	{
 		std::string text = fs_paths::generic_utf8_of(path);
@@ -164,6 +145,23 @@ namespace {
 			return "//" + text.substr(8);
 		}
 		return text.starts_with("//?/") ? text.substr(4) : text;
+	}
+
+	// A symlink or a junction: a link whose target std::filesystem can read. Any other link (another name surrogate) has
+	// a target only its file system filter knows.
+	bool is_symlink_or_junction(const fs::path& path)
+	{
+		std::error_code ec;
+		const fs::file_status status = fs::symlink_status(path, ec);
+		if (ec) {
+			return false;
+		}
+#ifdef _MSC_VER
+		if (status.type() == fs::file_type::junction) {
+			return true;
+		}
+#endif
+		return fs::is_symlink(status);
 	}
 
 	enum class entry_check : std::uint8_t { missing, link, other, unreadable };
@@ -349,7 +347,7 @@ std::optional<std::string> prj::link_below(const fs::path& dir, const link_walk_
 	}
 	// directory_options::none: a link is reported, never entered. Walked in its long form, so an entry past MAX_PATH is
 	// reached and checked like any other.
-	const fs::path walked = long_form(dir);
+	const fs::path walked = platform::beneath::long_path(dir);
 	fs::recursive_directory_iterator it(walked, fs::directory_options::none, ec);
 	if (ec) {
 		return unreadable(ec);
@@ -411,7 +409,9 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 		fs::path real = fs::weakly_canonical(private_dir, private_error);
 		if (!private_error) real_private.push_back(std::move(real));
 	}
-	fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec);
+	// Walked in its long form, so an entry past MAX_PATH is reached; what is reported is spelled as `dir` was.
+	const fs::path walked = platform::beneath::long_path(dir);
+	fs::recursive_directory_iterator it(walked, fs::directory_options::none, ec);
 	if (ec) {
 		out.complete = false;
 		return out;
@@ -431,22 +431,29 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 			continue;
 		}
 		it.disable_recursion_pending();
+		const fs::path link = dir / it->path().lexically_relative(walked);
+		if (!is_symlink_or_junction(it->path())) {
+			out.found.push_back({ link, fs::path{} });
+			continue;
+		}
 		std::error_code resolve_error;
 		// A link whose target is gone is judged by where it points: weakly_canonical would stop at the link and answer
-		// with the link's own (inside) place.
+		// with the link's own (inside) place. It is resolved by its plain name, as the root and the private folders are:
+		// one past MAX_PATH fails and is reported with no target.
 		fs::path target;
-		if (fs::exists(it->path(), resolve_error)) {
-			target = fs::weakly_canonical(it->path(), resolve_error);
+		if (fs::exists(link, resolve_error)) {
+			target = fs::weakly_canonical(link, resolve_error);
 		} else {
-			const fs::path written = fs::read_symlink(it->path(), resolve_error);
+			const fs::path written = fs::read_symlink(link, resolve_error);
 			if (!resolve_error) {
-				target = fs::weakly_canonical(written.is_absolute() ? written : it->path().parent_path() / written, resolve_error);
+				const fs::path pointed = written.is_absolute() ? written : link.parent_path() / written;
+				target = fs::weakly_canonical(pointed, resolve_error);
 			}
 		}
 		const bool into_private = !resolve_error
 			&& std::ranges::any_of(real_private, [&target](const fs::path& private_dir) { return is_inside(private_dir, target); });
 		if (resolve_error || !is_inside(real_root, target) || into_private) {
-			out.found.push_back({ it->path(), resolve_error ? fs::path{} : target });
+			out.found.push_back({ link, resolve_error ? fs::path{} : target });
 		}
 	}
 	if (ec) {
