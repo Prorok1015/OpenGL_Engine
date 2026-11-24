@@ -20,6 +20,7 @@ Editor/
     │   ├── edt_document_tabs.cpp/h   # the strip of document tabs (#1184), no ImGui: `tabs_of`, `focus_document` (shared with the Unsaved list), `document_tabs::activate/close`
     │   ├── edt_save_all.cpp/h        # Save All (#1183): list_unsaved, save_all_write/save_all_resolve, the report, summary and JSON, `k_save_all_shortcut`; no ImGui
     │   ├── edt_world_controller.cpp/h # switch/create world
+    │   ├── edt_viewport_picker.cpp/h # pick_node (#1189): a pixel of the editor camera's image -> the node under it (`scn::ray_from_screen` + `scn::raycast_all`; a hit on an entity that is no node belongs to its nearest ancestor that is one, an entity with none is seen through); no ImGui. The viewport panel's click handling (select_gesture, gizmo priority) comes with its own PR
     │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit(), undo history
     │   ├── edt_editor_camera.cpp/h   # camera state POD, save_camera_state / inject_camera
     │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace (main menu + default layout from the editor_context registries)
