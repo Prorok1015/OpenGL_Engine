@@ -333,6 +333,132 @@ BOOST_AUTO_TEST_CASE(ANaNWorldMatrix_IsSkipped_AndTheRestStillAnswers)
 	BOOST_TEST((hit->entity == fine));
 }
 
+BOOST_AUTO_TEST_CASE(ABatch_AnswersAsTheSyncQueriesDo_AndEchoesItsFrame)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto far_quad = add_quad(reg, at({ 0.f, 0.f, -8.f }));
+	const auto near_quad = add_quad(reg, at({ 0.f, 0.f, -2.f }));
+	scn::ray_request closest;
+	closest.line = toward_minus_z({ 0.f, 0.f, 1.f });
+	scn::ray_request any = closest;
+	any.kind = scn::ray_query::any;
+	scn::ray_request all = closest;
+	all.kind = scn::ray_query::all;
+	scn::ray_request miss = closest;
+	miss.line = toward_minus_z({ 9.f, 0.f, 1.f });
+
+	auto handle = scn::raycast_batch(tasks, reg, { closest, any, all, miss }, 77);
+	pump();
+	BOOST_REQUIRE(handle.status() == ds::task_status::ready);
+	const scn::ray_batch& batch = handle.get();
+	BOOST_TEST(batch.frame == 77u);
+	BOOST_REQUIRE(batch.results.size() == 4u);
+	BOOST_REQUIRE(batch.results[0].hits.size() == 1u);
+	BOOST_TEST((batch.results[0].hits[0].entity == near_quad));
+	BOOST_REQUIRE(batch.results[1].hits.size() == 1u);
+	BOOST_REQUIRE(batch.results[2].hits.size() == 2u);
+	BOOST_TEST((batch.results[2].hits[0].entity == near_quad));
+	BOOST_TEST((batch.results[2].hits[1].entity == far_quad));
+	BOOST_TEST(!batch.results[2].truncated);
+	BOOST_TEST(batch.results[3].hits.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ABatchOnRealWorkerThreads_AnswersAsOnTheManualPool_WhileTheWorldMovesOn)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	ds::task_system_config config;
+	config.mode = ds::policy::threaded;
+	ds::task_system workers{ config };
+
+	scn::ray_request request;
+	request.line = toward_minus_z({ 0.f, 0.f, 2.f });
+	request.kind = scn::ray_query::all;
+	std::vector<ds::task_handle<scn::ray_batch>> handles;
+	for (int i = 0; i < 16; ++i) {
+		handles.push_back(scn::raycast_batch(workers, reg, std::vector<scn::ray_request>(8, request), static_cast<std::uint64_t>(i)));
+	}
+	// The world changes while the workers read their snapshot.
+	reg.get<scn::world_transform>(quad).world = at({ 10.f, 0.f, -3.f });
+	const std::vector<entt::entity> moved{ quad };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+
+	for (std::size_t i = 0; i < handles.size(); ++i) {
+		handles[i].wait();
+		BOOST_REQUIRE(handles[i].status() == ds::task_status::ready);
+		const scn::ray_batch& batch = handles[i].get();
+		BOOST_TEST(batch.frame == static_cast<std::uint64_t>(i));
+		BOOST_REQUIRE(batch.results.size() == 8u);
+		for (const scn::ray_result& result : batch.results) {
+			BOOST_TEST(result.hits.size() == 1u);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ABatch_Frame_N_DoesNotSeeTheMovesOfFrame_N_Plus_1)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	scn::ray_request request;
+	request.line = toward_minus_z({ 0.f, 0.f, 2.f });
+
+	auto first = scn::raycast_batch(tasks, reg, { request }, 1);
+
+	reg.get<scn::world_transform>(quad).world = at({ 10.f, 0.f, -3.f });
+	const std::vector<entt::entity> moved{ quad };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+	auto second = scn::raycast_batch(tasks, reg, { request }, 2);
+	reg.destroy(quad);
+
+	pump();
+	BOOST_REQUIRE(first.status() == ds::task_status::ready);
+	BOOST_REQUIRE(second.status() == ds::task_status::ready);
+	BOOST_REQUIRE(first.get().results[0].hits.size() == 1u);
+	BOOST_TEST((first.get().results[0].hits[0].entity == quad));
+	BOOST_TEST(second.get().results[0].hits.empty());
+}
+
+BOOST_AUTO_TEST_CASE(BatchesHandedInWhileNothingChanges_ShareOneSnapshot_AChangeTakesANewOne)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	scn::ray_request request;
+	request.line = toward_minus_z({ 0.f, 0.f, 2.f });
+
+	auto a = scn::raycast_batch(tasks, reg, { request }, 1);
+	reg.remove<scn::renderable>(quad);
+	auto b = scn::raycast_batch(tasks, reg, { request }, 1);
+	pump();
+	BOOST_TEST(a.get().results[0].hits.size() == 1u);
+	BOOST_TEST(b.get().results[0].hits.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnAllRequest_IsCutAtMaxHits_NearestFirst_AndSaysSo)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	std::vector<entt::entity> quads;
+	for (int i = 0; i < 5; ++i) {
+		quads.push_back(add_quad(reg, at({ 0.f, 0.f, -2.f - static_cast<float>(i) })));
+	}
+	scn::ray_request request;
+	request.line = toward_minus_z({ 0.f, 0.f, 1.f });
+	request.kind = scn::ray_query::all;
+	request.max_hits = 3;
+	auto handle = scn::raycast_batch(tasks, reg, { request }, 5);
+	pump();
+	const scn::ray_result& result = handle.get().results[0];
+	BOOST_REQUIRE(result.hits.size() == 3u);
+	BOOST_TEST(result.truncated);
+	for (std::size_t i = 0; i < 3; ++i) {
+		BOOST_TEST((result.hits[i].entity == quads[i]));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(ManyRandomQuads_TheTreesAnswerAsABruteForceLoopDoes)
 {
 	put_quad("quad.geom.desc");
