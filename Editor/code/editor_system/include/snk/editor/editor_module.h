@@ -5,6 +5,11 @@
 #include <string_view>
 #include <vector>
 
+namespace core
+{
+	struct library_copy;
+}
+
 namespace editor
 {
 	// Settings the editor needs set before its modules register (the gui module, which registers first, reads them):
@@ -16,7 +21,7 @@ namespace editor
 	// core::project_modules_options::trust_library of the editor (#921): the person's trust in the project, kept by
 	// the editor (edt::project_trust_service in `data`, made by the editor's init); `trust_flag` (--trust-project)
 	// trusts everything for this run. Without the editor in `data`, only the flag counts. `data` outlives the gate.
-	std::function<bool(std::string_view name, const std::filesystem::path& copy)> project_trust_gate(
+	std::function<bool(std::string_view name, const core::library_copy& copy)> project_trust_gate(
 		ds::app_data_storage& data, bool trust_flag);
 
 	class editor_module : public app::modules::module_interface

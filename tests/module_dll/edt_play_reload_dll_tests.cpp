@@ -26,6 +26,7 @@
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <system_error>
 #include <functional>
@@ -166,7 +167,10 @@ struct dll_play_fixture : test_util::module_env
 		return text.empty() ? boost::json::object{} : boost::json::parse(text).as_object();
 	}
 
-	test_util::dll_project project{ "dll_play_reload", root };
+	// A folder per test: copy folder numbers never repeat for one folder in a process (#1304), and each test counts
+	// its copies from 0.
+	test_util::dll_project project{ std::format("dll_play_reload_{}",
+		static_cast<unsigned long>(boost::unit_test::framework::current_test_case().p_id)), root };
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::editor_events events;

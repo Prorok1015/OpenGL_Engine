@@ -21,8 +21,10 @@
 #include <format>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -34,6 +36,16 @@ namespace {
 	namespace fs = std::filesystem;
 
 	constexpr int k_max_copies = 1000;
+
+	// The <n> of the next copy folder <pid>-<n> in the copies folder `cache`: never the same twice in a process for that
+	// folder, so a path the loader saw once never names another copy (#1304).
+	std::uint64_t next_copy_number(const fs::path& cache)
+	{
+		static std::mutex lock;
+		static std::map<fs::path, std::uint64_t> next;
+		const std::lock_guard guard{ lock };
+		return next[cache]++;
+	}
 
 	// path::string() throws on Windows for a name outside the ANSI code page.
 	std::string utf8(const fs::path& path)
@@ -227,6 +239,10 @@ namespace {
 		fs::path source;
 		std::uintmax_t source_size = 0;
 		fs::file_time_type source_time{};
+		// #1304: the hold on the folder, the path the library loads by through it and the digest read through it.
+		std::shared_ptr<platform::beneath::held_folder> hold;
+		fs::path load_path;
+		std::string digest;
 	};
 
 	// A read-only project (a shipped game, a migration: #593, #757) gets nothing written into it: the copies go to the
@@ -239,16 +255,166 @@ namespace {
 		return &data.require<core::res::run_scratch_folder>().path;
 	}
 
-	// A copy the host made, removed from where the copies of this run are.
-	void remove_copy(ds::app_data_storage& data, const fs::path& folder)
+	// The folder of this user outside the project for the copies the project cannot hold (#1304): `scratch`, made
+	// on the first call (core::res::make_scratch_dir, 0700 and checked on POSIX), the copies in its "modules".
+	constexpr std::string_view k_private_copies = "module-copies";
+
+	std::string private_home(fs::path& scratch, copies_home& out)
 	{
-		if (data.has_value<prj::project_context>()) {
-			remove_copy_folder(home_of(data.require<prj::project_context>(), run_scratch(data)), folder);
+		if (scratch.empty()) {
+			if (const std::size_t stale = core::res::remove_stale_scratch_dirs(k_private_copies); stale > 0) {
+				egLOG_INFO("project", "removed {} folder(s) of module copies of ended runs", stale);
+			}
+			const core::res::scratch_folder_result made = core::res::make_scratch_dir(k_private_copies);
+			if (made.path.empty()) {
+				return made.error;
+			}
+			scratch = made.path;
 		}
+		out = { scratch, "modules" };
+		return {};
 	}
 
-	// Empty string on success; on failure nothing of the copy is left.
-	std::string copy_library(const prj::project_context& project, const fs::path* scratch, const fs::path& found, module_copy& out)
+	// The home `folder` (a <pid>-<n> folder) was made in: the private one when it lies there.
+	copies_home home_of_copy(ds::app_data_storage& data, const fs::path& private_scratch, const fs::path& folder)
+	{
+		if (!private_scratch.empty() && folder.parent_path() == private_scratch / "modules") {
+			return { private_scratch, "modules" };
+		}
+		return home_of(data.require<prj::project_context>(), run_scratch(data));
+	}
+
+	enum class copy_outcome { copied, not_held_here, failed };
+
+	// Copies into a new folder of `home`, closed to others from its making, holds it and hashes the libraries through
+	// the hold (#1304). `need_load_path`: a copy no other path than the hold's reaches safely (in the project) is
+	// `not_held_here` without one. On anything but `copied` nothing of the copy is left and `why` says why.
+	copy_outcome copy_and_hold(const copies_home& home, const fs::path& output, const fs::path& library,
+		bool need_load_path, module_copy& out, std::string& why)
+	{
+		const fs::path cache = home.folder();
+		platform::beneath::pinned_root pinned{ home.base };
+		if (std::string problem = platform::beneath::make_folders_beneath(pinned, home.below); !problem.empty()) {
+			why = std::format("cannot make '{}': {}", utf8(cache), problem);
+			return copy_outcome::failed;
+		}
+
+		std::error_code ec;
+		const std::int64_t pid = platform::current_process_id();
+		fs::path folder;
+		platform::beneath::folder_identity made;
+		for (int attempt = 0; attempt < k_max_copies && folder.empty(); ++attempt) {
+			const fs::path candidate = cache / std::format("{}-{}", pid, next_copy_number(cache));
+			std::error_code status_ec;
+			if (fs::symlink_status(candidate, status_ec).type() != fs::file_type::not_found) {
+				continue;
+			}
+			const fs::path below = home.below / candidate.filename();
+			// Closed to others before anything is in it: nobody else can open, add or rename an entry in it.
+			std::string problem = platform::beneath::make_new_folder_beneath(pinned, below, 0700, &made);
+			if (!problem.empty()) {
+				// Whatever stopped the private folder (no ACLs on the file system, a name taken meanwhile...), the copy
+				// goes to the scratch fallback instead.
+				why = std::format("cannot make '{}': {}", utf8(candidate), problem);
+				return copy_outcome::not_held_here;
+			}
+			folder = candidate;
+		}
+		if (folder.empty()) {
+			why = std::format("no free folder for a copy of '{}' in '{}'", utf8(library), utf8(cache));
+			return copy_outcome::failed;
+		}
+
+		const auto fail = [&](copy_outcome outcome, std::string problem) {
+			// Held files cannot be removed on Windows: the hold goes first.
+			out.hold.reset();
+			remove_copy_folder(home, folder);
+			why = std::move(problem);
+			return outcome;
+		};
+		const fs::path target = folder / library.filename();
+		// Before the copy: a build that writes meanwhile leaves a newer time, so the copy is not taken for current.
+		out.source = library;
+		out.source_size = fs::file_size(library, ec);
+		out.source_time = fs::last_write_time(library, ec);
+		out.siblings.clear();
+		if (std::string problem = copy_into(home, library, folder, library.filename()); !problem.empty()) {
+			return fail(copy_outcome::failed,
+				std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), problem));
+		}
+		std::vector<fs::path> copied{ library.filename() };
+		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
+			// A link out of build/bin is not part of the build: it never travels with the module.
+			fs::path real;
+			if (it->path().filename() == library.filename() || !travels_with_module(it->path())
+				|| !file_inside(output, it->path(), real).empty()) {
+				continue;
+			}
+			// A sibling of the build left behind would be looked for by the loader elsewhere: the copy is refused.
+			if (std::string problem = copy_into(home, real, folder, it->path().filename()); !problem.empty()) {
+				return fail(copy_outcome::failed, std::format("cannot copy '{}' with '{}': {}", utf8(real),
+					utf8(library), problem));
+			}
+			copied.push_back(it->path().filename());
+			if (is_library(real)) {
+				std::error_code stamp_ec;
+				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
+			}
+		}
+		if (ec) {
+			return fail(copy_outcome::failed, std::format("cannot list '{}': {}", utf8(output), ec.message()));
+		}
+
+		// Held, then hashed through the hold: what the gate is told is what the loader reads.
+		platform::beneath::hold_result held =
+			platform::beneath::hold_folder_beneath(pinned, home.below / folder.filename(), made, copied);
+		if (held.status == platform::beneath::hold_status::not_private) {
+			return fail(copy_outcome::not_held_here, std::move(held.error));
+		}
+		if (held.status != platform::beneath::hold_status::held) {
+			return fail(copy_outcome::failed, std::format("cannot hold the copy '{}': {}", utf8(folder), held.error));
+		}
+		out.hold = std::move(held.held);
+		std::vector<std::pair<std::string, std::string>> hashed;
+		for (const fs::path& name : copied) {
+			if (!is_library(name)) {
+				continue;
+			}
+			const std::optional<std::string> hash = cmn::sha256_stream_hex([&](const auto& sink) {
+				return out.hold->read(name, [&sink](std::span<const std::byte> piece) {
+					sink(piece);
+					return true;
+				});
+			});
+			if (!hash) {
+				return fail(copy_outcome::failed, std::format("cannot read the held copy '{}'", utf8(folder / name)));
+			}
+			hashed.emplace_back(utf8(name), *hash);
+		}
+		std::optional<std::string> digest = core::module_library_set_digest_of(std::move(hashed));
+		if (!digest) {
+			return fail(copy_outcome::failed, std::format("the copy '{}' holds no library", utf8(folder)));
+		}
+		out.load_path = out.hold->load_path(library.filename());
+		if (out.load_path.empty()) {
+			if (need_load_path) {
+				return fail(copy_outcome::not_held_here, "the held copy cannot be loaded through its hold here (no "
+					"usable /proc/self/fd)");
+			}
+			// A folder of this user only, that nobody else can rename or write into: its path is as safe as the hold.
+			out.load_path = target;
+		}
+		out.digest = std::move(*digest);
+		out.library = target;
+		out.folder = folder;
+		return copy_outcome::copied;
+	}
+
+	// Empty string on success; on failure nothing of the copy is left. The copy goes to the project's .cache/modules
+	// (a read-only project: `scratch`, the run's folder), or where the project cannot hold it, to the folder of this
+	// user `private_scratch` (made here when needed, #1304).
+	std::string copy_library(const prj::project_context& project, const fs::path* scratch,
+		fs::path& private_scratch, const fs::path& found, module_copy& out)
 	{
 		fs::path output;
 		if (std::string why = folder_inside(project.root, build_output_dir(project), output); !why.empty()) {
@@ -261,58 +427,54 @@ namespace {
 		if (!scratch && ::res::resource_system::read_only_project()) {
 			return "a read-only project has no folder for the copies of its modules";
 		}
-		const copies_home home = home_of(project, scratch);
-		const fs::path cache = home.folder();
-		platform::beneath::pinned_root pinned{ home.base };
-		if (std::string why = platform::beneath::make_folders_beneath(pinned, home.below); !why.empty()) {
-			return std::format("cannot make '{}': {}", utf8(cache), why);
+		std::string why;
+		if (scratch) {
+			// The run's folder is this user's only: a path into it is safe where no hold path exists.
+			return copy_and_hold(home_of(project, scratch), output, library, false, out, why) == copy_outcome::copied
+				? std::string{}
+				: why;
 		}
-
-		std::error_code ec;
-		const std::int64_t pid = platform::current_process_id();
-		fs::path folder;
-		for (int n = 0; n < k_max_copies && folder.empty(); ++n) {
-			const fs::path candidate = cache / std::format("{}-{}", pid, n);
-			std::error_code status_ec;
-			if (fs::symlink_status(candidate, status_ec).type() != fs::file_type::not_found) {
-				continue;
-			}
-			const fs::path below = home.below / candidate.filename();
-			if (std::string why = platform::beneath::make_folders_beneath(pinned, below, true); !why.empty()) {
-				return std::format("cannot make '{}': {}", utf8(candidate), why);
-			}
-			folder = candidate;
+#if defined(__APPLE__)
+		// No /proc/self/fd: a copy in the project could be loaded only by a path someone else may change.
+		why = "macOS has no path that reaches a held folder";
+#else
+		const copy_outcome here = copy_and_hold(home_of(project, nullptr), output, library, true, out, why);
+		if (here == copy_outcome::copied) {
+			return {};
 		}
-		if (folder.empty()) {
-			return std::format("no free folder for a copy of '{}' in '{}'", utf8(library), utf8(cache));
-		}
-
-		const auto fail = [&](std::string why) {
-			remove_copy_folder(home, folder);
+		if (here == copy_outcome::failed) {
 			return why;
-		};
-		const fs::path target = folder / library.filename();
-		// Before the copy: a build that writes meanwhile leaves a newer time, so the copy is not taken for current.
-		out.source = library;
-		out.source_size = fs::file_size(library, ec);
-		out.source_time = fs::last_write_time(library, ec);
-		if (std::string why = copy_into(home, library, folder, library.filename()); !why.empty()) {
-			return fail(std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), why));
 		}
-		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
-			fs::path real;
-			if (it->path().filename() == library.filename() || !travels_with_module(it->path())
-				|| !file_inside(output, it->path(), real).empty()) {
-				continue;
-			}
-			if (copy_into(home, real, folder, it->path().filename()).empty() && is_library(real)) {
-				std::error_code stamp_ec;
-				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
-			}
+#endif
+		egLOG_INFO("project", "the copy of '{}' goes to a folder of this user outside the project: {}", utf8(library),
+			why);
+		copies_home home;
+		if (std::string problem = private_home(private_scratch, home); !problem.empty()) {
+			return std::format("the project cannot hold a copy safely ({}) and there is no private folder for one: {}",
+				why, problem);
 		}
-		out.library = target;
-		out.folder = folder;
+		std::string problem;
+		if (copy_and_hold(home, output, library, false, out, problem) != copy_outcome::copied) {
+			return std::format("the private copy failed: {}", problem);
+		}
 		return {};
+	}
+
+	// The source of a held copy, loaded by its hold's path.
+	std::unique_ptr<app::modules::module_source> held_source(const module_copy& copy)
+	{
+		return std::make_unique<app::modules::held_library_source>(copy.load_path, copy.library, copy.hold);
+	}
+
+	// The source of a copy loaded before, for a rollback or a revert: only while the host still holds its folder.
+	std::unique_ptr<app::modules::module_source> held_again(const fs::path& library, const fs::path& load_path,
+		const std::weak_ptr<void>& hold)
+	{
+		std::shared_ptr<void> kept = hold.lock();
+		if (!kept) {
+			throw std::runtime_error(std::format("the copy '{}' is no longer held", utf8(library)));
+		}
+		return std::make_unique<app::modules::held_library_source>(load_path, library, std::move(kept));
 	}
 
 	// A source whose entry is checked right after it opens, before the module is created: the editor API version of an
@@ -375,13 +537,13 @@ namespace {
 	}
 
 	// The host's answer for the copy of `name` about to be loaded: no gate, or one that throws, is a no (#921).
-	bool trusted(const core::project_modules_options& options, const std::string& name, const fs::path& copy)
+	bool trusted(const core::project_modules_options& options, const std::string& name, const module_copy& copy)
 	{
 		if (!options.trust_library) {
 			return false;
 		}
 		try {
-			return options.trust_library(name, copy);
+			return options.trust_library(name, core::library_copy{ copy.library, copy.digest });
 		} catch (const std::exception& e) {
 			egLOG_ERROR("project", "module '{}': the trust check failed: {}", name, e.what());
 		} catch (...) {
@@ -452,6 +614,25 @@ core::project_module_host::project_module_host(app::modules::module_loader& load
 {
 }
 
+core::project_module_host::~project_module_host()
+{
+	if (m_private_scratch.empty()) {
+		return;
+	}
+	// A library still mapped from it keeps running once its file is gone (POSIX); Windows keeps such a file and the
+	// folder stays, for remove_stale_scratch_dirs of a later run.
+	if (const std::string problem = core::res::remove_scratch_dir(m_private_scratch); !problem.empty()) {
+		egLOG_WARN("project", "the folder of module copies '{}' stays: {}", utf8(m_private_scratch), problem);
+	}
+}
+
+void core::project_module_host::remove_copy(const std::filesystem::path& folder) const
+{
+	if (m_data.has_value<prj::project_context>()) {
+		remove_copy_folder(home_of_copy(m_data, m_private_scratch, folder), folder);
+	}
+}
+
 std::optional<std::filesystem::path> core::project_module_host::build_output(const std::string& name) const
 {
 	if (m_options.compiled_only || !m_data.has_value<prj::project_context>()) {
@@ -502,23 +683,17 @@ bool core::project_module_host::is_current(const std::string& name) const
 
 void core::project_module_host::remove_unused_copies() const
 {
-	// A static host makes no copies and writes nothing into the project; a read-only one keeps them outside it.
-	if (m_options.compiled_only || ::res::resource_system::read_only_project()) {
+	// A static host makes no copies and writes nothing into the project.
+	if (m_options.compiled_only || !m_data.has_value<prj::project_context>()) {
 		return;
 	}
-	if (!m_data.has_value<prj::project_context>()) {
-		return;
+	std::vector<copies_home> homes;
+	// A read-only one keeps them outside it, in the run's folder that goes with the run.
+	if (!::res::resource_system::read_only_project()) {
+		homes.push_back(home_of(m_data.require<prj::project_context>(), nullptr));
 	}
-	const copies_home home = home_of(m_data.require<prj::project_context>(), nullptr);
-	const fs::path cache = home.folder();
-	std::error_code ec;
-	// Only listed when no link stands in the way (nor a junction, which MSVC calls neither a folder nor a link); a link
-	// swapped in after this is met by the removal, which refuses it.
-	for (fs::path step = home.base; const fs::path& part : home.below) {
-		step /= part;
-		if (fs::symlink_status(step, ec).type() != fs::file_type::directory) {
-			return;
-		}
+	if (!m_private_scratch.empty()) {
+		homes.push_back({ m_private_scratch, "modules" });
 	}
 	const auto in_use = [&](const fs::path& folder) {
 		return std::ranges::any_of(m_copies, [&](const auto& entry) {
@@ -527,23 +702,37 @@ void core::project_module_host::remove_unused_copies() const
 		});
 	};
 	const std::int64_t self = platform::current_process_id();
-	std::vector<fs::path> unused;
-	for (fs::directory_iterator it{ cache, ec }, end; !ec && it != end; it.increment(ec)) {
-		std::error_code type_ec;
-		if (!it->is_directory(type_ec)) {
-			// A copy of the layout before #435 (<name>.<n>.<ext>).
+	for (const copies_home& home : homes) {
+		const fs::path cache = home.folder();
+		std::error_code ec;
+		// Only listed when no link stands in the way (nor a junction, which MSVC calls neither a folder nor a link); a
+		// link swapped in after this is met by the removal, which refuses it.
+		bool plain = true;
+		for (fs::path step = home.base; const fs::path& part : home.below) {
+			step /= part;
+			plain = plain && fs::symlink_status(step, ec).type() == fs::file_type::directory;
+		}
+		if (!plain) {
+			continue;
+		}
+		std::vector<fs::path> unused;
+		for (fs::directory_iterator it{ cache, ec }, end; !ec && it != end; it.increment(ec)) {
+			std::error_code type_ec;
+			if (!it->is_directory(type_ec)) {
+				// A copy of the layout before #435 (<name>.<n>.<ext>).
+				unused.push_back(it->path());
+				continue;
+			}
+			const auto owner = owner_of(it->path());
+			if (!owner || (*owner == self ? in_use(it->path()) : platform::process_is_running(*owner))) {
+				continue;
+			}
 			unused.push_back(it->path());
-			continue;
 		}
-		const auto owner = owner_of(it->path());
-		if (!owner || (*owner == self ? in_use(it->path()) : platform::process_is_running(*owner))) {
-			continue;
+		// One still mapped by a process cannot go on Windows and stays.
+		for (const auto& entry : unused) {
+			remove_copy_folder(home, entry);
 		}
-		unused.push_back(it->path());
-	}
-	// One still mapped by a process cannot go on Windows and stays.
-	for (const auto& entry : unused) {
-		remove_copy_folder(home, entry);
 	}
 }
 
@@ -595,15 +784,16 @@ void core::project_module_host::load_runtime_module(const std::string& name, pro
 		if (const auto it = m_options.compiled_in.find(name); it != m_options.compiled_in.end()) {
 			source = std::make_unique<app::modules::static_module_source>(name, it->second);
 		} else if (const auto found = build_output(name)) {
-			if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
+			std::string why = copy_library(project, run_scratch(m_data), m_private_scratch, *found, copy);
+			if (!why.empty()) {
 				return why;
 			}
-			// Asked of the copy: the file that is checked is the one loaded, whatever the build output does meanwhile.
-			if (!trusted(m_options, name, copy.library)) {
+			// Asked of the held copy: what is judged is what loads, whatever the build output or the cache do meanwhile.
+			if (!trusted(m_options, name, copy)) {
 				untrusted = true;
 				return untrusted_message(name);
 			}
-			source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+			source = held_source(copy);
 		} else {
 			return "its library is no longer in the build output";
 		}
@@ -614,13 +804,14 @@ void core::project_module_host::load_runtime_module(const std::string& name, pro
 			copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
 		if (!copy.folder.empty()) {
 			m_copies[name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source,
-				copy.source_size, copy.source_time };
+				copy.source_size, copy.source_time, copy.load_path, std::move(copy.hold) };
 		}
 		report.loaded.push_back(name);
 		return;
 	}
 	if (!copy.folder.empty()) {
-		remove_copy(m_data, copy.folder);
+		copy.hold.reset();
+		remove_copy(copy.folder);
 	}
 	if (untrusted) {
 		egLOG_WARN("project", "module '{}' not loaded: {}", name, problem);
@@ -715,12 +906,14 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	}
 	remove_unused_copies();
 	module_copy copy;
-	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
+	const auto copied = [&] { return copy_library(project, run_scratch(m_data), m_private_scratch, *found, copy); };
+	if (std::string why = guarded(copied); !why.empty()) {
 		return refused(std::move(why));
 	}
 	// Before anything is unloaded: the running module stays.
-	if (!trusted(m_options, name, copy.library)) {
-		remove_copy(m_data, copy.folder);
+	if (!trusted(m_options, name, copy)) {
+		copy.hold.reset();
+		remove_copy(copy.folder);
 		if (m_loader.state(name) != app::modules::module_state::initialized) {
 			add_once(m_untrusted_runtime, name);
 		}
@@ -734,12 +927,15 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
 	if (const auto it = m_copies.find(name); it != m_copies.end() && it->second.current) {
 		running = it->second.current;
-		previous = [library = running->library, folder = running->folder] {
-			return std::make_unique<app::modules::native_library_source>(library, folder);
+		previous = [library = running->library, load = running->load_path, hold = std::weak_ptr<void>(running->hold)] {
+			return held_again(library, load, hold);
 		};
 	}
-	const reload_report report = swap(name, std::make_unique<app::modules::native_library_source>(copy.library, copy.folder),
-		previous, hooks, loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time });
+	std::unique_ptr<app::modules::module_source> next = held_source(copy);
+	// The hold moves on with the copy: a swap that drops the copy lets it go before the folder is removed.
+	loaded_copy made{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time,
+		copy.load_path, std::move(copy.hold) };
+	const reload_report report = swap(name, std::move(next), previous, hooks, std::move(made));
 	if (report.status == reload_status::reloaded && running) {
 		warn_about_siblings(name, copy.siblings, running->siblings);
 	}
@@ -809,11 +1005,12 @@ core::reload_report core::project_module_host::revert(const std::string& name, c
 
 core::reload_report core::project_module_host::swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-	const std::optional<loaded_copy>& copy, bool keep_copy)
+	std::optional<loaded_copy> copy, bool keep_copy)
 {
 	const auto drop_copy = [&] {
 		if (copy && !keep_copy) {
-			remove_copy(m_data, copy->folder);
+			copy->hold.reset();
+			remove_copy(copy->folder);
 		}
 	};
 
@@ -909,6 +1106,8 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 		}
 		return finish({ reload_status::reloaded, {} });
 	}
+	// Its hold goes before the folder: the revert point would keep it.
+	next_revert = revert_point{};
 	drop_copy();
 
 	if (!was_loaded) {
@@ -964,11 +1163,13 @@ core::reload_report core::project_module_host::reload_editor_module(const std::s
 	}
 	remove_unused_copies();
 	module_copy copy;
-	if (std::string why = guarded([&] { return copy_library(project, run_scratch(m_data), *found, copy); }); !why.empty()) {
+	const auto copied = [&] { return copy_library(project, run_scratch(m_data), m_private_scratch, *found, copy); };
+	if (std::string why = guarded(copied); !why.empty()) {
 		return refused(std::move(why));
 	}
-	if (!trusted(m_options, name, copy.library)) {
-		remove_copy(m_data, copy.folder);
+	if (!trusted(m_options, name, copy)) {
+		copy.hold.reset();
+		remove_copy(copy.folder);
 		if (m_loader.state(name) != app::modules::module_state::initialized) {
 			add_once(m_untrusted_editor, name);
 		}
@@ -979,21 +1180,25 @@ core::reload_report core::project_module_host::reload_editor_module(const std::s
 	std::erase(m_untrusted_editor, name);
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
 	if (const auto it = m_copies.find(name); it != m_copies.end() && it->second.current) {
-		previous = [library = it->second.current->library, folder = it->second.current->folder] {
-			return std::make_unique<app::modules::native_library_source>(library, folder);
+		const loaded_copy& running = *it->second.current;
+		previous = [library = running.library, load = running.load_path, hold = std::weak_ptr<void>(running.hold)] {
+			return held_again(library, load, hold);
 		};
 	}
-	return swap_editor(name, std::make_unique<app::modules::native_library_source>(copy.library, copy.folder), previous, hooks,
-		loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time });
+	std::unique_ptr<app::modules::module_source> next = held_source(copy);
+	loaded_copy made{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time,
+		copy.load_path, std::move(copy.hold) };
+	return swap_editor(name, std::move(next), previous, hooks, std::move(made));
 }
 
 core::reload_report core::project_module_host::swap_editor(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-	const std::optional<loaded_copy>& copy)
+	std::optional<loaded_copy> copy)
 {
 	const auto drop_copy = [&] {
 		if (copy) {
-			remove_copy(m_data, copy->folder);
+			copy->hold.reset();
+			remove_copy(copy->folder);
 		}
 	};
 	if (!m_options.with_editor_modules || !m_options.check_editor_module) {
@@ -1050,7 +1255,6 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 	// unload_editor_modules unloads the last loaded first.
 	m_editor_loaded.reserve(m_editor_loaded.size() + 1);
 	auto& copies = m_copies[name];
-	std::optional<loaded_copy> next_current = copy;
 	const auto move_to_the_end = [&] {
 		std::erase(m_editor_loaded, name);
 		m_editor_loaded.push_back(name);
@@ -1090,7 +1294,7 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 	if (problem.empty()) {
 		if (copy) {
 			copies.previous = std::move(copies.current);
-			copies.current = std::move(next_current);
+			copies.current = copy;
 		}
 		move_to_the_end();
 		return finish({ reload_status::reloaded, {} });
@@ -1168,14 +1372,15 @@ core::project_modules_report core::project_module_host::load_editor(
 			} else if (m_options.compiled_only) {
 				return "the static host loads only compiled-in modules";
 			} else if (const auto found = find_library(project, ref.name)) {
-				if (std::string why = copy_library(project, run_scratch(m_data), *found, copy); !why.empty()) {
+				if (std::string why = copy_library(project, run_scratch(m_data), m_private_scratch, *found, copy);
+					!why.empty()) {
 					return why;
 				}
-				if (!trusted(m_options, ref.name, copy.library)) {
+				if (!trusted(m_options, ref.name, copy)) {
 					untrusted = true;
 					return untrusted_message(ref.name);
 				}
-				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+				source = held_source(copy);
 			} else {
 				return {};
 			}
@@ -1185,7 +1390,8 @@ core::project_modules_report core::project_module_host::load_editor(
 		if (problem.empty() && m_loader.state(ref.name) == app::modules::module_state::initialized) {
 			egLOG_INFO("project", "editor module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
 			if (!copy.folder.empty()) {
-				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time };
+				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source,
+					copy.source_size, copy.source_time, copy.load_path, std::move(copy.hold) };
 			}
 			m_editor_loaded.push_back(ref.name);
 			report.loaded.push_back(ref.name);
@@ -1196,7 +1402,8 @@ core::project_modules_report core::project_module_host::load_editor(
 			continue;
 		}
 		if (!copy.folder.empty()) {
-			remove_copy(m_data, copy.folder);
+			copy.hold.reset();
+			remove_copy(copy.folder);
 		}
 		if (untrusted) {
 			egLOG_WARN("project", "editor module '{}' is not loaded: {}", ref.name, problem);
@@ -1265,16 +1472,30 @@ std::optional<std::string> core::module_library_set_digest(const std::filesystem
 	if (ec || files.empty()) {
 		return std::nullopt;
 	}
-	std::ranges::sort(files);
-	std::string listing;
+	std::vector<std::pair<std::string, std::string>> hashed;
+	hashed.reserve(files.size());
 	for (const auto& [name, path] : files) {
-		const std::optional<std::string> hash = cmn::sha256_file_hex(path);
+		std::optional<std::string> hash = cmn::sha256_file_hex(path);
 		if (!hash) {
 			return std::nullopt;
 		}
+		hashed.emplace_back(name, std::move(*hash));
+	}
+	return module_library_set_digest_of(std::move(hashed));
+}
+
+std::optional<std::string> core::module_library_set_digest_of(
+	std::vector<std::pair<std::string, std::string>> libraries)
+{
+	if (libraries.empty()) {
+		return std::nullopt;
+	}
+	std::ranges::sort(libraries);
+	std::string listing;
+	for (const auto& [name, hash] : libraries) {
 		listing += name;
 		listing += '\0';
-		listing += *hash;
+		listing += hash;
 		listing += '\n';
 	}
 	return cmn::sha256_hex(std::as_bytes(std::span{ listing.data(), listing.size() }));

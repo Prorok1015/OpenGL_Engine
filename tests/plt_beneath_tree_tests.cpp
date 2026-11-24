@@ -366,6 +366,46 @@ BOOST_AUTO_TEST_CASE(remove_tree_removes_a_read_only_file)
 }
 #endif
 
+// #1304 review: a hold proves it holds the folder made, not another one put at its name since.
+BOOST_AUTO_TEST_CASE(a_folder_put_at_the_made_name_is_not_held)
+{
+	platform::beneath::folder_identity made;
+	BOOST_REQUIRE(platform::beneath::make_new_folder_beneath(pinned, "copy", 0700, &made).empty());
+	fs::rename(root / "copy", root / "moved");
+	platform::beneath::folder_identity planted;
+	BOOST_REQUIRE(platform::beneath::make_new_folder_beneath(pinned, "copy", 0700, &planted).empty());
+	BOOST_TEST(!(planted == made));
+	dir.write("copy/lib.bin", "planted");
+	const std::vector<fs::path> names{ "lib.bin" };
+
+	const platform::beneath::hold_result swapped = platform::beneath::hold_folder_beneath(pinned, "copy", made, names);
+	BOOST_TEST((swapped.status == platform::beneath::hold_status::failed));
+	BOOST_TEST(!swapped.held);
+	BOOST_TEST(swapped.error.find("not the folder made") != std::string::npos, swapped.error);
+
+	const platform::beneath::hold_result own = platform::beneath::hold_folder_beneath(pinned, "copy", planted, names);
+	BOOST_TEST((own.status == platform::beneath::hold_status::held), own.error);
+}
+
+// #1304 review: the loader looks in the library's folder first, so a held folder holds the copy and nothing else.
+BOOST_AUTO_TEST_CASE(a_held_folder_with_anything_but_the_copy_is_not_held)
+{
+	platform::beneath::folder_identity made;
+	BOOST_REQUIRE(platform::beneath::make_new_folder_beneath(pinned, "copy", 0700, &made).empty());
+	dir.write("copy/lib.bin", "the copy");
+	dir.write("copy/extra.dll", "not put there by the copy");
+
+	const std::vector<fs::path> copied{ "lib.bin" };
+	const platform::beneath::hold_result extra = platform::beneath::hold_folder_beneath(pinned, "copy", made, copied);
+	BOOST_TEST((extra.status == platform::beneath::hold_status::failed));
+	BOOST_TEST(!extra.held);
+	BOOST_TEST(extra.error.find("extra.dll") != std::string::npos, extra.error);
+
+	const std::vector<fs::path> both{ "lib.bin", "extra.dll" };
+	const platform::beneath::hold_result all = platform::beneath::hold_folder_beneath(pinned, "copy", made, both);
+	BOOST_TEST((all.status == platform::beneath::hold_status::held), all.error);
+}
+
 #ifdef _WIN32
 // #1316 (from remove_tree_without_following, #1099): a read-only junction goes as the link; its read-only target stays
 // read-only and whole.

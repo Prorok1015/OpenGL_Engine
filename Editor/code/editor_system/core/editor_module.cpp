@@ -37,13 +37,13 @@ void editor::apply_default_settings()
 	cfg::set_variable("gui/layout_file", fs_paths::utf8_of(user_data / "settings" / "layout_settings.ini"));
 }
 
-std::function<bool(std::string_view, const std::filesystem::path&)> editor::project_trust_gate(
+std::function<bool(std::string_view, const core::library_copy&)> editor::project_trust_gate(
 	ds::app_data_storage& data, bool trust_flag)
 {
 	if (data.has_value<edt::project_trust_service>()) {
 		data.require<edt::project_trust_service>().set_flag_trust(trust_flag);
 	}
-	return [&data, trust_flag](std::string_view name, const std::filesystem::path& copy) {
+	return [&data, trust_flag](std::string_view name, const core::library_copy& copy) {
 		if (!data.has_value<edt::project_trust_service>()) return trust_flag;
 		return data.require<edt::project_trust_service>().allow_library(name, copy);
 	};

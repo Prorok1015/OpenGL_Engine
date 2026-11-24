@@ -13,6 +13,11 @@ namespace res
 	class resource_system;
 }
 
+namespace core
+{
+	struct library_copy;
+}
+
 namespace edt {
 
 	class dialog_service;
@@ -38,8 +43,9 @@ namespace edt {
 		[[nodiscard]] bool has_project() const { return m_key.has_value(); }
 
 		// trust_library: whether the copy of `module` (in its own copy folder) may be loaded. A library the person
-		// must be asked about is remembered as waiting and refused for now. Hashes only while there is no answer.
-		bool allow_library(std::string_view module, const std::filesystem::path& copy);
+		// must be asked about is remembered as waiting and refused for now. Without an answer the copy's digest, read
+		// by the host through its hold on the copy (#1304), is compared with the editor's own build.
+		bool allow_library(std::string_view module, const core::library_copy& copy);
 		[[nodiscard]] bool waiting() const { return !m_waiting.empty(); }
 		[[nodiscard]] const std::vector<std::string>& waiting_modules() const { return m_waiting; }
 		// Before project_module_host::load_waiting, which asks allow_library again.
@@ -67,7 +73,7 @@ namespace edt {
 		void set_question_open(bool open) { m_question_open = open; }
 
 	private:
-		bool decide_library(std::string_view module, const std::filesystem::path& copy);
+		bool decide_library(std::string_view module, const core::library_copy& copy);
 
 		res::resource_system& m_res;
 		std::optional<std::string> m_key;

@@ -36,11 +36,29 @@ if(MSVC)
 endif()
 add_dependencies(unit_tests test_copy_prefab_dll)
 
+# #1304: a build of the module that needs a library beside it, found only from the folder of the module's held copy:
+# $ORIGIN alone as its RPATH (a path into the build tree would find the sibling there instead), the DLL's own folder on
+# Windows.
+add_library(test_sibling_dll SHARED test_sibling_dll.cpp)
+target_link_libraries(test_sibling_dll PRIVATE snk::sanitizers)
+add_library(test_game_dll_sibling SHARED test_game_dll.cpp)
+target_compile_definitions(test_game_dll_sibling PRIVATE TEST_DLL_SIBLING
+	"SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\"")
+target_link_libraries(test_game_dll_sibling PRIVATE snk::engine snk::engine_api snk::sanitizers test_sibling_dll)
+if(MSVC)
+	target_link_libraries(test_game_dll_sibling PRIVATE Boost::json)
+endif()
+set_target_properties(test_game_dll_sibling PROPERTIES BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN")
+add_dependencies(unit_tests test_game_dll_sibling test_sibling_dll)
+
 # edt_play_reload_dll_tests: Play kept across a reload of these builds (#600, HOT_RELOAD_PLAY.md 11).
 set(_dll_tests "${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/edt_play_reload_dll_tests.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/edt_game_config_dll_tests.cpp")
 target_sources(unit_tests PRIVATE ${_dll_tests})
 set_source_files_properties(${_dll_tests} TARGET_DIRECTORY unit_tests
 	PROPERTIES COMPILE_DEFINITIONS "SNK_TEST_GAME_DLL_PATH=\"$<TARGET_FILE:test_game_dll>\";SNK_TEST_GAME_DLL_V2_PATH=\"$<TARGET_FILE:test_game_dll_v2>\";SNK_TEST_GAME_DLL_FAILING_PATH=\"$<TARGET_FILE:test_game_dll_failing>\";SNK_TEST_GAME_DLL_BAD_API_PATH=\"$<TARGET_FILE:test_game_dll_bad_api>\";SNK_TEST_GAME_DLL_OLD_API_PATH=\"$<TARGET_FILE:test_game_dll_old_api>\";SNK_TEST_GAME_DLL_BAD_RESTORE_PATH=\"$<TARGET_FILE:test_game_dll_bad_restore>\";SNK_TEST_GAME_DLL_BAD_LAYOUT_PATH=\"$<TARGET_FILE:test_game_dll_bad_layout>\";SNK_TEST_GAME_DLL_NO_LAYOUT_PATH=\"$<TARGET_FILE:test_game_dll_no_layout>\";SNK_TEST_KEEPER_TRAP_PATH=\"${_keeper_trap}\";SNK_TEST_COPY_PREFAB_DLL_PATH=\"$<TARGET_FILE:test_copy_prefab_dll>\"" SKIP_PRECOMPILE_HEADERS ON)
+set_property(SOURCE ${_dll_tests} TARGET_DIRECTORY unit_tests APPEND PROPERTY COMPILE_DEFINITIONS
+	"SNK_TEST_GAME_DLL_SIBLING_PATH=\"$<TARGET_FILE:test_game_dll_sibling>\""
+	"SNK_TEST_SIBLING_DLL_PATH=\"$<TARGET_FILE:test_sibling_dll>\"")
 target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})
 
 # US-542-C: a module that reads the action map inline and calls gs::input_actions through its exports (rebind of 3.16
