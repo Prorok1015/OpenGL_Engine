@@ -27,3 +27,6 @@
 
 ## ABI
 Запись: `docs/abi/changes/1326.md` (layout_revision 26, `spatial_backend_abi_revision` 1, типы `ray/ray_filter/ray_hit` в ключе, `spatial_layers` в `engine_component_types`).
+
+## Зарезервированные слои
+Слой 31 (`scn::spatial_layer{31}`) зарезервирован за редактором: `edt::k_editor_helper_layer` (иконки света и камеры, вспомогательные меши). `edt::pick_node` его не попадает; игровой код слой 31 не занимает.
