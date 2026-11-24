@@ -82,6 +82,9 @@ namespace edt::mesh
 		std::uint64_t generation() const { return m_generation; }
 		std::size_t triangle_count() const;
 
+		// The next ids both meshes would hand out are the same: two meshes that are equal otherwise but differ here are not the same state.
+		bool same_id_counters(const poly_mesh& other) const { return m_next_vertex == other.m_next_vertex && m_next_face == other.m_next_face; }
+
 		// What is wrong with the mesh, one line each: empty when it is sound.
 		std::vector<std::string> validate() const;
 
