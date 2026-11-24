@@ -40,11 +40,14 @@ namespace core::res {
 	// link or a junction) is removed; on POSIX also only one owned by this user with mode 0700, so a folder someone else
 	// put in a shared temp folder is never walked. Returns how many.
 	SNK_API std::size_t remove_stale_scratch_dirs(std::string_view project_name);
-	// Removes `path` and what it holds without ever going through a link: a symlink, a junction or any other reparse point
-	// inside is removed itself, never entered (#1054: a child that wrote the folder could plant one that points at the
-	// user's files). False with `ec` set when something could not be removed; what could be is gone. Only for a tree no
-	// one writes into any more: an entry swapped for a link between its check and its removal is not caught. Windows:
-	// READONLY is cleared on an entry itself, a link included, never on what it points at; a path past MAX_PATH is removed
-	// too (#1099).
+	// Removes a scratch folder (make_scratch_dir) and what it holds through platform::beneath::remove_tree_beneath from
+	// the folder above it (#1316): a link inside is removed as itself, never entered, and one at `folder` is refused, so
+	// a child that wrote the folder cannot point the removal at the user's files. Nothing there: success. Empty on
+	// success, else why not; what could be removed is gone.
+	SNK_API std::string remove_scratch_dir(const std::filesystem::path& folder);
+	// Removes `path` and what it holds by path, without entering a link inside (#1054, #1099): an entry swapped for a link
+	// between its check and its removal is not caught. False with `ec` set when something could not be removed.
+	[[deprecated("remove_scratch_dir or platform::beneath::remove_tree_beneath; remove at the next major of "
+		"SNK_MODULE_API_VERSION")]]
 	SNK_API bool remove_tree_without_following(const std::filesystem::path& path, std::error_code& ec);
 }

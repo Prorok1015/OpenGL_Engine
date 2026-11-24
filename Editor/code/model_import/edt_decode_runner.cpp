@@ -21,21 +21,27 @@ namespace {
 // One folder per run, snk-model_decoder-<pid>-<random> in the private scratch base of the user.
 constexpr const char* k_scratch_name = "model_decoder";
 
-struct folder_guard
-{
-	fs::path path;
-	~folder_guard()
-	{
-		std::error_code ec;
-		core::res::remove_tree_without_following(path, ec);
-	}
-};
-
 std::string utf8_text(const fs::path& path)
 {
 	const auto text = path.u8string();
 	return std::string(text.begin(), text.end());
 }
+
+struct folder_guard
+{
+	fs::path path;
+	const std::function<void(const fs::path&)>& before_cleanup;
+	~folder_guard()
+	{
+		if (before_cleanup) {
+			before_cleanup(path);
+		}
+		// The child wrote this folder: a link it planted is removed as the link, never followed (#1316).
+		if (const std::string problem = core::res::remove_scratch_dir(path); !problem.empty()) {
+			egLOG_WARN("edt/decoder", "cannot remove the decoder's run folder '{}': {}", utf8_text(path), problem);
+		}
+	}
+};
 
 std::vector<std::string> clean_environment(const fs::path& folder)
 {
@@ -92,7 +98,7 @@ edt::decode_outcome edt::decode_runner::run(const decode_request& request, const
 		return outcome;
 	}
 	const fs::path folder = made.path;
-	folder_guard guard{ folder };
+	folder_guard guard{ folder, m_config.before_cleanup };
 
 	decode_request sent = request;
 	const auto timeout_ms = static_cast<std::uint64_t>(m_config.timeout.count());

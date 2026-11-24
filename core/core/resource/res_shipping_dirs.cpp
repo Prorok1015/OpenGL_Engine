@@ -1,6 +1,7 @@
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_process.h>
 #include <array>
 #include <cstdlib>
@@ -345,11 +346,9 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 			egLOG_DEBUG("resource", "left alone: '{}' is not a private folder of this user", fs_paths::utf8_of(it->path()));
 			continue;
 		}
-		std::error_code remove_ec;
-		remove_tree_without_following(it->path(), remove_ec);
-		if (remove_ec) {
+		if (const std::string problem = remove_scratch_dir(it->path()); !problem.empty()) {
 			egLOG_WARN("resource", "cannot remove the scratch folder of an ended run '{}': {}", fs_paths::utf8_of(it->path()),
-				remove_ec.message());
+				problem);
 		} else {
 			++removed;
 		}
@@ -412,28 +411,46 @@ namespace {
 }
 #endif
 
+#ifndef _WIN32
+namespace {
+	bool remove_tree_below(const fs::path& path, std::error_code& ec)
+	{
+		const fs::file_status status = fs::symlink_status(path, ec);
+		if (ec) {
+			if (ec == std::errc::no_such_file_or_directory) ec.clear();
+			return !ec;
+		}
+		if (fs::is_directory(status)) {
+			std::error_code list_ec;
+			for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
+				std::error_code child_ec;
+				if (!remove_tree_below(it->path(), child_ec) && !ec) ec = child_ec;
+			}
+			if (list_ec && !ec) ec = list_ec;
+		}
+		std::error_code remove_ec;
+		fs::remove(path, remove_ec);
+		if (remove_ec && !ec) ec = remove_ec;
+		return !ec;
+	}
+}
+#endif
+
 bool core::res::remove_tree_without_following(const fs::path& path, std::error_code& ec)
 {
 	ec.clear();
 #ifdef _WIN32
 	return remove_tree_below(extended_form(path), ec);
 #else
-	const fs::file_status status = fs::symlink_status(path, ec);
-	if (ec) {
-		if (ec == std::errc::no_such_file_or_directory) ec.clear();
-		return !ec;
-	}
-	if (fs::is_directory(status)) {
-		std::error_code list_ec;
-		for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
-			std::error_code child_ec;
-			if (!remove_tree_without_following(it->path(), child_ec) && !ec) ec = child_ec;
-		}
-		if (list_ec && !ec) ec = list_ec;
-	}
-	std::error_code remove_ec;
-	fs::remove(path, remove_ec);
-	if (remove_ec && !ec) ec = remove_ec;
+	return remove_tree_below(path, ec);
 #endif
-	return !ec;
+}
+
+std::string core::res::remove_scratch_dir(const fs::path& folder)
+{
+	if (folder.empty() || !folder.has_filename()) {
+		return std::format("'{}' names no folder", fs_paths::utf8_of(folder));
+	}
+	platform::beneath::pinned_root pinned{ folder.parent_path() };
+	return platform::beneath::remove_tree_beneath(pinned, fs::path{}, folder.filename());
 }

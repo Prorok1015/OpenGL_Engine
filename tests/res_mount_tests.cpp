@@ -13,6 +13,7 @@
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>, whose OPAQUE/TRANSPARENT macros
 // break the render headers that one includes.
 #include "test_manual_tasks.hpp"
+#include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -520,6 +521,28 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject
 	BOOST_TEST(fs::is_directory(user));
 }
 
+// #1316: the run's scratch folder is removed at resource_term without going through a link planted in it.
+BOOST_FIXTURE_TEST_CASE(ResourceTerm_RemovesALinkInTheScratchFolder_AsTheLink, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"json({ "format_version": 1, "name": "Read Only", "engine_version": "0.2.0" })json");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	read_only_project_config config{ dir.path() / "player" };
+	const fs::path kept = dir.write("victim/keep.txt", "player data");
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	core::res::resource_init(data);
+	const auto scratch = data.require<res::resource_system>().mount_roots(res::tag::memory);
+	BOOST_REQUIRE(scratch.size() == 1u);
+	BOOST_REQUIRE(test_util::link_folder(kept.parent_path(), scratch.front() / "escape"));
+
+	core::res::resource_term(data);
+	BOOST_TEST(!fs::exists(scratch.front()));
+	BOOST_TEST(read_file(kept) == "player data");
+}
+
 BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndLetters_ReplacesTheRest)
 {
 	BOOST_TEST(core::res::safe_folder_name("My Game_2.0-beta") == "My Game_2.0-beta");
@@ -640,6 +663,21 @@ BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedR
 	fs::remove_all(open_folder, ec);
 	fs::remove(link, ec);
 #endif
+}
+
+// #1316: a stale scratch folder is removed without going through a link planted in it.
+BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesALinkInAStaleFolder_AsTheLink)
+{
+	const std::string name = "res_mount_tests_stale_link";
+	constexpr std::int64_t ended_pid = 2147483647;
+	const fs::path ended = planted_scratch(name, ended_pid);
+	test_util::temp_dir victim{ "res_mount_tests_link_victim" };
+	victim.write("keep.txt", "player data");
+	BOOST_REQUIRE(test_util::link_folder(victim.path(), ended / "objects" / "escape"));
+
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
+	BOOST_TEST(!fs::exists(ended));
+	BOOST_TEST(read_file(victim.path() / "keep.txt") == "player data");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

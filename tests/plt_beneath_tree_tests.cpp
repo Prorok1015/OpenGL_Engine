@@ -11,6 +11,12 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // #1294: folders made and trees removed below a root without going through a link.
 namespace {
@@ -59,6 +65,25 @@ struct tree_fixture {
 
 	fs::path outside() const { return root / "outside"; }
 };
+
+#ifdef _WIN32
+// READONLY set on `path` itself, a reparse point included.
+bool set_read_only(const fs::path& path)
+{
+	const HANDLE entry = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+		nullptr);
+	if (entry == INVALID_HANDLE_VALUE) {
+		return false;
+	}
+	FILE_BASIC_INFO basic{};
+	bool set = GetFileInformationByHandleEx(entry, FileBasicInfo, &basic, sizeof(basic)) != FALSE;
+	basic.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+	set = set && SetFileInformationByHandle(entry, FileBasicInfo, &basic, sizeof(basic)) != FALSE;
+	CloseHandle(entry);
+	return set;
+}
+#endif
 
 // A name the system call cuts at its NUL: it would open "..".
 fs::path dot_dot_nul()
@@ -297,6 +322,48 @@ BOOST_AUTO_TEST_CASE(remove_tree_removes_a_read_only_file)
 	fs::permissions(root / "tree" / "locked.txt", write, fs::perm_options::remove);
 
 	BOOST_TEST(platform::beneath::remove_tree_beneath(pinned, "", "tree").empty());
+	BOOST_TEST(!fs::exists(root / "tree"));
+}
+#endif
+
+#ifdef _WIN32
+// #1316 (from remove_tree_without_following, #1099): a read-only junction goes as the link; its read-only target stays
+// read-only and whole.
+BOOST_AUTO_TEST_CASE(remove_tree_removes_a_read_only_junction_and_leaves_its_target_as_it_was)
+{
+	const fs::path target = outside();
+	BOOST_REQUIRE(SetFileAttributesW(target.c_str(), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_DIRECTORY));
+	fs::create_directories(root / "tree");
+	const fs::path link = root / "tree" / "escape";
+	BOOST_REQUIRE(link_folder(target, link, true));
+	BOOST_REQUIRE(set_read_only(link));
+
+	const std::string error = platform::beneath::remove_tree_beneath(pinned, "", "tree");
+	BOOST_TEST(error.empty(), error);
+	BOOST_TEST(!fs::exists(root / "tree"));
+	BOOST_TEST(fs::is_regular_file(target / "keep.txt"));
+	const DWORD attributes = GetFileAttributesW(target.c_str());
+	BOOST_TEST((attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) != 0));
+	SetFileAttributesW(target.c_str(), FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// #1316 (from remove_tree_without_following, #1099): a tree whose paths run past MAX_PATH goes whole.
+BOOST_AUTO_TEST_CASE(remove_tree_removes_a_tree_deeper_than_max_path)
+{
+	std::wstring deep = L"\\\\?\\" + (root / "tree").lexically_normal().make_preferred().wstring();
+	while (deep.size() < MAX_PATH + 60) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	std::error_code made;
+	fs::create_directories(fs::path(deep), made);
+	BOOST_REQUIRE_MESSAGE(!made, made.message());
+	const HANDLE file = CreateFileW((deep + L"\\file.txt").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+		FILE_ATTRIBUTE_READONLY, nullptr);
+	BOOST_REQUIRE(file != INVALID_HANDLE_VALUE);
+	CloseHandle(file);
+
+	const std::string error = platform::beneath::remove_tree_beneath(pinned, "", "tree");
+	BOOST_TEST(error.empty(), error);
 	BOOST_TEST(!fs::exists(root / "tree"));
 }
 #endif
