@@ -1727,8 +1727,14 @@ BOOST_FIXTURE_TEST_CASE(TheInspectorNode_NeverBelongsToAPrefabTheWindowStoppedSh
 	window->select_node({ 0xe1 });
 	BOOST_REQUIRE(inspector->selected_node() == a.working_node({ 0xe1 }));
 
+	// A node is picked in A, so B opens as a tab (#1303): the window and the Inspector stay on A.
 	edt::prefab_document& b = open('b');
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
+	BOOST_TEST(inspector->selected_node() == a.working_node({ 0xe1 }));
 
+	// The window moves to B: the Inspector lets go of A's node at once.
+	documents().set_active(b.id());
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &b);
 	BOOST_TEST(inspector->selected_node() == nullptr);
 	window->select_node({ 0xe1 });
 	BOOST_TEST(inspector->selected_node() == b.working_node({ 0xe1 }));
@@ -1736,6 +1742,7 @@ BOOST_FIXTURE_TEST_CASE(TheInspectorNode_NeverBelongsToAPrefabTheWindowStoppedSh
 
 	documents().set_active(a.id());
 
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
 	BOOST_TEST(inspector->selected_node() == nullptr);
 }
 
