@@ -55,29 +55,44 @@ BOOST_AUTO_TEST_CASE(ALevelWithoutALevelSuffix_IsKnownByTheTypeOfItsDesc)
 
 BOOST_AUTO_TEST_CASE(TheTypeOfADescIsReadFromItsFirstBytes)
 {
-	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_desc", "__version": 3, "worlds": [] })") == "level_desc");
-	BOOST_TEST(edt::desc_type_in("{\n\t\"__version\": 1,\n\t\"__type\":\"world_desc\"\n}") == "world_desc");
-	BOOST_TEST(edt::desc_type_in(R"({ "name": "x" })").empty());
-	BOOST_TEST(edt::desc_type_in(R"({ "__type": 5 })").empty());
+	const std::string text_1 = R"({ "__type": "level_desc", "__version": 3, "worlds": [] })";
+	BOOST_TEST(edt::desc_type_in(text_1) == "level_desc");
+	const std::string spread_out = "{\n\t\"__version\": 1,\n\t\"__type\":\"world_desc\"\n}";
+	BOOST_TEST(edt::desc_type_in(spread_out) == "world_desc");
+	const std::string text_2 = R"({ "name": "x" })";
+	BOOST_TEST(edt::desc_type_in(text_2).empty());
+	const std::string text_3 = R"({ "__type": 5 })";
+	BOOST_TEST(edt::desc_type_in(text_3).empty());
 	BOOST_TEST(edt::desc_type_in("").empty());
 }
 
 BOOST_AUTO_TEST_CASE(OnlyTheTopLevelTypeCounts)
 {
-	BOOST_TEST(edt::desc_type_in(R"({ "child": { "__type": "world_desc" }, "__type": "level_desc" })") == "level_desc");
-	BOOST_TEST(edt::desc_type_in(R"({ "list": [ { "__type": "world_desc" } ] })").empty());
-	BOOST_TEST(edt::desc_type_in(R"({ "note": "\"__type\": \"world_desc\"", "__type": "level_desc" })") == "level_desc");
-	BOOST_TEST(edt::desc_type_in(R"({ "a": 1, "b": { "c": [1, 2, { "__type": "x" }] }, "__type" : "prefab_desc" })") == "prefab_desc");
-	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_desc" })") == "level_desc");
+	const std::string text_4 = R"({ "child": { "__type": "world_desc" }, "__type": "level_desc" })";
+	BOOST_TEST(edt::desc_type_in(text_4) == "level_desc");
+	const std::string text_5 = R"({ "list": [ { "__type": "world_desc" } ] })";
+	BOOST_TEST(edt::desc_type_in(text_5).empty());
+	// Kept out of the macro: MSVC's preprocessor misreads a raw string with escaped quotes in a macro argument.
+	const std::string quoted = R"({ "note": "\"__type\": \"world_desc\"", "__type": "level_desc" })";
+	BOOST_TEST(edt::desc_type_in(quoted) == "level_desc");
+	const std::string text_6 = R"({ "a": 1, "b": { "c": [1, 2, { "__type": "x" }] }, "__type" : "prefab_desc" })";
+	BOOST_TEST(edt::desc_type_in(text_6) == "prefab_desc");
+	const std::string text_7 = R"({ "__type": "level_desc" })";
+	BOOST_TEST(edt::desc_type_in(text_7) == "level_desc");
 }
 
 BOOST_AUTO_TEST_CASE(ABomIsSkipped_ATruncatedTextHasNoType)
 {
-	BOOST_TEST(edt::desc_type_in("\xEF\xBB\xBF{ \"__type\": \"level_desc\" }") == "level_desc");
-	BOOST_TEST(edt::desc_type_in(R"({ "__type": "level_de)").empty());
-	BOOST_TEST(edt::desc_type_in(R"({ "__typ)").empty());
-	BOOST_TEST(edt::desc_type_in(R"({ "__type":)").empty());
-	BOOST_TEST(edt::desc_type_in(R"({ "name": "unfinished)").empty());
+	const std::string with_bom = std::string("\xEF\xBB\xBF") + "{ \"__type\": \"level_desc\" }";
+	BOOST_TEST(edt::desc_type_in(with_bom) == "level_desc");
+	const std::string text_8 = R"({ "__type": "level_de)";
+	BOOST_TEST(edt::desc_type_in(text_8).empty());
+	const std::string text_9 = R"({ "__typ)";
+	BOOST_TEST(edt::desc_type_in(text_9).empty());
+	const std::string text_10 = R"({ "__type":)";
+	BOOST_TEST(edt::desc_type_in(text_10).empty());
+	const std::string text_11 = R"({ "name": "unfinished)";
+	BOOST_TEST(edt::desc_type_in(text_11).empty());
 }
 
 BOOST_AUTO_TEST_CASE(OnlyAPlainDescNeedsItsType)
