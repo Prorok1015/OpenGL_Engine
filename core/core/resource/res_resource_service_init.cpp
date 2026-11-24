@@ -88,9 +88,21 @@ void core::res::resource_init(ds::app_data_storage& data)
 				throw prj::project_error(std::format("project '{}': {}", project.data.name, *problem));
 			}
 		};
+		// .snk holds the agent token, the connection file, the policy and the migration journals: a link anywhere in it, shipped
+		// with the project, would take those writes along (#1300). Everything but the copies in `migrations/<id>/backup` is walked
+		// (they are the project's own files, many, and no path of .snk reads through them); the walk is bounded like .cache's.
+		const auto refuse_snk_links = [&project] {
+			prj::link_walk_options options;
+			options.what = "the project's .snk folder";
+			options.skip_folder = prj::is_migration_backup_folder;
+			if (auto problem = prj::link_below(project.snk_dir(), options)) {
+				throw prj::project_error(std::format("project '{}': {}", project.data.name, *problem));
+			}
+		};
 		verify();
 		if (::res::resource_system::read_only_project()) {
 			refuse_cache_links();
+			refuse_snk_links();
 			mount_read_only_project(data, project, engine_base);
 			return;
 		}
@@ -102,6 +114,7 @@ void core::res::resource_init(ds::app_data_storage& data)
 		}
 		verify();
 		refuse_cache_links();
+		refuse_snk_links();
 
 		std::filesystem::path code_dir = project.code_dir();
 		if (!std::filesystem::is_directory(code_dir, ec)) {

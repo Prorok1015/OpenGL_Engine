@@ -51,6 +51,9 @@ namespace edt
 			// Runs `poll` every UI frame under `id` until it returns false (editor_layer::register_implicit); null: a prefab opens at once,
 			// as before (#152). Late-bound like the other ports that name what is made after this component.
 			std::function<void(std::string_view id, std::function<bool()> poll)> register_frame = {};
+			// True while the person is typing a value or dragging (an ImGui item is active): a prefab that finishes loading then does
+			// not take the window (#1303). Null: never.
+			std::function<bool()> person_is_editing = {};
 		};
 
 		explicit prefab_editor_component(ports from);
@@ -85,6 +88,8 @@ namespace edt
 		void close();
 		// Ends every wait for a prefab being opened and leaves the window as it was: prefabs that were open stay open.
 		void cancel_open();
+		// Ends the wait of the load `id` (the banner's Cancel); the other loads and the open prefabs are not touched.
+		void cancel_open(std::uint64_t id);
 		// Closes each prefab document with unapplied edits without asking (Discard of Exit/New/Open); the window shows another open one, if any.
 		void close_dirty();
 		// The game layer goes: the prefab editor closes, with a WARN when that loses edits.
@@ -107,10 +112,14 @@ namespace edt
 		// A prefab being opened: its own wait (several may load at once).
 		struct pending_open
 		{
+			std::uint64_t id = 0;
 			prefab_open_watch watch;
 			bool depth_warned = false;
 		};
 		std::vector<std::unique_ptr<pending_open>> m_pending;
+		std::uint64_t m_next_pending_id = 1;
+		// Set while finish_open opens a document that must not take the window: the activation listener leaves the window alone.
+		bool m_keep_shown = false;
 		bool m_polling = false;
 		// The prefab document the window shows: the last one brought to the front.
 		document_id m_shown{};
@@ -135,10 +144,13 @@ namespace edt
 		// A shown prefab went: the window moves to the one opened last, or shows nothing.
 		void leave_shown();
 		bool loading() const { return !m_pending.empty(); }
-		void show_loading_text();
+		void show_loadings();
 		void close_document(document_id id);
 		// `loaded`: the handle the wait held (it keeps the prefab cached while the document opens); empty: read it now.
 		void finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded);
+		// The shown prefab is being worked on (unapplied edits, a node picked in it, an item in use): a prefab that finished loading
+		// in the meantime opens as a tab and leaves the window as it is.
+		bool person_is_working_in_shown() const;
 		// One poll of the wait: false while it is still loading; true when it ended (opened, failed or timed out) or is not running.
 		bool settle_open();
 		void report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out);

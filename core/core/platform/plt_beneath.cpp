@@ -1731,10 +1731,27 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	return result;
 }
 
+namespace {
+	// The \\?\ form of `path` (absolute, normalized): without it an entry past MAX_PATH reads as missing (#1295).
+	std::wstring long_form(const fs::path& path)
+	{
+		const std::wstring& text = path.native();
+		if (text.starts_with(L"\\\\?\\")) {
+			return text;
+		}
+		std::error_code ec;
+		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().native();
+		if (ec) {
+			return text;
+		}
+		return whole.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + whole.substr(2) : L"\\\\?\\" + whole;
+	}
+}
+
 std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(const fs::path& path, std::error_code& ec)
 {
 	ec.clear();
-	const handle_holder entry{ ::CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+	const handle_holder entry{ ::CreateFileW(long_form(path).c_str(), FILE_READ_ATTRIBUTES,
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
 		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
 	if (!entry.valid()) {

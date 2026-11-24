@@ -37,6 +37,7 @@
 #include "edt_panels_component.h"
 #include "edt_shape_parameters_component.h"
 #include "edt_problems_component.h"
+#include "edt_project_links.h"
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
 #include "edt_input_actions_panel.h"
@@ -337,6 +338,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.play_active = [this] { return m_play && m_play->active(); },
 		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); } });
 
+	// A link in code/ that leaves the project: the project opens, the person is told (#1300).
+	if (data.has_value<prj::project_context>()) {
+		m_context->problems().set(k_project_problem_source, code_link_problems(data.require<prj::project_context>()));
+	}
+
 	const auto asset_catalog = [this]() -> const picker::catalog* { return m_asset_component ? &m_asset_component->catalog() : nullptr; };
 	// Create panels
 	m_panels = std::make_unique<panels_component>(panels_component::ports{ .context = *m_context, .services = m_services, .state = m_state,
@@ -377,7 +383,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab = std::make_unique<prefab_editor_component>(prefab_editor_component::ports{
 		*m_context, m_services, m_state, m_rnd, m_gui, m_input_router, *m_panels->inspector(), m_problems->desc(),
 		[this] { return m_asset_open->desc_layout(); },
-		[this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); } });
+		[this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); },
+		[this] { return person_is_editing(); } });
 
 	// The mesh modeller (EPIC-77, #1011).
 	m_modeller = std::make_unique<modeller_component>(modeller_component::ports{
