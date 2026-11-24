@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <system_error>
@@ -18,5 +19,16 @@ namespace platform::beneath {
 	// `path` in the form that reaches an entry past MAX_PATH: on Windows absolute, normalized and prefixed with
 	// \\?\ (or \\?\UNC\ for a share), unchanged when it already is or cannot be made absolute; unchanged elsewhere.
 	SNK_API std::filesystem::path long_path(const std::filesystem::path& path);
+
+	// long_path only once `path` no longer fits MAX_PATH (less the 12 a folder must leave for an 8.3 name), the path
+	// itself otherwise: the plain form keeps Win32 normalization, and MSVC create_directories over \\?\UNC\ can stop
+	// at the share, so a short root behaves as it did before #1352.
+	inline std::filesystem::path long_path_if_needed(const std::filesystem::path& path)
+	{
+		constexpr std::size_t k_folder_path_limit = 260 - 12;
+		std::error_code ec;
+		const std::filesystem::path whole = std::filesystem::absolute(path, ec);
+		return !ec && whole.native().size() >= k_folder_path_limit ? long_path(path) : path;
+	}
 
 }

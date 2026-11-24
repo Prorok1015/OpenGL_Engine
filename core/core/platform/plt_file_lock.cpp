@@ -1,5 +1,6 @@
 #include <snk/platform/plt_file_lock.h>
 #include <snk/common/fs_paths.h>
+#include <snk/platform/plt_link_check.h>
 #include <format>
 #include <optional>
 #include <string>
@@ -71,7 +72,11 @@ namespace
 	// junction after it was checked (the same check as platform::beneath on Windows).
 	bool lies_below_root(HANDLE file, const fs::path& root, const std::vector<fs::path>& parts)
 	{
-		const HANDLE root_handle = ::CreateFileW(root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		// Both sides are final paths (the \\?\ or \\?\UNC\ form), so the comparison does not depend on how `root`
+		// is spelled.
+		const fs::path long_root = platform::beneath::long_path_if_needed(root);
+		const HANDLE root_handle = ::CreateFileW(long_root.c_str(), FILE_READ_ATTRIBUTES,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 		if (root_handle == INVALID_HANDLE_VALUE) {
 			return false;
@@ -137,14 +142,16 @@ platform::lock_attempt platform::file_lock::acquire_once(const fs::path& root, c
 	const auto is_missing = [](DWORD code) { return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND; };
 	// Checked one folder at a time, then the file is opened without following a reparse point and checked through its
 	// handle; its final path then shows that no folder was swapped for a junction after its check.
+	// A path past MAX_PATH in its \\?\ form, so such a root works (#1352); messages name the plain path.
 	if (create) {
 		std::error_code made;
-		fs::create_directories(root, made);
+		fs::create_directories(platform::beneath::long_path_if_needed(root), made);
 	}
 	fs::path folder = root;
 	for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
 		folder /= parts[i];
-		DWORD attributes = ::GetFileAttributesW(folder.c_str());
+		const fs::path long_folder = platform::beneath::long_path_if_needed(folder);
+		DWORD attributes = ::GetFileAttributesW(long_folder.c_str());
 		if (attributes == INVALID_FILE_ATTRIBUTES) {
 			const DWORD code = ::GetLastError();
 			if (!create) {
@@ -152,17 +159,19 @@ platform::lock_attempt platform::file_lock::acquire_once(const fs::path& root, c
 										: refused(lock_outcome::failed, std::format("cannot inspect '{}': {}", fs_paths::utf8_of(folder),
 											  std::system_category().message(static_cast<int>(code))));
 			}
-			if (!::CreateDirectoryW(folder.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
+			if (!::CreateDirectoryW(long_folder.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
 				return refused(lock_outcome::failed, std::format("cannot make '{}': {}", fs_paths::utf8_of(folder),
 					std::system_category().message(static_cast<int>(::GetLastError()))));
 			}
-			attributes = ::GetFileAttributesW(folder.c_str());
+			attributes = ::GetFileAttributesW(long_folder.c_str());
 		}
 		if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
 			return refused(lock_outcome::failed, std::format("'{}' is a link or not a folder", fs_paths::utf8_of(folder)));
 		}
 	}
-	const HANDLE handle = ::CreateFileW(where.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	const fs::path long_where = platform::beneath::long_path_if_needed(where);
+	const HANDLE handle = ::CreateFileW(long_where.c_str(), GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		nullptr, create ? OPEN_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (handle == INVALID_HANDLE_VALUE) {
 		const DWORD code = ::GetLastError();
