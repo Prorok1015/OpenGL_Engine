@@ -4,7 +4,9 @@
 #include <snk/model_codec/res_reference.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_diagnostics.h>
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -45,6 +47,11 @@ namespace
 		return k_formats[2];
 	}
 
+	constexpr std::string_view k_pixel_keys[] = { "width", "height", "format", "base64" };
+
+	// The longest text the cap allows: what is longer is refused before anything else is read.
+	constexpr std::size_t k_max_encoded = (rnd::texture_2d_desc::k_max_inline_bytes + 2) / 3 * 4;
+
 	const json::value& field(const json::object& pixels, std::string_view key)
 	{
 		const json::value* value = pixels.if_contains(key);
@@ -56,24 +63,38 @@ namespace
 	{
 		const json::value& value = field(pixels, key);
 		const std::string path = std::format("/pixels/{}", key);
+		// Integers only: 1.0 and "1" are refused, a value past int64 is out of range.
 		if (!value.is_int64() && !value.is_uint64()) refuse(path, std::format("'{}' is not a whole number", key));
-		const bool in_range = value.is_int64()
-			? value.as_int64() >= 1 && value.as_int64() <= rnd::texture_2d_desc::k_max_inline_side
-			: value.as_uint64() <= rnd::texture_2d_desc::k_max_inline_side;
-		if (!in_range) {
+		if (value.is_uint64() || value.as_int64() < 1 || value.as_int64() > rnd::texture_2d_desc::k_max_inline_side) {
 			refuse(path, std::format("'{}' is {}: 1 to {}", key, json::serialize(value), rnd::texture_2d_desc::k_max_inline_side));
 		}
-		return static_cast<uint32_t>(value.is_int64() ? value.as_int64() : value.as_uint64());
+		return static_cast<uint32_t>(value.as_int64());
 	}
 
+	// Checked in the order that does the least work for bad input: the text's length, the shape, the size the shape
+	// needs, then the decode of a text of exactly that length.
 	rnd::inline_pixels read_pixels(const json::value& value)
 	{
 		if (!value.is_object()) refuse("/pixels", "inline pixels are an object {width, height, format, base64}");
 		const json::object& pixels = value.as_object();
+		for (const auto& member : pixels) {
+			if (std::ranges::find(k_pixel_keys, std::string_view(member.key())) == std::end(k_pixel_keys)) {
+				refuse(std::format("/pixels/{}", res::json_pointer_token(member.key())),
+					std::format("unknown key '{}' in inline pixels: width, height, format, base64", text_escape::escaped_text(member.key(), 64)));
+			}
+		}
+
+		const json::value& text = field(pixels, "base64");
+		if (!text.is_string()) refuse("/pixels/base64", "'base64' is not a string");
+		const std::string_view encoded = text.as_string();
+		if (encoded.size() > k_max_encoded) {
+			refuse("/pixels/base64", std::format("'base64' has {} characters: inline pixels are at most {} bytes ({} characters), use a "
+				"picture file", encoded.size(), rnd::texture_2d_desc::k_max_inline_bytes, k_max_encoded));
+		}
+
 		rnd::inline_pixels out;
 		out.width = side(pixels, "width");
 		out.height = side(pixels, "height");
-
 		const json::value& format = field(pixels, "format");
 		if (!format.is_string()) refuse("/pixels/format", "'format' is not a string");
 		const format_name* found = nullptr;
@@ -86,29 +107,24 @@ namespace
 		}
 		out.format = found->format;
 
-		// Both sides are at most 4096, so the product of three of them cannot overflow.
-		const std::size_t expected = static_cast<std::size_t>(out.width) * out.height * found->bytes_per_pixel;
+		const uint64_t expected = uint64_t{ out.width } * out.height * found->bytes_per_pixel;
 		if (expected > rnd::texture_2d_desc::k_max_inline_bytes) {
 			refuse("/pixels", std::format("{}x{} {} is {} bytes: inline pixels are at most {} bytes, use a picture file", out.width,
 				out.height, found->name, expected, rnd::texture_2d_desc::k_max_inline_bytes));
 		}
-
-		const json::value& text = field(pixels, "base64");
-		if (!text.is_string()) refuse("/pixels/base64", "'base64' is not a string");
-		const std::string_view encoded = text.as_string();
-		// Checked before decoding: a long string is refused without allocating for it.
-		const std::size_t encoded_size = (expected + 2) / 3 * 4;
+		const uint64_t encoded_size = (expected + 2) / 3 * 4;
 		if (encoded.size() != encoded_size) {
 			refuse("/pixels/base64", std::format("'base64' has {} characters: {}x{} {} needs {} bytes, {} characters", encoded.size(),
 				out.width, out.height, found->name, expected, encoded_size));
 		}
 		std::optional<std::vector<std::byte>> decoded = cmd::base64::decode(encoded);
-		// Only the canonical text of the bytes: unused bits left nonzero would not survive a save.
+		// Only the canonical text of the bytes (no whitespace, the padding the length needs, unused bits zero): any other
+		// spelling would be rewritten by a save, and desc_resave --check would never settle.
 		if (!decoded || decoded->size() != expected || cmd::base64::encode(*decoded) != encoded) {
-			refuse("/pixels/base64", "'base64' is not padded standard base64 (RFC 4648) of the pixels");
+			refuse("/pixels/base64", "'base64' is not the canonical padded standard base64 (RFC 4648) of the pixels");
 		}
-		out.bytes.resize(expected);
-		std::memcpy(out.bytes.data(), decoded->data(), expected);
+		out.bytes.resize(static_cast<std::size_t>(expected));
+		std::memcpy(out.bytes.data(), decoded->data(), out.bytes.size());
 		return out;
 	}
 
@@ -128,7 +144,9 @@ void rnd::texture_2d_desc::deserialize(desc::desc_system& system, const json::ob
 {
 	texture_desc::deserialize(system, resource);
 
-	// A null is what a file over a `__parent` writes for a key the parent has and it has not (merge patch, #821).
+	// The file's own object, the parent already copied in: `data` and `pixels` together is an error only when this file
+	// names both. A null is what a file over a `__parent` writes for a key the parent has and it has not (merge patch,
+	// #821): it takes the parent's pixels away, as a null takes away any optional field.
 	const json::value* pixels = resource.if_contains("pixels");
 	const json::value* data = resource.if_contains("data");
 	const bool gives_pixels = pixels && !pixels->is_null();

@@ -189,12 +189,19 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	texture_manager.register_loader("texture_2d_desc", [told](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
 		if (const auto& own = tex_2d_desc.get_inline_pixels()) {
-			// Checked when the desc was read: the bytes are exactly width x height pixels of the format (#1204).
+			// Checked when the desc was read: the bytes are exactly width x height pixels of the format (#1204). The file
+			// holds its top row first, as a PNG does; a decoded picture (pct_adapter) is uploaded bottom row first.
 			upload_pixels pixels;
 			pixels.format = own->format;
 			pixels.width = own->width;
 			pixels.height = own->height;
-			pixels.data = own->bytes.data();
+			const std::size_t row = own->bytes.size() / own->height;
+			pixels.converted.reserve(own->bytes.size());
+			for (uint32_t y = own->height; y-- > 0;) {
+				const auto first = own->bytes.begin() + static_cast<std::ptrdiff_t>(y * row);
+				pixels.converted.insert(pixels.converted.end(), first, first + static_cast<std::ptrdiff_t>(row));
+			}
+			pixels.data = pixels.converted.data();
 			return upload_2d(*drv, desc.get_header(), pixels);
 		}
 		auto picture_handle = tex_2d_desc.get_picture_handle();

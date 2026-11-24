@@ -278,7 +278,8 @@ BOOST_AUTO_TEST_CASE(ACheckerboard_OfInlinePixels_KeepsTheSamplingOfItsHeader)
 	BOOST_TEST((made.min == texture_header::FILTERING::NEAREST));
 	BOOST_TEST((made.mag == texture_header::FILTERING::NEAREST));
 	BOOST_REQUIRE(uploads.size() == 1u);
-	BOOST_TEST((uploads.front().pixels == std::vector<unsigned char>{ 255, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255 }));
+	// Rows of 6 bytes (no 4-byte alignment), the bottom row first as a decoded picture's.
+	BOOST_TEST((uploads.front().pixels == std::vector<unsigned char>{ 0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0 }));
 }
 
 BOOST_AUTO_TEST_CASE(InlinePixels_OfOneChannel_ClampTheirMipLevelsToTheChain)
@@ -294,7 +295,8 @@ BOOST_AUTO_TEST_CASE(InlinePixels_OfOneChannel_ClampTheirMipLevelsToTheChain)
 	BOOST_TEST(textures.info(id).data.mip_levels == 3u);
 	BOOST_REQUIRE(!uploads.empty());
 	BOOST_TEST(uploads.front().pixels.size() == 16u);
-	BOOST_TEST(uploads.front().pixels[15] == 15);
+	BOOST_TEST(uploads.front().pixels[0] == 12);
+	BOOST_TEST(uploads.front().pixels[15] == 3);
 }
 
 // A texture_2d_desc is two-dimensional: no type in its header loads 1D, 3D or array pixels from it (US-27-3 has those).
@@ -329,6 +331,31 @@ BOOST_AUTO_TEST_CASE(AChangedDescOfInlinePixels_ReloadsTheTextureWithTheNewBytes
 	BOOST_TEST((uploads.back().pixels == std::vector<unsigned char>{ 0, 255, 0, 255 }));
 }
 
+// The rows of a desc are read as a PNG's: top row first. The same picture as a PNG file and as inline pixels gives the
+// driver the same bytes (red on top, blue below; uploaded bottom row first). No colour conversion either way: RGBA8 is
+// uploaded as it is, as a PNG's pixels are (an sRGB format is #1371).
+BOOST_AUTO_TEST_CASE(InlinePixels_AreUploadedAsTheSamePictureAsAPngFile)
+{
+	// 1x2 RGBA8, red top row, blue bottom row.
+	const std::vector<unsigned char> png{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x99, 0x81, 0xb6, 0x27, 0x00, 0x00, 0x00, 0x11, 0x49,
+		0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x44, 0x0c, 0xff, 0xff, 0x03, 0x00, 0x11, 0xf8, 0x03, 0xfd, 0x08, 0xed,
+		0xb1, 0x56, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82 };
+	const res::tag file{ "memory://upload/red_over_blue.png" };
+	std::vector<std::byte> bytes(png.size());
+	std::memcpy(bytes.data(), png.data(), png.size());
+	BOOST_REQUIRE(resources().store(file, bytes));
+
+	BOOST_REQUIRE(textures.is_ready(settle(description("from_png.desc", { { "__type", "texture_2d_desc" }, { "data", std::string(file.view()) } }))));
+	BOOST_REQUIRE(uploads.size() == 1u);
+	BOOST_REQUIRE(textures.is_ready(settle(inline_texture("from_pixels.desc", pixels(1, 2, "RGBA8", "/wAA/wAA//8=")))));
+	BOOST_REQUIRE(uploads.size() == 2u);
+
+	const std::vector<unsigned char> bottom_first{ 0, 0, 255, 255, 255, 0, 0, 255 };
+	BOOST_TEST((uploads[0].pixels == bottom_first));
+	BOOST_TEST((uploads[1].pixels == bottom_first));
+}
+
 // What is saved reads back to the same bytes: a desc without pixels gets no "pixels" key (byte-stable resave), one with
 // pixels keeps them exactly.
 BOOST_AUTO_TEST_CASE(ADescWithOrWithoutInlinePixels_SavesToTheBytesItWasReadFrom)
@@ -355,7 +382,8 @@ BOOST_AUTO_TEST_CASE(ADescWithOrWithoutInlinePixels_SavesToTheBytesItWasReadFrom
 	}
 }
 
-// A child's source replaces its parent's: `pixels` a parent's picture, `data` a parent's pixels.
+// A child's source replaces its parent's: `pixels` a parent's picture, `data` a parent's pixels, through three levels;
+// a child that names neither takes its parent's. Each saves over its parent and reads back the same.
 BOOST_AUTO_TEST_CASE(AChildDesc_TakesItsOwnSource_OverItsParents)
 {
 	const res::tag image = picture("parent.raw", 1, 1, 4, { 9, 9, 9, 9 });
@@ -372,6 +400,32 @@ BOOST_AUTO_TEST_CASE(AChildDesc_TakesItsOwnSource_OverItsParents)
 	BOOST_TEST((textures.info(with_pixels).data.format == texture_header::TYPE::R8));
 	BOOST_TEST((textures.info(with_picture).data.format == texture_header::TYPE::RGBA8));
 	BOOST_TEST(textures.info(with_picture).data.extent.width == 1u);
+
+	// picture -> pixels -> (nothing) and picture -> pixels -> picture.
+	const res::tag middle = description("middle.desc", { { "__type", "texture_2d_desc" }, { "__parent", std::string(picture_parent.view()) },
+		{ "pixels", pixels(2, 1, "R8", "BQY=") } });
+	const res::tag inherits = description("inherits.desc", { { "__type", "texture_2d_desc" }, { "__parent", std::string(middle.view()) },
+		{ "header", json::object{ { "wrap", "repeat" } } } });
+	const res::tag back_to_picture = description("back_to_picture.desc", { { "__type", "texture_2d_desc" },
+		{ "__parent", std::string(middle.view()) }, { "data", std::string(image.view()) } });
+	const rnd::texture_id inherited = settle(inherits);
+	const rnd::texture_id replaced = settle(back_to_picture);
+	BOOST_REQUIRE(textures.is_ready(inherited));
+	BOOST_REQUIRE(textures.is_ready(replaced));
+	BOOST_TEST((textures.info(inherited).data.format == texture_header::TYPE::R8));
+	BOOST_TEST(textures.info(inherited).data.extent.width == 2u);
+	BOOST_TEST((textures.info(replaced).data.format == texture_header::TYPE::RGBA8));
+
+	for (const res::tag& tag : { middle, inherits, back_to_picture }) {
+		BOOST_TEST_CONTEXT(tag.view()) {
+			const std::vector<std::byte> first = saved(tag);
+			const json::object written = json::parse(std::string(reinterpret_cast<const char*>(first.data()), first.size())).as_object();
+			BOOST_TEST(written.contains("__parent"));
+			const res::tag again{ std::string(tag.view()) + ".again.desc" };
+			BOOST_REQUIRE(resources().store(again, first));
+			BOOST_TEST((saved(again) == first));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -225,10 +225,19 @@ BOOST_AUTO_TEST_CASE(InlinePixels_ThatAreWrong_FailTheLoad_AndNameTheField)
 			"'base64' has 4 characters: 1x1 RGBA8 needs 4 bytes, 8 characters" },
 		{ "long", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/wAA/w=="})"), "/pixels/base64",
 			"'base64' has 8 characters: 1x1 R8 needs 1 bytes, 4 characters" },
-		{ "alphabet", inline_texture(R"({"width":1,"height":1,"format":"RGBA8","base64":"/wA*/w=="})"), "/pixels/base64", "not padded standard base64" },
-		{ "unpadded_length", inline_texture(R"({"width":1,"height":1,"format":"RGB8","base64":"/wA="})"), "/pixels/base64", "not padded standard base64" },
+		{ "alphabet", inline_texture(R"({"width":1,"height":1,"format":"RGBA8","base64":"/wA*/w=="})"), "/pixels/base64", "canonical padded" },
+		{ "unpadded_length", inline_texture(R"({"width":1,"height":1,"format":"RGB8","base64":"/wA="})"), "/pixels/base64", "canonical padded" },
 		// The same bytes as "/w==" with the unused bits set: they would not survive a save.
-		{ "noncanonical", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/x=="})"), "/pixels/base64", "not padded standard base64" },
+		{ "noncanonical", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/x=="})"), "/pixels/base64", "canonical padded" },
+		{ "space", inline_texture(R"({"width":1,"height":1,"format":"RGB8","base64":"/wA "})"), "/pixels/base64", "canonical padded" },
+		{ "unknown_key", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/w==","colour":1})"), "/pixels/colour",
+			"unknown key 'colour' in inline pixels" },
+		{ "float_width", inline_texture(R"({"width":1.0,"height":1,"format":"R8","base64":"/w=="})"), "/pixels/width", "not a whole number" },
+		{ "string_width", inline_texture(R"({"width":"1","height":1,"format":"R8","base64":"/w=="})"), "/pixels/width", "not a whole number" },
+		{ "negative_height", inline_texture(R"({"width":1,"height":-1,"format":"R8","base64":"/w=="})"), "/pixels/height", "'height' is -1: 1 to 4096" },
+		// The text's length is checked first: no width, but a text longer than any inline texture.
+		{ "long_text", inline_texture(R"({"base64":")" + std::string(87388, 'A') + R"("})"), "/pixels/base64",
+			"at most 65536 bytes (87384 characters)" },
 	};
 	for (const bad& item : cases) {
 		BOOST_TEST_CONTEXT(item.name) {
