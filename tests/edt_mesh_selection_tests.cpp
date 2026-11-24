@@ -34,7 +34,7 @@ BOOST_FIXTURE_TEST_SUITE(EdtMeshSelectionTests, cube_fixture)
 BOOST_AUTO_TEST_CASE(ANewSelection_IsEmpty_InVertexMode)
 {
 	BOOST_TEST(selection.empty());
-	BOOST_TEST(selection.mode() == select_mode::vertex);
+	BOOST_TEST((selection.mode() == select_mode::vertex));
 }
 
 BOOST_AUTO_TEST_CASE(Replace_KeepsOnlyTheNewElement_AddKeepsBoth_ToggleRemovesAPresentOne)
