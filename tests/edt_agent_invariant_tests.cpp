@@ -52,6 +52,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -1127,14 +1128,16 @@ struct desc_problems_fixture : agent_editor_fixture
 	void open_prefab(const res::tag& tag)
 	{
 		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
-		// The prefab opens in the background (#152): frames until the window is done loading, with a limit.
+		// The prefab opens in the background (#152): frames until the window is done loading. The limit is wall-clock,
+		// so a slow shared runner cannot run out of frames first.
 		const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
-		for (int frame = 0; frame < 300; ++frame) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (window && window->loading() && std::chrono::steady_clock::now() < deadline) {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
-			if (!window || !window->loading()) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 300 frames");
+		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 5 s");
 	}
 
 	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
