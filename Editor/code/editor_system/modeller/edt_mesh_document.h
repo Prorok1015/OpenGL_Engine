@@ -3,6 +3,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_mesh_bake.h"
 #include "edt_mesh_io.h"
+#include "edt_mesh_view.h"
 #include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
 #include <cstddef>
@@ -104,6 +105,8 @@ namespace edt
 
 		// The working mesh; read-only. Null while closed.
 		const mesh::poly_mesh* working() const { return m_open ? &m_working.mesh : nullptr; }
+		// What the window shows and picks of the working mesh (mode, selection, hover, x-ray). Editor state: not saved, not an edit.
+		mesh::mesh_view& view() { return m_view; }
 		// Changes the working mesh: `change` gets it and says whether it changed anything. The preview follows. False: closed,
 		// locked, or nothing changed.
 		bool edit(const std::function<bool(mesh::poly_mesh&)>& change);
@@ -161,6 +164,7 @@ namespace edt
 		targets_release m_release_targets;
 
 		mesh::poly_mesh_desc m_working;
+		mesh::mesh_view m_view;
 		mesh::baked_mesh m_baked;
 		mesh_stats m_stats;
 		std::string m_preview_problem;
