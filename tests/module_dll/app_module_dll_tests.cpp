@@ -686,7 +686,7 @@ BOOST_AUTO_TEST_CASE(a_refused_project_loads_its_module_once_the_person_trusts_i
 		project.build(g_module_path);
 		auto trust = std::make_shared<edt::project_trust_service>(*rs, std::string("project"));
 		core::project_modules_options options = checked_layouts();
-		options.trust_library = [trust](std::string_view name, const std::filesystem::path& copy) {
+		options.trust_library = [trust](std::string_view name, const core::library_copy& copy) {
 			return trust->allow_library(name, copy);
 		};
 		core::project_module_host host(loader, root, options);
@@ -833,6 +833,16 @@ BOOST_AUTO_TEST_CASE(a_revert_whose_previous_copy_fails_leaves_no_current_copy)
 	BOOST_REQUIRE((host.reload(std::string{ dll_game::module_name }).status == core::reload_status::reloaded));
 	BOOST_REQUIRE(host.is_current(std::string{ dll_game::module_name }));
 	// The previous copy is not mapped any more: it becomes a build that passes the check and fails to register.
+#if defined(_WIN32)
+	// #1304: the host holds the copy for reading alone, so nobody (the test neither) can write it in place.
+	std::error_code held_ec;
+	std::filesystem::copy_file(g_failing_path, project.copy(0), std::filesystem::copy_options::overwrite_existing,
+		held_ec);
+	BOOST_TEST(static_cast<bool>(held_ec), "the held copy was written");
+#else
+	// #1304: the copy is 0400 in a 0700 folder; this user (out of the threat model) may still make it writable.
+	std::filesystem::permissions(project.copy(0), std::filesystem::perms::owner_write,
+		std::filesystem::perm_options::add);
 	std::filesystem::copy_file(g_failing_path, project.copy(0), std::filesystem::copy_options::overwrite_existing);
 
 	const auto report = host.revert(std::string{ dll_game::module_name });
@@ -845,6 +855,7 @@ BOOST_AUTO_TEST_CASE(a_revert_whose_previous_copy_fails_leaves_no_current_copy)
 	BOOST_CHECK_MESSAGE(again.status == core::reload_status::reloaded, again.message);
 	BOOST_TEST(host.is_current(std::string{ dll_game::module_name }));
 	BOOST_TEST(moved_value(*this) == 4);
+#endif
 	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
 }
@@ -1027,9 +1038,9 @@ BOOST_AUTO_TEST_CASE(an_untrusted_project_module_waits_and_load_waiting_runs_it_
 	std::string asked_name;
 	std::filesystem::path asked_copy;
 	auto options = checked_layouts();
-	options.trust_library = [&](std::string_view name, const std::filesystem::path& copy) {
+	options.trust_library = [&](std::string_view name, const core::library_copy& copy) {
 		asked_name = name;
-		asked_copy = copy;
+		asked_copy = copy.path;
 		return trust;
 	};
 	core::project_module_host host(loader, root, options);
@@ -1063,7 +1074,7 @@ BOOST_AUTO_TEST_CASE(a_reload_of_an_untrusted_build_is_refused_and_the_running_m
 	project.build(g_module_path);
 	bool trust = true;
 	auto options = checked_layouts();
-	options.trust_library = [&](std::string_view, const std::filesystem::path&) { return trust; };
+	options.trust_library = [&](std::string_view, const core::library_copy&) { return trust; };
 	core::project_module_host host(loader, root, options);
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 
@@ -1143,6 +1154,85 @@ BOOST_AUTO_TEST_CASE(a_file_of_a_module_type_migrates_only_while_the_module_is_l
 	const std::string gone = read_text(file);
 	BOOST_TEST(migrate(after->descs()) == pmg::k_exit_partial, printed);
 	BOOST_TEST(read_text(file) == gone);
+}
+
+// #1304: the copy the gate judged is the one that loads. Windows holds it for reading alone: neither a write in place
+// nor a rename over it gets through. POSIX closes its folder to others (0700) before anything is in it and makes the
+// file 0400, so only this user could swap it (out of the threat model).
+BOOST_AUTO_TEST_CASE(a_held_copy_cannot_be_swapped_between_the_gate_and_the_load)
+{
+	namespace fs = std::filesystem;
+	dll_project project("dll_held_swap", root);
+	project.build(g_module_path);
+	const fs::path other = project.dir.path() / project_library_name("other_build");
+	fs::copy_file(g_v2_path, other);
+	bool swapped = true;
+	auto options = checked_layouts();
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+#if defined(_WIN32)
+		std::error_code write_ec;
+		fs::copy_file(other, copy.path, fs::copy_options::overwrite_existing, write_ec);
+		std::error_code rename_ec;
+		fs::rename(other, copy.path, rename_ec);
+		swapped = !write_ec || !rename_ec;
+#else
+		const fs::perms folder = fs::status(copy.path.parent_path()).permissions();
+		const fs::perms file = fs::status(copy.path).permissions();
+		swapped = (folder & (fs::perms::group_all | fs::perms::others_all)) != fs::perms::none
+			|| file != fs::perms::owner_read;
+#endif
+		return true;
+	};
+	core::project_module_host host(loader, root, options);
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	BOOST_TEST(!swapped);
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// #1304: a module loaded again after its copy went is the new build, never an image the system kept under the same
+// /proc/self/fd/<n>/<name>: the hold of an image that stays mapped is never let go, so its descriptor is not reused.
+BOOST_AUTO_TEST_CASE(a_build_loaded_after_the_unload_of_another_is_the_new_one)
+{
+	dll_project project("dll_held_reuse", root);
+	project.build(g_module_path);
+	{
+		core::project_module_host first(loader, root, test_util::trusting_options());
+		BOOST_REQUIRE(first.load_all().loaded.size() == 1u);
+		BOOST_TEST(moved_value(*this) == 3);
+		loader.unload(dll_game::module_name, root);
+	}
+	project.rebuild(g_v2_path);
+	core::project_module_host second(loader, root, test_util::trusting_options());
+	BOOST_REQUIRE(second.load_all().loaded.size() == 1u);
+
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(moved_value(*this) == 4);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+// #1304: a library beside the module is loaded from the held copy's folder ($ORIGIN of the held folder on Linux, the
+// DLL's own folder on Windows), not from the build output nor from where it was built.
+BOOST_AUTO_TEST_CASE(a_library_beside_the_module_loads_from_the_held_copy_folder)
+{
+	namespace fs = std::filesystem;
+	const fs::path module{ SNK_TEST_GAME_DLL_SIBLING_PATH };
+	const fs::path sibling{ SNK_TEST_SIBLING_DLL_PATH };
+	dll_project project("dll_held_sibling", root);
+	project.build(module);
+	fs::copy_file(sibling, project.built.parent_path() / sibling.filename());
+	core::project_module_host host(loader, root, test_util::trusting_options());
+	const auto report = host.load_all();
+	BOOST_REQUIRE(report.loaded.size() == 1u);
+
+	BOOST_TEST(resident(project.copy_folder(0) / sibling.filename()));
+	BOOST_TEST(!resident(project.built.parent_path() / sibling.filename()));
+	BOOST_TEST(!resident(sibling));
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

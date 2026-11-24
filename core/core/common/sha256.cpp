@@ -146,3 +146,14 @@ std::optional<std::string> cmn::sha256_file_hex(const std::filesystem::path& fil
 	}
 	return state.finish();
 }
+
+std::optional<std::string> cmn::sha256_stream_hex(
+	const std::function<bool(const std::function<void(std::span<const std::byte>)>& sink)>& read)
+{
+	sha256_state state;
+	const bool complete = read([&state](std::span<const std::byte> bytes) { state.update(bytes); });
+	if (!complete) {
+		return std::nullopt;
+	}
+	return state.finish();
+}

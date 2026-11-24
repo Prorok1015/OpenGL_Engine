@@ -22,7 +22,7 @@ namespace test_util {
 	inline core::project_modules_options trusting_options()
 	{
 		core::project_modules_options options;
-		options.trust_library = [](std::string_view, const std::filesystem::path&) { return true; };
+		options.trust_library = [](std::string_view, const core::library_copy&) { return true; };
 		return options;
 	}
 

@@ -3,12 +3,14 @@
 #include "test_temp_dir.hpp"
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/editor/edt_editor_extension.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/platform/plt_beneath_hold_hook.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
 #include <snk/resource/res_shipping_dirs.h>
@@ -19,6 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -32,6 +35,7 @@
 #include <cstdio>
 #include <share.h>
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -386,7 +390,7 @@ struct project_fixture {
 	static core::project_modules_options trusting()
 	{
 		core::project_modules_options options;
-		options.trust_library = [](std::string_view, const fs::path&) { return true; };
+		options.trust_library = [](std::string_view, const core::library_copy&) { return true; };
 		return options;
 	}
 
@@ -680,8 +684,8 @@ BOOST_AUTO_TEST_CASE(a_taken_copy_name_is_skipped)
 #endif
 	fs::path asked_copy;
 	core::project_modules_options options;
-	options.trust_library = [&](std::string_view, const fs::path& copy) {
-		asked_copy = copy;
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		asked_copy = copy.path;
 		return true;
 	};
 	load(options);
@@ -787,8 +791,8 @@ BOOST_AUTO_TEST_CASE(a_link_beside_the_library_in_the_build_output_is_not_copied
 	}
 	std::vector<std::string> copied;
 	core::project_modules_options options;
-	options.trust_library = [&](std::string_view, const fs::path& copy) {
-		copied = files_in(copy.parent_path());
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		copied = files_in(copy.path.parent_path());
 		return true;
 	};
 	load(options);
@@ -877,7 +881,7 @@ BOOST_AUTO_TEST_CASE(an_untrusted_project_keeps_its_libraries_out_and_compiled_i
 	put_broken_library("extra_game");
 	std::vector<std::string> asked;
 	auto options = compiled_in(probe_entry());
-	options.trust_library = [&](std::string_view name, const fs::path&) {
+	options.trust_library = [&](std::string_view name, const core::library_copy&) {
 		asked.emplace_back(name);
 		return false;
 	};
@@ -902,10 +906,10 @@ BOOST_AUTO_TEST_CASE(the_trust_gate_is_asked_about_the_copy_that_would_be_loaded
 	fs::path asked_copy;
 	bool copy_was_there = false;
 	core::project_modules_options options;
-	options.trust_library = [&](std::string_view name, const fs::path& copy) {
+	options.trust_library = [&](std::string_view name, const core::library_copy& copy) {
 		asked_name = name;
-		asked_copy = copy;
-		copy_was_there = fs::is_regular_file(copy);
+		asked_copy = copy.path;
+		copy_was_there = fs::is_regular_file(copy.path);
 		return true;
 	};
 	const auto report = load(options);
@@ -932,14 +936,18 @@ BOOST_AUTO_TEST_CASE(the_library_set_digest_of_build_bin_is_the_one_of_its_copy)
 	BOOST_TEST(built->size() == 64u);
 
 	std::optional<std::string> seen;
+	std::string told;
 	core::project_modules_options options;
-	options.trust_library = [&](std::string_view, const fs::path& copy) {
-		seen = core::module_library_set_digest(copy.parent_path());
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		seen = core::module_library_set_digest(copy.path.parent_path());
+		told = copy.digest;
 		return false;
 	};
 	load(options);
 	BOOST_REQUIRE(seen.has_value());
 	BOOST_TEST(*seen == *built);
+	// #1304: the digest the gate is handed, read through the host's hold, is the same.
+	BOOST_TEST(told == *built);
 
 	// Symbols are not loaded: they do not count.
 	dir.write(fs::path{ "game" } / "build" / "bin" / "test_game.pdb", "symbols");
@@ -956,7 +964,7 @@ BOOST_AUTO_TEST_CASE(load_waiting_asks_the_gate_again_for_what_it_refused_and_on
 	bool trust = false;
 	int asked = 0;
 	core::project_modules_options options;
-	options.trust_library = [&](std::string_view, const fs::path&) {
+	options.trust_library = [&](std::string_view, const core::library_copy&) {
 		++asked;
 		return trust;
 	};
@@ -981,7 +989,7 @@ BOOST_AUTO_TEST_CASE(a_reload_the_gate_refuses_is_refused_before_anything_is_tou
 	open({ manifest_module("test_game") });
 	put_broken_library("test_game");
 	core::project_modules_options options;
-	options.trust_library = [](std::string_view, const fs::path&) { return false; };
+	options.trust_library = [](std::string_view, const core::library_copy&) { return false; };
 	core::project_module_host host(loader, data, options);
 	int hooks_called = 0;
 	core::reload_hooks hooks;
@@ -1003,7 +1011,7 @@ BOOST_AUTO_TEST_CASE(an_untrusted_editor_module_waits_for_the_gate_too)
 	core::project_modules_options options;
 	options.with_editor_modules = true;
 	options.check_editor_module = &check_editor_entry;
-	options.trust_library = [&](std::string_view, const fs::path&) { return trust; };
+	options.trust_library = [&](std::string_view, const core::library_copy&) { return trust; };
 	core::project_module_host host(loader, data, options);
 	BOOST_TEST(host.load_all().loaded.empty());
 	BOOST_TEST(host.load_editor_modules().untrusted == std::vector<std::string>{ "test_editor" });
@@ -1029,6 +1037,124 @@ BOOST_AUTO_TEST_CASE(a_library_without_the_lib_prefix_is_found_too)
 
 	BOOST_TEST(report.missing_required.empty());
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+}
+#endif
+
+// #1304: what the hold of a copy changes; the hook and the /proc switch are put back whatever a test does.
+struct hold_seams_reset {
+	~hold_seams_reset()
+	{
+		platform::beneath::set_hold_hook({});
+		platform::beneath::set_proc_fd_unusable(false);
+	}
+};
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+// The copy's folder is closed to others before anything is in it and its files are this user's, readable by it alone.
+BOOST_AUTO_TEST_CASE(a_copy_folder_is_this_users_alone_and_its_files_read_only)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	struct ::stat folder_state {};
+	struct ::stat file_state {};
+	bool asked = false;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		asked = ::stat(copy.path.parent_path().c_str(), &folder_state) == 0
+			&& ::stat(copy.path.c_str(), &file_state) == 0;
+		return false;
+	};
+	load(options);
+
+	BOOST_REQUIRE(asked);
+	BOOST_TEST((folder_state.st_mode & 07777) == 0700u);
+	BOOST_TEST(folder_state.st_uid == ::geteuid());
+	BOOST_TEST((file_state.st_mode & 07777) == 0400u);
+	BOOST_TEST(file_state.st_uid == ::geteuid());
+}
+#endif
+
+// An edit in place of a held copy: Windows refuses it (the copy is held for reading alone); elsewhere the file is 0400
+// (only root writes it), and a write that gets through is in the digest the gate is told, which is read after the hold.
+BOOST_AUTO_TEST_CASE(an_edit_in_place_of_a_held_copy_is_refused_or_seen_by_the_digest)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	const std::optional<std::string> built = core::module_library_set_digest(library.parent_path());
+	BOOST_REQUIRE(built.has_value());
+	const hold_seams_reset reset;
+	bool written = false;
+	platform::beneath::set_hold_hook([&](const fs::path& folder) {
+		std::ofstream edit(root / folder / library.filename(), std::ios::binary | std::ios::app);
+		if (edit) {
+			edit << "edited in place";
+			edit.flush();
+			written = edit.good();
+		}
+	});
+	std::string told;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		told = copy.digest;
+		return false;
+	};
+	load(options);
+
+	BOOST_REQUIRE(!told.empty());
+#if defined(_WIN32)
+	BOOST_TEST(!written, "a held copy was opened for writing");
+#endif
+	if (written) {
+		BOOST_TEST(told != *built, "the edit is not in the digest");
+	} else {
+		BOOST_TEST(told == *built);
+	}
+}
+
+#if defined(__linux__)
+// Without a usable /proc/self/fd the copy goes to a folder of this user outside the project, removed with the host;
+// without one the module is refused with the reason.
+BOOST_AUTO_TEST_CASE(without_proc_the_copy_goes_to_a_private_folder_outside_the_project)
+{
+	open({ manifest_module("test_game") });
+	const fs::path library = put_broken_library("test_game");
+	const std::optional<std::string> built = core::module_library_set_digest(library.parent_path());
+	BOOST_REQUIRE(built.has_value());
+	const hold_seams_reset reset;
+	platform::beneath::set_proc_fd_unusable(true);
+	fs::path asked;
+	std::string told;
+	struct ::stat folder_state {};
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		asked = copy.path;
+		told = copy.digest;
+		BOOST_TEST(::stat(copy.path.parent_path().c_str(), &folder_state) == 0);
+		return false;
+	};
+	std::vector<std::string> errors;
+	const engine::log_sink_handle sink =
+		engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+			if (level >= engine::log_level::error) errors.emplace_back(message);
+		});
+	const auto report = load(options);
+
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty(), "nothing of the copy stays in the project");
+	if (asked.empty()) {
+		BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+		const bool said = std::ranges::any_of(errors, [](const std::string& line) {
+			return line.find("no private folder") != std::string::npos;
+		});
+		BOOST_TEST(said, "the refusal says why");
+		return;
+	}
+	BOOST_TEST(!fs_paths::is_inside(root, asked));
+	BOOST_TEST(asked.parent_path().parent_path().filename() == "modules");
+	BOOST_TEST((folder_state.st_mode & 07777) == 0700u);
+	BOOST_TEST(told == *built);
+	BOOST_TEST(report.untrusted == std::vector<std::string>{ "test_game" });
+	// The host made the private folder and took it away with itself.
+	BOOST_TEST(!fs::exists(asked.parent_path().parent_path().parent_path()));
 }
 #endif
 
