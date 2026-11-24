@@ -190,6 +190,21 @@ std::vector<std::byte> edt::prefab_document::working_bytes() const
 	return m_working ? prefab_file_bytes(m_services, *m_working, m_source_tag) : std::vector<std::byte>{};
 }
 
+edt::autosave_snapshot edt::prefab_document::autosave_capture() const
+{
+	autosave_snapshot out;
+	if (!m_open || !m_working) {
+		out.error = "the prefab is not open";
+		return out;
+	}
+	std::string why;
+	out.bytes = prefab_file_bytes(m_services, *m_working, m_source_tag, &why);
+	if (out.bytes.empty()) {
+		out.error = why.empty() ? "the prefab has no file form" : why;
+	}
+	return out;
+}
+
 void edt::prefab_document::sync_preview()
 {
 	entt::registry* reg = get_registry();

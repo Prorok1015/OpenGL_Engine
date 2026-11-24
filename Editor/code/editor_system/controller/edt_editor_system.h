@@ -55,6 +55,7 @@ namespace edt {
 	class agent_component;
 	class agent_ui_component;
 	class theme_settings_component;
+	class autosave_component;
 	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
@@ -131,6 +132,8 @@ namespace edt {
 		void tick_asset_problems();
 		// The cache of checked binary files (EPIC-79 section 7) written at most every 5 s: the `editor_assets` frame stage.
 		void tick_desc_binary_cache();
+		// Autosave of the dirty documents (#1186): the `editor_autosave` frame stage.
+		void tick_autosave();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
 		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
 		bool person_is_editing() const;
@@ -265,6 +268,9 @@ namespace edt {
 		std::unique_ptr<agent_ui_component> m_agent_ui;
 		// The editor's theme and the Editor Settings window (#1109).
 		std::unique_ptr<theme_settings_component> m_theme_settings;
+		// Autosave (#1186): reads the documents, the level controller and the job service; destroyed before them (its files
+		// are removed by shutdown() in the destructor, once the jobs stopped).
+		std::unique_ptr<autosave_component> m_autosave;
 
 		// Set on the base resource system with a project open (#1126); taken off it and written in the destructor.
 		std::shared_ptr<res::file_desc_binary_hash_cache> m_desc_binary_cache;

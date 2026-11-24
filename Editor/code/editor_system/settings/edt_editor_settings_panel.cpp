@@ -5,6 +5,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <format>
 #include <string>
 
@@ -42,15 +43,51 @@ void edt::editor_settings_panel::on_render()
 {
 	if (!m_model.available()) {
 		ImGui::TextDisabled("There is no renderer (headless): the theme cannot be changed.");
+	} else {
+		bold_separator_text("Theme");
+		draw_theme_list();
+		bold_separator_text("Preset");
+		draw_preset_editor();
+		if (!m_model.last_message().empty()) {
+			ImGui::Spacing();
+			ImGui::TextWrapped("%s", m_model.last_message().c_str());
+		}
+	}
+	draw_autosave();
+}
+
+void edt::editor_settings_panel::draw_autosave()
+{
+	if (!m_autosave.get || !m_autosave.set) {
 		return;
 	}
-	bold_separator_text("Theme");
-	draw_theme_list();
-	bold_separator_text("Preset");
-	draw_preset_editor();
-	if (!m_model.last_message().empty()) {
-		ImGui::Spacing();
-		ImGui::TextWrapped("%s", m_model.last_message().c_str());
+	bold_separator_text("Autosave");
+	autosave_settings current = m_autosave.get();
+	bool enabled = current.enabled;
+	if (ImGui::Checkbox("Autosave unsaved documents", &enabled)) {
+		current.enabled = enabled;
+		m_autosave_message = m_autosave.set(current);
+	}
+	if (!m_interval_active) {
+		m_interval_edit = current.interval_seconds;
+	}
+	ImGui::SetNextItemWidth(em(120.f));
+	ImGui::InputInt("Interval (seconds)", &m_interval_edit, 0, 0);
+	m_interval_active = ImGui::IsItemActive();
+	if (ImGui::IsItemDeactivatedAfterEdit()) {
+		current.interval_seconds = std::clamp(m_interval_edit, k_autosave_min_interval, k_autosave_max_interval);
+		m_interval_edit = current.interval_seconds;
+		m_autosave_message = m_autosave.set(current);
+	}
+	ImGui::TextDisabled("Written %d s after the first unsaved edit into the project's cache://autosave/; the source files are not touched.",
+		current.interval_seconds);
+	if (m_autosave.blocked) {
+		if (const std::string blocked = m_autosave.blocked(); !blocked.empty()) {
+			ImGui::TextDisabled("%s", blocked.c_str());
+		}
+	}
+	if (!m_autosave_message.empty()) {
+		ImGui::TextWrapped("%s", m_autosave_message.c_str());
 	}
 }
 

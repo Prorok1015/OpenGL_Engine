@@ -491,6 +491,24 @@ BOOST_AUTO_TEST_CASE(Save_ASourceWithTwoMaterials_MayBeSavedOverItsOwnGeometry)
 	BOOST_TEST_REQUIRE(saved.saved, saved.error);
 }
 
+// #1186: what autosave writes is the source Save writes; taking it changes neither the file nor the document.
+BOOST_AUTO_TEST_CASE(AutosaveCapture_IsTheSourceSaveWrites_AndChangesNothing)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	const std::uint64_t generation = document->generation();
+
+	const edt::autosave_snapshot snapshot = document->autosave_capture();
+	BOOST_REQUIRE_MESSAGE(snapshot.error.empty(), snapshot.error);
+	const std::vector<std::byte> captured = edt::autosave_bytes(snapshot);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->generation() == generation);
+	BOOST_TEST(text_of(res_root / "shapes/crate.poly.desc") == box_text);
+
+	BOOST_REQUIRE(document->save().saved);
+	BOOST_TEST(std::string(reinterpret_cast<const char*>(captured.data()), captured.size()) == text_of(res_root / "shapes/crate.poly.desc"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtMeshDocumentWorld, mesh_world_fixture)

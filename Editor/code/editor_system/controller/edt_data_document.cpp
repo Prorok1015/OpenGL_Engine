@@ -689,6 +689,54 @@ edt::save_result edt::data_document::write(bool over)
 	return result;
 }
 
+edt::data_document::save_form edt::data_document::save_bytes(const json::object& on_disk) const
+{
+	save_form out;
+	desc::desc_system* descs = m_services.descs();
+	res::resource_system* reader = m_services.resources();
+	if (!descs || !reader) {
+		out.error = "the project resources are not available";
+		return out;
+	}
+	out.content = json::value(m_own);
+	// A person's rule: a reference whose file moved is the one write_references below repairs.
+	const desc_tree_check checked = validate_desc_tree(*descs, out.content, m_source.view(), reader, reference_rule::person);
+	for (const res::diagnostic& item : checked.problems) {
+		if (item.severity == res::diagnostic_severity::error) {
+			out.error = std::format("{}: {}", where(m_source, item.json_path), item.reason);
+			return out;
+		}
+	}
+	descs->stamp_tree(out.content);
+	// The document holds what the file had, but a value typed in again is a path: the guid the file had for it is kept.
+	const json::value replaced(on_disk);
+	descs->write_references(out.content, on_disk.empty() ? nullptr : &replaced);
+	out.bytes = descs->serialize_to_bytes(out.content);
+	return out;
+}
+
+edt::data_document::save_form edt::data_document::save_bytes() const
+{
+	json::object on_disk;
+	std::string version;
+	// A file that cannot be read keeps no guid: the same as a save over a file that is gone.
+	(void)read_file(m_source, on_disk, version);
+	return save_bytes(on_disk);
+}
+
+edt::autosave_snapshot edt::data_document::autosave_capture() const
+{
+	autosave_snapshot out;
+	if (!m_open) {
+		out.error = "the document is not open";
+		return out;
+	}
+	save_form form = save_bytes();
+	out.bytes = std::move(form.bytes);
+	out.error = std::move(form.error);
+	return out;
+}
+
 edt::save_result edt::data_document::write_checked(bool over)
 {
 	if (!m_open) {
@@ -740,19 +788,11 @@ edt::save_result edt::data_document::write_checked(bool over)
 			where(m_source), m_file_version, m_current_version));
 	}
 
-	json::value content(m_own);
-	// A person's rule: a reference whose file moved is the one write_references below repairs.
-	const desc_tree_check checked = validate_desc_tree(*descs, content, m_source.view(), reader, reference_rule::person);
-	for (const res::diagnostic& item : checked.problems) {
-		if (item.severity == res::diagnostic_severity::error) {
-			return save_result::failure(std::format("{}: {}", where(m_source, item.json_path), item.reason));
-		}
+	save_form form = save_bytes(on_disk);
+	if (!form.error.empty()) {
+		return save_result::failure(form.error);
 	}
-	descs->stamp_tree(content);
-	// The document holds what the file had, but a value typed in again is a path: the guid the file had for it is kept.
-	const json::value replaced(on_disk);
-	descs->write_references(content, on_disk.empty() ? nullptr : &replaced);
-	const std::vector<std::byte> bytes = descs->serialize_to_bytes(content);
+	const std::vector<std::byte>& bytes = form.bytes;
 	if (bytes.size() > k_desc_file_limit) {
 		return save_result::failure(std::format("{} would be {} bytes: a data document holds at most {}", where(m_source), bytes.size(), k_desc_file_limit));
 	}
@@ -764,7 +804,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 		egLOG_WARN("Editor/Save", "{}", version_upgrade_text(m_source.view(), m_file_version, m_current_version));
 	}
 
-	m_own = std::move(content.as_object());
+	m_own = std::move(form.content.as_object());
 	m_saved_own = m_own;
 	m_committed_own = m_own;
 	m_history.mark_saved();
