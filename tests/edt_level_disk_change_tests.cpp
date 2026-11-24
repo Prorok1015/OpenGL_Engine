@@ -10,11 +10,11 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_context_set.h>
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_desc_problems.h"
 #include "edt_file_menu.h"
-#include "edt_input_target.h"
 #include "edt_level_controller.h"
 #include "edt_level_disk_banner.h"
 #include "edt_registry_token.h"
@@ -139,6 +139,13 @@ struct level_disk_fixture : test_util::scene_env
 	}
 
 	std::string world_name() const { return state.world_names.empty() ? std::string{} : state.world_names.front(); }
+	// The registry the viewport shows: the active world of the set "level" (no Play in these tests).
+	entt::registry* shown_registry() const
+	{
+		const std::string* name = state.active_world_name();
+		scn::world_context* world = name ? mgr->level_set().find(*name) : nullptr;
+		return world ? &world->state() : nullptr;
+	}
 	std::vector<std::byte> working_copy_bytes() const { return ram->files.at(working_copy); }
 	void make_dirty() { state.commit("edit", edt::commit_mode::state_only); }
 
@@ -546,12 +553,12 @@ BOOST_AUTO_TEST_CASE(PlayStoppedForAModuleReload_DoesNotTakeTheFile)
 BOOST_AUTO_TEST_CASE(AReloadFromDisk_GivesTheViewARegistryOfAnotherToken)
 {
 	open_level("alpha");
-	entt::registry* before = edt::view_registry(services, state);
+	entt::registry* before = shown_registry();
 	BOOST_REQUIRE(before);
 	const std::uint64_t first = edt::registry_token(*before);
 
 	write_from_outside(level_text("beta"));
-	entt::registry* silent = edt::view_registry(services, state);
+	entt::registry* silent = shown_registry();
 	BOOST_REQUIRE(silent);
 	const std::uint64_t second = edt::registry_token(*silent);
 	BOOST_TEST(second != first);
@@ -562,7 +569,7 @@ BOOST_AUTO_TEST_CASE(AReloadFromDisk_GivesTheViewARegistryOfAnotherToken)
 	answer_front(0);
 	banner.run_pending();
 	BOOST_REQUIRE(world_name() == "gamma");
-	entt::registry* queued = edt::view_registry(services, state);
+	entt::registry* queued = shown_registry();
 	BOOST_REQUIRE(queued);
 	BOOST_TEST(edt::registry_token(*queued) != second);
 }
