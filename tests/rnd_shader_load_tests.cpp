@@ -8,6 +8,7 @@
 #include <snk/render/shader/rnd_shader_includes.h>
 #include <snk/render/rnd_gpu_blocks.h>
 #include <algorithm>
+#include <format>
 #include <string>
 
 // What the engine does to a shader source before the compiler sees it: includes, defines after the #version line,
@@ -166,7 +167,8 @@ namespace {
 	}
 }
 
-BOOST_AUTO_TEST_CASE(AFileIncludedTwiceIsExpandedOnce)
+// A file is expanded at every include, each copy under the same guard: the compiler keeps the first (#1301).
+BOOST_AUTO_TEST_CASE(AFileIncludedTwiceIsGuarded)
 {
 	put("shared.glsl", "float shared_marker;\n");
 	put("mid.glsl", "#include \"shared.glsl\"\nfloat mid_marker;\n");
@@ -174,8 +176,13 @@ BOOST_AUTO_TEST_CASE(AFileIncludedTwiceIsExpandedOnce)
 	const auto result = load(program_of(vertex, put("twice.frag", good_fragment)));
 	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
 	const std::string& body = result.headers[0].body;
-	BOOST_TEST(count_of(body, "float shared_marker;") == 1u);
+	BOOST_TEST(count_of(body, "float shared_marker;") == 3u);
 	BOOST_TEST(count_of(body, "float mid_marker;") == 1u);
+	const std::size_t guard_at = body.find("#ifndef SNK_INCLUDE_");
+	BOOST_REQUIRE(guard_at != std::string::npos);
+	const std::string guard_line = body.substr(guard_at, body.find('\n', guard_at) - guard_at);
+	// shared.glsl's guard: the first one in the body, before each of its three copies.
+	BOOST_TEST(count_of(body, guard_line + "\n") == 3u);
 	BOOST_TEST(body.find("#include") == std::string::npos);
 	BOOST_TEST(body.find("void main()") != std::string::npos);
 }
@@ -224,15 +231,18 @@ BOOST_AUTO_TEST_CASE(AVeryDeepIncludeChainIsReportedInsteadOfOverflowingTheStack
 	BOOST_TEST(result.error.find("deep0.glsl -> ") != std::string::npos);
 }
 
-// The include line is replaced by the file's text and nothing else: no blank line is left behind, and a CRLF
-// source keeps its CRLF (the loader used to leave an empty line per include).
+// The include line is replaced by the file's text inside its include guard (#1301) and nothing else: no blank line is
+// left behind, and a CRLF source keeps its CRLF, the guard's lines too (the loader used to leave an empty line per include).
 BOOST_AUTO_TEST_CASE(TheExpansionOfACrlfSourceIsExact)
 {
 	put("crlf_lib.glsl", "float a;\r\nfloat b;\r\n");
 	std::string source = "#version 450 core\r\n#include \"crlf_lib.glsl\"\r\nvoid main() {}\r\n";
 	const auto origin = put("crlf.vert", source);
 	BOOST_TEST(rnd::expand_includes(source, origin, *env.rs).empty());
-	BOOST_TEST(source == "#version 450 core\r\nfloat a;\r\nfloat b;\r\nvoid main() {}\r\n");
+	const std::size_t guard_at = source.find("#ifndef SNK_INCLUDE_");
+	BOOST_REQUIRE(guard_at != std::string::npos);
+	const std::string guard = source.substr(guard_at + 8, source.find('\r', guard_at) - guard_at - 8);
+	BOOST_TEST(source == std::format("#version 450 core\r\n#ifndef {0}\r\n#define {0}\r\nfloat a;\r\nfloat b;\r\n#endif\r\nvoid main() {{}}\r\n", guard), source);
 }
 
 BOOST_AUTO_TEST_CASE(AnIncludeWithoutAQuotedNameIsReportedAndOneInACommentIsIgnored)
