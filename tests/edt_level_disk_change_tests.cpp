@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <cstdint>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_action_registry.h>
@@ -153,7 +154,7 @@ struct level_disk_fixture : test_util::scene_env
 	{
 		const auto pending = dialogs.list();
 		BOOST_REQUIRE(!pending.empty());
-		BOOST_REQUIRE(dialogs.answer(pending.front().id, boost::json::object{ { "index", index } }).ok);
+		BOOST_REQUIRE(dialogs.answer(pending.front().id, boost::json::object{ { "index", static_cast<std::int64_t>(index) } }).ok);
 	}
 
 	test_util::temp_dir dir{ "level_disk" };
