@@ -114,13 +114,17 @@ namespace {
 		if (end > view.ind_begin) {
 			items.reserve((end - view.ind_begin) / 3);
 		}
+		std::size_t skipped = 0;
 		for (std::size_t i = view.ind_begin; i + 2 < end; i += 3) {
 			glm::vec3 corner[3];
 			bool whole = true;
 			for (std::size_t k = 0; k < 3; ++k) {
 				whole = whole && read_position(*tree, indices[i + k], corner[k]);
 			}
+			whole = whole && std::isfinite(corner[0].x + corner[0].y + corner[0].z + corner[1].x + corner[1].y + corner[1].z
+				+ corner[2].x + corner[2].y + corner[2].z);
 			if (!whole) {
+				++skipped;
 				continue;
 			}
 			ds::aabb3 box;
@@ -128,6 +132,9 @@ namespace {
 				ds::expand(box, point);
 			}
 			items.push_back({ box, static_cast<std::uint32_t>(i) });
+		}
+		if (skipped != 0) {
+			egLOG_WARN("scene/spatial", "a geometry has {} triangles with a NaN or infinite position or an index out of range: ray queries skip them", skipped);
 		}
 		tree->boxes_only = items.size() > k_max_exact_triangles;
 		tree->triangles.build(std::move(items));
@@ -182,7 +189,7 @@ namespace {
 	// How a query wants the answer.
 	enum class mode { closest, any };
 
-	class mesh_backend final : public scn::spatial_backend
+	class mesh_backend final : public scn::detail::spatial_backend
 	{
 	public:
 		std::optional<scn::ray_hit> raycast_closest(entt::registry& world, const scn::ray& line, const scn::ray_filter& filter) override
@@ -213,8 +220,10 @@ namespace {
 				// The walk goes on past this entity to every other: the distance is not narrowed.
 				return std::numeric_limits<float>::infinity();
 			});
-			std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
-				[](const scn::ray_hit& a, const scn::ray_hit& b) { return a.distance < b.distance; });
+			std::stable_sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
+				[](const scn::ray_hit& a, const scn::ray_hit& b) {
+					return a.distance != b.distance ? a.distance < b.distance : a.entity < b.entity;
+				});
 		}
 
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved) override
@@ -222,8 +231,11 @@ namespace {
 			if (!m_built) {
 				return;
 			}
+			std::vector<entt::entity> unique(moved.begin(), moved.end());
+			std::sort(unique.begin(), unique.end());
+			unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
 			std::size_t refit = 0;
-			for (const entt::entity entity : moved) {
+			for (const entt::entity entity : unique) {
 				const auto found = m_index_of.find(entity);
 				if (found == m_index_of.end()) {
 					continue;
@@ -242,6 +254,8 @@ namespace {
 				m_world.rebuild();
 			}
 		}
+
+		void structure_changed() override { m_dirty = true; }
 
 	private:
 		// Calls `found(hit)` for the nearest hit of every entity the ray meets; what it returns is the distance the walk goes on
@@ -289,10 +303,6 @@ namespace {
 			const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
 			const scn::spatial_mask on = layers ? layers->mask : scn::spatial_mask{ scn::k_default_spatial_layer };
 			if (!on.any_of(filter.mask)) {
-				return std::nullopt;
-			}
-			if (stale(world, mesh)) {
-				m_dirty = true;
 				return std::nullopt;
 			}
 			const glm::vec3 local_origin = glm::vec3(mesh.inverse * glm::vec4(ray.origin, 1.f));
@@ -371,7 +381,8 @@ namespace {
 			return out;
 		}
 
-		// An entity that no longer draws the range or the geometry its entry was built from.
+		// An entity that no longer draws the range or the geometry its entry was built from (the held handle was given another
+		// geometry: a retag, a reload held again).
 		static bool stale(entt::registry& world, const entry& mesh)
 		{
 			const auto* component = world.try_get<scn::mesh_component>(mesh.entity);
@@ -384,12 +395,16 @@ namespace {
 			return !held || !held->is_ready() || held->get().get() != mesh.geometry;
 		}
 
-		// Builds the trees when the world has more or fewer meshes than the last build saw, when something found an entry stale,
-		// or when a geometry that was not loaded is now.
+		// Builds the trees again when a mesh or geometry component came, went or changed (structure_changed), when the world has
+		// another number of meshes than the last build saw, when an entry no longer matches what its entity draws, or when a
+		// geometry that was not loaded is now. Before the traversal: a walk never sees a half-stale tree.
 		void ensure_current(entt::registry& world)
 		{
 			const std::size_t meshes = world.view<const scn::mesh_component, const scn::world_transform>().size_hint();
 			bool rebuild = !m_built || m_dirty || meshes != m_mesh_count;
+			if (!rebuild) {
+				rebuild = std::ranges::any_of(m_entries, [&world](const entry& mesh) { return stale(world, mesh); });
+			}
 			if (!rebuild && !m_pending.empty()) {
 				const auto* holds = world.ctx().find<scn::geometry_holds>();
 				rebuild = holds && std::ranges::any_of(m_pending, [&](entt::entity entity) {
@@ -462,7 +477,7 @@ namespace {
 
 }
 
-std::unique_ptr<scn::spatial_backend> scn::detail::make_mesh_backend()
+std::unique_ptr<scn::detail::spatial_backend> scn::detail::make_mesh_backend()
 {
 	return std::make_unique<mesh_backend>();
 }

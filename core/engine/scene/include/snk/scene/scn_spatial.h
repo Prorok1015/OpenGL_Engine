@@ -12,9 +12,8 @@
 #include <type_traits>
 #include <vector>
 
-// Spatial queries of a world (EPIC-81, #1326): a ray against what the world holds. The world answers through backends
-// (spatial_backend): the engine's own is the mesh backend (the triangles of the loaded geometry, a BVH per geometry and
-// one over the entities); a physics backend can join it later without a change in the calls.
+// Spatial queries of a world (EPIC-81, #1326): a ray against what the world holds, answered by the engine's mesh backend
+// (the triangles of the loaded geometry, a BVH per geometry and one over the entities). A module cannot add a backend.
 //
 // Limits (also in docs/epics/spatial/EPIC-81.md):
 //  - a skinned mesh is tested in its bind pose, the vertices as the geometry holds them;
@@ -78,31 +77,14 @@ namespace scn {
 	static_assert(std::is_trivially_copyable_v<ray_hit> && std::is_standard_layout_v<ray_hit>);
 	static_assert(std::is_trivially_copyable_v<ray_filter> && std::is_standard_layout_v<ray_filter>);
 
-	// A module or the engine fills this vtable (spatial_world::add_backend) and the engine calls it: raised with any change of
-	// its bases or virtual functions (check_vtable_pins.py).
-	inline constexpr std::uint32_t spatial_backend_abi_revision = 1;
+	namespace detail { struct spatial_backend; }
 
-	// Answers the queries of one world from what it knows about it. The mesh backend is the engine's; a physics backend
-	// would be another. The registry is handed in by every call, never kept: a registry can be moved.
-	struct spatial_backend
-	{
-		virtual ~spatial_backend() = default;
-		// The nearest hit within the filter's distance.
-		virtual std::optional<ray_hit> raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter) = 0;
-		// Whether anything is hit: stops at the first hit it finds.
-		virtual bool raycast_any(entt::registry& world, const ray& line, const ray_filter& filter) = 0;
-		// The nearest hit of every entity the ray meets (one per entity), nearest first, appended to `out`.
-		virtual void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out) = 0;
-		// The transform system moved these entities (and their descendants) this frame: their world matrices are new.
-		virtual void entities_moved(entt::registry& world, std::span<const entt::entity> moved) = 0;
-	};
-
-	// The backends of one world, in its registry's ctx. Made by the engine when the world is made (attach); queries from
-	// the free functions below. Main thread, between the frame's systems and the next: not thread safe.
+	// The spatial queries of one world, in its registry's ctx. Made by the engine when the world is made (attach); the queries
+	// are the free functions below. Main thread, between the frame's systems and the next: not thread safe.
 	class SNK_API spatial_world
 	{
 	public:
-		// Made on first use with the mesh backend (which reads the geometry the world's geometry_holds keeps).
+		// Made on first use, with the engine's mesh backend (which reads the geometry the world's geometry_holds keeps).
 		static spatial_world& attach(entt::registry& world);
 		static spatial_world* find(entt::registry& world);
 
@@ -111,19 +93,17 @@ namespace scn {
 		spatial_world(const spatial_world&) = delete;
 		spatial_world& operator=(const spatial_world&) = delete;
 
-		void add_backend(std::unique_ptr<spatial_backend> backend);
-		std::size_t backend_count() const;
-
-		// The nearest of every backend's nearest.
 		std::optional<ray_hit> raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter);
 		bool raycast_any(entt::registry& world, const ray& line, const ray_filter& filter);
-		// Every backend's hits merged by distance.
+		// One hit per entity, nearest first (equal distances: by entity).
 		void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
 	private:
-		std::vector<std::unique_ptr<spatial_backend>> m_backends;
+		static void on_structure_changed(entt::registry& world, entt::entity entity);
+
+		std::unique_ptr<detail::spatial_backend> m_backend;
 	};
 
 	// The queries of a world's registry; a world without a spatial_world answers "nothing". They make it on first use.

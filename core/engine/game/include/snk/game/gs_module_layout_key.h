@@ -81,8 +81,7 @@ namespace gs
 			wnd::window_system_abi_revision, wnd::window_listener_interface_abi_revision,
 			rnd::driver::driver_interface_abi_revision, rnd::driver::shader_interface_abi_revision,
 			rnd::driver::vertex_array_interface_abi_revision, rnd::driver::buffer_interface_abi_revision,
-			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision,
-			scn::spatial_backend_abi_revision>;
+			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.

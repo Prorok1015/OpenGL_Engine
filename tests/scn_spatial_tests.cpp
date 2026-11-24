@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "test_quad_geometry.hpp"
 #include "test_scene_env.hpp"
 #include <snk/common/ds/ds_intersect.hpp>
 #include <snk/render/geom/rnd_geometry_desc.h>
@@ -17,34 +18,15 @@
 
 namespace {
 
-std::string bytes_json(const std::vector<float>& floats)
-{
-	std::string out = "[";
-	for (const float value : floats) {
-		unsigned char raw[sizeof(float)];
-		std::memcpy(raw, &value, sizeof(float));
-		for (const unsigned char byte : raw) {
-			out += std::to_string(static_cast<int>(byte)) + ",";
-		}
-	}
-	if (out.size() > 1) {
-		out.pop_back();
-	}
-	return out + "]";
-}
-
 struct spatial_env : test_util::scene_env
 {
 	spatial_env() { descs->register_desc<rnd::geometry_desc>("geometry_desc"); }
 	~spatial_env() { descs->unregister_desc("geometry_desc"); }
 
 	// A unit square in the XY plane, two counter-clockwise triangles: the front faces +Z.
-	void put_quad(std::string_view name)
+	void put_quad(std::string_view name, float half = 0.5f)
 	{
-		const std::vector<float> corners{ -0.5f, -0.5f, 0.f, 0.5f, -0.5f, 0.f, 0.5f, 0.5f, 0.f, -0.5f, 0.5f, 0.f };
-		const std::string json = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2,0,2,3],"vertices":)"
-			+ bytes_json(corners) + "}";
-		geometry = require_loaded<rnd::geometry_desc>(put(name, json));
+		geometry = require_loaded<rnd::geometry_desc>(put(name, test_util::quad_geometry_json(half)));
 		BOOST_REQUIRE(geometry.is_ready());
 	}
 
@@ -244,6 +226,82 @@ BOOST_AUTO_TEST_CASE(AMeshWhoseGeometryIsNotLoaded_IsNotHit_AndNothingFails)
 	reg.emplace<scn::mesh_component>(entity, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 6 } });
 	reg.emplace<scn::geometry_component>(entity, scn::geometry_component{ .geom_tag = tag_of("missing.geom.desc") });
 	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+}
+
+BOOST_AUTO_TEST_CASE(ANonUniformScale_StretchesTheHitAndKeepsTheNormalPerpendicular)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	// 4 wide, 1 tall, tilted 45 degrees about X: the normal is (0, sin 45, cos 45) however the scale stretches the quad.
+	glm::mat4 matrix = glm::rotate(at({ 0.f, 0.f, -3.f }), glm::radians(45.f), glm::vec3{ 1.f, 0.f, 0.f });
+	matrix = glm::scale(matrix, glm::vec3{ 4.f, 1.f, 1.f });
+	add_quad(reg, matrix);
+	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 1.8f, 0.f, 2.f }));
+	BOOST_REQUIRE(hit);
+	BOOST_TEST(hit->normal.y == std::sin(glm::radians(45.f)), boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(hit->normal.z == std::cos(glm::radians(45.f)), boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(glm::length(hit->normal) == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 2.5f, 0.f, 2.f })));
+}
+
+BOOST_AUTO_TEST_CASE(AnEntityReplacedAtTheSameMeshCount_IsSeenAsTheNewOne)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto old_one = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	BOOST_REQUIRE(scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+
+	reg.destroy(old_one);
+	const auto replacement = add_quad(reg, at({ 5.f, 0.f, -3.f }));
+	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 5.f, 0.f, 2.f }));
+	BOOST_REQUIRE(hit);
+	BOOST_TEST((hit->entity == replacement));
+}
+
+BOOST_AUTO_TEST_CASE(AMeshComponentGivenAnotherRange_IsHitByTheNewRange)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	BOOST_REQUIRE(scn::raycast_closest(reg, toward_minus_z({ 0.4f, 0.4f, 2.f })));
+	// Only the first triangle (indices 0..3): the point (0.4, 0.4) lies in the second one.
+	reg.replace<scn::mesh_component>(quad, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 3 } });
+	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 0.4f, 0.4f, 2.f })));
+	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.4f, -0.4f, 2.f })));
+}
+
+BOOST_AUTO_TEST_CASE(AMeshWhoseGeometryLoadsLater_IsHitOnceItIsLoaded)
+{
+	entt::registry reg;
+	scn::geometry_holds::attach(reg, rs.get());
+	const auto entity = reg.create();
+	reg.emplace<scn::world_transform>(entity, scn::world_transform{ at({ 0.f, 0.f, -3.f }) });
+	reg.emplace<scn::renderable>(entity);
+	reg.emplace<scn::mesh_component>(entity, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 6 } });
+	reg.emplace<scn::geometry_component>(entity, scn::geometry_component{ .geom_tag = tag_of("later.geom.desc") });
+	const auto ray = toward_minus_z({ 0.f, 0.f, 2.f });
+	BOOST_REQUIRE(!scn::raycast_closest(reg, ray));
+
+	put("later.geom.desc", test_util::quad_geometry_json());
+	scn::geometry_holds::of(reg).hold(entity, tag_of("later.geom.desc"));
+	require_loaded<rnd::geometry_desc>(tag_of("later.geom.desc"));
+	BOOST_TEST(scn::raycast_closest(reg, ray));
+}
+
+BOOST_AUTO_TEST_CASE(AGeometryHeldAgainAsABiggerShape_IsHitWhereTheNewShapeIs)
+{
+	put_quad("small.geom.desc", 0.5f);
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	const auto outside = toward_minus_z({ 1.5f, 0.f, 2.f });
+	BOOST_REQUIRE(!scn::raycast_closest(reg, outside));
+
+	put("big.geom.desc", test_util::quad_geometry_json(2.f));
+	reg.replace<scn::geometry_component>(quad, scn::geometry_component{ .geom_tag = tag_of("big.geom.desc") });
+	require_loaded<rnd::geometry_desc>(tag_of("big.geom.desc"));
+	scn::geometry_holds::of(reg).hold(quad, tag_of("big.geom.desc"));
+	BOOST_TEST(scn::raycast_closest(reg, outside));
 }
 
 BOOST_AUTO_TEST_CASE(ManyRandomQuads_TheTreesAnswerAsABruteForceLoopDoes)

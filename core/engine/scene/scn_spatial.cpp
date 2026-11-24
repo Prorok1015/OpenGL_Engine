@@ -2,6 +2,8 @@
 #include "scn_spatial_detail.h"
 #include <snk/scene/level/scn_screen_anchor.h>
 #include <snk/scene/scn_camera_component.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/engine_assert.h>
 #include <snk/scene/scn_model.h>
 #include <entt/entity/registry.hpp>
 #include <algorithm>
@@ -10,13 +12,26 @@
 scn::spatial_world::spatial_world() = default;
 scn::spatial_world::~spatial_world() = default;
 
+void scn::spatial_world::on_structure_changed(entt::registry& world, entt::entity)
+{
+	if (auto* spatial = world.ctx().find<spatial_world>()) {
+		spatial->m_backend->structure_changed();
+	}
+}
+
 scn::spatial_world& scn::spatial_world::attach(entt::registry& world)
 {
 	if (auto* existing = world.ctx().find<spatial_world>()) {
 		return *existing;
 	}
 	auto& made = world.ctx().emplace<spatial_world>();
-	made.add_backend(detail::make_mesh_backend());
+	made.m_backend = detail::make_mesh_backend();
+	world.on_construct<mesh_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_update<mesh_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_destroy<mesh_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_construct<geometry_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_update<geometry_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_destroy<geometry_component>().connect<&spatial_world::on_structure_changed>();
 	return made;
 }
 
@@ -25,56 +40,27 @@ scn::spatial_world* scn::spatial_world::find(entt::registry& world)
 	return world.ctx().find<spatial_world>();
 }
 
-void scn::spatial_world::add_backend(std::unique_ptr<spatial_backend> backend)
-{
-	if (backend) {
-		m_backends.push_back(std::move(backend));
-	}
-}
-
-std::size_t scn::spatial_world::backend_count() const
-{
-	return m_backends.size();
-}
-
 std::optional<scn::ray_hit> scn::spatial_world::raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter)
 {
-	std::optional<ray_hit> best;
-	// The next backend only looks as far as the best hit so far.
-	ray_filter narrowed = filter;
-	for (const auto& backend : m_backends) {
-		if (auto hit = backend->raycast_closest(world, line, narrowed)) {
-			if (!best || hit->distance < best->distance) {
-				best = *hit;
-				narrowed.max_distance = hit->distance;
-			}
-		}
-	}
-	return best;
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	return m_backend->raycast_closest(world, line, filter);
 }
 
 bool scn::spatial_world::raycast_any(entt::registry& world, const ray& line, const ray_filter& filter)
 {
-	return std::ranges::any_of(m_backends, [&](const auto& backend) { return backend->raycast_any(world, line, filter); });
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	return m_backend->raycast_any(world, line, filter);
 }
 
 void scn::spatial_world::raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out)
 {
-	const std::size_t first = out.size();
-	for (const auto& backend : m_backends) {
-		backend->raycast_all(world, line, filter, out);
-	}
-	if (m_backends.size() > 1) {
-		std::stable_sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
-			[](const ray_hit& a, const ray_hit& b) { return a.distance < b.distance; });
-	}
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	m_backend->raycast_all(world, line, filter, out);
 }
 
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
-	for (const auto& backend : m_backends) {
-		backend->entities_moved(world, moved);
-	}
+	m_backend->entities_moved(world, moved);
 }
 
 std::optional<scn::ray_hit> scn::raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter)
