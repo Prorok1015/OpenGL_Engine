@@ -1,6 +1,7 @@
 #include "edt_code_tree.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <cctype>
@@ -56,6 +57,9 @@ namespace edt
 			std::error_code entry_ec;
 			const auto status = it->symlink_status(entry_ec);
 			if (entry_ec) continue;
+			// std::filesystem calls an entry with another reparse tag a plain folder or file (#1343).
+			const auto kind = platform::beneath::link_entry_at(it->path(), entry_ec);
+			if (entry_ec || !kind || *kind == platform::beneath::link_entry::link) continue;
 			const std::string name = fs_paths::utf8_of(it->path().filename());
 			code_entry entry;
 			entry.name = name;

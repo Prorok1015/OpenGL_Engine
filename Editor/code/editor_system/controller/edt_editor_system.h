@@ -56,6 +56,7 @@ namespace edt {
 	class agent_ui_component;
 	class theme_settings_component;
 	class autosave_component;
+	class autosave_recovery;
 	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
@@ -176,6 +177,8 @@ namespace edt {
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
+		// Crash recovery (#1187): the autosaves of other editor runs, asked about once the start level settled.
+		void install_autosave_recovery(bool headless);
 
 	public:
 		agent_server* agent_server_object();
@@ -271,6 +274,10 @@ namespace edt {
 		// Autosave (#1186): reads the documents, the level controller and the job service; destroyed before them (its files
 		// are removed by shutdown() in the destructor, once the jobs stopped).
 		std::unique_ptr<autosave_component> m_autosave;
+		// Crash recovery (#1187): reaches the autosave, the level load, the prefab editor, the modeller and the asset opening;
+		// destroyed before them. Its frame callbacks hold a weak copy of m_recovery_alive.
+		std::shared_ptr<int> m_recovery_alive = std::make_shared<int>(0);
+		std::unique_ptr<autosave_recovery> m_recovery;
 
 		// Set on the base resource system with a project open (#1126); taken off it and written in the destructor.
 		std::shared_ptr<res::file_desc_binary_hash_cache> m_desc_binary_cache;

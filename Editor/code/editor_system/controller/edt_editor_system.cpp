@@ -90,6 +90,10 @@
 #include "../settings/edt_editor_settings_panel.h"
 #include "../autosave/edt_autosave_component.h"
 #include "../autosave/edt_autosave_settings.h"
+#include "../autosave/edt_autosave_recovery.h"
+#include "../autosave/edt_autosave_restore.h"
+#include "edt_data_document.h"
+#include "edt_mesh_documents.h"
 #include <snk/gui/gui_theme_service.h>
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
@@ -507,8 +511,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
-	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs (busy), and
-	// with an uncommitted edit or any dirty document (needs_input).
+	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs, or (not the
+	// rollback) before the asset index is ready (busy), and with an uncommitted edit or any dirty document (needs_input).
 	m_migration = std::make_unique<migration_component>(migration_component::ports{
 		.context = *m_context, .services = m_services, .resources = m_res, .layer = *editor_layer, .level_ctrl = m_level_ctrl,
 		.state = m_state, .prefab = *m_prefab, .asset_open = *m_asset_open, .level_load = *m_level_load,
@@ -530,6 +534,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_import->person_import_running()) return std::string{ "a model import is running" };
 			return std::nullopt;
 		},
+		.index_wait = [this] { return asset_index_wait(m_asset_component ? m_asset_component->index() : nullptr); },
 		.unsaved_reason = [this]() -> std::optional<std::string> {
 			if (person_is_editing()) return std::string{ "a person is editing a value (an inspector field or a gizmo drag): commit it first" };
 			if (m_state.is_dirty()) return std::string{ "the level has unsaved changes: save or discard them first" };
@@ -693,6 +698,112 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_autosave->cache_root().empty()) return "No project is open: autosave has nowhere to write.";
 			return {};
 		} });
+	install_autosave_recovery(headless);
+}
+
+void edt::editor_system::install_autosave_recovery(bool headless)
+{
+	// #1187: the autosaves other editor runs left behind, offered once the start level settled.
+	autosave_recovery::ports ports;
+	ports.cache_root = [this] { return autosave_cache_root(m_res); };
+	ports.res_roots = [this] { return m_res.mount_roots(res::tag::default_protocol()); };
+	ports.own_session = [this] { return m_autosave ? m_autosave->session() : std::string{}; };
+	ports.ensure_own_session = [this] { return m_autosave && m_autosave->ensure_session(); };
+	ports.adopt = [this](document_id id, std::uint64_t generation) {
+		if (m_autosave) m_autosave->adopt(id, generation);
+	};
+	ports.settled = [this] { return !m_migration || m_migration->start_level_settled(); };
+	ports.register_frame = [this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
+	ports.headless = headless;
+	ports.jobs = &m_context->jobs();
+	ports.events = &m_context->events();
+	ports.choose = [this](std::string title, std::string text, std::vector<std::string> options, std::function<void(std::optional<std::size_t>)> answer) {
+		m_context->dialogs().choose(std::move(title), std::move(text), std::move(options), std::move(answer));
+	};
+	ports.message = [this](std::string text) { m_context->dialogs().message(message_level::error, std::move(text)); };
+	ports.is_document_type = [this](std::string_view type) {
+		for (const std::string& known : desc_system.document_types()) {
+			if (known == type) return true;
+		}
+		return false;
+	};
+	ports.host_name = [] { return this_host_name(); };
+	ports.restore_scene = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		if (m_state.is_dirty()) {
+			done({ "the open level has unsaved changes: save or discard them, then restore again at the next start", {}, 0 });
+			return;
+		}
+		// Another load's watch would take our `ended` (a taken implicit id is not registered again).
+		if (m_level_load->in_progress() || editor_layer->has_implicit_prefix("edt/load_level")) {
+			done({ "another level is loading", {}, 0 });
+			return;
+		}
+		auto copy = std::make_shared<res::tag>();
+		auto ended = [this, done, copy, source = request.source](bool loaded) {
+			if (!loaded) {
+				done({ "the level did not load", {}, 0 });
+				return;
+			}
+			if (!(m_state.editor_tag == *copy) || !(m_state.level_tag == source)) {
+				done({ "another level was loaded instead", {}, 0 });
+				return;
+			}
+			m_state.commit("Recovered autosave", commit_mode::state_only);
+			done({ {}, m_state.id(), m_state.generation() });
+		};
+		if (!m_level_load->begin_and_watch(request.source, std::move(ended), std::vector<std::byte>(*request.bytes))) {
+			done({ "it is not a level file", {}, 0 });
+			return;
+		}
+		*copy = m_level_load->loading_copy();
+	};
+	ports.restore_prefab = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		m_prefab->open(request.source);
+		auto settle = [this, request, done, alive = std::weak_ptr<int>(m_recovery_alive)]() {
+			if (!alive.lock()) return false;
+			if (m_prefab->opening(request.source)) return true;
+			prefab_document* prefab = m_prefab->open_document(request.source);
+			if (!prefab) {
+				done({ "the prefab did not open", {}, 0 });
+				return false;
+			}
+			const res::tag copy{ std::format("memory://editor/recovery/{}/{}", request.serial, request.working_name) };
+			const std::string error = restore_prefab_bytes(*m_services.writable_resources(), *m_services.resources(), *prefab, copy, *request.bytes);
+			done(error.empty() ? autosave_recovery::restore_outcome{ {}, prefab->id(), prefab->generation() }
+				: autosave_recovery::restore_outcome{ error, {}, 0 });
+			return false;
+		};
+		if (!m_prefab->opening(request.source)) {
+			settle();
+			return;
+		}
+		editor_layer->register_implicit(std::format("edt/autosave_recovery/prefab/{}", request.serial), std::move(settle));
+	};
+	ports.restore_mesh = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		m_modeller->open(request.source);
+		mesh_document* mesh = mesh_of_source(m_context->documents(), request.source);
+		if (!mesh) {
+			done({ "the mesh did not open", {}, 0 });
+			return;
+		}
+		const std::string error = restore_mesh_bytes(*mesh, *request.bytes);
+		done(error.empty() ? autosave_recovery::restore_outcome{ {}, mesh->id(), mesh->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
+	};
+	ports.restore_data = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		m_asset_open->data_documents().open(request.source, true);
+		data_document* data = nullptr;
+		m_context->documents().for_each([&data, &request](document& open) {
+			if (auto* found = dynamic_cast<data_document*>(&open); found && found->source() == request.source) data = found;
+		});
+		if (!data) {
+			done({ "it did not open as a data document", {}, 0 });
+			return;
+		}
+		const std::string error = restore_data_bytes(*data, *request.bytes);
+		done(error.empty() ? autosave_recovery::restore_outcome{ {}, data->id(), data->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
+	};
+	m_recovery = std::make_unique<autosave_recovery>(std::move(ports));
+	m_recovery->install();
 }
 
 void edt::editor_system::tick_autosave()

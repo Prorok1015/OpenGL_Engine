@@ -39,6 +39,73 @@ BOOST_AUTO_TEST_CASE(a_path_that_is_not_plain_names_is_refused)
 	}
 }
 
+// #1187: another holder is `held`, not an error; once it goes, the lock is taken.
+BOOST_AUTO_TEST_CASE(acquire_tells_a_held_lock_from_a_free_one)
+{
+	test_util::temp_dir dir("file_lock_acquire");
+	const std::filesystem::path relative = std::filesystem::path("session") / "session.lock";
+	platform::lock_attempt first = platform::file_lock::acquire(dir.path(), relative);
+	BOOST_REQUIRE((first.outcome == platform::lock_outcome::acquired));
+	BOOST_TEST(first.lock.has_value());
+
+	const platform::lock_attempt second = platform::file_lock::acquire(dir.path(), relative);
+	BOOST_TEST((second.outcome == platform::lock_outcome::held));
+	BOOST_TEST(!second.lock.has_value());
+	BOOST_TEST(second.error.empty());
+	BOOST_TEST((platform::file_lock::acquire(dir.path(), relative, platform::lock_open::existing_only).outcome
+		== platform::lock_outcome::held));
+
+	first.lock.reset();
+	const platform::lock_attempt probe = platform::file_lock::acquire(dir.path(), relative, platform::lock_open::existing_only);
+	BOOST_TEST((probe.outcome == platform::lock_outcome::acquired));
+}
+
+// #1187: a probe of a lock file that is not there makes neither the file nor its folders nor the root.
+BOOST_AUTO_TEST_CASE(a_probe_makes_nothing)
+{
+	test_util::temp_dir dir("file_lock_probe");
+	const std::filesystem::path root = dir.path() / "cache";
+	const std::filesystem::path relative = std::filesystem::path("session") / "session.lock";
+	BOOST_TEST((platform::file_lock::acquire(root, relative, platform::lock_open::existing_only).outcome
+		== platform::lock_outcome::missing));
+	BOOST_TEST(!std::filesystem::exists(root));
+
+	std::filesystem::create_directories(root);
+	BOOST_TEST((platform::file_lock::acquire(root, relative, platform::lock_open::existing_only).outcome
+		== platform::lock_outcome::missing));
+	BOOST_TEST(!std::filesystem::exists(root / "session"));
+
+	std::filesystem::create_directories(root / "session");
+	BOOST_TEST((platform::file_lock::acquire(root, relative, platform::lock_open::existing_only).outcome
+		== platform::lock_outcome::missing));
+	BOOST_TEST(!std::filesystem::exists(root / relative));
+}
+
+BOOST_AUTO_TEST_CASE(acquire_refuses_a_path_that_is_not_plain_names)
+{
+	test_util::temp_dir dir("file_lock_acquire_names");
+	const platform::lock_attempt attempt = platform::file_lock::acquire(dir.path(), "../.lock");
+	BOOST_TEST((attempt.outcome == platform::lock_outcome::failed));
+	BOOST_TEST(!attempt.error.empty());
+}
+
+#if !defined(_WIN32)
+// #1187: a probe through a link is refused as an error, never taken for a missing or a free lock.
+BOOST_AUTO_TEST_CASE(a_probe_through_a_link_fails)
+{
+	test_util::temp_dir dir("file_lock_probe_link");
+	test_util::temp_dir outside("file_lock_probe_outside");
+	{
+		std::ofstream(outside.path() / "session.lock", std::ios::binary) << "";
+	}
+	std::filesystem::create_directory_symlink(outside.path(), dir.path() / "session");
+	const platform::lock_attempt attempt = platform::file_lock::acquire(dir.path(), std::filesystem::path("session") / "session.lock",
+		platform::lock_open::existing_only);
+	BOOST_TEST((attempt.outcome == platform::lock_outcome::failed));
+	BOOST_TEST(!attempt.error.empty());
+}
+#endif
+
 #if !defined(_WIN32)
 // #822: a project could hold a link where the lock goes; its target must not be made, opened or changed.
 BOOST_AUTO_TEST_CASE(a_link_at_the_file_or_a_folder_is_not_followed)

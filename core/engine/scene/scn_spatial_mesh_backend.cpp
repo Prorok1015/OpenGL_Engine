@@ -200,6 +200,177 @@ namespace {
 	// How a query wants the answer.
 	enum class mode { closest, any };
 
+	// The nearest hit inside one entity, after the filters. `renderable` and `layers` are what the entity has now (the sync
+	// queries read them from the registry) or had when the snapshot was taken (the async ones).
+	std::optional<scn::ray_hit> test_mesh(const entry& mesh, bool renderable, scn::spatial_mask layers, const ds::ray3& ray,
+		const scn::ray_filter& filter, float t_max, mode how)
+	{
+		if (mesh.degenerate || !mesh.tree || excluded(filter.exclude, mesh.entity)) {
+			return std::nullopt;
+		}
+		if (!filter.include_hidden && !renderable) {
+			return std::nullopt;
+		}
+		if (!layers.any_of(filter.mask)) {
+			return std::nullopt;
+		}
+		const glm::vec3 local_origin = glm::vec3(mesh.inverse * glm::vec4(ray.origin, 1.f));
+		const glm::vec3 local_direction = glm::vec3(mesh.inverse * glm::vec4(ray.direction, 0.f));
+		if (!(glm::dot(local_direction, local_direction) > 0.f)) {
+			return std::nullopt;
+		}
+		const ds::ray3 local(local_origin, local_direction);
+		// A point of the local ray is the same parameter t of the world ray: the transform is affine.
+		struct best_hit
+		{
+			float t = 0.f;
+			std::uint32_t first_index = ~0u;
+			ds::triangle_hit triangle{};
+			bool exact = false;
+			bool found = false;
+		} best;
+		best.t = t_max;
+		const triangle_tree& tree = *mesh.tree;
+		tree.triangles.traverse_ray(local, t_max, [&](std::uint32_t, const std::uint32_t& first_index, float box_entry) {
+			if (!filter.triangles || tree.boxes_only) {
+				const float entry_distance = std::max(box_entry, 0.f);
+				if (entry_distance <= best.t) {
+					best = { entry_distance, first_index, {}, false, true };
+				}
+				return ds::bvh_ray_action{ best.t, how == mode::any && best.found };
+			}
+			const auto& indices = tree.geometry->indices;
+			glm::vec3 a;
+			glm::vec3 b;
+			glm::vec3 c;
+			if (!read_position(tree, indices[first_index], a) || !read_position(tree, indices[first_index + 1], b)
+				|| !read_position(tree, indices[first_index + 2], c)) {
+				return ds::bvh_ray_action{ best.t, false };
+			}
+			const auto hit = ds::ray_triangle(local.origin, local.direction, a, b, c, false, best.t);
+			if (!hit) {
+				return ds::bvh_ray_action{ best.t, false };
+			}
+			const bool seen_from_behind = hit->back_face != mesh.mirrored;
+			if (filter.cull_back_faces && seen_from_behind) {
+				return ds::bvh_ray_action{ best.t, false };
+			}
+			best = { hit->t, first_index, *hit, true, true };
+			return ds::bvh_ray_action{ best.t, how == mode::any };
+		});
+		if (!best.found) {
+			return std::nullopt;
+		}
+		scn::ray_hit out;
+		out.entity = mesh.entity;
+		out.distance = best.t;
+		out.point = ray.origin + ray.direction * best.t;
+		if (best.exact) {
+			const auto& indices = tree.geometry->indices;
+			glm::vec3 a;
+			glm::vec3 b;
+			glm::vec3 c;
+			read_position(tree, indices[best.first_index], a);
+			read_position(tree, indices[best.first_index + 1], b);
+			read_position(tree, indices[best.first_index + 2], c);
+			glm::vec3 normal = mesh.normal_matrix * glm::cross(b - a, c - a);
+			const float normal_length = glm::length(normal);
+			normal = normal_length > 0.f ? normal / normal_length : -ray.direction;
+			// On the side the ray came from; back_face says whether that is the triangle's back.
+			if (glm::dot(normal, ray.direction) > 0.f) {
+				normal = -normal;
+			}
+			out.normal = normal;
+			out.triangle = best.first_index / 3;
+			out.barycentric = { best.triangle.u, best.triangle.v };
+			out.back_face = best.triangle.back_face != mesh.mirrored;
+		} else {
+			out.normal = -ray.direction;
+		}
+		return out;
+	}
+
+	// Walks the world tree for one ray. `test(index, t_max)` answers the nearest hit inside entry `index`; `found(hit)` returns the
+	// distance the walk goes on to (infinity: every entity; the hit's own distance: only nearer ones). For `any` the walk stops at
+	// the first hit.
+	template <class Test, class Found>
+	void walk_world(const ds::bvh<std::uint32_t>& tree, const ds::ray3& ray, float max_distance, mode how, Test&& test, Found&& found)
+	{
+		float t_max = max_distance;
+		bool stopped = false;
+		tree.traverse_ray(ray, t_max, [&](std::uint32_t, const std::uint32_t& index, float) {
+			if (stopped) {
+				return ds::bvh_ray_action{ t_max, true };
+			}
+			const std::optional<scn::ray_hit> hit = test(index, t_max);
+			if (!hit) {
+				return ds::bvh_ray_action{ t_max, false };
+			}
+			const float next = found(*hit);
+			if (how == mode::any) {
+				stopped = true;
+				return ds::bvh_ray_action{ t_max, true };
+			}
+			t_max = std::min(t_max, next);
+			return ds::bvh_ray_action{ t_max, false };
+		});
+	}
+
+	// What an asynchronous batch reads: a copy of the world tree and of every entry, with the flags the registry had when it was
+	// taken. The triangle trees are shared and never change after they are built. Nothing in it points into the registry.
+	struct snapshot_entry
+	{
+		entry mesh;
+		bool valid = true;
+		bool renderable = true;
+		scn::spatial_mask layers{ scn::k_default_spatial_layer };
+	};
+
+	struct snapshot
+	{
+		ds::bvh<std::uint32_t> world;
+		std::vector<snapshot_entry> entries;
+	};
+
+	scn::ray_result run_request(const snapshot& state, const scn::ray_request& request)
+	{
+		scn::ray_result result;
+		const float length = glm::length(request.line.direction);
+		if (!(length > 0.f) || !(request.max_distance > 0.f)) {
+			return result;
+		}
+		const scn::ray_filter filter{ request.max_distance, request.mask, request.include_hidden, request.cull_back_faces,
+			request.triangles, std::span<const entt::entity>{ request.exclude } };
+		const ds::ray3 ray(request.line.origin, request.line.direction / length);
+		const mode how = request.kind == scn::ray_query::any ? mode::any : mode::closest;
+		const auto test = [&](std::uint32_t index, float t_max) -> std::optional<scn::ray_hit> {
+			const snapshot_entry& each = state.entries[index];
+			if (!each.valid) {
+				return std::nullopt;
+			}
+			return test_mesh(each.mesh, each.renderable, each.layers, ray, filter, t_max, how);
+		};
+		if (request.kind == scn::ray_query::all) {
+			walk_world(state.world, ray, request.max_distance, how, test, [&result](const scn::ray_hit& hit) {
+				result.hits.push_back(hit);
+				return std::numeric_limits<float>::infinity();
+			});
+			std::stable_sort(result.hits.begin(), result.hits.end(), [](const scn::ray_hit& a, const scn::ray_hit& b) {
+				return a.distance != b.distance ? a.distance < b.distance : a.entity < b.entity;
+			});
+			if (request.max_hits != 0 && result.hits.size() > request.max_hits) {
+				result.hits.resize(request.max_hits);
+				result.truncated = true;
+			}
+			return result;
+		}
+		walk_world(state.world, ray, request.max_distance, how, test, [&result](const scn::ray_hit& hit) {
+			result.hits.assign(1, hit);
+			return hit.distance;
+		});
+		return result;
+	}
+
 	class mesh_backend final : public scn::detail::spatial_backend
 	{
 	public:
@@ -266,13 +437,43 @@ namespace {
 				|| m_world.degradation() > k_rebuild_degradation) {
 				m_world.rebuild();
 			}
+			if (refit != 0) {
+				++m_stamp;
+			}
 		}
 
-		void structure_changed() override { m_dirty = true; }
+		void structure_changed() override
+		{
+			m_dirty = true;
+			++m_stamp;
+		}
+
+		void state_changed() override { ++m_stamp; }
+
+		ds::task_handle<scn::ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<scn::ray_request> requests,
+			std::uint64_t frame) override
+		{
+			ensure_current(world);
+			if (!m_snapshot || m_snapshot_stamp != m_stamp) {
+				take_snapshot(world);
+			}
+			// std::function wants a copyable body: the requests are shared, the snapshot is read-only.
+			auto asked = std::make_shared<const std::vector<scn::ray_request>>(std::move(requests));
+			std::shared_ptr<const snapshot> state = m_snapshot;
+			return tasks.run(ds::lane::compute, ds::task_desc{ .name = "spatial.raycast_batch", .category = "spatial" },
+				[state, asked, frame](ds::task_context&) {
+					scn::ray_batch batch;
+					batch.frame = frame;
+					batch.results.reserve(asked->size());
+					for (const scn::ray_request& request : *asked) {
+						batch.results.push_back(run_request(*state, request));
+					}
+					return batch;
+				});
+		}
 
 	private:
-		// Calls `found(hit)` for the nearest hit of every entity the ray meets; what it returns is the distance the walk goes on
-		// to (infinity: every entity; the hit's own distance: only nearer ones). For `any` the walk stops at the first hit.
+		// A query against the live world: the registry says what each entity is now.
 		template <class Found>
 		void walk(entt::registry& world, const scn::ray& line, const scn::ray_filter& filter, mode how, Found&& found)
 		{
@@ -281,117 +482,18 @@ namespace {
 				return;
 			}
 			ensure_current(world);
-			const glm::vec3 direction = line.direction / length;
-			const ds::ray3 ray(line.origin, direction);
-			float t_max = filter.max_distance;
-			bool stopped = false;
-			m_world.traverse_ray(ray, t_max, [&](std::uint32_t, const std::uint32_t& index, float) {
-				if (stopped) {
-					return ds::bvh_ray_action{ t_max, true };
-				}
-				const auto hit = test_entry(world, m_entries[index], ray, filter, t_max, how);
-				if (!hit) {
-					return ds::bvh_ray_action{ t_max, false };
-				}
-				const float next = found(*hit);
-				if (how == mode::any) {
-					stopped = true;
-					return ds::bvh_ray_action{ t_max, true };
-				}
-				t_max = std::min(t_max, next);
-				return ds::bvh_ray_action{ t_max, false };
-			});
-		}
-
-		// The nearest hit inside one entity, after the filters.
-		std::optional<scn::ray_hit> test_entry(entt::registry& world, const entry& mesh, const ds::ray3& ray, const scn::ray_filter& filter,
-			float t_max, mode how)
-		{
-			if (mesh.degenerate || !mesh.tree || !world.valid(mesh.entity) || excluded(filter.exclude, mesh.entity)) {
-				return std::nullopt;
-			}
-			if (!filter.include_hidden && !world.all_of<scn::renderable>(mesh.entity)) {
-				return std::nullopt;
-			}
-			const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
-			const scn::spatial_mask on = layers ? layers->mask : scn::spatial_mask{ scn::k_default_spatial_layer };
-			if (!on.any_of(filter.mask)) {
-				return std::nullopt;
-			}
-			const glm::vec3 local_origin = glm::vec3(mesh.inverse * glm::vec4(ray.origin, 1.f));
-			const glm::vec3 local_direction = glm::vec3(mesh.inverse * glm::vec4(ray.direction, 0.f));
-			if (!(glm::dot(local_direction, local_direction) > 0.f)) {
-				return std::nullopt;
-			}
-			const ds::ray3 local(local_origin, local_direction);
-			// A point of the local ray is the same parameter t of the world ray: the transform is affine.
-			struct best_hit
-			{
-				float t = 0.f;
-				std::uint32_t first_index = ~0u;
-				ds::triangle_hit triangle{};
-				bool exact = false;
-				bool found = false;
-			} best;
-			best.t = t_max;
-			const triangle_tree& tree = *mesh.tree;
-			tree.triangles.traverse_ray(local, t_max, [&](std::uint32_t, const std::uint32_t& first_index, float box_entry) {
-				if (!filter.triangles || tree.boxes_only) {
-					const float entry_distance = std::max(box_entry, 0.f);
-					if (entry_distance <= best.t) {
-						best = { entry_distance, first_index, {}, false, true };
+			const ds::ray3 ray(line.origin, line.direction / length);
+			walk_world(m_world, ray, filter.max_distance, how,
+				[&](std::uint32_t index, float t_max) -> std::optional<scn::ray_hit> {
+					const entry& mesh = m_entries[index];
+					if (!world.valid(mesh.entity)) {
+						return std::nullopt;
 					}
-					return ds::bvh_ray_action{ best.t, how == mode::any && best.found };
-				}
-				const auto& indices = tree.geometry->indices;
-				glm::vec3 a;
-				glm::vec3 b;
-				glm::vec3 c;
-				if (!read_position(tree, indices[first_index], a) || !read_position(tree, indices[first_index + 1], b)
-					|| !read_position(tree, indices[first_index + 2], c)) {
-					return ds::bvh_ray_action{ best.t, false };
-				}
-				const auto hit = ds::ray_triangle(local.origin, local.direction, a, b, c, false, best.t);
-				if (!hit) {
-					return ds::bvh_ray_action{ best.t, false };
-				}
-				const bool seen_from_behind = hit->back_face != mesh.mirrored;
-				if (filter.cull_back_faces && seen_from_behind) {
-					return ds::bvh_ray_action{ best.t, false };
-				}
-				best = { hit->t, first_index, *hit, true, true };
-				return ds::bvh_ray_action{ best.t, how == mode::any };
-			});
-			if (!best.found) {
-				return std::nullopt;
-			}
-			scn::ray_hit out;
-			out.entity = mesh.entity;
-			out.distance = best.t;
-			out.point = ray.origin + ray.direction * best.t;
-			if (best.exact) {
-				const auto& indices = tree.geometry->indices;
-				glm::vec3 a;
-				glm::vec3 b;
-				glm::vec3 c;
-				read_position(tree, indices[best.first_index], a);
-				read_position(tree, indices[best.first_index + 1], b);
-				read_position(tree, indices[best.first_index + 2], c);
-				glm::vec3 normal = mesh.normal_matrix * glm::cross(b - a, c - a);
-				const float normal_length = glm::length(normal);
-				normal = normal_length > 0.f ? normal / normal_length : -ray.direction;
-				// On the side the ray came from; back_face says whether that is the triangle's back.
-				if (glm::dot(normal, ray.direction) > 0.f) {
-					normal = -normal;
-				}
-				out.normal = normal;
-				out.triangle = best.first_index / 3;
-				out.barycentric = { best.triangle.u, best.triangle.v };
-				out.back_face = best.triangle.back_face != mesh.mirrored;
-			} else {
-				out.normal = -ray.direction;
-			}
-			return out;
+					const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
+					return test_mesh(mesh, world.all_of<scn::renderable>(mesh.entity),
+						layers ? layers->mask : scn::spatial_mask{ scn::k_default_spatial_layer }, ray, filter, t_max, how);
+				},
+				found);
 		}
 
 		// Builds the trees again when a mesh or geometry component came, went or changed (structure_changed), when the world has
@@ -412,6 +514,28 @@ namespace {
 			if (rebuild) {
 				build(world);
 			}
+		}
+
+		void take_snapshot(entt::registry& world)
+		{
+			auto made = std::make_shared<snapshot>();
+			made->world = m_world;
+			made->entries.reserve(m_entries.size());
+			for (const entry& mesh : m_entries) {
+				snapshot_entry copy;
+				copy.mesh = mesh;
+				copy.valid = world.valid(mesh.entity);
+				if (copy.valid) {
+					copy.renderable = world.all_of<scn::renderable>(mesh.entity);
+					const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
+					if (layers) {
+						copy.layers = layers->mask;
+					}
+				}
+				made->entries.push_back(std::move(copy));
+			}
+			m_snapshot = std::move(made);
+			m_snapshot_stamp = m_stamp;
 		}
 
 		void build(entt::registry& world)
@@ -477,11 +601,16 @@ namespace {
 			m_world.build(std::move(items));
 			m_built = true;
 			m_dirty = false;
+			++m_stamp;
 		}
 
 		bool m_built = false;
 		bool m_dirty = false;
 		std::uint64_t m_holds_revision = 0;
+		// Moves with everything a snapshot copies; a snapshot is taken anew when it differs from the snapshot's.
+		std::uint64_t m_stamp = 1;
+		std::uint64_t m_snapshot_stamp = 0;
+		std::shared_ptr<const snapshot> m_snapshot;
 		std::size_t m_mesh_count = 0;
 		std::vector<entry> m_entries;
 		std::unordered_map<entt::entity, std::uint32_t> m_index_of;

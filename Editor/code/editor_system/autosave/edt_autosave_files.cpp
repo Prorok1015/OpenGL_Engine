@@ -6,13 +6,27 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <iterator>
 #include <exception>
 #include <format>
 #include <random>
 #include <system_error>
 #include <vector>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cstring>
+#include <unistd.h>
+#endif
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
@@ -88,10 +102,51 @@ std::string edt::autosave_source_text(const res::tag& source)
 	return source.protocol() == res::tag::default_protocol() ? std::string(source.relative()) : std::string(source.view());
 }
 
-std::string edt::autosave_file_of(std::string_view kind, const res::tag& source)
+bool edt::is_autosave_kind(std::string_view kind)
+{
+	return std::ranges::find(k_autosave_kinds, kind) != k_autosave_kinds.end();
+}
+
+bool edt::is_autosave_session_name(std::string_view name)
+{
+	return name.size() == 32 && std::ranges::all_of(name, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
+std::string edt::autosave_session_folder(std::string_view session)
+{
+	return std::format("{}/{}", k_autosave_folder, one_file_name(session));
+}
+
+std::string edt::autosave_file_of(std::string_view session, std::string_view kind, const res::tag& source)
 {
 	const std::string text = autosave_source_text(source);
-	return std::format("{}/{}/{}", k_autosave_folder, one_file_name(kind), text.empty() ? std::string{ "untitled" } : one_file_name(text));
+	return std::format("{}/{}/{}", autosave_session_folder(session), one_file_name(kind),
+		text.empty() ? std::string{ "untitled" } : one_file_name(text));
+}
+
+std::string_view edt::autosave_leaf_of(std::string_view file)
+{
+	const std::size_t slash = file.rfind('/');
+	return slash == std::string_view::npos ? file : file.substr(slash + 1);
+}
+
+std::optional<res::tag> edt::autosave_source_tag(std::string_view text)
+{
+	if (text.empty() || text.find("://") != std::string_view::npos || text.front() == '/') return std::nullopt;
+	for (const char c : text) {
+		const auto byte = static_cast<unsigned char>(c);
+		if (byte < 0x20 || byte == 0x7f || c == '\\' || c == ':') return std::nullopt;
+	}
+	std::size_t start = 0;
+	while (start <= text.size()) {
+		const std::size_t end = (std::min)(text.find('/', start), text.size());
+		const std::string_view part = text.substr(start, end - start);
+		if (part.empty() || part == "." || part == "..") return std::nullopt;
+		start = end + 1;
+	}
+	res::tag tag = res::tag::make(text);
+	if (!tag.is_valid() || autosave_source_text(tag) != text) return std::nullopt;
+	return tag;
 }
 
 std::string edt::autosave_meta_text(const autosave_meta& meta)
@@ -103,6 +158,7 @@ std::string edt::autosave_meta_text(const autosave_meta& meta)
 	root["generation"] = meta.generation;
 	root["saved_at"] = meta.saved_at;
 	root["session"] = meta.session;
+	root["host"] = meta.host;
 	root["payload_size"] = meta.payload_size;
 	root["payload_sha256"] = meta.payload_sha256;
 	if (meta.source_size) {
@@ -135,9 +191,10 @@ std::optional<edt::autosave_meta> edt::parse_autosave_meta(std::string_view text
 	const std::optional<std::uint64_t> generation = number_of("generation");
 	const json::string* saved_at = string_of("saved_at");
 	const json::string* session = string_of("session");
+	const json::string* host = string_of("host");
 	const std::optional<std::uint64_t> payload_size = number_of("payload_size");
 	const json::string* payload_sha256 = string_of("payload_sha256");
-	if (!format || *format != static_cast<std::uint64_t>(k_autosave_format) || !source || !kind || !generation || !saved_at || !session
+	if (!format || *format != static_cast<std::uint64_t>(k_autosave_format) || !source || !kind || !generation || !saved_at || !session || !host
 		|| !payload_size || !payload_sha256) {
 		return std::nullopt;
 	}
@@ -147,6 +204,7 @@ std::optional<edt::autosave_meta> edt::parse_autosave_meta(std::string_view text
 	meta.generation = *generation;
 	meta.saved_at = std::string(*saved_at);
 	meta.session = std::string(*session);
+	meta.host = std::string(*host);
 	meta.payload_size = *payload_size;
 	meta.payload_sha256 = std::string(*payload_sha256);
 	meta.source_size = number_of("source_size");
@@ -156,15 +214,87 @@ std::optional<edt::autosave_meta> edt::parse_autosave_meta(std::string_view text
 
 const std::string& edt::autosave_session_id()
 {
-	static const std::string session = [] {
-		std::random_device random;
-		std::string out;
-		for (int part = 0; part < 4; ++part) {
-			out += std::format("{:08x}", static_cast<std::uint32_t>(random()));
-		}
-		return out;
-	}();
+	static const std::string session = autosave_new_session_id();
 	return session;
+}
+
+std::string edt::autosave_new_session_id()
+{
+	std::random_device random;
+	std::string out;
+	for (int part = 0; part < 4; ++part) {
+		out += std::format("{:08x}", static_cast<std::uint32_t>(random()));
+	}
+	return out;
+}
+
+std::string edt::this_host_name()
+{
+	std::string name;
+#if defined(_WIN32)
+	wchar_t buffer[256]{};
+	DWORD size = static_cast<DWORD>(std::size(buffer));
+	bool named = ::GetComputerNameExW(ComputerNameDnsHostname, buffer, &size) != FALSE;
+	if (!named) {
+		size = static_cast<DWORD>(std::size(buffer));
+		named = ::GetComputerNameW(buffer, &size) != FALSE;
+	}
+	if (named && size < std::size(buffer)) {
+		name = fs_paths::utf8_of(fs::path(std::wstring(buffer, size)));
+	}
+#else
+	char buffer[256]{};
+	if (::gethostname(buffer, sizeof(buffer) - 1) == 0) {
+		name = std::string(buffer, ::strnlen(buffer, sizeof(buffer) - 1));
+	}
+#endif
+	if (name.size() > 255) {
+		std::size_t end = 255;
+		while (end > 0 && (static_cast<unsigned char>(name[end]) & 0xC0) == 0x80) --end;
+		name.resize(end);
+	}
+	return name;
+}
+
+std::string edt::autosave_session_text(const autosave_session_info& info)
+{
+	json::object root;
+	root["format"] = info.format;
+	root["session"] = info.session;
+	root["host"] = info.host;
+	root["pid"] = info.pid;
+	root["started_at"] = info.started_at;
+	root["locked"] = info.locked;
+	return prj::to_indented_json(root);
+}
+
+std::optional<edt::autosave_session_info> edt::parse_autosave_session(std::string_view text)
+{
+	boost::system::error_code ec;
+	json::parse_options options;
+	options.max_depth = 8;
+	const json::value root = json::parse(text, ec, {}, options);
+	if (ec || !root.is_object()) return std::nullopt;
+	const json::object& object = root.as_object();
+	const json::value* format = object.if_contains("format");
+	const json::value* session = object.if_contains("session");
+	const json::value* host = object.if_contains("host");
+	const json::value* pid = object.if_contains("pid");
+	const json::value* started_at = object.if_contains("started_at");
+	const json::value* locked = object.if_contains("locked");
+	const bool format_ok = format && ((format->is_int64() && format->as_int64() == k_autosave_format)
+		|| (format->is_uint64() && format->as_uint64() == static_cast<std::uint64_t>(k_autosave_format)));
+	if (!format_ok || !session || !session->is_string() || !host || !host->is_string() || !locked || !locked->is_bool()) {
+		return std::nullopt;
+	}
+	autosave_session_info info;
+	info.session = std::string(session->as_string());
+	info.host = std::string(host->as_string());
+	if (pid && pid->is_int64()) info.pid = pid->as_int64();
+	else if (pid && pid->is_uint64() && pid->as_uint64() <= static_cast<std::uint64_t>(INT64_MAX)) info.pid = static_cast<std::int64_t>(pid->as_uint64());
+	if (started_at && started_at->is_string()) info.started_at = std::string(started_at->as_string());
+	info.locked = locked->as_bool();
+	return info;
 }
 
 std::string edt::autosave_time_now()
@@ -185,6 +315,47 @@ std::string edt::write_autosave_files(const fs::path& cache_root, std::string_vi
 	}
 	const auto* first = reinterpret_cast<const std::byte*>(meta.data());
 	return write_one(root, fs_paths::path_from_utf8(autosave_meta_of(file)), std::span<const std::byte>(first, meta.size()));
+}
+
+std::string edt::write_autosave_file(const fs::path& cache_root, std::string_view file, std::string_view text)
+{
+	try {
+		const fs::path relative = fs_paths::path_from_utf8(file);
+		platform::beneath::pinned_root root{ cache_root };
+		if (std::string error = platform::beneath::make_folders_beneath(root, relative.parent_path()); !error.empty()) {
+			return error;
+		}
+		const auto* first = reinterpret_cast<const std::byte*>(text.data());
+		return write_one(root, relative, std::span<const std::byte>(first, text.size()));
+	} catch (const std::exception& error) {
+		return error.what();
+	} catch (...) {
+		return "an unknown error";
+	}
+}
+
+std::string edt::remove_autosave_file(const fs::path& cache_root, std::string_view file)
+{
+	try {
+		platform::beneath::pinned_root root{ cache_root };
+		return remove_one(root, fs_paths::path_from_utf8(file));
+	} catch (const std::exception& error) {
+		return error.what();
+	} catch (...) {
+		return "an unknown error";
+	}
+}
+
+std::string edt::remove_autosave_tree(const fs::path& cache_root, std::string_view name)
+{
+	try {
+		platform::beneath::pinned_root root{ cache_root };
+		return platform::beneath::remove_tree_beneath(root, fs_paths::path_from_utf8(k_autosave_folder), fs_paths::path_from_utf8(name));
+	} catch (const std::exception& error) {
+		return error.what();
+	} catch (...) {
+		return "an unknown error";
+	}
 }
 
 std::string edt::remove_autosave_files(const fs::path& cache_root, std::string_view file)

@@ -45,6 +45,8 @@ namespace {
 	namespace pmg = prj::migration;
 
 	constexpr std::size_t k_max_shown = 32;
+	// The fingerprint of a question asked before there was a plan to show (#1278): no plan's fnv1a hash is 0 in practice.
+	constexpr std::uint64_t k_no_plan = 0;
 	// What a person was shown lives as long as the question about it; an approved plan that met `busy` lives as long again
 	// from that refusal, well past agent_confirmations::busy_wait (5 s), so every retry finds it.
 	constexpr auto k_shown_lifetime = cmd::command_registry::confirmation_lifetime;
@@ -114,6 +116,12 @@ namespace {
 	json::value error_value(std::string_view code, std::string_view message)
 	{
 		return json::object{ { "error", json::object{ { "code", code }, { "message", message } } } };
+	}
+
+	cmd::result index_wait_refusal(cmd::result refused)
+	{
+		refused.value = json::object{ { edt::k_index_wait_key, true } };
+		return refused;
 	}
 
 	// FNV-1a 64.
@@ -687,6 +695,7 @@ namespace {
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return cmd::result::failure(k_no_project, "no project is open");
+			if (auto why = index_wait()) return index_wait_refusal(cmd::result::failure(cmd::codes::busy, *why));
 			const pmg::migration_plan plan = make_plan(*root);
 			json::object planned = plan_json(plan);
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(*root);
@@ -707,6 +716,11 @@ namespace {
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return std::string("This request will be refused: no project is open");
+			if (auto why = index_wait()) {
+				// A fingerprint no plan has: the run a person approves now is refused, its retry is denied.
+				remember(key_of(call.from), call.confirmation, k_no_plan);
+				return "This request will be refused: " + shown_message(*why);
+			}
 			const pmg::migration_plan plan = make_plan(*root);
 			remember(key_of(call.from), call.confirmation, fingerprint_of(*root, plan, code_identity()));
 
@@ -765,7 +779,8 @@ namespace {
 				return cmd::result::failure(std::move(code), std::move(message));
 			};
 			if (m_running) return refuse(cmd::codes::busy, "a migration of the project is already running");
-			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return refuse(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return refuse(cmd::codes::busy, *why);
+			if (auto why = index_wait()) return index_wait_refusal(refuse(cmd::codes::busy, *why));
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return refuse(cmd::codes::needs_input, *why);
 
 			auto run = std::make_shared<migration_run>();
@@ -824,7 +839,7 @@ namespace {
 				return cmd::result::failure(std::move(code), std::move(message));
 			};
 			if (m_running) return refuse(cmd::codes::busy, "a migration or a rollback of the project is already running");
-			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return refuse(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return refuse(cmd::codes::busy, *why);
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return refuse(cmd::codes::needs_input, *why);
 
 			auto run = std::make_shared<migration_run>();
@@ -983,6 +998,16 @@ namespace {
 			return asked != m_shown.end() ? &*asked : nullptr;
 		}
 
+		std::optional<std::string> index_wait() const
+		{
+			return m_deps.index_wait ? m_deps.index_wait() : std::nullopt;
+		}
+
+		std::optional<std::string> busy_reason_now() const
+		{
+			return m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt;
+		}
+
 		pmg::migration_plan make_plan(const fs::path& root) const
 		{
 			const desc::desc_system& descs = m_deps.descs();
@@ -1065,7 +1090,9 @@ namespace {
 			if (run.abandoned->load()) return error_value(cmd::codes::failed, "the job was cancelled: nothing was written");
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root || *root != run.root) return error_value(k_no_project, "the project is not open any more: nothing was written");
-			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return error_value(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return error_value(cmd::codes::busy, *why);
+			// The rollback does not wait for the index: its migration's own writes keep it pending.
+			if (auto why = run.rollback ? std::optional<std::string>{} : index_wait()) return error_value(cmd::codes::busy, *why);
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return error_value(cmd::codes::needs_input, *why);
 			return std::nullopt;
 		}
@@ -1382,7 +1409,7 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	cmd::command_desc plan;
 	plan.id = "project.migration_plan";
 	plan.summary = "The plan of migrating the open project's data to this engine (as editor --migrate --dry-run): files, steps, "
-		"what is not migrated and the exit code of the dry run. Writes nothing";
+		"what is not migrated and the exit code of the dry run. Writes nothing; `busy` until the asset index is ready";
 	plan.args_schema = parse_schema(k_no_args_schema);
 	plan.result_schema = parse_schema(k_plan_result_schema);
 	plan.category = cmd::agent_category::read;
@@ -1392,7 +1419,8 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	cmd::command_desc migrate;
 	migrate.id = "project.migrate";
 	migrate.summary = "Migrate the open project in place after a person approved the plan they were shown (as editor --migrate, "
-		"without --force). Refused while Play runs, a level loads or a build runs (`busy`) and with unsaved changes (`needs_input`). "
+		"without --force). Refused while Play runs, a level loads, a build runs or the asset index is being built (`busy`) and with unsaved "
+		"changes (`needs_input`). "
 		"Open documents are closed and the level is opened again; the job's result is the report";
 	migrate.args_schema = parse_schema(k_migrate_args_schema);
 	migrate.result_schema = parse_schema(k_job_result_schema);
@@ -1410,8 +1438,8 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	cmd::command_desc rollback;
 	rollback.id = "project.migrate_rollback";
 	rollback.summary = "Roll back a migration of the open project from its journal and backup in .snk/migrations/<id> (as editor "
-		"--migrate-rollback <id>) after a person approved it. Refused while Play runs, a level loads or a build runs (`busy`) and with "
-		"unsaved changes (`needs_input`). Open documents are closed and the level is opened again; the job's result is "
+		"--migrate-rollback <id>) after a person approved it. Refused while Play runs, a level loads or a build runs (`busy`; it does "
+		"not wait for the asset index) and with unsaved changes (`needs_input`). Open documents are closed and the level is opened again; the job's result is "
 		"{code, status, id, text}: code 0 rolled back, 2 refused (nothing written), 6 put back only in part";
 	rollback.args_schema = parse_schema(k_rollback_args_schema);
 	rollback.result_schema = parse_schema(k_job_result_schema);

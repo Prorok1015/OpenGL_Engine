@@ -33,6 +33,8 @@ namespace edt
 			// What a rollback of migration `id` would do (edt::rollback_listing_of of the open project); null: no rollback can
 			// be shown, so none is confirmed.
 			std::function<rollback_listing(const std::string& id)> listing_of;
+			// migration_deps::index_wait: once a plan refused for the index finds it ready, tick() asks again. Null: no retry.
+			std::function<std::optional<std::string>()> index_wait;
 		};
 
 		// The question "Roll back migration <id>?" (#910): what the rollback would do, one path per line; `refused`: why it
@@ -114,6 +116,9 @@ namespace edt
 		void request_plan();
 		// Runs what request_plan asked for; the window calls it every frame it is drawn.
 		void tick();
+		// Every frame the window is drawn: a plan refused because the asset index was not ready is asked for again once
+		// ports::index_wait says it is (the startup's Migrate almost always opens the window before that).
+		void poll_index();
 		// Only for a plan that needs a migration (code 1).
 		bool can_migrate() const { return m_phase == phase::plan_shown && m_plan && m_plan->code == k_code_needed; }
 		// project.migrate; refused at once (busy, needs_input, ...) the plan stays shown with the reason.
@@ -158,6 +163,10 @@ namespace edt
 
 		// What the person can do about an error code of these commands; empty: nothing to add.
 		static std::string hint_of(std::string_view code);
+		// The hint of a `busy` that waits for the asset index (k_index_wait_key).
+		static constexpr std::string_view k_index_wait_hint = "The asset index is still being built; try again in a moment.";
+		// The last plan was refused because the asset index was not ready.
+		bool waiting_for_index() const { return m_waiting_for_index; }
 		// One line for a report's code: "Migrated", "Rolled back", ...
 		static std::string outcome_text(int code);
 		// The same for an answer of project.migrate_rollback.
@@ -179,6 +188,7 @@ namespace edt
 		std::string m_error_hint;
 		std::string m_notice;
 		bool m_rolling_back = false;
+		bool m_waiting_for_index = false;
 		std::optional<rollback_question> m_question;
 		// The id the question was asked for, as given (rollback_question::id is cleaned for the screen), and the journal it
 		// showed: a journal that reads otherwise by the run is refused.

@@ -56,6 +56,8 @@ namespace edt
 			cmd::log_read_filter* log_filter;
 			// Why a migration cannot start now: Play, a load, a build, a reload, an import, the export dialog, a git write. Null: none.
 			std::function<std::optional<std::string>()> busy_reason;
+			// Why the asset index is not ready yet (asset_index_wait, #1278): the plan waits for it too. Null: ready.
+			std::function<std::optional<std::string>()> index_wait;
 			// A person is in the middle of an edit, or a document has unsaved changes. Null: none.
 			std::function<std::optional<std::string>()> unsaved_reason;
 			// Moves with every change of the game layer: project.migrate binds the plan a person approved to the code that runs it.
@@ -88,13 +90,14 @@ namespace edt
 		std::optional<std::string> project_write_blocker();
 		// Why a level of the project is not saved (a migration stopped half way and is not rolled back); nullopt: none.
 		std::optional<std::string> stopped_reason() { return m_stopped.reason(); }
+		// No level is loading or settling and the start level is not pending: startup questions may be asked (#1187 too).
+		bool start_level_settled() const;
 
 	private:
 		void open_rollback(const std::string& id);
 		void offer_rollback(const journal_offer& offer);
 		void start_scan(const std::filesystem::path& root);
 		bool draw_notice();
-		bool start_level_settled() const;
 
 		ports m_ports;
 		std::shared_ptr<migration_panel> m_panel;

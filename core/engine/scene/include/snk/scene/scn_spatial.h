@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/ds/ds_bit_frags.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <entt/entity/entity.hpp>
 #include <entt/fwd.hpp>
@@ -72,6 +73,45 @@ namespace scn {
 		bool back_face = false;
 	};
 
+	enum class ray_query : std::uint8_t
+	{
+		// The nearest hit: no hit or one.
+		closest,
+		// Whether anything is hit: no hit or one (the first the walk found, not the nearest).
+		any,
+		// The nearest hit of every entity the ray meets, nearest first, at most `max_hits` of them.
+		all,
+	};
+
+	// One ray of an asynchronous batch. Owns its exclude list: the batch outlives the caller's memory.
+	struct ray_request
+	{
+		ray line;
+		ray_query kind = ray_query::closest;
+		float max_distance = std::numeric_limits<float>::infinity();
+		spatial_mask mask = spatial_mask::all();
+		bool include_hidden = false;
+		bool cull_back_faces = false;
+		bool triangles = true;
+		std::uint32_t max_hits = 64;
+		std::vector<entt::entity> exclude;
+	};
+
+	struct ray_result
+	{
+		std::vector<ray_hit> hits;
+		// `all` found more entities than `max_hits`: these are the nearest ones.
+		bool truncated = false;
+	};
+
+	// The answers of a batch, in the order of its requests, from the world as it was when the batch was handed in.
+	struct ray_batch
+	{
+		// The `frame` the caller gave: the frame whose state these answers describe, however late they arrive.
+		std::uint64_t frame = 0;
+		std::vector<ray_result> results;
+	};
+
 	static_assert(std::is_trivially_copyable_v<spatial_layers> && std::is_standard_layout_v<spatial_layers>);
 	static_assert(std::is_trivially_copyable_v<ray> && std::is_standard_layout_v<ray>);
 	static_assert(std::is_trivially_copyable_v<ray_hit> && std::is_standard_layout_v<ray_hit>);
@@ -97,11 +137,19 @@ namespace scn {
 		bool raycast_any(entt::registry& world, const ray& line, const ray_filter& filter);
 		// One hit per entity, nearest first (equal distances: by entity).
 		void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out);
+		// A callback of the handle (then_main) is not tied to a ds::lifetime owner here: a module that holds the handle must drop it
+		// (and any continuation it set) before the module is unloaded.
+		// Runs the requests on the task system's compute lane against a snapshot of the world taken now (one copy per state of the
+		// world: batches handed in while nothing changed share it). Later moves, creations and destructions do not touch it,
+		// and nothing of the batch lives in the frame allocator. The result is read with handle.get() once handle.status() is ready.
+		ds::task_handle<ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
+			std::uint64_t frame);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
 	private:
 		static void on_structure_changed(entt::registry& world, entt::entity entity);
+		static void on_state_changed(entt::registry& world, entt::entity entity);
 
 		std::unique_ptr<detail::spatial_backend> m_backend;
 	};
@@ -110,6 +158,9 @@ namespace scn {
 	SNK_API std::optional<ray_hit> raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter = {});
 	SNK_API bool raycast_any(entt::registry& world, const ray& line, const ray_filter& filter = {});
 	SNK_API void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out);
+
+	SNK_API ds::task_handle<ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
+		std::uint64_t frame);
 
 	// The ray through a point of an image. `point` is in pixels, origin top left, y down; `image_size` the image's size.
 	// With a camera entity of `world` (camera_component + world_transform); nothing when it has none or the size is empty.

@@ -149,9 +149,10 @@ struct autosave_fixture : test_util::scene_env
 	bool written(std::string_view relative) const { return fs::exists(file_of(relative)) && fs::exists(meta_of(relative)); }
 	bool nothing_at(std::string_view relative) const { return !fs::exists(file_of(relative)) && !fs::exists(meta_of(relative)); }
 
-	static constexpr std::string_view k_untitled = "autosave/scene/untitled";
-	static constexpr std::string_view k_level = "autosave/scene/levels%2Fa.desc";
-	static constexpr std::string_view k_data = "autosave/data/settings.desc";
+	std::string session_folder() const { return edt::autosave_session_folder(autosave->session()); }
+	std::string untitled_file() const { return session_folder() + "/scene/untitled"; }
+	std::string level_file() const { return session_folder() + "/scene/levels%2Fa.desc"; }
+	std::string data_file() const { return session_folder() + "/data/settings.desc"; }
 
 	test_util::temp_dir dir{ "edt_autosave" };
 	const fs::path content = dir.path() / "content";
@@ -180,25 +181,26 @@ BOOST_AUTO_TEST_CASE(ADirtyDocument_IsWrittenAfterTheInterval_ACleanOneNever)
 {
 	autosave->tick();
 	after(120s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 	BOOST_TEST(autosave->writes() == 0u);
 
 	edit_level();
 	after(1s);
 	after(58s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 	after(2s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 	BOOST_TEST(autosave->writes() == 1u);
-	BOOST_TEST(autosave->written_file(state.id()) == std::string(k_untitled));
+	BOOST_TEST(autosave->written_file(state.id()) == std::string(untitled_file()));
 }
 
 // Review of #1329: a document that is not autosaved says so in Problems until it is written again.
 BOOST_AUTO_TEST_CASE(AWriteThatFails_IsAProblemsWarning_UntilTheNextWriteSucceeds)
 {
 	// A file where the kind's folder goes: the folder cannot be made.
-	fs::create_directories(cache / "autosave");
-	std::ofstream(cache / "autosave" / "scene", std::ios::binary) << "x";
+	autosave->tick();
+	BOOST_REQUIRE(fs::is_directory(cache / session_folder()));
+	std::ofstream(cache / session_folder() / "scene", std::ios::binary) << "x";
 	edit_level();
 	after(1s);
 	after(60s);
@@ -209,11 +211,11 @@ BOOST_AUTO_TEST_CASE(AWriteThatFails_IsAProblemsWarning_UntilTheNextWriteSucceed
 	BOOST_TEST((listed[0].item.severity == edt::problem_severity::warning));
 	BOOST_TEST(listed[0].item.message.find("could not be autosaved") != std::string::npos);
 
-	fs::remove(cache / "autosave" / "scene");
+	fs::remove(cache / session_folder() / "scene");
 	edit_level();
 	after(1s);
 	after(60s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 	BOOST_TEST(problems.list().empty());
 }
 
@@ -224,9 +226,9 @@ BOOST_AUTO_TEST_CASE(TheCountdown_StartsAtTheFirstEdit_LaterEditsDoNotPushItBack
 	after(40s);
 	edit_level();
 	after(15s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 	after(6s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(NoSecondWrite_WithoutANewEdit_TheNextOneIsAnIntervalAfterIt)
@@ -253,11 +255,11 @@ BOOST_AUTO_TEST_CASE(AGestureInProgress_DefersTheWrite_UntilItEnds)
 	gesture = true;
 	after(61s);
 	after(30s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 
 	gesture = false;
 	after(0s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(Save_RemovesTheAutosaveAndItsMeta)
@@ -266,11 +268,11 @@ BOOST_AUTO_TEST_CASE(Save_RemovesTheAutosaveAndItsMeta)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_level));
+	BOOST_REQUIRE(written(level_file()));
 
 	BOOST_REQUIRE(state.save().saved);
 	after(1s);
-	BOOST_TEST(nothing_at(k_level));
+	BOOST_TEST(nothing_at(level_file()));
 	BOOST_TEST(autosave->written_file(state.id()).empty());
 }
 
@@ -279,11 +281,11 @@ BOOST_AUTO_TEST_CASE(Discard_RemovesTheAutosaveAndItsMeta)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 
 	state.mark_clean();
 	after(1s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(Close_RemovesTheAutosaveAndItsMeta)
@@ -293,12 +295,12 @@ BOOST_AUTO_TEST_CASE(Close_RemovesTheAutosaveAndItsMeta)
 	BOOST_REQUIRE(set_speed(data, 5.0));
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_data));
+	BOOST_REQUIRE(written(data_file()));
 
 	documents.close(id);
-	BOOST_TEST(nothing_at(k_data));
+	BOOST_TEST(nothing_at(data_file()));
 	after(1s);
-	BOOST_TEST(nothing_at(k_data));
+	BOOST_TEST(nothing_at(data_file()));
 }
 
 BOOST_AUTO_TEST_CASE(ACleanExit_RemovesWhatWasWritten)
@@ -306,10 +308,10 @@ BOOST_AUTO_TEST_CASE(ACleanExit_RemovesWhatWasWritten)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 
 	autosave->shutdown();
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(AnAutosave_ChangesNeitherTheSourceNorTheDocument)
@@ -321,7 +323,7 @@ BOOST_AUTO_TEST_CASE(AnAutosave_ChangesNeitherTheSourceNorTheDocument)
 	const bool had_undo = state.next_undo_entry().has_value();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_level));
+	BOOST_REQUIRE(written(level_file()));
 
 	BOOST_TEST(read_file(content / "levels" / "a.desc") == source);
 	BOOST_TEST(state.is_dirty());
@@ -335,12 +337,12 @@ BOOST_AUTO_TEST_CASE(DisabledInTheSettings_NothingIsWritten)
 	edit_level();
 	after(1s);
 	after(600s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 
 	autosave->set_allowed(false);
 	autosave->set_settings({});
 	after(600s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(TurningAutosaveOff_RemovesWhatItWrote)
@@ -348,19 +350,19 @@ BOOST_AUTO_TEST_CASE(TurningAutosaveOff_RemovesWhatItWrote)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 
 	autosave->set_settings({ .enabled = false, .interval_seconds = 60 });
 	after(1s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 
 	autosave->set_settings({});
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 	autosave->set_allowed(false);
 	after(1s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(TheInterval_ComesFromTheSettings)
@@ -369,9 +371,9 @@ BOOST_AUTO_TEST_CASE(TheInterval_ComesFromTheSettings)
 	edit_level();
 	after(1s);
 	after(9s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 	after(2s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(InPlay_NothingIsWritten_UntilEditsAreUnlocked)
@@ -381,11 +383,11 @@ BOOST_AUTO_TEST_CASE(InPlay_NothingIsWritten_UntilEditsAreUnlocked)
 	state.set_edits_locked(true);
 	after(61s);
 	after(60s);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 
 	state.set_edits_locked(false);
 	after(1s);
-	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(written(untitled_file()));
 }
 
 BOOST_AUTO_TEST_CASE(TheLevelsAutosave_IsWhatSaveWrites)
@@ -394,8 +396,8 @@ BOOST_AUTO_TEST_CASE(TheLevelsAutosave_IsWhatSaveWrites)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_level));
-	const std::string autosaved = read_file(file_of(k_level));
+	BOOST_REQUIRE(written(level_file()));
+	const std::string autosaved = read_file(file_of(level_file()));
 
 	BOOST_REQUIRE(state.save().saved);
 	BOOST_TEST(read_file(content / "levels" / "a.desc") == autosaved);
@@ -407,8 +409,8 @@ BOOST_AUTO_TEST_CASE(ADataDocumentsAutosave_IsWhatSaveWrites)
 	BOOST_REQUIRE(set_speed(data, 5.0));
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_data));
-	const std::string autosaved = read_file(file_of(k_data));
+	BOOST_REQUIRE(written(data_file()));
+	const std::string autosaved = read_file(file_of(data_file()));
 	BOOST_TEST(read_file(content / "settings.desc").find("2.0") != std::string::npos);
 	BOOST_TEST(data.is_dirty());
 
@@ -416,7 +418,7 @@ BOOST_AUTO_TEST_CASE(ADataDocumentsAutosave_IsWhatSaveWrites)
 	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
 	BOOST_TEST(read_file(content / "settings.desc") == autosaved);
 	after(1s);
-	BOOST_TEST(nothing_at(k_data));
+	BOOST_TEST(nothing_at(data_file()));
 }
 
 BOOST_AUTO_TEST_CASE(TheMetaFile_HasTheDocumentedFields)
@@ -425,10 +427,11 @@ BOOST_AUTO_TEST_CASE(TheMetaFile_HasTheDocumentedFields)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_level));
+	BOOST_REQUIRE(written(level_file()));
 
-	const json::object meta = json::parse(read_file(meta_of(k_level))).as_object();
-	BOOST_TEST(meta.at("format").to_number<int>() == 1);
+	const json::object meta = json::parse(read_file(meta_of(level_file()))).as_object();
+	BOOST_TEST(meta.at("format").to_number<int>() == 2);
+	BOOST_TEST(std::string(meta.at("host").as_string()) == edt::this_host_name());
 	BOOST_TEST(std::string(meta.at("source").as_string()) == "levels/a.desc");
 	BOOST_TEST(std::string(meta.at("kind").as_string()) == "scene");
 	BOOST_TEST(meta.at("generation").to_number<std::uint64_t>() == state.generation());
@@ -440,14 +443,14 @@ BOOST_AUTO_TEST_CASE(TheMetaFile_HasTheDocumentedFields)
 	BOOST_TEST(meta.at("source_size").to_number<std::uint64_t>() == fs::file_size(source));
 	BOOST_TEST(std::string(meta.at("source_sha256").as_string()) == cmn::sha256_file_hex(source).value_or(""));
 
-	const std::string payload = read_file(file_of(k_level));
+	const std::string payload = read_file(file_of(level_file()));
 	BOOST_TEST(meta.at("payload_size").to_number<std::uint64_t>() == payload.size());
 	const auto* first = reinterpret_cast<const std::byte*>(payload.data());
 	BOOST_TEST(std::string(meta.at("payload_sha256").as_string()) == cmn::sha256_hex(std::span<const std::byte>(first, payload.size())));
-	BOOST_TEST(std::string(meta.at("session").as_string()) == edt::autosave_session_id());
-	BOOST_TEST(edt::autosave_session_id().size() == 32u);
+	BOOST_TEST(std::string(meta.at("session").as_string()) == autosave->session());
+	BOOST_TEST(edt::is_autosave_session_name(autosave->session()));
 
-	const std::optional<edt::autosave_meta> parsed = edt::parse_autosave_meta(read_file(meta_of(k_level)));
+	const std::optional<edt::autosave_meta> parsed = edt::parse_autosave_meta(read_file(meta_of(level_file())));
 	BOOST_REQUIRE(parsed.has_value());
 	BOOST_TEST(parsed->kind == "scene");
 	BOOST_TEST(parsed->source == "levels/a.desc");
@@ -458,9 +461,9 @@ BOOST_AUTO_TEST_CASE(AnUntitledLevelsMeta_HasAnEmptySourceAndNoSourceHash)
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 
-	const json::object meta = json::parse(read_file(meta_of(k_untitled))).as_object();
+	const json::object meta = json::parse(read_file(meta_of(untitled_file()))).as_object();
 	BOOST_TEST(std::string(meta.at("source").as_string()).empty());
 	BOOST_TEST(!meta.contains("source_size"));
 	BOOST_TEST(!meta.contains("source_sha256"));
@@ -476,7 +479,7 @@ BOOST_AUTO_TEST_CASE(AProjectSwitch_DuringAWrite_LeavesNothingUnderEitherFolder)
 	after(1s);
 	after(61s);
 	BOOST_REQUIRE(jobs.running_count() == 1u);
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 
 	const fs::path other = dir.path() / "other_cache";
 	fs::create_directories(other);
@@ -485,16 +488,17 @@ BOOST_AUTO_TEST_CASE(AProjectSwitch_DuringAWrite_LeavesNothingUnderEitherFolder)
 	BOOST_TEST(autosave->cache_root() == other);
 	pump();
 
-	BOOST_TEST(nothing_at(k_untitled));
-	BOOST_TEST(!fs::exists(other / "autosave" / "scene" / "untitled"));
+	BOOST_TEST(nothing_at(untitled_file()));
+	BOOST_TEST(!fs::exists(other / untitled_file()));
 	BOOST_TEST(autosave->written_file(state.id()).empty());
 
 	// The next write goes into the new folder, an interval after the switch.
 	after(61s);
 	pump();
-	BOOST_TEST(fs::exists(other / "autosave" / "scene" / "untitled"));
+	BOOST_TEST(fs::exists(other / untitled_file()));
+	const fs::path other_session = other / session_folder();
 	autosave.reset();
-	BOOST_TEST(!fs::exists(other / "autosave" / "scene" / "untitled"));
+	BOOST_TEST(!fs::exists(other_session));
 }
 
 BOOST_AUTO_TEST_CASE(AWriteFinishedBeforeTheSwitchIsSeen_IsRemovedFromTheOldFolder)
@@ -508,11 +512,11 @@ BOOST_AUTO_TEST_CASE(AWriteFinishedBeforeTheSwitchIsSeen_IsRemovedFromTheOldFold
 	fs::create_directories(other);
 	BOOST_REQUIRE(rs->remount(res::tag::cache, { other }));
 	pump();
-	BOOST_REQUIRE(written(k_untitled));
+	BOOST_REQUIRE(written(untitled_file()));
 
 	after(1s);
-	BOOST_TEST(nothing_at(k_untitled));
-	BOOST_TEST(!fs::exists(other / "autosave"));
+	BOOST_TEST(nothing_at(untitled_file()));
+	BOOST_TEST(!fs::exists(other / untitled_file()));
 	autosave.reset();
 }
 
@@ -525,7 +529,7 @@ BOOST_AUTO_TEST_CASE(Shutdown_DropsAWriteNotStarted_AndNoCallbackRunsAfterIt)
 	after(61s);
 	autosave->shutdown();
 	pump();
-	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(nothing_at(untitled_file()));
 	BOOST_TEST(autosave->writes() == 0u);
 	autosave.reset();
 }
@@ -535,9 +539,11 @@ BOOST_AUTO_TEST_CASE(ALinkUnderTheAutosaveFolder_IsNeverFollowed)
 {
 	const fs::path outside = dir.path() / "outside";
 	fs::create_directories(outside);
-	fs::create_directories(cache / "autosave");
+	autosave->tick();
+	const fs::path session = cache / session_folder();
+	BOOST_REQUIRE(fs::is_directory(session));
 	std::error_code ec;
-	fs::create_directory_symlink(outside, cache / "autosave" / "scene", ec);
+	fs::create_directory_symlink(outside, session / "scene", ec);
 	if (ec) {
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
 		return;
@@ -549,10 +555,10 @@ BOOST_AUTO_TEST_CASE(ALinkUnderTheAutosaveFolder_IsNeverFollowed)
 	BOOST_TEST(fs::is_empty(outside));
 	BOOST_TEST(autosave->writes() == 0u);
 
-	fs::remove(cache / "autosave" / "scene");
-	fs::create_directories(cache / "autosave" / "scene");
+	fs::remove(session / "scene");
+	fs::create_directories(session / "scene");
 	std::ofstream(outside / "target.txt", std::ios::binary) << "keep";
-	fs::create_symlink(outside / "target.txt", cache / "autosave" / "scene" / "untitled", ec);
+	fs::create_symlink(outside / "target.txt", session / "scene" / "untitled", ec);
 	BOOST_REQUIRE(!ec);
 	edit_level();
 	after(1s);
@@ -585,8 +591,8 @@ BOOST_AUTO_TEST_CASE(ALiveLevelsAutosave_TakesTheEcsTransforms_AndIsWhatSaveWrit
 	edit_level();
 	after(1s);
 	after(61s);
-	BOOST_REQUIRE(written(k_level));
-	const std::string autosaved = read_file(file_of(k_level));
+	BOOST_REQUIRE(written(level_file()));
+	const std::string autosaved = read_file(file_of(level_file()));
 	BOOST_TEST(state.world_descs[0].get_root().children[0].position.x == 0.f);
 	BOOST_TEST(autosaved != read_file(content / "levels" / "a.desc"));
 
@@ -624,19 +630,19 @@ BOOST_AUTO_TEST_CASE(WithoutACacheMount_AutosaveIsOff)
 
 BOOST_AUTO_TEST_CASE(AFileName_IsOneNamePerSource)
 {
-	BOOST_TEST(edt::autosave_file_of("scene", res::tag{}) == "autosave/scene/untitled");
-	BOOST_TEST(edt::autosave_file_of("prefab", res::tag::make("prefabs/a.prefab.desc")) == "autosave/prefab/prefabs%2Fa.prefab.desc");
-	BOOST_TEST(edt::autosave_file_of("data", res::tag::make("a%b/c:d.desc")) == "autosave/data/a%25b%2Fc%3Ad.desc");
-	BOOST_TEST(edt::autosave_file_of("data", res::tag::make(".hidden.desc")) == "autosave/data/%2Ehidden.desc");
-	const std::string long_name = edt::autosave_file_of("data", res::tag::make(std::string(400, 'x') + ".desc"));
-	BOOST_TEST(long_name.size() < 200u);
-	BOOST_TEST(long_name != edt::autosave_file_of("data", res::tag::make("y" + std::string(399, 'x') + ".desc")));
+	const std::string s(32, 'a');
+	BOOST_TEST(edt::autosave_file_of(s, "scene", res::tag{}) == "autosave/" + s + "/scene/untitled");
+	BOOST_TEST(edt::autosave_file_of(s, "prefab", res::tag::make("prefabs/a.prefab.desc")) == "autosave/" + s + "/prefab/prefabs%2Fa.prefab.desc");
+	BOOST_TEST(edt::autosave_file_of(s, "data", res::tag::make("a%b/c:d.desc")) == "autosave/" + s + "/data/a%25b%2Fc%3Ad.desc");
+	BOOST_TEST(edt::autosave_file_of(s, "data", res::tag::make(".hidden.desc")) == "autosave/" + s + "/data/%2Ehidden.desc");
+	const std::string long_name = std::string(edt::autosave_leaf_of(edt::autosave_file_of(s, "data", res::tag::make(std::string(400, 'x') + ".desc"))));
+	BOOST_TEST(long_name.size() <= 160u);
+	BOOST_TEST(long_name != std::string(edt::autosave_leaf_of(edt::autosave_file_of(s, "data", res::tag::make("y" + std::string(399, 'x') + ".desc")))));
 	// U+00E9 is two bytes: a cut never starts inside a character or inside a %XX escape.
 	std::string accents;
 	for (int i = 0; i < 150; ++i) accents += i % 7 == 0 ? std::string{ "/" } : std::string{ "\xC3\xA9" };
 	for (const std::string& path : { accents, "x" + accents }) {
-		const std::string name = edt::autosave_file_of("data", res::tag::make(path));
-		const std::string leaf = name.substr(std::string_view{ "autosave/data/" }.size());
+		const std::string leaf(edt::autosave_leaf_of(edt::autosave_file_of(s, "data", res::tag::make(path))));
 		BOOST_TEST(leaf.size() <= 160u);
 		BOOST_TEST((static_cast<unsigned char>(leaf.front()) & 0xC0) != 0x80);
 		BOOST_TEST(!(leaf.front() >= '0' && leaf.front() <= '9'));
@@ -654,12 +660,15 @@ BOOST_AUTO_TEST_CASE(TheMeta_ReadsBackAsWritten)
 	meta.source_size = 18;
 	meta.source_sha256 = std::string(64, 'a');
 	meta.session = edt::autosave_session_id();
+	meta.host = "builder";
 	meta.payload_size = 7;
 	meta.payload_sha256 = std::string(64, 'b');
 	const std::optional<edt::autosave_meta> parsed = edt::parse_autosave_meta(edt::autosave_meta_text(meta));
 	BOOST_REQUIRE(parsed.has_value());
 	BOOST_TEST((*parsed == meta));
 	BOOST_TEST(!edt::parse_autosave_meta(R"({"format":2,"source":"","kind":"scene","generation":1,"saved_at":"x"})").has_value());
+	meta.format = 1;
+	BOOST_TEST(!edt::parse_autosave_meta(edt::autosave_meta_text(meta)).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(TheSettings_ParseClampAndRefuse)

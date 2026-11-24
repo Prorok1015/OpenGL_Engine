@@ -8,6 +8,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_start_level.h>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -63,12 +64,14 @@ namespace edt
 		// File > Cancel Level Load (level.cancel_load).
 		void install(std::vector<registration>& out);
 
-		// Starts loading `original_tag`; false when it is no level (nothing started).
-		bool begin(const res::tag& original_tag);
+		// Starts loading `original_tag`; false when it is no level (nothing started). `bytes` (crash recovery, #1187): what
+		// the working copy holds instead of the file's; the document's source is still `original_tag` (empty: untitled).
+		bool begin(const res::tag& original_tag, std::optional<std::vector<std::byte>> bytes = std::nullopt);
 		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
 		bool poll(bool* loaded = nullptr);
 		// begin(), then polls every UI frame under "edt/load_level" until the load ends; `ended(loaded)` runs once when it does.
-		bool begin_and_watch(const res::tag& original_tag, std::function<void(bool)> ended = {});
+		bool begin_and_watch(const res::tag& original_tag, std::function<void(bool)> ended = {},
+			std::optional<std::vector<std::byte>> bytes = std::nullopt);
 		// A load that ended without a level, or was interrupted: the document keeps what it had, the working copy is removed.
 		void abandon();
 		// level.cancel_load, Esc in the loading window: the load goes, the level is the one before it.
@@ -77,6 +80,8 @@ namespace edt
 		bool in_progress() const { return m_loading; }
 		// The level being loaded; empty when nothing loads.
 		const res::tag& loading_tag() const { return m_tag; }
+		// The working copy of the load in progress; empty when nothing loads.
+		const res::tag& loading_copy() const { return m_editor_tag; }
 		// The level waits for the loads it started before it counts as loaded.
 		bool settling() const { return m_settle.has_value(); }
 		void cancel_settle();

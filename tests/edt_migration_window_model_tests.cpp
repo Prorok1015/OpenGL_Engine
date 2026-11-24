@@ -49,6 +49,8 @@ struct window_fixture
 	std::vector<std::string> opened;
 	std::optional<cmd::result> plan_answer;
 	std::optional<cmd::result> migrate_answer;
+	// What ports::index_wait answers; nullopt: the asset index is ready.
+	std::optional<std::string> index_waiting;
 	std::uint64_t job = 7;
 	std::vector<std::string> listed;
 	edt::rollback_listing listing{ {}, "  Migration m2: .snk/migrations/m2/\n  Backup: .snk/migrations/m2/backup\n", "0123456789abcdef" };
@@ -68,6 +70,7 @@ struct window_fixture
 			listed.push_back(id);
 			return listing;
 		};
+		out.index_wait = [this] { return index_waiting; };
 		return out;
 	}
 
@@ -157,6 +160,57 @@ BOOST_AUTO_TEST_CASE(ARefusedPlan_DisablesMigrate)
 	plan_answer = cmd::result::success(json::parse(R"({"code":4,"text":"","plan":{}})"));
 	plan();
 	BOOST_TEST(!model.can_migrate());
+}
+
+// #1278: project.migration_plan is busy until the editor's asset index is ready: the window shows why with its own hint,
+// offers no Migrate, and asks for the plan again by itself once ports::index_wait says the index is ready.
+BOOST_AUTO_TEST_CASE(APlanWaitingForTheAssetIndex_ShowsWhy_AndPlansAgainOnceItIsReady)
+{
+	const std::string why = "the asset index is still being built; the index is not attached yet (the first scan is running)";
+	cmd::result waiting = cmd::result::failure(cmd::codes::busy, why);
+	waiting.value = json::object{ { edt::k_index_wait_key, true } };
+	plan_answer = waiting;
+	index_waiting = why;
+	plan();
+	BOOST_TEST((model.state() == phase::idle));
+	BOOST_TEST(!model.plan().has_value());
+	BOOST_TEST(model.error_code() == "busy");
+	BOOST_TEST(model.error_text() == why);
+	BOOST_TEST(model.error_hint() == edt::migration_window_model::k_index_wait_hint);
+	BOOST_TEST(model.waiting_for_index());
+	BOOST_TEST(!model.can_migrate());
+	model.migrate();
+	BOOST_TEST(calls.size() == 1u);
+
+	// Still building: no call.
+	model.poll_index();
+	BOOST_TEST((model.state() == phase::idle));
+	BOOST_TEST(calls.size() == 1u);
+
+	// Ready: the plan is asked for on the next tick, and Migrate.
+	index_waiting.reset();
+	plan_answer.reset();
+	model.poll_index();
+	BOOST_TEST_REQUIRE((model.state() == phase::planning));
+	model.tick();
+	BOOST_TEST_REQUIRE((model.state() == phase::plan_shown));
+	BOOST_TEST(calls.size() == 2u);
+	BOOST_TEST(model.error_code().empty());
+	BOOST_TEST(!model.waiting_for_index());
+	BOOST_TEST(model.can_migrate());
+}
+
+// A `busy` for anything else keeps the general hint and is not asked again by itself.
+BOOST_AUTO_TEST_CASE(APlanBusyForAnotherReason_KeepsTheGeneralHint)
+{
+	plan_answer = cmd::result::failure(cmd::codes::busy, "Play is running");
+	plan();
+	BOOST_TEST((model.state() == phase::idle));
+	BOOST_TEST(model.error_hint() == edt::migration_window_model::hint_of("busy"));
+	BOOST_TEST(!model.waiting_for_index());
+	model.poll_index();
+	BOOST_TEST((model.state() == phase::idle));
+	BOOST_TEST(calls.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(APlanThatFails_ShowsWhy)

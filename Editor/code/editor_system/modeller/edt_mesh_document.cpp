@@ -134,6 +134,7 @@ bool edt::mesh_document::load_source(std::string& error)
 		return false;
 	}
 	m_working = std::move(loaded);
+	m_view.reset();
 	m_saved_text = working_text();
 	m_disk_version = file.version;
 	m_dirty = false;
@@ -196,6 +197,7 @@ void edt::mesh_document::close()
 	m_changed_on_disk = false;
 	m_stale_message.clear();
 	m_working = {};
+	m_view.reset();
 	m_baked = {};
 	m_stats = {};
 }

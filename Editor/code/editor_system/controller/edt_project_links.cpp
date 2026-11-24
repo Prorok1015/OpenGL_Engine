@@ -21,7 +21,8 @@ std::vector<edt::problem> edt::code_link_problems(const prj::project_context& pr
 		item.severity = problem_severity::warning;
 		item.file = fs_paths::generic_utf8_of(link.link.lexically_relative(project.root));
 		item.message = link.target.empty()
-			? std::string{ "a link in code/ leads nowhere inside the project" }
+			? std::string{ "a link in code/ leads to an unknown place (its target cannot be read, or it is a reparse "
+				"point of another kind)" }
 			: std::format("a link in code/ leads outside the project (or into its .snk / .cache), to '{}'", fs_paths::generic_utf8_of(link.target));
 		item.notes.push_back("the build and a person's reads follow it; the agent's code.* tools do not, and nothing writes through it");
 		out.push_back(std::move(item));

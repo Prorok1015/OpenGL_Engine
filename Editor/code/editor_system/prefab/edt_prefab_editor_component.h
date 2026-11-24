@@ -68,6 +68,10 @@ namespace edt
 		// Opens the prefab for editing next to the ones already open (#1185): an open one is brought to the front, a prefab still
 		// loading is not asked for twice. Every prefab loads on its own, so opening a second does not cancel the first.
 		void open(const res::tag& tag);
+		// The prefab of that file is still loading after open() (crash recovery waits for it, #1187).
+		bool opening(const res::tag& tag) const;
+		// The open prefab document of that file, else null.
+		prefab_document* open_document(const res::tag& tag) const { return prefab_for(tag); }
 		// The first open prefab with unapplied edits, else null.
 		prefab_document* dirty() const;
 		// The open prefab of that file when it has unapplied edits, else null.
