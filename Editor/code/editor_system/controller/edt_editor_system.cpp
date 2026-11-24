@@ -402,6 +402,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.asset_catalog = asset_catalog };
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
+	m_asset_open->data_documents().set_shown_prefab([this] {
+		const prefab_document* shown = m_prefab ? m_prefab->shown_prefab() : nullptr;
+		return shown ? shown->id() : document_id{};
+	});
 	m_asset_open->data_documents().set_shown_mesh([this] { return m_modeller ? m_modeller->shown_id() : document_id{}; });
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },

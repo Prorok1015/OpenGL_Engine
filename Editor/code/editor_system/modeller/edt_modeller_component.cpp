@@ -39,7 +39,9 @@ edt::modeller_component::modeller_component(ports from)
 	});
 	m_panel->set_on_save([this] { save_shown(); });
 	m_panel->set_on_revert([this] { revert_shown(); });
-	m_panel->set_on_overwrite_geometry([this] { overwrite_geometry_of_shown(); });
+	m_panel->set_on_overwrite_geometry([this] {
+		if (m_shown != document_id{}) request_overwrite_geometry(m_shown);
+	});
 }
 
 edt::modeller_component::~modeller_component() = default;
@@ -140,9 +142,9 @@ void edt::modeller_component::save_shown()
 	publish_problems();
 }
 
-void edt::modeller_component::overwrite_geometry_of_shown()
+void edt::modeller_component::request_overwrite_geometry(document_id id)
 {
-	mesh_document* mesh = shown();
+	mesh_document* mesh = mesh_by_id(m_ports.context.documents(), id);
 	if (!mesh) return;
 	m_ports.context.dialogs().choose("Overwrite geometry",
 		mesh->overwrite_geometry_question(), { "Overwrite", "Cancel" },

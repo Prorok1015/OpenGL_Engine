@@ -51,6 +51,9 @@ namespace edt
 		void show(document_id id);
 		// Closes the mesh after Save / Discard / Cancel when it has unsaved edits.
 		void request_close(document_id id);
+		// The window's "Overwrite geometry": asks first (the question names the files), then saves the mesh replacing the geometry file. An
+		// answer that comes after the mesh was closed changes nothing.
+		void request_overwrite_geometry(document_id id);
 		// Exit, New and Open: any mesh with unsaved edits.
 		bool dirty() const;
 		// Saves every dirty mesh in the order opened; false (the reason shown) at the first one that was not saved.
@@ -71,7 +74,6 @@ namespace edt
 		void close_now(document_id id);
 		void confirm_close(mesh_document& mesh, std::function<void()> proceed);
 		void save_shown();
-		void overwrite_geometry_of_shown();
 		void revert_shown();
 		void publish_problems();
 		void report(const std::string& text);
