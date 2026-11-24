@@ -450,7 +450,8 @@ namespace {
 		const platform::beneath::tree_hook* hook, int depth, dev_t device)
 	{
 		if (depth > k_tree_depth_limit) {
-			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), k_tree_too_deep, k_tree_depth_limit);
+			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), platform::beneath::k_tree_too_deep,
+				k_tree_depth_limit);
 		}
 		const fd_holder folder{ ::openat(parent, name.c_str(), k_dir_flags) };
 		if (folder.get() < 0) {
@@ -1344,7 +1345,8 @@ namespace {
 		const platform::beneath::tree_hook* hook, int depth, bool top)
 	{
 		if (depth > k_tree_depth_limit) {
-			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), k_tree_too_deep, k_tree_depth_limit);
+			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), platform::beneath::k_tree_too_deep,
+				k_tree_depth_limit);
 		}
 		const handle_holder entry = open_in(parent, name, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN, 0);
 		if (!entry.valid()) {
