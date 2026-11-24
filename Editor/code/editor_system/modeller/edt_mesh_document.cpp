@@ -251,10 +251,10 @@ bool edt::mesh_document::record_change(const mesh::poly_mesh& before, const std:
 {
 	if (auto moves = mesh::moves_between(before, m_working.mesh)) {
 		if (moves->empty()) return false;
-		m_history.record(std::move(label), origin, std::make_unique<mesh_positions_change>(*this, std::move(*moves), selection_before, m_view.selection()));
+		m_history.record(std::move(label), origin, std::make_unique<mesh_positions_change>(history_target(), std::move(*moves), selection_before, m_view.selection()));
 		return true;
 	}
-	m_history.record(std::move(label), origin, std::make_unique<mesh_snapshot_change>(*this, before, generator_before, m_working.mesh, m_working.generator,
+	m_history.record(std::move(label), origin, std::make_unique<mesh_snapshot_change>(history_target(), before, generator_before, m_working.mesh, m_working.generator,
 		selection_before, m_view.selection()));
 	return true;
 }

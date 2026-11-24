@@ -174,6 +174,7 @@ namespace edt
 		mesh::poly_mesh& history_mesh() override { return m_working.mesh; }
 		void history_replace(const mesh::poly_mesh& mesh, const std::optional<mesh::shape_params>& generator) override;
 		void history_applied(const mesh::mesh_selection& selection) override;
+		mesh_history_target& history_target() { return *this; }
 		bool record_change(const mesh::poly_mesh& before, const std::optional<mesh::shape_params>& generator_before, const mesh::mesh_selection& selection_before,
 			std::string label, const cmd::origin& origin);
 		save_result save_impl(bool replace_foreign_geometry);
