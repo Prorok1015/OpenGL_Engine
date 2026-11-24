@@ -2,7 +2,9 @@
 #include <snk/common/fs_paths.h>
 #include <snk/project/prj_code.h>
 #include <snk/project/prj_link_check.h>
+#include <snk/platform/plt_link_check.h>
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <system_error>
 #include <utility>
@@ -135,20 +137,50 @@ namespace {
 		return out;
 	}
 
-	// MSVC's std::filesystem has a file type of its own for a junction.
-	bool is_junction(const fs::file_status& status)
+	// The \\?\ form of `path` on Windows (absolute, normalized), which reaches an entry past MAX_PATH; `path` elsewhere.
+	fs::path long_form(const fs::path& path)
 	{
-#ifdef _MSC_VER
-		return status.type() == fs::file_type::junction;
+#ifdef _WIN32
+		const std::wstring& text = path.native();
+		if (text.starts_with(L"\\\\?\\")) {
+			return path;
+		}
+		std::error_code ec;
+		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().native();
+		if (ec) {
+			return path;
+		}
+		return fs::path{ whole.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + whole.substr(2) : L"\\\\?\\" + whole };
 #else
-		(void)status;
-		return false;
+		return path;
 #endif
 	}
 
-	bool is_link(const fs::file_status& status)
+	// `path` as the person wrote it, without the \\?\ prefix of long_form.
+	std::string shown(const fs::path& path)
 	{
-		return fs::is_symlink(status) || is_junction(status);
+		std::string text = fs_paths::generic_utf8_of(path);
+		if (text.starts_with("//?/UNC/")) {
+			return "//" + text.substr(8);
+		}
+		return text.starts_with("//?/") ? text.substr(4) : text;
+	}
+
+	enum class entry_check : std::uint8_t { missing, link, other, unreadable };
+
+	// A symlink, a junction or any other entry that redirects its name (#1295: on Windows by its reparse tag, which
+	// std::filesystem reports for symlinks and junctions alone). An entry that cannot be inspected is `unreadable`, and
+	// every caller refuses it: the check fails closed.
+	entry_check check_entry(const fs::path& path, std::error_code& ec)
+	{
+		const auto entry = platform::beneath::link_entry_at(path, ec);
+		if (ec) {
+			return entry_check::unreadable;
+		}
+		if (!entry) {
+			return entry_check::missing;
+		}
+		return *entry == platform::beneath::link_entry::link ? entry_check::link : entry_check::other;
 	}
 
 	// A link at code/ (a symlink or a junction) would send every code:// write wherever it leads.
@@ -157,16 +189,20 @@ namespace {
 	{
 		std::error_code ec;
 		const fs::path dir = project.code_dir();
-		const auto status = fs::symlink_status(dir, ec);
-		if (status.type() == fs::file_type::not_found) {
+		switch (check_entry(dir, ec)) {
+		case entry_check::missing:
 			return std::nullopt;
+		case entry_check::unreadable:
+			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
+		case entry_check::link:
+			return std::format("'{}' is a link or an unsupported entry (a symlink, a junction or another reparse "
+				"point): replace it with a real folder and open the project again", fs_paths::generic_utf8_of(dir));
+		case entry_check::other:
+			break;
 		}
+		const auto status = fs::symlink_status(dir, ec);
 		if (ec) {
 			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
-		}
-		if (is_link(status)) {
-			return std::format("'{}' is a link (symlink or junction): replace it with a real folder and open the "
-				"project again", fs_paths::generic_utf8_of(dir));
 		}
 		if (!fs::is_directory(status)) {
 			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
@@ -255,16 +291,21 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 	auto real_dirs = project.writable_dirs();
 	real_dirs.push_back(project.snk_dir());
 	for (const auto& dir : real_dirs) {
-		const auto status = fs::symlink_status(dir, ec);
-		if (status.type() == fs::file_type::not_found) {
+		switch (check_entry(dir, ec)) {
+		case entry_check::missing:
 			continue;
+		case entry_check::unreadable:
+			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
+		case entry_check::link:
+			return std::format("'{}' is a link or an unsupported entry (a symlink, a junction or another reparse "
+				"point): remove it and open the project again; the project's own folders must be real folders",
+				fs_paths::generic_utf8_of(dir));
+		case entry_check::other:
+			break;
 		}
+		const auto status = fs::symlink_status(dir, ec);
 		if (ec) {
 			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
-		}
-		if (is_link(status)) {
-			return std::format("'{}' is a link (symlink or junction): remove it and open the project again; the "
-				"project's own folders must be real folders", fs_paths::generic_utf8_of(dir));
 		}
 		if (!fs::is_directory(status)) {
 			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
@@ -291,20 +332,25 @@ std::optional<std::string> prj::link_below(const fs::path& dir, std::size_t max_
 std::optional<std::string> prj::link_below(const fs::path& dir, const link_walk_options& options)
 {
 	std::error_code ec;
-	const auto own = fs::symlink_status(dir, ec);
-	if (own.type() == fs::file_type::not_found) {
-		return std::nullopt;
-	}
-	if (!ec && is_link(own)) {
-		return std::format("'{}' is a link (symlink or junction): remove it and open the project again",
-			fs_paths::generic_utf8_of(dir));
-	}
 	const auto unreadable = [&dir](const std::error_code& error) {
 		return std::format("'{}' cannot be checked for links: {}; the project is not opened",
 			fs_paths::generic_utf8_of(dir), error.message());
 	};
-	// directory_options::none: a link is reported, never entered.
-	fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec);
+	switch (check_entry(dir, ec)) {
+	case entry_check::missing:
+		return std::nullopt;
+	case entry_check::unreadable:
+		return unreadable(ec);
+	case entry_check::link:
+		return std::format("'{}' is a link or an unsupported entry (a symlink, a junction or another reparse point): "
+			"remove it and open the project again", fs_paths::generic_utf8_of(dir));
+	case entry_check::other:
+		break;
+	}
+	// directory_options::none: a link is reported, never entered. Walked in its long form, so an entry past MAX_PATH is
+	// reached and checked like any other.
+	const fs::path walked = long_form(dir);
+	fs::recursive_directory_iterator it(walked, fs::directory_options::none, ec);
 	if (ec) {
 		return unreadable(ec);
 	}
@@ -318,16 +364,23 @@ std::optional<std::string> prj::link_below(const fs::path& dir, const link_walk_
 				"project is not opened: empty that folder (it is {}) and open the project again",
 				fs_paths::generic_utf8_of(dir), options.max_entries, options.what);
 		}
-		const auto status = it->symlink_status(ec);
-		if (ec) {
+		const entry_check entry = check_entry(it->path(), ec);
+		if (entry == entry_check::unreadable) {
 			return unreadable(ec);
 		}
-		if (is_link(status)) {
-			return std::format("'{}' is a link (symlink or junction) in {}: remove it and open the "
-				"project again", fs_paths::generic_utf8_of(it->path()), options.what);
+		if (entry == entry_check::missing) {
+			// The walk listed it: an entry the check cannot reach again is not taken for a plain one.
+			return std::format("'{}' in {} cannot be reached to be checked for links; the project is not opened: remove "
+				"it and open the project again", shown(it->path()), options.what);
 		}
-		if (options.skip_folder && fs::is_directory(status)
-			&& options.skip_folder(fs_paths::generic_utf8_of(it->path().lexically_relative(dir)))) {
+		if (entry == entry_check::link) {
+			// Whatever the caller does next, a link is never walked into.
+			it.disable_recursion_pending();
+			return std::format("'{}' is a link or an unsupported entry (a symlink, a junction or another reparse point) "
+				"in {}: remove it and open the project again", shown(it->path()), options.what);
+		}
+		if (options.skip_folder && it->is_directory(ec) && !ec
+			&& options.skip_folder(fs_paths::generic_utf8_of(it->path().lexically_relative(walked)))) {
 			it.disable_recursion_pending();
 		}
 	}
@@ -369,14 +422,15 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 			out.complete = false;
 			return out;
 		}
-		const auto status = it->symlink_status(ec);
-		if (ec) {
+		const entry_check entry = check_entry(it->path(), ec);
+		if (entry == entry_check::unreadable || entry == entry_check::missing) {
 			out.complete = false;
 			return out;
 		}
-		if (!is_link(status)) {
+		if (entry != entry_check::link) {
 			continue;
 		}
+		it.disable_recursion_pending();
 		std::error_code resolve_error;
 		// A link whose target is gone is judged by where it points: weakly_canonical would stop at the link and answer
 		// with the link's own (inside) place.

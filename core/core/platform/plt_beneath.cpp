@@ -1,6 +1,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_reparse_tag.h>
 #include <snk/platform/plt_beneath_tree_hook.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/platform/plt_beneath_hold_hook.h>
 #include <snk/platform/plt_windows_names.h>
 #include <snk/common/logger/engine_log.h>
@@ -856,6 +857,18 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	return result;
 }
 
+std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(const fs::path& path, std::error_code& ec)
+{
+	ec.clear();
+	struct stat information;
+	if (::lstat(path.c_str(), &information) != 0) {
+		if (errno != ENOENT && errno != ENOTDIR) {
+			ec = std::error_code(errno, std::generic_category());
+		}
+		return std::nullopt;
+	}
+	return S_ISLNK(information.st_mode) ? link_entry::link : link_entry::plain;
+}
 
 struct platform::beneath::held_folder::state {
 	std::vector<fs::path> names;
@@ -2101,6 +2114,45 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	read_result result{ read_status::ok, {} };
 	result.stamp = stamp_after_read(file.get(), stamp, total);
 	return result;
+}
+
+namespace {
+	// The \\?\ form of `path` (absolute, normalized): without it an entry past MAX_PATH reads as missing (#1295).
+	std::wstring long_form(const fs::path& path)
+	{
+		const std::wstring& text = path.native();
+		if (text.starts_with(L"\\\\?\\")) {
+			return text;
+		}
+		std::error_code ec;
+		const std::wstring whole = fs::absolute(path, ec).lexically_normal().make_preferred().native();
+		if (ec) {
+			return text;
+		}
+		return whole.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + whole.substr(2) : L"\\\\?\\" + whole;
+	}
+}
+
+std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(const fs::path& path, std::error_code& ec)
+{
+	ec.clear();
+	const handle_holder entry{ ::CreateFileW(long_form(path).c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
+	if (!entry.valid()) {
+		const DWORD code = ::GetLastError();
+		if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) {
+			ec = std::error_code(static_cast<int>(code), std::system_category());
+		}
+		return std::nullopt;
+	}
+	FILE_ATTRIBUTE_TAG_INFO information{};
+	if (!::GetFileInformationByHandleEx(entry.get(), FileAttributeTagInfo, &information, sizeof(information))) {
+		ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+		return std::nullopt;
+	}
+	const bool reparse_point = (information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	return link_entry_of(information.FileAttributes, true, reparse_point ? information.ReparseTag : 0);
 }
 
 struct platform::beneath::held_folder::state {

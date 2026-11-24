@@ -75,4 +75,36 @@ namespace platform::beneath {
 		return top ? tree_entry::refused : tree_entry::remove_itself;
 	}
 
+	inline constexpr std::uint32_t k_reparse_tag_wof = 0x80000017u;
+	inline constexpr std::uint32_t k_reparse_tag_app_exec_link = 0x8000001Bu;
+
+	enum class link_entry : std::uint8_t { plain, kept_in_place, link };
+
+	// What the check of a project's folders when it is opened (#1295) makes of an entry opened as itself: a folder as
+	// folder_entry_of decides it (any tag but a filter's that keeps it in place is a link); a file is a link when its
+	// tag names another entry, is an app execution alias or cannot be read, kept in place for a filter's tag or a file
+	// Windows compressed (WOF), and a link for any other tag. Pure, so it is tested everywhere.
+	constexpr link_entry link_entry_of(std::uint32_t attributes, bool tag_known, std::uint32_t tag)
+	{
+		if ((attributes & k_file_attribute_directory) != 0) {
+			switch (folder_entry_of(attributes, tag_known, tag)) {
+			case folder_entry::enter:
+				return link_entry::plain;
+			case folder_entry::through_filter:
+				return link_entry::kept_in_place;
+			case folder_entry::not_a_folder:
+			case folder_entry::refused:
+				break;
+			}
+			return link_entry::link;
+		}
+		if ((attributes & k_file_attribute_reparse_point) == 0) {
+			return link_entry::plain;
+		}
+		if (!tag_known || reparse_tag_redirects(tag) || tag == k_reparse_tag_app_exec_link) {
+			return link_entry::link;
+		}
+		return reparse_tag_kept_in_place(tag) || tag == k_reparse_tag_wof ? link_entry::kept_in_place : link_entry::link;
+	}
+
 }
