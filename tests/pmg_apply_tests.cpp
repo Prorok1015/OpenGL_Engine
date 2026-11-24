@@ -1100,7 +1100,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedEntryThatDoesNotRead)
 		{ json::array{ with("size_after", "5") }, "size_after" },
 		{ json::array{ without("path") }, "created_files[0] has no string path" },
 		{ json::array{ with("path", 7) }, "created_files[0] has no string path" },
-		{ json::array{ good, with("hash_after", pmg::journal_hash("other")) }, "listed twice" },
+		{ json::array{ good, with("hash_after", json::string(pmg::journal_hash("other"))) }, "listed twice" },
 		{ json::array{ good, with("size_after", 6) }, "listed twice" },
 		{ json::array{ "res/created.bin", good }, "created_files[0] is a path without its hash_after and size_after" },
 		{ json::array{ good, 42 }, "created_files[1] is neither a path nor an object" },
