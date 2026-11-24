@@ -1,6 +1,7 @@
 #include "edt_save_all.h"
 #include "edt_data_document.h"
 #include "edt_prefab_document.h"
+#include "edt_scene_document.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_document_manager.h>
 #include <algorithm>
@@ -32,6 +33,10 @@ namespace {
 		}
 		if (!scene.level_path || scene.level_path().empty()) {
 			report.skipped.push_back({ std::move(item), "untitled: use Save Level As" });
+			return;
+		}
+		if (scene.disk_conflict && scene.disk_conflict()) {
+			report.asked.push_back({ std::move(item), edt::save_all_question::disk_changed });
 			return;
 		}
 		if (!scene.quick_save || !scene.quick_save()) {
@@ -134,6 +139,9 @@ std::optional<edt::save_all_question> edt::save_all_question_of(const document& 
 	if (const auto* prefab = dynamic_cast<const prefab_document*>(&open)) {
 		if (prefab->changed_on_disk()) return save_all_question::disk_changed;
 		if (prefab->layer_refused()) return save_all_question::base_layer;
+	}
+	if (const auto* level = dynamic_cast<const scene_document*>(&open); level && level->changed_on_disk()) {
+		return save_all_question::disk_changed;
 	}
 	return std::nullopt;
 }

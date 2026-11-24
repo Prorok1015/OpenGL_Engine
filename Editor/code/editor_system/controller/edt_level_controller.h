@@ -1,10 +1,13 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
+#include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/desc/desc_base.hpp>
 #include <snk/scene/level/scn_world_desc.h>
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -108,15 +111,19 @@ namespace edt
 
 		// True when the level is in the context manager and its worlds are known. `file_version`: the root __version of
 		// the bytes the load read (desc_root_version; 0 unknown), kept for the warning of a save over an older file.
-		bool finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version = 0);
+		// `disk_version`: code_version_of the level file's bytes the load read (#1188); nullopt: the file is read now.
+		bool finish_level_load(res::res_handle<scn::level_desc>& handle, int file_version = 0,
+			std::optional<std::string> disk_version = std::nullopt);
 		// The document takes `level_tag` (read from its working copy `editor_tag`) only when finish_level_load takes it;
 		// a refusal leaves the document's tags as they were and watches its level again (#613).
 		bool take_loaded_level(res::res_handle<scn::level_desc>& handle, const res::tag& level_tag, const res::tag& editor_tag,
-			int file_version = 0);
+			int file_version = 0, std::optional<std::string> disk_version = std::nullopt);
 
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;
-		bool write_level_to_disk(const std::string& rel_path);
+		// `over_disk_change`: the person chose to overwrite a level file that changed on disk (overwrite_disk_change);
+		// otherwise a write over the level's own file is refused while it is not the version the editor knows (#1188).
+		bool write_level_to_disk(const std::string& rel_path, bool over_disk_change = false);
 		// The file form of a level of `worlds` written as `target`, before it is printed (serialize_to_bytes): what Save
 		// writes. Reads the descs and the level's parent, changes nothing. Main thread (schemas).
 		boost::json::value level_file_json(const std::vector<scn::world_desc>& worlds, std::string_view level_name,
@@ -132,7 +139,7 @@ namespace edt
 		void add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key);
 
 		// Hot reload of the edited level (editor_tag): watched on the resource system of the layer that loaded it, and
-		// unwatched there even after the game layer changed.
+		// unwatched there even after the game layer changed. The level's own file (level_tag) is watched with it (#1188).
 		void watch_level();
 		void unwatch_level();
 		// A level load unwatches the open level when it starts; one that ends without a new level watches it again.
@@ -149,6 +156,35 @@ namespace edt
 		// Between detach_from_game_layer and attach_to_game_layer.
 		bool is_detached() const { return m_detached_level.has_value(); }
 
+		// The level file changed on disk (#1188).
+		// The editor's working copy (editor_tag) never follows the file by itself: the controller watches level_tag on the
+		// base resource system and tells its own writes from outside ones by code_version_of alone. A clean level outside
+		// Play takes the new file at once; a dirty one, or any during Play, gets scene_document::changed_on_disk.
+		// code_version_of the level file as the editor last read or wrote it; empty for an untitled level.
+		const std::string& disk_version() const { return m_disk_version; }
+		// The file is watched (a level with a file of its own; not while a load runs or the level is detached).
+		const res::tag& watched_file() const { return m_file_watch_tag; }
+		// The signal of a change of the level file (the watcher calls it).
+		void on_level_file_changed();
+		// Reads the file again and makes it the level: the bytes must load as a level first (else the level stays, the
+		// working copy is not touched, on_disk_problem tells why and false). Drops unsaved edits; the history starts
+		// again, the selection and the active world are taken again (#33).
+		bool reload_from_disk();
+		// Writes the editor's level over a file that changed on disk, unless it changed again since it was flagged: then the
+		// flag is set anew (another serial) and nothing is written.
+		save_result overwrite_disk_change();
+		// Why the level's own file must not be written now: it is flagged, or it is not the version the editor knows (a missed
+		// signal: the flag is set then). nullopt: it may.
+		std::optional<std::string> disk_conflict();
+		// Play stopped: a clean level flagged meanwhile takes the file (same checks as reload_from_disk).
+		void on_play_stopped();
+
+		// Set by the coordinator. A level load is in progress: a change of the file is ignored (the load reads it).
+		std::function<bool()> load_in_progress;
+		// The bytes of an outside change did not load as a level: one row of Problems with the reason. An empty reason: the
+		// level took its file (or another level was loaded), the row goes.
+		std::function<void(const std::string&)> on_disk_problem;
+
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
 		// The worlds of the level were replaced or dropped (a new level, a game layer change, a hot reload): what is
@@ -158,6 +194,17 @@ namespace edt
 		std::function<void(const std::string&)> on_file_upgraded;
 
 	private:
+		// Watches the level file (level_tag) when it has one of its own; drops a previous watch.
+		void watch_level_file();
+		void unwatch_level_file();
+		// The level file's bytes as they are on disk now; nullopt when it cannot be read (gone).
+		std::optional<std::vector<std::byte>> read_level_file() const;
+		// Checks that `bytes` load as a level (a probe copy) and makes them the level; false (and the row) when they do not.
+		bool take_disk_bytes(const std::vector<std::byte>& bytes, const std::string& version);
+		// An outside version of the file the editor cannot take now: flagged, the serial grows once per version.
+		void flag_disk_version(const std::string& version);
+		void forget_disk_change();
+
 		scene_document& m_state;
 		editor_services& m_services;
 		scene_editor& m_scene_editor;
@@ -166,5 +213,11 @@ namespace edt
 		res::tag m_watched_tag;
 		std::optional<boost::json::object> m_detached_level;
 		int m_detached_world = -1;
+		res::resource_system* m_file_watch_resources = nullptr;
+		res::tag m_file_watch_tag;
+		std::string m_disk_version;
+		// The outside version the flag was set for (empty: not flagged).
+		std::string m_flagged_version;
+		std::uint32_t m_probe_serial = 0;
 	};
 }

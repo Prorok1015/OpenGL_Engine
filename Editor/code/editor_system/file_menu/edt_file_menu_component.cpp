@@ -6,6 +6,7 @@
 #include "edt_file_menu.h"
 #include "edt_import_component.h"
 #include "edt_level_controller.h"
+#include "edt_level_disk_banner.h"
 #include "edt_level_load_component.h"
 #include "edt_main_menu.h"
 #include "edt_path_text.h"
@@ -146,12 +147,21 @@ edt::file_menu_component::file_menu_component(ports from)
 		return stopped;
 	};
 	hooks.level_write_blocker = level_write_blocker;
+	// #1188: the file of the level changed on disk; read again at each save, so a missed signal is found too.
+	const std::function<std::optional<std::string>()> level_disk_conflict = [this] { return m_ports.level_ctrl.disk_conflict(); };
+	hooks.level_disk_conflict = level_disk_conflict;
+	if (m_ports.level_disk) {
+		hooks.ask_level_disk_conflict = [this](std::function<void(bool resolved)> resolved) {
+			m_ports.level_disk->ask_save(std::move(resolved));
+		};
+	}
 	// Save All (#1183): every document that can be written, then the questions about the ones that cannot (controller/edt_save_all.h).
-	hooks.save_all = [this, level_write_blocker] {
+	hooks.save_all = [this, level_write_blocker, level_disk_conflict] {
 		save_all_scene_ports scene;
 		scene.write_blocker = level_write_blocker;
 		scene.level_path = [this] { return m_ports.state.level_tag.is_valid() ? std::string(m_ports.state.level_tag.relative()) : std::string{}; };
 		scene.quick_save = [this] { return m_ports.state.save().saved; };
+		scene.disk_conflict = level_disk_conflict;
 		return save_all_write(m_ports.context.documents(), scene);
 	};
 	hooks.ask_unsaved = [this](const save_all_ask& ask, std::function<void(bool resolved)> resolved) {
@@ -159,6 +169,8 @@ edt::file_menu_component::file_menu_component(ports from)
 			m_ports.asset_open.data_documents().resolve_unsaved(ask.item.id, std::move(resolved));
 		} else if (ask.item.kind == "prefab") {
 			m_ports.prefab.resolve_unsaved(ask, std::move(resolved));
+		} else if (ask.item.kind == "scene" && ask.question == save_all_question::disk_changed && m_ports.level_disk) {
+			m_ports.level_disk->ask_save(std::move(resolved));
 		} else if (resolved) {
 			resolved(false);
 		}

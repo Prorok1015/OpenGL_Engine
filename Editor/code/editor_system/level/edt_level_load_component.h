@@ -105,6 +105,8 @@ namespace edt
 		res::tag m_editor_tag;
 		// The root __version of the bytes the load read (0: unknown).
 		int m_file_version = 0;
+		// code_version_of the level file's bytes when the load began (empty: no file); the level controller's disk version.
+		std::string m_disk_version;
 		std::uint32_t m_serial = 0;
 		// Kept while the level waits: the settle holds a reference to it. Declared first, so it is destroyed after it.
 		std::shared_ptr<scn::context_manager> m_settle_contexts;

@@ -296,6 +296,8 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 			return;
 		}
 		if (!m_hooks.level_path().empty()) {
+			// The file changed on disk: the person settles that first; Cancel stops New/Exit like a failed write.
+			if (ask_level_disk_conflict([action] { action(true); })) return;
 			// A failed write must not continue into New/Exit: the changes would be lost.
 			if (invoke_or_report("file.save", json::object{}, LEVEL_NOT_SAVED)) action(true);
 			return;
@@ -440,10 +442,20 @@ void edt::file_menu::quick_save()
 {
 	if (!m_hooks.has_scene()) return;
 	if (!m_hooks.level_path().empty()) {
+		if (ask_level_disk_conflict({})) return;
 		invoke_or_report("file.save", json::object{}, LEVEL_NOT_SAVED);
 	} else {
 		save_level();
 	}
+}
+
+bool edt::file_menu::ask_level_disk_conflict(std::function<void()> then)
+{
+	if (!m_hooks.level_disk_conflict || !m_hooks.ask_level_disk_conflict || !m_hooks.level_disk_conflict()) return false;
+	m_hooks.ask_level_disk_conflict([alive = std::weak_ptr<void>(m_alive), then = std::move(then)](bool resolved) {
+		if (alive.lock() && resolved && then) then();
+	});
+	return true;
 }
 
 void edt::file_menu::save_all()
@@ -556,6 +568,10 @@ void edt::file_menu::register_actions()
 			if (auto busy = level_write_busy()) return *busy;
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
+			// Nobody is asked here: a person answers the menu's question (quick_save), an agent leaves it to a person.
+			if (std::optional<std::string> conflict = m_hooks.level_disk_conflict ? m_hooks.level_disk_conflict() : std::nullopt) {
+				return action_result::failure("needs_input", *conflict + "; a person decides in the editor (Reload or Overwrite)");
+			}
 			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
@@ -580,6 +596,11 @@ void edt::file_menu::register_actions()
 				case level_file_state::missing: break;
 				}
 				target = named.path;
+			}
+			if (target == m_hooks.level_path()) {
+				if (std::optional<std::string> conflict = m_hooks.level_disk_conflict ? m_hooks.level_disk_conflict() : std::nullopt) {
+					return action_result::failure("needs_input", *conflict + "; a person decides in the editor (Reload or Overwrite)");
+				}
 			}
 			if (!m_hooks.save_level_as(target)) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();

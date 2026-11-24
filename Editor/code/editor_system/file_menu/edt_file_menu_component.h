@@ -22,6 +22,7 @@ namespace edt
 	class file_menu;
 	class import_component;
 	class level_controller;
+	class level_disk_banner;
 	class level_load_component;
 	class prefab_editor_component;
 	class problems_component;
@@ -64,6 +65,8 @@ namespace edt
 			std::function<void()> discard_meshes = {};
 			std::function<void(document_id)> show_mesh = {};
 			std::function<void(document_id)> request_close_mesh = {};
+			// The question of a person's save of a level whose file changed on disk (#1188); null: the save reports it.
+			level_disk_banner* level_disk = nullptr;
 		};
 
 		explicit file_menu_component(ports from);

@@ -16,11 +16,12 @@ Editor/
     ├── controller/                   # Editor controllers (decomposed from editor_system)
     │   ├── edt_editor_system.cpp/h   # composition root (#1004): creates the services, the editor_context and the components below in order, wires the controllers' callbacks; no feature logic
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
-    │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
+    │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk; also watches the level's res:// file (#1188): an outside version (code_version_of, never time) is taken at once by a clean level outside Play (bytes tried under memory://editor/disk_probe/ first; a bad file: the level stays, one Problems row, scope `level file`), else `scene_document::changed_on_disk` + `disk_change_serial`; every write over the file re-reads it first (`disk_conflict`)
+    │   ├── edt_level_disk_banner.cpp/h # the viewport banner "The level file changed on disk." (#1188), no ImGui: Reload (asks if dirty) / Keep mine (until the next serial) / Overwrite (refused if the file changed again); `ask_save` = Save's Reload / Overwrite / Cancel for a person (file.save, Ctrl+S, Exit/New/Open, Save All `asked`); an agent's file.save gets needs_input
     │   ├── edt_document_tabs.cpp/h   # the strip of document tabs (#1184), no ImGui: `tabs_of`, `focus_document` (shared with the Unsaved list), `document_tabs::activate/close`
     │   ├── edt_save_all.cpp/h        # Save All (#1183): list_unsaved, save_all_write/save_all_resolve, the report, summary and JSON, `k_save_all_shortcut`; no ImGui
     │   ├── edt_world_controller.cpp/h # switch/create world
-    │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit(), undo history
+    │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit(), undo history; `changed_on_disk()`/`disk_change_serial()` (#1188, set by level_controller): save() refuses with "the level file changed on disk"
     │   ├── edt_editor_camera.cpp/h   # camera state POD, save_camera_state / inject_camera
     │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace (main menu + default layout from the editor_context registries)
     │
