@@ -2,6 +2,10 @@
 #include "test_scene_env.hpp"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_transform_system.h>
+#include <snk/scene/scn_spatial.h>
+#include <snk/scene/scn_geometry_holds.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
+#include "test_quad_geometry.hpp"
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_camera_controller_system.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
@@ -179,6 +183,39 @@ BOOST_AUTO_TEST_CASE(TransformSystem_MovingParentPropagatesToDescendants)
 	step(0.016f);
 
 	BOOST_TEST((world_pos(reg, child) == glm::vec3{ 10, 1, 0 }));
+}
+
+BOOST_AUTO_TEST_CASE(TransformSystem_TellsTheSpatialWorld_SoARayFindsAChildWhereItsParentTookIt)
+{
+	descs->register_desc<rnd::geometry_desc>("geometry_desc");
+	const auto geometry = require_loaded<rnd::geometry_desc>(put("quad.geom.desc", test_util::quad_geometry_json()));
+	BOOST_REQUIRE(geometry.is_ready());
+	auto& reg = make_world({ "scn::depth_system", "scn::transform_system" }).state();
+	auto root = node(reg, entt::null, {});
+	auto child = node(reg, root, { 0, 0, -3 });
+	reg.emplace<scn::renderable>(child);
+	reg.emplace<scn::mesh_component>(child, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 6 } });
+	reg.emplace<scn::geometry_component>(child, scn::geometry_component{ .geom_tag = geometry.get_tag() });
+	// The set made without resources holds nothing by itself: hold what the mesh draws, as an assembly does.
+	scn::geometry_holds::of(reg).hold(child, geometry);
+	emit_hierarchy(reg, root);
+	emit_transform(reg, root);
+	step(0.016f);
+
+	const scn::ray at_origin{ { 0.f, 0.f, 2.f }, { 0.f, 0.f, -1.f } };
+	const scn::ray at_ten{ { 10.f, 0.f, 2.f }, { 0.f, 0.f, -1.f } };
+	BOOST_REQUIRE(scn::raycast_closest(reg, at_origin));
+	BOOST_REQUIRE(!scn::raycast_closest(reg, at_ten));
+
+	reg.get<scn::local_transform>(root).local = glm::translate(glm::mat4(1.0f), glm::vec3{ 10, 0, 0 });
+	emit_transform(reg, root); // only the parent is reported
+	step(0.016f);
+
+	BOOST_TEST(!scn::raycast_closest(reg, at_origin));
+	const auto hit = scn::raycast_closest(reg, at_ten);
+	BOOST_REQUIRE(hit);
+	BOOST_TEST((hit->entity == child));
+	descs->unregister_desc("geometry_desc");
 }
 
 BOOST_AUTO_TEST_CASE(TransformSystem_ParentRotationAndScaleAffectChildPosition)

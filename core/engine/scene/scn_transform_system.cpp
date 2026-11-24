@@ -1,6 +1,7 @@
 #include <snk/scene/scn_transform_system.h>
 #include <snk/common/common.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_spatial.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <unordered_set>
@@ -71,7 +72,8 @@ namespace {
                                        entt::registry& registry,
                                        entt::view<entt::get_t<scn::local_transform, scn::world_transform>>& view,
                                        entt::view<entt::get_t<const scn::parent_component>>& parents,
-                                       entt::view<entt::get_t<scn::children_component>>& children_list)
+                                       entt::view<entt::get_t<scn::children_component>>& children_list,
+                                       std::vector<entt::entity>& moved)
     {
         glm::mat4 parent_world{ 1.0 };
         if (parents.contains(ent)) {
@@ -83,13 +85,14 @@ namespace {
 
         auto&& [local, world] = view.get(ent);
         world.world = parent_world * local.local;
+        moved.push_back(ent);
 
         if (children_list.contains(ent)) {
             auto& kids = children_list.get<0>(ent);
             drop_dead_children(registry, kids);
             for (auto&& child : kids.children) {
                 if (view.contains(child)) {
-                    update_world_matrix_recursive(child, registry, view, parents, children_list);
+                    update_world_matrix_recursive(child, registry, view, parents, children_list, moved);
                 }
             }
         }
@@ -108,8 +111,13 @@ namespace {
         const auto depth_of = [&](entt::entity ent) { return depth.contains(ent) ? depth.get<0>(ent).value : 0u; };
         std::sort(event.begin(), event.end(), [&](entt::entity a, entt::entity b) { return depth_of(a) > depth_of(b); });
 
+        std::vector<entt::entity> moved;
+        moved.reserve(event.size());
         for (auto&& ent : event) {
-            update_world_matrix_recursive(ent, registry, view, parents, children);
+            update_world_matrix_recursive(ent, registry, view, parents, children, moved);
+        }
+        if (auto* spatial = scn::spatial_world::find(registry); spatial && !moved.empty()) {
+            spatial->entities_moved(registry, moved);
         }
 
         event.clear();
