@@ -7,18 +7,24 @@
 
 namespace test_util {
 
-	// A folder link at `link` that leads to `target` (which must exist): a junction on Windows (it needs no privilege), a symlink
-	// elsewhere. A link that cannot be made is a broken test, never a skip: the check it stands for would be vacuous.
-	inline void make_folder_link(const std::filesystem::path& link, const std::filesystem::path& target)
+	// A link to the folder `target` at `link`, as a child or a person could plant one: a junction on Windows (no
+	// privilege needed, so one that cannot be made is a broken test, never a skip), a directory symlink elsewhere.
+	inline bool link_folder(const std::filesystem::path& target, const std::filesystem::path& link)
 	{
 #ifdef _WIN32
 		const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul";
-		BOOST_REQUIRE_MESSAGE(std::system(command.c_str()) == 0 && std::filesystem::exists(link),
-			"mklink /J could not make a junction at " << link.string());
+		return std::system(command.c_str()) == 0 && std::filesystem::exists(link);
 #else
 		std::error_code ec;
 		std::filesystem::create_directory_symlink(target, link, ec);
-		BOOST_REQUIRE_MESSAGE(!ec, "no symlink at " << link.string() << ": " << ec.message());
+		return !ec;
 #endif
 	}
+
+	// link_folder that fails the test when no link can be made: the check it stands for would be vacuous.
+	inline void make_folder_link(const std::filesystem::path& link, const std::filesystem::path& target)
+	{
+		BOOST_REQUIRE_MESSAGE(link_folder(target, link), "no folder link could be made at " << link.string());
+	}
+
 }

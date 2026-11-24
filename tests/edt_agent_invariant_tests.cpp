@@ -943,8 +943,13 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 		}
 	};
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
-	pump_frames();
-	BOOST_REQUIRE(!editor().level_load_in_progress());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (editor().level_load_in_progress() && std::chrono::steady_clock::now() < deadline) {
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		test_util::pump(tasks);
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	BOOST_REQUIRE_MESSAGE(!editor().level_load_in_progress(), "the level was still loading after 5 s");
 	person_allows(true);
 	const std::string garbage = "not a model";
 	std::vector<std::byte> bytes(garbage.size());
@@ -1642,12 +1647,18 @@ struct multi_prefab_fixture : desc_problems_fixture
 		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 	}
 
-	void pump_frames(int frames)
+	// Frames until `done`, for up to 5 s of wall-clock: a frame count would run out first on a slow shared runner.
+	template <class Done>
+	bool pump_until(Done&& done)
 	{
-		for (int frame = 0; frame < frames; ++frame) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		do {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
-		}
+			if (done()) return true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		} while (std::chrono::steady_clock::now() < deadline);
+		return false;
 	}
 
 	edt::inspector_panel* inspector = nullptr;
@@ -1701,8 +1712,7 @@ BOOST_FIXTURE_TEST_CASE(ApplyDirty_WritesInOpenOrder_AndStopsAtTheFirstRefusal, 
 	project.write("res/prefabs/multi_b.prefab.desc",
 		R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"outside"}]})json");
 	storage.require<res::resource_system>().signal_changed(tag_of('b'));
-	pump_frames(5);
-	BOOST_REQUIRE(b.changed_on_disk());
+	BOOST_REQUIRE_MESSAGE(pump_until([&b] { return b.changed_on_disk(); }), "the changed file was not noticed within 5 s");
 
 	BOOST_TEST(!editor().prefab_editor().apply_dirty());
 
@@ -1720,9 +1730,8 @@ BOOST_FIXTURE_TEST_CASE(APrefabThatFinishesLoading_AfterAnotherPrefabWasClosed_O
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
 
 	documents().close(a_id);
-	pump_frames(30);
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return !window->loading(); }), "the second prefab was still loading after 5 s");
 
-	BOOST_TEST(!window->loading());
 	const std::vector<edt::prefab_document*> open_now = edt::prefabs_of(documents());
 	BOOST_REQUIRE_EQUAL(open_now.size(), 1u);
 	BOOST_TEST(open_now.front()->source_tag() == tag_of('b'));

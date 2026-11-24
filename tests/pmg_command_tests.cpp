@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_fixture_project.hpp"
+#include "test_folder_link.hpp"
 #include "test_scene_env.hpp"
 #include <snk/project_migration/pmg_asset_steps.h>
 #include <snk/project_migration/pmg_command.h>
@@ -459,6 +460,20 @@ BOOST_AUTO_TEST_CASE(Prune_ACreatedOutOfRangeIsKept_TheSameCreatedOrdersIdsByNum
 	BOOST_TEST(bad_kept == 4u);
 }
 
+// #1316: a link inside a pruned migration folder is deleted as the link, what it points at stays.
+BOOST_AUTO_TEST_CASE(Prune_DeletesALinkInsideAMigrationFolder_AsTheLink)
+{
+	test_util::fixture_copy outside{ "migration_v1" };
+	write_journal(outside.root(), "elsewhere", "ok", "2026-01-01T00:00:00Z");
+	const fs::path root = copy.root();
+	write_journal(root, "a", "ok", "2026-01-01T00:00:00Z");
+	BOOST_REQUIRE(test_util::link_folder(outside.root() / ".snk/migrations/elsewhere", root / ".snk/migrations/a/escape"));
+
+	BOOST_TEST(pmg::run_migrate_prune({ 0, false }, context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(!fs::exists(fs::symlink_status(root / ".snk/migrations/a")));
+	BOOST_TEST(fs::exists(outside.root() / ".snk/migrations/elsewhere/report.json"));
+}
+
 // A folder that cannot be deleted is named; the others still go, and the run says it did not finish.
 BOOST_AUTO_TEST_CASE(Prune_AFolderThatCannotBeDeleted_IsNamed_TheOthersGo)
 {
@@ -467,12 +482,13 @@ BOOST_AUTO_TEST_CASE(Prune_AFolderThatCannotBeDeleted_IsNamed_TheOthersGo)
 	write_journal(root, "b", "ok", "2026-01-02T00:00:00Z");
 	write_journal(root, "c", "ok", "2026-01-03T00:00:00Z");
 	pmg::command_context failing = context();
-	failing.remove_tree = [](const fs::path& folder, std::error_code& ec) {
+	failing.remove_tree = [](const fs::path& folder) -> std::string {
 		if (folder.filename() == "a") {
-			ec = std::make_error_code(std::errc::permission_denied);
-			return false;
+			return "permission denied";
 		}
-		return fs::remove_all(folder, ec) != static_cast<std::uintmax_t>(-1) && !ec;
+		std::error_code ec;
+		fs::remove_all(folder, ec);
+		return ec ? ec.message() : std::string{};
 	};
 	BOOST_TEST(pmg::run_migrate_prune({ 1, false }, failing) == pmg::k_exit_refused, printed);
 	BOOST_TEST(fs::exists(root / ".snk/migrations/a"));

@@ -6,6 +6,7 @@
 #include "test_folder_link.hpp"
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
@@ -14,6 +15,7 @@
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>, whose OPAQUE/TRANSPARENT macros
 // break the render headers that one includes.
 #include "test_manual_tasks.hpp"
+#include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -556,6 +558,28 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_ReadOnlyProject_WritesNothingIntoTheProject
 	BOOST_TEST(fs::is_directory(user));
 }
 
+// #1316: the run's scratch folder is removed at resource_term without going through a link planted in it.
+BOOST_FIXTURE_TEST_CASE(ResourceTerm_RemovesALinkInTheScratchFolder_AsTheLink, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"json({ "format_version": 1, "name": "Read Only", "engine_version": "0.2.0" })json");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	read_only_project_config config{ dir.path() / "player" };
+	const fs::path kept = dir.write("victim/keep.txt", "player data");
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	core::res::resource_init(data);
+	const auto scratch = data.require<res::resource_system>().mount_roots(res::tag::memory);
+	BOOST_REQUIRE(scratch.size() == 1u);
+	BOOST_REQUIRE(test_util::link_folder(kept.parent_path(), scratch.front() / "escape"));
+
+	core::res::resource_term(data);
+	BOOST_TEST(!fs::exists(scratch.front()));
+	BOOST_TEST(read_file(kept) == "player data");
+}
+
 BOOST_AUTO_TEST_CASE(SafeFolderName_KeepsPlainNamesAndLetters_ReplacesTheRest)
 {
 	BOOST_TEST(core::res::safe_folder_name("My Game_2.0-beta") == "My Game_2.0-beta");
@@ -655,7 +679,12 @@ BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedR
 	fs::create_directory_symlink(victim.path(), link, link_ec);
 #endif
 
+#ifndef _WIN32
+	// The link is this user's (#1316: a run folder its child replaced): it goes as the link.
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == (link_ec ? 1u : 2u));
+#else
 	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
+#endif
 	BOOST_TEST(!fs::exists(ended));
 	BOOST_TEST(fs::is_directory(own));
 	BOOST_TEST(fs::is_directory(other_game));
@@ -663,7 +692,7 @@ BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedR
 #ifndef _WIN32
 	BOOST_TEST(fs::is_directory(open_folder));
 	if (!link_ec) {
-		BOOST_TEST(fs::is_symlink(link));
+		BOOST_TEST(!fs::exists(fs::symlink_status(link)));
 		BOOST_TEST(read_file(victim.path() / "keep.txt") == "player data");
 	}
 #endif
@@ -676,6 +705,72 @@ BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesOnlyThePrivateFoldersOfEndedR
 	fs::remove_all(open_folder, ec);
 	fs::remove(link, ec);
 #endif
+}
+
+// #1316: a run folder replaced by a link is not removed as a tree; remove_scratch_dir removes the link alone.
+BOOST_AUTO_TEST_CASE(RemoveScratchDir_ALinkAtTheFolder_GoesAsTheLink)
+{
+	test_util::temp_dir dir{ "res_mount_tests_top_link" };
+	const fs::path kept = dir.write("victim/keep.txt", "player data");
+	fs::create_directories(dir.path() / "base");
+	const fs::path run = dir.path() / "base" / "run";
+	BOOST_REQUIRE(test_util::link_folder(kept.parent_path(), run));
+	platform::beneath::pinned_root pinned{ fs::canonical(dir.path() / "base") };
+	BOOST_TEST(!platform::beneath::remove_tree_beneath(pinned, "", "run").empty(), "a link is no tree");
+
+	const std::string problem = core::res::remove_scratch_dir(run);
+	BOOST_TEST(problem.empty(), problem);
+	BOOST_TEST(!fs::exists(fs::symlink_status(run)));
+	BOOST_TEST(read_file(kept) == "player data");
+}
+
+BOOST_AUTO_TEST_CASE(RemoveScratchDir_RefusesAPathThatNamesNoFolder)
+{
+	BOOST_TEST(core::res::remove_scratch_dir(fs::path{}).find("names no folder") != std::string::npos);
+	BOOST_TEST(core::res::remove_scratch_dir(fs::path{ "a/" }).find("names no folder") != std::string::npos);
+	BOOST_TEST(core::res::remove_scratch_dir(fs::path{ "never_made_base" } / "run").empty(), "nothing there: success");
+	BOOST_TEST(!fs::exists("never_made_base"), "a removal makes nothing");
+}
+
+#ifndef _WIN32
+// #1316: a tree too deep to walk is moved aside once, and the sweep counts it and leaves it.
+BOOST_AUTO_TEST_CASE(RemoveScratchDir_ATreeTooDeep_IsQuarantined_AndTheSweepLeavesIt)
+{
+	const std::string name = "res_mount_tests_deep";
+	constexpr std::int64_t ended_pid = 2147483647;
+	const fs::path ended = planted_scratch(name, ended_pid);
+	fs::path deep = ended / "objects";
+	for (int level = 0; level < 260; ++level) {
+		deep /= "d";
+	}
+	fs::create_directories(deep);
+
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 0u);
+	fs::path quarantine = ended;
+	quarantine += ".quarantine";
+	BOOST_TEST(!fs::exists(ended));
+	BOOST_TEST(fs::is_directory(quarantine));
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 0u);
+	BOOST_TEST(fs::is_directory(quarantine), "a quarantined folder is left");
+
+	std::error_code ec;
+	fs::remove_all(quarantine, ec);
+}
+#endif
+
+// #1316: a stale scratch folder is removed without going through a link planted in it.
+BOOST_AUTO_TEST_CASE(RemoveStaleScratchDirs_RemovesALinkInAStaleFolder_AsTheLink)
+{
+	const std::string name = "res_mount_tests_stale_link";
+	constexpr std::int64_t ended_pid = 2147483647;
+	const fs::path ended = planted_scratch(name, ended_pid);
+	test_util::temp_dir victim{ "res_mount_tests_link_victim" };
+	victim.write("keep.txt", "player data");
+	BOOST_REQUIRE(test_util::link_folder(victim.path(), ended / "objects" / "escape"));
+
+	BOOST_TEST(core::res::remove_stale_scratch_dirs(name) == 1u);
+	BOOST_TEST(!fs::exists(ended));
+	BOOST_TEST(read_file(victim.path() / "keep.txt") == "player data");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

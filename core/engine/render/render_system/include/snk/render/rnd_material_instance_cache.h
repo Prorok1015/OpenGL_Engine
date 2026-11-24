@@ -38,6 +38,7 @@ namespace rnd
 		static constexpr std::uint64_t grace_frames = 8;
 
 		material_instance_cache(shader_config_cache& variants, texture_manager& textures);
+		~material_instance_cache();
 		material_instance_cache(const material_instance_cache&) = delete;
 		material_instance_cache& operator=(const material_instance_cache&) = delete;
 
@@ -54,16 +55,16 @@ namespace rnd
 		bool contains(material_instance_id id) const noexcept;
 
 		// Instances alive now.
-		std::size_t size() const noexcept { return m_by_key.size(); }
+		std::size_t size() const noexcept;
 		// Compilations done so far; grows only when an instance is made or rebuilt.
-		std::uint64_t compilations() const noexcept { return m_compilations; }
+		std::uint64_t compilations() const noexcept;
 
 	private:
 		struct key
 		{
 			const void* desc = nullptr;
 			bool skinned = false;
-			bool operator==(const key&) const = default;
+			bool operator==(const key& other) const;
 		};
 
 		struct key_hash

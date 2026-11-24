@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_decoder_sandbox.hpp"
+#include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_decode_runner.h"
 #include "edt_decoder_copy.h"
@@ -124,6 +125,24 @@ BOOST_AUTO_TEST_CASE(AScan_OfAnObj_ComesBackFromTheChild_AndTheFolderIsGone)
 	BOOST_CHECK_MESSAGE(requests->error.empty(), requests->error);
 	BOOST_CHECK(requests->requested.empty());
 	BOOST_CHECK(scratch_is_empty());
+}
+
+// #1316: a link left in the run folder (as a child could plant one) is removed as the link, what it points at stays.
+BOOST_AUTO_TEST_CASE(ALinkInTheRunFolder_IsRemovedAsTheLink_WhatItPointsAtStays)
+{
+	const fs::path model = dir.write("m/tri.obj", k_triangle_obj);
+	const fs::path kept = dir.write("outside/keep.txt", "the user's");
+	edt::decode_runner_config with_link = config();
+	bool planted = false;
+	with_link.before_cleanup = [&](const fs::path& run_folder) {
+		planted = test_util::link_folder(kept.parent_path(), run_folder / "escape");
+	};
+	const edt::decode_runner runner(with_link);
+	const auto outcome = runner.run(request_for(model, edt::decode_request::mode_kind::scan), bytes_of(k_triangle_obj), {}, {});
+	BOOST_REQUIRE_MESSAGE(outcome.ok(), outcome.error);
+	BOOST_REQUIRE(planted);
+	BOOST_CHECK(scratch_is_empty());
+	BOOST_CHECK(fs::exists(kept));
 }
 
 BOOST_AUTO_TEST_CASE(AnImport_OfAnObj_ReturnsEveryCreatedResourceAsABlob)
