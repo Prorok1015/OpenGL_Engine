@@ -160,7 +160,7 @@ BOOST_AUTO_TEST_CASE(TheFilters_SkipMaxDistanceExcludedHiddenAndOtherLayers)
 	BOOST_TEST(!scn::raycast_closest(reg, ray));
 	scn::ray_filter with_hidden;
 	with_hidden.include_hidden = true;
-	BOOST_TEST(scn::raycast_closest(reg, ray, with_hidden));
+	BOOST_TEST(scn::raycast_closest(reg, ray, with_hidden).has_value());
 
 	reg.emplace<scn::spatial_layers>(quad, scn::spatial_layers{ scn::spatial_mask{ scn::spatial_layer{ 3 } } });
 	scn::ray_filter default_layer;
@@ -168,7 +168,7 @@ BOOST_AUTO_TEST_CASE(TheFilters_SkipMaxDistanceExcludedHiddenAndOtherLayers)
 	default_layer.mask = scn::spatial_mask{ scn::k_default_spatial_layer };
 	BOOST_TEST(!scn::raycast_closest(reg, ray, default_layer));
 	default_layer.mask = scn::spatial_mask{ scn::spatial_layer{ 3 } };
-	BOOST_TEST(scn::raycast_closest(reg, ray, default_layer));
+	BOOST_TEST(scn::raycast_closest(reg, ray, default_layer).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(WithoutTriangles_TheBoxOfTheMeshAnswers)
@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(AMovedEntity_IsHitWhereItIsAfterTheTransformSystemToldTheWo
 	const std::vector<entt::entity> moved{ quad };
 	scn::spatial_world::attach(reg).entities_moved(reg, moved);
 	BOOST_TEST(!scn::raycast_closest(reg, ray));
-	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 10.f, 0.f, 2.f })));
+	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 10.f, 0.f, 2.f })).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AMeshAddedOrDestroyedAfterTheFirstQuery_IsSeenByTheNext)
@@ -269,7 +269,7 @@ BOOST_AUTO_TEST_CASE(AMeshComponentGivenAnotherRange_IsHitByTheNewRange)
 	// Only the first triangle (indices 0..3): the point (0.4, 0.4) lies in the second one.
 	reg.replace<scn::mesh_component>(quad, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 3 } });
 	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 0.4f, 0.4f, 2.f })));
-	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.4f, -0.4f, 2.f })));
+	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.4f, -0.4f, 2.f })).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AMeshWhoseGeometryLoadsLater_IsHitOnceItIsLoaded)
@@ -287,7 +287,7 @@ BOOST_AUTO_TEST_CASE(AMeshWhoseGeometryLoadsLater_IsHitOnceItIsLoaded)
 	put("later.geom.desc", test_util::quad_geometry_json());
 	scn::geometry_holds::of(reg).hold(entity, tag_of("later.geom.desc"));
 	require_loaded<rnd::geometry_desc>(tag_of("later.geom.desc"));
-	BOOST_TEST(scn::raycast_closest(reg, ray));
+	BOOST_TEST(scn::raycast_closest(reg, ray).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AGeometryHeldAgainAsABiggerShape_IsHitWhereTheNewShapeIs)
@@ -302,7 +302,7 @@ BOOST_AUTO_TEST_CASE(AGeometryHeldAgainAsABiggerShape_IsHitWhereTheNewShapeIs)
 	reg.replace<scn::geometry_component>(quad, scn::geometry_component{ .geom_tag = tag_of("big.geom.desc") });
 	require_loaded<rnd::geometry_desc>(tag_of("big.geom.desc"));
 	scn::geometry_holds::of(reg).hold(quad, tag_of("big.geom.desc"));
-	BOOST_TEST(scn::raycast_closest(reg, outside));
+	BOOST_TEST(scn::raycast_closest(reg, outside).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(AGeometryReloadedInPlace_IsHitWhereTheNewShapeIs_WithoutTouchingAComponent)
@@ -317,8 +317,8 @@ BOOST_AUTO_TEST_CASE(AGeometryReloadedInPlace_IsHitWhereTheNewShapeIs_WithoutTou
 	put("reload.geom.desc", test_util::quad_geometry_json(2.f));
 	rs->signal_changed(geometry.get_tag());
 	pump();
-	BOOST_TEST(scn::raycast_closest(reg, outside));
-	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+	BOOST_TEST(scn::raycast_closest(reg, outside).has_value());
+	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ANaNWorldMatrix_IsSkipped_AndTheRestStillAnswers)
