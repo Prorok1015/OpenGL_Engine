@@ -13,6 +13,7 @@
 #include "edt_editor_camera.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
+#include "edt_viewport_picker.h"
 #include <imgui.h>
 #include <format>
 #include <optional>
@@ -156,11 +157,38 @@ namespace edt
 			target = m_input_target();
 		const bool takes_input = bind_view_input(m_router, target, view, is_dragging_gizmo());
 		if (reg)
-			set_editor_camera_input(*reg, takes_input);
+			run_click(*reg, takes_input && !locked, locked, cam_view, cam_proj);
+		reg = m_get_registry ? m_get_registry() : nullptr;
+		if (reg)
+			set_editor_camera_input(*reg, takes_input && (!m_click || m_click->camera_input()));
 
 		if (reg)
 			render_orientation_gizmo(*reg);
 		render_fps_overlay();
+	}
+
+	void viewport_panel::run_click(entt::registry& reg, bool takes_input, bool locked, const glm::mat4& cam_view, const glm::mat4& cam_proj)
+	{
+		if (!m_click)
+			m_click.emplace(dpi_px(4.f));
+		const ImGuiIO& io = ImGui::GetIO();
+		const ImVec2 mouse = io.MousePos;
+		const glm::vec2 pixel{ mouse.x - m_image_pos.x, mouse.y - m_image_pos.y };
+		const mesh::gesture_result result = m_click->update({
+			.takes_input = takes_input,
+			.locked = locked,
+			.pressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+			.down = ImGui::IsMouseDown(ImGuiMouseButton_Left),
+			.pixel = pixel,
+			.modifiers = { io.KeyShift, io.KeyCtrl, io.KeyAlt },
+		});
+		if (result.kind != mesh::gesture_end::click || !m_on_pick)
+			return;
+		const auto picked = pick_node(reg, { cam_view, cam_proj, result.point, m_viewport_size });
+		if (picked)
+			m_on_pick(picked->path);
+		else
+			m_on_pick(std::nullopt);
 	}
 
 	void viewport_panel::render_toolbar()
