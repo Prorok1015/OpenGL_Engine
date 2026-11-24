@@ -218,7 +218,8 @@ namespace ds {
 		// An empty box is finite (its corners are the largest floats); NaN and infinity would break the median split.
 		static bool finite(const aabb3& box)
 		{
-			return std::isfinite(box.min.x + box.min.y + box.min.z + box.max.x + box.max.y + box.max.z);
+			return box.empty() || (std::isfinite(box.min.x) && std::isfinite(box.min.y) && std::isfinite(box.min.z)
+				&& std::isfinite(box.max.x) && std::isfinite(box.max.y) && std::isfinite(box.max.z));
 		}
 
 		void build_node(std::uint32_t index, std::uint32_t first, std::uint32_t count, std::uint32_t parent)
@@ -232,7 +233,7 @@ namespace ds {
 			}
 			m_nodes[index].box = box;
 			m_nodes[index].parent = parent;
-			const glm::vec3 spread = centres.empty() ? glm::vec3{ 0.f } : size(centres);
+			const glm::vec3 spread = centres.empty() ? glm::vec3{ 0.f } : ds::size(centres);
 			const int axis = spread.x >= spread.y && spread.x >= spread.z ? 0 : (spread.y >= spread.z ? 1 : 2);
 			if (count <= k_leaf_size || spread[axis] <= 0.f) {
 				m_nodes[index].first = first;
