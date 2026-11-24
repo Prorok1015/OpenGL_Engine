@@ -79,12 +79,23 @@ namespace edt
 		if (!m_disk_banner || !m_disk_banner->visible()) return;
 		const std::string_view text = level_disk_banner::k_text;
 		ImGui::TextColored(colors().warning, "%.*s", static_cast<int>(text.size()), text.data());
+		// The actions are queued: the level is rebuilt after the frame, never under the registry this panel draws.
+		const std::optional<std::string> blocked = m_disk_banner->blocked_reason();
+		const auto explain = [&blocked] {
+			if (blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", blocked->c_str());
+		};
 		ImGui::SameLine();
+		ImGui::BeginDisabled(blocked.has_value());
 		if (ImGui::SmallButton("Reload##level_disk")) m_disk_banner->reload();
+		explain();
+		ImGui::EndDisabled();
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Keep mine##level_disk")) m_disk_banner->keep_mine();
 		ImGui::SameLine();
-		if (ImGui::SmallButton("Overwrite##level_disk")) static_cast<void>(m_disk_banner->overwrite());
+		ImGui::BeginDisabled(blocked.has_value());
+		if (ImGui::SmallButton("Overwrite##level_disk")) m_disk_banner->overwrite();
+		explain();
+		ImGui::EndDisabled();
 		if (const std::string& error = m_disk_banner->error(); !error.empty()) {
 			ImGui::TextColored(colors().error, "%s", error.c_str());
 		}

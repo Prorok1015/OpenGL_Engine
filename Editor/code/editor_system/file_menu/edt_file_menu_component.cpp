@@ -147,6 +147,7 @@ edt::file_menu_component::file_menu_component(ports from)
 		return stopped;
 	};
 	hooks.level_write_blocker = level_write_blocker;
+	m_ports.level_ctrl.write_blocker = level_write_blocker;
 	// #1188: the file of the level changed on disk; read again at each save, so a missed signal is found too.
 	const std::function<std::optional<std::string>()> level_disk_conflict = [this] { return m_ports.level_ctrl.disk_conflict(); };
 	hooks.level_disk_conflict = level_disk_conflict;
@@ -208,6 +209,7 @@ edt::file_menu_component::~file_menu_component()
 {
 	// The level controller is declared before this component and outlives it: it must not call into a notice that is gone.
 	m_ports.level_ctrl.on_file_upgraded = nullptr;
+	m_ports.level_ctrl.write_blocker = nullptr;
 }
 
 std::optional<std::string> edt::file_menu_component::migration_blocker() const

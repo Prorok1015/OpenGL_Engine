@@ -2,10 +2,10 @@
 #include "edt_level_controller.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_document.h>
 #include <cstddef>
 #include <format>
 #include <utility>
-#include <vector>
 
 namespace
 {
@@ -24,40 +24,68 @@ bool edt::level_disk_banner::visible() const
 	return m_state.changed_on_disk() && m_dismissed_serial != m_state.disk_change_serial();
 }
 
-bool edt::level_disk_banner::reload_now()
+std::optional<std::string> edt::level_disk_banner::blocked_reason() const
 {
-	const bool reloaded = m_level.reload_from_disk();
-	m_error = reloaded ? std::string{} : std::string{ "The level was not reloaded: Problems and the log say why." };
-	return reloaded;
+	if (m_state.edits_locked()) return std::string{ "stop Play first" };
+	return m_level.write_blocker ? m_level.write_blocker() : std::nullopt;
+}
+
+bool edt::level_disk_banner::run(action what)
+{
+	switch (what) {
+	case action::reload: {
+		const std::string why = m_level.reload_from_disk();
+		m_error = why.empty() ? std::string{} : "The level was not reloaded: " + why;
+		return why.empty();
+	}
+	case action::overwrite: {
+		const save_result written = m_level.overwrite_disk_change();
+		m_error = written.saved ? std::string{} : "The level file was not overwritten: " + written.error;
+		return written.saved;
+	}
+	case action::keep_mine:
+		m_dismissed_serial = m_state.disk_change_serial();
+		m_error.clear();
+		return true;
+	}
+	return false;
+}
+
+void edt::level_disk_banner::run_pending()
+{
+	std::vector<queued> now = std::exchange(m_pending, {});
+	for (queued& item : now) {
+		const bool ok = run(item.what);
+		if (item.done) item.done(ok);
+	}
 }
 
 void edt::level_disk_banner::reload(std::function<void(bool reloaded)> done)
 {
 	if (!m_state.is_dirty()) {
-		const bool reloaded = reload_now();
-		if (done) done(reloaded);
+		m_pending.push_back({ action::reload, std::move(done) });
 		return;
 	}
 	m_dialogs.choose("Reload the level", "Reloading reads the level file again: your unsaved changes of the level are lost.",
 		{ k_reload_option, "Cancel" },
 		[this, done = std::move(done), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
 			if (!alive.lock()) return;
-			const bool reloaded = choice && *choice == 0 && reload_now();
-			if (done) done(reloaded);
+			if (choice && *choice == 0) {
+				m_pending.push_back({ action::reload, done });
+			} else if (done) {
+				done(false);
+			}
 		});
 }
 
 void edt::level_disk_banner::keep_mine()
 {
-	m_dismissed_serial = m_state.disk_change_serial();
-	m_error.clear();
+	m_pending.push_back({ action::keep_mine, {} });
 }
 
-edt::save_result edt::level_disk_banner::overwrite()
+void edt::level_disk_banner::overwrite(std::function<void(bool written)> done)
 {
-	save_result written = m_level.overwrite_disk_change();
-	m_error = written.saved ? std::string{} : written.error;
-	return written;
+	m_pending.push_back({ action::overwrite, std::move(done) });
 }
 
 void edt::level_disk_banner::ask_save(std::function<void(bool resolved)> done)
@@ -68,12 +96,12 @@ void edt::level_disk_banner::ask_save(std::function<void(bool resolved)> done)
 		{ k_reload_option, "Overwrite the file", "Cancel" },
 		[this, done = std::move(done), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
 			if (!alive.lock()) return;
-			bool resolved = false;
 			if (choice && *choice == 0) {
-				resolved = reload_now();
+				m_pending.push_back({ action::reload, done });
 			} else if (choice && *choice == 1) {
-				resolved = overwrite().saved;
+				m_pending.push_back({ action::overwrite, done });
+			} else if (done) {
+				done(false);
 			}
-			if (done) done(resolved);
 		});
 }

@@ -389,6 +389,12 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 		if (!alive.lock()) return;
 		auto after = std::move(m_after_save);
 		m_after_save.clear();
+		// Onto the level's own file that changed on disk: the same question as Save, not a refusal.
+		if (path == m_hooks.level_path() && ask_level_disk_conflict([after] {
+				for (const auto& action : after) action();
+			})) {
+			return;
+		}
 		if (!invoke_or_report("file.save_as", json::object{ { "path", path } }, LEVEL_NOT_SAVED)) return;
 		for (const auto& action : after) action();
 	});
@@ -451,7 +457,10 @@ void edt::file_menu::quick_save()
 
 bool edt::file_menu::ask_level_disk_conflict(std::function<void()> then)
 {
-	if (!m_hooks.level_disk_conflict || !m_hooks.ask_level_disk_conflict || !m_hooks.level_disk_conflict()) return false;
+	if (!m_hooks.level_disk_conflict || !m_hooks.ask_level_disk_conflict) return false;
+	// A blocked write is reported by file.save itself (busy, #761): no question whose answers could not be carried out.
+	if (m_hooks.level_write_blocker && m_hooks.level_write_blocker()) return false;
+	if (!m_hooks.level_disk_conflict()) return false;
 	m_hooks.ask_level_disk_conflict([alive = std::weak_ptr<void>(m_alive), then = std::move(then)](bool resolved) {
 		if (alive.lock() && resolved && then) then();
 	});
@@ -570,7 +579,7 @@ void edt::file_menu::register_actions()
 			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
 			// Nobody is asked here: a person answers the menu's question (quick_save), an agent leaves it to a person.
 			if (std::optional<std::string> conflict = m_hooks.level_disk_conflict ? m_hooks.level_disk_conflict() : std::nullopt) {
-				return action_result::failure("needs_input", *conflict + "; a person decides in the editor (Reload or Overwrite)");
+				return action_result::failure(cmd::codes::needs_input, *conflict + "; a person decides in the editor (Reload or Overwrite)");
 			}
 			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
@@ -599,7 +608,7 @@ void edt::file_menu::register_actions()
 			}
 			if (target == m_hooks.level_path()) {
 				if (std::optional<std::string> conflict = m_hooks.level_disk_conflict ? m_hooks.level_disk_conflict() : std::nullopt) {
-					return action_result::failure("needs_input", *conflict + "; a person decides in the editor (Reload or Overwrite)");
+					return action_result::failure(cmd::codes::needs_input, *conflict + "; a person decides in the editor (Reload or Overwrite)");
 				}
 			}
 			if (!m_hooks.save_level_as(target)) return action_result::failure("failed", "the level could not be written");

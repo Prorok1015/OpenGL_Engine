@@ -1,11 +1,11 @@
 #pragma once
-#include <snk/editor/edt_document.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace edt
 {
@@ -15,6 +15,8 @@ namespace edt
 
 	// The banner over the viewport while the level file changed on disk (#1188), without ImGui: whether it shows and what its
 	// buttons do (the viewport panel draws it). The question of a person's Save of a flagged level is asked through it too.
+	// Reload and Overwrite rebuild the level or write it, so a click or an answer only queues them: run_pending carries them
+	// out once a frame, outside the UI, where no panel holds a registry of the worlds.
 	class level_disk_banner
 	{
 	public:
@@ -26,26 +28,40 @@ namespace edt
 
 		// The level is flagged (scene_document::changed_on_disk) and Keep mine did not put off this outside version.
 		bool visible() const;
+		// Why Reload and Overwrite cannot run now (Play, a level loading, a migration, a detached level); nullopt: they can.
+		std::optional<std::string> blocked_reason() const;
 		// Reload: asks first while the level has unsaved changes (they are lost), then the level takes its file; bytes that do
 		// not load leave the level as it is and say why in Problems. `done(true)` once the level took the file.
 		void reload(std::function<void(bool reloaded)> done = {});
 		// Keep mine: the banner goes until the next outside change; the flag stays, so Save still asks.
 		void keep_mine();
 		// Overwrite: the editor's level over the file, unless the file changed again meanwhile (flagged anew: the banner is back).
-		save_result overwrite();
+		void overwrite(std::function<void(bool written)> done = {});
 		// What the last action of the banner failed with; empty: nothing.
 		const std::string& error() const { return m_error; }
 		// A person's Save of a flagged level: Reload / Overwrite / Cancel. `done(true)` once the level and its file agree again.
 		void ask_save(std::function<void(bool resolved)> done);
 
+		bool has_pending() const { return !m_pending.empty(); }
+		// Carries out the queued actions, each `done` after its own.
+		void run_pending();
+
 	private:
-		bool reload_now();
+		enum class action : std::uint8_t { reload, overwrite, keep_mine };
+		struct queued
+		{
+			action what = action::reload;
+			std::function<void(bool)> done;
+		};
+
+		bool run(action what);
 
 		scene_document& m_state;
 		level_controller& m_level;
 		dialog_service& m_dialogs;
 		std::optional<std::uint64_t> m_dismissed_serial;
 		std::string m_error;
+		std::vector<queued> m_pending;
 		// The dialog queue can outlive the banner: an answer after that does nothing.
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 	};

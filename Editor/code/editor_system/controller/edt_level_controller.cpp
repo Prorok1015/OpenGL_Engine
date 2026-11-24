@@ -130,6 +130,8 @@ void edt::level_controller::watch_level_file()
 	if (!m_file_watch_resources) return;
 	m_file_watch_tag = file;
 	m_file_watch_resources->watch(m_file_watch_tag, this, [this](const res::tag&) { on_level_file_changed(); });
+	// A change while nothing watched (a load running, the game layer away) is found by the next tick.
+	m_disk_check_pending = true;
 }
 
 void edt::level_controller::unwatch_level_file()
@@ -139,6 +141,7 @@ void edt::level_controller::unwatch_level_file()
 		m_file_watch_resources = nullptr;
 	}
 	m_file_watch_tag = res::tag{};
+	m_disk_check_pending = false;
 }
 
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────
@@ -460,20 +463,24 @@ boost::json::object edt::level_controller::build_level_json() const
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path, bool over_disk_change)
 {
+	m_last_write_error.clear();
 	// Detached, the worlds are gone (detach_from_game_layer): a save would write an empty level over the file (#761).
 	if (is_detached()) {
 		egLOG_ERROR("Editor/Save", "Level not saved to '{}': the level is detached (a game layer change or a project migration)", rel_path);
+		m_last_write_error = "the level is detached (a game layer change or a project migration)";
 		return false;
 	}
 	// A path typed into Save As (or sent by an agent) becomes a res:// tag; one that already names a protocol cannot.
 	if (rel_path.find("://") != std::string::npos) {
 		egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
+		m_last_write_error = std::format("'{}' must be a path inside the project, without a protocol", rel_path);
 		return false;
 	}
 	// The file is read again before it is replaced: a signal may have been missed (#1188).
 	if (!over_disk_change && m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative()) {
-		if (const std::optional<std::string> conflict = disk_conflict()) {
+		if (std::optional<std::string> conflict = disk_conflict()) {
 			egLOG_ERROR("Editor/Save", "Level not saved: {}", *conflict);
+			m_last_write_error = std::move(*conflict);
 			return false;
 		}
 	}
@@ -495,6 +502,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path, boo
 		replaced_guid replaced = root_guid_of_replaced(*m_services.writable_resources(), rel_path);
 		if (!replaced.error.empty()) {
 			egLOG_ERROR("Editor/Save", "Level not saved over '{}': {}, so its __guid would be lost", res::tag::make(rel_path).view(), replaced.error);
+			m_last_write_error = std::format("'{}': {}, so its __guid would be lost", res::tag::make(rel_path).view(), replaced.error);
 			return false;
 		}
 		guid = std::move(replaced.guid);
@@ -509,6 +517,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path, boo
 	// only once the level is on disk, or exit would no longer ask about the changes.
 	if (!m_services.writable_resources()->store_sync(tag, bytes)) {
 		egLOG_ERROR("Editor/Save", "Level not saved: '{}' could not be written; the changes are kept", tag.view());
+		m_last_write_error = std::format("'{}' could not be written; the changes are kept", tag.view());
 		return false;
 	}
 	m_state.level_guid = guid;
@@ -710,8 +719,22 @@ void edt::level_controller::forget_disk_change()
 
 void edt::level_controller::on_level_file_changed()
 {
+	m_disk_check_pending = false;
+	check_level_file();
+}
+
+void edt::level_controller::tick_disk_change()
+{
+	if (!m_disk_check_pending) return;
+	m_disk_check_pending = false;
+	check_level_file();
+}
+
+void edt::level_controller::check_level_file()
+{
 	if (load_in_progress && load_in_progress()) {
-		egLOG_DEBUG("Editor/DiskChange", "'{}' changed during a level load: ignored, the load reads the file", m_state.level_tag.view());
+		// The load re-arms the watch when it ends, which checks the file again.
+		egLOG_DEBUG("Editor/DiskChange", "'{}' changed during a level load: looked at when the load ends", m_state.level_tag.view());
 		return;
 	}
 	if (is_detached() || !m_state.level_tag.is_valid()) return;
@@ -722,12 +745,18 @@ void edt::level_controller::on_level_file_changed()
 	}
 	const std::string version = code_version_of(*bytes);
 	if (version == m_disk_version) {
-		// The editor's own write, or the file went back to the version the editor has.
+		// The editor's own write, or the file went back to the version the editor has: nothing is wrong with it any more.
 		if (m_state.changed_on_disk()) forget_disk_change();
+		if (on_disk_problem) on_disk_problem({});
 		return;
 	}
 	if (m_state.is_dirty() || m_state.edits_locked()) {
 		flag_disk_version(version);
+		return;
+	}
+	if (person_is_editing && person_is_editing()) {
+		// Swapping the worlds under a gizmo drag or a field being typed into would drop what the person holds.
+		m_disk_check_pending = true;
 		return;
 	}
 	take_disk_bytes(*bytes, version);
@@ -770,21 +799,33 @@ bool edt::level_controller::take_disk_bytes(const std::vector<std::byte>& bytes,
 	writable->erase(probe);
 	if (!probe_error.empty()) return refuse(probe_error);
 
+	std::optional<std::vector<std::byte>> old_copy;
+	if (const auto raw = writable->fetch_data(m_state.editor_tag)) {
+		raw->wait();
+		if (raw->is_ready()) old_copy = raw->data;
+	}
+	// A step after the probe failed: the working copy gets its bytes back; `rebuilt`: the set "level" had taken the new ones.
+	const auto restore = [&](const std::string& reason, bool rebuilt) {
+		if (old_copy) {
+			writable->store(m_state.editor_tag, *old_copy);
+			resources->signal_changed(m_state.editor_tag);
+			if (rebuilt && !ctx_mgr->load_level(m_state.editor_tag)) {
+				egLOG_ERROR("Editor/DiskChange", "level '{}' could not be rebuilt from the editor's copy either", m_state.editor_tag.view());
+			}
+		}
+		return refuse(reason);
+	};
+
 	const notify_worlds_replaced notify{ on_worlds_replaced };
 	std::string active_name;
 	if (const std::string* active = m_state.active_world_name()) active_name = *active;
 	// The same in-place path as a change of the game layer: the working copy gets the bytes, the set "level" is rebuilt.
-	writable->store(m_state.editor_tag, bytes);
+	if (!writable->store(m_state.editor_tag, bytes)) return restore("its bytes could not be put into the editor's copy of the level", false);
 	resources->signal_changed(m_state.editor_tag);
-	if (!ctx_mgr->load_level(m_state.editor_tag)) {
-		egLOG_ERROR("Editor/DiskChange", "level '{}' could not be rebuilt from its file", m_state.level_tag.view());
-		return false;
-	}
+	// load_level leaves the set as it was when it refuses.
+	if (!ctx_mgr->load_level(m_state.editor_tag)) return restore("the level could not be rebuilt from it", false);
 	auto level_res = resources->require_sync<scn::level_desc>(m_state.editor_tag);
-	if (!level_res.is_ready()) {
-		egLOG_ERROR("Editor/DiskChange", "level desc '{}' failed to load after the reload", m_state.editor_tag.view());
-		return false;
-	}
+	if (!level_res.is_ready()) return restore("the level desc did not load after the rebuild", true);
 	const std::size_t migrated = populate_worlds_from_level(level_res);
 	m_state.level_guid = level_res->get_guid();
 	m_state.level_parent = level_res->get_parent();
@@ -807,24 +848,31 @@ bool edt::level_controller::take_disk_bytes(const std::vector<std::byte>& bytes,
 	return true;
 }
 
-bool edt::level_controller::reload_from_disk()
+std::string edt::level_controller::reload_from_disk()
 {
-	if (!m_state.level_tag.is_valid() || is_detached()) return false;
-	if (m_state.edits_locked()) {
-		egLOG_WARN("Editor/DiskChange", "level not reloaded: stop Play first");
-		return false;
+	std::string why;
+	if (!m_state.level_tag.is_valid()) {
+		why = "the level has no file yet";
+	} else if (m_state.edits_locked()) {
+		why = "stop Play first";
+	} else if (std::optional<std::string> blocked = write_blocker ? write_blocker() : std::nullopt) {
+		why = std::move(*blocked);
+	} else if (is_detached()) {
+		why = "the level is detached (a game layer change or a project migration)";
+	} else if (const std::optional<std::vector<std::byte>> bytes = read_level_file(); !bytes) {
+		why = std::format("'{}' cannot be read", m_state.level_tag.view());
+	} else if (!take_disk_bytes(*bytes, code_version_of(*bytes))) {
+		why = "the file does not load as a level: Problems says why";
 	}
-	const std::optional<std::vector<std::byte>> bytes = read_level_file();
-	if (!bytes) {
-		egLOG_WARN("Editor/DiskChange", "level not reloaded: '{}' cannot be read", m_state.level_tag.view());
-		return false;
-	}
-	return take_disk_bytes(*bytes, code_version_of(*bytes));
+	if (!why.empty()) egLOG_WARN("Editor/DiskChange", "level not reloaded: {}", why);
+	return why;
 }
 
 edt::save_result edt::level_controller::overwrite_disk_change()
 {
 	if (!m_state.level_tag.is_valid()) return save_result::failure("the level has no file yet: use Save Level As");
+	if (m_state.edits_locked()) return save_result::failure("stop Play first");
+	if (std::optional<std::string> blocked = write_blocker ? write_blocker() : std::nullopt) return save_result::failure(std::move(*blocked));
 	const bool flagged = m_state.changed_on_disk();
 	if (flagged) {
 		// The person decided on the version that was flagged; one that came while they did is looked at first.
@@ -836,10 +884,7 @@ edt::save_result edt::level_controller::overwrite_disk_change()
 			}
 		}
 	}
-	if (!write_level_to_disk(std::string(m_state.level_tag.relative()), flagged)) {
-		return save_result::failure(m_state.changed_on_disk() ? "the level file changed on disk: reload it or overwrite it"
-			: "the level could not be written");
-	}
+	if (!write_level_to_disk(std::string(m_state.level_tag.relative()), flagged)) return save_result::failure(m_last_write_error);
 	return save_result::ok();
 }
 
@@ -857,8 +902,9 @@ std::optional<std::string> edt::level_controller::disk_conflict()
 	return std::format("the level file '{}' changed on disk: reload it or overwrite it", m_state.level_tag.view());
 }
 
-void edt::level_controller::on_play_stopped()
+void edt::level_controller::on_play_stopped(bool for_module_reload)
 {
+	if (for_module_reload) return;
 	if (!m_state.changed_on_disk() || m_state.is_dirty() || m_state.edits_locked() || is_detached()) return;
 	if (load_in_progress && load_in_progress()) return;
 	const std::optional<std::vector<std::byte>> bytes = read_level_file();

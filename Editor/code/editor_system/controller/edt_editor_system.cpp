@@ -213,6 +213,7 @@ edt::editor_system::~editor_system()
 	// Stop is about to run below: a flagged level must not be reloaded while the editor goes.
 	m_play_stopped.disconnect();
 	m_level_ctrl.load_in_progress = nullptr;
+	m_level_ctrl.person_is_editing = nullptr;
 	m_level_ctrl.on_disk_problem = nullptr;
 	if (m_desc_binary_cache) {
 		m_res.set_desc_binary_hash_cache(nullptr);
@@ -599,8 +600,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_live->install();
 	create_play_session(data);
 	// A flagged level that is clean once Play stopped takes its file then (#1188).
-	m_play_stopped = m_context->events().play_state_changed.subscribe([this](play_state state, play_reason) {
-		if (state == play_state::stopped) m_level_ctrl.on_play_stopped();
+	m_play_stopped = m_context->events().play_state_changed.subscribe([this](play_state state, play_reason reason) {
+		if (state == play_state::stopped) m_level_ctrl.on_play_stopped(reason == play_reason::stopped_for_reload);
 	});
 
 	m_build->install(m_registrations);
@@ -962,6 +963,7 @@ void edt::editor_system::wire_controller_callbacks()
 	};
 	// #1188: an outside change of the level file waits while a level loads (the load reads the file itself).
 	m_level_ctrl.load_in_progress = [this] { return level_load_in_progress(); };
+	m_level_ctrl.person_is_editing = [this] { return person_is_editing(); };
 	m_level_ctrl.on_disk_problem = [this](const std::string& reason) {
 		if (!m_problems) return;
 		if (reason.empty()) {
@@ -1010,6 +1012,9 @@ bool edt::editor_system::level_load_in_progress() const
 void edt::editor_system::tick_level_settle()
 {
 	if (m_level_load) m_level_load->tick_settle();
+	// Outside the UI: no panel holds a registry of the worlds a reload rebuilds (#1188).
+	m_level_ctrl.tick_disk_change();
+	if (m_level_disk) m_level_disk->run_pending();
 }
 
 void edt::editor_system::go_to_problem(const std::string& source, const problem& item)

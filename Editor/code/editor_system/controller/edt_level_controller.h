@@ -166,21 +166,32 @@ namespace edt
 		const res::tag& watched_file() const { return m_file_watch_tag; }
 		// The signal of a change of the level file (the watcher calls it).
 		void on_level_file_changed();
+		// Once a frame, outside the UI: a check of the file that had to wait (a re-armed watch: a load ended, the game layer
+		// came back; a person dragging a gizmo or typing into a field while a clean level would be reloaded).
+		void tick_disk_change();
+		bool disk_check_pending() const { return m_disk_check_pending; }
 		// Reads the file again and makes it the level: the bytes must load as a level first (else the level stays, the
-		// working copy is not touched, on_disk_problem tells why and false). Drops unsaved edits; the history starts
-		// again, the selection and the active world are taken again (#33).
-		bool reload_from_disk();
+		// working copy is not touched, on_disk_problem tells why). Drops unsaved edits; the history starts again, the
+		// selection and the active world are taken again (#33). Refused during Play or while write_blocker says so. Returns
+		// why it did not reload; empty: reloaded. Rebuilds the level: never call it while a panel holds its registry.
+		std::string reload_from_disk();
 		// Writes the editor's level over a file that changed on disk, unless it changed again since it was flagged: then the
 		// flag is set anew (another serial) and nothing is written.
 		save_result overwrite_disk_change();
 		// Why the level's own file must not be written now: it is flagged, or it is not the version the editor knows (a missed
 		// signal: the flag is set then). nullopt: it may.
 		std::optional<std::string> disk_conflict();
-		// Play stopped: a clean level flagged meanwhile takes the file (same checks as reload_from_disk).
-		void on_play_stopped();
+		// Play stopped: a clean level flagged meanwhile takes the file (same checks as reload_from_disk). Not when it stopped
+		// for a module reload (`for_module_reload`): the game layer is being swapped, the check follows the attach.
+		void on_play_stopped(bool for_module_reload = false);
 
 		// Set by the coordinator. A level load is in progress: a change of the file is ignored (the load reads it).
 		std::function<bool()> load_in_progress;
+		// A person is in the middle of an edit (a gizmo drag, a field being typed into): a silent reload waits a frame.
+		std::function<bool()> person_is_editing;
+		// Why the level may not be written now (a level loading, a migration, a detached level; #761): Reload and Overwrite
+		// of a file that changed on disk are refused with it.
+		std::function<std::optional<std::string>()> write_blocker;
 		// The bytes of an outside change did not load as a level: one row of Problems with the reason. An empty reason: the
 		// level took its file (or another level was loaded), the row goes.
 		std::function<void(const std::string&)> on_disk_problem;
@@ -199,6 +210,8 @@ namespace edt
 		void unwatch_level_file();
 		// The level file's bytes as they are on disk now; nullopt when it cannot be read (gone).
 		std::optional<std::vector<std::byte>> read_level_file() const;
+		// Compares the file with m_disk_version and acts on it (on_level_file_changed); may leave a retry for the next tick.
+		void check_level_file();
 		// Checks that `bytes` load as a level (a probe copy) and makes them the level; false (and the row) when they do not.
 		bool take_disk_bytes(const std::vector<std::byte>& bytes, const std::string& version);
 		// An outside version of the file the editor cannot take now: flagged, the serial grows once per version.
@@ -219,5 +232,8 @@ namespace edt
 		// The outside version the flag was set for (empty: not flagged).
 		std::string m_flagged_version;
 		std::uint32_t m_probe_serial = 0;
+		bool m_disk_check_pending = false;
+		// Why the last write_level_to_disk did not write; empty after one that did.
+		std::string m_last_write_error;
 	};
 }

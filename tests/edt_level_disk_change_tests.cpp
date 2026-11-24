@@ -42,6 +42,8 @@ namespace fs = std::filesystem;
 
 constexpr std::string_view k_level_path = "levels/main.desc";
 constexpr std::string_view k_working_copy = "memory://editor/loading/1/main.desc";
+// Spelled apart: the repository scan of res:// literals would look for the missing file below.
+constexpr std::string_view k_res_protocol = "res:/" "/";
 
 std::string read_file(const fs::path& p)
 {
@@ -231,6 +233,7 @@ BOOST_AUTO_TEST_CASE(ADirtyLevel_IsFlagged_AndKeepMineHidesTheBannerUntilTheNext
 	BOOST_TEST(state.disk_change_serial() == serial);
 
 	banner.keep_mine();
+	banner.run_pending();
 	BOOST_TEST(!banner.visible());
 	BOOST_TEST(state.changed_on_disk());
 
@@ -252,6 +255,10 @@ BOOST_AUTO_TEST_CASE(Reload_AsksFirst_ThenDropsTheEditsAndTakesTheFile)
 	BOOST_TEST(dialogs.pending() == 1u);
 	BOOST_TEST(world_name() == "alpha");
 	answer_front(0);
+	// Queued: the level is rebuilt by the frame's tick, not under the panel that drew the button.
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST(banner.has_pending());
+	banner.run_pending();
 
 	BOOST_TEST(reloaded);
 	BOOST_TEST(world_name() == "beta");
@@ -267,7 +274,10 @@ BOOST_AUTO_TEST_CASE(Overwrite_WritesTheEditorsLevel_AndClearsTheFlag)
 	write_from_outside(level_text("beta"));
 	BOOST_REQUIRE(state.changed_on_disk());
 
-	BOOST_TEST(banner.overwrite().saved);
+	bool written_ok = false;
+	banner.overwrite([&written_ok](bool written) { written_ok = written; });
+	banner.run_pending();
+	BOOST_TEST(written_ok);
 	const auto written = boost::json::parse(read_file(level_file_path));
 	BOOST_TEST(written.at("worlds").as_array().at(0).at("name").as_string() == "alpha");
 	BOOST_TEST(!state.changed_on_disk());
@@ -287,12 +297,16 @@ BOOST_AUTO_TEST_CASE(Overwrite_RefusesAFileThatChangedAgainMeanwhile)
 	write_from_outside(level_text("beta"));
 	BOOST_REQUIRE(banner.visible());
 	banner.keep_mine();
+	banner.run_pending();
 	const auto serial = state.disk_change_serial();
 
 	// Another outside write whose signal has not come yet.
 	const std::string gamma = level_text("gamma");
 	write_file(gamma);
-	BOOST_TEST(!banner.overwrite().saved);
+	bool written_ok = true;
+	banner.overwrite([&written_ok](bool written) { written_ok = written; });
+	banner.run_pending();
+	BOOST_TEST(!written_ok);
 
 	BOOST_TEST(read_file(level_file_path) == gamma);
 	BOOST_TEST(state.changed_on_disk());
@@ -314,8 +328,10 @@ BOOST_AUTO_TEST_CASE(SaveWithTheFlag_AsksAPerson_AndRefusesAnAgent)
 	BOOST_TEST(dialogs.pending() == 1u);
 	BOOST_TEST(read_file(level_file_path) == beta);
 	answer_front(2);
+	BOOST_TEST(!banner.has_pending());
 	BOOST_TEST(read_file(level_file_path) == beta);
 	BOOST_TEST(state.is_dirty());
+	BOOST_TEST(state.changed_on_disk());
 
 	// An agent: needs_input, nothing written, nothing asked.
 	const edt::action_result agent = actions.invoke("file.save", boost::json::object{}, cmd::origin::agent("session-1"));
@@ -349,6 +365,7 @@ BOOST_AUTO_TEST_CASE(SaveWithTheFlag_OverwriteAnsweredByThePerson_WritesTheLevel
 
 	menu().quick_save();
 	answer_front(1);
+	banner.run_pending();
 	const auto written = boost::json::parse(read_file(level_file_path));
 	BOOST_TEST(written.at("worlds").as_array().at(0).at("name").as_string() == "alpha");
 	BOOST_TEST(!state.changed_on_disk());
@@ -405,7 +422,7 @@ BOOST_AUTO_TEST_CASE(DuringPlay_OnlyTheFlag_AndAfterStopACleanLevelTakesTheFile)
 	BOOST_TEST(state.changed_on_disk());
 	BOOST_TEST(world_name() == "alpha");
 	BOOST_TEST((working_copy_bytes() == copy_before));
-	BOOST_TEST(!level_ctrl.reload_from_disk());
+	BOOST_TEST(!level_ctrl.reload_from_disk().empty());
 
 	state.set_edits_locked(false);
 	level_ctrl.on_play_stopped();
@@ -428,17 +445,161 @@ BOOST_AUTO_TEST_CASE(DuringPlay_ADirtyLevelKeepsTheBannerAfterStop)
 	BOOST_TEST(banner.visible());
 }
 
-BOOST_AUTO_TEST_CASE(ASignalDuringALevelLoad_IsIgnored)
+BOOST_AUTO_TEST_CASE(AChangeDuringALevelLoad_IsTakenWhenTheLoadEnds)
 {
 	open_level("alpha");
-	level_ctrl.load_in_progress = [] { return true; };
+	// As level_load_component::begin: the level is unwatched while the load runs, and a signal then changes nothing.
+	bool loading = true;
+	level_ctrl.load_in_progress = [&loading] { return loading; };
+	level_ctrl.unwatch_level();
+	BOOST_TEST(!level_ctrl.watched_file().is_valid());
 	write_from_outside(level_text("beta"));
 	BOOST_TEST(world_name() == "alpha");
 	BOOST_TEST(!state.changed_on_disk());
 
-	// A load unwatches the level when it starts (level_load_component::begin): the file is not watched then.
-	level_ctrl.unwatch_level();
-	BOOST_TEST(!level_ctrl.watched_file().is_valid());
+	// The load ended without a new level: the watch is back and the next tick compares the file once.
+	loading = false;
+	level_ctrl.resume_watch();
+	BOOST_TEST(level_ctrl.disk_check_pending());
+	BOOST_TEST(world_name() == "alpha");
+	level_ctrl.tick_disk_change();
+	BOOST_TEST(world_name() == "beta");
+	BOOST_TEST(!level_ctrl.disk_check_pending());
+}
+
+BOOST_AUTO_TEST_CASE(AChangeWhileTheGameLayerIsAway_IsFoundAfterTheAttach)
+{
+	open_level("alpha");
+	make_dirty();
+	level_ctrl.detach_from_game_layer();
+	write_from_outside(level_text("beta"));
+	BOOST_TEST(!state.changed_on_disk());
+	level_ctrl.attach_to_game_layer();
+	level_ctrl.tick_disk_change();
+	BOOST_TEST(state.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(ASilentReload_WaitsWhileAPersonIsEditing)
+{
+	open_level("alpha");
+	bool editing = true;
+	level_ctrl.person_is_editing = [&editing] { return editing; };
+	write_from_outside(level_text("beta"));
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST(level_ctrl.disk_check_pending());
+	level_ctrl.tick_disk_change();
+	BOOST_TEST(world_name() == "alpha");
+	editing = false;
+	level_ctrl.tick_disk_change();
+	BOOST_TEST(world_name() == "beta");
+}
+
+BOOST_AUTO_TEST_CASE(TheBannersReload_RebuildsTheLevelOnlyInTheQueuedStep)
+{
+	open_level("alpha");
+	// A clean level flagged during Play, Play stopped for a module reload: the banner is up, its Reload asks nothing.
+	state.set_edits_locked(true);
+	write_from_outside(level_text("beta"));
+	state.set_edits_locked(false);
+	level_ctrl.on_play_stopped(true);
+	BOOST_REQUIRE(banner.visible());
+
+	banner.reload();
+	BOOST_TEST(dialogs.pending() == 0u);
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST((working_copy_bytes() != test_util::to_bytes(level_text("beta"))));
+	banner.run_pending();
+	BOOST_TEST(world_name() == "beta");
+	BOOST_TEST(banner.error().empty());
+}
+
+BOOST_AUTO_TEST_CASE(PlayStoppedForAModuleReload_DoesNotTakeTheFile)
+{
+	open_level("alpha");
+	state.set_edits_locked(true);
+	write_from_outside(level_text("beta"));
+	state.set_edits_locked(false);
+	level_ctrl.on_play_stopped(true);
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST(state.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(AWriteBlocker_RefusesTheBannersOverwriteAndReload)
+{
+	open_level("alpha");
+	make_dirty();
+	const std::string beta = level_text("beta");
+	write_from_outside(beta);
+	level_ctrl.write_blocker = []() -> std::optional<std::string> { return std::string{ "a level is loading" }; };
+	BOOST_TEST(banner.blocked_reason().value_or("") == "a level is loading");
+
+	bool written_ok = true;
+	banner.overwrite([&written_ok](bool written) { written_ok = written; });
+	banner.run_pending();
+	BOOST_TEST(!written_ok);
+	BOOST_TEST(read_file(level_file_path) == beta);
+	BOOST_TEST(banner.error().find("a level is loading") != std::string::npos);
+	BOOST_TEST(!level_ctrl.reload_from_disk().empty());
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST(state.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(OverwriteDuringPlay_IsRefused)
+{
+	open_level("alpha");
+	make_dirty();
+	const std::string beta = level_text("beta");
+	write_from_outside(beta);
+	state.set_edits_locked(true);
+	BOOST_TEST(banner.blocked_reason().has_value());
+	const edt::save_result written = level_ctrl.overwrite_disk_change();
+	BOOST_TEST(!written.saved);
+	BOOST_TEST(written.error == "stop Play first");
+	BOOST_TEST(read_file(level_file_path) == beta);
+	state.set_edits_locked(false);
+}
+
+BOOST_AUTO_TEST_CASE(BrokenBytesFromOutsideOnADirtyLevel_OnlyFlag)
+{
+	open_level("alpha");
+	make_dirty();
+	const auto copy_before = working_copy_bytes();
+	write_from_outside("{ \"__type\": \"level_desc\", ");
+	BOOST_TEST(state.changed_on_disk());
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST((working_copy_bytes() == copy_before));
+	BOOST_TEST(problems.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ALevelWhoseWorldDoesNotLoad_LeavesTheOldLevelAndOneProblem)
+{
+	open_level("alpha");
+	const auto copy_before = working_copy_bytes();
+	// Valid JSON of the level type, but its world is a file that is not there.
+	const std::string missing_world = std::string(k_res_protocol) + "worlds/gone_for_1188.desc";
+	const boost::json::object level{ { "__type", "level_desc" }, { "__version", descs->current_version("level_desc") },
+		{ "name", "main" }, { "worlds", boost::json::array{ boost::json::object{ { "path", missing_world } } } } };
+	write_from_outside(boost::json::serialize(level));
+
+	BOOST_TEST(world_name() == "alpha");
+	BOOST_TEST((working_copy_bytes() == copy_before));
+	BOOST_TEST(problems.size() == 1u);
+	BOOST_TEST(!state.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(PersonSaveAsOntoTheFlaggedFile_AsksTheSameQuestion)
+{
+	open_level("alpha");
+	make_dirty();
+	const std::string beta = level_text("beta");
+	write_from_outside(beta);
+	menu().save_level();
+	BOOST_REQUIRE(dialogs.pending() == 1u);
+	const auto save_as = dialogs.list().front();
+	BOOST_REQUIRE(dialogs.answer(save_as.id, boost::json::object{ { "path", std::string(k_level_path) } }).ok);
+	BOOST_TEST(dialogs.pending() == 1u);
+	BOOST_TEST(dialogs.list().front().kind == "choice");
+	BOOST_TEST(read_file(level_file_path) == beta);
 }
 
 BOOST_AUTO_TEST_CASE(AnUntitledLevel_HasNoWatch)

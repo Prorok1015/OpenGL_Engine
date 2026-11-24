@@ -123,7 +123,8 @@ namespace edt {
 		void run_implicit_callbacks();
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
-		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669).
+		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669); a check of the
+		// level file that had to wait and the queued actions of its banner run here (#1188).
 		void tick_level_settle();
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file
 		// opened when an asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
