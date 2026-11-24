@@ -4,9 +4,11 @@
 #include <snk/platform/plt_beneath_tree_hook.h>
 #include <snk/platform/plt_reparse_tag.h>
 #include <snk/platform/plt_windows_names.h>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -445,6 +447,49 @@ BOOST_AUTO_TEST_CASE(remove_tree_removes_a_tree_deeper_than_max_path)
 	const std::string error = platform::beneath::remove_tree_beneath(pinned, "", "tree");
 	BOOST_TEST(error.empty(), error);
 	BOOST_TEST(!fs::exists(root / "tree"));
+}
+
+// #1352: a root whose own path runs past MAX_PATH is opened like any other: a file is written, read and removed
+// under it.
+BOOST_AUTO_TEST_CASE(a_root_longer_than_max_path_is_written_read_and_removed_under)
+{
+	std::wstring deep = (root / "tree").lexically_normal().make_preferred().wstring();
+	while (deep.size() < MAX_PATH + 60) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	std::error_code made;
+	fs::create_directories(fs::path(L"\\\\?\\" + deep), made);
+	BOOST_REQUIRE_MESSAGE(!made, made.message());
+	const fs::path long_root{ deep };
+	platform::beneath::pinned_root under{ long_root };
+	const std::string text = "written under a long root";
+	const auto* bytes = reinterpret_cast<const std::byte*>(text.data());
+
+	platform::beneath::write_request write;
+	write.folder = "sub";
+	write.leaf = "a.txt";
+	write.tmp_leaf = "a.tmp";
+	write.data = std::span<const std::byte>(bytes, text.size());
+	const std::string written = platform::beneath::write_beneath(under, write);
+	BOOST_TEST(written.empty(), written);
+
+	platform::beneath::read_request read;
+	read.root = long_root;
+	read.folder = "sub";
+	read.leaf = "a.txt";
+	read.max_bytes = 1024;
+	std::vector<std::byte> out;
+	const platform::beneath::read_result got = platform::beneath::read_beneath(read, out);
+	BOOST_TEST((got.status == platform::beneath::read_status::ok), got.error);
+	BOOST_TEST(std::string(reinterpret_cast<const char*>(out.data()), out.size()) == text);
+
+	const std::string removed = platform::beneath::remove_beneath(under, "sub", "a.txt");
+	BOOST_TEST(removed.empty(), removed);
+	out.clear();
+	BOOST_TEST((platform::beneath::read_beneath(read, out).status == platform::beneath::read_status::missing));
+
+	const std::string cleaned = platform::beneath::remove_tree_beneath(pinned, "", "tree");
+	BOOST_TEST(cleaned.empty(), cleaned);
 }
 #endif
 
