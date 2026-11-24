@@ -568,6 +568,116 @@ std::string platform::beneath::remove_tree_beneath_watched(pinned_root& root, co
 	return remove_tree_at(at.get(), leaf.string(), path, hook, 0, parent.st_dev);
 }
 
+namespace {
+
+	platform::beneath::entry_kind kind_of_mode(mode_t mode)
+	{
+		using platform::beneath::entry_kind;
+		if (S_ISLNK(mode)) {
+			return entry_kind::link;
+		}
+		if (S_ISDIR(mode)) {
+			return entry_kind::folder;
+		}
+		return S_ISREG(mode) ? entry_kind::file : entry_kind::other;
+	}
+
+	platform::beneath::entry_kind kind_of_type(unsigned char type)
+	{
+		using platform::beneath::entry_kind;
+		switch (type) {
+		case DT_REG:
+			return entry_kind::file;
+		case DT_DIR:
+			return entry_kind::folder;
+		case DT_LNK:
+			return entry_kind::link;
+		default:
+			return entry_kind::other;
+		}
+	}
+
+}
+
+platform::beneath::list_result platform::beneath::list_beneath(pinned_root& root, const fs::path& folder, std::size_t max_entries)
+{
+	list_result out;
+	const auto parts = folder_parts(folder);
+	if (!parts) {
+		out.error = std::string{ k_not_below };
+		return out;
+	}
+	std::string error;
+	const int root_fd = root.existing_descriptor(error);
+	if (root_fd < 0) {
+		if (errno == ENOENT) {
+			out.missing = true;
+		} else {
+			out.error = std::move(error);
+		}
+		return out;
+	}
+	fs::path reached = root.path();
+	const fd_holder at = open_below(root_fd, *parts, false, reached);
+	if (at.get() < 0) {
+		if (errno == ENOENT) {
+			out.missing = true;
+		} else {
+			out.error = errno_text("cannot open the folder (a link, or not a folder)", reached);
+		}
+		return out;
+	}
+	const int copy = ::fcntl(at.get(), F_DUPFD_CLOEXEC, 0);
+	if (copy < 0) {
+		out.error = errno_text("cannot list", reached);
+		return out;
+	}
+	DIR* listing = ::fdopendir(copy);
+	if (!listing) {
+		const int code = errno;
+		::close(copy);
+		errno = code;
+		out.error = errno_text("cannot list", reached);
+		return out;
+	}
+	int code = 0;
+	for (;;) {
+		errno = 0;
+		const dirent* entry = ::readdir(listing);
+		if (!entry) {
+			code = errno;
+			break;
+		}
+		const std::string_view name = entry->d_name;
+		if (name == "." || name == "..") {
+			continue;
+		}
+		if (out.entries.size() >= max_entries) {
+			out.truncated = true;
+			break;
+		}
+		folder_entry item;
+		item.name = fs::path(std::string(name));
+		if (entry->d_type == DT_UNKNOWN) {
+			struct stat information;
+			if (::fstatat(at.get(), entry->d_name, &information, AT_SYMLINK_NOFOLLOW) == 0) {
+				item.kind = kind_of_mode(information.st_mode);
+			}
+		} else {
+			item.kind = kind_of_type(entry->d_type);
+		}
+		out.entries.push_back(std::move(item));
+	}
+	::closedir(listing);
+	if (code != 0) {
+		errno = code;
+		out.error = errno_text("cannot list", reached);
+		out.entries.clear();
+		out.truncated = false;
+	}
+	return out;
+}
+
 std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)
 {
 	if (request.across_volumes) {
@@ -1472,6 +1582,69 @@ std::string platform::beneath::remove_tree_beneath_watched(pinned_root& root, co
 		}
 	}
 	return remove_tree_at(chain.last(), leaf, path, hook, 0, true);
+}
+
+platform::beneath::list_result platform::beneath::list_beneath(pinned_root& root, const fs::path& folder, std::size_t max_entries)
+{
+	list_result out;
+	const auto parts = folder_parts(folder);
+	if (!parts) {
+		out.error = std::string{ k_not_below };
+		return out;
+	}
+	fs::path reached;
+	const held_chain chain = hold_chain(root.path(), *parts, false, reached, unnormalized::refuse);
+	if (chain.empty()) {
+		const DWORD code = ::GetLastError();
+		if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
+			out.missing = true;
+		} else {
+			out.error = last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached);
+		}
+		return out;
+	}
+	// FILE_ID_BOTH_DIR_INFO entries are 8-byte aligned within the buffer.
+	std::vector<std::uint64_t> buffer(64 * 1024 / sizeof(std::uint64_t));
+	const auto bytes = reinterpret_cast<const std::byte*>(buffer.data());
+	FILE_INFO_BY_HANDLE_CLASS what = FileIdBothDirectoryRestartInfo;
+	for (;;) {
+		const auto size = static_cast<DWORD>(buffer.size() * sizeof(std::uint64_t));
+		if (!::GetFileInformationByHandleEx(chain.last(), what, buffer.data(), size)) {
+			if (::GetLastError() != ERROR_NO_MORE_FILES) {
+				out.error = last_error_text("cannot list", reached);
+				out.entries.clear();
+			}
+			return out;
+		}
+		what = FileIdBothDirectoryInfo;
+		for (std::size_t offset = 0;;) {
+			const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(bytes + offset);
+			std::wstring name(entry->FileName, entry->FileNameLength / sizeof(wchar_t));
+			if (name != L"." && name != L"..") {
+				if (out.entries.size() >= max_entries) {
+					out.truncated = true;
+					return out;
+				}
+				folder_entry item;
+				item.name = fs::path(std::move(name));
+				// Any reparse point is a link here, a cloud placeholder too: nothing is entered through one.
+				if ((entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+					item.kind = entry_kind::link;
+				} else if ((entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+					item.kind = entry_kind::folder;
+				} else if ((entry->FileAttributes & FILE_ATTRIBUTE_DEVICE) != 0) {
+					item.kind = entry_kind::other;
+				} else {
+					item.kind = entry_kind::file;
+				}
+				out.entries.push_back(std::move(item));
+			}
+			if (entry->NextEntryOffset == 0) {
+				break;
+			}
+			offset += entry->NextEntryOffset;
+		}
+	}
 }
 
 std::string platform::beneath::rename_beneath(pinned_root& root, const rename_request& request)

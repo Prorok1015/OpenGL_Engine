@@ -131,6 +131,31 @@ namespace platform::beneath {
 	SNK_API std::string remove_tree_beneath(pinned_root& root, const std::filesystem::path& folder,
 		const std::filesystem::path& leaf);
 
+	enum class entry_kind : std::uint8_t { file, folder, link, other };
+
+	struct folder_entry {
+		std::filesystem::path name;
+		// The entry as it is, never followed: a link (Windows: any reparse point) is `link`.
+		entry_kind kind = entry_kind::other;
+	};
+
+	struct list_result {
+		std::vector<folder_entry> entries;
+		// The folder, a folder on the way or the root does not exist.
+		bool missing = false;
+		// More than `max_entries` were there: `entries` holds the first ones only.
+		bool truncated = false;
+		// Why it could not be listed (and `entries` is empty); empty on success and for `missing`.
+		std::string error;
+	};
+
+	// The entries of `folder` below the root (#1187), "." and ".." left out, in no particular order. The way there is
+	// opened as the writes walk it, without following a link (Windows: no link or junction) and without making
+	// anything, the root included; each entry's kind is read without following it (POSIX: d_type, else fstatat with
+	// AT_SYMLINK_NOFOLLOW; Windows: the attributes the listing itself gives). Stops after `max_entries`. A name that
+	// is not UTF-8 comes back as it is, without an error.
+	SNK_API list_result list_beneath(pinned_root& root, const std::filesystem::path& folder, std::size_t max_entries);
+
 	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
 
 	// A file as its open handle saw it. The change time cannot be set back by a tool, unlike the write time.

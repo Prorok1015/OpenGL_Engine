@@ -91,73 +91,133 @@ namespace
 #endif
 }
 
-std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::path& root, const fs::path& relative, std::string* error)
+namespace
 {
-	const std::optional<std::vector<fs::path>> parts = plain_parts(relative);
-	if (!parts) {
-		set_error(error, std::format("'{}' is not a chain of plain names", fs_paths::utf8_of(relative)));
-		return std::nullopt;
+	platform::lock_attempt refused(platform::lock_outcome outcome, std::string error = {})
+	{
+		platform::lock_attempt out;
+		out.outcome = outcome;
+		out.error = std::move(error);
+		return out;
 	}
-	const fs::path where = root / relative;
+
+#if !defined(_WIN32)
+	// Separate tests: EAGAIN and EWOULDBLOCK (ENOTSUP and EOPNOTSUPP) are one value on some systems.
+	bool lock_is_held(int code)
+	{
+		if (code == EWOULDBLOCK) {
+			return true;
+		}
+		return code == EAGAIN;
+	}
+
+	bool lock_is_unsupported(int code)
+	{
+		if (code == ENOLCK || code == EOPNOTSUPP) {
+			return true;
+		}
+		return code == ENOTSUP;
+	}
+#endif
+}
+
+// One attempt; `gone` is set when the file was locked but no longer lies at its name (removed or replaced meanwhile).
+platform::lock_attempt platform::file_lock::acquire_once(const fs::path& root, const std::vector<fs::path>& parts, bool create,
+	bool& gone)
+{
+	gone = false;
+	const fs::path where = [&] {
+		fs::path path = root;
+		for (const fs::path& part : parts) {
+			path /= part;
+		}
+		return path;
+	}();
 #if defined(_WIN32)
+	const auto is_missing = [](DWORD code) { return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND; };
 	// Checked one folder at a time, then the file is opened without following a reparse point and checked through its
 	// handle; its final path then shows that no folder was swapped for a junction after its check.
-	std::error_code made;
-	fs::create_directories(root, made);
+	if (create) {
+		std::error_code made;
+		fs::create_directories(root, made);
+	}
 	fs::path folder = root;
-	for (std::size_t i = 0; i + 1 < parts->size(); ++i) {
-		folder /= (*parts)[i];
+	for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
+		folder /= parts[i];
 		DWORD attributes = ::GetFileAttributesW(folder.c_str());
 		if (attributes == INVALID_FILE_ATTRIBUTES) {
+			const DWORD code = ::GetLastError();
+			if (!create) {
+				return is_missing(code) ? refused(lock_outcome::missing)
+										: refused(lock_outcome::failed, std::format("cannot inspect '{}': {}", fs_paths::utf8_of(folder),
+											  std::system_category().message(static_cast<int>(code))));
+			}
 			if (!::CreateDirectoryW(folder.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
-				set_error(error, std::format("cannot make '{}': {}", fs_paths::utf8_of(folder), std::system_category().message(static_cast<int>(::GetLastError()))));
-				return std::nullopt;
+				return refused(lock_outcome::failed, std::format("cannot make '{}': {}", fs_paths::utf8_of(folder),
+					std::system_category().message(static_cast<int>(::GetLastError()))));
 			}
 			attributes = ::GetFileAttributesW(folder.c_str());
 		}
 		if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-			set_error(error, std::format("'{}' is a link or not a folder", fs_paths::utf8_of(folder)));
-			return std::nullopt;
+			return refused(lock_outcome::failed, std::format("'{}' is a link or not a folder", fs_paths::utf8_of(folder)));
 		}
 	}
 	const HANDLE handle = ::CreateFileW(where.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-		nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		nullptr, create ? OPEN_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (handle == INVALID_HANDLE_VALUE) {
-		set_error(error, std::format("cannot open '{}': {}", fs_paths::utf8_of(where), std::system_category().message(static_cast<int>(::GetLastError()))));
-		return std::nullopt;
+		const DWORD code = ::GetLastError();
+		if (!create && is_missing(code)) {
+			return refused(lock_outcome::missing);
+		}
+		return refused(lock_outcome::failed, std::format("cannot open '{}': {}", fs_paths::utf8_of(where),
+			std::system_category().message(static_cast<int>(code))));
 	}
 	BY_HANDLE_FILE_INFORMATION information{};
 	if (!::GetFileInformationByHandle(handle, &information)
 		|| (information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0
-		|| !lies_below_root(handle, root, *parts)) {
+		|| !lies_below_root(handle, root, parts)) {
 		::CloseHandle(handle);
-		set_error(error, std::format("'{}' is a link or not a file", fs_paths::utf8_of(where)));
-		return std::nullopt;
+		return refused(lock_outcome::failed, std::format("'{}' is a link or not a file", fs_paths::utf8_of(where)));
 	}
 	OVERLAPPED whole{};
 	if (!::LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &whole)) {
+		const DWORD code = ::GetLastError();
 		::CloseHandle(handle);
-		return std::nullopt;
+		if (code == ERROR_LOCK_VIOLATION || code == ERROR_IO_PENDING) {
+			return refused(lock_outcome::held);
+		}
+		const std::string text = std::format("cannot lock '{}': {}", fs_paths::utf8_of(where),
+			std::system_category().message(static_cast<int>(code)));
+		const bool unsupported = code == ERROR_NOT_SUPPORTED || code == ERROR_INVALID_FUNCTION;
+		return refused(unsupported ? lock_outcome::unsupported : lock_outcome::failed, text);
 	}
-	return file_lock{ reinterpret_cast<std::intptr_t>(handle) };
+	file_lock held{ reinterpret_cast<std::intptr_t>(handle) };
+	FILE_STANDARD_INFO standard{};
+	if (!::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) || standard.DeletePending
+		|| standard.NumberOfLinks == 0) {
+		gone = true;
+		return refused(lock_outcome::missing);
+	}
 #else
 	constexpr int k_folder_flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
 	int at = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-	if (at < 0 && errno == ENOENT) {
+	if (at < 0 && errno == ENOENT && create) {
 		std::error_code ec;
 		fs::create_directories(root, ec);
 		at = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	}
 	if (at < 0) {
-		set_error(error, std::format("cannot open '{}': {}", fs_paths::utf8_of(root), std::generic_category().message(errno)));
-		return std::nullopt;
+		if (!create && errno == ENOENT) {
+			return refused(lock_outcome::missing);
+		}
+		return refused(lock_outcome::failed, std::format("cannot open '{}': {}", fs_paths::utf8_of(root), std::generic_category().message(errno)));
 	}
 	fs::path reached = root;
-	for (std::size_t i = 0; i + 1 < parts->size(); ++i) {
-		const fs::path& name = (*parts)[i];
+	for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
+		const fs::path& name = parts[i];
 		reached /= name;
 		int next = ::openat(at, name.c_str(), k_folder_flags);
-		if (next < 0 && errno == ENOENT) {
+		if (next < 0 && errno == ENOENT && create) {
 			if (::mkdirat(at, name.c_str(), 0777) == 0 || errno == EEXIST) {
 				next = ::openat(at, name.c_str(), k_folder_flags);
 			}
@@ -165,35 +225,89 @@ std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::pa
 		const int code = errno;
 		::close(at);
 		if (next < 0) {
-			set_error(error, std::format("cannot open the folder '{}' (a link is not followed): {}", fs_paths::utf8_of(reached),
-				std::generic_category().message(code)));
-			return std::nullopt;
+			if (!create && code == ENOENT) {
+				return refused(lock_outcome::missing);
+			}
+			return refused(lock_outcome::failed, std::format("cannot open the folder '{}' (a link is not followed): {}",
+				fs_paths::utf8_of(reached), std::generic_category().message(code)));
 		}
 		at = next;
 	}
 	// O_NONBLOCK: a FIFO at the name cannot hold the editor; it is refused below as not a regular file.
-	const int fd = ::openat(at, parts->back().c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0644);
-	const int code = errno;
-	::close(at);
+	const int open_flags = O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | (create ? O_CREAT : 0);
+	const int fd = ::openat(at, parts.back().c_str(), open_flags, 0644);
 	if (fd < 0) {
-		set_error(error, std::format("cannot open '{}' (a link is not followed): {}", fs_paths::utf8_of(where), std::generic_category().message(code)));
-		return std::nullopt;
+		const int code = errno;
+		::close(at);
+		if (!create && code == ENOENT) {
+			return refused(lock_outcome::missing);
+		}
+		return refused(lock_outcome::failed, std::format("cannot open '{}' (a link is not followed): {}", fs_paths::utf8_of(where),
+			std::generic_category().message(code)));
 	}
 	struct stat information{};
 	if (::fstat(fd, &information) != 0 || !S_ISREG(information.st_mode)) {
 		::close(fd);
-		set_error(error, std::format("'{}' is not a regular file", fs_paths::utf8_of(where)));
-		return std::nullopt;
+		::close(at);
+		return refused(lock_outcome::failed, std::format("'{}' is not a regular file", fs_paths::utf8_of(where)));
 	}
 	while (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
-		if (errno == EINTR) {
+		const int code = errno;
+		if (code == EINTR) {
 			continue;
 		}
 		::close(fd);
-		return std::nullopt;
+		::close(at);
+		if (lock_is_held(code)) {
+			return refused(lock_outcome::held);
+		}
+		const std::string text = std::format("cannot lock '{}': {}", fs_paths::utf8_of(where), std::generic_category().message(code));
+		return refused(lock_is_unsupported(code) ? lock_outcome::unsupported : lock_outcome::failed, text);
 	}
-	return file_lock{ static_cast<std::intptr_t>(fd) };
+	file_lock held{ static_cast<std::intptr_t>(fd) };
+	struct stat named{};
+	const bool still_there = ::fstatat(at, parts.back().c_str(), &named, AT_SYMLINK_NOFOLLOW) == 0
+		&& named.st_ino == information.st_ino && named.st_dev == information.st_dev;
+	::close(at);
+	if (!still_there) {
+		gone = true;
+		return refused(lock_outcome::missing);
+	}
 #endif
+	lock_attempt out;
+	out.outcome = lock_outcome::acquired;
+	out.lock.emplace(std::move(held));
+	return out;
+}
+
+platform::lock_attempt platform::file_lock::acquire(const fs::path& root, const fs::path& relative, lock_open open)
+{
+	const std::optional<std::vector<fs::path>> parts = plain_parts(relative);
+	if (!parts) {
+		return refused(lock_outcome::failed, std::format("'{}' is not a chain of plain names", fs_paths::utf8_of(relative)));
+	}
+	const bool create = open == lock_open::create;
+	// A file removed between its open and its lock (its holder cleaning up) is made again once or twice; a probe
+	// reports it missing.
+	for (int attempt = 0;; ++attempt) {
+		bool gone = false;
+		lock_attempt result = acquire_once(root, *parts, create, gone);
+		if (!gone || !create || attempt == 2) {
+			return result;
+		}
+	}
+}
+
+std::optional<platform::file_lock> platform::file_lock::try_acquire(const fs::path& root, const fs::path& relative, std::string* error)
+{
+	lock_attempt attempt = acquire(root, relative, lock_open::create);
+	if (attempt.outcome == lock_outcome::acquired) {
+		return std::move(attempt.lock);
+	}
+	if (attempt.outcome != lock_outcome::held) {
+		set_error(error, attempt.error.empty() ? std::string{ "the lock file was removed while it was taken" } : std::move(attempt.error));
+	}
+	return std::nullopt;
 }
 
 platform::file_lock::file_lock(file_lock&& other) noexcept : m_handle(std::exchange(other.m_handle, -1)) {}
