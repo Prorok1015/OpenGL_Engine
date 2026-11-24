@@ -23,6 +23,7 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 			document->set_lock_source(locked);
 			return document;
 		},
+		.multiple = true,
 	}));
 	// Not "shader": asset_type_of already names GLSL sources so, and an agent's asset.query by kind would mix the two.
 	if (hooks.open_desc) {

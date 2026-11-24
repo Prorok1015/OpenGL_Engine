@@ -48,9 +48,7 @@ namespace edt
 		// False: one document for the whole kind, kept until the kind is removed; opening another source reopens it, and any
 		// other single-kind preview closes (a model preview replaces a module's). True (#1185): every source opened gets a
 		// document of its own, made by make_preview, which lives while it is open, and opening one closes no other document.
-		// Only the editor builds an asset_preview_desc (a module hands module_asset_preview_desc to
-		// editor_module_context::add_asset_preview, which keeps this false), so the field sits at the end and no module is
-		// affected.
+		// The field sits at the end of the struct; the type is in the editor layout key.
 		bool multiple = false;
 	};
 

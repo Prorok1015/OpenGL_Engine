@@ -161,6 +161,11 @@ edt::previewable_document* edt::document_manager::open_with(const asset_preview_
 {
 	// A preview that closed itself is no open preview any more.
 	std::erase_if(m_open_previews, [](const previewable_document* d) { return !d->is_open(); });
+	// A document of a `multiple` kind that closed itself never came back through close(): it is destroyed here, not kept.
+	for (kept_preview& kept : m_previews) {
+		if (kept.multiple) std::erase_if(kept.instances, [](const std::unique_ptr<previewable_document>& d) { return !d->is_open(); });
+	}
+	m_failed_preview.reset();
 	const bool multiple = kind_of(preview).multiple;
 	previewable_document* next = nullptr;
 	if (multiple) {
@@ -322,6 +327,7 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 	const auto known = std::find_if(m_previews.begin(), m_previews.end(), [&preview](const kept_preview& p) { return p.preview_id == preview.id; });
 	if (known == m_previews.end()) return;
 
+	m_failed_preview.reset();
 	// Out of the list before anything is announced: a listener of the close may open another preview, which changes the list.
 	kept_preview removed = std::move(*known);
 	m_previews.erase(known);

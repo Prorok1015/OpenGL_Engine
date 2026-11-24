@@ -10,6 +10,7 @@ namespace edt
 	class editor_context;
 	struct editor_services;
 	class inspector_panel;
+	class prefab_document;
 	class scene_document;
 	class shape_parameters_section;
 
@@ -27,6 +28,8 @@ namespace edt
 			res::resource_system& resources;
 			inspector_panel& inspector;
 			std::function<desc_file_layout()> desc_layout;
+			// The prefab the prefab editor window shows (null: none); the shape section rebuilds into that one.
+			std::function<prefab_document*()> shown_prefab = {};
 		};
 
 		explicit shape_parameters_component(ports from);
