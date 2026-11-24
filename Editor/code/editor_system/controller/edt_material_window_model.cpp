@@ -294,7 +294,7 @@ void edt::material_window_model::scan()
 	res::tag tag = m_shader.shader;
 	if (!m_has_scan || !m_document.has_pending_edit()) {
 		const json::value shown = m_document.shown();
-		tag = {};
+		tag = res::tag{};
 		if (const json::value* field = shown.is_object() ? shown.as_object().if_contains("shader") : nullptr) {
 			desc::read_context context;
 			context.system = m_services.descs();
