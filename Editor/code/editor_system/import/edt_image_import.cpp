@@ -846,7 +846,7 @@ void edt::image_import_form::check()
 
 std::vector<std::string> edt::image_import_form::final_names() const
 {
-	if (!m_plan.image.is_valid()) {
+	if (!m_plan.ok() || !m_plan.image.is_valid()) {
 		return {};
 	}
 	return { std::string(m_plan.image.view()), std::string(m_plan.meta.view()), std::string(m_plan.texture.view()),
