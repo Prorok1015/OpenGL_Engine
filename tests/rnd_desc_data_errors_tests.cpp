@@ -2,7 +2,9 @@
 #include "null_engine_fixture.hpp"
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/resource/res_diagnostics.h>
 #include <snk/resource/resources/res_resource_picture.h>
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -28,6 +30,22 @@ struct data_error_fixture : test_util::null_engine_fixture
 		auto handle = resources().require_sync<T>(tag);
 		test_util::pump(tasks);
 		return handle;
+	}
+
+	// The json_path of the load's own diagnostic (empty: none).
+	template<class T>
+	static std::string path_of(const res::res_handle<T>& handle)
+	{
+		res::diagnostics_collector collector;
+		handle.collect_into(collector);
+		const auto& items = collector.items();
+		return items.empty() ? std::string{} : items.front().json_path;
+	}
+
+	// A texture_2d_desc whose "pixels" are `pixels` (raw JSON), and `extra` more members.
+	static std::string inline_texture(std::string_view pixels, std::string_view extra = "")
+	{
+		return std::string(R"({"__type":"texture_2d_desc",)") + std::string(extra) + R"("pixels":)" + std::string(pixels) + "}";
 	}
 
 	// One-byte vertices and no indices: any bytes pass the data checks of arrays (#1068), only their JSON is tested here.
@@ -179,6 +197,54 @@ BOOST_AUTO_TEST_CASE(ARawImageShorterThanItsHeader_FailsItsLoad)
 
 	BOOST_TEST(picture.has_error());
 	BOOST_TEST(picture.error_text().find("shorter than its header") != std::string::npos);
+}
+
+// #1204: inline pixels that do not describe themselves exactly fail the load and name their field.
+BOOST_AUTO_TEST_CASE(InlinePixels_ThatAreWrong_FailTheLoad_AndNameTheField)
+{
+	struct bad
+	{
+		const char* name;
+		std::string text;
+		const char* path;
+		const char* reason;
+	};
+	const bad cases[] = {
+		{ "both", inline_texture(R"({"width":1,"height":1,"format":"RGBA8","base64":"/wAA/w=="})", R"("data":"memory://bad_data/x.raw",)"),
+			"/pixels", "either 'data' (a picture) or 'pixels', not both" },
+		{ "not_object", inline_texture(R"("/wAA/w==")"), "/pixels", "an object {width, height, format, base64}" },
+		{ "no_width", inline_texture(R"({"height":1,"format":"RGBA8","base64":"/wAA/w=="})"), "/pixels/width", "need 'width'" },
+		{ "zero_width", inline_texture(R"({"width":0,"height":1,"format":"RGBA8","base64":""})"), "/pixels/width", "'width' is 0: 1 to 4096" },
+		{ "wide", inline_texture(R"({"width":5000,"height":1,"format":"R8","base64":""})"), "/pixels/width", "'width' is 5000: 1 to 4096" },
+		{ "fraction", inline_texture(R"({"width":1.5,"height":1,"format":"R8","base64":""})"), "/pixels/width", "not a whole number" },
+		{ "format", inline_texture(R"({"width":1,"height":1,"format":"RGBA16F","base64":"AAAAAAAAAAA="})"), "/pixels/format",
+			"unknown inline pixel format 'RGBA16F'" },
+		{ "big", inline_texture(R"({"width":256,"height":256,"format":"RGBA8","base64":""})"), "/pixels",
+			"262144 bytes: inline pixels are at most 65536 bytes" },
+		{ "short", inline_texture(R"({"width":1,"height":1,"format":"RGBA8","base64":"/wAA"})"), "/pixels/base64",
+			"'base64' has 4 characters: 1x1 RGBA8 needs 4 bytes, 8 characters" },
+		{ "long", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/wAA/w=="})"), "/pixels/base64",
+			"'base64' has 8 characters: 1x1 R8 needs 1 bytes, 4 characters" },
+		{ "alphabet", inline_texture(R"({"width":1,"height":1,"format":"RGBA8","base64":"/wA*/w=="})"), "/pixels/base64", "not padded standard base64" },
+		{ "unpadded_length", inline_texture(R"({"width":1,"height":1,"format":"RGB8","base64":"/wA="})"), "/pixels/base64", "not padded standard base64" },
+		// The same bytes as "/w==" with the unused bits set: they would not survive a save.
+		{ "noncanonical", inline_texture(R"({"width":1,"height":1,"format":"R8","base64":"/x=="})"), "/pixels/base64", "not padded standard base64" },
+	};
+	for (const bad& item : cases) {
+		BOOST_TEST_CONTEXT(item.name) {
+			const auto texture = load<rnd::texture_desc>(std::string(item.name) + ".desc", item.text);
+			BOOST_TEST(texture.has_error());
+			BOOST_TEST(texture.error_text().find(item.reason) != std::string::npos, texture.error_text());
+			BOOST_TEST(path_of(texture) == item.path);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(InlinePixels_ThatAreRight_Load)
+{
+	const auto texture = load<rnd::texture_desc>("right.desc", inline_texture(R"({"width":2,"height":1,"format":"RGB8","base64":"AQIDBAUG"})"));
+
+	BOOST_TEST(texture.is_ready(), texture.error_text());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

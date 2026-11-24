@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include <snk/render/texture/rnd_texture_manager.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_system.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <boost/json.hpp>
 #include <cstddef>
@@ -82,6 +84,31 @@ struct texture_upload_fixture : test_util::null_engine_fixture
 			data[side] = std::string(faces[index++].view());
 		}
 		return description(name, { { "__type", "texture_cubemap_desc" }, { "data", data } });
+	}
+
+	// A texture desc that holds its pixels (#1204).
+	res::tag inline_texture(const std::string& name, const json::object& own, json::object header = {})
+	{
+		json::object body{ { "__type", "texture_2d_desc" }, { "pixels", own } };
+		if (!header.empty()) body["header"] = std::move(header);
+		return description(name, body);
+	}
+
+	static json::object pixels(int width, int height, std::string_view format, std::string_view base64)
+	{
+		return { { "width", width }, { "height", height }, { "format", format }, { "base64", base64 } };
+	}
+
+	// As desc_resave and the editor write a desc: the adapter's bytes of the loaded desc.
+	std::vector<std::byte> saved(const res::tag& tag)
+	{
+		// Its picture loaded first: a save of a desc waits for the picture it names.
+		BOOST_REQUIRE(textures.is_ready(settle(tag)));
+		auto handle = resources().require_sync<rnd::texture_desc>(tag);
+		test_util::pump(tasks);
+		BOOST_REQUIRE(handle.is_ready());
+		core::desc::desc_adapter_t adapter(resources(), storage.require<desc::desc_system>());
+		return adapter.serialize(tag, handle.get());
 	}
 
 	struct upload
@@ -213,6 +240,138 @@ BOOST_AUTO_TEST_CASE(AGeneratedTexture_WithAShortBufferOrNoSize_MakesNoTexture)
 
 	const rnd::texture_id id = textures.generate(tag, { 2, 2 }, texture_header::TYPE::RGB8, std::vector<unsigned char>(2 * 2 * 3));
 	BOOST_TEST(textures.is_ready(id));
+}
+
+// #1204: a texture whose desc holds its pixels; its shape comes from them alone, as a picture's does (#926).
+BOOST_AUTO_TEST_CASE(ASolidColour_OfInlinePixels_IsUploadedAsItsBytes_WhateverTheHeaderSays)
+{
+	const res::tag texture = inline_texture("red.desc", pixels(1, 1, "RGBA8", "/wAA/w=="),
+		{ { "type", "texture_3d" }, { "usage", "color_target" },
+			{ "data", json::object{ { "format", "RGBA32F" }, { "extent", json::object{ { "width", 64 }, { "height", 64 }, { "depth", 8 } } } } } });
+
+	const rnd::texture_id id = settle(texture);
+
+	BOOST_REQUIRE(textures.is_ready(id));
+	const texture_header& made = textures.info(id);
+	BOOST_TEST((made.type == TEXTURE_TYPE::TEXTURE_2D));
+	BOOST_TEST((made.usage == texture_usage::sampled));
+	BOOST_TEST((made.data.format == texture_header::TYPE::RGBA8));
+	BOOST_TEST(made.data.extent.width == 1u);
+	BOOST_TEST(made.data.extent.height == 1u);
+	BOOST_TEST(made.data.extent.depth == 1u);
+	BOOST_REQUIRE(uploads.size() == 1u);
+	BOOST_TEST((uploads.front().pixels == std::vector<unsigned char>{ 255, 0, 0, 255 }));
+}
+
+BOOST_AUTO_TEST_CASE(ACheckerboard_OfInlinePixels_KeepsTheSamplingOfItsHeader)
+{
+	// 2x2 RGB8: white, black / black, white.
+	const res::tag texture = inline_texture("checker.desc", pixels(2, 2, "RGB8", "////AAAAAAAA////"),
+		{ { "wrap", "repeat" }, { "min", "nearest" }, { "mag", "nearest" } });
+
+	const rnd::texture_id id = settle(texture);
+
+	BOOST_REQUIRE(textures.is_ready(id));
+	const texture_header& made = textures.info(id);
+	BOOST_TEST((made.data.format == texture_header::TYPE::RGB8));
+	BOOST_TEST((made.wrap == texture_header::WRAPPING::REPEAT));
+	BOOST_TEST((made.min == texture_header::FILTERING::NEAREST));
+	BOOST_TEST((made.mag == texture_header::FILTERING::NEAREST));
+	BOOST_REQUIRE(uploads.size() == 1u);
+	BOOST_TEST((uploads.front().pixels == std::vector<unsigned char>{ 255, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255 }));
+}
+
+BOOST_AUTO_TEST_CASE(InlinePixels_OfOneChannel_ClampTheirMipLevelsToTheChain)
+{
+	const res::tag texture = inline_texture("grey.desc", pixels(4, 4, "R8", "AAECAwQFBgcICQoLDA0ODw=="),
+		{ { "data", json::object{ { "mip_levels", 8 } } } });
+
+	const rnd::texture_id id = settle(texture);
+
+	BOOST_REQUIRE(textures.is_ready(id));
+	BOOST_TEST((textures.info(id).data.format == texture_header::TYPE::R8));
+	// 4x4 has three levels: 4x4, 2x2, 1x1.
+	BOOST_TEST(textures.info(id).data.mip_levels == 3u);
+	BOOST_REQUIRE(!uploads.empty());
+	BOOST_TEST(uploads.front().pixels.size() == 16u);
+	BOOST_TEST(uploads.front().pixels[15] == 15);
+}
+
+// A texture_2d_desc is two-dimensional: no type in its header loads 1D, 3D or array pixels from it (US-27-3 has those).
+BOOST_AUTO_TEST_CASE(InlinePixels_UnderA1dOr2dArrayType_StillMakeA2dTexture)
+{
+	for (const char* type : { "texture_1d", "texture_2d_array", "texture_1d_array" }) {
+		BOOST_TEST_CONTEXT(type) {
+			const rnd::texture_id id = settle(inline_texture(std::string(type) + ".desc", pixels(2, 1, "RGBA8", "AQIDBAUGBwg="),
+				{ { "type", type }, { "data", json::object{ { "extent", json::object{ { "width", 2 }, { "height", 1 }, { "depth", 3 } } } } } }));
+			BOOST_REQUIRE(textures.is_ready(id));
+			BOOST_TEST((textures.info(id).type == TEXTURE_TYPE::TEXTURE_2D));
+			BOOST_TEST(textures.info(id).data.extent.layers == 1u);
+			BOOST_TEST(textures.info(id).data.extent.depth == 1u);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AChangedDescOfInlinePixels_ReloadsTheTextureWithTheNewBytes)
+{
+	const res::tag texture = inline_texture("changing.desc", pixels(1, 1, "RGBA8", "/wAA/w=="));
+	BOOST_REQUIRE(textures.is_ready(settle(texture)));
+	BOOST_REQUIRE(uploads.size() == 1u);
+
+	inline_texture("changing.desc", pixels(1, 1, "RGBA8", "AP8A/w=="));
+	resources().signal_changed(texture);
+	for (int frame = 0; frame < 10 && uploads.size() < 2; ++frame) {
+		test_util::pump(tasks);
+		textures.require(texture);
+	}
+
+	BOOST_REQUIRE(uploads.size() == 2u);
+	BOOST_TEST((uploads.back().pixels == std::vector<unsigned char>{ 0, 255, 0, 255 }));
+}
+
+// What is saved reads back to the same bytes: a desc without pixels gets no "pixels" key (byte-stable resave), one with
+// pixels keeps them exactly.
+BOOST_AUTO_TEST_CASE(ADescWithOrWithoutInlinePixels_SavesToTheBytesItWasReadFrom)
+{
+	const res::tag image = picture("saved.raw", 1, 1, 4, { 1, 2, 3, 4 });
+	const res::tag by_picture = description("by_picture.desc", { { "__type", "texture_2d_desc" }, { "data", std::string(image.view()) },
+		{ "header", json::object{ { "wrap", "repeat" } } } });
+	const res::tag by_pixels = inline_texture("by_pixels.desc", pixels(2, 2, "RGB8", "////AAAAAAAA////"), { { "wrap", "repeat" } });
+
+	for (const res::tag& tag : { by_picture, by_pixels }) {
+		BOOST_TEST_CONTEXT(tag.view()) {
+			const std::vector<std::byte> first = saved(tag);
+			const res::tag again{ std::string(tag.view()) + ".again.desc" };
+			BOOST_REQUIRE(resources().store(again, first));
+			BOOST_TEST((saved(again) == first));
+
+			const json::object written = json::parse(std::string(reinterpret_cast<const char*>(first.data()), first.size())).as_object();
+			BOOST_TEST(written.contains("pixels") == (tag == by_pixels));
+			BOOST_TEST(written.contains("data") == (tag == by_picture));
+			if (tag == by_pixels) {
+				BOOST_TEST((written.at("pixels") == json::value(pixels(2, 2, "RGB8", "////AAAAAAAA////"))));
+			}
+		}
+	}
+}
+
+// A child's source replaces its parent's: `pixels` a parent's picture, `data` a parent's pixels.
+BOOST_AUTO_TEST_CASE(AChildDesc_TakesItsOwnSource_OverItsParents)
+{
+	const res::tag image = picture("parent.raw", 1, 1, 4, { 9, 9, 9, 9 });
+	const res::tag picture_parent = description("picture_parent.desc", { { "__type", "texture_2d_desc" }, { "data", std::string(image.view()) } });
+	const res::tag pixels_parent = inline_texture("pixels_parent.desc", pixels(1, 1, "RGBA8", "AQIDBA=="));
+
+	const rnd::texture_id with_pixels = settle(description("pixels_child.desc", { { "__type", "texture_2d_desc" },
+		{ "__parent", std::string(picture_parent.view()) }, { "pixels", pixels(1, 1, "R8", "Bw==") } }));
+	const rnd::texture_id with_picture = settle(description("picture_child.desc", { { "__type", "texture_2d_desc" },
+		{ "__parent", std::string(pixels_parent.view()) }, { "data", std::string(image.view()) } }));
+
+	BOOST_REQUIRE(textures.is_ready(with_pixels));
+	BOOST_REQUIRE(textures.is_ready(with_picture));
+	BOOST_TEST((textures.info(with_pixels).data.format == texture_header::TYPE::R8));
+	BOOST_TEST((textures.info(with_picture).data.format == texture_header::TYPE::RGBA8));
+	BOOST_TEST(textures.info(with_picture).data.extent.width == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

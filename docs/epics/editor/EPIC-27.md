@@ -47,37 +47,31 @@
 
 ## Архитектура: inline data
 
-Ключевая идея — `data` может быть как ссылкой на внешний файл, так и inline-блоком:
+Сделано в #1204 (US-27-A). Источник пикселей задаётся одним из двух ключей, не обоими сразу:
 
 ```json
-// Ссылка на файл (как сейчас)
+// Ссылка на файл (как было)
 {
   "__type": "texture_2d_desc",
   "data": "res://textures/brick.png"
 }
 
-// Inline: solid color (4 байта RGBA)
+// Inline: пиксели в самом desc (сплошной цвет 1x1)
 {
   "__type": "texture_2d_desc",
-  "header": {
-    "data": { "extent": { "width": 1, "height": 1 }, "format": "RGBA8" }
-  },
-  "inline_data": "base64:AP8AAP8="
-}
-
-// Inline: генератор
-{
-  "__type": "texture_2d_desc",
-  "generator": {
-    "type": "checkerboard",
-    "size": 256,
-    "color_a": [255, 255, 255, 255],
-    "color_b": [128, 128, 128, 255]
-  }
+  "header": { "wrap": "repeat", "min": "nearest", "mag": "nearest" },
+  "pixels": { "width": 1, "height": 1, "format": "RGBA8", "base64": "/wAA/w==" }
 }
 ```
 
----
+- `pixels.width`, `pixels.height`: целые числа от 1 до 4096. `pixels.format`: `R8` | `RGB8` | `RGBA8`.
+- `pixels.base64`: строки пикселей подряд, без выравнивания, верхняя строка первой. Формат — стандартный base64 RFC 4648 с паддингом, только каноническая запись. Ровно width·height·bpp байт, не больше 64 KiB; текстура больше — это файл.
+- Длина строки и лимит проверяются до декодирования. Ошибка — `res::load_error` с путём поля (`/pixels`, `/pixels/width`, `/pixels/format`, `/pixels/base64`).
+- `data` и `pixels` в одном объекте — ошибка загрузки (`/pixels`). Если ключ задан в дочернем desc (`__parent`), он заменяет унаследованный источник.
+- Форма текстуры берётся только из пикселей, как у картинки (#926): `header.type/usage/data.extent/data.format` игнорируются, всегда 2D sampled. Из `header` берутся только `wrap/min/mag/data.mip_levels`; мипы обрезаются до полной цепочки.
+- `__version` не повышен: без ключа `pixels` desc читается и пересохраняется байт в байт (`desc_resave --check`).
+- Сплошной цвет — это 1x1, шахматка — 2x2 с `repeat` + `nearest`. Генераторы описаны в US-27-2.
+- 1D/3D/array из `texture_2d_desc` не грузятся: при любом `header.type` получается 2D, и тесты это фиксируют. Отдельные типы описаны в US-27-3.
 
 ## User Stories
 
@@ -102,10 +96,7 @@ public:
 };
 ```
 
-**Десериализация:**
-- Если поле `"data"` — строка `"res://..."` → загрузить `picture_resource` (legacy path)
-- Если поле `"inline_data"` — base64 строка → декодировать в `inline_pixels`
-- `header.data` задаёт `extent` и `format` для inline данных
+**Сделано (#1204):** формат описан выше в разделе «Архитектура: inline data». Ключ называется `pixels`, а не `inline_data`. Ширина, высота и формат лежат в самом `pixels`, а не в `header.data`: эти поля для текстуры из картинки игнорируются (#926). base64 берётся из `cmd::base64`, новой утилиты нет.
 
 **Loader в `rnd_render_system.cpp`:**
 ```cpp
@@ -361,7 +352,7 @@ US-27-6 (Inspector UI)  ← после US-27-1..4
 
 ## Критерии готовности
 
-- [ ] `texture_2d_desc` с `"inline_data"` загружается и рендерится
+- [x] `texture_2d_desc` с `"pixels"` загружается и рендерится (#1204)
 - [ ] Генератор `"solid"` создаёт 1x1 текстуру заданного цвета без внешнего файла
 - [ ] `texture_1d_desc` / `texture_3d_desc` / `texture_2d_array_desc` зарегистрированы и работают
 - [ ] Cubemap поддерживает equirectangular HDR панораму
