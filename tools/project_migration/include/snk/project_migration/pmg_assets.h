@@ -88,6 +88,9 @@ namespace prj::migration
 		const std::vector<std::filesystem::path>& read_only_layers() const { return m_read_only_layers; }
 		// The content roots it was made with, relative to the project root, as project.snkproj lists them.
 		const std::vector<std::filesystem::path>& content_roots() const { return m_content_roots; }
+		// The layers of res:// lowest first, as res:// stacks them and res::name_taken takes them: the read-only layers, then
+		// the content roots below the project root, the first of project.snkproj the highest.
+		std::vector<std::filesystem::path> res_layers() const;
 
 	private:
 		std::filesystem::path m_root;

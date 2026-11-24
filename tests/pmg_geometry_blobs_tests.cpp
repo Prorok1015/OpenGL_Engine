@@ -394,6 +394,28 @@ BOOST_AUTO_TEST_CASE(ABinaryFileOneByteOff_IsNotTaken_AndLeavesTheDescAsItIs)
 	BOOST_TEST(outcome.report.created_files.empty());
 }
 
+// #1279: the .bin is new but cannot take another name (its desc names it), so a file of another layer of res:// at that
+// name leaves the desc as it is: the new .bin would shadow it or be shadowed by it.
+BOOST_AUTO_TEST_CASE(ABinaryNameHeldInAnotherContentRoot_LeavesTheDescAsItIs)
+{
+	json::object manifest = json::parse(read_text(at("project.snkproj"))).as_object();
+	manifest["content_roots"] = json::array{ "res", "extra" };
+	write_text(at("project.snkproj"), json::serialize(manifest));
+	const std::string arrays = arrays_desc({ 0, 1, 2 });
+	write_text(at(k_desc), arrays);
+	write_text(at("extra/geom/tri.geom.bin"), "not ours");
+
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned(planned_now));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
+	BOOST_TEST(any_note(outcome.report, std::string(k_desc) + ": not migrated: "));
+	BOOST_TEST(any_note(outcome.report, "holds the name of its binary file res://geom/tri.geom.bin in another layer of res://"));
+	BOOST_TEST(read_text(at(k_desc)) == arrays);
+	BOOST_TEST(!fs::exists(at(k_binary)));
+	BOOST_TEST(read_text(at("extra/geom/tri.geom.bin")) == "not ours");
+}
+
 // A geometry desc over the scan's limit is not read: it is listed as not migrated, and the migration is not refused for
 // it as it is for any other file over the limit.
 BOOST_AUTO_TEST_CASE(AGeometryDescTooBigForTheScan_IsNotMigrated_AndDoesNotStopTheMigration)

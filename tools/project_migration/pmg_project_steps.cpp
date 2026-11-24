@@ -8,6 +8,7 @@
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_free_name.h>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/model_codec/res_reference.h>
 #include <snk/model_codec/res_tag.h>
@@ -131,6 +132,37 @@ namespace
 		}
 	}
 
+	// The .bin is new but its name is the desc's (res::desc_binary::binary_tag), so it cannot step aside: refused when
+	// any other layer of res:// holds that name (#1279). Its own content root is checked through the step's files.
+	std::optional<std::string> held_in_another_layer(const project_assets& assets, const std::string& binary_path)
+	{
+		// Lowest first: the read-only layers, then the content roots from the last.
+		std::vector<std::filesystem::path> others = assets.res_layers();
+		std::optional<std::string> res_path;
+		const std::vector<std::filesystem::path>& roots = assets.content_roots();
+		// The first content root that holds the file is its own, as res:// sees it.
+		for (std::size_t i = 0; i < roots.size(); ++i) {
+			std::string prefix = fs_paths::generic_utf8_of(roots[i].lexically_normal());
+			while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+			if (prefix == "." || prefix.empty()) {
+				res_path = binary_path;
+			} else if (binary_path.size() > prefix.size() && binary_path.starts_with(prefix) && binary_path[prefix.size()] == '/') {
+				res_path = binary_path.substr(prefix.size() + 1);
+			} else {
+				continue;
+			}
+			others.erase(others.begin() + static_cast<std::ptrdiff_t>(others.size() - 1 - i));
+			break;
+		}
+		if (!res_path) return std::format("{} is in no content root", binary_path);
+		const std::optional<res::name_refusal> refusal = res::name_taken(others, *res_path);
+		if (!refusal) return std::nullopt;
+		if (!refusal->error.empty()) {
+			return std::format("res://{} cannot be checked in every layer: {}: {}", *res_path, fs_paths::utf8_of(refusal->existing), refusal->error);
+		}
+		return std::format("{} holds the name of its binary file res://{} in another layer of res://", fs_paths::utf8_of(refusal->existing), *res_path);
+	}
+
 	enum class geometry_outcome { converted, binary_kept };
 
 	struct converted_geometry
@@ -141,14 +173,16 @@ namespace
 	};
 
 	// Writes the pair of one desc. Nothing is written before every check passed.
-	converted_geometry convert_geometry(project_step_files& files, const std::string& path)
+	converted_geometry convert_geometry(project_step_context& context, const std::string& path)
 	{
+		project_step_files& files = context.files;
 		const res::tag tag{ path };
 		const std::optional<res::tag> binary = res::desc_binary::binary_tag(tag);
 		const std::optional<res::tag> staged = res::desc_binary::staged_tag(tag);
 		if (!binary || !staged) return { {}, "not named <name>.<ext>.desc: no binary file can stand beside it" };
 		const std::string binary_path(binary->view());
 		if (std::optional<std::string> reason = taken(files, std::string(staged->view()))) return { {}, *reason };
+		if (std::optional<std::string> reason = held_in_another_layer(context.assets, binary_path)) return { {}, *reason };
 
 		const std::string read = files.read(path);
 		std::string_view text = read;
@@ -188,7 +222,7 @@ namespace
 		std::size_t left = 0;
 		for (const scanned_file& file : context.scan.files) {
 			if (!file.geometry_arrays) continue;
-			const converted_geometry done = convert_geometry(context.files, file.path);
+			const converted_geometry done = convert_geometry(context, file.path);
 			if (!done.reason.empty()) {
 				context.warn(std::format("{}: not migrated: {}", file.path, done.reason));
 				++left;
@@ -366,17 +400,6 @@ namespace
 			throw std::runtime_error(std::format("{} is neither in the project nor in the engine's files", tag.view()));
 		}
 
-		// Whether a file the asset walk lists, or a read-only layer, is at `res_path` (below res://).
-		bool logical_exists(std::string_view res_path) const
-		{
-			if (m_project.contains(key_of(res_path))) return true;
-			for (const std::filesystem::path& layer : m_assets.read_only_layers()) {
-				const prj::project_file_text found = prj::read_project_file(layer, fs_paths::path_from_utf8(res_path), k_max_desc_bytes);
-				if (found.exists || !found.error.empty()) return true;
-			}
-			return false;
-		}
-
 	private:
 		const project_assets& m_assets;
 		project_reader m_read;
@@ -503,14 +526,14 @@ namespace
 		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
-	// Names are unique by the logical res:// path: no content root and no read-only layer may have the file or its
-	// .resource, so the new file neither shadows one nor is shadowed, and nothing is overwritten.
+	// A name is free when no layer of res:// has it (res::free_name: the file, its .resource, a desc's leftover .bin) and
+	// this run has neither handed it out nor created it: the new file neither shadows one nor is shadowed.
 	class shader_namer
 	{
 	public:
-		shader_namer(project_step_context& context, const desc_finder& finder)
+		explicit shader_namer(project_step_context& context)
 			: m_context(context)
-			, m_finder(finder)
+			, m_layers(context.assets.res_layers())
 		{
 		}
 
@@ -521,32 +544,41 @@ namespace
 			if (listed == m_context.assets.assets().end()) {
 				throw std::runtime_error("the asset walk does not list it (a higher content root covers it): no res:// path to name a file beside it");
 			}
-			const std::string stem = stem_of(material);
 			const std::string res_stem = stem_of(listed->second.res_path);
-			for (int number = 1; number < 1000; ++number) {
-				const std::string suffix = number == 1 ? std::string{} : std::format("-{}", number);
-				const std::string res_path = res_stem + suffix + std::string(k_shader_suffix);
-				if (taken(res_path)) continue;
-				m_assigned.insert(desc_finder::key_of(res_path));
-				shader_target target;
-				target.path = stem + suffix + std::string(k_shader_suffix);
-				target.tag = "res://" + res_path;
-				return target;
-			}
-			throw std::runtime_error(std::format("no free name for {}{} up to -999", stem, k_shader_suffix));
+			const auto [folder, stem] = split_folder(res_stem);
+			m_error.clear();
+			const res::free_name_result found = res::free_name(m_layers, folder, stem, k_shader_suffix, "-",
+				[this](std::string_view res_path) { return in_run(res_path); });
+			// An overlay that could not answer: no name may be called free past it.
+			if (!m_error.empty()) throw std::runtime_error(m_error);
+			if (!found.ok()) throw std::runtime_error(found.error);
+			const std::string res_path = folder.empty() ? found.name : std::format("{}/{}", folder, found.name);
+			m_assigned.insert(res::asset_name_key(res_path, true));
+			const std::string material_folder(split_folder(material).first);
+			shader_target target;
+			target.path = material_folder.empty() ? found.name : std::format("{}/{}", material_folder, found.name);
+			target.tag = "res://" + res_path;
+			return target;
 		}
 
 	private:
-		// A name that cannot be checked counts as taken.
-		bool taken(const std::string& res_path)
+		static std::pair<std::string_view, std::string_view> split_folder(std::string_view path)
 		{
-			if (m_assigned.contains(desc_finder::key_of(res_path))) return true;
-			if (m_finder.logical_exists(res_path) || m_finder.logical_exists(res_path + ".resource")) return true;
+			const std::size_t slash = path.rfind('/');
+			if (slash == std::string_view::npos) return { {}, path };
+			return { path.substr(0, slash), path.substr(slash + 1) };
+		}
+
+		// Handed out before in this run, or at that path (or its .resource) in a content root as this run left it.
+		bool in_run(std::string_view res_path)
+		{
+			if (m_assigned.contains(res::asset_name_key(res_path, true))) return true;
 			for (const std::filesystem::path& root : m_context.assets.content_roots()) {
 				const std::string in_root = fs_paths::generic_utf8_of((root / fs_paths::path_from_utf8(res_path)).lexically_normal());
 				try {
-					if (m_context.files.exists(in_root) || m_context.files.exists(in_root + ".resource")) return true;
-				} catch (const std::exception&) {
+					if (m_context.files.exists(in_root) || m_context.files.exists(in_root + std::string{ res::asset_meta_suffix })) return true;
+				} catch (const std::exception& e) {
+					if (m_error.empty()) m_error = e.what();
 					return true;
 				}
 			}
@@ -554,8 +586,12 @@ namespace
 		}
 
 		project_step_context& m_context;
-		const desc_finder& m_finder;
+		// Lowest first, as res::free_name takes them.
+		std::vector<std::filesystem::path> m_layers;
+		// res::asset_name_key (folded) of the res:// paths handed out.
 		std::set<std::string> m_assigned;
+		// Why the overlay could not answer in_run; empty when it could.
+		std::string m_error;
 	};
 
 	void material_shaders_apply(project_step_context& context)
@@ -593,7 +629,7 @@ namespace
 			roots.emplace(path, std::move(root));
 		}
 
-		shader_namer namer(context, finder);
+		shader_namer namer(context);
 		std::map<stage_triple, std::size_t> by_stages;
 		std::vector<shader_target> targets;
 		std::set<std::string> changed;
