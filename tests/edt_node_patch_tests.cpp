@@ -3,6 +3,7 @@
 #include "edt_node_patch.h"
 #include "edt_scene_document.h"
 #include <snk/scene/level/scn_level_desc.h>
+#include <snk/ecs/ecs_event.hpp>
 #include <snk/scene/level/scn_node_index.h>
 #include <boost/json/serialize.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -10,7 +11,9 @@
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 #include <span>
 #include <string>
 #include <vector>
@@ -159,6 +162,92 @@ BOOST_AUTO_TEST_CASE(APatchedField_SurvivesAHotReloadOfItsParentDesc_ARebuild_An
 
 	const auto saved = scn::level_desc::build_json("lvl", scene.world_descs, *descs);
 	BOOST_TEST(boost::json::serialize(saved).find("65") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(ANodeWithAComponentThatMayBeAPrefabRef_IsNeverPatched_EvenForItsTransform)
+{
+	scn::prefab_desc::prefab_comp_node untyped;
+	untyped.parent_desc = require_loaded<desc::desc_base>(res::tag{ "memory://t/rig.prefab.desc" });
+	node(BOX_ID).components["ref"] = untyped;
+	const entt::entity box = live(reg, BOX_ID);
+	const glm::mat4 before = reg.get<scn::local_transform>(box).local;
+	node(BOX_ID).position = { 4.f, 0.f, 0.f };
+	node(BOX_ID).has_transform = true;
+	const edt::scene_node_edit edit{ 0, BOX_ID, true, false, {} };
+	BOOST_TEST(!edt::patch_live_nodes(scene.world_descs[0], reg, *assembler, std::span(&edit, 1)));
+	BOOST_TEST((reg.get<scn::local_transform>(box).local == before));
+}
+
+BOOST_AUTO_TEST_CASE(ARecordOfAnAncestor_StopsThePatchOfAFieldOfItsDescendant)
+{
+	node(BOX_ID).children.push_back([] {
+		prefab_node child;
+		child.name = "Inner";
+		child.node_id = 0xc4;
+		child.components["camera_desc"].type_name = "camera_desc";
+		child.components["camera_desc"].overrides["fov"] = 70.0;
+		return child;
+	}());
+	entt::registry deep;
+	const auto deep_root = deep.create();
+	scn::spawn_world(*assembler, deep, deep_root, scene.world_descs[0], "w0", res::tag{});
+	const std::vector<std::uint64_t> inner_path{ BOX_ID, 0xc4 };
+	const entt::entity inner = scn::node_index::get(deep).find(inner_path);
+	BOOST_REQUIRE(deep.valid(inner));
+
+	node(BOX_ID).children[0].components["camera_desc"].overrides["fov"] = 33.0;
+	const edt::scene_node_edit edit{ 0, 0xc4, false, false, { "camera_desc" } };
+	BOOST_TEST(edt::patch_live_nodes(scene.world_descs[0], deep, *assembler, std::span(&edit, 1)));
+
+	scn::override_record record;
+	record.component = "camera_desc";
+	record.path = "/fov";
+	record.value = 10.0;
+	node(BOX_ID).overrides.push_back(record);
+	node(BOX_ID).children[0].components["camera_desc"].overrides["fov"] = 34.0;
+	BOOST_TEST(!edt::patch_live_nodes(scene.world_descs[0], deep, *assembler, std::span(&edit, 1)));
+	BOOST_TEST(deep.get<scn::camera_component>(inner).fov == 33.f);
+}
+
+BOOST_AUTO_TEST_CASE(OnlyAllowlistedComponentTypesArePatched_AMeshNodeFallsBackToARebuild)
+{
+	const entt::entity box = live(reg, BOX_ID);
+	scn::prefab_desc::prefab_comp_node mesh;
+	mesh.type_name = "mesh_node_desc";
+	mesh.overrides["material"] = "";
+	node(BOX_ID).components["mesh"] = mesh;
+	const edt::scene_node_edit edit{ 0, BOX_ID, false, false, { "mesh" } };
+	BOOST_TEST(!edt::patch_live_nodes(scene.world_descs[0], reg, *assembler, std::span(&edit, 1)));
+	BOOST_TEST(!reg.all_of<scn::camera_component>(box));
+}
+
+BOOST_AUTO_TEST_CASE(ATransformPatch_AnnouncesTheEntity_SoTheTransformSystemMovesItsChildren)
+{
+	entt::registry with_events;
+	with_events.ctx().emplace<ecs::event<scn::transform_updated>>();
+	const auto events_root = with_events.create();
+	scn::spawn_world(*assembler, with_events, events_root, scene.world_descs[0], "w0", res::tag{});
+	auto& events = with_events.ctx().get<ecs::event<scn::transform_updated>>();
+	events.clear();
+	const entt::entity cam = live(with_events, CAM_ID);
+
+	node(CAM_ID).position = { 0.f, 1.f, 0.f };
+	node(CAM_ID).has_transform = true;
+	const edt::scene_node_edit edit{ 0, CAM_ID, true, false, {} };
+	BOOST_REQUIRE(edt::patch_live_nodes(scene.world_descs[0], with_events, *assembler, std::span(&edit, 1)));
+	BOOST_TEST((std::find(events.begin(), events.end(), cam) != events.end()));
+}
+
+BOOST_AUTO_TEST_CASE(APatcherThatThrows_IsFollowedByARebuild)
+{
+	scene.set_node_patcher([this](std::span<const edt::scene_node_edit>) -> bool {
+		++patches;
+		throw std::runtime_error("boom");
+	});
+	edit_fov(35.f);
+	scene.commit("Edit node");
+	BOOST_TEST(patches == 1);
+	BOOST_TEST(pushes == 1);
 }
 
 BOOST_AUTO_TEST_CASE(AnEditOfANodeThatIsNotLive_TouchesNothing_AndIsRefused)

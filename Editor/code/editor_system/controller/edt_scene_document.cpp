@@ -259,7 +259,15 @@ bool edt::scene_document::patch_touched()
 		return false;
 	}
 	const auto& edits = m_index.last_field_edits();
-	if (edits.empty() || !m_node_patcher(edits)) {
+	if (edits.empty()) {
+		return false;
+	}
+	try {
+		if (!m_node_patcher(edits)) {
+			return false;
+		}
+	} catch (const std::exception& error) {
+		egLOG_WARN("Editor/Patch", "a node patch threw, the world is rebuilt: {}", error.what());
 		return false;
 	}
 	m_index.take_touched();

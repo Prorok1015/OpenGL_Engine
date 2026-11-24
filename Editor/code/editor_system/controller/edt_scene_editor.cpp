@@ -263,12 +263,15 @@ bool edt::scene_editor::reload_world(std::size_t index)
 
 bool edt::scene_editor::patch_nodes(std::span<const scene_node_edit> edits)
 {
+	// The same preconditions as reload_world: a patch that cannot be followed by the rebuild is not started.
 	const std::string* world_name = m_state.active_world_name();
 	auto ctx_mgr = m_services.ctx_manager.lock();
-	if (!world_name || !ctx_mgr || !m_services.assembler() || !m_state.has_active_world()) return false;
+	if (!m_state.editor_tag.is_valid() || !world_name || !ctx_mgr || !m_services.sfactory() || !m_services.assembler()
+		|| !m_state.has_active_world()) return false;
 	scn::context_set& lvl = ctx_mgr->level_set();
 	if (!lvl.has(*world_name)) return false;
 	const std::size_t index = static_cast<std::size_t>(m_state.active_world_idx);
+	if (index >= m_state.world_descs.size()) return false;
 	for (const auto& edit : edits) {
 		if (edit.world != index) return false;
 	}
