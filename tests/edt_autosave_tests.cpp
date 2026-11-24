@@ -608,7 +608,8 @@ BOOST_AUTO_TEST_CASE(WithoutACacheMount_AutosaveIsOff)
 	edt::scene_document scene;
 	edt::document_manager documents{ scene, events };
 	edt::autosave_component::clock::time_point now{ std::chrono::hours(1) };
-	edt::autosave_component autosave{ edt::autosave_component::ports{ .documents = documents, .events = events, .resources = *env.rs } };
+	edt::autosave_component autosave{ edt::autosave_component::ports{ .documents = documents, .events = events, .resources = *env.rs,
+		.jobs = nullptr, .gesture_active = {}, .problems = nullptr } };
 	autosave.set_clock_for_tests([&now] { return now; });
 
 	scene.commit("edit", edt::commit_mode::state_only);
