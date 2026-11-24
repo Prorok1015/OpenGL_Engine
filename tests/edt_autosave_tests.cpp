@@ -15,9 +15,16 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/level/scn_world_context.h>
+#include <snk/scene/scn_model.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <boost/json.hpp>
 #include <chrono>
 #include <filesystem>
@@ -25,8 +32,10 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 // Autosave (#1186): the dirty documents are written into cache://autosave/ an interval after their first unsaved edit,
@@ -83,10 +92,10 @@ struct autosave_fixture : test_util::scene_env
 		rs->unregistrate_resolver(res::tag::default_protocol());
 	}
 
-	std::unique_ptr<edt::autosave_component> make_autosave()
+	std::unique_ptr<edt::autosave_component> make_autosave(edt::job_service* jobs = nullptr)
 	{
 		auto made = std::make_unique<edt::autosave_component>(edt::autosave_component::ports{ .documents = documents, .events = events,
-			.resources = *rs, .jobs = nullptr, .gesture_active = [this] { return gesture; } });
+			.resources = *rs, .jobs = jobs, .gesture_active = [this] { return gesture; } });
 		made->set_clock_for_tests([this] { return now; });
 		return made;
 	}
@@ -308,6 +317,26 @@ BOOST_AUTO_TEST_CASE(DisabledInTheSettings_NothingIsWritten)
 	BOOST_TEST(nothing_at(k_untitled));
 }
 
+BOOST_AUTO_TEST_CASE(TurningAutosaveOff_RemovesWhatItWrote)
+{
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_REQUIRE(written(k_untitled));
+
+	autosave->set_settings({ .enabled = false, .interval_seconds = 60 });
+	after(1s);
+	BOOST_TEST(nothing_at(k_untitled));
+
+	autosave->set_settings({});
+	after(1s);
+	after(61s);
+	BOOST_REQUIRE(written(k_untitled));
+	autosave->set_allowed(false);
+	after(1s);
+	BOOST_TEST(nothing_at(k_untitled));
+}
+
 BOOST_AUTO_TEST_CASE(TheInterval_ComesFromTheSettings)
 {
 	autosave->set_settings({ .enabled = true, .interval_seconds = 10 });
@@ -385,6 +414,13 @@ BOOST_AUTO_TEST_CASE(TheMetaFile_HasTheDocumentedFields)
 	BOOST_TEST(meta.at("source_size").to_number<std::uint64_t>() == fs::file_size(source));
 	BOOST_TEST(std::string(meta.at("source_sha256").as_string()) == cmn::sha256_file_hex(source).value_or(""));
 
+	const std::string payload = read_file(file_of(k_level));
+	BOOST_TEST(meta.at("payload_size").to_number<std::uint64_t>() == payload.size());
+	const auto* first = reinterpret_cast<const std::byte*>(payload.data());
+	BOOST_TEST(std::string(meta.at("payload_sha256").as_string()) == cmn::sha256_hex(std::span<const std::byte>(first, payload.size())));
+	BOOST_TEST(std::string(meta.at("session").as_string()) == edt::autosave_session_id());
+	BOOST_TEST(edt::autosave_session_id().size() == 32u);
+
 	const std::optional<edt::autosave_meta> parsed = edt::parse_autosave_meta(read_file(meta_of(k_level)));
 	BOOST_REQUIRE(parsed.has_value());
 	BOOST_TEST(parsed->kind == "scene");
@@ -402,6 +438,135 @@ BOOST_AUTO_TEST_CASE(AnUntitledLevelsMeta_HasAnEmptySourceAndNoSourceHash)
 	BOOST_TEST(std::string(meta.at("source").as_string()).empty());
 	BOOST_TEST(!meta.contains("source_size"));
 	BOOST_TEST(!meta.contains("source_sha256"));
+}
+
+// A project switch while a write is in flight: the write lands in the old cache folder and is removed from there; the
+// new folder gets nothing that belongs to the old run.
+BOOST_AUTO_TEST_CASE(AProjectSwitch_DuringAWrite_LeavesNothingUnderEitherFolder)
+{
+	edt::job_service jobs{ tasks };
+	autosave = make_autosave(&jobs);
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_REQUIRE(jobs.running_count() == 1u);
+	BOOST_TEST(nothing_at(k_untitled));
+
+	const fs::path other = dir.path() / "other_cache";
+	fs::create_directories(other);
+	BOOST_REQUIRE(rs->remount(res::tag::cache, { other }));
+	after(1s);
+	BOOST_TEST(autosave->cache_root() == other);
+	pump();
+
+	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(!fs::exists(other / "autosave" / "scene" / "untitled"));
+	BOOST_TEST(autosave->written_file(state.id()).empty());
+
+	// The next write goes into the new folder, an interval after the switch.
+	after(61s);
+	pump();
+	BOOST_TEST(fs::exists(other / "autosave" / "scene" / "untitled"));
+	autosave.reset();
+	BOOST_TEST(!fs::exists(other / "autosave" / "scene" / "untitled"));
+}
+
+BOOST_AUTO_TEST_CASE(AWriteFinishedBeforeTheSwitchIsSeen_IsRemovedFromTheOldFolder)
+{
+	edt::job_service jobs{ tasks };
+	autosave = make_autosave(&jobs);
+	edit_level();
+	after(1s);
+	after(61s);
+	const fs::path other = dir.path() / "other_cache";
+	fs::create_directories(other);
+	BOOST_REQUIRE(rs->remount(res::tag::cache, { other }));
+	pump();
+	BOOST_REQUIRE(written(k_untitled));
+
+	after(1s);
+	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(!fs::exists(other / "autosave"));
+	autosave.reset();
+}
+
+BOOST_AUTO_TEST_CASE(Shutdown_DropsAWriteNotStarted_AndNoCallbackRunsAfterIt)
+{
+	edt::job_service jobs{ tasks };
+	autosave = make_autosave(&jobs);
+	edit_level();
+	after(1s);
+	after(61s);
+	autosave->shutdown();
+	pump();
+	BOOST_TEST(nothing_at(k_untitled));
+	BOOST_TEST(autosave->writes() == 0u);
+	autosave.reset();
+}
+
+// A link where autosave writes: a folder link is refused, a file link is replaced, never followed.
+BOOST_AUTO_TEST_CASE(ALinkUnderTheAutosaveFolder_IsNeverFollowed)
+{
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside);
+	fs::create_directories(cache / "autosave");
+	std::error_code ec;
+	fs::create_directory_symlink(outside, cache / "autosave" / "scene", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_TEST(fs::is_empty(outside));
+	BOOST_TEST(autosave->writes() == 0u);
+
+	fs::remove(cache / "autosave" / "scene");
+	fs::create_directories(cache / "autosave" / "scene");
+	std::ofstream(outside / "target.txt", std::ios::binary) << "keep";
+	fs::create_symlink(outside / "target.txt", cache / "autosave" / "scene" / "untitled", ec);
+	BOOST_REQUIRE(!ec);
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_TEST(read_file(outside / "target.txt") == "keep");
+}
+
+// A live world whose entity was moved in the ECS and not yet written back: autosave takes the move on a copy (the document
+// keeps its desc) and writes what Save writes once it has synced the move itself.
+BOOST_AUTO_TEST_CASE(ALiveLevelsAutosave_TakesTheEcsTransforms_AndIsWhatSaveWrites)
+{
+	const res::tag tag = put("lv.desc", R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]}]})");
+	state.editor_tag = tag;
+	auto handle = rs->require_sync<scn::level_desc>(tag);
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+	BOOST_REQUIRE(state.has_active_world());
+	save_level();
+
+	entt::registry& reg = mgr->level_set().get("w0").state();
+	bool moved = false;
+	reg.view<scn::node_id_component, scn::local_transform>().each([&moved](const scn::node_id_component& id, scn::local_transform& lt) {
+		if (id.path == std::vector<std::uint64_t>{ 0xa2 }) {
+			lt.local = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 5.f, 0.f, 0.f });
+			moved = true;
+		}
+	});
+	BOOST_REQUIRE(moved);
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_REQUIRE(written(k_level));
+	const std::string autosaved = read_file(file_of(k_level));
+	BOOST_TEST(state.world_descs[0].get_root().children[0].position.x == 0.f);
+	BOOST_TEST(autosaved != read_file(content / "levels" / "a.desc"));
+
+	BOOST_REQUIRE(state.save().saved);
+	BOOST_TEST(state.world_descs[0].get_root().children[0].position.x == 5.f);
+	BOOST_TEST(read_file(content / "levels" / "a.desc") == autosaved);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -438,6 +603,18 @@ BOOST_AUTO_TEST_CASE(AFileName_IsOneNamePerSource)
 	BOOST_TEST(edt::autosave_file_of("data", res::tag::make(".hidden.desc")) == "autosave/data/%2Ehidden.desc");
 	const std::string long_name = edt::autosave_file_of("data", res::tag::make(std::string(400, 'x') + ".desc"));
 	BOOST_TEST(long_name.size() < 200u);
+	BOOST_TEST(long_name != edt::autosave_file_of("data", res::tag::make("y" + std::string(399, 'x') + ".desc")));
+	// U+00E9 is two bytes: a cut never starts inside a character or inside a %XX escape.
+	std::string accents;
+	for (int i = 0; i < 150; ++i) accents += i % 7 == 0 ? std::string{ "/" } : std::string{ "\xC3\xA9" };
+	for (const std::string& path : { accents, "x" + accents }) {
+		const std::string name = edt::autosave_file_of("data", res::tag::make(path));
+		const std::string leaf = name.substr(std::string_view{ "autosave/data/" }.size());
+		BOOST_TEST(leaf.size() <= 160u);
+		BOOST_TEST((static_cast<unsigned char>(leaf.front()) & 0xC0) != 0x80);
+		BOOST_TEST(!(leaf.front() >= '0' && leaf.front() <= '9'));
+		BOOST_TEST(leaf.find('/') == std::string::npos);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(TheMeta_ReadsBackAsWritten)
@@ -449,6 +626,9 @@ BOOST_AUTO_TEST_CASE(TheMeta_ReadsBackAsWritten)
 	meta.saved_at = "2026-11-24T10:15:00Z";
 	meta.source_size = 18;
 	meta.source_sha256 = std::string(64, 'a');
+	meta.session = edt::autosave_session_id();
+	meta.payload_size = 7;
+	meta.payload_sha256 = std::string(64, 'b');
 	const std::optional<edt::autosave_meta> parsed = edt::parse_autosave_meta(edt::autosave_meta_text(meta));
 	BOOST_REQUIRE(parsed.has_value());
 	BOOST_TEST((*parsed == meta));

@@ -37,12 +37,19 @@ namespace edt
 		// The source file on disk at the time of the write; unset when there was none or it was not read.
 		std::optional<std::uint64_t> source_size;
 		std::string source_sha256;
+		// The editor run that wrote it (autosave_session_id): a reader skips its own run's files.
+		std::string session;
+		// The payload file this meta was written with: a payload that differs is not this meta's.
+		std::uint64_t payload_size = 0;
+		std::string payload_sha256;
 
 		bool operator==(const autosave_meta&) const = default;
 	};
 	std::string autosave_meta_text(const autosave_meta& meta);
 	// nullopt for a text that is not a meta of a known format.
 	std::optional<autosave_meta> parse_autosave_meta(std::string_view text);
+	// A random id of this editor run (128 bits, hex), made once.
+	const std::string& autosave_session_id();
 	// The current UTC time as autosave_meta::saved_at writes it.
 	std::string autosave_time_now();
 
@@ -51,6 +58,6 @@ namespace edt
 	// Any thread.
 	std::string write_autosave_files(const std::filesystem::path& cache_root, std::string_view file, std::span<const std::byte> data,
 		std::string_view meta);
-	// Removes the meta and then the file; nothing there is success. Empty on success, else why not. Any thread.
+	// Removes the meta and then the file; nothing there is success. Empty on success, else why not; never throws. Any thread.
 	std::string remove_autosave_files(const std::filesystem::path& cache_root, std::string_view file);
 }

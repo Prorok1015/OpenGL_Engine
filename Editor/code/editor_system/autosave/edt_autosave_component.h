@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -49,7 +51,8 @@ namespace edt
 
 		// Once a frame (the `editor_autosave` frame stage).
 		void tick();
-		// Removes the files it wrote and stops: after a clean exit there is nothing to recover. Call once the jobs stopped.
+		// Removes the files it wrote and stops: after a clean exit there is nothing to recover. Waits for a write that is
+		// running and drops the ones not started; no job callback reaches the component afterwards.
 		void shutdown();
 
 		const autosave_settings& settings() const { return m_settings; }
@@ -67,10 +70,21 @@ namespace edt
 		std::size_t writes() const { return m_writes; }
 
 	private:
+		// Shared by a write's job and the component: shutdown() takes the lock (waiting out a write that runs) and cancels.
+		struct write_gate
+		{
+			std::mutex mutex;
+			bool cancelled = false;
+		};
+
 		struct tracked
 		{
 			// Relative to the cache folder (autosave_file_of); follows the document's kind and source.
 			std::string file;
+			// Where the last write went (cache folder and file): a project switch or a new source does not move those files.
+			std::filesystem::path root;
+			std::string disk_file;
+			std::shared_ptr<write_gate> gate;
 			std::optional<clock::time_point> due;
 			// The generation the last write (or the last capture that could not be written) was of.
 			std::optional<std::uint64_t> written_generation;
@@ -88,7 +102,7 @@ namespace edt
 		void finish_write(document_id id, const std::string& error);
 		void discard(tracked& record);
 		void forget(document_id id);
-		void remove_files(const std::string& file);
+		void remove_files(const std::filesystem::path& root, const std::string& file) noexcept;
 
 		ports m_ports;
 		autosave_settings m_settings;

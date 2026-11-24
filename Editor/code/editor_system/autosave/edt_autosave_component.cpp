@@ -8,6 +8,8 @@
 #include <snk/model_codec/res_tag.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
+#include <exception>
+#include <mutex>
 #include <format>
 #include <system_error>
 #include <utility>
@@ -30,12 +32,14 @@ namespace
 		std::optional<fs::path> source_file;
 	};
 
-	std::string run_write(write_order& order)
+	std::string write_now(write_order& order)
 	{
 		const std::vector<std::byte> bytes = edt::autosave_bytes(order.snapshot);
 		if (bytes.empty()) {
 			return "nothing to write";
 		}
+		order.meta.payload_size = bytes.size();
+		order.meta.payload_sha256 = cmn::sha256_hex(bytes);
 		if (order.source_file) {
 			std::error_code ec;
 			const std::uintmax_t size = fs::file_size(*order.source_file, ec);
@@ -48,6 +52,17 @@ namespace
 		}
 		order.meta.saved_at = edt::autosave_time_now();
 		return edt::write_autosave_files(order.root, order.file, bytes, edt::autosave_meta_text(order.meta));
+	}
+
+	std::string run_write(write_order& order) noexcept
+	{
+		try {
+			return write_now(order);
+		} catch (const std::exception& error) {
+			return error.what();
+		} catch (...) {
+			return "an unknown error";
+		}
 	}
 }
 
@@ -66,7 +81,7 @@ edt::autosave_component::~autosave_component()
 std::string edt::autosave_component::written_file(document_id id) const
 {
 	const auto found = m_tracked.find(id);
-	return found != m_tracked.end() && found->second.on_disk ? found->second.file : std::string{};
+	return found != m_tracked.end() && found->second.on_disk ? found->second.disk_file : std::string{};
 }
 
 void edt::autosave_component::refresh_root()
@@ -94,7 +109,16 @@ void edt::autosave_component::tick()
 	if (m_shut) return;
 	refresh_root();
 	const clock::time_point now = m_clock();
-	const bool can_write = !m_root.empty() && m_settings.enabled && m_allowed;
+	const bool on = m_settings.enabled && m_allowed;
+	if (!on) {
+		// Turned off: what it wrote is no autosave the person wants kept.
+		for (auto& [id, record] : m_tracked) {
+			discard(record);
+			record.due.reset();
+			record.written_generation.reset();
+		}
+	}
+	const bool can_write = on && !m_root.empty();
 	std::optional<bool> gesture;
 	std::vector<document_id> seen;
 	seen.reserve(m_tracked.size() + 1);
@@ -131,10 +155,13 @@ void edt::autosave_component::follow(document& doc, clock::time_point now, bool 
 		record.written_generation.reset();
 		return;
 	}
+	if (!can_write) {
+		return;
+	}
 	if (!record.due && record.written_generation != generation) {
 		record.due = now + std::chrono::seconds(std::clamp(m_settings.interval_seconds, k_autosave_min_interval, k_autosave_max_interval));
 	}
-	if (!record.due || now < *record.due || !can_write || record.in_flight || doc.edits_locked()) {
+	if (!record.due || now < *record.due || record.in_flight || doc.edits_locked()) {
 		return;
 	}
 	if (!gesture) {
@@ -158,10 +185,13 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 	write_order order;
 	order.snapshot = source->autosave_capture();
 	if (order.snapshot.bytes.empty() && !order.snapshot.tree) {
-		egLOG_WARN("editor/autosave", "'{}' was not autosaved: {}", doc.title(), order.snapshot.error.empty() ? "nothing to write" : order.snapshot.error);
+		// Asked again only after the next edit: an invalid value or a variant without its base is no failure to repeat.
+		egLOG_DEBUG("editor/autosave", "'{}' ({}) is not autosaved: {}", doc.title(), doc.source().view(),
+			order.snapshot.error.empty() ? "nothing to write" : order.snapshot.error);
 		return;
 	}
 	order.root = m_root;
+	order.meta.session = autosave_session_id();
 	order.file = record.file;
 	order.meta.source = autosave_source_text(doc.source());
 	order.meta.kind = std::string(doc.kind());
@@ -171,15 +201,23 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 			order.source_file = disk->file;
 		}
 	}
+	record.root = m_root;
+	record.disk_file = record.file;
 	record.on_disk = true;
 	record.in_flight = true;
 	if (!m_ports.jobs) {
 		finish_write(id, run_write(order));
 		return;
 	}
+	auto gate = std::make_shared<write_gate>();
+	record.gate = gate;
 	m_ports.jobs->start(ds::lane::io, ds::task_desc{ std::format("Autosave {}", doc.title()), "editor/autosave", false }, m_lifetime,
-		[order = std::move(order)](ds::task_context&) mutable { return run_write(order); },
-		[this, id](ds::task_result<std::string>& result) {
+		[order = std::move(order), gate](ds::task_context&) mutable {
+			std::lock_guard lock(gate->mutex);
+			return gate->cancelled ? std::string{ "cancelled" } : run_write(order);
+		},
+		[this, id, gate](ds::task_result<std::string>& result) {
+			if (gate->cancelled) return;
 			finish_write(id, result.ok() && result.value ? *result.value : (result.error.empty() ? std::string{ "the write failed" } : result.error));
 		});
 }
@@ -190,13 +228,15 @@ void edt::autosave_component::finish_write(document_id id, const std::string& er
 	if (found == m_tracked.end()) return;
 	tracked& record = found->second;
 	record.in_flight = false;
+	record.gate.reset();
 	if (error.empty()) {
 		++m_writes;
-		egLOG_DEBUG("editor/autosave", "autosaved to cache://{}", record.file);
+		egLOG_DEBUG("editor/autosave", "autosaved to cache://{}", record.disk_file);
 	} else {
-		egLOG_WARN("editor/autosave", "cache://{} could not be written: {}", record.file, error);
+		egLOG_WARN("editor/autosave", "cache://{} could not be written: {}", record.disk_file, error);
 	}
-	if (record.remove_after || m_shut) {
+	// Written under a cache folder that is no longer the project's: nothing will ever look for it there.
+	if (record.remove_after || m_shut || record.root != m_root) {
 		record.remove_after = false;
 		discard(record);
 	}
@@ -212,7 +252,7 @@ void edt::autosave_component::discard(tracked& record)
 		record.remove_after = true;
 		return;
 	}
-	remove_files(record.file);
+	remove_files(record.root, record.disk_file);
 	record.on_disk = false;
 }
 
@@ -228,11 +268,15 @@ void edt::autosave_component::forget(document_id id)
 	m_tracked.erase(found);
 }
 
-void edt::autosave_component::remove_files(const std::string& file)
+void edt::autosave_component::remove_files(const fs::path& root, const std::string& file) noexcept
 {
-	if (m_root.empty() || file.empty()) return;
-	if (const std::string error = remove_autosave_files(m_root, file); !error.empty()) {
-		egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", file, error);
+	if (root.empty() || file.empty()) return;
+	try {
+		if (const std::string error = remove_autosave_files(root, file); !error.empty()) {
+			egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", file, error);
+		}
+	} catch (...) {
+		// Called from shutdown() in a destructor: a failed log line must not end the program.
 	}
 }
 
@@ -243,6 +287,11 @@ void edt::autosave_component::shutdown()
 	m_closed.disconnect();
 	m_lifetime.cancel_tasks();
 	for (auto& [id, record] : m_tracked) {
+		if (record.gate) {
+			std::lock_guard lock(record.gate->mutex);
+			record.gate->cancelled = true;
+		}
+		record.gate.reset();
 		record.in_flight = false;
 		discard(record);
 	}

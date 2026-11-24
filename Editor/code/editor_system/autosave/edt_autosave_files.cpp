@@ -7,6 +7,8 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <chrono>
+#include <cstdint>
+#include <exception>
 #include <format>
 #include <random>
 #include <system_error>
@@ -34,7 +36,15 @@ namespace
 			}
 		}
 		if (out.size() > k_max_name) {
-			out = std::format("{}~{:016x}", out.substr(out.size() - (k_max_name - 17)), ds::fnv1a_64(path));
+			// The tail names the file best; the hash of the whole path keeps two long names apart.
+			std::size_t start = out.size() - (k_max_name - 17);
+			const auto inside = [&out](std::size_t at) {
+				const bool continuation = (static_cast<unsigned char>(out[at]) & 0xC0) == 0x80;
+				const bool escape_digit = out[at - 1] == '%' || (at >= 2 && out[at - 2] == '%');
+				return continuation || escape_digit;
+			};
+			while (start < out.size() && inside(start)) ++start;
+			out = std::format("{}~{:016x}", out.substr(start), ds::fnv1a_64(path));
 		}
 		// A leading dot would hide the file, and "." or ".." is no file name at all.
 		if (!out.empty() && out.front() == '.') {
@@ -92,6 +102,9 @@ std::string edt::autosave_meta_text(const autosave_meta& meta)
 	root["kind"] = meta.kind;
 	root["generation"] = meta.generation;
 	root["saved_at"] = meta.saved_at;
+	root["session"] = meta.session;
+	root["payload_size"] = meta.payload_size;
+	root["payload_sha256"] = meta.payload_sha256;
 	if (meta.source_size) {
 		root["source_size"] = *meta.source_size;
 		root["source_sha256"] = meta.source_sha256;
@@ -121,7 +134,11 @@ std::optional<edt::autosave_meta> edt::parse_autosave_meta(std::string_view text
 	const json::string* kind = string_of("kind");
 	const std::optional<std::uint64_t> generation = number_of("generation");
 	const json::string* saved_at = string_of("saved_at");
-	if (!format || *format != static_cast<std::uint64_t>(k_autosave_format) || !source || !kind || !generation || !saved_at) {
+	const json::string* session = string_of("session");
+	const std::optional<std::uint64_t> payload_size = number_of("payload_size");
+	const json::string* payload_sha256 = string_of("payload_sha256");
+	if (!format || *format != static_cast<std::uint64_t>(k_autosave_format) || !source || !kind || !generation || !saved_at || !session
+		|| !payload_size || !payload_sha256) {
 		return std::nullopt;
 	}
 	autosave_meta meta;
@@ -129,9 +146,25 @@ std::optional<edt::autosave_meta> edt::parse_autosave_meta(std::string_view text
 	meta.kind = std::string(*kind);
 	meta.generation = *generation;
 	meta.saved_at = std::string(*saved_at);
+	meta.session = std::string(*session);
+	meta.payload_size = *payload_size;
+	meta.payload_sha256 = std::string(*payload_sha256);
 	meta.source_size = number_of("source_size");
 	if (const json::string* sha = string_of("source_sha256")) meta.source_sha256 = std::string(*sha);
 	return meta;
+}
+
+const std::string& edt::autosave_session_id()
+{
+	static const std::string session = [] {
+		std::random_device random;
+		std::string out;
+		for (int part = 0; part < 4; ++part) {
+			out += std::format("{:08x}", static_cast<std::uint32_t>(random()));
+		}
+		return out;
+	}();
+	return session;
 }
 
 std::string edt::autosave_time_now()
@@ -156,9 +189,15 @@ std::string edt::write_autosave_files(const fs::path& cache_root, std::string_vi
 
 std::string edt::remove_autosave_files(const fs::path& cache_root, std::string_view file)
 {
-	platform::beneath::pinned_root root{ cache_root };
-	if (std::string error = remove_one(root, fs_paths::path_from_utf8(autosave_meta_of(file))); !error.empty()) {
-		return error;
+	try {
+		platform::beneath::pinned_root root{ cache_root };
+		if (std::string error = remove_one(root, fs_paths::path_from_utf8(autosave_meta_of(file))); !error.empty()) {
+			return error;
+		}
+		return remove_one(root, fs_paths::path_from_utf8(file));
+	} catch (const std::exception& error) {
+		return error.what();
+	} catch (...) {
+		return "an unknown error";
 	}
-	return remove_one(root, fs_paths::path_from_utf8(file));
 }
