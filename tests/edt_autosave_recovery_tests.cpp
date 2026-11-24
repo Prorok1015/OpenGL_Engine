@@ -176,6 +176,10 @@ struct recovery_fixture : test_util::scene_env
 		documents.shutdown();
 		rs->unregistrate_resolver(res::tag::cache);
 		rs->unregistrate_resolver(res::tag::default_protocol());
+		// The temp folder's own removal takes plain paths: on Windows a record name past 260 would stay, and the
+		// sessions of this test with it, for the next test to find.
+		std::error_code ignored;
+		fs::remove_all(openable(dir.path()), ignored);
 	}
 
 	std::unique_ptr<edt::autosave_component> make_autosave()
