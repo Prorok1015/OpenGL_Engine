@@ -7,6 +7,7 @@
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/scn_spatial.h>
 
 namespace scn
 {
@@ -21,7 +22,7 @@ namespace scn
 	using engine_component_types = type_list<
 		local_transform, name_component, node_id_component, parent_component, children_component, object_component,
 		renderable, scene_anchor_component, world_root_component, spawned_root_component, directional_light,
-		mouse_controller_component, screen_anchor_component,
+		mouse_controller_component, screen_anchor_component, spatial_layers,
 		world_transform, depth_level, screen_anchor_result, bone_matrices_component,
 		mesh_component, geometry_component, material_desc_component, skeleton_component, skinning_component,
 		bone_component, sky_component, camera_component,

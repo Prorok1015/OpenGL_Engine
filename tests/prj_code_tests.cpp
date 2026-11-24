@@ -3,6 +3,7 @@
 #include <snk/project/prj_link_check.h>
 #include "test_folder_link.hpp"
 #include <snk/project/prj_project.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/resource/resolvers/res_write_policy.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
@@ -13,6 +14,12 @@
 #include <vector>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winioctl.h>
 #endif
 
 // What counts as code in code:// (#450): categories, ignored folders, the write patterns and the project's code/ folder.
@@ -33,6 +40,30 @@ prj::project_context open_game(test_util::temp_dir& dir)
 	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
 	return *opened.context;
 }
+
+#ifdef _WIN32
+// The empty folder `folder` made a reparse point with a name-surrogate tag of a third party (#1295): std::filesystem
+// calls it neither a symlink nor a junction. Needs no privilege. Empty on success, else why not.
+std::string set_third_party_surrogate_tag(const fs::path& folder)
+{
+	const HANDLE handle = CreateFileW(folder.c_str(), GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (handle == INVALID_HANDLE_VALUE) {
+		return "cannot open the folder: error " + std::to_string(GetLastError());
+	}
+	REPARSE_GUID_DATA_BUFFER buffer{};
+	buffer.ReparseTag = 0x2000ABCDu;
+	buffer.ReparseDataLength = 0;
+	buffer.ReparseGuid = { 0x1295ABCDu, 0x1295, 0x4295, { 0x12, 0x95, 0x12, 0x95, 0x12, 0x95, 0x12, 0x95 } };
+	DWORD returned = 0;
+	const BOOL set = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, &buffer, REPARSE_GUID_DATA_BUFFER_HEADER_SIZE,
+		nullptr, 0, &returned, nullptr);
+	const DWORD code = GetLastError();
+	CloseHandle(handle);
+	return set ? std::string{} : "FSCTL_SET_REPARSE_POINT failed: error " + std::to_string(code);
+}
+#endif
 
 }
 
@@ -500,6 +531,64 @@ BOOST_AUTO_TEST_CASE(Refuses_AJunctionAsTheCacheOrInsideIt)
 		BOOST_TEST(problem->find("is a link") != std::string::npos);
 		BOOST_TEST_MESSAGE("junction refused: " << *problem);
 	}
+}
+
+// #1295: a reparse point std::filesystem reports as neither a symlink nor a junction is a link by its tag too.
+BOOST_AUTO_TEST_CASE(Refuses_AnotherNameSurrogateAsTheCacheOrInsideIt)
+{
+	for (const bool inside : { false, true }) {
+		BOOST_TEST_INFO("surrogate inside .cache: " << inside);
+		test_util::temp_dir dir(inside ? "prj_cache_surrogate_in" : "prj_cache_surrogate");
+		const auto project = open_game(dir);
+		const fs::path planted = inside ? project.cache_dir() / "modules" : project.cache_dir();
+		fs::create_directories(planted);
+		const std::string error = set_third_party_surrogate_tag(planted);
+		BOOST_REQUIRE_MESSAGE(error.empty(), error);
+		struct remove_on_exit {
+			fs::path path;
+			~remove_on_exit() { RemoveDirectoryW(path.c_str()); }
+		} remove{ planted };
+
+		const auto problem = inside ? prj::link_below(project.cache_dir()) : prj::verify_project_mounts(project);
+		BOOST_REQUIRE(problem.has_value());
+		BOOST_TEST(problem->find("is a link") != std::string::npos, *problem);
+	}
+}
+
+// #1295 review: an entry past MAX_PATH is reached and checked like any other: a plain one passes, a link there is
+// refused, never taken for missing.
+BOOST_AUTO_TEST_CASE(LinkBelow_ChecksEntriesPastMaxPath)
+{
+	test_util::temp_dir dir("prj_cache_long");
+	const auto project = open_game(dir);
+	std::wstring deep = L"\\\\?\\" + project.cache_dir().lexically_normal().make_preferred().wstring();
+	while (deep.size() < MAX_PATH + 60) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	std::error_code made;
+	fs::create_directories(fs::path{ deep }, made);
+	BOOST_REQUIRE_MESSAGE(!made, made.message());
+	struct remove_on_exit {
+		fs::path root;
+		~remove_on_exit()
+		{
+			platform::beneath::pinned_root pinned{ root };
+			platform::beneath::remove_tree_beneath(pinned, "", ".cache");
+		}
+	} remove{ project.root };
+
+	const auto plain = prj::link_below(project.cache_dir());
+	BOOST_TEST(!plain.has_value(), plain.value_or(""));
+
+	const fs::path planted = fs::path{ deep } / "planted";
+	BOOST_REQUIRE(fs::create_directory(planted, made));
+	const std::string error = set_third_party_surrogate_tag(planted);
+	BOOST_REQUIRE_MESSAGE(error.empty(), error);
+	const auto problem = prj::link_below(project.cache_dir());
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("is a link") != std::string::npos, *problem);
+	BOOST_TEST(problem->find("planted") != std::string::npos, *problem);
+	BOOST_TEST(problem->find("//?/") == std::string::npos, *problem);
 }
 #endif
 

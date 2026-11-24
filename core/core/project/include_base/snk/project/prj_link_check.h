@@ -19,7 +19,7 @@ namespace prj
 	struct link_walk_options
 	{
 		std::size_t max_entries = k_link_walk_limit;
-		// Completes "is a link (symlink or junction) in <what>" and "holds more than N entries (it is <what>)".
+		// Completes "is a link or an unsupported entry (...) in <what>" and "holds more than N entries (it is <what>)".
 		std::string what = "the project's cache";
 		// A folder this says yes to (its path relative to the walked folder, '/' separated) is checked as an entry like any
 		// other, so a link at it is refused, but its contents are not walked. Null: every folder is walked.
@@ -38,9 +38,10 @@ namespace prj
 		return !id.empty() && id.find('/') == std::string_view::npos;
 	}
 
-	// Why `dir` holds a link (a symlink or a junction) at any depth, every entry checked without following one; empty
-	// when it holds none or does not exist. A walk past `max_entries` entries, or one that cannot read an entry, is a
-	// refusal too. Every reason names the entry and tells the person what to do; nothing is removed here.
+	// Why `dir` holds a link (a symlink, a junction or any other entry that redirects its name: on Windows by its
+	// reparse tag, platform::beneath::link_entry_at, #1295) at any depth, every entry checked without following one;
+	// empty when it holds none or does not exist. A walk past `max_entries` entries, or one that cannot read an entry,
+	// is a refusal too. Every reason names the entry and tells the person what to do; nothing is removed here.
 	SNK_API std::optional<std::string> link_below(const std::filesystem::path& dir, const link_walk_options& options);
 	SNK_API std::optional<std::string> link_below(const std::filesystem::path& dir,
 		std::size_t max_entries = k_link_walk_limit);

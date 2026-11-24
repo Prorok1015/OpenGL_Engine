@@ -62,7 +62,12 @@ bool rnd::material_instance_cache::any_slot(const res::tag& shader, std::string_
 void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned)
 {
 	if (!s.shader.is_valid() || desc->shader.get_tag() != s.shader.get_tag()) {
+		const res::tag old_shader = s.shader.get_tag();
 		set_shader(s, desc->shader);
+		// A material pointed at another shader no longer has the old one's problem (filed under the last compile's tag).
+		if (old_shader.is_valid() && !any_slot(old_shader, s.material_tag, false)) {
+			clear_problem(old_shader, s.material_tag);
+		}
 	}
 	s.material_tag = desc->get_tag().view();
 	const material_shader_state shader = read_shader(s.shader);
