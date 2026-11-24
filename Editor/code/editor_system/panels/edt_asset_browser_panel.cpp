@@ -221,7 +221,16 @@ namespace edt
 		if (buffer.data() != form.name()) {
 			form.set_name(buffer.data());
 		}
-		ImGui::TextDisabled(".desc is added when the name has no extension");
+		if (!form.file_name().empty()) {
+			const std::string target = form.folder().empty() ? form.file_name() : form.folder() + "/" + form.file_name();
+			if (form.suffix_replaced()) {
+				ImGui::TextColored(colors().warning, "'%s' is created as res://%s", form.name().c_str(), target.c_str());
+			} else {
+				ImGui::TextDisabled("Creates res://%s", target.c_str());
+			}
+		} else {
+			ImGui::TextDisabled("The type adds its extension (.desc, or its asset kind's such as .shader.desc)");
+		}
 		if (const std::string problem = form.problem(); !problem.empty()) {
 			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::TextWrapped("%s", problem.c_str());

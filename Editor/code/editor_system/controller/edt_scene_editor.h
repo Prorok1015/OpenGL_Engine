@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_scene_history.h"
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,8 @@ namespace edt
 		bool serialize_and_push();
 		// Reloads world `index` from its desc, the editor camera kept when it is the active one.
 		bool reload_world(std::size_t index);
+		// Field edits of the active world applied to its live entities (#1190); false: nothing applied, rebuild instead.
+		bool patch_nodes(std::span<const scene_node_edit> edits);
 		void sync_ecs_transforms_to_desc();
 		// What sync_ecs_transforms_to_desc writes, written into `worlds` (a copy of the document's world descs, same order)
 		// instead: the document is not touched (#1186). False when there is no live active world to read.

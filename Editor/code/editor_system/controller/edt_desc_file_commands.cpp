@@ -14,6 +14,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_free_name.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
@@ -120,6 +121,17 @@ namespace {
 		std::string entry;
 		std::string rule;
 	};
+
+	// Why desc.create does not make `relative` although no file has that name (#1361).
+	std::string name_held_text(std::string_view relative, const res::name_refusal& taken)
+	{
+		const std::string held = fs_paths::utf8_of(taken.existing.filename());
+		if (taken.meta_left) {
+			return std::format("'res://{}' was the name of a deleted asset: its '{}' is still there and would give "
+				"the new file that asset's ID; choose another name, or a person removes that file", relative, held);
+		}
+		return std::format("'res://{}' is held by '{}' in a layer of res://: choose another name", relative, held);
+	}
 
 	class desc_files
 	{
@@ -559,6 +571,15 @@ namespace {
 			if (found.found) {
 				return cmd::result::failure(cmd::codes::needs_input,
 					std::format("'res://{}' exists: desc.create never replaces a file; read it and use desc.write (a person confirms that)", path.relative));
+			}
+			// #1361: the name may be held by something other than the file: a .resource a deleted file left (the new
+			// file would take that asset's ID), a geometry desc's .bin, a name differing only in case.
+			if (const std::optional<res::name_refusal> taken = res::name_taken(m_files.layers(), path.relative)) {
+				if (!taken->error.empty()) {
+					return cmd::result::failure(cmd::codes::failed,
+						std::format("'res://{}' cannot be checked: {}", path.relative, taken->error));
+				}
+				return cmd::result::failure(cmd::codes::needs_input, name_held_text(path.relative, *taken));
 			}
 			const level_answer level = m_files.names_open_level(path.relative);
 			if (level.claim == level_claim::this_file) {

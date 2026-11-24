@@ -1,4 +1,5 @@
 #include <snk/project_migration/pmg_apply.h>
+#include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
@@ -48,6 +49,38 @@ namespace
 	std::string hash_of(std::string_view bytes)
 	{
 		return std::format("{:016x}", desc::schema_id(bytes));
+	}
+
+	created_check check_of(std::string_view text)
+	{
+		return created_check{ hash_of(text), text.size() };
+	}
+
+	// What hash_of gives: 16 lowercase hex digits.
+	bool is_hash_text(std::string_view text)
+	{
+		return text.size() == 16 && std::ranges::all_of(text, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+	}
+
+	// A whole number of a journal (journal_format, size_after); nullopt for anything else, a negative one too.
+	std::optional<std::uint64_t> whole_number(const json::value& value)
+	{
+		if (value.is_uint64()) return value.get_uint64();
+		if (value.is_int64() && value.get_int64() >= 0) return static_cast<std::uint64_t>(value.get_int64());
+		return std::nullopt;
+	}
+
+	// Why a journal is not of a format this engine reads; nullopt when it is (no journal_format: format 1).
+	std::optional<std::string> journal_format_error(const json::object& journal)
+	{
+		const json::value* format = journal.if_contains("journal_format");
+		if (!format) return std::nullopt;
+		const std::optional<std::uint64_t> number = whole_number(*format);
+		if (!number || *number == 0) return std::string("its journal_format is not a format number");
+		if (*number > static_cast<std::uint64_t>(k_journal_format)) {
+			return std::format("it was written by a newer engine (journal_format {}; this engine reads {} and older)", *number, k_journal_format);
+		}
+		return std::nullopt;
 	}
 
 	void stop_at(const apply_context& context, apply_checkpoint where)
@@ -126,20 +159,30 @@ namespace
 			entry["unknown_types"] = std::move(types);
 			skipped.push_back(std::move(entry));
 		}
+		ASSERT_MSG(report.created_checks.size() == report.created_files.size(), "created_checks is not parallel to created_files");
 		json::array created;
-		for (const std::string& path : report.created_files) created.push_back(json::string(path));
+		for (std::size_t i = 0; i < report.created_files.size(); ++i) {
+			const created_check& check = report.created_checks[i];
+			created.push_back(json::object{ { "path", report.created_files[i] }, { "hash_after", check.hash }, { "size_after", check.size } });
+		}
 		json::array project_steps;
 		for (const std::string& id : report.project_steps) project_steps.push_back(json::string(id));
 		json::array project_notes;
 		for (const std::string& note : report.project_notes) project_notes.push_back(json::string(note));
-		json::object out{ { "id", report.id }, { "created", report.created }, { "engine_before", report.engine_before },
-			{ "engine_after", report.engine_after }, { "status", std::string(to_string(report.status)) }, { "backup", report.backup } };
+		json::object out{ { "journal_format", k_journal_format }, { "id", report.id }, { "created", report.created },
+			{ "engine_before", report.engine_before }, { "engine_after", report.engine_after }, { "status", std::string(to_string(report.status)) },
+			{ "backup", report.backup } };
 		out["files"] = std::move(files);
 		out["skipped"] = std::move(skipped);
 		out["created_files"] = std::move(created);
 		out["project_steps"] = std::move(project_steps);
 		out["project_notes"] = std::move(project_notes);
 		if (!report.error.empty()) out["error"] = report.error;
+		if (!report.rollback_warnings.empty()) {
+			json::array warnings;
+			for (const std::string& warning : report.rollback_warnings) warnings.push_back(json::string(warning));
+			out["rollback_warnings"] = std::move(warnings);
+		}
 		if (report.backup_files > 0) out["backup_bytes"] = report.backup_bytes;
 		return out;
 	}
@@ -164,6 +207,10 @@ namespace
 				}
 				for (const std::string& note : file.notes) md += std::format("- `{}`: {}\n", file.path, note);
 			}
+		}
+		if (!report.rollback_warnings.empty()) {
+			md += "\n## Kept by the rollback\n\n";
+			for (const std::string& warning : report.rollback_warnings) md += std::format("- {}\n", warning);
 		}
 		if (!report.project_steps.empty() || !report.project_notes.empty()) {
 			md += "\n## Project\n\n";
@@ -293,25 +340,6 @@ namespace
 		return std::move(parsed.data);
 	}
 
-	journal_paths paths_of(const json::object& journal)
-	{
-		journal_paths out;
-		if (const json::value* backup = journal.if_contains("backup"); backup && backup->is_string()) out.backup = std::string(backup->as_string());
-		if (const json::value* list = journal.if_contains("files"); list && list->is_array()) {
-			for (const json::value& item : list->as_array()) {
-				if (!item.is_object()) continue;
-				const json::value* path = item.as_object().if_contains("path");
-				out.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
-			}
-		}
-		if (const json::value* list = journal.if_contains("created_files"); list && list->is_array()) {
-			for (const json::value& item : list->as_array()) {
-				if (item.is_string()) out.created.emplace_back(item.as_string());
-			}
-		}
-		return out;
-	}
-
 	// Removes a file the migration created without following a link below the root (platform::beneath).
 	std::optional<std::string> remove_created(const fs::path& root, const std::string& path)
 	{
@@ -324,6 +352,50 @@ namespace
 			return std::format("{} not deleted: {}", path, error);
 		}
 		return std::nullopt;
+	}
+
+	enum class created_state { gone, ours, changed };
+
+	// Whether a created file is still what the migration last wrote there: a size that differs is told without a read; a
+	// file too big or unreadable to compare counts as changed.
+	created_state created_state_of(const fs::path& root, const std::string& path, const created_check& check)
+	{
+		const fs::path relative = fs_paths::path_from_utf8(path);
+		std::error_code ec;
+		const fs::file_status status = fs::symlink_status(root / relative, ec);
+		if (status.type() == fs::file_type::not_found) return created_state::gone;
+		if (ec || !fs::is_regular_file(status)) return created_state::changed;
+		const std::uintmax_t size = fs::file_size(root / relative, ec);
+		if (ec || size != check.size || size > k_max_file_bytes) return created_state::changed;
+		const prj::project_file_text now = prj::read_project_file(root, relative, k_max_file_bytes);
+		if (!now.exists && now.error.empty()) return created_state::gone;
+		if (!now.exists || !now.error.empty()) return created_state::changed;
+		return now.text.size() == check.size && hash_of(now.text) == check.hash ? created_state::ours : created_state::changed;
+	}
+
+	std::string kept_warning(const std::string& path)
+	{
+		return std::format("{} was changed after the migration and was kept: delete it yourself if it is not yours; a later migration may "
+			"refuse a file at that name", journal_path_text(path));
+	}
+
+	// Deletes a created file only while it is what the migration wrote (#1346); a changed one stays, named in `warnings`.
+	// An entry without a hash (a format 1 journal) is deleted unchecked.
+	std::optional<std::string> remove_if_unchanged(const fs::path& root, const std::string& path, const created_check& check,
+		std::vector<std::string>& warnings)
+	{
+		if (!check.hash.empty()) {
+			switch (created_state_of(root, path, check)) {
+			case created_state::gone:
+				return std::nullopt;
+			case created_state::changed:
+				warnings.push_back(kept_warning(path));
+				return std::nullopt;
+			case created_state::ours:
+				break;
+			}
+		}
+		return remove_created(root, path);
 	}
 
 	enum class create_result { created, taken, failed };
@@ -555,13 +627,15 @@ namespace
 				return;
 			}
 			// Journaled before the file is there, as every write: a run stopped between the two leaves an entry with no file,
-			// which a rollback passes over.
+			// which a rollback passes over. Its hash and size are in this first entry, so a file someone else puts at the
+			// name later (or one that took the name first) does not match and is kept (#1346).
 			m_report.created_files.push_back(relative);
+			m_report.created_checks.push_back(check_of(text));
 			try {
 				journal();
 			} catch (const std::exception&) {
 				// The in-process rollback deletes what the list names: not a file someone else may create there.
-				m_report.created_files.pop_back();
+				drop_last_created();
 				throw;
 			}
 			std::string error;
@@ -574,7 +648,7 @@ namespace
 				std::string why = created == create_result::taken
 					? std::format("{}: {} cannot be created: something is at its name", m_step, relative)
 					: std::format("{}: {} cannot be created: {}", m_step, relative, error);
-				m_report.created_files.pop_back();
+				drop_last_created();
 				try {
 					journal();
 				} catch (const std::exception& e) {
@@ -601,7 +675,7 @@ namespace
 			const std::string relative = step_path(path);
 			const std::string key = key_of(relative);
 			if (!exists(relative)) throw std::runtime_error(std::format("{}: {} is not there to be deleted", m_step, relative));
-			if (created_here(key)) throw std::runtime_error(std::format("{}: {} was created by this migration and is not deleted by it", m_step, relative));
+			if (created_index(key)) throw std::runtime_error(std::format("{}: {} was created by this migration and is not deleted by it", m_step, relative));
 			applied_file& file = m_report.files[entry_for(relative)];
 			file.notes.push_back(std::format("deleted by the project step {}", m_step));
 			file.hash_after = std::string(k_removed);
@@ -806,9 +880,17 @@ namespace
 		// Two spellings of one file share the key: on Windows names differ only in letter case, as res:// merges them.
 		static std::string key_of(std::string_view path) { return res::asset_name_key(path, res::asset_names_case_insensitive); }
 
-		bool created_here(const std::string& key) const
+		std::optional<std::size_t> created_index(const std::string& key) const
 		{
-			return std::ranges::any_of(m_report.created_files, [&key](const std::string& created) { return key_of(created) == key; });
+			const auto found = std::ranges::find(m_report.created_files, key, [](const std::string& created) { return key_of(created); });
+			if (found == m_report.created_files.end()) return std::nullopt;
+			return static_cast<std::size_t>(found - m_report.created_files.begin());
+		}
+
+		void drop_last_created()
+		{
+			m_report.created_files.pop_back();
+			m_report.created_checks.pop_back();
 		}
 
 		// A step writes like a change of the asset tree: the path is rebuilt from its parts ("res//a.png" is
@@ -856,8 +938,17 @@ namespace
 		void overwrite(const std::string& relative, std::string_view text)
 		{
 			const std::string key = key_of(relative);
-			if (created_here(key)) {
-				put(relative, text);
+			if (const std::optional<std::size_t> created = created_index(key)) {
+				// A rollback deletes a created file only while it holds what was last written there: journaled first, as every write.
+				const created_check before = std::exchange(m_report.created_checks[*created], check_of(text));
+				try {
+					journal();
+					put(relative, text);
+				} catch (const std::exception&) {
+					// The file still holds the earlier text, unless the write reached the disk anyway.
+					if (!holds_bytes(relative, text)) m_report.created_checks[*created] = before;
+					throw;
+				}
 				m_current.insert_or_assign(key, written_file{ relative, std::string(text) });
 				m_step_touched.insert(key);
 				return;
@@ -1008,10 +1099,10 @@ namespace
 		return prj::to_indented_json(now);
 	}
 
-	// Puts back every file the failed migration may have written and deletes what it created; the errors, empty when
-	// the project is as it was.
+	// Puts back every file the failed migration may have written and deletes what it created and is unchanged (a changed
+	// one is kept, named in `warnings`); the errors, empty when the project is as it was.
 	std::string roll_back(const fs::path& root, const project_writer& write, const migration_report& report,
-		const std::vector<std::string>& originals, const std::vector<fs::path>& content_roots)
+		const std::vector<std::string>& originals, const std::vector<fs::path>& content_roots, std::vector<std::string>& warnings)
 	{
 		std::string errors;
 		const auto add = [&errors](const std::string& error) { errors += (errors.empty() ? "" : "; ") + error; };
@@ -1020,10 +1111,11 @@ namespace
 			if (file.hash_after.empty()) continue;
 			if (auto error = restore_file(root, write, file.path, file.hash_before, file.hash_after, originals[i], true)) add(*error);
 		}
-		for (const std::string& created : report.created_files) {
+		for (std::size_t i = 0; i < report.created_files.size(); ++i) {
+			const std::string& created = report.created_files[i];
 			if (auto error = created_file_error(created, content_roots)) {
 				add(*error);
-			} else if (auto removed = remove_created(root, created)) {
+			} else if (auto removed = remove_if_unchanged(root, created, report.created_checks[i], warnings)) {
 				add(*removed);
 			}
 		}
@@ -1221,7 +1313,10 @@ prj::migration::apply_outcome prj::migration::apply_migration(const migration_pl
 		} catch (const std::exception& e) {
 			report.error = e.what();
 			egLOG_ERROR("project/migrate", "migration {} failed, rolling back: {}", report.id, report.error);
-			const std::string restore_errors = roll_back(context.root, apply.writer(), report, originals, content_roots);
+			std::vector<std::string> warnings;
+			const std::string restore_errors = roll_back(context.root, apply.writer(), report, originals, content_roots, warnings);
+			for (const std::string& warning : warnings) egLOG_WARN("project/migrate", "migration {}: {}", report.id, warning);
+			report.rollback_warnings = std::move(warnings);
 			if (restore_errors.empty()) {
 				report.status = migration_status::rolled_back;
 			} else {
@@ -1350,7 +1445,9 @@ std::vector<prj::migration::migration_folder> prj::migration::migration_folders(
 		if (status && status->is_string()) folder.status = std::string(status->as_string());
 		const json::value* created = journal.as_object().if_contains("created");
 		if (created && created->is_string()) folder.created = std::string(created->as_string());
-		if (folder.status.empty()) {
+		if (auto why = journal_format_error(journal.as_object())) {
+			folder.problem = std::format("its report.json cannot be read: {}", *why);
+		} else if (folder.status.empty()) {
 			folder.problem = "its report.json has no status";
 		} else if (!is_utc_stamp(folder.created)) {
 			folder.problem = "its report.json has no created time of the form 2026-01-31T12:00:00Z";
@@ -1363,6 +1460,67 @@ std::vector<prj::migration::migration_folder> prj::migration::migration_folders(
 std::string prj::migration::journal_path_text(std::string_view path)
 {
 	return text_escape::escaped_text(path, k_max_shown_path_bytes);
+}
+
+std::optional<std::string> prj::migration::parse_journal_paths(const json::object& journal, journal_paths& paths)
+{
+	paths = {};
+	if (auto why = journal_format_error(journal)) return why;
+	if (const json::value* backup = journal.if_contains("backup"); backup && backup->is_string()) paths.backup = std::string(backup->as_string());
+	if (const json::value* list = journal.if_contains("files"); list && list->is_array()) {
+		const json::array& files = list->as_array();
+		for (std::size_t i = 0; i < files.size(); ++i) {
+			const json::value& item = files[i];
+			if (!item.is_object()) return std::format("files[{}] is not an object", i);
+			const json::value* path = item.as_object().if_contains("path");
+			paths.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
+		}
+	}
+	const json::value* list = journal.if_contains("created_files");
+	if (!list) return std::nullopt;
+	if (!list->is_array()) return std::string("its created_files is not a list");
+	// A path without its hash is only a format 1 entry: in a newer journal it would be deleted unchecked.
+	const bool hashed_format = journal.if_contains("journal_format") != nullptr;
+	// Skipped, an entry would be a file the rollback leaves without a word: every one reads or the journal is refused.
+	std::map<std::string, std::size_t> seen;
+	const json::array& entries = list->as_array();
+	for (std::size_t i = 0; i < entries.size(); ++i) {
+		const json::value& item = entries[i];
+		std::string path;
+		created_check check;
+		if (item.is_string()) {
+			if (hashed_format) return std::format("created_files[{}] is a path without its hash_after and size_after", i);
+			path = std::string(item.as_string());
+		} else if (item.is_object()) {
+			const json::object& entry = item.as_object();
+			const json::value* given = entry.if_contains("path");
+			if (!given || !given->is_string()) return std::format("created_files[{}] has no string path", i);
+			path = std::string(given->as_string());
+			const json::value* hash = entry.if_contains("hash_after");
+			if (!hash || !hash->is_string() || !is_hash_text(hash->as_string())) {
+				return std::format("created file '{}' has no hash_after of 16 hex digits", journal_path_text(path));
+			}
+			check.hash = std::string(hash->as_string());
+			const json::value* size = entry.if_contains("size_after");
+			const std::optional<std::uint64_t> bytes = size ? whole_number(*size) : std::nullopt;
+			if (!bytes) return std::format("created file '{}' has no size_after that is a whole number", journal_path_text(path));
+			check.size = *bytes;
+		} else {
+			return std::format("created_files[{}] is neither a path nor an object {{path, hash_after, size_after}}", i);
+		}
+		const std::string key = res::asset_name_key(path, res::asset_names_case_insensitive);
+		if (const auto found = seen.find(key); found != seen.end()) {
+			const created_check& first = paths.created_checks[found->second];
+			if (first.hash != check.hash || first.size != check.size) {
+				return std::format("created file '{}' is listed twice with another hash or size", journal_path_text(path));
+			}
+			continue;
+		}
+		seen.emplace(key, paths.created.size());
+		paths.created.push_back(std::move(path));
+		paths.created_checks.push_back(std::move(check));
+	}
+	return std::nullopt;
 }
 
 std::optional<std::string> prj::migration::check_journal_paths(const fs::path& root, std::string_view id, const journal_paths& journal)
@@ -1419,7 +1577,9 @@ std::optional<std::string> prj::migration::check_journal(const fs::path& root, s
 	boost::system::error_code error;
 	const json::value journal = json::parse(text.text, error, {}, parse_options());
 	if (error || !journal.is_object()) return std::format("the journal of migration {} cannot be read", journal_path_text(id));
-	return check_journal_paths(root, id, paths_of(journal.as_object()));
+	journal_paths paths;
+	if (auto why = parse_journal_paths(journal.as_object(), paths)) return std::format("the journal of migration {}: {}", journal_path_text(id), *why);
+	return check_journal_paths(root, id, paths);
 }
 
 std::optional<std::string> prj::migration::rollback_migration(const fs::path& root, std::string_view id, const rollback_context& context)
@@ -1441,7 +1601,10 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		const json::value* value = from.if_contains(key);
 		return value && value->is_string() ? std::string(value->as_string()) : std::string{};
 	};
-	const journal_paths named = paths_of(object);
+	journal_paths named;
+	if (auto why = parse_journal_paths(object, named)) {
+		return std::format("migration {} cannot be rolled back, nothing was written: its journal: {}", shown_id, *why);
+	}
 	if (auto why = check_journal_paths(root, id, named)) {
 		return std::format("migration {} cannot be rolled back, nothing was written: {}", shown_id, *why);
 	}
@@ -1496,7 +1659,6 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		}
 	}
 
-	const std::vector<std::string>& created = named.created;
 	if (!refused.empty()) {
 		std::string list;
 		for (const std::string& path : refused) list += (list.empty() ? "" : ", ") + path;
@@ -1511,6 +1673,7 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 	if (auto failed = journal_as(migration_status::in_progress)) return std::format("the journal cannot be written: {}", *failed);
 	if (context.wrote) *context.wrote = true;
 
+	std::vector<std::string> warnings;
 	const auto roll_back_files = [&]() -> std::optional<std::string> {
 		for (const entry& file : files) {
 			if (file.unstamp) {
@@ -1524,8 +1687,8 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 			}
 			if (auto failed = restore_file(root, writer, file.path, file.hash_before, file.hash_after, saved.text, false)) return failed;
 		}
-		for (const std::string& path : created) {
-			if (auto failed = remove_created(root, path)) return failed;
+		for (std::size_t i = 0; i < named.created.size(); ++i) {
+			if (auto failed = remove_if_unchanged(root, named.created[i], named.created_checks[i], warnings)) return failed;
 		}
 		return std::nullopt;
 	};
@@ -1536,6 +1699,15 @@ std::optional<std::string> prj::migration::rollback_migration(const fs::path& ro
 		watch.pause();
 		failed = roll_back_files();
 	}
+	// What this rollback kept replaces what an earlier run of it kept.
+	if (warnings.empty()) {
+		object.erase("rollback_warnings");
+	} else {
+		json::array kept;
+		for (const std::string& warning : warnings) kept.push_back(json::string(warning));
+		object["rollback_warnings"] = std::move(kept);
+	}
+	if (context.warnings) *context.warnings = warnings;
 	if (failed) {
 		object["error"] = *failed;
 		if (auto journal_failed = journal_as(migration_status::rollback_failed)) {

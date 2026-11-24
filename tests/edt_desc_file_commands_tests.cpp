@@ -349,6 +349,28 @@ BOOST_AUTO_TEST_CASE(Create_NeverReplacesAFile_AlsoOneInALowerLayer)
 	BOOST_TEST(!fs::exists(res_root / "materials" / "engine.mat.desc"));
 }
 
+// #1361: a .resource left by a deleted file still holds its name, in any layer: a new file there would take the old
+// asset's ID and the references to the old asset would lead to it. desc.create asks, names the .resource, creates
+// nothing and leaves the .resource as it is.
+BOOST_AUTO_TEST_CASE(Create_RefusesANameALeftoverResourceHolds_InAnyLayer)
+{
+	const std::string meta = R"({"__type":"resource_meta","__version":1,)"
+		R"("__guid":"5d8a1f3e-2b4c-4e6f-8a9b-0c1d2e3f4a5b"})";
+	for (const char* layer : { "res", "lower" }) {
+		BOOST_TEST_CONTEXT(layer)
+		{
+			const std::string name = std::string("gone_") + layer + ".mat.desc";
+			dir.write(std::string(layer) + "/materials/" + name + ".resource", meta);
+			const auto made = call("desc.create", desc_args("materials/" + name, k_material));
+			BOOST_TEST(made.code == cmd::codes::needs_input);
+			BOOST_TEST(made.error.find(name + ".resource") != std::string::npos, made.error);
+			BOOST_TEST(!fs::exists(res_root / "materials" / name));
+			BOOST_TEST(read_file(dir.path() / layer / "materials" / (name + ".resource")) == meta);
+		}
+	}
+	make_material("materials/fresh.mat.desc");
+}
+
 BOOST_AUTO_TEST_CASE(Write_RefusesAMissingFile_AndOneOfALowerLayer)
 {
 	const auto missing = call("desc.write", write_args("materials/none.mat.desc", "v", k_material));
