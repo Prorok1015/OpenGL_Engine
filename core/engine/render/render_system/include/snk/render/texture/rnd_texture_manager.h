@@ -31,11 +31,7 @@ namespace rnd
 	public:
 		// Returns an empty owner while the texture cannot be made yet (the manager asks again later).
 		using loader_fn = std::function<driver::texture_owner(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
-		texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys)
-			: desc_system(d)
-			, m_res_sys(res_sys)
-			, drv(driver)
-		{}
+		texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys);
 		~texture_manager() override;
 
 		// dllexport instantiates the implicit copy members, which cannot compile with move-only values
@@ -59,7 +55,7 @@ namespace rnd
 		const driver::texture_header& info(texture_id id) const;
 
 		// Whether the calling thread is the one the manager belongs to (the one that made it).
-		bool on_owner_thread() const noexcept { return std::this_thread::get_id() == m_owner_thread; }
+		bool on_owner_thread() const noexcept;
 
 		// Destroys the texture of `tag`; the slot and its id stay (its generation grows).
 		void remove(const res::tag& tag);
@@ -70,17 +66,11 @@ namespace rnd
 		// not only a cost: require() starts a load only when the material compiles, so a slot emptied by a resource
 		// change or render-target resize is asked for again when this counter changes. Bind groups key by
 		// (id, slot generation) and rebuild once the replacement arrives.
-		std::uint64_t generation() const noexcept { return m_generation; }
+		std::uint64_t generation() const noexcept;
 
-		void register_loader(const std::string& txm_type, loader_fn fn)
-		{
-			loaders[txm_type] = std::move(fn);
-		}
+		void register_loader(const std::string& txm_type, loader_fn fn);
 
-		void unregister_loader(const std::string& txm_type)
-		{
-			loaders.erase(txm_type);
-		}
+		void unregister_loader(const std::string& txm_type);
 	protected:
 		struct slot
 		{

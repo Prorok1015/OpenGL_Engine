@@ -57,6 +57,13 @@ namespace edt
 			std::function<std::optional<std::string>()> migration_stopped_reason = {};
 			std::function<bool()> startup_pending = {};
 			std::function<asset_component*()> assets = {};
+			// The mesh modeller's questions (EPIC-77, #1011), late-bound: Exit, New and Open save or drop the meshes with unsaved edits, the
+			// Unsaved list and the tabs bring a mesh's window to the front and close it through its own question.
+			std::function<bool()> meshes_dirty = {};
+			std::function<bool()> save_meshes = {};
+			std::function<void()> discard_meshes = {};
+			std::function<void(document_id)> show_mesh = {};
+			std::function<void(document_id)> request_close_mesh = {};
 		};
 
 		explicit file_menu_component(ports from);

@@ -32,7 +32,7 @@ namespace json = boost::json;
 namespace fs = std::filesystem;
 
 constexpr const char* WORLD = R"({
-	"__type": "world_desc", "__version": 4, "name": "w0", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "w0", "systems": [],
 	"children": [
 		{ "__id": "00000000000000a1", "name": "Sun",
 		  "components": { "directional_light_desc": { "__type": "directional_light_desc", "direction": [0.0, -1.0, 0.0, 0.0] } } },
@@ -46,7 +46,7 @@ constexpr const char* WORLD = R"({
 
 // A second world: Inst instantiates a prefab with two nodes and holds override records for both.
 constexpr const char* PREFAB = R"({
-	"__type": "prefab_desc", "__version": 4,
+	"__type": "prefab_desc", "__version": 5,
 	"children": [
 		{ "__id": "00000000000000c1", "name": "arm", "components": { "stat": { "__type": "stat_desc", "hp": 3 } } },
 		{ "__id": "00000000000000c2", "name": "leg", "components": { "stat": { "__type": "stat_desc", "hp": 4 } } }
@@ -54,7 +54,7 @@ constexpr const char* PREFAB = R"({
 })";
 
 constexpr const char* WORLD_1 = R"({
-	"__type": "world_desc", "__version": 4, "name": "w1", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "w1", "systems": [],
 	"children": [
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/crate.prefab.desc" } },

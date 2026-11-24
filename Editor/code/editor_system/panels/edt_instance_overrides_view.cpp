@@ -177,7 +177,8 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 			if (entry.index < stale_at.size()) stale_at[entry.index] = &entry;
 		}
 	}
-	const std::size_t stale_count = static_cast<std::size_t>(std::ranges::count_if(stale_at, [] (const auto* entry) { return entry != nullptr; }));
+	const auto clearable = [] (const override_edit::stale_record* entry) { return entry != nullptr && !entry->keep_on_clear; };
+	const std::size_t stale_count = static_cast<std::size_t>(std::ranges::count_if(stale_at, clearable));
 
 	const std::string header = std::format("Overrides ({})###instance_overrides", node.overrides.size());
 	if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) return false;
@@ -240,7 +241,7 @@ bool edt::draw_instance_overrides(scn::prefab_desc::prefab_node& node, const std
 		const std::string label = std::format("Clear stale overrides ({})", stale_count);
 		if (ImGui::SmallButton(label.c_str())) {
 			for (std::size_t i = stale_at.size(); i-- > 0;) {
-				if (stale_at[i]) node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(i));
+				if (clearable(stale_at[i])) node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(i));
 			}
 			changed = true;
 		}

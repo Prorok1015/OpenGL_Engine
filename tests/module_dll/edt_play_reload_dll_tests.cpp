@@ -61,9 +61,9 @@ constexpr const char* RESULT_LEVEL = R"json({"__type":"level_desc","name":"resul
 
 constexpr const char* SNAKE_LEVEL = R"json({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":["dll::snake"]}]})json";
-constexpr const char* SEGMENT = R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"scale"}]})json";
+constexpr const char* SEGMENT = R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000b1","name":"scale"}]})json";
 // A prefab with a component of the module: only the assembler of the layer loaded now can build it.
-constexpr const char* MARKED = R"json({"__type":"prefab_desc","__version":4,"children":[
+constexpr const char* MARKED = R"json({"__type":"prefab_desc","__version":5,"children":[
 	{"__id":"00000000000000c1","name":"mark","components":{"g":{"__type":"dll_desc","value":7}}}]})json";
 
 struct dll_play_fixture : test_util::module_env

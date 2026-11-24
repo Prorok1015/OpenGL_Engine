@@ -325,6 +325,16 @@ platform::beneath::pinned_root::~pinned_root()
 
 int platform::beneath::pinned_root::descriptor(std::string& error)
 {
+	return open_root(error, true);
+}
+
+int platform::beneath::pinned_root::existing_descriptor(std::string& error)
+{
+	return open_root(error, false);
+}
+
+int platform::beneath::pinned_root::open_root(std::string& error, bool create)
+{
 	if (m_fd >= 0) {
 		struct stat held;
 		struct stat at_path;
@@ -337,11 +347,15 @@ int platform::beneath::pinned_root::descriptor(std::string& error)
 	}
 	if (m_fd < 0) {
 		// The root is the mounted folder itself, pinned canonical when mounted: made by path if it does not exist yet.
-		std::error_code ec;
-		fs::create_directories(m_root, ec);
+		if (create) {
+			std::error_code ec;
+			fs::create_directories(m_root, ec);
+		}
 		m_fd = ::open(m_root.c_str(), k_dir_flags);
 		if (m_fd < 0) {
+			const int code = errno;
 			error = errno_text("cannot open the root", m_root);
+			errno = code;
 		}
 	}
 	return m_fd;
@@ -491,7 +505,8 @@ namespace {
 		const platform::beneath::tree_hook* hook, int depth, dev_t device)
 	{
 		if (depth > k_tree_depth_limit) {
-			return std::format("'{}' is nested deeper than {} folders", fs_paths::utf8_of(path), k_tree_depth_limit);
+			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), platform::beneath::k_tree_too_deep,
+				k_tree_depth_limit);
 		}
 		const fd_holder folder{ ::openat(parent, name.c_str(), k_dir_flags) };
 		if (folder.get() < 0) {
@@ -604,9 +619,9 @@ std::string platform::beneath::remove_tree_beneath_watched(pinned_root& root, co
 		return std::string{ k_not_below };
 	}
 	std::string error;
-	const int root_fd = root.descriptor(error);
+	const int root_fd = root.existing_descriptor(error);
 	if (root_fd < 0) {
-		return error;
+		return errno == ENOENT ? std::string{} : error;
 	}
 	fs::path reached = root.path();
 	const fd_holder at = open_below(root_fd, *parts, false, reached);
@@ -1697,7 +1712,8 @@ namespace {
 		const platform::beneath::tree_hook* hook, int depth, bool top)
 	{
 		if (depth > k_tree_depth_limit) {
-			return std::format("'{}' is nested deeper than {} folders", fs_paths::utf8_of(path), k_tree_depth_limit);
+			return std::format("'{}' is {} {} folders", fs_paths::utf8_of(path), platform::beneath::k_tree_too_deep,
+				k_tree_depth_limit);
 		}
 		const handle_holder entry = open_in(parent, name, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN, 0);
 		if (!entry.valid()) {

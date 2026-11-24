@@ -45,7 +45,7 @@ namespace json = boost::json;
 using prefab_node = scn::prefab_desc::prefab_node;
 
 constexpr const char* WORLD = R"({
-	"__type": "world_desc", "__version": 4, "name": "w0", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "w0", "systems": [],
 	"children": [
 		{ "__id": "00000000000000a2", "name": "MainCamera",
 		  "components": { "camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 70.0 } } },
@@ -56,7 +56,7 @@ constexpr const char* WORLD = R"({
 })";
 
 constexpr const char* PREFAB = R"({
-	"__type": "prefab_desc", "__version": 4,
+	"__type": "prefab_desc", "__version": 5,
 	"children": [
 		{ "__id": "00000000000000c1", "name": "eye", "components": {
 			"camera_desc": { "__type": "camera_desc", "__version": 2, "fov": 40.0 },
@@ -66,7 +66,7 @@ constexpr const char* PREFAB = R"({
 })";
 
 constexpr const char* WORLD_1 = R"({
-	"__type": "world_desc", "__version": 4, "name": "w1", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "w1", "systems": [],
 	"children": [
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/rig.prefab.desc" } } },
@@ -781,8 +781,8 @@ BOOST_AUTO_TEST_CASE(values_written_inside_an_instance_and_back)
 // world's file open, as the spawn of the world does (#993).
 BOOST_AUTO_TEST_CASE(a_record_of_the_world_that_instantiates_the_instances_prefab_again_is_listed_and_edited)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
-	const res::tag file = put("w2.desc", R"({"__type":"world_desc","__version":4,"name":"w2","systems":[],"children":[
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag file = put("w2.desc", R"({"__type":"world_desc","__version":5,"name":"w2","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
 			{"op":"add_node","target":[],"value":{"__id":"00000000000000d2","name":"A",
 				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
@@ -835,7 +835,7 @@ BOOST_AUTO_TEST_CASE(a_record_turns_stale_when_the_prefab_file_changes_under_an_
 	edt::override_edit::view_cache cache(services, scene);
 	BOOST_REQUIRE(cache.stale(inst)->empty());
 
-	rs->store(rig, test_util::to_bytes(R"({"__type":"prefab_desc","__version":4,"children":[]})"));
+	rs->store(rig, test_util::to_bytes(R"({"__type":"prefab_desc","__version":5,"children":[]})"));
 	rs->evict_cached(rig);
 	pump();
 
@@ -862,6 +862,21 @@ BOOST_AUTO_TEST_CASE(whole_component_records_and_array_indexes_are_judged_by_the
 	std::vector<std::size_t> indices;
 	for (const auto& entry : *stale) indices.push_back(entry.index);
 	BOOST_TEST((indices == std::vector<std::size_t>{ 0, 3 }));
+}
+
+// Review of #1310: Clear stale overrides leaves a record the steps of its type cannot follow; it may still work as written.
+BOOST_AUTO_TEST_CASE(a_record_through_an_index_after_a_type_version_bump_is_stale_but_kept_on_clear)
+{
+	scene.active_world_idx = 1;
+	auto& inst = const_cast<prefab_node&>(*child(root(1), 0xe1));
+	BOOST_REQUIRE(descs->current_version("camera_desc") > 1);
+	inst.overrides.push_back(scn::override_record{ .target = { 0xc1 }, .component = "camera_desc", .path = "/fov/0", .value = 1,
+		.type_version = 1 });
+	edt::override_edit::view_cache cache(services, scene);
+
+	const auto stale = cache.stale(inst);
+	BOOST_REQUIRE(stale->size() == 1u);
+	BOOST_TEST(stale->front().keep_on_clear);
 }
 
 BOOST_AUTO_TEST_CASE(resetting_the_history_after_an_apply_leaves_nothing_to_undo)

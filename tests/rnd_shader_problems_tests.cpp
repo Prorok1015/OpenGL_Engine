@@ -51,8 +51,9 @@ struct compiler_location
 	int line = 0;
 };
 
-std::optional<compiler_location> compiler_location_of(std::string_view source, std::string_view marker)
+std::optional<compiler_location> compiler_location_of(std::string_view source, std::string_view marker, std::size_t* active_hits = nullptr)
 {
+	std::optional<compiler_location> first;
 	struct group
 	{
 		bool active = true;
@@ -81,7 +82,13 @@ std::optional<compiler_location> compiler_location_of(std::string_view source, s
 		line_begin = newline == std::string_view::npos ? source.size() : newline + 1;
 		const bool active = groups.empty() || groups.back().active;
 		if (line.find(marker) != std::string_view::npos && active) {
-			return at;
+			if (!active_hits) {
+				return at;
+			}
+			++*active_hits;
+			if (!first) {
+				first = at;
+			}
 		}
 		if (const auto ifdef = word_after(line, "ifdef")) {
 			const bool on = active && defined.contains(std::string{ *ifdef });
@@ -108,7 +115,26 @@ std::optional<compiler_location> compiler_location_of(std::string_view source, s
 		}
 		++at.line;
 	}
-	return std::nullopt;
+	return first;
+}
+
+// How many lines with `marker` a GLSL preprocessor keeps (compiler_location_of's groups).
+std::size_t active_count(std::string_view source, std::string_view marker)
+{
+	std::size_t hits = 0;
+	compiler_location_of(source, marker, &hits);
+	return hits;
+}
+
+// The include guard macro that comes first in `body` (#1301).
+std::string first_guard(const std::string& body)
+{
+	const std::size_t at = body.find("#ifndef SNK_INCLUDE_");
+	if (at == std::string::npos) {
+		return {};
+	}
+	const std::size_t begin = at + std::string_view{ "#ifndef " }.size();
+	return body.substr(begin, body.find_first_of("\r\n", begin) - begin);
 }
 
 driver::shader_build_log stage_log(std::size_t stage, std::string text)
@@ -171,7 +197,10 @@ BOOST_AUTO_TEST_CASE(TheExpandedSourceNumbersItsLinesAsTheFilesDo)
 	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
 	const std::string& body = result.headers[0].body;
 	BOOST_TEST(body.starts_with("#version 450 core\n#define MAX_LIGHT_COUNT "));
-	BOOST_TEST(body.ends_with("#define SNK_VERTEX_SHADER\n#line 2 0\n#line 1 1\nfloat a;\nfloat b;\n#line 3 0\nvoid main() {}\n"), body);
+	const std::string guard = first_guard(body);
+	BOOST_REQUIRE(guard.size() == std::string_view{ "SNK_INCLUDE_" }.size() + 16u);
+	BOOST_TEST(body.ends_with(std::format("#define SNK_VERTEX_SHADER\n#line 2 0\n#ifndef {0}\n#define {0}\n#line 1 1\nfloat a;\nfloat b;\n#endif\n"
+		"#line 3 0\nvoid main() {{}}\n", guard)), body);
 	BOOST_REQUIRE(result.sources.size() == 2u);
 	BOOST_TEST((result.sources[0] == std::vector<res::tag>{ vertex, lib }));
 	BOOST_TEST((result.sources[1] == std::vector<res::tag>{ fragment }));
@@ -188,7 +217,62 @@ BOOST_AUTO_TEST_CASE(AFileIncludedTwiceKeepsTheLinesAfterItsSecondInclude)
 	const auto vertex = put("twice_lines.vert", "#version 450 core\n#include \"twice_lib.glsl\"\n#include \"twice_lib.glsl\"\nvoid main() {}\n");
 	const auto result = load(program_of(vertex, put("twice_lines.frag", good_fragment)));
 	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
-	BOOST_TEST(result.headers[0].body.ends_with("#line 1 1\nfloat a;\n#line 3 0\n\nvoid main() {}\n"), result.headers[0].body);
+	const std::string& body = result.headers[0].body;
+	const std::string guard = first_guard(body);
+	BOOST_REQUIRE(!guard.empty());
+	// Both includes are there, under the same guard and the same source number: the compiler keeps the first copy only.
+	BOOST_TEST(body.ends_with(std::format("#ifndef {0}\n#define {0}\n#line 1 1\nfloat a;\n#endif\n#line 3 0\n"
+		"#ifndef {0}\n#define {0}\n#line 1 1\nfloat a;\n#endif\n#line 4 0\nvoid main() {{}}\n", guard)), body);
+	BOOST_TEST(result.sources[0].size() == 2u);
+	BOOST_TEST(active_count(body, "float a;") == 1u);
+}
+
+// #1301: an include first met in a group the compiler skips used to hide the file from a later include in a group it keeps.
+BOOST_AUTO_TEST_CASE(AnIncludeInASkippedGroupDoesNotHideTheFileFromALaterInclude)
+{
+	const auto lib = put("guarded_lib.glsl", "float lib_fn() { return 1.0; }\n");
+	const auto vertex = put("guarded.vert", "#version 450 core\n#ifdef NOT_DEFINED\n#include \"guarded_lib.glsl\"\n#endif\n"
+		"#include \"guarded_lib.glsl\"\nvoid main() { lib_fn(); }\n");
+	const auto result = load(program_of(vertex, put("guarded.frag", good_fragment)));
+	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
+	const std::string& body = result.headers[0].body;
+	BOOST_TEST(active_count(body, "float lib_fn()") == 1u, body);
+	const auto at = compiler_location_of(body, "float lib_fn()");
+	BOOST_REQUIRE(at);
+	BOOST_TEST(at->source == 1u);
+	BOOST_TEST(at->line == 1);
+	BOOST_TEST((result.sources[0] == std::vector<res::tag>{ vertex, lib }));
+	const auto main_at = compiler_location_of(body, "void main()");
+	BOOST_REQUIRE(main_at);
+	BOOST_TEST(main_at->source == 0u);
+	BOOST_TEST(main_at->line == 6);
+}
+
+// Every include is expanded now, so a file included twice by each of many nested files would grow without end.
+BOOST_AUTO_TEST_CASE(IncludesThatExpandPastTheLimitAreAProblem)
+{
+	constexpr int levels = 24;
+	const std::string filler(1024, ' ');
+	for (int i = 0; i < levels; ++i) {
+		const std::string next = std::format("grow{}.glsl", i + 1);
+		put(std::format("grow{}.glsl", i), std::format("#include \"{0}\"\n#include \"{0}\"\n//{1}\n", next, filler));
+	}
+	put(std::format("grow{}.glsl", levels), "float leaf;\n//" + filler + "\n");
+	const auto vertex = put("grow.vert", "#version 450 core\n#include \"grow0.glsl\"\nvoid main() {}\n");
+
+	const auto started = std::chrono::steady_clock::now();
+	const auto result = load(program_of(vertex, put("grow.frag", good_fragment)));
+	const bool within_ten_seconds = std::chrono::steady_clock::now() - started < std::chrono::seconds(10);
+	BOOST_TEST(within_ten_seconds);
+	BOOST_TEST(!result.ok());
+	std::size_t too_large = 0;
+	for (const shader_problem& problem : result.problems) {
+		if (problem.message.find("the includes expand to more than") != std::string::npos) {
+			++too_large;
+			BOOST_TEST(problem.code == "shader/include");
+		}
+	}
+	BOOST_TEST(too_large == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(TheLogsOfTheThreeVendorsMapToTheFilesAndLines)
@@ -352,7 +436,11 @@ BOOST_AUTO_TEST_CASE(EveryGroupEndOrTurnSetsTheNumberingAgain)
 	const auto vertex = put("turn.vert", "#version 450 core\n#ifdef B\n#include \"turn_lib.glsl\"\n#endif\nvoid main() {}\n");
 	const auto result = load(program_of(vertex, put("turn.frag", good_fragment)));
 	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
-	BOOST_TEST(result.headers[0].body.ends_with("#ifdef B\n#line 1 1\n#ifdef A\nfloat a;\n#else\n#line 4 1\nfloat b;\n#endif\n#line 6 1\n#line 4 0\n#endif\n#line 5 0\nvoid main() {}\n"), result.headers[0].body);
+	const std::string& body = result.headers[0].body;
+	const std::string guard = first_guard(body);
+	BOOST_REQUIRE(!guard.empty());
+	BOOST_TEST(body.ends_with(std::format("#ifdef B\n#ifndef {0}\n#define {0}\n#line 1 1\n#ifdef A\nfloat a;\n#else\n#line 4 1\nfloat b;\n#endif\n"
+		"#line 6 1\n#endif\n#line 4 0\n#endif\n#line 5 0\nvoid main() {{}}\n", guard)), body);
 }
 
 BOOST_AUTO_TEST_CASE(ASourceNumberOutsideTheTableIsTheStageWithoutALine)

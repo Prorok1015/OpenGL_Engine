@@ -40,12 +40,19 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
+#include "edt_mesh_document.h"
+#include "edt_mesh_editor_panel.h"
+#include "edt_mesh_documents.h"
+#include "edt_mesh_shape_asset.h"
+#include "edt_modeller_component.h"
+#include "edt_save_all.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/editor/edt_dialog_service.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -1059,22 +1066,22 @@ BOOST_FIXTURE_TEST_CASE(ALoadedLevel_IsReportedOnceItsLoadsSettled_AndNotAfterAN
 namespace {
 
 constexpr std::string_view k_level_with_unknown = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]}]})json";
 constexpr std::string_view k_clean_level = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"odd"}]}]})json";
 constexpr std::string_view k_level_with_unknown_system = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]},
-	{"__type":"world_desc","__version":4,"name":"w1","systems":["no_such_system"],"children":[]}]})json";
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]},
+	{"__type":"world_desc","__version":5,"name":"w1","systems":["no_such_system"],"children":[]}]})json";
 constexpr std::string_view k_level_with_world_file = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
 	"res://worlds/desc_problems_world.desc"]})json";
-constexpr std::string_view k_world_file_with_unknown = R"json({"__type":"world_desc","__version":4,"name":"wf","systems":[],"children":[
+constexpr std::string_view k_world_file_with_unknown = R"json({"__type":"world_desc","__version":5,"name":"wf","systems":[],"children":[
 	{"__id":"00000000000000f1","name":"plain"},
 	{"__id":"00000000000000f2","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
-constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":4,"children":[
+constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":5,"children":[
 	{"__id":"00000000000000e1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
-constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":4,"children":[
+constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":5,"children":[
 	{"__id":"00000000000000e1","name":"plain"}]})json";
 
 struct desc_problems_fixture : agent_editor_fixture
@@ -1121,14 +1128,17 @@ struct desc_problems_fixture : agent_editor_fixture
 	void open_prefab(const res::tag& tag)
 	{
 		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
-		// The prefab opens in the background (#152): frames until the window is done loading, with a limit.
+		// The prefab opens in the background (#152): frames until the window is done loading. The limit is wall-clock,
+		// so a slow shared runner cannot run out of frames first.
 		const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
-		for (int frame = 0; frame < 300; ++frame) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		do {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
 			if (!window || !window->loading()) break;
-		}
-		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 300 frames");
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		} while (std::chrono::steady_clock::now() < deadline);
+		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 5 s");
 	}
 
 	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
@@ -1310,9 +1320,9 @@ BOOST_FIXTURE_TEST_CASE(GoingToAWorldRow_MakesItsWorldActive, desc_problems_fixt
 BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevelStaysClean, desc_problems_fixture)
 {
 	const res::tag prefab = res::tag::make("prefabs/apply_instance.prefab.desc");
-	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 			{"__id":"00000000000000d1","name":"inst","components":{"p":{"__type":"prefab_desc","__parent":"res://prefabs/apply_instance.prefab.desc"}}}]}]})json");
 	auto& contexts = storage.require<scn::context_manager>();
 	const auto world_has = [&contexts](std::string_view name) {
@@ -1359,9 +1369,9 @@ BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevel
 BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_WhenALevelSelectionTakesTheInspector, desc_problems_fixture)
 {
 	const res::tag prefab = res::tag::make("prefabs/pending_edit.prefab.desc");
-	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 			{"__id":"00000000000000d1","name":"other"}]}]})json");
 	edt::editor_context& context = *editor().context();
 	auto* inspector = dynamic_cast<edt::inspector_panel*>(context.panels().find("inspector"));
@@ -1393,9 +1403,9 @@ struct prefab_inspector_fixture : desc_problems_fixture
 {
 	prefab_inspector_fixture()
 	{
-		store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+		store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 		open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-			{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 				{"__id":"00000000000000d1","name":"other"}]}]})json");
 		inspector = dynamic_cast<edt::inspector_panel*>(editor().context()->panels().find("inspector"));
 		tree = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
@@ -1449,7 +1459,7 @@ struct prefab_on_disk_fixture : prefab_inspector_fixture
 	prefab_on_disk_fixture()
 	{
 		project.write("res/prefabs/inspector_target.prefab.desc",
-			R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+			R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 		auto& rs = storage.require<res::resource_system>();
 		// The resource system already has a res:// mount (its roots are what mount_roots answers: the first mount of a protocol),
 		// so the project's folder takes its place; a second mount of the protocol would never be asked.
@@ -1503,10 +1513,10 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 {
 	const res::tag first = res::tag::make("prefabs/open_first.prefab.desc");
 	const res::tag second = res::tag::make("prefabs/open_second.prefab.desc");
-	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
-	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	store(first, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]}]})json");
 	auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
 	BOOST_REQUIRE(window);
 	open_prefab(first);
@@ -1534,10 +1544,10 @@ BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_LoadsBothAndShowsTheLa
 {
 	const res::tag first = res::tag::make("prefabs/replace_first.prefab.desc");
 	const res::tag second = res::tag::make("prefabs/replace_second.prefab.desc");
-	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
-	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	store(first, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]}]})json");
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), first)); });
 	open_prefab(second);
@@ -1808,6 +1818,231 @@ BOOST_FIXTURE_TEST_CASE(AFailedOpen_LeavesTheShownPrefabsProblemsAlone, multi_pr
 	BOOST_TEST(desc_rows().empty());
 }
 
+
+
+// The prefab editor and the mesh modeller side by side (#1011): the editor's own flows over files in the project's res folder.
+struct mixed_documents_fixture : multi_prefab_fixture
+{
+	mixed_documents_fixture()
+	{
+		const edt::mesh::shape_asset_result box = edt::mesh::build_shape_asset(edt::mesh::box_params{}, res::tag{ "res://shapes/m1.geom.desc" });
+		BOOST_REQUIRE(box.files.has_value());
+		box_poly = box.files->poly;
+		for (const char* name : { "m1", "m2" }) project.write(std::string("res/shapes/") + name + ".poly.desc", box_poly);
+	}
+
+	static res::tag poly_tag(std::string_view name) { return res::tag::make(std::string("shapes/") + std::string(name) + ".poly.desc"); }
+
+	edt::mesh_document& open_mesh(std::string_view name)
+	{
+		editor().modeller().open(poly_tag(name));
+		edt::mesh_document* mesh = edt::mesh_of_source(documents(), poly_tag(name));
+		BOOST_REQUIRE(mesh && mesh->is_open());
+		return *mesh;
+	}
+
+	static bool move_first_vertex(edt::mesh_document& mesh)
+	{
+		return mesh.edit([](edt::mesh::poly_mesh& edited) {
+			return edited.set_position(edited.vertices().begin()->first, glm::vec3{ 9.f, 9.f, 9.f });
+		});
+	}
+
+	std::string file_of(std::string_view name, std::string_view suffix = ".poly.desc")
+	{
+		std::ifstream in(project.path() / "res" / "shapes" / (std::string(name) + std::string(suffix)), std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	void write_foreign_geometry(std::string_view name)
+	{
+		const edt::mesh::shape_asset_result sphere = edt::mesh::build_shape_asset(edt::mesh::sphere_params{ 0.5f, 8, 4 },
+			res::tag{ std::string("res://shapes/") + std::string(name) + ".geom.desc" });
+		BOOST_REQUIRE(sphere.files.has_value());
+		BOOST_REQUIRE(edt::mesh::write_mesh_geometry(storage.require<res::resource_system>(),
+			res::tag{ std::string("res://shapes/") + std::string(name) + ".geom.desc" }, sphere.files->data).empty());
+	}
+
+	std::vector<edt::problem> mesh_rows()
+	{
+		std::vector<edt::problem> rows;
+		for (const auto& entry : editor().context()->problems().list()) {
+			if (entry.source == "mesh") rows.push_back(entry.item);
+		}
+		return rows;
+	}
+
+	edt::dialog_service& dialogs() { return editor().context()->dialogs(); }
+
+	std::string box_poly;
+};
+
+BOOST_FIXTURE_TEST_CASE(ADirtyPrefab_WithAMeshActive_IsStillSeen_ByTheQuitQuestion_TheUnsavedListAndApply, mixed_documents_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "armA"));
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(documents().active() == &mesh);
+
+	BOOST_TEST(editor().prefab_editor().dirty() == &a);
+	std::size_t prefabs = 0;
+	for (const edt::unsaved_item& item : edt::list_unsaved(documents())) {
+		if (item.kind == "prefab" && item.id == a.id()) ++prefabs;
+	}
+	BOOST_TEST(prefabs == 1u);
+	BOOST_REQUIRE(move_first_vertex(mesh));
+	BOOST_TEST(editor().modeller().dirty());
+
+	BOOST_TEST(editor().prefab_editor().apply_dirty());
+
+	BOOST_TEST(!a.is_dirty());
+	BOOST_TEST(file_text('a').find("armA") != std::string::npos);
+	BOOST_TEST(mesh.is_dirty());
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_AsksFirst_CancelKeepsItAndItsEdits, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "unsaved");
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "cancel" } }).ok);
+
+	edt::mesh_document* kept = edt::mesh_of_source(documents(), poly_tag("m1"));
+	BOOST_REQUIRE(kept && kept->is_open());
+	BOOST_TEST(kept->is_dirty());
+	BOOST_TEST(file_of("m1") == box_poly);
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_SaveWritesTheFilesThenCloses, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "save" } }).ok);
+
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(file_of("m1") != box_poly);
+	BOOST_TEST(!file_of("m1", ".geom.desc").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_DiscardClosesAndWritesNothing, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "discard" } }).ok);
+
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(file_of("m1") == box_poly);
+	BOOST_TEST(file_of("m1", ".geom.desc").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(SaveDirty_WithTwoMeshes_SavesTheFirst_AndStopsAtTheSecondThatIsRefused, mixed_documents_fixture)
+{
+	edt::mesh_document& first = open_mesh("m1");
+	edt::mesh_document& second = open_mesh("m2");
+	BOOST_REQUIRE(move_first_vertex(first));
+	BOOST_REQUIRE(move_first_vertex(second));
+	project.write("res/shapes/m2.poly.desc", box_poly + "\n");
+
+	BOOST_TEST(!editor().modeller().save_dirty());
+
+	BOOST_TEST(!first.is_dirty());
+	BOOST_TEST(file_of("m1") != box_poly);
+	BOOST_TEST(second.is_dirty());
+	BOOST_TEST(file_of("m2") == box_poly + "\n");
+	bool shown = false;
+	for (const auto& dialog : dialogs().list()) shown = shown || dialog.kind == "message";
+	BOOST_TEST(shown);
+}
+
+BOOST_FIXTURE_TEST_CASE(OverwriteGeometry_AnsweredCancel_ChangesNothing_AnsweredAfterTheMeshClosed_ChangesNothing, mixed_documents_fixture)
+{
+	write_foreign_geometry("m1");
+	const std::string foreign = file_of("m1", ".geom.desc");
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(mesh.geometry_mismatch());
+	BOOST_REQUIRE_EQUAL(mesh_rows().size(), 1u);
+	BOOST_TEST((mesh_rows().front().severity == edt::problem_severity::warning));
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "choice");
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "cancel", true } }).ok);
+	BOOST_TEST(mesh.geometry_mismatch());
+	BOOST_TEST(file_of("m1", ".geom.desc") == foreign);
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	documents().close(mesh.id());
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(file_of("m1", ".geom.desc") == foreign);
+	BOOST_TEST(mesh_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(OverwriteGeometry_Answered_ReplacesTheForeignFile_AndTheProblemRowGoes, mixed_documents_fixture)
+{
+	write_foreign_geometry("m1");
+	const std::string foreign = file_of("m1", ".geom.desc");
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE_EQUAL(mesh_rows().size(), 1u);
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+
+	BOOST_TEST(!mesh.geometry_mismatch());
+	BOOST_TEST(file_of("m1", ".geom.desc") != foreign);
+	BOOST_TEST(mesh_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheModellersCloseButton_ClosesACleanMeshAtOnce_AndTheWindowLetsGoOfIt, mixed_documents_fixture)
+{
+	auto* panel = dynamic_cast<edt::mesh_editor_panel*>(editor().context()->panels().find("mesh_editor"));
+	BOOST_REQUIRE(panel != nullptr);
+	open_mesh("m1");
+	BOOST_REQUIRE(panel->context() != nullptr);
+
+	panel->press_close();
+
+	BOOST_TEST(panel->context() == nullptr);
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(dialogs().list().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseDirty_ClosesTheDirtyPrefabs_KeepsTheMeshes_AndTheQuitGateSeesBothKinds, mixed_documents_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "armA"));
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(documents().active() == &mesh);
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+
+	editor().prefab_editor().close_dirty();
+
+	BOOST_TEST(edt::prefabs_of(documents()).empty());
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == &mesh);
+	BOOST_TEST(editor().prefab_editor().dirty() == nullptr);
+	BOOST_TEST(!editor().modeller().dirty());
+
+	BOOST_REQUIRE(move_first_vertex(mesh));
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+	BOOST_TEST(editor().modeller().dirty());
+}
 
 BOOST_AUTO_TEST_SUITE_END()
 

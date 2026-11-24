@@ -746,6 +746,57 @@ BOOST_AUTO_TEST_CASE(HotReload_InstanceKeepsItsRecordsWhenTheBaseChanges)
 	BOOST_TEST(!reg.valid(child_named(reg, inst, "arm")));                 // dropped from the base
 }
 
+// Review of #1310: the copy an instance keeps for a hot reload has the version of its records too, or a record written against
+// an older version of its type would be applied at its old path once the prefab changes.
+BOOST_AUTO_TEST_CASE(HotReload_ARecordOfAnOlderTypeVersion_StillFollowsTheSteps)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object& o) {
+		if (const auto it = o.find("health"); it != o.end()) {
+			boost::json::value moved = it->value();
+			o.erase(it);
+			o["hp"] = std::move(moved);
+		}
+	});
+	auto base_tag = put("base.prefab.desc", BASE_PREFAB);
+	auto level = parse(R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"},
+		 "overrides":[{"target":["00000000000000a2"],"component":"stat","path":"/health","value":40,"version":1}]}]})");
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, level, "level", res::tag{});
+	auto inst = child_named(reg, root, "inst");
+	BOOST_REQUIRE(reg.valid(inst));
+	auto leg = child_named(reg, inst, "leg");
+	BOOST_REQUIRE(reg.valid(leg));
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).hp == 40);
+
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000a2","name":"leg","components":{"stat":{"__type":"stat_desc","__version":2,"hp":44,"label":"v2"}}}]})");
+	rs->signal_changed(base_tag);
+	pump();
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(base_tag));
+
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).hp == 40);
+	BOOST_TEST(reg.get<test_util::stat_component>(leg).label == "v2");
+}
+
+// Review of #1310: a record the steps of its type cannot follow (here: through an index) may still work as written, so it is
+// reported but not pruned; one without a version whose field is gone is.
+BOOST_AUTO_TEST_CASE(PruneStaleRecords_KeepsARecordTheStepsCannotFollow)
+{
+	descs->register_migration("stat_desc", 1, [](boost::json::object&) {});
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(on_arm(R"("component":"stat","path":"/limits/0","value":1,"version":1)")).c_str());
+
+	const auto stale = scn::find_stale_records(*assembler, inst.get_root());
+	BOOST_REQUIRE_EQUAL(stale.size(), 1u);
+	BOOST_TEST((stale[0].why == scn::stale_override::reason::not_migrated));
+
+	scn::prefab_desc::prefab_node node = inst.get_root();
+	BOOST_TEST(scn::prune_stale_records(*assembler, node) == 0u);
+	BOOST_TEST(node.overrides.size() == 1u);
+}
+
 // ---------------------------------------------------------------- records on disk
 
 BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)
@@ -904,7 +955,7 @@ BOOST_AUTO_TEST_CASE(Migration_NestedInstanceLayerBecomesRecords)
 			{"__id":"00000000000000a1","name":"arm","transform":{"position":[7,0,0]},
 			 "components":{"stat":{"__type":"stat_desc","hp":30}}},
 			{"__id":"00000000000000e1","name":"extra","components":{"stat":{"__type":"stat_desc","hp":1}}}]})");
-	BOOST_TEST(migrated.at("__version").as_int64() == 4);
+	BOOST_TEST(migrated.at("__version").as_int64() == 5);
 	BOOST_TEST(!migrated.contains("children"));
 	BOOST_TEST(migrated.at("components").as_object().size() == 1u); // only the reference stays a component
 	const auto& records = migrated.at("overrides").as_array();
@@ -940,9 +991,9 @@ BOOST_AUTO_TEST_CASE(Migration_VersionTwoFileWithoutAnInstanceOnlyGetsTheNewVers
 	const char* text = R"({"__type":"prefab_desc","__version":2,"children":[
 		{"__id":"00000000000000aa","name":"a","transform":{"position":[1,0,0]}}]})";
 	auto migrated = parse_migrated(text);
-	BOOST_TEST(migrated.at("__version").as_int64() == 4);
+	BOOST_TEST(migrated.at("__version").as_int64() == 5);
 	auto expected = json::parse(text).as_object();
-	expected["__version"] = 4;
+	expected["__version"] = 5;
 	BOOST_TEST(json::value(migrated) == json::value(expected));
 }
 
@@ -1487,7 +1538,7 @@ namespace {
 // A prefab whose children instantiate prefabs: `children` is the text between the brackets of "children".
 std::string prefab_with_children(std::string_view children)
 {
-	return std::string(R"({"__type":"prefab_desc","__version":4,"children":[)") + std::string(children) + "]}";
+	return std::string(R"({"__type":"prefab_desc","__version":5,"children":[)") + std::string(children) + "]}";
 }
 
 std::string instance_child(std::string_view name, std::string_view prefab_file)
@@ -2368,7 +2419,7 @@ BOOST_AUTO_TEST_CASE(HotReload_OfAnInstanceNode_WhoseRecordInstantiatesItsPrefab
 BOOST_AUTO_TEST_CASE(Reconcile_WithAFileOpenInTheRunningSpawn_IsRefused_AndBuildsNothing)
 {
 	const auto file_tag = put("outer.prefab.desc",
-		R"({"__type":"prefab_desc","__version":4,"components":{"stat":{"__type":"stat_desc","hp":1}}})");
+		R"({"__type":"prefab_desc","__version":5,"components":{"stat":{"__type":"stat_desc","hp":1}}})");
 	auto outer = load<scn::prefab_desc>(file_tag);
 	BOOST_REQUIRE(outer);
 
@@ -2441,7 +2492,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiates
 {
 	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
 	const auto world_tag = put("grown.world.desc",
-		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__type":"world_desc","__version":5,"name":"w","systems":[],"children":[)"
 		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[{"target":[],"op":"add_node","value":)"
 		R"({"__id":"00000000000000e1","name":"added","components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
 	auto world = load<scn::world_desc>(world_tag);
@@ -2462,7 +2513,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_WithTheWorldsFile_ExpandsARecordThatInstantiates
 	BOOST_REQUIRE(reg.all_of<scn::prefab_instance>(added));
 	BOOST_TEST(reg.get<scn::prefab_instance>(added).content_of == world_tag);
 
-	put("grown.world.desc", R"({"__type":"world_desc","__version":4,"name":"w","systems":[]})");
+	put("grown.world.desc", R"({"__type":"world_desc","__version":5,"name":"w","systems":[]})");
 	rs->signal_changed(world_tag);
 	pump();
 	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(world_tag));
@@ -2488,7 +2539,7 @@ BOOST_AUTO_TEST_CASE(SpawnWorld_OfADescWhoseOwnTagIsTheFile_BuildsItAsALevelLoad
 {
 	put("leaf.prefab.desc", prefab_with_children(R"({"name":"tip"})"));
 	const auto world_tag = put("tagged.world.desc",
-		R"({"__type":"world_desc","__version":4,"name":"w","systems":[],"children":[)"
+		R"({"__type":"world_desc","__version":5,"name":"w","systems":[],"children":[)"
 		R"({"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
 	auto world = load<scn::world_desc>(world_tag);
 	BOOST_REQUIRE(world);

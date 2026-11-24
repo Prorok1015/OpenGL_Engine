@@ -28,6 +28,10 @@ const std::vector<std::pair<std::string, std::string>> k_headers = {
 	{ "core/engine/game/include/snk/game/gs_input_actions.h", "input_actions" },
 	{ "core/core/common/include/snk/common/ds/ds_store.hpp", "app_data_storage" },
 	{ "core/core/windows/window_service/include/snk/window/wnd_window_system.h", "window_system" },
+	{ "core/engine/render/render_system/include/snk/render/rnd_render_system.h", "render_system" },
+	{ "core/engine/render/render_system/include/snk/render/texture/rnd_texture_manager.h", "texture_manager" },
+	{ "core/engine/render/render_system/include/snk/render/rnd_material_instance_cache.h", "material_instance_cache" },
+	{ "core/engine/render/render_system/include/snk/render/skinning/rnd_skinning_manager.h", "skinning_manager" },
 };
 
 std::string read_all(const fs::path& path)
@@ -188,7 +192,7 @@ std::vector<std::string> inline_special_members(std::string_view header, std::st
 std::vector<std::string> layout_queries(std::string_view header, std::string_view source)
 {
 	static const std::regex query{ R"(\b(?:sizeof|alignof|offsetof)\s*\(?\s*(?:(?:const|volatile)\s+)*(?:decltype\s*\(\s*)?)"
-		R"((?:\*\s*this\b|(?:[\w:]*::)?(?:scene_layer|input_actions|app_data_storage|window_system|entry)\b))" };
+		R"((?:\*\s*this\b|(?:[\w:]*::)?(?:scene_layer|input_actions|app_data_storage|window_system|render_system|texture_manager|material_instance_cache|skinning_manager|entry)\b))" };
 	const std::string text = strip_comments(source);
 	std::vector<std::string> out;
 	for (auto it = std::sregex_iterator(text.begin(), text.end(), query); it != std::sregex_iterator(); ++it) {

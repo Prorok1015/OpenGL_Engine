@@ -86,3 +86,20 @@ const rnd::compiled_material& rnd::material_instance_cache::get(material_instanc
 	ASSERT_MSG(contains(id), "material instance {} is not in the cache", id.index);
 	return *m_slots[id.index].material;
 }
+
+std::size_t rnd::material_instance_cache::size() const noexcept
+{
+	return m_by_key.size();
+}
+
+std::uint64_t rnd::material_instance_cache::compilations() const noexcept
+{
+	return m_compilations;
+}
+
+rnd::material_instance_cache::~material_instance_cache() = default;
+
+bool rnd::material_instance_cache::key::operator==(const key& other) const
+{
+	return desc == other.desc && skinned == other.skinned;
+}

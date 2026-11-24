@@ -621,9 +621,8 @@ core::project_module_host::~project_module_host()
 	}
 	// A library still mapped from it keeps running once its file is gone (POSIX); Windows keeps such a file and the
 	// folder stays, for remove_stale_scratch_dirs of a later run.
-	std::error_code ec;
-	if (!core::res::remove_tree_without_following(m_private_scratch, ec)) {
-		egLOG_WARN("project", "the folder of module copies '{}' stays: {}", utf8(m_private_scratch), ec.message());
+	if (const std::string problem = core::res::remove_scratch_dir(m_private_scratch); !problem.empty()) {
+		egLOG_WARN("project", "the folder of module copies '{}' stays: {}", utf8(m_private_scratch), problem);
 	}
 }
 
