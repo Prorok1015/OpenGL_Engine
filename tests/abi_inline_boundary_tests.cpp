@@ -27,6 +27,7 @@ const std::vector<std::pair<std::string, std::string>> k_headers = {
 	{ "core/engine/scene/include/snk/scene/scn_scene_layer.h", "scene_layer" },
 	{ "core/engine/game/include/snk/game/gs_input_actions.h", "input_actions" },
 	{ "core/core/common/include/snk/common/ds/ds_store.hpp", "app_data_storage" },
+	{ "core/engine/scene/include/snk/scene/scn_spatial.h", "spatial_world" },
 	{ "core/core/windows/window_service/include/snk/window/wnd_window_system.h", "window_system" },
 };
 
