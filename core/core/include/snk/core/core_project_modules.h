@@ -118,9 +118,10 @@ namespace core
 	// #1304: the copy's folder is made closed to others (POSIX 0700, its files 0400) and held (platform::beneath::
 	// hold_folder_beneath) before the gate is asked, and the library is loaded through that hold (Linux
 	// /proc/self/fd/<folder>/<name>, Windows the held file's final path), so someone else who writes into the project
-	// cannot swap or edit what loads. Where the project's file system cannot give that (macOS, no usable /proc, no
-	// modes), the copies go to a folder of this user outside the project (core::res::make_scratch_dir), removed with
-	// the host; without one no library is loaded.
+	// cannot swap or edit what loads; on Windows the folder's protected DACL lets nobody else add a file beside the
+	// module. Where the project's file system cannot give that (macOS, no usable /proc, no modes or ACLs), the copies
+	// go to a folder of this user outside the project (core::res::make_scratch_dir), removed with the host; without one
+	// no library is loaded.
 	class SNK_API project_module_host
 	{
 	public:

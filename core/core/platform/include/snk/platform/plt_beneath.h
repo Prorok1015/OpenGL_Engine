@@ -116,7 +116,9 @@ namespace platform::beneath {
 		bool must_be_new = false);
 
 	// make_folders_beneath(root, folder, true) with the last folder made with `mode` (#1304): POSIX mkdirat(mode), the
-	// umask only narrows it, so a folder made 0700 is closed to others from its first moment; Windows: not used.
+	// umask only narrows it, so a folder made 0700 is closed to others from its first moment. Windows: a mode with
+	// nothing for group and others makes it owned by the current user with a protected DACL granting that user alone
+	// (inherited by what is made inside), so nobody else can add a file to it or open one; other modes are not used.
 	SNK_API std::string make_new_folder_beneath(pinned_root& root, const std::filesystem::path& folder,
 		std::uint32_t mode);
 
@@ -186,8 +188,9 @@ namespace platform::beneath {
 	// loader opens next (#1304). POSIX: the folder's descriptor, opened from the root without following a link, of this
 	// user and closed to others, holding nothing but the files; each file opened from it without following a link, a
 	// regular file of this user, made readable by this user only (0400). Windows: the chain of folders held without
-	// FILE_SHARE_DELETE and each file opened as itself (a reparse point refused) for reading, sharing reading only:
-	// while it is held nobody writes, renames or removes one. Destroying it lets all of that go.
+	// FILE_SHARE_DELETE, the folder owned by the current user with a protected DACL that allows nobody else, and each
+	// file opened as itself (a reparse point refused) for reading, sharing reading only: while it is held nobody
+	// writes, renames or removes one. Destroying it lets all of that go.
 	class SNK_API held_folder
 	{
 	public:
@@ -222,7 +225,8 @@ namespace platform::beneath {
 
 	// Holds `folder` below the root and the files `names` (single names) in it. One missing, a link or not a regular
 	// file is `failed`; so is, on POSIX, anything else in the folder. POSIX: the folder or a file not of this user, or
-	// open to others once made 0400 (a file system that keeps no modes), is `not_private`.
+	// open to others once made 0400 (a file system that keeps no modes), is `not_private`; Windows: a folder not owned
+	// by the current user, with an inherited DACL or one that allows anyone else (no ACLs there), is `not_private`.
 	SNK_API hold_result hold_folder_beneath(pinned_root& root, const std::filesystem::path& folder,
 		std::span<const std::filesystem::path> names);
 

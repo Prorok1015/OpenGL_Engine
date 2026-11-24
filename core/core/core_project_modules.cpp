@@ -244,9 +244,8 @@ namespace {
 		return &data.require<core::res::run_scratch_folder>().path;
 	}
 
-#if !defined(_WIN32)
 	// The folder of this user outside the project for the copies the project cannot hold (#1304): `scratch`, made
-	// on the first call (core::res::make_scratch_dir, 0700 and checked), the copies in its "modules".
+	// on the first call (core::res::make_scratch_dir, 0700 and checked on POSIX), the copies in its "modules".
 	constexpr std::string_view k_private_copies = "module-copies";
 
 	std::string private_home(fs::path& scratch, copies_home& out)
@@ -264,7 +263,6 @@ namespace {
 		out = { scratch, "modules" };
 		return {};
 	}
-#endif
 
 	// The home `folder` (a <pid>-<n> folder) was made in: the private one when it lies there.
 	copies_home home_of_copy(ds::app_data_storage& data, const fs::path& private_scratch, const fs::path& folder)
@@ -396,7 +394,7 @@ namespace {
 	// (a read-only project: `scratch`, the run's folder), or where the project cannot hold it, to the folder of this
 	// user `private_scratch` (made here when needed, #1304).
 	std::string copy_library(const prj::project_context& project, const fs::path* scratch,
-		[[maybe_unused]] fs::path& private_scratch, const fs::path& found, module_copy& out)
+		fs::path& private_scratch, const fs::path& found, module_copy& out)
 	{
 		fs::path output;
 		if (std::string why = folder_inside(project.root, build_output_dir(project), output); !why.empty()) {
@@ -428,9 +426,6 @@ namespace {
 			return why;
 		}
 #endif
-#if defined(_WIN32)
-		return why;
-#else
 		egLOG_INFO("project", "the copy of '{}' goes to a folder of this user outside the project: {}", utf8(library),
 			why);
 		copies_home home;
@@ -443,7 +438,6 @@ namespace {
 			return std::format("the private copy failed: {}", problem);
 		}
 		return {};
-#endif
 	}
 
 	// The source of a held copy, loaded by its hold's path.
@@ -605,7 +599,8 @@ core::project_module_host::~project_module_host()
 	if (m_private_scratch.empty()) {
 		return;
 	}
-	// Only POSIX makes one: a library still mapped from it keeps running once its file is gone.
+	// A library still mapped from it keeps running once its file is gone (POSIX); Windows keeps such a file and the
+	// folder stays, for remove_stale_scratch_dirs of a later run.
 	std::error_code ec;
 	if (!core::res::remove_tree_without_following(m_private_scratch, ec)) {
 		egLOG_WARN("project", "the folder of module copies '{}' stays: {}", utf8(m_private_scratch), ec.message());

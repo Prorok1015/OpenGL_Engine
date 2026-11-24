@@ -34,6 +34,14 @@
 #ifdef _WIN32
 #include <cstdio>
 #include <share.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <aclapi.h>
 #else
 #include <sys/stat.h>
 #include <unistd.h>
@@ -1071,6 +1079,71 @@ BOOST_AUTO_TEST_CASE(a_copy_folder_is_this_users_alone_and_its_files_read_only)
 	BOOST_TEST(folder_state.st_uid == ::geteuid());
 	BOOST_TEST((file_state.st_mode & 07777) == 0400u);
 	BOOST_TEST(file_state.st_uid == ::geteuid());
+}
+#endif
+
+#if defined(_WIN32)
+// The copy's folder is the current user's with a protected DACL granting that user alone: nobody else can put a library
+// beside the module (the loader would take it first) or open the copies, whatever the project's folders allow.
+BOOST_AUTO_TEST_CASE(a_copy_folder_grants_only_this_user)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	const hold_seams_reset reset;
+	HANDLE token = nullptr;
+	BOOST_REQUIRE(::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token));
+	DWORD size = 0;
+	::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+	std::vector<std::byte> token_user(size);
+	const bool read = size != 0 && ::GetTokenInformation(token, TokenUser, token_user.data(), size, &size);
+	::CloseHandle(token);
+	BOOST_REQUIRE(read);
+	const PSID self = reinterpret_cast<const TOKEN_USER*>(token_user.data())->User.Sid;
+
+	bool checked = false;
+	bool owned = false;
+	bool protected_list = false;
+	bool only_self = false;
+	platform::beneath::set_hold_hook([&](const fs::path& folder) {
+		const fs::path path = root / folder;
+		const HANDLE handle = ::CreateFileW(path.c_str(), READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE
+			| FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return;
+		}
+		PSID owner = nullptr;
+		PACL dacl = nullptr;
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		const DWORD status = ::GetSecurityInfo(handle, SE_FILE_OBJECT,
+			OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &descriptor);
+		::CloseHandle(handle);
+		if (status != ERROR_SUCCESS) {
+			return;
+		}
+		checked = true;
+		owned = owner && ::EqualSid(owner, self);
+		SECURITY_DESCRIPTOR_CONTROL control = 0;
+		DWORD revision = 0;
+		protected_list = ::GetSecurityDescriptorControl(descriptor, &control, &revision)
+			&& (control & SE_DACL_PROTECTED) != 0;
+		only_self = dacl && dacl->AceCount > 0;
+		for (DWORD index = 0; dacl && index < dacl->AceCount; ++index) {
+			void* ace = nullptr;
+			if (!::GetAce(dacl, index, &ace) || static_cast<ACE_HEADER*>(ace)->AceType != ACCESS_ALLOWED_ACE_TYPE
+				|| !::EqualSid(reinterpret_cast<PSID>(&static_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart), self)) {
+				only_self = false;
+			}
+		}
+		::LocalFree(descriptor);
+	});
+	core::project_modules_options options;
+	options.trust_library = [](std::string_view, const core::library_copy&) { return false; };
+	load(options);
+
+	BOOST_REQUIRE_MESSAGE(checked, "the copy was not held, or its permissions could not be read");
+	BOOST_TEST(owned);
+	BOOST_TEST(protected_list);
+	BOOST_TEST(only_self);
 }
 #endif
 
