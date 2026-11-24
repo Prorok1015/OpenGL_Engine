@@ -137,6 +137,8 @@ namespace scn {
 		bool raycast_any(entt::registry& world, const ray& line, const ray_filter& filter);
 		// One hit per entity, nearest first (equal distances: by entity).
 		void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out);
+		// A callback of the handle (then_main) is not tied to a ds::lifetime owner here: a module that holds the handle must drop it
+		// (and any continuation it set) before the module is unloaded.
 		// Runs the requests on the task system's compute lane against a snapshot of the world taken now (one copy per state of the
 		// world: batches handed in while nothing changed share it). Later moves, creations and destructions do not touch it,
 		// and nothing of the batch lives in the frame allocator. The result is read with handle.get() once handle.status() is ready.

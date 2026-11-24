@@ -364,6 +364,39 @@ BOOST_AUTO_TEST_CASE(ABatch_AnswersAsTheSyncQueriesDo_AndEchoesItsFrame)
 	BOOST_TEST(batch.results[3].hits.empty());
 }
 
+BOOST_AUTO_TEST_CASE(ABatchOnRealWorkerThreads_AnswersAsOnTheManualPool_WhileTheWorldMovesOn)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	ds::task_system_config config;
+	config.mode = ds::policy::threaded;
+	ds::task_system workers{ config };
+
+	scn::ray_request request;
+	request.line = toward_minus_z({ 0.f, 0.f, 2.f });
+	request.kind = scn::ray_query::all;
+	std::vector<ds::task_handle<scn::ray_batch>> handles;
+	for (int i = 0; i < 16; ++i) {
+		handles.push_back(scn::raycast_batch(workers, reg, std::vector<scn::ray_request>(8, request), static_cast<std::uint64_t>(i)));
+	}
+	// The world changes while the workers read their snapshot.
+	reg.get<scn::world_transform>(quad).world = at({ 10.f, 0.f, -3.f });
+	const std::vector<entt::entity> moved{ quad };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+
+	for (std::size_t i = 0; i < handles.size(); ++i) {
+		handles[i].wait();
+		BOOST_REQUIRE(handles[i].status() == ds::task_status::ready);
+		const scn::ray_batch& batch = handles[i].get();
+		BOOST_TEST(batch.frame == static_cast<std::uint64_t>(i));
+		BOOST_REQUIRE(batch.results.size() == 8u);
+		for (const scn::ray_result& result : batch.results) {
+			BOOST_TEST(result.hits.size() == 1u);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(ABatch_Frame_N_DoesNotSeeTheMovesOfFrame_N_Plus_1)
 {
 	put_quad("quad.geom.desc");
