@@ -80,6 +80,8 @@ namespace edt
 		bool in_progress() const { return m_loading; }
 		// The level being loaded; empty when nothing loads.
 		const res::tag& loading_tag() const { return m_tag; }
+		// The working copy of the load in progress; empty when nothing loads.
+		const res::tag& loading_copy() const { return m_editor_tag; }
 		// The level waits for the loads it started before it counts as loaded.
 		bool settling() const { return m_settle.has_value(); }
 		void cancel_settle();

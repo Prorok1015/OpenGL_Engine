@@ -701,13 +701,14 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 	ports.res_roots = [this] { return m_res.mount_roots(res::tag::default_protocol()); };
 	ports.own_session = [this] { return m_autosave ? m_autosave->session() : std::string{}; };
 	ports.ensure_own_session = [this] { return m_autosave && m_autosave->ensure_session(); };
-	ports.adopt = [this](document_id id) {
-		if (m_autosave) m_autosave->adopt(id);
+	ports.adopt = [this](document_id id, std::uint64_t generation) {
+		if (m_autosave) m_autosave->adopt(id, generation);
 	};
 	ports.settled = [this] { return !m_migration || m_migration->start_level_settled(); };
 	ports.register_frame = [this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); };
 	ports.headless = headless;
 	ports.jobs = &m_context->jobs();
+	ports.events = &m_context->events();
 	ports.choose = [this](std::string title, std::string text, std::vector<std::string> options, std::function<void(std::optional<std::size_t>)> answer) {
 		m_context->dialogs().choose(std::move(title), std::move(text), std::move(options), std::move(answer));
 	};
@@ -724,9 +725,19 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 			done({ "the open level has unsaved changes: save or discard them, then restore again at the next start", {}, 0 });
 			return;
 		}
-		auto ended = [this, done](bool loaded) {
+		// Another load's watch would take our `ended` (a taken implicit id is not registered again).
+		if (m_level_load->in_progress() || editor_layer->has_implicit_prefix("edt/load_level")) {
+			done({ "another level is loading", {}, 0 });
+			return;
+		}
+		auto copy = std::make_shared<res::tag>();
+		auto ended = [this, done, copy, source = request.source](bool loaded) {
 			if (!loaded) {
 				done({ "the level did not load", {}, 0 });
+				return;
+			}
+			if (!(m_state.editor_tag == *copy) || !(m_state.level_tag == source)) {
+				done({ "another level was loaded instead", {}, 0 });
 				return;
 			}
 			m_state.commit("Recovered autosave", commit_mode::state_only);
@@ -734,7 +745,9 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 		};
 		if (!m_level_load->begin_and_watch(request.source, std::move(ended), std::vector<std::byte>(*request.bytes))) {
 			done({ "it is not a level file", {}, 0 });
+			return;
 		}
+		*copy = m_level_load->loading_copy();
 	};
 	ports.restore_prefab = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
 		m_prefab->open(request.source);

@@ -1,4 +1,5 @@
 #include "edt_autosave_recovery.h"
+#include "edt_file_identity.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
@@ -49,39 +50,80 @@ namespace
 		return desc && !special ? std::string{} : std::string{ "its source is not a data document file" };
 	}
 
-	std::optional<edt::autosave_session_info> read_session_info(const fs::path& root, const std::string& session)
+	struct session_file
 	{
+		std::optional<edt::autosave_session_info> info;
+		bool missing = false;
+	};
+
+	session_file read_session_info(const fs::path& root, const std::string& session)
+	{
+		session_file out;
 		std::vector<std::byte> bytes;
 		pb::read_request request;
 		request.root = root;
 		request.folder = relative_of(edt::autosave_session_folder(session));
 		request.leaf = relative_of(edt::k_autosave_session_file);
 		request.max_bytes = edt::k_recovery_max_meta;
-		if (pb::read_beneath(request, bytes).status != pb::read_status::ok) return std::nullopt;
-		return edt::parse_autosave_session(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+		const pb::read_status status = pb::read_beneath(request, bytes).status;
+		out.missing = status == pb::read_status::missing;
+		if (status != pb::read_status::ok) return out;
+		out.info = edt::parse_autosave_session(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+		return out;
+	}
+
+	std::string hex_of(const edt::content_digest& digest)
+	{
+		std::string out;
+		out.reserve(digest.size() * 2);
+		for (const std::uint8_t byte : digest) out += std::format("{:02x}", static_cast<unsigned>(byte));
+		return out;
 	}
 
 	struct source_state
 	{
 		bool exists = false;
-		std::optional<std::string> sha256;
+		bool changed = false;
+		// The hash was not compared: the scan's byte budget was used up.
+		bool not_checked = false;
 	};
 
-	source_state source_now(const std::vector<fs::path>& res_roots, const res::tag& source)
+	// Whether the source is there and differs from what the meta recorded: by size first (no read), then by a hash read
+	// in chunks whose bytes count against `used`.
+	source_state source_now(const std::vector<fs::path>& res_roots, const res::tag& source, const edt::autosave_meta& meta,
+		std::uint64_t& used)
 	{
 		source_state out;
 		const fs::path relative = relative_of(source.relative());
 		for (auto root = res_roots.rbegin(); root != res_roots.rend(); ++root) {
-			std::vector<std::byte> bytes;
+			std::vector<std::byte> none;
 			pb::read_request request;
 			request.root = *root;
 			request.folder = relative.parent_path();
 			request.leaf = relative.filename();
 			request.max_bytes = edt::k_recovery_max_payload;
-			const pb::read_result read = pb::read_beneath(request, bytes);
-			if (read.status == pb::read_status::missing) continue;
+			request.stamp_only = true;
+			const pb::read_result stamped = pb::read_beneath(request, none);
+			if (stamped.status == pb::read_status::missing) continue;
 			out.exists = true;
-			if (read.status == pb::read_status::ok) out.sha256 = cmn::sha256_hex(bytes);
+			if (stamped.status != pb::read_status::ok || !stamped.stamp || meta.source_sha256.empty()) return out;
+			const std::uint64_t size = stamped.stamp->size;
+			if (meta.source_size && *meta.source_size != size) {
+				out.changed = true;
+				return out;
+			}
+			if (used + size > edt::k_recovery_scan_budget) {
+				out.not_checked = true;
+				return out;
+			}
+			used += size;
+			request.stamp_only = false;
+			edt::content_hasher hasher;
+			const pb::read_result read = pb::read_beneath_stream(request, [&hasher](std::span<const std::byte> chunk) {
+				hasher.update(chunk);
+				return true;
+			});
+			if (read.status == pb::read_status::ok) out.changed = hex_of(hasher.finish()) != meta.source_sha256;
 			return out;
 		}
 		return out;
@@ -151,7 +193,8 @@ namespace
 		{
 			edt::recovery_session session;
 			session.id = id;
-			const std::optional<edt::autosave_session_info> info = read_session_info(m_options.cache_root, id);
+			const session_file file = read_session_info(m_options.cache_root, id);
+			const std::optional<edt::autosave_session_info>& info = file.info;
 			const bool usable_info = info && info->session == id;
 			if (usable_info) {
 				session.host = info->host;
@@ -172,6 +215,11 @@ namespace
 				session.state = edt::recovery_state::live;
 				return session;
 			case platform::lock_outcome::acquired:
+				// A lock file without session.json in a young folder: that editor is between its lock and its session.json.
+				if (file.missing && young(id)) {
+					session.state = edt::recovery_state::starting;
+					return session;
+				}
 				session.lock = std::move(attempt.lock);
 				session.state = unjudgeable ? edt::recovery_state::unverifiable : edt::recovery_state::dead;
 				return session;
@@ -185,6 +233,15 @@ namespace
 		{
 			const std::string folder = edt::autosave_session_folder(session.id);
 			const pb::list_result kinds = pb::list_beneath(root, relative_of(folder), 64);
+			if (!kinds.error.empty()) {
+				session.incomplete = "its folder could not be listed: " + kinds.error;
+				++session.over_limit;
+				return;
+			}
+			if (kinds.truncated) {
+				session.incomplete = "its folder holds more entries than are read";
+				++session.over_limit;
+			}
 			std::size_t metas = 0;
 			for (const pb::folder_entry& kind_entry : kinds.entries) {
 				const std::string kind = name_of(kind_entry.name);
@@ -195,7 +252,15 @@ namespace
 				}
 				const std::string kind_folder = folder + "/" + kind;
 				const pb::list_result entries = pb::list_beneath(root, relative_of(kind_folder), 4096);
-				if (entries.truncated) ++session.over_limit;
+				if (!entries.error.empty()) {
+					session.incomplete = std::format("its folder '{}' could not be listed: {}", kind, entries.error);
+					++session.over_limit;
+					continue;
+				}
+				if (entries.truncated) {
+					session.incomplete = std::format("its folder '{}' holds more entries than are read", kind);
+					++session.over_limit;
+				}
 				for (const pb::folder_entry& entry : entries.entries) {
 					const std::string name = name_of(entry.name);
 					if (!name.ends_with(edt::k_autosave_meta_suffix)) continue;
@@ -300,9 +365,10 @@ namespace
 			record.bytes = std::move(payload);
 			record.not_restorable = kind_mismatch(kind, meta->source);
 			if (source) {
-				const source_state now = source_now(m_options.res_roots, *source);
+				const source_state now = source_now(m_options.res_roots, *source, *meta, m_used);
 				record.source_exists = now.exists;
-				record.source_changed = now.sha256 && !meta->source_sha256.empty() && *now.sha256 != meta->source_sha256;
+				record.source_changed = now.changed;
+				record.source_not_checked = now.not_checked;
 				if (!now.exists && record.not_restorable.empty()) record.not_restorable = "source missing: can only be discarded";
 			}
 			session.records.push_back(std::move(record));
@@ -425,8 +491,13 @@ std::string edt::recovery_question_text(const std::vector<const recovery_session
 				record.meta.source.empty() ? std::string{ "(untitled level)" } : recovery_shown_text(record.meta.source),
 				recovery_shown_text(record.meta.saved_at));
 			if (record.source_changed) text += " - file changed on disk since the autosave";
+			if (record.source_not_checked) text += " - not checked whether the file changed on disk (limit)";
 			if (!record.not_restorable.empty()) text += " - " + record.not_restorable;
 			line(text);
+		}
+		if (!session->incomplete.empty()) {
+			line(std::format("  cache://{} was not fully read ({}): its folder is kept", autosave_session_folder(session->id),
+				recovery_shown_text(session->incomplete)));
 		}
 		rejected += session->rejected.size();
 		over_limit += session->over_limit;
@@ -448,11 +519,34 @@ std::string edt::recovery_question_text(const std::vector<const recovery_session
 edt::autosave_recovery::autosave_recovery(ports from)
 	: m_ports(std::move(from))
 {
+	if (m_ports.events) {
+		m_finished = m_ports.events->job_finished.subscribe(
+			[this](std::uint64_t id, job_status status, const std::string&, const std::optional<boost::json::value>&) { job_ended(id, status); });
+	}
 }
 
 edt::autosave_recovery::~autosave_recovery()
 {
+	m_finished.disconnect();
 	m_lifetime.cancel_tasks();
+}
+
+void edt::autosave_recovery::job_ended(std::uint64_t id, job_status status)
+{
+	// job_service calls no on_done of a cancelled job: what waited for it goes on here.
+	if (status != job_status::cancelled || id == 0) return;
+	if (id == m_scan_job) {
+		m_scan_job = 0;
+		egLOG_WARN("editor/autosave", "the look for autosaves of other editor runs was cancelled");
+		finish();
+		return;
+	}
+	if (id == m_move_job && m_move) {
+		m_move_job = 0;
+		const pending_move move = *m_move;
+		m_move.reset();
+		moved(move, "the move was cancelled");
+	}
 }
 
 void edt::autosave_recovery::install()
@@ -487,15 +581,16 @@ void edt::autosave_recovery::start()
 		take(std::make_shared<recovery_scan_result>(scan_autosave_sessions(options)));
 		return;
 	}
-	m_ports.jobs->start(ds::lane::io, ds::task_desc{ "Look for autosaves to recover", "editor/autosave", false }, m_lifetime,
+	m_scan_job = m_ports.jobs->start(ds::lane::io, ds::task_desc{ "Look for autosaves to recover", "editor/autosave", false }, m_lifetime,
 		[options](ds::task_context&) { return std::make_shared<recovery_scan_result>(scan_autosave_sessions(options)); },
 		[this](ds::task_result<std::shared_ptr<recovery_scan_result>>& result) {
+			m_scan_job = 0;
 			if (result.ok() && result.value && *result.value) {
 				take(std::move(*result.value));
 				return;
 			}
-			egLOG_WARN("editor/autosave", "the autosaves of other editor runs could not be looked for: {}", result.error);
-			m_busy = false;
+			egLOG_WARN("editor/autosave", "the autosaves of other editor runs could not be looked for: {}", recovery_shown_text(result.error));
+			finish();
 		});
 }
 
@@ -637,48 +732,41 @@ void edt::autosave_recovery::answer(std::optional<std::size_t> picked)
 	restore_next();
 }
 
+void edt::autosave_recovery::remove_listed(recovery_session& session)
+{
+	for (const recovery_record& record : session.records) {
+		if (record.restored) continue;
+		if (const std::string error = remove_autosave_files(m_root, record.file); !error.empty()) {
+			egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", recovery_shown_text(record.file), error);
+		}
+	}
+	for (const recovery_rejected& rejected : session.rejected) {
+		static_cast<void>(remove_autosave_file(m_root, rejected.file));
+		if (rejected.file.ends_with(k_autosave_meta_suffix)) {
+			static_cast<void>(remove_autosave_file(m_root, rejected.file.substr(0, rejected.file.size() - k_autosave_meta_suffix.size())));
+		}
+	}
+}
+
 void edt::autosave_recovery::discard_batch()
 {
 	for (std::size_t index : m_current->sessions) {
 		recovery_session& session = m_scan->sessions[index];
 		const std::string folder = autosave_session_folder(session.id);
-		if (!m_current->unverifiable) {
-			std::string error = remove_autosave_tree(m_root, session.id);
-			if (!error.empty() && session.lock) {
-				// Some file systems refuse to remove a file that is still open locked: once more after the lock went.
-				session.lock.reset();
-				error = remove_autosave_tree(m_root, session.id);
-			}
-			if (!error.empty()) egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
-			else egLOG_INFO("editor/autosave", "the autosaves in cache://{} were discarded", folder);
+		// Not dead, or not read whole: only what was looked at goes; the folder, session.json and session.lock stay.
+		if (m_current->unverifiable || !session.fully_read()) {
+			remove_listed(session);
+			egLOG_INFO("editor/autosave", "the autosaves read from cache://{} were discarded; the folder is kept", folder);
 			continue;
 		}
-		// Only what was looked at goes: the editor that wrote it may still run.
-		for (const recovery_record& record : session.records) {
-			if (const std::string error = remove_autosave_files(m_root, record.file); !error.empty()) {
-				egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", recovery_shown_text(record.file), error);
-			}
+		std::string error = remove_autosave_tree(m_root, session.id);
+		if (!error.empty() && session.lock) {
+			// Some file systems refuse to remove a file that is still open locked: once more after the lock went.
+			session.lock.reset();
+			error = remove_autosave_tree(m_root, session.id);
 		}
-		for (const recovery_rejected& rejected : session.rejected) {
-			static_cast<void>(remove_autosave_file(m_root, rejected.file));
-			if (rejected.file.ends_with(k_autosave_meta_suffix)) {
-				static_cast<void>(remove_autosave_file(m_root, rejected.file.substr(0, rejected.file.size() - k_autosave_meta_suffix.size())));
-			}
-		}
-		static_cast<void>(remove_autosave_file(m_root, folder + "/" + std::string(k_autosave_session_file)));
-		session.lock.reset();
-		static_cast<void>(remove_autosave_file(m_root, folder + "/" + std::string(k_autosave_lock_file)));
-		try {
-			pb::pinned_root root{ m_root };
-			for (const std::string_view kind : k_autosave_kinds) {
-				static_cast<void>(pb::remove_beneath(root, relative_of(folder), relative_of(kind)));
-			}
-			if (const std::string error = pb::remove_beneath(root, relative_of(k_autosave_folder), relative_of(session.id)); !error.empty()) {
-				egLOG_DEBUG("editor/autosave", "cache://{} stays: {}", folder, error);
-			}
-		} catch (const std::exception& error) {
-			egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error.what());
-		}
+		if (!error.empty()) egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
+		else egLOG_INFO("editor/autosave", "the autosaves in cache://{} were discarded", folder);
 	}
 }
 
@@ -722,16 +810,18 @@ void edt::autosave_recovery::finish_record(std::size_t session, std::size_t reco
 	recovery_record& found = m_scan->sessions[session].records[record];
 	const std::string shown = found.meta.source.empty() ? std::string{ "the untitled level" } : recovery_shown_text(found.meta.source);
 	if (!outcome.error.empty()) {
-		egLOG_WARN("editor/autosave", "the autosave of {} was not restored: {}", shown, outcome.error);
+		const std::string why = recovery_shown_text(outcome.error);
+		egLOG_WARN("editor/autosave", "the autosave of {} was not restored: {}", shown, why);
 		if (m_ports.message) {
-			m_ports.message(std::format("The autosave of {} could not be restored and is kept:\n{}", shown, outcome.error));
+			m_ports.message(std::format("The autosave of {} could not be restored and is kept:\n{}", shown, why));
 		}
 		restore_next();
 		return;
 	}
 	egLOG_INFO("editor/autosave", "the autosave of {} was restored (unsaved)", shown);
+	const pending_move move{ session, record, outcome.document, outcome.generation };
 	if (!m_ports.own_session || (m_ports.ensure_own_session && !m_ports.ensure_own_session())) {
-		moved(session, record, outcome.document, "this run has no autosave folder");
+		moved(move, "this run has no autosave folder");
 		return;
 	}
 	const std::string own_session = m_ports.own_session();
@@ -755,27 +845,32 @@ void edt::autosave_recovery::finish_record(std::size_t session, std::size_t reco
 			return "an unknown error";
 		}
 	};
-	const document_id document = outcome.document;
 	if (!m_ports.jobs) {
-		moved(session, record, document, relocate());
+		moved(move, relocate());
 		return;
 	}
-	m_ports.jobs->start(ds::lane::io, ds::task_desc{ "Keep a restored autosave", "editor/autosave", false }, m_lifetime,
+	m_move = move;
+	m_move_job = m_ports.jobs->start(ds::lane::io, ds::task_desc{ "Keep a restored autosave", "editor/autosave", false }, m_lifetime,
 		[relocate](ds::task_context&) { return relocate(); },
-		[this, session, record, document](ds::task_result<std::string>& result) {
-			moved(session, record, document, result.ok() && result.value ? *result.value
+		[this](ds::task_result<std::string>& result) {
+			if (!m_move) return;
+			const pending_move done = *m_move;
+			m_move.reset();
+			m_move_job = 0;
+			moved(done, result.ok() && result.value ? *result.value
 				: (result.error.empty() ? std::string{ "the move failed" } : result.error));
 		});
 }
 
-void edt::autosave_recovery::moved(std::size_t session, std::size_t record, document_id document, const std::string& error)
+void edt::autosave_recovery::moved(const pending_move& move, const std::string& error)
 {
-	recovery_record& found = m_scan->sessions[session].records[record];
+	recovery_record& found = m_scan->sessions[move.session].records[move.record];
 	if (error.empty()) {
 		found.restored = true;
-		if (m_ports.adopt && document != document_id{}) m_ports.adopt(document);
+		if (m_ports.adopt && move.document != document_id{}) m_ports.adopt(move.document, move.generation);
 	} else {
-		egLOG_WARN("editor/autosave", "the restored autosave cache://{} stays where it is: {}", recovery_shown_text(found.file), error);
+		egLOG_WARN("editor/autosave", "the restored autosave cache://{} stays where it is: {}", recovery_shown_text(found.file),
+			recovery_shown_text(error));
 	}
 	restore_next();
 }
@@ -787,8 +882,7 @@ void edt::autosave_recovery::end_batch()
 		recovery_session& session = m_scan->sessions[index];
 		const bool restored_all = std::ranges::all_of(session.records, [](const recovery_record& record) { return record.restored; });
 		const bool any_restored = std::ranges::any_of(session.records, [](const recovery_record& record) { return record.restored; });
-		if (session.state == recovery_state::dead && any_restored && restored_all && session.rejected.empty() && session.over_limit == 0
-			&& session.not_checked == 0) {
+		if (session.state == recovery_state::dead && any_restored && restored_all && session.rejected.empty() && session.fully_read()) {
 			std::string error = remove_autosave_tree(m_root, session.id);
 			if (!error.empty() && session.lock) {
 				session.lock.reset();
@@ -811,5 +905,7 @@ void edt::autosave_recovery::finish()
 	m_current.reset();
 	m_batches.clear();
 	m_queue.clear();
+	m_move.reset();
+	m_move_job = 0;
 	m_busy = false;
 }

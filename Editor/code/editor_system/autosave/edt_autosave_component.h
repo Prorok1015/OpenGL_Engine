@@ -83,9 +83,9 @@ namespace edt
 		bool ensure_session();
 		// Whether the session holds its session.lock.
 		bool session_locked() const { return m_lock.has_value(); }
-		// The autosave of document `id` lies in this session's folder already (recovery wrote it there): it is this
-		// component's to remove, as if it had written it at the document's current generation.
-		void adopt(document_id id);
+		// The autosave of document `id` lies in this session's folder already (recovery wrote it there, of the document at
+		// `generation`): it is this component's to remove, as if it had written it.
+		void adopt(document_id id, std::uint64_t generation);
 
 		void set_clock_for_tests(std::function<clock::time_point()> clock) { m_clock = std::move(clock); }
 		// The file the last autosave of document `id` went to, relative to the cache folder; empty while none is there.

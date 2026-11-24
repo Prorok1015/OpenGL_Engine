@@ -394,17 +394,21 @@ void edt::autosave_component::end_session() noexcept
 	try {
 		const std::string folder = autosave_session_folder(m_session);
 		static_cast<void>(remove_autosave_file(root, folder + "/" + std::string(k_autosave_session_file)));
-		m_lock.reset();
-		if (const std::string error = remove_autosave_tree(root, m_session); !error.empty()) {
-			egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
+		// Removed while the lock is held, so no other editor takes the folder for a dead run's meanwhile.
+		std::string error = remove_autosave_tree(root, m_session);
+		if (!error.empty() && m_lock) {
+			m_lock.reset();
+			error = remove_autosave_tree(root, m_session);
 		}
+		m_lock.reset();
+		if (!error.empty()) egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
 	} catch (...) {
 		// Called from shutdown() in a destructor: a failed log line must not end the program.
 		m_lock.reset();
 	}
 }
 
-void edt::autosave_component::adopt(document_id id)
+void edt::autosave_component::adopt(document_id id, std::uint64_t generation)
 {
 	document* doc = nullptr;
 	m_ports.documents.for_each([&doc, id](document& open) {
@@ -421,7 +425,7 @@ void edt::autosave_component::adopt(document_id id)
 		record.on_disk = true;
 	}
 	record.due.reset();
-	record.written_generation = doc->generation();
+	record.written_generation = generation;
 }
 
 void edt::autosave_component::report(document_id id, std::string file, std::string message)

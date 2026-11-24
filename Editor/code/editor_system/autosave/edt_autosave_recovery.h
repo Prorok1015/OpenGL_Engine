@@ -2,6 +2,7 @@
 #include "edt_autosave_files.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_document.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/platform/plt_file_lock.h>
 #include <chrono>
@@ -50,8 +51,10 @@ namespace edt
 		autosave_meta meta;
 		std::shared_ptr<const std::vector<std::byte>> bytes;
 		bool source_exists = false;
-		// The source file's SHA-256 now differs from the one the meta recorded.
+		// The source file's size or SHA-256 now differs from what the meta recorded.
 		bool source_changed = false;
+		// Whether the source changed was not checked (the scan's byte budget was used up); it can still be restored.
+		bool source_not_checked = false;
 		// Why it cannot be restored (it can be discarded); empty: it can.
 		std::string not_restorable;
 		// Set by a restore: its files left this session.
@@ -80,9 +83,13 @@ namespace edt
 		std::size_t over_limit = 0;
 		// Records not read because the scan's byte budget was used up.
 		std::size_t not_checked = 0;
+		// Why its folder was not listed whole (an error, more entries than are read); empty when it was.
+		std::string incomplete;
 
 		// Nothing in it to restore or to report.
-		bool empty() const { return records.empty() && rejected.empty() && over_limit == 0 && not_checked == 0; }
+		bool empty() const { return records.empty() && rejected.empty() && fully_read(); }
+		// Everything in its folder was read: only then may the folder itself go.
+		bool fully_read() const { return incomplete.empty() && over_limit == 0 && not_checked == 0; }
 	};
 
 	struct recovery_scan_result
@@ -161,7 +168,7 @@ namespace edt
 			std::function<std::string()> own_session;
 			std::function<bool()> ensure_own_session;
 			// The restored document's autosave now lies in this run's session folder (autosave_component::adopt).
-			std::function<void(document_id)> adopt;
+			std::function<void(document_id, std::uint64_t generation)> adopt;
 			// The start level settled: the scan starts. Null: at once.
 			std::function<bool()> settled;
 			// Runs `poll` every UI frame under `id` until it returns false. Null: install() scans at once.
@@ -170,6 +177,8 @@ namespace edt
 			bool headless = false;
 			// The scan and the moves of restored autosaves run on its io lane. Null: on the calling thread.
 			job_service* jobs = nullptr;
+			// Its job_finished tells a job of this component cancelled (job_service then calls no on_done). Null: none.
+			editor_events* events = nullptr;
 			choose_port choose;
 			std::function<void(std::string text)> message;
 			// A desc type marked as a document (desc_system::document_types).
@@ -204,6 +213,14 @@ namespace edt
 		bool busy() const { return m_busy; }
 
 	private:
+		struct pending_move
+		{
+			std::size_t session = 0;
+			std::size_t record = 0;
+			document_id document{};
+			std::uint64_t generation = 0;
+		};
+
 		struct batch
 		{
 			std::vector<std::size_t> sessions;
@@ -217,7 +234,10 @@ namespace edt
 		void discard_batch();
 		void restore_next();
 		void finish_record(std::size_t session, std::size_t record, const restore_outcome& outcome);
-		void moved(std::size_t session, std::size_t record, document_id document, const std::string& error);
+		void moved(const pending_move& move, const std::string& error);
+		void job_ended(std::uint64_t id, job_status status);
+		// Removes the record files the scan read (verified and rejected), nothing else of the session.
+		void remove_listed(recovery_session& session);
 		void end_batch();
 		void finish();
 		restore_port port_of(std::string_view kind) const;
@@ -232,6 +252,10 @@ namespace edt
 		bool m_started = false;
 		bool m_busy = false;
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+		std::uint64_t m_scan_job = 0;
+		std::uint64_t m_move_job = 0;
+		std::optional<pending_move> m_move;
+		connection m_finished;
 		// Declared last: destroyed (and its jobs' results dropped) first.
 		ds::lifetime m_lifetime;
 	};

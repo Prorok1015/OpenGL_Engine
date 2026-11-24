@@ -44,6 +44,9 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 // Crash recovery (#1187): the autosaves another editor run left behind are judged by their session's lock, checked
 // record by record, asked about in one question and restored through each kind's own open path.
@@ -93,8 +96,13 @@ std::string read_file(const fs::path& path)
 
 void write_file(const fs::path& path, std::string_view text)
 {
-	fs::create_directories(path.parent_path());
-	std::ofstream(path, std::ios::binary) << text;
+	std::error_code ec;
+	fs::create_directories(path.parent_path(), ec);
+	BOOST_REQUIRE_MESSAGE(!ec, "cannot make " << path.parent_path().string() << ": " << ec.message());
+	std::ofstream out(path, std::ios::binary);
+	out << text;
+	out.close();
+	BOOST_REQUIRE_MESSAGE(!out.fail(), "cannot write " << path.string());
 }
 
 std::set<fs::path> folders_below(const fs::path& root)
@@ -244,7 +252,7 @@ struct recovery_fixture : test_util::scene_env
 		ports.res_roots = [this] { return std::vector<fs::path>{ content }; };
 		ports.own_session = [this] { return autosave->session(); };
 		ports.ensure_own_session = [this] { return autosave->ensure_session(); };
-		ports.adopt = [this](edt::document_id id) { autosave->adopt(id); };
+		ports.adopt = [this](edt::document_id id, std::uint64_t generation) { autosave->adopt(id, generation); };
 		ports.headless = false;
 		ports.choose = [this](std::string title, std::string text, std::vector<std::string> options, std::function<void(std::optional<std::size_t>)> answer) {
 			asked.push_back({ std::move(title), std::move(text), std::move(options), std::move(answer) });
@@ -439,6 +447,62 @@ BOOST_AUTO_TEST_CASE(AMissingLock_InAFreshFolder_IsAnEditorStarting_InAnOldOneIt
 	BOOST_TEST(asked.size() == 1u);
 }
 
+// A lock file and no session.json yet in a young folder: an editor between its lock and its session.json.
+BOOST_AUTO_TEST_CASE(ALockFileWithoutSessionJson_InAFreshFolder_IsAnEditorStarting_InAnOldOneItIsDead)
+{
+	const std::string other = other_session();
+	const fs::path folder = cache / edt::autosave_session_folder(other);
+	fs::remove(folder / "session.json");
+	put_record(other, "data", "settings.desc", bytes_of("{}"));
+	run();
+	BOOST_TEST(asked.empty());
+	BOOST_TEST(fs::exists(folder / "session.lock"));
+	BOOST_TEST(lock_is_free(other));
+
+	fs::last_write_time(folder, fs::file_time_type::clock::now() - 10min);
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].title == std::string(edt::autosave_recovery::k_title));
+}
+
+// A folder not listed whole may hold records the scan never saw: Discard all leaves it, with its lock file.
+BOOST_AUTO_TEST_CASE(ASessionNotReadWhole_IsNeverRemoved_DiscardTakesOnlyWhatItRead)
+{
+	const std::string other = other_session();
+	const fs::path folder = cache / edt::autosave_session_folder(other);
+	for (int index = 0; index < 70; ++index) write_file(folder / std::format("extra{}.txt", index), "x");
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].text.find("was not fully read") != std::string::npos);
+	answer(edt::autosave_recovery::k_discard);
+	BOOST_TEST(fs::exists(folder));
+	BOOST_TEST(fs::exists(folder / "session.lock"));
+	BOOST_TEST(fs::exists(folder / "session.json"));
+	BOOST_TEST(lock_is_free(other));
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(AKindFolderThatCannotBeListed_KeepsTheSession)
+{
+	if (::geteuid() == 0) {
+		BOOST_TEST_MESSAGE("running as root: a folder without permissions is still listed");
+		return;
+	}
+	const std::string other = other_session();
+	const fs::path folder = cache / edt::autosave_session_folder(other);
+	put_record(other, "data", "gone.desc", bytes_of("{}"));
+	put_record(other, "prefab", "p.prefab.desc", bytes_of("{}"));
+	fs::permissions(folder / "prefab", fs::perms::none);
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	answer(edt::autosave_recovery::k_discard);
+	fs::permissions(folder / "prefab", fs::perms::owner_all);
+	BOOST_TEST(fs::exists(folder / "prefab" / "p.prefab.desc"));
+	BOOST_TEST(fs::exists(folder / "session.lock"));
+	BOOST_TEST(!fs::exists(cache / edt::autosave_file_of(other, "data", res::tag::make("gone.desc"))));
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(ALockFileSystemWithoutLocks_IsUnverifiable_LaterFirst_AndLaterDeletesNothing)
 {
 	const std::string other = other_session();
@@ -610,7 +674,7 @@ BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTextFromFilesAsData_AndAChangedSource)
 {
 	write_file(content / "settings.desc", R"({"__type":"test.recovery_settings","speed":2.0})");
 	const std::string other = other_session();
-	const std::string long_source = std::string(300, 'x') + ".desc";
+	const std::string long_source = std::string(220, 'x') + ".desc";
 	put_record(other, "data", long_source, bytes_of("{}"), "2026-11-24T10:00:00Z");
 	const std::vector<std::byte> payload = bytes_of("{}");
 	edt::autosave_meta changed = meta_of(other, "data", "settings.desc", payload, "2026\x01-11");
