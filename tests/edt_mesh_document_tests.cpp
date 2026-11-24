@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
-#include "edt_autosave_restore.h"
+#include "autosave/edt_autosave_restore.h"
 #include "edt_mesh_document.h"
 #include "edt_mesh_documents.h"
 #include "edt_mesh_shape_asset.h"
