@@ -76,7 +76,9 @@ namespace edt
 		ImGui::SameLine();
 		ImGui::TextDisabled("|");
 		ImGui::SameLine();
-		if (ImGui::Button("Close") && m_on_close) m_on_close();
+		if (ImGui::Button("Close")) press_close();
+		// A clean mesh closes at once and takes the document with it: nothing of it may be read after that.
+		if (!m_ctx || !m_ctx->is_open()) return;
 		const mesh_stats& stats = m_ctx->stats();
 		ImGui::SameLine();
 		ImGui::TextDisabled("%zu vertices, %zu faces, %zu triangles", stats.vertices, stats.faces, stats.triangles);

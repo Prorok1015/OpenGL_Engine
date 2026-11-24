@@ -85,8 +85,7 @@ void edt::data_document_host::follow_focus()
 	const auto taken = std::find_if(panels.begin(), panels.end(),
 		[name, stable_id](const panel_info& panel) { return panel.title == name || (!stable_id.empty() && panel.id == stable_id); });
 	if (taken != panels.end() && taken->id == "prefab_editor") {
-		// Without the editor's port (a host alone) the active preview is the prefab, as it was before several previews could be open.
-		const document_id shown = m_shown_prefab ? m_shown_prefab() : (manager.preview() ? manager.preview()->id() : document_id{});
+		const document_id shown = m_shown_prefab ? m_shown_prefab() : document_id{};
 		if (shown != document_id{}) {
 			manager.set_active(shown);
 			return;

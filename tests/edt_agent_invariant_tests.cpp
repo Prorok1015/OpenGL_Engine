@@ -41,6 +41,7 @@
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_mesh_document.h"
+#include "edt_mesh_editor_panel.h"
 #include "edt_mesh_documents.h"
 #include "edt_mesh_shape_asset.h"
 #include "edt_modeller_component.h"
@@ -2003,6 +2004,40 @@ BOOST_FIXTURE_TEST_CASE(OverwriteGeometry_Answered_ReplacesTheForeignFile_AndThe
 	BOOST_TEST(!mesh.geometry_mismatch());
 	BOOST_TEST(file_of("m1", ".geom.desc") != foreign);
 	BOOST_TEST(mesh_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheModellersCloseButton_ClosesACleanMeshAtOnce_AndTheWindowLetsGoOfIt, mixed_documents_fixture)
+{
+	auto* panel = dynamic_cast<edt::mesh_editor_panel*>(editor().context()->panels().find("mesh_editor"));
+	BOOST_REQUIRE(panel != nullptr);
+	open_mesh("m1");
+	BOOST_REQUIRE(panel->context() != nullptr);
+
+	panel->press_close();
+
+	BOOST_TEST(panel->context() == nullptr);
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(dialogs().list().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseDirty_ClosesTheDirtyPrefabs_KeepsTheMeshes_AndTheQuitGateSeesBothKinds, mixed_documents_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "armA"));
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(documents().active() == &mesh);
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+
+	editor().prefab_editor().close_dirty();
+
+	BOOST_TEST(edt::prefabs_of(documents()).empty());
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == &mesh);
+	BOOST_TEST(editor().prefab_editor().dirty() == nullptr);
+	BOOST_TEST(!editor().modeller().dirty());
+
+	BOOST_REQUIRE(move_first_vertex(mesh));
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+	BOOST_TEST(editor().modeller().dirty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -103,6 +103,7 @@ void edt::mesh_document::open(const res::tag& source)
 	m_open = true;
 	rebake();
 	open_preview_world();
+	if (!m_has_world) release_preview_resources();
 	watch_source();
 	egLOG("Editor/Mesh", "Opened mesh '{}' for editing", m_poly_tag.view());
 }
@@ -574,19 +575,30 @@ void edt::mesh_document::rebuild_preview_world()
 {
 	if (!m_open || m_has_world) return;
 	open_preview_world();
+	if (!m_has_world) release_preview_resources();
 	rebake();
 }
 
 void edt::mesh_document::close_preview_world()
 {
-	const bool had_world = m_has_world;
 	release_preview_world();
-	if (!had_world) return;
-	if (res::resource_system* writer = m_services.writable_resources()) {
-		writer->erase(m_world_tag);
+	release_preview_resources();
+}
+
+void edt::mesh_document::release_preview_resources()
+{
+	if (m_world_tag.is_valid()) {
+		if (res::resource_system* writer = m_services.writable_resources()) writer->erase(m_world_tag);
+		m_world_tag = res::tag{};
 	}
-	if (m_release_targets) {
-		m_release_targets({ res::tag{ m_rt_color }, res::tag{ m_rt_depth }, res::tag{ m_rt_accum }, res::tag{ m_rt_reveal } });
+	if (!m_rt_color.empty()) {
+		if (m_release_targets) {
+			m_release_targets({ res::tag{ m_rt_color }, res::tag{ m_rt_depth }, res::tag{ m_rt_accum }, res::tag{ m_rt_reveal } });
+		}
+		m_rt_color.clear();
+		m_rt_depth.clear();
+		m_rt_accum.clear();
+		m_rt_reveal.clear();
 	}
 }
 

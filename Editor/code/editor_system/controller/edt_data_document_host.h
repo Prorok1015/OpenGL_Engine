@@ -71,7 +71,7 @@ namespace edt
 		// The mesh the modeller's window shows (0: none): the window has no document of its own here, so a focus on it activates that
 		// document, and Ctrl+S saves the mesh, not the level (EPIC-77, #1011).
 		void set_shown_mesh(std::function<document_id()> shown_mesh) { m_shown_mesh = std::move(shown_mesh); }
-		// The same for the prefab editor's window: its shown prefab, not the active preview (a mesh may be the active one).
+		// The same for the prefab editor's window: its shown prefab, not the active preview (a mesh may be the active one). Without it the window gives the scene.
 		void set_shown_prefab(std::function<document_id()> shown_prefab) { m_shown_prefab = std::move(shown_prefab); }
 
 	private:

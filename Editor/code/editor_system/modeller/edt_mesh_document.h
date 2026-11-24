@@ -138,6 +138,8 @@ namespace edt
 		void check_geometry_match();
 		void open_preview_world();
 		void close_preview_world();
+		// The render targets and the world template, once they were named (also of a world that failed or is parked).
+		void release_preview_resources();
 		void sync_preview_node();
 		bool load_source(std::string& error);
 		void rebake();

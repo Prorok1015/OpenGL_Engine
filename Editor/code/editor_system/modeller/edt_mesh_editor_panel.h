@@ -25,6 +25,8 @@ namespace edt
 		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		void set_on_overwrite_geometry(std::function<void()> cb) { m_on_overwrite_geometry = std::move(cb); }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
+		// What the Close button does (tests press it here).
+		void press_close() { if (m_on_close) m_on_close(); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
 
 	protected:
