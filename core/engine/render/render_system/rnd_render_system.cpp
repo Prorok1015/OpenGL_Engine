@@ -168,7 +168,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
 	, m_materials(std::make_unique<rnd::material_groups>(*drv, *m_textures))
-	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
+	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures, &res_sys))
 {
 	auto& texture_manager = *m_textures;
 	// A loader that gives nothing is asked again every frame: what it could not load is said once.
@@ -311,12 +311,16 @@ void rnd::render_system::render_frame(frame_context& context) const
 }
 std::uint64_t rnd::render_system::shader_problems_generation() const
 {
-	return m_shaders->problems_generation();
+	// Both only grow, so the sum moves whenever either does.
+	return m_shaders->problems_generation() + m_instances->problems_generation();
 }
 
 std::vector<rnd::shader_problem> rnd::render_system::shader_problems() const
 {
-	return m_shaders->problems();
+	std::vector<rnd::shader_problem> problems = m_shaders->problems();
+	const std::vector<rnd::shader_problem> materials = m_instances->problems();
+	problems.insert(problems.end(), materials.begin(), materials.end());
+	return problems;
 }
 
 const rnd::texture_manager& rnd::render_system::get_texture_manager() const

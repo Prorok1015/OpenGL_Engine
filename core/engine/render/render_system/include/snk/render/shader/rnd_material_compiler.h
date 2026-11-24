@@ -56,4 +56,9 @@ namespace rnd
 	SNK_API std::shared_ptr<compiled_material> build_compiled_material(
 		material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
 		std::shared_ptr<const material_desc> mat, bool skinned);
+	// The same with the shader state the caller read: material_instance_cache compiles with the shader it keeps, which
+	// after a reload is newer than mat->shader.
+	SNK_API std::shared_ptr<compiled_material> build_compiled_material(
+		material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
+		std::shared_ptr<const material_desc> mat, bool skinned, const material_shader_state& shader);
 }

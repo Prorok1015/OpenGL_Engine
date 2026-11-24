@@ -3,13 +3,17 @@
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/render/rnd_material_desc.h>
+#include <snk/render/rnd_shader_problem.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace res { class resource_system; }
 
 namespace rnd
 {
@@ -25,7 +29,10 @@ namespace rnd
 	// the same slot (the id stays valid), only when
 	//   - the caller says the description changed (scn::material_desc_component::dirty),
 	//   - a texture was reloaded or a render target resized (texture_manager::generation()), or
-	//   - a map it asked for was still loading when it was compiled.
+	//   - a map it asked for was still loading when it was compiled, or
+	//   - its shader desc changed on disk (#1272): the old instance draws while the new shader loads, and keeps drawing
+	//     if it fails to load.
+	// An instance keeps the shader handle it compiled with, so a later rebuild does not bring back a replaced shader.
 	// An instance is compiled at most once per frame, however many draws and cameras ask for it. One that has not
 	// been asked for during `grace_frames` frames is dropped (its slot is reused).
 	//
@@ -37,7 +44,8 @@ namespace rnd
 		// materials for every frame it draws.
 		static constexpr std::uint64_t grace_frames = 8;
 
-		material_instance_cache(shader_config_cache& variants, texture_manager& textures);
+		// `resources`: where the shaders of the instances are watched for changes; nullptr watches nothing.
+		material_instance_cache(shader_config_cache& variants, texture_manager& textures, res::resource_system* resources = nullptr);
 		~material_instance_cache();
 		material_instance_cache(const material_instance_cache&) = delete;
 		material_instance_cache& operator=(const material_instance_cache&) = delete;
@@ -58,6 +66,11 @@ namespace rnd
 		std::size_t size() const noexcept;
 		// Compilations done so far; grows only when an instance is made or rebuilt.
 		std::uint64_t compilations() const noexcept;
+
+		// Shaders of materials that failed to load ("shader/load"), one per (shader, material), for the Problems panel.
+		// The generation grows whenever they change.
+		std::vector<shader_problem> problems() const;
+		std::uint64_t problems_generation() const noexcept;
 
 	private:
 		struct key
@@ -82,17 +95,35 @@ namespace rnd
 			std::shared_ptr<compiled_material> material;
 			std::uint64_t last_used = 0;
 			std::uint64_t built_frame = 0;
+			// What the instance compiles with, not desc->shader: after a reload the desc still holds the old block.
+			res::res_handle<shader_desc> shader;
+			// A fresh request of `shader` after its file changed; adopted once it has loaded.
+			res::res_handle<shader_desc> pending;
+			bool shader_changed = false;
+			// The last reload failed: the instance keeps the old shader, and its problem stays until a reload succeeds.
+			bool reload_failed = false;
 		};
 
 		void compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned);
+		// True when the changed shader has loaded and the slot must be compiled with it.
+		bool reload_shader(slot& s, const material_desc& desc);
+		void set_shader(slot& s, res::res_handle<shader_desc> shader);
+		void on_shader_changed(const res::tag& shader);
+		void report_problem(const res::tag& shader, const material_desc& desc, const std::string& error, bool reload);
+		void clear_problem(const res::tag& shader, const material_desc& desc);
 
 		shader_config_cache& m_variants;
 		texture_manager& m_textures;
+		res::resource_system* m_resources = nullptr;
 		material_compiler_interface* m_compiler = nullptr;
 		std::vector<slot> m_slots;
 		std::vector<std::uint32_t> m_free;
 		std::unordered_map<key, std::uint32_t, key_hash> m_by_key;
 		std::uint64_t m_frame = 0;
 		std::uint64_t m_compilations = 0;
+		// Slots per watched shader tag.
+		std::unordered_map<res::tag, std::size_t> m_shader_users;
+		std::vector<shader_problem> m_problems;
+		std::uint64_t m_problems_generation = 0;
 	};
 }

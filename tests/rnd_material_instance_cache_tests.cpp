@@ -5,10 +5,15 @@
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_material_desc.h>
+#include <snk/common/logger/engine_log_sinks.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 // The material instance cache on the null backend (RHI R6b, #125): an instance is compiled once, again only when
 // its description changed, a texture it uses was reloaded, or a map was still loading, and is dropped after
@@ -40,6 +45,54 @@ struct instance_cache_fixture : test_util::null_engine_fixture
 
 	// A new frame of the cache under test.
 	void next_frame(rnd::material_instance_cache& cache) { cache.begin_frame(compiler()); }
+
+	static bool has_define(const rnd::shader_config::constant_data& cdata, std::string_view define)
+	{
+		return std::ranges::find(cdata.defines, define) != cdata.defines.end();
+	}
+
+	// A test shader desc over the shipped scene stages, so no shipped file is rewritten.
+	void write_shader(const res::tag& tag, std::string_view defines, std::string_view fragment = "res://shaders/scene.frag")
+	{
+		write_file(tag, std::string(R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert","fragment":")")
+			+ std::string(fragment) + R"(","defines":)" + std::string(defines) + "}");
+	}
+
+	void write_file(const res::tag& tag, const std::string& body)
+	{
+		BOOST_REQUIRE(resources().store(tag, test_util::to_bytes(body)));
+	}
+
+	// What a hot reload does: the file changed, the watchers are told on the main thread.
+	void signal(const res::tag& tag)
+	{
+		resources().signal_changed(tag);
+		test_util::pump(tasks);
+	}
+
+	std::shared_ptr<scn::material_desc> make_desc_with_shader(const res::tag& shader, std::vector<res::tag> samplers = {})
+	{
+		auto desc = make_desc(32.f, std::move(samplers));
+		desc->shader = resources().require<rnd::shader_desc>(shader);
+		test_util::pump(tasks);
+		return desc;
+	}
+};
+
+// Counts the errors logged with `part` in their text.
+struct error_count
+{
+	explicit error_count(std::string part)
+		: m_part(std::move(part))
+	{
+		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
+			if (level == engine::log_level::error && message.find(m_part) != std::string_view::npos) ++count;
+		});
+	}
+
+	std::string m_part;
+	std::atomic<int> count{ 0 };
+	engine::log_sink_handle sink;	// last: removed first
 };
 
 }
@@ -301,6 +354,138 @@ BOOST_AUTO_TEST_CASE(AMaterialWithoutAShaderIsNotDrawn)
 	const auto built = rnd::build_compiled_material(*compiler(), variants, textures(), desc, false);
 	BOOST_TEST(built->complete);
 	BOOST_TEST(has_no_stage(variants.resolve(built->base)));
+}
+
+// #1272: a .shader.desc that changed on disk reaches the instances of the materials that use it, though the desc still
+// holds the old handle (no dependency edge from the material to its shader).
+BOOST_AUTO_TEST_CASE(AChangedShaderDescIsPickedUpWithItsNewDefines)
+{
+	const res::tag tag{ res::tag::memory, "t/reload_defines.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+	BOOST_REQUIRE(desc->shader.is_ready());
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	const auto id = cache.acquire(desc, false, false);
+	const std::uint64_t serial = cache.get(id).serial;
+	BOOST_TEST(!has_define(variants.resolve(cache.get(id).base), "USE_NORMAL_MAP"));
+
+	write_shader(tag, R"(["USE_NORMAL_MAP"])");
+	signal(tag);
+	next_frame(cache);
+	cache.acquire(desc, false, false);	// asks for the changed shader
+	test_util::pump(tasks);
+	next_frame(cache);
+	BOOST_CHECK(cache.acquire(desc, false, false) == id);
+	BOOST_TEST(cache.get(id).serial != serial);
+	BOOST_TEST(has_define(variants.resolve(cache.get(id).base), "USE_NORMAL_MAP"));
+	BOOST_TEST(cache.compilations() == 2u);
+
+	// A later rebuild for another reason keeps the reloaded shader, not the one the desc still holds.
+	desc->shininess = 5.f;
+	next_frame(cache);
+	cache.acquire(desc, false, true);
+	BOOST_TEST(cache.compilations() == 3u);
+	BOOST_TEST(has_define(variants.resolve(cache.get(id).base), "USE_NORMAL_MAP"));
+}
+
+BOOST_AUTO_TEST_CASE(TheOldInstanceDrawsWhileTheChangedShaderLoads)
+{
+	const res::tag tag{ res::tag::memory, "t/reload_loading.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+	const std::size_t watched = resources().watched_tag_count();
+	{
+		rnd::shader_config_cache variants;
+		rnd::material_instance_cache cache(variants, textures(), &resources());
+		next_frame(cache);
+		const auto id = cache.acquire(desc, false, false);
+		const std::uint64_t serial = cache.get(id).serial;
+		BOOST_TEST(resources().watched_tag_count() == watched + 1);
+
+		write_shader(tag, R"(["USE_NORMAL_MAP"])");
+		signal(tag);
+		// No task runs between these frames, so the new shader's load stays queued.
+		for (int frame = 0; frame < 3; ++frame) {
+			next_frame(cache);
+			BOOST_CHECK(cache.acquire(desc, false, false) == id);
+			BOOST_TEST(cache.get(id).serial == serial);
+		}
+		BOOST_TEST(cache.compilations() == 1u);
+
+		test_util::pump(tasks);
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		BOOST_TEST(cache.get(id).serial != serial);
+		BOOST_TEST(cache.compilations() == 2u);
+	}
+	BOOST_TEST(resources().watched_tag_count() == watched);	// the cache let its watch go
+}
+
+BOOST_AUTO_TEST_CASE(AShaderThatFailsToReloadKeepsTheOldInstanceAndIsReportedOnce)
+{
+	const res::tag tag{ res::tag::memory, "t/reload_failed.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	const auto id = cache.acquire(desc, false, false);
+	const std::uint64_t serial = cache.get(id).serial;
+	const std::uint64_t generation = cache.problems_generation();
+
+	write_file(tag, "{ not json");
+	signal(tag);
+	for (int frame = 0; frame < 3; ++frame) {
+		next_frame(cache);
+		BOOST_CHECK(cache.acquire(desc, false, false) == id);
+		test_util::pump(tasks);
+	}
+	BOOST_TEST(cache.get(id).serial == serial);
+	BOOST_TEST(cache.compilations() == 1u);
+	BOOST_TEST(cache.get(id).base.is_valid());
+	BOOST_TEST(variants.resolve(cache.get(id).base).program.get_fragment_shader().string() == "res://shaders/scene.frag");
+	const auto problems = cache.problems();
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems[0].file == tag);
+	BOOST_TEST(problems[0].code == "shader/load");
+	BOOST_TEST(!problems[0].message.empty());
+	BOOST_TEST(cache.problems_generation() != generation);
+
+	write_shader(tag, "[]", "res://shaders/mix_opaque_trans_scene.frag");
+	signal(tag);
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	test_util::pump(tasks);
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	BOOST_TEST(cache.problems().empty());
+	BOOST_TEST(cache.get(id).serial != serial);
+	BOOST_TEST(variants.resolve(cache.get(id).base).program.get_fragment_shader().string() == "res://shaders/mix_opaque_trans_scene.frag");
+}
+
+// #1273: a material whose shader failed and whose map is still loading is rebuilt every frame; its shader is reported
+// once, not on every rebuild.
+BOOST_AUTO_TEST_CASE(AFailedShaderIsReportedOnceThoughTheInstanceIsRebuiltEveryFrame)
+{
+	const res::tag shader = res::tag::make("shaders/__material_instance_cache_missing__.shader.desc");
+	const auto desc = make_desc_with_shader(shader, { res::tag::make("textures/__material_instance_cache_missing__.desc") });
+	BOOST_REQUIRE(desc->shader.has_error());
+
+	error_count errors(std::string(shader.view()));
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	for (std::uint64_t frame = 1; frame <= 4; ++frame) {
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		BOOST_TEST(cache.compilations() == frame);
+	}
+	BOOST_TEST(cache.problems().size() == 1u);
+	BOOST_TEST(cache.problems()[0].file == shader);
+	BOOST_TEST(errors.count.load() == 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
