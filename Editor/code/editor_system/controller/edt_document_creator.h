@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,6 +40,10 @@ namespace edt
 			// Why nothing may be written now (a project migration runs, or stopped half way and is not rolled back): create()
 			// refuses with it. Null or nullopt: it runs.
 			std::function<std::optional<std::string>()> blocker = {};
+			// The editor's asset kinds whose suffix ends with ".desc", as {id, suffix}: a kind whose id is a document
+			// type names the suffix of that type's files ("shader_desc" -> ".shader.desc", #1263). Null: every type
+			// gets ".desc".
+			std::function<std::vector<std::pair<std::string, std::string>>()> desc_kinds = {};
 		};
 
 		explicit document_creator(ports wired) : m_ports(std::move(wired)) {}
@@ -46,8 +51,18 @@ namespace edt
 		// The desc types that are documents, by name.
 		std::vector<std::string> types() const;
 
-		// "a" -> "a.desc", "A.DESC" -> "A.desc": the extension is always `.desc`.
-		static std::string file_name(std::string_view name);
+		// `name` ending with `suffix`: the longest of `suffix`, ".desc", one of `tails` or `suffix` without its
+		// ".desc" that ends the name (in any letter case) is replaced. "a" -> "a.desc", "A.DESC" -> "A.desc"; with
+		// ".shader.desc" and the tail ".prefab.desc": "a", "a.desc", "a.shader" and "a.prefab.desc" all give
+		// "a.shader.desc".
+		static std::string file_name(std::string_view name, std::string_view suffix = ".desc",
+			std::span<const std::string> tails = {});
+
+		// The suffix of the files of a document `type`: its asset kind's (ports::desc_kinds), else ".desc".
+		std::string suffix_of(std::string_view type) const;
+		// The file a document of `type` named `name` gets: any kind's .desc suffix the name ends with is replaced by
+		// its own.
+		std::string file_name_of(std::string_view type, std::string_view name) const;
 
 		// Why `name` cannot be the name of a new document in `folder` (below res://, '/' separated, empty = the root): empty
 		// when it can. A name taken in any layer is refused naming the layer, so a new file never hides one below it; so is a
@@ -55,12 +70,18 @@ namespace edt
 		// file of the desc (res::name_taken; letter case never tells names apart). Walks the folder in every layer: call it
 		// when the name changes, not every frame.
 		std::string check(std::string_view folder, std::string_view name) const;
+		// The same for the file a document of `type` gets (file_name_of).
+		std::string check(std::string_view folder, std::string_view type, std::string_view name) const;
 
 		// Writes `{"__type", "__version"}` and nothing else (the fields read as the schema's defaults, the ID of the file is
 		// the asset database's). The file is made by create_sync: never over a file, also one that appears meanwhile.
 		document_creation create(std::string_view folder, std::string_view type, std::string_view name) const;
 
 	private:
+		std::string check_file(std::string_view folder, std::string_view name, const std::string& file,
+			std::string_view suffix) const;
+		std::vector<std::string> desc_suffixes() const;
+
 		ports m_ports;
 	};
 
@@ -76,10 +97,16 @@ namespace edt
 
 		const std::vector<std::string>& types() const { return m_types; }
 		std::size_t type_index() const { return m_type_index; }
-		void set_type_index(std::size_t index) { m_type_index = index < m_types.size() ? index : m_type_index; }
+		// A new type checks the name again: the file name follows the type.
+		void set_type_index(std::size_t index);
 
 		const std::string& name() const { return m_name; }
 		void set_name(std::string name);
+		// The file the document gets (the name with the type's suffix); empty while nothing is typed.
+		const std::string& file_name() const { return m_file; }
+		// The name ended with another suffix that the type's replaced ("a.prefab.desc" -> "a.shader.desc"), so the
+		// window shows both before anything is made.
+		bool suffix_replaced() const;
 
 		// What is wrong with the name as of the last change of it (the folders are walked then, not at every frame); empty while
 		// nothing is typed yet.
@@ -92,11 +119,14 @@ namespace edt
 		std::optional<res::tag> submit();
 
 	private:
+		void recheck();
+
 		const document_creator& m_creator;
 		std::string m_folder;
 		std::vector<std::string> m_types;
 		std::size_t m_type_index = 0;
 		std::string m_name;
+		std::string m_file;
 		std::string m_problem;
 		std::string m_error;
 	};
