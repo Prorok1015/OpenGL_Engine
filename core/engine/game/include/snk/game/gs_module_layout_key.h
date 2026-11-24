@@ -132,7 +132,7 @@ namespace gs
 			inp::action_trace::edge, inp::action_input, inp::action_reach, inp::action_injection, inp::injected_edge,
 			inp::input_capture, scn::node_index, ecs::event<int>,
 			// Passed by value to and from the exports of scn::spatial_world and the raycast functions.
-			scn::ray, scn::ray_filter, scn::ray_hit,
+			scn::ray, scn::ray_filter, scn::ray_hit, scn::ray_request, scn::ray_result, scn::ray_batch,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
 			// The module constructs and moves it, so its size stays in the key; its logic is behind exports since #922 PR 3.

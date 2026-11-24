@@ -19,6 +19,13 @@ void scn::spatial_world::on_structure_changed(entt::registry& world, entt::entit
 	}
 }
 
+void scn::spatial_world::on_state_changed(entt::registry& world, entt::entity)
+{
+	if (auto* spatial = world.ctx().find<spatial_world>()) {
+		spatial->m_backend->state_changed();
+	}
+}
+
 scn::spatial_world& scn::spatial_world::attach(entt::registry& world)
 {
 	if (auto* existing = world.ctx().find<spatial_world>()) {
@@ -32,6 +39,11 @@ scn::spatial_world& scn::spatial_world::attach(entt::registry& world)
 	world.on_construct<geometry_component>().connect<&spatial_world::on_structure_changed>();
 	world.on_update<geometry_component>().connect<&spatial_world::on_structure_changed>();
 	world.on_destroy<geometry_component>().connect<&spatial_world::on_structure_changed>();
+	world.on_construct<renderable>().connect<&spatial_world::on_state_changed>();
+	world.on_destroy<renderable>().connect<&spatial_world::on_state_changed>();
+	world.on_construct<spatial_layers>().connect<&spatial_world::on_state_changed>();
+	world.on_update<spatial_layers>().connect<&spatial_world::on_state_changed>();
+	world.on_destroy<spatial_layers>().connect<&spatial_world::on_state_changed>();
 	return made;
 }
 
@@ -58,10 +70,23 @@ void scn::spatial_world::raycast_all(entt::registry& world, const ray& line, con
 	m_backend->raycast_all(world, line, filter, out);
 }
 
+ds::task_handle<scn::ray_batch> scn::spatial_world::raycast_batch(ds::task_system& tasks, entt::registry& world,
+	std::vector<ray_request> requests, std::uint64_t frame)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "a batch is handed in on the main thread");
+	return m_backend->raycast_batch(tasks, world, std::move(requests), frame);
+}
+
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "entities_moved runs on the main thread");
 	m_backend->entities_moved(world, moved);
+}
+
+ds::task_handle<scn::ray_batch> scn::raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
+	std::uint64_t frame)
+{
+	return spatial_world::attach(world).raycast_batch(tasks, world, std::move(requests), frame);
 }
 
 std::optional<scn::ray_hit> scn::raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter)
