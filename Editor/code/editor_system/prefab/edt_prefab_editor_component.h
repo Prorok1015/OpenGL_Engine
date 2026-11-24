@@ -51,6 +51,9 @@ namespace edt
 			// Runs `poll` every UI frame under `id` until it returns false (editor_layer::register_implicit); null: a prefab opens at once,
 			// as before (#152). Late-bound like the other ports that name what is made after this component.
 			std::function<void(std::string_view id, std::function<bool()> poll)> register_frame = {};
+			// True while the person is typing a value or dragging (an ImGui item is active): a prefab that finishes loading then does
+			// not take the window (#1303). Null: never.
+			std::function<bool()> person_is_editing = {};
 		};
 
 		explicit prefab_editor_component(ports from);
@@ -115,6 +118,8 @@ namespace edt
 		};
 		std::vector<std::unique_ptr<pending_open>> m_pending;
 		std::uint64_t m_next_pending_id = 1;
+		// Set while finish_open opens a document that must not take the window: the activation listener leaves the window alone.
+		bool m_keep_shown = false;
 		bool m_polling = false;
 		// The prefab document the window shows: the last one brought to the front.
 		document_id m_shown{};
@@ -143,6 +148,9 @@ namespace edt
 		void close_document(document_id id);
 		// `loaded`: the handle the wait held (it keeps the prefab cached while the document opens); empty: read it now.
 		void finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded);
+		// The shown prefab is being worked on (unapplied edits, a node picked in it, an item in use): a prefab that finished loading
+		// in the meantime opens as a tab and leaves the window as it is.
+		bool person_is_working_in_shown() const;
 		// One poll of the wait: false while it is still loading; true when it ended (opened, failed or timed out) or is not running.
 		bool settle_open();
 		void report_failed_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& handle, bool timed_out);

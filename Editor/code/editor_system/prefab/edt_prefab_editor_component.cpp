@@ -114,6 +114,7 @@ void edt::prefab_editor_component::install(std::vector<registration>& out)
 	}));
 	// A tab, the Unsaved list or a new document brought a prefab to the front: the window shows it.
 	m_connections.push_back(events.document_activated.subscribe([this](document_id id) {
+		if (m_keep_shown) return;
 		if (prefab_document* prefab = prefab_by_id(id)) show_document(*prefab);
 	}));
 	out.push_back(m_ports.context.panels().add({
@@ -452,11 +453,21 @@ void edt::prefab_editor_component::cancel_open(std::uint64_t id)
 
 void edt::prefab_editor_component::finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded)
 {
+	const prefab_document* before = shown();
+	const bool keep_window = before != nullptr && person_is_working_in_shown();
+	const document_id kept_id = before ? before->id() : document_id{};
+	m_keep_shown = keep_window;
 	prefab_document& prefab = edt::open_prefab(m_ports.context.documents(), tag);
+	m_keep_shown = false;
 	// The diagnostics of the load the preview made, or of a load again when nothing kept it (no wait: tests, no frame port).
 	const auto reread = loaded.is_valid() ? loaded : m_ports.services.resources()->require_sync<scn::prefab_desc>(tag);
 	if (prefab.is_open()) {
 		m_diagnostics[prefab.id()] = diagnostics_of(reread);
+		if (keep_window) {
+			// A tab, not the window: the prefab being worked on stays shown and stays the active document.
+			m_ports.context.documents().set_active(kept_id);
+			return;
+		}
 		// Its activation made it the shown one before its diagnostics were known.
 		show_document(prefab);
 		publish_diagnostics();
@@ -465,6 +476,13 @@ void edt::prefab_editor_component::finish_open(const res::tag& tag, const res::r
 		m_ports.desc_problems.report(m_ports.context.problems(), k_failed_open_scope, diagnostics_of(reread));
 		if (prefabs().empty() && !loading()) m_panel->set_open(false);
 	}
+}
+
+bool edt::prefab_editor_component::person_is_working_in_shown() const
+{
+	const prefab_document* prefab = shown();
+	if (!prefab) return false;
+	return prefab->is_dirty() || m_inspector_target.is_prefab() || (m_ports.person_is_editing && m_ports.person_is_editing());
 }
 
 void edt::prefab_editor_component::confirm_close(prefab_document* prefab, std::function<void()> proceed)

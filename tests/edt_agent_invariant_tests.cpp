@@ -1807,6 +1807,79 @@ BOOST_FIXTURE_TEST_CASE(ADirtyPrefab_StaysShownAndEditable_WhileAnotherPrefabLoa
 	BOOST_TEST(window->is_open());
 }
 
+// #1303: a load that finishes does not take the window from a prefab the person is working in.
+BOOST_FIXTURE_TEST_CASE(ALoadThatFinishes_WhileThePersonWorksInTheShownPrefab_OpensAsATabAndLeavesTheWindow, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	window->select_node({ 0xe1 });
+	BOOST_REQUIRE(rename(a, "typed"));
+	BOOST_REQUIRE(inspector->selected_node() == a.working_node({ 0xe1 }));
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+
+	pump_frames(30);
+
+	BOOST_REQUIRE(document_of('b') != nullptr);
+	BOOST_TEST(document_of('b')->is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 2u);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
+	BOOST_TEST(inspector->selected_node() == a.working_node({ 0xe1 }));
+	BOOST_REQUIRE(documents().active() != nullptr);
+	BOOST_TEST(documents().active()->id() == a.id());
+	BOOST_TEST(a.is_dirty());
+}
+
+BOOST_FIXTURE_TEST_CASE(ALoadThatFinishes_WhileTheShownPrefabIsClean_IsShownAsBefore, multi_prefab_fixture)
+{
+	open('a');
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+
+	pump_frames(30);
+
+	edt::prefab_document* b = document_of('b');
+	BOOST_REQUIRE(b != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == b);
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfAnUnknownOrFinishedLoad_ChangesNothing, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('a'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	const std::uint64_t id = window->loadings().front().id;
+
+	window->cancel_loading(id + 1000);
+	BOOST_TEST(window->loadings().size() == 1u);
+
+	pump_frames(30);
+	BOOST_REQUIRE(document_of('a') != nullptr);
+	window->cancel_loading(id);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(document_of('a') != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == document_of('a'));
+}
+
+BOOST_FIXTURE_TEST_CASE(ClosingTheShownPrefab_WhileLoadsArePending_KeepsTheBanner_AndTheLoadStillOpens, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	const edt::document_id a_id = a.id();
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+
+	documents().close(a_id);
+
+	BOOST_TEST(window->loadings().size() == 1u);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == nullptr);
+	BOOST_TEST(inspector->selected_node() == nullptr);
+
+	pump_frames(30);
+
+	BOOST_TEST(!window->loading());
+	edt::prefab_document* b = document_of('b');
+	BOOST_REQUIRE(b != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == b);
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 1u);
+}
+
 BOOST_FIXTURE_TEST_CASE(CancelOfTheOnlyLoad_WithNothingOpen_ClosesTheWindow, multi_prefab_fixture)
 {
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('a'))); });

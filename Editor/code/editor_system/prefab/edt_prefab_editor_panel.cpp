@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_close.h"
@@ -227,15 +228,20 @@ namespace edt
 		if (m_loadings.empty()) return;
 		// A Cancel runs the callback, which sets the list again: the rows are drawn from a copy.
 		const std::vector<loading_item> items = m_loadings;
-		for (const loading_item& item : items) {
-			ImGui::PushID(static_cast<int>(item.id));
-			ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
-			ImGui::TextUnformatted(item.text.c_str());
-			ImGui::PopStyleColor();
-			ImGui::SameLine();
-			if (m_on_cancel_loading && ImGui::SmallButton("Cancel")) m_on_cancel_loading(item.id);
-			ImGui::PopID();
+		// Many loads scroll in a region of a capped height instead of squeezing the tree and the viewport.
+		const float rows_height = static_cast<float>(items.size()) * ImGui::GetFrameHeightWithSpacing();
+		if (ImGui::BeginChild("##prefab_loadings", ImVec2(0.f, std::min(rows_height, em(8.f))), ImGuiChildFlags_None)) {
+			for (const loading_item& item : items) {
+				ImGui::PushID(static_cast<int>(item.id));
+				ImGui::PushStyleColor(ImGuiCol_Text, colors().text_secondary);
+				ImGui::TextUnformatted(item.text.c_str());
+				ImGui::PopStyleColor();
+				ImGui::SameLine();
+				if (m_on_cancel_loading && ImGui::SmallButton("Cancel")) m_on_cancel_loading(item.id);
+				ImGui::PopID();
+			}
 		}
+		ImGui::EndChild();
 		ImGui::Separator();
 	}
 
