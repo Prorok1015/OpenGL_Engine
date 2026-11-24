@@ -34,7 +34,7 @@ BOOST_AUTO_TEST_CASE(ALinkInCodeThatLeavesTheProject_IsAWarningNamingTheLinkAndI
 	const std::vector<edt::problem> problems = edt::code_link_problems(project);
 
 	BOOST_REQUIRE_EQUAL(problems.size(), 1u);
-	BOOST_TEST(problems[0].severity == edt::problem_severity::warning);
+	BOOST_TEST((problems[0].severity == edt::problem_severity::warning));
 	BOOST_TEST(problems[0].file == "code/vendor");
 	BOOST_TEST(problems[0].message.find("leads outside the project") != std::string::npos);
 	BOOST_TEST(problems[0].message.find("elsewhere") != std::string::npos);
