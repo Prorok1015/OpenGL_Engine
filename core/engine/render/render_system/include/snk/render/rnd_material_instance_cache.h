@@ -34,6 +34,8 @@ namespace rnd
 	//   - its shader desc changed on disk (#1272): the old instance draws while the new shader loads, and keeps drawing
 	//     if it fails to load.
 	// An instance keeps the shader handle it compiled with, so a later rebuild does not bring back a replaced shader.
+	// A shader that failed is logged and listed in problems() once while the material stays in the cache: one unused for
+	// more than grace_frames loses its problem and is reported again when it comes back.
 	// An instance is compiled at most once per frame, however many draws and cameras ask for it. One that has not
 	// been asked for during `grace_frames` frames is dropped (its slot is reused).
 	//
