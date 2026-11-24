@@ -1,6 +1,6 @@
 #pragma once
-#include <glm/glm.hpp>
 #include <limits>
+#include <glm/glm.hpp>
 
 namespace ds {
 	// A box in 3D space. `ds::bbox` (ds_bbox.hpp) is the 2D one (UV space of a geometry) and stays as it is.

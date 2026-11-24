@@ -1,11 +1,12 @@
 #pragma once
 #include "ds_aabb3.hpp"
-#include <glm/glm.hpp>
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <glm/glm.hpp>
 
 // Pure intersection math: no ECS, no render, no allocation. Distances are in units of the ray's direction vector, so a
 // unit direction gives world distances.
@@ -29,11 +30,13 @@ namespace ds {
 	// past `t_max`. Touching a face or an edge is a hit.
 	inline std::optional<float> ray_aabb(const ray3& ray, const aabb3& box, float t_max = std::numeric_limits<float>::infinity())
 	{
+		ASSERT_MSG(!std::isnan(ray.origin.x + ray.origin.y + ray.origin.z + ray.direction.x + ray.direction.y + ray.direction.z),
+			"ray_aabb: the ray has a NaN origin or direction");
 		if (box.empty()) return std::nullopt;
 		float t_near = 0.f;
 		float t_far = t_max;
 		for (int axis = 0; axis < 3; ++axis) {
-			if (ray.direction[axis] == 0.f) {
+			if (!std::isfinite(ray.inv_direction[axis])) {
 				// The ray does not move along this axis: it is inside the slab everywhere or nowhere (touching a face counts).
 				if (ray.origin[axis] < box.min[axis] || ray.origin[axis] > box.max[axis]) return std::nullopt;
 				continue;
@@ -61,12 +64,15 @@ namespace ds {
 	inline std::optional<triangle_hit> ray_triangle(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& a,
 		const glm::vec3& b, const glm::vec3& c, bool cull_back_faces = false, float t_max = std::numeric_limits<float>::infinity())
 	{
-		constexpr float k_parallel = 1e-12f;
+		// Relative: sin of the angle between the ray and the triangle's plane, so the size of the triangle and of the direction
+		// vector do not decide what counts as parallel.
+		constexpr float k_parallel = 1e-7f;
 		const glm::vec3 edge1 = b - a;
 		const glm::vec3 edge2 = c - a;
 		const glm::vec3 p = glm::cross(direction, edge2);
 		const float det = glm::dot(edge1, p);
-		if (cull_back_faces ? det <= k_parallel : std::abs(det) <= k_parallel) return std::nullopt;
+		const float limit = k_parallel * glm::length(edge1) * glm::length(p);
+		if (cull_back_faces ? det <= limit : std::abs(det) <= limit) return std::nullopt;
 		const float inv_det = 1.f / det;
 		const glm::vec3 s = origin - a;
 		const float u = glm::dot(s, p) * inv_det;

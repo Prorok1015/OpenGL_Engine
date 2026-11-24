@@ -268,6 +268,61 @@ BOOST_AUTO_TEST_CASE(SetBox_ToAnEmptyBox_TakesTheItemOutOfEveryQuery_AndBackAgai
 	BOOST_TEST(bvh_ray_all(t, ray, 100.f).contains(17u));
 }
 
+BOOST_AUTO_TEST_CASE(FrustumQuery_NeverVisitsAnEmptyBox_EvenUnderANodeFullyInsideTheView)
+{
+	scene world(77);
+	auto items = world.items(300, 5.f);
+	items[42].box = ds::aabb3{};
+	const tree t(items);
+	const glm::mat4 view = glm::lookAt(glm::vec3{ 0.f, 0.f, 400.f }, glm::vec3{ 0.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const ds::frustum frustum = ds::frustum_from(glm::perspective(glm::radians(60.f), 1.f, 1.f, 2000.f) * view);
+	BOOST_REQUIRE(ds::test_frustum(frustum, t.bounds()) == ds::frustum_test::inside);
+	std::set<std::uint32_t> found;
+	t.query_frustum(frustum, [&found](std::uint32_t id, const int&, bool) {
+		found.insert(id);
+		return true;
+	});
+	BOOST_TEST(found.size() == items.size() - 1);
+	BOOST_TEST(!found.contains(42u));
+}
+
+BOOST_AUTO_TEST_CASE(SetBox_BoxAndFrustumQueriesAgreeWithAFullRebuild)
+{
+	scene world(555);
+	auto items = world.items(800);
+	tree t(items);
+	const glm::mat4 view = glm::lookAt(glm::vec3{ 0.f, 0.f, 70.f }, glm::vec3{ 0.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const ds::frustum frustum = ds::frustum_from(glm::perspective(glm::radians(50.f), 1.3f, 1.f, 120.f) * view);
+	for (int frame = 0; frame < 4; ++frame) {
+		for (int n = 0; n < 200; ++n) {
+			const std::uint32_t id = static_cast<std::uint32_t>(world.real(0.f, static_cast<float>(items.size()) - 0.001f));
+			const glm::vec3 shift = world.point(20.f);
+			items[id].box = ds::aabb3{ items[id].box.min + shift, items[id].box.max + shift };
+			t.set_box(id, items[id].box);
+		}
+		const tree rebuilt(items);
+		const auto in_frustum = [&frustum](const tree& source) {
+			std::set<std::uint32_t> out;
+			source.query_frustum(frustum, [&out](std::uint32_t id, const int&, bool) {
+				out.insert(id);
+				return true;
+			});
+			return out;
+		};
+		BOOST_REQUIRE(in_frustum(t) == in_frustum(rebuilt));
+		const ds::aabb3 region = box_at(world.point(30.f), { 15.f, 15.f, 15.f });
+		const auto in_box = [&region](const tree& source) {
+			std::set<std::uint32_t> out;
+			source.query_box(region, [&out](std::uint32_t id, const int&) {
+				out.insert(id);
+				return true;
+			});
+			return out;
+		};
+		BOOST_REQUIRE(in_box(t) == in_box(rebuilt));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(Degradation_GrowsWhenItemsScatter_AndOneAgainAfterARebuild)
 {
 	scene world(11);

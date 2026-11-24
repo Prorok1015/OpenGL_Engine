@@ -1,4 +1,6 @@
 #pragma once
+#include <snk/common/engine_assert.h>
+#include <cstddef>
 #include <type_traits>
 // Concept to ensure the type is an enum
 template<typename T>
@@ -117,6 +119,8 @@ namespace ds {
         underlying_type flags_ = 0;
 
         static constexpr underlying_type shift_flag(Enum flag) {
+            ASSERT_MSG(static_cast<std::size_t>(flag) < sizeof(underlying_type) * 8, "bit_flags: flag {} does not fit in {} bits",
+                static_cast<std::size_t>(flag), sizeof(underlying_type) * 8);
             return static_cast<underlying_type>(static_cast<underlying_type>(1) << static_cast<underlying_type>(flag));
         }
     };

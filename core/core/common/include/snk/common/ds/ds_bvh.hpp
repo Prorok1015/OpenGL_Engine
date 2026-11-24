@@ -1,12 +1,15 @@
 #pragma once
 #include "ds_aabb3.hpp"
 #include "ds_intersect.hpp"
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <utility>
 #include <vector>
+#include <glm/glm.hpp>
 
 namespace ds {
 	// What a ray visitor answers: the distance the walk goes on to (it may only shrink: a closest-hit search narrows it to the
@@ -50,6 +53,9 @@ namespace ds {
 		// Builds the tree again over the current boxes (after many set_box calls); the ids do not change.
 		void rebuild()
 		{
+			for (const item& each : m_items) {
+				ASSERT_MSG(finite(each.box), "bvh: a box has a NaN or infinite corner");
+			}
 			m_nodes.clear();
 			m_order.resize(m_items.size());
 			for (std::uint32_t i = 0; i < m_order.size(); ++i) m_order[i] = i;
@@ -59,7 +65,7 @@ namespace ds {
 				m_baseline_area = 0.f;
 				return;
 			}
-			m_nodes.reserve(m_items.size() / 2 + 2);
+			m_nodes.reserve(2 * m_items.size() / k_leaf_size + 1);
 			m_nodes.push_back({});
 			build_node(0, 0, static_cast<std::uint32_t>(m_items.size()), k_no_parent);
 			m_baseline_area = m_inner_area;
@@ -74,6 +80,8 @@ namespace ds {
 		// Moves an item's box and refits the boxes above it, stopping where a box did not change.
 		void set_box(std::uint32_t id, const aabb3& box)
 		{
+			ASSERT_MSG(id < m_items.size(), "bvh::set_box: id {} of {} items", id, m_items.size());
+			ASSERT_MSG(finite(box), "bvh::set_box: the box has a NaN or infinite corner");
 			m_items[id].box = box;
 			std::uint32_t node = m_leaf_of[id];
 			refit_leaf(node);
@@ -166,6 +174,7 @@ namespace ds {
 				if (n.is_leaf()) {
 					for (std::uint32_t k = n.first; k < n.first + n.count; ++k) {
 						const std::uint32_t id = m_order[k];
+						if (m_items[id].box.empty()) continue;
 						bool fully = inside;
 						if (!inside) {
 							const frustum_test own = test_frustum(view, m_items[id].box);
@@ -205,6 +214,12 @@ namespace ds {
 		};
 
 		static float box_area(const aabb3& box) { return surface_area(box); }
+
+		// An empty box is finite (its corners are the largest floats); NaN and infinity would break the median split.
+		static bool finite(const aabb3& box)
+		{
+			return std::isfinite(box.min.x + box.min.y + box.min.z + box.max.x + box.max.y + box.max.z);
+		}
 
 		void build_node(std::uint32_t index, std::uint32_t first, std::uint32_t count, std::uint32_t parent)
 		{

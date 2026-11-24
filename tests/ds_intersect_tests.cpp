@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <limits>
+#include <random>
 
 namespace {
 constexpr float k_eps = 1e-4f;
@@ -158,6 +159,60 @@ BOOST_AUTO_TEST_CASE(RayTriangle_OnAnEdgeAndAVertex_Hits)
 	BOOST_TEST(ds::ray_triangle({ 2.f, 0.f, 1.f }, { 0.f, 0.f, -1.f }, a, b, c).has_value());
 	BOOST_TEST(ds::ray_triangle({ 0.f, 0.f, 1.f }, { 0.f, 0.f, -1.f }, a, b, c).has_value());
 	BOOST_TEST(ds::ray_triangle({ 2.f, 2.f, 1.f }, { 0.f, 0.f, -1.f }, a, b, c).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(RayTriangle_ATinyTriangle_IsHit_AndTheDirectionsLengthDoesNotMatter)
+{
+	const glm::vec3 a{ 0.f, 0.f, 0.f };
+	const glm::vec3 b{ 1e-3f, 0.f, 0.f };
+	const glm::vec3 c{ 0.f, 1e-3f, 0.f };
+	const auto unit = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -1.f }, a, b, c);
+	BOOST_REQUIRE(unit);
+	BOOST_TEST(unit->t == 1.f, boost::test_tools::tolerance(1e-4));
+	const auto stretched = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -100.f }, a, b, c);
+	BOOST_REQUIRE(stretched);
+	BOOST_TEST(stretched->t == 0.01f, boost::test_tools::tolerance(1e-3));
+	const auto shrunk = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -1e-3f }, a, b, c);
+	BOOST_REQUIRE(shrunk);
+	BOOST_TEST(shrunk->t == 1000.f, boost::test_tools::tolerance(1e-3));
+}
+
+BOOST_AUTO_TEST_CASE(RayTriangle_AnOriginOnTheTriangle_HitsAtZero)
+{
+	const auto hit = ds::ray_triangle({ 0.25f, 0.25f, 0.f }, { 0.f, 0.f, -1.f }, { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 1.f, 0.f });
+	BOOST_REQUIRE(hit);
+	BOOST_TEST(hit->t == 0.f, boost::test_tools::tolerance(1e-6));
+}
+
+BOOST_AUTO_TEST_CASE(RayTriangle_ADegenerateTriangle_IsNeverHit)
+{
+	BOOST_TEST(!ds::ray_triangle({ 0.f, 0.f, 1.f }, { 0.f, 0.f, -1.f }, { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }));
+}
+
+BOOST_AUTO_TEST_CASE(Frustum_APointInsideTheViewIsNotOutside_AndOneOutsideIs)
+{
+	const glm::mat4 view = glm::lookAt(glm::vec3{ 3.f, 2.f, 20.f }, glm::vec3{ 0.f, 1.f, 0.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const glm::mat4 view_projection = glm::perspective(glm::radians(55.f), 1.6f, 0.5f, 60.f) * view;
+	const ds::frustum frustum = ds::frustum_from(view_projection);
+	const glm::mat4 inverse = glm::inverse(view_projection);
+	std::mt19937 random{ 99 };
+	std::uniform_real_distribution<float> clip{ -1.4f, 1.4f };
+	int inside = 0;
+	for (int i = 0; i < 2000; ++i) {
+		const glm::vec4 ndc{ clip(random), clip(random), clip(random), 1.f };
+		glm::vec4 world = inverse * ndc;
+		world /= world.w;
+		const bool in_view = std::abs(ndc.x) < 0.999f && std::abs(ndc.y) < 0.999f && std::abs(ndc.z) < 0.999f;
+		const bool out_of_view = std::abs(ndc.x) > 1.001f || std::abs(ndc.y) > 1.001f || std::abs(ndc.z) > 1.001f;
+		const ds::aabb3 point{ glm::vec3(world), glm::vec3(world) };
+		const ds::frustum_test test = ds::test_frustum(frustum, point);
+		if (in_view) {
+			++inside;
+			BOOST_REQUIRE(test == ds::frustum_test::inside);
+		}
+		if (out_of_view) BOOST_REQUIRE(test == ds::frustum_test::outside);
+	}
+	BOOST_TEST(inside > 100);
 }
 
 BOOST_AUTO_TEST_CASE(Frustum_ClassifiesBoxesAgainstAPerspectiveView)
