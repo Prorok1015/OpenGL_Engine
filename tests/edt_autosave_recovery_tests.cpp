@@ -674,6 +674,23 @@ BOOST_AUTO_TEST_CASE(MoreThan256Records_TheRestAreCountedNotRead)
 	BOOST_TEST(scan.sessions[0].over_limit == 4u);
 }
 
+// Review of #1342: Discard all takes only the records it read; those past a limit stay for the next start.
+BOOST_AUTO_TEST_CASE(DiscardAll_OfASessionWithRecordsPastTheLimit_KeepsTheUnreadOnes)
+{
+	const std::string other = other_session();
+	for (int index = 0; index < 260; ++index) put_record(other, "data", std::format("d/{}.desc", index), bytes_of("{}"));
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	answer(edt::autosave_recovery::k_discard);
+	BOOST_TEST(session_exists(other));
+	std::size_t metas = 0;
+	for (const auto& entry : fs::directory_iterator(cache / "autosave" / other / "data")) {
+		if (entry.path().filename().string().ends_with(".autosave.json")) ++metas;
+	}
+	BOOST_TEST(metas == 4u);
+	BOOST_TEST(lock_is_free(other));
+}
+
 BOOST_AUTO_TEST_CASE(TheQuestion_ShowsTextFromFilesAsData_AndAChangedSource)
 {
 	write_file(content / "settings.desc", R"({"__type":"test.recovery_settings","speed":2.0})");

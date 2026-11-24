@@ -846,8 +846,9 @@ void edt::autosave_recovery::discard_batch()
 	for (std::size_t index : m_current->sessions) {
 		recovery_session& session = m_scan->sessions[index];
 		const std::string folder = autosave_session_folder(session.id);
-		// Not dead, or not listed whole: only what was looked at goes; the folder, session.json and session.lock stay.
-		if (m_current->unverifiable || !session.incomplete.empty()) {
+		// Not dead, not listed whole, or records left unread by a limit: only what was looked at goes; the folder,
+		// session.json and session.lock stay, so the person is asked about the rest next time.
+		if (m_current->unverifiable || !session.incomplete.empty() || session.over_limit > 0 || session.not_checked > 0) {
 			remove_listed(session);
 			egLOG_INFO("editor/autosave", "the autosaves read from cache://{} were discarded; the folder is kept", folder);
 			continue;
