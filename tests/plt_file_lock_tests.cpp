@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_file_lock.h>
+#include <snk/platform/plt_link_check.h>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -189,6 +190,22 @@ BOOST_AUTO_TEST_CASE(a_lock_under_a_root_longer_than_max_path_is_taken_and_held)
 	const platform::lock_attempt through = platform::file_lock::acquire(root, through_tagged);
 	BOOST_TEST((through.outcome == platform::lock_outcome::failed), through.error);
 	RemoveDirectoryW(tagged.c_str());
+}
+
+// A short root keeps its plain spelling: a UNC share is made and opened as before, Win32 normalization applies.
+BOOST_AUTO_TEST_CASE(only_a_root_past_max_path_takes_the_long_form)
+{
+	const std::filesystem::path short_unc{ L"\\\\server\\share\\project" };
+	BOOST_TEST((platform::beneath::long_path_if_needed(short_unc) == short_unc));
+	test_util::temp_dir dir("file_lock_short");
+	BOOST_TEST((platform::beneath::long_path_if_needed(dir.path()) == dir.path()));
+
+	std::wstring deep = L"\\\\server\\share";
+	while (deep.size() < MAX_PATH) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	BOOST_TEST((platform::beneath::long_path_if_needed(std::filesystem::path(deep)).native()
+		== L"\\\\?\\UNC\\" + deep.substr(2)));
 }
 #endif
 

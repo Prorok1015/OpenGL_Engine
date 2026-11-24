@@ -74,7 +74,7 @@ namespace
 	{
 		// Both sides are final paths (the \\?\ or \\?\UNC\ form), so the comparison does not depend on how `root`
 		// is spelled.
-		const fs::path long_root = platform::beneath::long_path(root);
+		const fs::path long_root = platform::beneath::long_path_if_needed(root);
 		const HANDLE root_handle = ::CreateFileW(long_root.c_str(), FILE_READ_ATTRIBUTES,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
@@ -142,15 +142,15 @@ platform::lock_attempt platform::file_lock::acquire_once(const fs::path& root, c
 	const auto is_missing = [](DWORD code) { return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND; };
 	// Checked one folder at a time, then the file is opened without following a reparse point and checked through its
 	// handle; its final path then shows that no folder was swapped for a junction after its check.
-	// Every path below in its \\?\ form, so a root past MAX_PATH works (#1352); messages name the plain path.
+	// A path past MAX_PATH in its \\?\ form, so such a root works (#1352); messages name the plain path.
 	if (create) {
 		std::error_code made;
-		fs::create_directories(platform::beneath::long_path(root), made);
+		fs::create_directories(platform::beneath::long_path_if_needed(root), made);
 	}
 	fs::path folder = root;
 	for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
 		folder /= parts[i];
-		const fs::path long_folder = platform::beneath::long_path(folder);
+		const fs::path long_folder = platform::beneath::long_path_if_needed(folder);
 		DWORD attributes = ::GetFileAttributesW(long_folder.c_str());
 		if (attributes == INVALID_FILE_ATTRIBUTES) {
 			const DWORD code = ::GetLastError();
@@ -169,7 +169,7 @@ platform::lock_attempt platform::file_lock::acquire_once(const fs::path& root, c
 			return refused(lock_outcome::failed, std::format("'{}' is a link or not a folder", fs_paths::utf8_of(folder)));
 		}
 	}
-	const fs::path long_where = platform::beneath::long_path(where);
+	const fs::path long_where = platform::beneath::long_path_if_needed(where);
 	const HANDLE handle = ::CreateFileW(long_where.c_str(), GENERIC_READ | GENERIC_WRITE,
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		nullptr, create ? OPEN_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);

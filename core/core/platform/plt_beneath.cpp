@@ -1503,11 +1503,11 @@ namespace {
 		if (create) {
 			std::error_code ec;
 			// The mounted folder itself, pinned when mounted.
-			fs::create_directories(platform::beneath::long_path(root), ec);
+			fs::create_directories(platform::beneath::long_path_if_needed(root), ec);
 		}
 		reached = root;
-		// The root by its \\?\ form, so one past MAX_PATH opens (#1352); everything below is opened from its handle.
-		const fs::path long_root = platform::beneath::long_path(root);
+		// The root past MAX_PATH by its \\?\ form, so it opens (#1352); everything below is opened from its handle.
+		const fs::path long_root = platform::beneath::long_path_if_needed(root);
 		handle_holder top{ ::CreateFileW(long_root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr,
 			OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
 		top = enter_folder(std::move(top), [&long_root] {
