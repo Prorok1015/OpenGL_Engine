@@ -106,6 +106,32 @@ BOOST_AUTO_TEST_CASE(RayAabb_AnAxisAlignedRayOnAFacePlane_CountsAsTouching_OneOf
 	BOOST_TEST(!ds::ray_aabb(ds::ray3{ { -5.f, 1.0001f, 0.f }, { 1.f, 0.f, 0.f } }, box).has_value());
 }
 
+// #1350: an axis the direction does not move along keeps an infinite reciprocal with the sign of its zero, and an
+// axis-aligned ray hits what it hit before.
+BOOST_AUTO_TEST_CASE(Ray3_AnAxisAlignedDirection_HasSignedInfiniteReciprocals_AndTheSameHits)
+{
+	const float inf = std::numeric_limits<float>::infinity();
+	const ds::ray3 down{ { 0.f, 0.f, 5.f }, { 0.f, -0.f, -2.f } };
+	BOOST_TEST(down.inv_direction.x == inf);
+	BOOST_TEST(down.inv_direction.y == -inf);
+	BOOST_TEST(down.inv_direction.z == -0.5f);
+	BOOST_TEST(ds::reciprocal(4.f) == 0.25f);
+	BOOST_TEST(std::isnan(ds::reciprocal(std::numeric_limits<float>::quiet_NaN())));
+
+	const ds::aabb3 box{ { -1.f, -1.f, -1.f }, { 1.f, 1.f, 1.f } };
+	const auto entry = ds::ray_aabb(down, box);
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(*entry == 2.f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(!ds::ray_aabb(ds::ray3{ { 1.5f, 0.f, 5.f }, { 0.f, 0.f, -1.f } }, box).has_value());
+
+	const auto hit = ds::ray_triangle(down.origin, down.direction, { -1.f, -1.f, 0.f }, { 1.f, -1.f, 0.f },
+		{ 0.f, 1.f, 0.f });
+	BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->t == 2.5f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(!ds::ray_triangle(down.origin, down.direction, { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 2.f, 0.f, 0.f })
+		.has_value());
+}
+
 BOOST_AUTO_TEST_CASE(RayAabb_ADiagonalRayThroughACorner)
 {
 	const ds::aabb3 box{ { 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f } };
