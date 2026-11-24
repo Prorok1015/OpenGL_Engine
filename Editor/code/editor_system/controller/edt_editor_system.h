@@ -87,6 +87,7 @@ namespace edt {
 	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
+	class level_disk_banner;
 
 	class editor_system
 	{
@@ -122,7 +123,8 @@ namespace edt {
 		void run_implicit_callbacks();
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
-		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669).
+		// Once a frame: a loaded level waits for the loads it started before "level loaded" and the exit (#669); a check of the
+		// level file that had to wait and the queued actions of its banner run here (#1188).
 		void tick_level_settle();
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file
 		// opened when an asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
@@ -190,6 +192,10 @@ namespace edt {
 	private:
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
+
+		// The banner "The level file changed on disk." and Save's question about it (#1188): the viewport panel and the file
+		// menu point at it, so it is declared before them and goes after them.
+		std::unique_ptr<level_disk_banner> m_level_disk;
 
 		// What the Problems panel shows and where a row leads (#1004): the publishers sit here. Before the panels, the prefab
 		// editor, the loads and the drop, which report into them, so it goes after them.
@@ -261,6 +267,8 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		// Play stopped: the level controller looks at a level file flagged meanwhile (#1188).
+		connection m_play_stopped;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 

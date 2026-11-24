@@ -75,6 +75,9 @@ namespace edt
 		std::function<std::string()> level_path;
 		// Overwrites the saved level, true if written.
 		std::function<bool()> quick_save;
+		// Why the level's file must not be written: it changed on disk (#1188, level_controller::disk_conflict). The level is
+		// then `asked` (disk_changed), nothing written. Null or nullopt: it may be written.
+		std::function<std::optional<std::string>()> disk_conflict;
 	};
 
 	// One row of the unsaved list: a document and, after a Save All, what is wrong with it (empty: nothing to add).
@@ -103,7 +106,8 @@ namespace edt
 	// The dirty documents as text (tooltip).
 	std::string unsaved_text(const std::vector<unsaved_item>& items);
 
-	// What a document that refused to be saved waits for (nullopt: nothing, the refusal is a failure). Looks at data and prefab documents.
+	// What a document that refused to be saved waits for (nullopt: nothing, the refusal is a failure). Looks at data and prefab
+	// documents and at the level (its file changed on disk).
 	std::optional<save_all_question> save_all_question_of(const document& open);
 
 	// Writes every document that can be written and goes on after one that cannot: a document that waits for a question

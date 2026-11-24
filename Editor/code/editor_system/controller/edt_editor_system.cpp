@@ -1,6 +1,7 @@
 #include "edt_editor_system.h"
 #include "edt_agent_log_filter.h"
 #include "edt_level_load_component.h"
+#include "edt_level_disk_banner.h"
 #include "edt_asset_component.h"
 #include "edt_asset_open_component.h"
 #include "edt_asset_ops.h"
@@ -154,6 +155,9 @@ CFG_VAR_EXT_BOOL(cfg_edt_headless);
 CFG_VAR_DEF_BOOL(cfg_edt_trust_project, "project/trust", false);
 
 namespace {
+	// The scope of the source "desc" for an outside change of the level file that does not load as a level (#1188).
+	constexpr std::string_view k_level_disk_scope = "level file";
+
 	// The configuration files the editor read its settings from (--config, else the one beside the executable, with its
 	// whole extends chain, #1090), and the one beside the executable: an agent's checkout or pull must not change them,
 	// import/decoder_sandbox is a person's (#1076). Links are guarded as links and as their targets.
@@ -206,6 +210,11 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 
 edt::editor_system::~editor_system()
 {
+	// Stop is about to run below: a flagged level must not be reloaded while the editor goes.
+	m_play_stopped.disconnect();
+	m_level_ctrl.load_in_progress = nullptr;
+	m_level_ctrl.person_is_editing = nullptr;
+	m_level_ctrl.on_disk_problem = nullptr;
 	if (m_desc_binary_cache) {
 		m_res.set_desc_binary_hash_cache(nullptr);
 		if (!m_desc_binary_cache_write.done()) m_desc_binary_cache_write.wait();
@@ -452,6 +461,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.refresh_world_problems = [this] { m_problems->refresh_world(); },
 		.stop_after_level_loaded = m_stop_after_level_loaded };
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
+	// #1188: the banner over the viewport and the question of a Save while the level file changed on disk.
+	m_level_disk = std::make_unique<level_disk_banner>(m_state, m_level_ctrl, m_context->dialogs());
+	m_panels->viewport()->set_disk_banner(m_level_disk.get());
 	m_game_layer = std::make_unique<game_layer_component>(game_layer_component::ports{ .services = m_services, .level_ctrl = m_level_ctrl,
 		.level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open,
 		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); },
@@ -475,7 +487,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.save_meshes = [this] { return m_modeller->save_dirty(); },
 		.discard_meshes = [this] { m_modeller->drop_dirty(); },
 		.show_mesh = [this](document_id id) { m_modeller->show(id); },
-		.request_close_mesh = [this](document_id id) { m_modeller->request_close(id); } });
+		.request_close_mesh = [this](document_id id) { m_modeller->request_close(id); },
+		.level_disk = m_level_disk.get() });
 	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
 	m_file_menu->install_edit_actions(m_registrations);
@@ -588,6 +601,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.tools_changed = [this] { if (m_agent) m_agent->notify_tools_changed(); } });
 	m_live->install();
 	create_play_session(data);
+	// A flagged level that is clean once Play stopped takes its file then (#1188).
+	m_play_stopped = m_context->events().play_state_changed.subscribe([this](play_state state, play_reason reason) {
+		if (state == play_state::stopped) m_level_ctrl.on_play_stopped(reason == play_reason::stopped_for_reload);
+	});
 
 	m_build->install(m_registrations);
 
@@ -946,6 +963,22 @@ void edt::editor_system::wire_controller_callbacks()
 	m_level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");
 	};
+	// #1188: an outside change of the level file waits while a level loads (the load reads the file itself).
+	m_level_ctrl.load_in_progress = [this] { return level_load_in_progress(); };
+	m_level_ctrl.person_is_editing = [this] { return person_is_editing(); };
+	m_level_ctrl.on_disk_problem = [this](const std::string& reason) {
+		if (!m_problems) return;
+		if (reason.empty()) {
+			m_problems->desc().clear(m_context->problems(), k_level_disk_scope);
+			return;
+		}
+		res::diagnostic item;
+		item.severity = res::diagnostic_severity::error;
+		item.kind = "level_file_changed";
+		item.resource = m_state.level_tag.string();
+		item.reason = "the file changed on disk and does not load as a level, the editor keeps the level it has: " + reason;
+		m_problems->desc().report(m_context->problems(), std::string(k_level_disk_scope), { item }, {}, m_state.level_tag);
+	};
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 		// Also a reload that failed: its errors stay in Problems until a clean one replaces them.
@@ -981,6 +1014,9 @@ bool edt::editor_system::level_load_in_progress() const
 void edt::editor_system::tick_level_settle()
 {
 	if (m_level_load) m_level_load->tick_settle();
+	// Outside the UI: no panel holds a registry of the worlds a reload rebuilds (#1188).
+	m_level_ctrl.tick_disk_change();
+	if (m_level_disk) m_level_disk->run_pending();
 }
 
 void edt::editor_system::go_to_problem(const std::string& source, const problem& item)

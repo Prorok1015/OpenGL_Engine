@@ -503,9 +503,11 @@ public:
 			m_answer.emplace();
 			return std::nullopt;
 		}
-		if (index && index->is_int64() && index->as_int64() >= 0
-			&& static_cast<std::uint64_t>(index->as_int64()) < m_options.size()) {
-			m_answer = static_cast<std::size_t>(index->as_int64());
+		std::optional<std::uint64_t> chosen;
+		if (index && index->is_int64() && index->as_int64() >= 0) chosen = static_cast<std::uint64_t>(index->as_int64());
+		if (index && index->is_uint64()) chosen = index->as_uint64();
+		if (chosen && *chosen < m_options.size()) {
+			m_answer = static_cast<std::size_t>(*chosen);
 			return std::nullopt;
 		}
 		return std::format("the answer needs an index below {}, or cancel: true", m_options.size());

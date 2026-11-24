@@ -2,6 +2,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
+#include <snk/gui/gui_theme.h>
 #include <snk/gui/gui_ui_font.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/scene/scn_camera_component.hpp>
@@ -10,6 +11,7 @@
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
+#include "edt_level_disk_banner.h"
 #include "edt_editor_camera.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
@@ -18,6 +20,7 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace edt
@@ -73,6 +76,33 @@ namespace edt
 		}
 	}
 
+	void viewport_panel::render_disk_banner()
+	{
+		if (!m_disk_banner || !m_disk_banner->visible()) return;
+		const std::string_view text = level_disk_banner::k_text;
+		ImGui::TextColored(colors().warning, "%.*s", static_cast<int>(text.size()), text.data());
+		// The actions are queued: the level is rebuilt after the frame, never under the registry this panel draws.
+		const std::optional<std::string> blocked = m_disk_banner->blocked_reason();
+		const auto explain = [&blocked] {
+			if (blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", blocked->c_str());
+		};
+		ImGui::SameLine();
+		ImGui::BeginDisabled(blocked.has_value());
+		if (ImGui::SmallButton("Reload##level_disk")) m_disk_banner->reload();
+		explain();
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Keep mine##level_disk")) m_disk_banner->keep_mine();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(blocked.has_value());
+		if (ImGui::SmallButton("Overwrite##level_disk")) m_disk_banner->overwrite();
+		explain();
+		ImGui::EndDisabled();
+		if (const std::string& error = m_disk_banner->error(); !error.empty()) {
+			ImGui::TextColored(colors().error, "%s", error.c_str());
+		}
+	}
+
 	void viewport_panel::set_registry_getter(std::function<entt::registry*()> getter)
 	{
 		m_get_registry = std::move(getter);
@@ -93,6 +123,7 @@ namespace edt
 			ImGui::SameLine();
 			ImGui::TextDisabled("Playing: stop Play to edit");
 		}
+		render_disk_banner();
 
 		// Capture the exact image start position (after toolbar) for gizmo projection
 		ImVec2 image_pos = ImGui::GetCursorScreenPos();
