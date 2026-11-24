@@ -1,7 +1,9 @@
 #pragma once
 #include "edt_mesh_model.h"
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace edt::mesh
@@ -43,4 +45,8 @@ namespace edt::mesh
 	// Layout is always position vec3, normal vec3, uv vec2,
 	// tangent vec3, bitangent vec3 in that order (a shader input is the element's place in the layout), `bounds` stay empty.
 	baked_mesh bake(const poly_mesh& mesh, const bake_settings& settings = {});
+
+	// The triangles of one face as bake() cuts it, as corner indices of the face; nullopt for a face bake() leaves out (it is in
+	// `skipped_faces`) and for an id the mesh does not have.
+	std::optional<std::vector<std::array<std::uint32_t, 3>>> triangulate_face(const poly_mesh& mesh, face_id id);
 }
