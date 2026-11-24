@@ -9,6 +9,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <entt/entt.hpp>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <random>
 #include <string>
@@ -302,6 +303,34 @@ BOOST_AUTO_TEST_CASE(AGeometryHeldAgainAsABiggerShape_IsHitWhereTheNewShapeIs)
 	require_loaded<rnd::geometry_desc>(tag_of("big.geom.desc"));
 	scn::geometry_holds::of(reg).hold(quad, tag_of("big.geom.desc"));
 	BOOST_TEST(scn::raycast_closest(reg, outside));
+}
+
+BOOST_AUTO_TEST_CASE(AGeometryReloadedInPlace_IsHitWhereTheNewShapeIs_WithoutTouchingAComponent)
+{
+	put_quad("reload.geom.desc", 0.5f);
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	const auto outside = toward_minus_z({ 1.5f, 0.f, 2.f });
+	BOOST_REQUIRE(!scn::raycast_closest(reg, outside));
+	BOOST_REQUIRE(scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+
+	put("reload.geom.desc", test_util::quad_geometry_json(2.f));
+	rs->signal_changed(geometry.get_tag());
+	pump();
+	BOOST_TEST(scn::raycast_closest(reg, outside));
+	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f })));
+}
+
+BOOST_AUTO_TEST_CASE(ANaNWorldMatrix_IsSkipped_AndTheRestStillAnswers)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto broken = add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	const auto fine = add_quad(reg, at({ 0.f, 0.f, -6.f }));
+	reg.get<scn::world_transform>(broken).world[3][0] = std::numeric_limits<float>::quiet_NaN();
+	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f }));
+	BOOST_REQUIRE(hit);
+	BOOST_TEST((hit->entity == fine));
 }
 
 BOOST_AUTO_TEST_CASE(ManyRandomQuads_TheTreesAnswerAsABruteForceLoopDoes)

@@ -55,9 +55,64 @@ scn::geometry_holds& scn::geometry_holds::attach(entt::registry& reg, res::resou
 	return holds;
 }
 
+scn::geometry_holds::geometry_holds() = default;
+
+scn::geometry_holds::~geometry_holds()
+{
+	if (m_resources) {
+		for (const auto& [tag, count] : m_watching) {
+			m_resources->unwatch(tag, this);
+		}
+	}
+}
+
+void scn::geometry_holds::watch_tag(const res::tag& tag)
+{
+	if (!m_resources || !tag.is_valid()) {
+		return;
+	}
+	if (m_watching[tag]++ == 0) {
+		// keep_dependencies: a change of the .bin beside the desc reaches the hold too, as it reaches the renderer's.
+		m_resources->watch(tag, this, [this](const res::tag& changed) { on_changed(changed); }, true);
+	}
+}
+
+void scn::geometry_holds::unwatch_tag(const res::tag& tag)
+{
+	const auto found = m_watching.find(tag);
+	if (found == m_watching.end()) {
+		return;
+	}
+	if (--found->second == 0) {
+		m_watching.erase(found);
+		m_resources->unwatch(tag, this);
+	}
+}
+
+void scn::geometry_holds::on_changed(const res::tag& tag)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "geometry_holds: a reload is taken on the main thread");
+	// The change evicted the block: this reads the new data, once, and every holder shares that handle.
+	const auto fresh = m_resources->require<rnd::geometry_desc>(tag);
+	for (auto& [entity, held] : m_held) {
+		if (held.get_tag() == tag) {
+			held = fresh;
+		}
+	}
+	++m_revision;
+}
+
+std::uint64_t scn::geometry_holds::revision() const
+{
+	return m_revision;
+}
+
 void scn::geometry_holds::hold(entt::entity entity, res::res_handle<rnd::geometry_desc> geometry)
 {
+	release(entity);
+	watch_tag(geometry.get_tag());
 	m_held.insert_or_assign(entity, std::move(geometry));
+	++m_revision;
 }
 
 void scn::geometry_holds::hold(entt::entity entity, const res::tag& geometry)
@@ -74,7 +129,13 @@ void scn::geometry_holds::hold(entt::entity entity, const res::tag& geometry)
 
 void scn::geometry_holds::release(entt::entity entity)
 {
-	m_held.erase(entity);
+	const auto found = m_held.find(entity);
+	if (found == m_held.end()) {
+		return;
+	}
+	unwatch_tag(found->second.get_tag());
+	m_held.erase(found);
+	++m_revision;
 }
 
 const res::res_handle<rnd::geometry_desc>* scn::geometry_holds::find(entt::entity entity) const

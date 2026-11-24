@@ -147,6 +147,7 @@ namespace {
 	{
 		entt::entity entity = entt::null;
 		std::shared_ptr<triangle_tree> tree;
+		tree_key key;
 		scn::mesh_view view{};
 		const rnd::geometry_desc* geometry = nullptr;
 		glm::mat4 world{ 1.f };
@@ -157,9 +158,18 @@ namespace {
 		// The matrix cannot be inverted: nothing of it is hit.
 		bool degenerate = false;
 
-		void set_world(const glm::mat4& matrix)
+		// False for a matrix with a NaN or infinite element: nothing of the entity is hit until it has a good one.
+		bool set_world(const glm::mat4& matrix)
 		{
 			world = matrix;
+			if (!std::isfinite(glm::dot(matrix[0], matrix[0]) + glm::dot(matrix[1], matrix[1]) + glm::dot(matrix[2], matrix[2])
+					+ glm::dot(matrix[3], matrix[3]))) {
+				degenerate = true;
+				mirrored = false;
+				inverse = glm::mat4{ 1.f };
+				normal_matrix = glm::mat3{ 1.f };
+				return false;
+			}
 			const glm::mat3 linear{ matrix };
 			const float determinant = glm::determinant(linear);
 			degenerate = !(std::abs(determinant) > 1e-12f);
@@ -167,10 +177,11 @@ namespace {
 			if (degenerate) {
 				inverse = glm::mat4{ 1.f };
 				normal_matrix = glm::mat3{ 1.f };
-				return;
+				return true;
 			}
 			inverse = glm::inverse(matrix);
 			normal_matrix = glm::transpose(glm::mat3{ inverse });
+			return true;
 		}
 
 		// An entry nothing can hit still needs a box in the world tree: a point at the origin keeps the tree's maths finite.
@@ -245,7 +256,9 @@ namespace {
 					continue;
 				}
 				entry& moving = m_entries[found->second];
-				moving.set_world(transform->world);
+				if (!moving.set_world(transform->world)) {
+					egLOG_WARN("scene/spatial", "entity {} has a NaN or infinite world matrix: ray queries skip it", static_cast<std::uint32_t>(entity));
+				}
 				m_world.set_box(found->second, moving.world_box());
 				++refit;
 			}
@@ -381,32 +394,16 @@ namespace {
 			return out;
 		}
 
-		// An entity that no longer draws the range or the geometry its entry was built from (the held handle was given another
-		// geometry: a retag, a reload held again).
-		static bool stale(entt::registry& world, const entry& mesh)
-		{
-			const auto* component = world.try_get<scn::mesh_component>(mesh.entity);
-			if (!component || component->mesh.vx_begin != mesh.view.vx_begin || component->mesh.ind_begin != mesh.view.ind_begin
-				|| component->mesh.ind_end != mesh.view.ind_end) {
-				return true;
-			}
-			const auto* holds = world.ctx().find<scn::geometry_holds>();
-			const res::res_handle<rnd::geometry_desc>* held = holds ? holds->find(mesh.entity) : nullptr;
-			return !held || !held->is_ready() || held->get().get() != mesh.geometry;
-		}
-
 		// Builds the trees again when a mesh or geometry component came, went or changed (structure_changed), when the world has
-		// another number of meshes than the last build saw, when an entry no longer matches what its entity draws, or when a
-		// geometry that was not loaded is now. Before the traversal: a walk never sees a half-stale tree.
+		// another number of meshes than the last build saw, when the geometry holds moved (a hold made, replaced, let go or
+		// reloaded), or when a geometry that was loading is ready now. Before the traversal: a walk never sees a half-stale tree.
 		void ensure_current(entt::registry& world)
 		{
 			const std::size_t meshes = world.view<const scn::mesh_component, const scn::world_transform>().size_hint();
-			bool rebuild = !m_built || m_dirty || meshes != m_mesh_count;
-			if (!rebuild) {
-				rebuild = std::ranges::any_of(m_entries, [&world](const entry& mesh) { return stale(world, mesh); });
-			}
+			const auto* holds = world.ctx().find<scn::geometry_holds>();
+			const std::uint64_t holds_revision = holds ? holds->revision() : 0;
+			bool rebuild = !m_built || m_dirty || meshes != m_mesh_count || holds_revision != m_holds_revision;
 			if (!rebuild && !m_pending.empty()) {
-				const auto* holds = world.ctx().find<scn::geometry_holds>();
 				rebuild = holds && std::ranges::any_of(m_pending, [&](entt::entity entity) {
 					const auto* held = holds->find(entity);
 					return held && held->is_ready();
@@ -419,11 +416,14 @@ namespace {
 
 		void build(entt::registry& world)
 		{
+			const auto* holds = world.ctx().find<scn::geometry_holds>();
+			m_holds_revision = holds ? holds->revision() : 0;
+			std::vector<entry> previous = std::move(m_entries);
+			std::unordered_map<entt::entity, std::uint32_t> previous_index = std::move(m_index_of);
 			m_entries.clear();
 			m_index_of.clear();
 			m_pending.clear();
 			std::vector<ds::bvh<std::uint32_t>::item> items;
-			const auto* holds = world.ctx().find<scn::geometry_holds>();
 			std::unordered_map<tree_key, std::shared_ptr<triangle_tree>, tree_key_hash> used;
 			const auto view = world.view<const scn::mesh_component, const scn::world_transform>();
 			m_mesh_count = view.size_hint();
@@ -436,13 +436,27 @@ namespace {
 				entry mesh;
 				mesh.entity = entity;
 				mesh.view = range;
-				mesh.set_world(view.get<const scn::world_transform>(entity).world);
+				if (!mesh.set_world(view.get<const scn::world_transform>(entity).world)) {
+					egLOG_WARN("scene/spatial", "entity {} has a NaN or infinite world matrix: ray queries skip it", static_cast<std::uint32_t>(entity));
+				}
 				if (!held->is_ready()) {
 					m_pending.push_back(entity);
+					// A geometry that is loading again keeps its old tree until the new block is ready, as the renderer keeps drawing the old one.
+					if (const auto before = previous_index.find(entity); before != previous_index.end()) {
+						const entry& old = previous[before->second];
+						if (old.tree && old.view.vx_begin == range.vx_begin && old.view.ind_begin == range.ind_begin
+							&& old.view.ind_end == range.ind_end) {
+							mesh.tree = old.tree;
+							mesh.key = old.key;
+							mesh.geometry = old.geometry;
+							used.emplace(old.key, old.tree);
+						}
+					}
 				} else {
 					std::shared_ptr<rnd::geometry_desc> geometry = held->get();
 					mesh.geometry = geometry.get();
 					const tree_key key{ mesh.geometry, range.vx_begin, range.ind_begin, range.ind_end };
+					mesh.key = key;
 					auto cached = m_trees.find(key);
 					if (cached == m_trees.end()) {
 						cached = m_trees.emplace(key, build_tree(std::move(geometry), range)).first;
@@ -467,6 +481,7 @@ namespace {
 
 		bool m_built = false;
 		bool m_dirty = false;
+		std::uint64_t m_holds_revision = 0;
 		std::size_t m_mesh_count = 0;
 		std::vector<entry> m_entries;
 		std::unordered_map<entt::entity, std::uint32_t> m_index_of;

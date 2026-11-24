@@ -60,6 +60,7 @@ void scn::spatial_world::raycast_all(entt::registry& world, const ray& line, con
 
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
+	ASSERT_MSG(!ds::task_system::on_worker(), "entities_moved runs on the main thread");
 	m_backend->entities_moved(world, moved);
 }
 
