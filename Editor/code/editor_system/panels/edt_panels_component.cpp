@@ -155,12 +155,11 @@ void edt::panels_component::wire_scene_callbacks()
 			return;
 		}
 		// Ids below a prefab instance are not nodes of the desc: the hierarchy takes them as the target tail.
-		for (std::size_t tail = 0; tail < path->size(); ++tail) {
-			const std::vector<uint64_t> target(path->end() - tail, path->end());
-			if (m_hierarchy->select_path(*path, target))
-				return;
-		}
-		m_ports.context.selection().clear();
+		const bool selected = select_longest_own_prefix(*path, [this](const std::vector<uint64_t>& full, const std::vector<uint64_t>& target) {
+			return m_hierarchy->select_path(full, target);
+		});
+		if (!selected)
+			egLOG_WARN("editor", "viewport pick: the hierarchy does not know the picked node, the selection is kept");
 	});
 	m_viewport->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {

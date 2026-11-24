@@ -9,6 +9,10 @@ namespace edt
 			return {};
 		}
 		if (m_gesture.active()) {
+			if (frame.interrupted || (!frame.down && !frame.released)) {
+				m_gesture.cancel();
+				return {};
+			}
 			if (frame.down) {
 				m_gesture.move(frame.pixel);
 				return {};

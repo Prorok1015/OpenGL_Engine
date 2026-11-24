@@ -77,7 +77,7 @@ namespace edt
 		void on_hidden() override;
 
 	private:
-		void run_click(entt::registry& reg, bool takes_input, bool locked, const glm::mat4& cam_view, const glm::mat4& cam_proj);
+		void run_click(entt::registry& reg, bool takes_input, bool usable, bool locked, const glm::mat4& cam_view, const glm::mat4& cam_proj);
 		void render_toolbar();
 		void render_fps_overlay();
 		void render_orientation_gizmo(entt::registry& reg);
