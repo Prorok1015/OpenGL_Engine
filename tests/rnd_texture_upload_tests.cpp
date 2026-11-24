@@ -408,6 +408,16 @@ BOOST_AUTO_TEST_CASE(AChildDesc_TakesItsOwnSource_OverItsParents)
 		{ "header", json::object{ { "wrap", "repeat" } } } });
 	const res::tag back_to_picture = description("back_to_picture.desc", { { "__type", "texture_2d_desc" },
 		{ "__parent", std::string(middle.view()) }, { "data", std::string(image.view()) } });
+	// A file with its own pixels over a parent's: the nested patch form ({"pixels": {"base64": ...}}) does not read back,
+	// so the save writes the pixels whole and keeps __parent.
+	const res::tag own_pixels = description("own_pixels.desc", { { "__type", "texture_2d_desc" }, { "__parent", std::string(middle.view()) },
+		{ "pixels", pixels(2, 1, "R8", "CQo=") } });
+	// A null takes the parent's pixels away: no source, no texture (as a desc without "data" before #1204).
+	const res::tag no_source = description("no_source.desc", { { "__type", "texture_2d_desc" }, { "__parent", std::string(middle.view()) },
+		{ "pixels", nullptr } });
+	BOOST_TEST(!textures.is_ready(settle(no_source)));
+	BOOST_TEST(uploads.size() == 2u);
+
 	const rnd::texture_id inherited = settle(inherits);
 	const rnd::texture_id replaced = settle(back_to_picture);
 	BOOST_REQUIRE(textures.is_ready(inherited));
@@ -416,7 +426,10 @@ BOOST_AUTO_TEST_CASE(AChildDesc_TakesItsOwnSource_OverItsParents)
 	BOOST_TEST(textures.info(inherited).data.extent.width == 2u);
 	BOOST_TEST((textures.info(replaced).data.format == texture_header::TYPE::RGBA8));
 
-	for (const res::tag& tag : { middle, inherits, back_to_picture }) {
+	BOOST_REQUIRE(textures.is_ready(settle(own_pixels)));
+	BOOST_TEST((uploads.back().pixels == std::vector<unsigned char>{ 9, 10 }));
+
+	for (const res::tag& tag : { middle, inherits, back_to_picture, own_pixels }) {
 		BOOST_TEST_CONTEXT(tag.view()) {
 			const std::vector<std::byte> first = saved(tag);
 			const json::object written = json::parse(std::string(reinterpret_cast<const char*>(first.data()), first.size())).as_object();
