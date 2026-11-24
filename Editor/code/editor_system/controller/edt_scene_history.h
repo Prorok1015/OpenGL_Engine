@@ -53,6 +53,18 @@ namespace edt
 		std::vector<std::string> after;
 	};
 
+	// A change of the node's own fields that can be applied to its live entity without rebuilding the world: the same
+	// node in the same place with the same set of components (none of them a prefab reference, none with edit records),
+	// no override records of the node. Anything else is structural (#1190).
+	struct scene_node_edit
+	{
+		std::size_t world = 0;
+		std::uint64_t id = 0;
+		bool transform = false;
+		bool name = false;
+		std::vector<std::string> components; // the components whose data changed
+	};
+
 	class scene_history_index
 	{
 	public:
@@ -71,6 +83,11 @@ namespace edt
 		// What changed since the index was taken, as one history change applying to `worlds`; the index moves on to now.
 		diff_result diff(std::vector<scn::world_desc>& worlds, std::unique_ptr<history_change>& change, scene_commit_stats& stats);
 
+		// The last diff() as field edits only: true with the edits, or false when it had a structural change, a change of
+		// a world's systems, a removed or created node, a move or nothing at all. Cleared by every diff().
+		bool last_diff_is_field_edits() const { return m_last_field_edits_only; }
+		const std::vector<scene_node_edit>& last_field_edits() const { return m_last_edits; }
+
 		// Brings the node `id` of `world` to `state` in the index (nullopt: removes it); used when a change is applied.
 		void set(std::size_t world, std::uint64_t id, const std::optional<scene_node_state>& state);
 		// Moves the node in the index, keeping what the index has in it.
@@ -83,12 +100,15 @@ namespace edt
 
 		// The worlds changes were applied to since the last call: their contexts have to be rebuilt.
 		std::vector<std::size_t> take_touched();
+		const std::vector<std::size_t>& touched() const { return m_touched; }
 		void touch(std::size_t world);
 
 	private:
 		std::vector<std::unordered_map<std::uint64_t, scene_node_state>> m_worlds;
 		std::vector<std::vector<std::string>> m_systems; // parallel to m_worlds
 		std::vector<std::size_t> m_touched;
+		std::vector<scene_node_edit> m_last_edits;
+		bool m_last_field_edits_only = false;
 		bool m_valid = false;
 	};
 
