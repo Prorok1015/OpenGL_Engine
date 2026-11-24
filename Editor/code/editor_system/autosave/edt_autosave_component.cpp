@@ -5,6 +5,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/editor/edt_problem_list.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
@@ -153,6 +154,7 @@ void edt::autosave_component::follow(document& doc, clock::time_point now, bool 
 		discard(record);
 		record.due.reset();
 		record.written_generation.reset();
+		report(id, {}, {});
 		return;
 	}
 	if (!can_write) {
@@ -186,8 +188,9 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 	order.snapshot = source->autosave_capture();
 	if (order.snapshot.bytes.empty() && !order.snapshot.tree) {
 		// Asked again only after the next edit: an invalid value or a variant without its base is no failure to repeat.
-		egLOG_DEBUG("editor/autosave", "'{}' ({}) is not autosaved: {}", doc.title(), doc.source().view(),
-			order.snapshot.error.empty() ? "nothing to write" : order.snapshot.error);
+		const std::string reason = order.snapshot.error.empty() ? std::string{ "nothing to write" } : order.snapshot.error;
+		egLOG_DEBUG("editor/autosave", "'{}' ({}) is not autosaved: {}", doc.title(), doc.source().view(), reason);
+		report(id, std::string(doc.source().view()), std::format("'{}' is not autosaved: {}", doc.title(), reason));
 		return;
 	}
 	order.root = m_root;
@@ -232,8 +235,10 @@ void edt::autosave_component::finish_write(document_id id, const std::string& er
 	if (error.empty()) {
 		++m_writes;
 		egLOG_DEBUG("editor/autosave", "autosaved to cache://{}", record.disk_file);
+		report(id, {}, {});
 	} else {
 		egLOG_WARN("editor/autosave", "cache://{} could not be written: {}", record.disk_file, error);
+		report(id, record.disk_file, std::format("cache://{} could not be autosaved: {}", record.disk_file, error));
 	}
 	// Written under a cache folder that is no longer the project's: nothing will ever look for it there.
 	if (record.remove_after || m_shut || record.root != m_root) {
@@ -258,6 +263,7 @@ void edt::autosave_component::discard(tracked& record)
 
 void edt::autosave_component::forget(document_id id)
 {
+	report(id, {}, {});
 	const auto found = m_tracked.find(id);
 	if (found == m_tracked.end()) return;
 	discard(found->second);
@@ -285,6 +291,8 @@ void edt::autosave_component::shutdown()
 	if (m_shut) return;
 	m_shut = true;
 	m_closed.disconnect();
+	m_reported.clear();
+	if (m_ports.problems) m_ports.problems->clear(k_problem_source);
 	m_lifetime.cancel_tasks();
 	for (auto& [id, record] : m_tracked) {
 		if (record.gate) {
@@ -296,4 +304,26 @@ void edt::autosave_component::shutdown()
 		discard(record);
 	}
 	m_tracked.clear();
+}
+
+void edt::autosave_component::report(document_id id, std::string file, std::string message)
+{
+	if (message.empty()) {
+		if (m_reported.erase(id) == 0) return;
+	} else {
+		auto& row = m_reported[id];
+		if (row.first == file && row.second == message) return;
+		row = { std::move(file), std::move(message) };
+	}
+	if (!m_ports.problems) return;
+	std::vector<problem> items;
+	items.reserve(m_reported.size());
+	for (const auto& [reported_id, row] : m_reported) {
+		problem item;
+		item.severity = problem_severity::warning;
+		item.file = row.first;
+		item.message = row.second;
+		items.push_back(std::move(item));
+	}
+	m_ports.problems->set(k_problem_source, std::move(items));
 }

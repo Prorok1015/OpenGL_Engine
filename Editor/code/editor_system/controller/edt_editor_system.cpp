@@ -641,7 +641,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// #1186: the dirty documents into the project's cache://autosave/; the settings are a section of Editor Settings.
 	m_autosave = std::make_unique<autosave_component>(autosave_component::ports{ .documents = m_context->documents(),
 		.events = m_context->events(), .resources = m_res, .jobs = &m_context->jobs(),
-		.gesture_active = [this] { return person_is_editing(); } });
+		.gesture_active = [this] { return person_is_editing(); }, .problems = &m_context->problems() });
 	m_autosave->set_settings(load_autosave_settings(m_res));
 	m_autosave->set_allowed(autosave_allowed_by_config());
 	m_state.set_autosave_capture([this] { return m_level_ctrl.capture_autosave(); });

@@ -12,7 +12,9 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace res { class resource_system; }
 
@@ -20,6 +22,7 @@ namespace edt
 {
 	class document_manager;
 	class job_service;
+	class problem_list;
 
 	// Autosave of the dirty documents into cache://autosave/ (#1186, EPIC-60): a document's countdown starts at its first
 	// unsaved edit; `interval` later its bytes (what Save would write, autosave_source) and a meta file are written beside
@@ -42,7 +45,12 @@ namespace edt
 			job_service* jobs = nullptr;
 			// A person's gesture is in progress (editor_system::person_is_editing). Null: never.
 			std::function<bool()> gesture_active;
+			// A document that is not autosaved (nothing to capture, a write that failed) is a warning of the source `autosave`
+			// until it is written, clean or closed. Null: only logged.
+			problem_list* problems = nullptr;
 		};
+
+		static constexpr std::string_view k_problem_source = "autosave";
 
 		explicit autosave_component(ports from);
 		~autosave_component();
@@ -103,6 +111,8 @@ namespace edt
 		void discard(tracked& record);
 		void forget(document_id id);
 		void remove_files(const std::filesystem::path& root, const std::string& file) noexcept;
+		// Empty `message` clears the document's row.
+		void report(document_id id, std::string file, std::string message);
 
 		ports m_ports;
 		autosave_settings m_settings;
@@ -112,6 +122,8 @@ namespace edt
 		std::filesystem::path m_root;
 		std::function<clock::time_point()> m_clock;
 		std::unordered_map<document_id, tracked> m_tracked;
+		// document -> {source, message} of its Problems row.
+		std::unordered_map<document_id, std::pair<std::string, std::string>> m_reported;
 		std::size_t m_writes = 0;
 		connection m_closed;
 		// Declared last: destroyed (and its jobs' results dropped) first.

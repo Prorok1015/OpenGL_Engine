@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/editor/edt_problem_list.h>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "autosave/edt_autosave_component.h"
@@ -95,7 +96,7 @@ struct autosave_fixture : test_util::scene_env
 	std::unique_ptr<edt::autosave_component> make_autosave(edt::job_service* jobs = nullptr)
 	{
 		auto made = std::make_unique<edt::autosave_component>(edt::autosave_component::ports{ .documents = documents, .events = events,
-			.resources = *rs, .jobs = jobs, .gesture_active = [this] { return gesture; } });
+			.resources = *rs, .jobs = jobs, .gesture_active = [this] { return gesture; }, .problems = &problems });
 		made->set_clock_for_tests([this] { return now; });
 		return made;
 	}
@@ -165,6 +166,7 @@ struct autosave_fixture : test_util::scene_env
 	edt::world_controller world_ctrl{ state, services };
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 	edt::document_manager documents{ state, events };
+	edt::problem_list problems;
 	bool gesture = false;
 	edt::autosave_component::clock::time_point now{ std::chrono::hours(1) };
 	std::unique_ptr<edt::autosave_component> autosave;
@@ -189,6 +191,30 @@ BOOST_AUTO_TEST_CASE(ADirtyDocument_IsWrittenAfterTheInterval_ACleanOneNever)
 	BOOST_TEST(written(k_untitled));
 	BOOST_TEST(autosave->writes() == 1u);
 	BOOST_TEST(autosave->written_file(state.id()) == std::string(k_untitled));
+}
+
+// Review of #1329: a document that is not autosaved says so in Problems until it is written again.
+BOOST_AUTO_TEST_CASE(AWriteThatFails_IsAProblemsWarning_UntilTheNextWriteSucceeds)
+{
+	// A file where the kind's folder goes: the folder cannot be made.
+	fs::create_directories(cache / "autosave");
+	std::ofstream(cache / "autosave" / "scene", std::ios::binary) << "x";
+	edit_level();
+	after(1s);
+	after(60s);
+	BOOST_TEST(autosave->writes() == 0u);
+	std::vector<edt::sourced_problem> listed = problems.list();
+	BOOST_REQUIRE(listed.size() == 1u);
+	BOOST_TEST(listed[0].source == std::string(edt::autosave_component::k_problem_source));
+	BOOST_TEST((listed[0].item.severity == edt::problem_severity::warning));
+	BOOST_TEST(listed[0].item.message.find("could not be autosaved") != std::string::npos);
+
+	fs::remove(cache / "autosave" / "scene");
+	edit_level();
+	after(1s);
+	after(60s);
+	BOOST_TEST(written(k_untitled));
+	BOOST_TEST(problems.list().empty());
 }
 
 BOOST_AUTO_TEST_CASE(TheCountdown_StartsAtTheFirstEdit_LaterEditsDoNotPushItBack)
