@@ -183,9 +183,9 @@ struct recovery_fixture : test_util::scene_env
 	}
 
 	// A session folder of another run: session.json and, unless `lock_file` is false, an unheld session.lock.
-	std::string other_session(bool lock_file = true, std::string host = edt::this_host_name(), bool locked = true)
+	std::string other_session(bool lock_file = true, std::string host = edt::this_host_name(), bool locked = true, std::string named = {})
 	{
-		const std::string id = edt::autosave_new_session_id();
+		const std::string id = named.empty() ? edt::autosave_new_session_id() : std::move(named);
 		edt::autosave_session_info info;
 		info.session = id;
 		info.host = std::move(host);
@@ -277,6 +277,7 @@ struct recovery_fixture : test_util::scene_env
 			done({ {}, state.id(), state.generation() });
 		};
 		ports.restore_prefab = [this](const edt::autosave_recovery::restore_request& request, std::function<void(edt::autosave_recovery::restore_outcome)> done) {
+			++other_restores;
 			prefab = std::make_unique<edt::prefab_document>(services);
 			prefab->assign_id(70);
 			prefab->open(request.source);
@@ -285,6 +286,7 @@ struct recovery_fixture : test_util::scene_env
 			done({ error, {}, prefab->generation() });
 		};
 		ports.restore_mesh = [this](const edt::autosave_recovery::restore_request& request, std::function<void(edt::autosave_recovery::restore_outcome)> done) {
+			++other_restores;
 			mesh = std::make_unique<edt::mesh_document>(mesh_services);
 			mesh->assign_id(90);
 			mesh->open(request.source);
@@ -292,6 +294,7 @@ struct recovery_fixture : test_util::scene_env
 			done({ error, {}, mesh->generation() });
 		};
 		ports.restore_data = [this](const edt::autosave_recovery::restore_request& request, std::function<void(edt::autosave_recovery::restore_outcome)> done) {
+			++other_restores;
 			auto made = std::make_unique<edt::data_document>(services, layout());
 			const edt::open_result opened = made->open(request.source);
 			if (!opened.opened) {
@@ -369,6 +372,7 @@ struct recovery_fixture : test_util::scene_env
 	std::vector<asked_question> asked;
 	std::vector<std::string> messages;
 	int scene_restores = 0;
+	int other_restores = 0;
 };
 
 }
@@ -885,5 +889,157 @@ BOOST_AUTO_TEST_CASE(ADataDocument_IsRestoredDirty_ItsFileUnchanged)
 	BOOST_TEST(!session_exists(other));
 	BOOST_TEST(autosave->written_file(restored->id()) == edt::autosave_file_of(autosave->session(), "data", res::tag::make("settings.desc")));
 }
+
+BOOST_AUTO_TEST_CASE(AnOwnLockTakenByAnotherEditor_MakesItUseAnotherFolder_AndLeavesThatOneAlone)
+{
+	autosave.reset();
+	const std::string first = edt::autosave_session_id();
+	std::optional<platform::lock_attempt> theirs;
+	autosave = make_autosave();
+	autosave->set_lock_for_tests([&theirs](const fs::path& root, const fs::path& relative, platform::lock_open open) {
+		if (!theirs) theirs = platform::file_lock::acquire(root, relative, platform::lock_open::create);
+		return platform::file_lock::acquire(root, relative, open);
+	});
+	autosave->tick();
+	BOOST_REQUIRE(theirs.has_value());
+	BOOST_REQUIRE((theirs->outcome == platform::lock_outcome::acquired));
+	BOOST_TEST(autosave->session() != first);
+	BOOST_TEST(autosave->session_locked());
+	const fs::path taken = cache / edt::autosave_session_folder(first);
+	BOOST_TEST(fs::exists(taken / "session.lock"));
+	BOOST_TEST(!fs::exists(taken / "session.json"));
+	BOOST_TEST(!lock_is_free(first));
+	BOOST_TEST(fs::exists(cache / edt::autosave_session_folder(autosave->session()) / "session.json"));
+}
+
+// The empty dead session is listed again under its lock before it goes: a record written after the scan keeps it.
+BOOST_AUTO_TEST_CASE(AnEmptyDeadSession_ThatGainsARecordAfterTheScan_IsKept)
+{
+	write_file(content / "settings.desc", R"({"__type":"test.recovery_settings","speed":2.0})");
+	const std::string first = other_session(true, edt::this_host_name(), true, std::string(31, '0') + "1");
+	put_record(first, "data", "settings.desc", bytes_of(R"({"__type":"test.recovery_settings"})"));
+	const std::string empty = other_session(true, edt::this_host_name(), true, std::string(32, 'f'));
+	edt::autosave_recovery::ports ports = recovery_ports();
+	const auto known = ports.is_document_type;
+	bool planted = false;
+	ports.is_document_type = [&](std::string_view type) {
+		if (!planted) {
+			planted = true;
+			put_record(empty, "data", "late.desc", bytes_of("{}"));
+		}
+		return known(type);
+	};
+	run(std::move(ports));
+	BOOST_TEST(planted);
+	BOOST_TEST(session_exists(empty));
+	BOOST_TEST(fs::exists(cache / edt::autosave_file_of(empty, "data", res::tag::make("late.desc"))));
+	BOOST_REQUIRE(asked.size() == 1u);
+	answer(edt::autosave_recovery::k_later);
+}
+
+BOOST_AUTO_TEST_CASE(AnEmptyDeadSession_IsRemoved)
+{
+	const std::string empty = other_session();
+	run();
+	BOOST_TEST(asked.empty());
+	BOOST_TEST(!session_exists(empty));
+}
+
+BOOST_AUTO_TEST_CASE(ManyStartingOrFutureFolders_DoNotPushOutADeadSession)
+{
+	for (int index = 0; index < 70; ++index) fs::create_directories(cache / edt::autosave_session_folder(edt::autosave_new_session_id()));
+	for (int index = 0; index < 3; ++index) {
+		const fs::path future = cache / edt::autosave_session_folder(edt::autosave_new_session_id());
+		fs::create_directories(future);
+		fs::last_write_time(future, fs::file_time_type::clock::now() + 1h);
+	}
+	const std::string dead = other_session(true, edt::this_host_name(), true, std::string(32, 'f'));
+	put_record(dead, "data", "real.desc", bytes_of("{}"));
+	const edt::recovery_scan_result scan = edt::scan_autosave_sessions(scan_options());
+	BOOST_TEST(scan.starting == 70u);
+	BOOST_TEST(scan.unchecked_sessions == 0u);
+	bool found = false;
+	for (const edt::recovery_session& session : scan.sessions) {
+		if (session.id == dead) found = session.records.size() == 1u;
+		// A folder dated in the future is no editor starting.
+		BOOST_TEST((session.state == edt::recovery_state::dead));
+	}
+	BOOST_TEST(found);
+	BOOST_TEST(scan.sessions.size() == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(PrefabMeshAndDataRecords_OfAnotherKindsSource_AreNotRestored)
+{
+	write_file(content / "a.desc", R"({"__type":"test.recovery_settings"})");
+	write_file(content / "m.desc", R"({"__type":"test.recovery_settings"})");
+	write_file(content / "p.prefab.desc", k_prefab);
+	const std::string other = other_session();
+	const std::string prefab_file = put_record(other, "prefab", "a.desc", bytes_of(k_prefab));
+	const std::string mesh_file = put_record(other, "mesh", "m.desc", bytes_of("{}"));
+	const std::string data_file = put_record(other, "data", "p.prefab.desc", bytes_of(k_prefab));
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].text.find("its source is not a prefab file") != std::string::npos);
+	BOOST_TEST(asked[0].text.find("its source is not a mesh source file") != std::string::npos);
+	BOOST_TEST(asked[0].text.find("its source is not a data document file") != std::string::npos);
+	answer(edt::autosave_recovery::k_restore);
+	BOOST_TEST(other_restores == 0);
+	BOOST_TEST(fs::exists(cache / prefab_file));
+	BOOST_TEST(fs::exists(cache / mesh_file));
+	BOOST_TEST(fs::exists(cache / data_file));
+	BOOST_TEST(session_exists(other));
+}
+
+BOOST_AUTO_TEST_CASE(ALevelRecord_WhoseSourceIsAnotherDescType_IsNotRestored)
+{
+	write_file(content / "materials" / "m.desc", R"({"__type":"test.recovery_settings","speed":2.0})");
+	const std::string on_disk = read_file(content / "materials" / "m.desc");
+	const std::string other = other_session();
+	const std::string file = put_record(other, "scene", "materials/m.desc", bytes_of(level_text("X")));
+	const std::string untyped = put_record(other, "scene", "", bytes_of(R"({"__type":"test.recovery_settings"})"));
+	run();
+	BOOST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST(asked[0].text.find("its source is not a level file") != std::string::npos);
+	BOOST_TEST(asked[0].text.find("the autosave is not a level") != std::string::npos);
+	answer(edt::autosave_recovery::k_restore);
+	BOOST_TEST(scene_restores == 0);
+	BOOST_TEST(read_file(content / "materials" / "m.desc") == on_disk);
+	BOOST_TEST(fs::exists(cache / file));
+	BOOST_TEST(fs::exists(cache / untyped));
+}
+
+BOOST_AUTO_TEST_CASE(FilesNoMetaAccountsFor_KeepAnEmptyLookingSession)
+{
+	const std::string other = other_session();
+	write_file(cache / edt::autosave_session_folder(other) / "scene" / ".untitled.0123456789abcdef.tmp", "{");
+	const edt::recovery_scan_result scan = edt::scan_autosave_sessions(scan_options());
+	BOOST_REQUIRE(scan.sessions.size() == 1u);
+	BOOST_TEST(scan.sessions[0].unread == 1u);
+	BOOST_TEST(!scan.sessions[0].fully_read());
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(ALinkAtASessionFolderOrAtItsLock_IsNeverFollowed)
+{
+	const fs::path outside = dir.path() / "outside_session";
+	write_file(outside / "session.lock", "");
+	write_file(outside / "data" / "x.desc", "{}");
+	fs::create_directories(cache / "autosave");
+	const std::string linked = edt::autosave_new_session_id();
+	fs::create_directory_symlink(outside, cache / edt::autosave_session_folder(linked));
+
+	const std::string other = other_session(false);
+	write_file(dir.path() / "outside.lock", "keep");
+	fs::create_symlink(dir.path() / "outside.lock", cache / edt::autosave_session_folder(other) / "session.lock");
+	put_record(other, "data", "settings.desc", bytes_of("{}"));
+
+	const edt::recovery_scan_result scan = edt::scan_autosave_sessions(scan_options());
+	BOOST_REQUIRE(scan.sessions.size() == 1u);
+	BOOST_TEST(scan.sessions[0].id == other);
+	BOOST_TEST((scan.sessions[0].state == edt::recovery_state::unverifiable));
+	BOOST_TEST(read_file(dir.path() / "outside.lock") == "keep");
+	BOOST_TEST(fs::exists(outside / "data" / "x.desc"));
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -83,13 +83,16 @@ namespace edt
 		std::size_t over_limit = 0;
 		// Records not read because the scan's byte budget was used up.
 		std::size_t not_checked = 0;
-		// Why its folder was not listed whole (an error, more entries than are read); empty when it was.
+		// Files in its kind folders that are no meta nor the payload of one (a payload left alone, a temp file).
+		std::size_t unread = 0;
+		// Why its folder was not listed whole (an error, more entries than are read); empty when it was. Such a folder is
+		// never removed: it may hold what the scan never saw.
 		std::string incomplete;
 
 		// Nothing in it to restore or to report.
 		bool empty() const { return records.empty() && rejected.empty() && fully_read(); }
 		// Everything in its folder was read: only then may the folder itself go.
-		bool fully_read() const { return incomplete.empty() && over_limit == 0 && not_checked == 0; }
+		bool fully_read() const { return incomplete.empty() && over_limit == 0 && not_checked == 0 && unread == 0; }
 	};
 
 	struct recovery_scan_result
@@ -98,7 +101,8 @@ namespace edt
 		std::vector<recovery_session> sessions;
 		std::size_t live = 0;
 		std::size_t starting = 0;
-		// Session folders past k_recovery_max_sessions; `unchecked_more`: the listing itself was cut, there may be more.
+		// Dead or unverifiable sessions past k_recovery_max_sessions, not read; `unchecked_more`: the listing itself was
+		// cut, there may be more.
 		std::size_t unchecked_sessions = 0;
 		bool unchecked_more = false;
 		std::string error;
@@ -238,6 +242,9 @@ namespace edt
 		void job_ended(std::uint64_t id, job_status status);
 		// Removes the record files the scan read (verified and rejected), nothing else of the session.
 		void remove_listed(recovery_session& session);
+		// Removes the folder of a dead session whose lock it holds, when a fresh listing finds nothing in it but
+		// session.json, session.lock and empty kind folders; else keeps it.
+		void remove_if_still_empty(recovery_session& session);
 		void end_batch();
 		void finish();
 		restore_port port_of(std::string_view kind) const;

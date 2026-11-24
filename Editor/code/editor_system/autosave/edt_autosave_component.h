@@ -88,6 +88,10 @@ namespace edt
 		void adopt(document_id id, std::uint64_t generation);
 
 		void set_clock_for_tests(std::function<clock::time_point()> clock) { m_clock = std::move(clock); }
+		using lock_port = std::function<platform::lock_attempt(const std::filesystem::path& root, const std::filesystem::path& relative,
+			platform::lock_open open)>;
+		// Takes the session's lock instead of platform::file_lock::acquire.
+		void set_lock_for_tests(lock_port lock) { m_lock_port = std::move(lock); }
 		// The file the last autosave of document `id` went to, relative to the cache folder; empty while none is there.
 		std::string written_file(document_id id) const;
 		// How many autosaves were written so far.
@@ -145,6 +149,7 @@ namespace edt
 		std::filesystem::path m_session_root;
 		bool m_session_failed = false;
 		std::optional<platform::file_lock> m_lock;
+		lock_port m_lock_port;
 		std::function<clock::time_point()> m_clock;
 		std::unordered_map<document_id, tracked> m_tracked;
 		// document -> {source, message} of its Problems row.

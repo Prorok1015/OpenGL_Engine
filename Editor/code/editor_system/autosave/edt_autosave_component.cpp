@@ -344,26 +344,39 @@ bool edt::autosave_component::start_session()
 				egLOG_WARN("editor/autosave", "cache://{}/{} (an autosave of an older format) could not be removed: {}", k_autosave_folder, name, error);
 			}
 		}
-		std::string error;
-		for (int attempt = 0; attempt < 8; ++attempt) {
-			error = pb::make_folders_beneath(root, fs_paths::path_from_utf8(autosave_session_folder(m_session)), true);
-			if (error.empty()) break;
-			std::error_code ec;
-			if (!fs::exists(m_root / fs_paths::path_from_utf8(autosave_session_folder(m_session)), ec)) break;
-			m_session = autosave_new_session_id();
+		std::string error = "no free session folder was found";
+		for (int tries = 0; tries < 8; ++tries) {
+			const std::string folder = autosave_session_folder(m_session);
+			error = pb::make_folders_beneath(root, fs_paths::path_from_utf8(folder), true);
+			if (!error.empty()) {
+				std::error_code ec;
+				if (!fs::exists(m_root / fs_paths::path_from_utf8(folder), ec)) break;
+				m_session = autosave_new_session_id();
+				continue;
+			}
+			const fs::path lock_file = fs_paths::path_from_utf8(folder + "/" + std::string(k_autosave_lock_file));
+			platform::lock_attempt attempt = m_lock_port ? m_lock_port(m_root, lock_file, platform::lock_open::create)
+				: platform::file_lock::acquire(m_root, lock_file, platform::lock_open::create);
+			if (attempt.outcome == platform::lock_outcome::held || attempt.outcome == platform::lock_outcome::missing) {
+				// Someone else took the new folder between its making and the lock: it is theirs, nothing of it is touched.
+				egLOG_WARN("editor/autosave", "cache://{} was taken by another editor; another session folder is used", folder);
+				error = "every new session folder was taken by another editor";
+				m_session = autosave_new_session_id();
+				continue;
+			}
+			if (attempt.outcome == platform::lock_outcome::acquired && attempt.lock) {
+				m_lock = std::move(attempt.lock);
+			} else {
+				egLOG_WARN("editor/autosave", "cache://{}/{} could not be locked ({}): another editor cannot tell whether this one still runs",
+					folder, k_autosave_lock_file, attempt.error.empty() ? std::string{ "no reason given" } : attempt.error);
+			}
+			error.clear();
+			break;
 		}
 		if (!error.empty()) {
 			egLOG_WARN("editor/autosave", "the autosave folder cache://{} could not be made: {}; autosave is off for this project",
 				autosave_session_folder(m_session), error);
 			return false;
-		}
-		const std::string lock_file = autosave_session_folder(m_session) + "/" + std::string(k_autosave_lock_file);
-		platform::lock_attempt attempt = platform::file_lock::acquire(m_root, fs_paths::path_from_utf8(lock_file), platform::lock_open::create);
-		if (attempt.outcome == platform::lock_outcome::acquired && attempt.lock) {
-			m_lock = std::move(attempt.lock);
-		} else {
-			egLOG_WARN("editor/autosave", "cache://{} could not be locked ({}): another editor cannot tell whether this one still runs",
-				lock_file, attempt.error.empty() ? std::string{ "held" } : attempt.error);
 		}
 		autosave_session_info info;
 		info.session = m_session;

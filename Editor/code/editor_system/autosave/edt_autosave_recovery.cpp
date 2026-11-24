@@ -5,11 +5,13 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/platform/plt_beneath.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 #include <algorithm>
 #include <exception>
 #include <format>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -78,6 +80,19 @@ namespace
 		out.reserve(digest.size() * 2);
 		for (const std::uint8_t byte : digest) out += std::format("{:02x}", static_cast<unsigned>(byte));
 		return out;
+	}
+
+	// Whether the bytes are a JSON object whose root __type is the level desc type.
+	bool is_level_text(std::span<const std::byte> bytes)
+	{
+		boost::json::error_code ec;
+		boost::json::parse_options options;
+		options.max_depth = 4096;
+		const boost::json::value parsed = boost::json::parse(
+			std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec, {}, options);
+		if (ec || !parsed.is_object()) return false;
+		const boost::json::value* type = parsed.as_object().if_contains("__type");
+		return type && type->is_string() && std::string_view(type->as_string()) == scn::level_desc::__type;
 	}
 
 	struct source_state
@@ -152,10 +167,7 @@ namespace
 				names.push_back(name);
 			}
 			std::ranges::sort(names);
-			if (names.size() > edt::k_recovery_max_sessions) {
-				out.unchecked_sessions = names.size() - edt::k_recovery_max_sessions;
-				names.resize(edt::k_recovery_max_sessions);
-			}
+			// Every folder is judged (a probe is cheap); only the ones whose records are read count against the limit.
 			for (const std::string& name : names) {
 				edt::recovery_session session = judge(name);
 				if (session.state == edt::recovery_state::live) {
@@ -164,6 +176,10 @@ namespace
 				}
 				if (session.state == edt::recovery_state::starting) {
 					++out.starting;
+					continue;
+				}
+				if (out.sessions.size() >= edt::k_recovery_max_sessions) {
+					++out.unchecked_sessions;
 					continue;
 				}
 				read_records(root, session);
@@ -184,9 +200,10 @@ namespace
 		{
 			std::error_code ec;
 			const fs::file_time_type written = fs::last_write_time(m_options.cache_root / relative_of(edt::autosave_session_folder(session)), ec);
-			if (ec) return false;
+			// Not knowing is treated as young: the folder is skipped, never judged dead.
+			if (ec) return true;
 			const fs::file_time_type now = m_options.now ? m_options.now() : fs::file_time_type::clock::now();
-			return now - written < edt::k_recovery_starting_age;
+			return written <= now && now - written < edt::k_recovery_starting_age;
 		}
 
 		edt::recovery_session judge(const std::string& id) const
@@ -261,6 +278,7 @@ namespace
 					session.incomplete = std::format("its folder '{}' holds more entries than are read", kind);
 					++session.over_limit;
 				}
+				std::set<std::string> accounted;
 				for (const pb::folder_entry& entry : entries.entries) {
 					const std::string name = name_of(entry.name);
 					if (!name.ends_with(edt::k_autosave_meta_suffix)) continue;
@@ -269,7 +287,13 @@ namespace
 						continue;
 					}
 					++metas;
+					accounted.insert(name.substr(0, name.size() - edt::k_autosave_meta_suffix.size()));
 					check_record(session, kind, kind_folder, name, entry.kind);
+				}
+				// A payload without its meta, a temp file of a write cut short: nothing checked them, so the folder is not empty.
+				for (const pb::folder_entry& entry : entries.entries) {
+					const std::string name = name_of(entry.name);
+					if (!name.ends_with(edt::k_autosave_meta_suffix) && !accounted.contains(name)) ++session.unread;
 				}
 			}
 		}
@@ -371,7 +395,38 @@ namespace
 				record.source_not_checked = now.not_checked;
 				if (!now.exists && record.not_restorable.empty()) record.not_restorable = "source missing: can only be discarded";
 			}
+			if (kind == edt::k_autosave_kind_scene && record.not_restorable.empty()) {
+				if (!is_level_text(*record.bytes)) {
+					record.not_restorable = "the autosave is not a level";
+				} else if (source) {
+					record.not_restorable = source_level_problem(*source);
+				}
+			}
 			session.records.push_back(std::move(record));
+		}
+
+		// Empty when the source file on disk is a level (its root __type); else why the record is not restored.
+		std::string source_level_problem(const res::tag& source)
+		{
+			const fs::path relative = relative_of(source.relative());
+			for (auto root = m_options.res_roots.rbegin(); root != m_options.res_roots.rend(); ++root) {
+				pb::read_request request;
+				request.root = *root;
+				request.folder = relative.parent_path();
+				request.leaf = relative.filename();
+				request.max_bytes = edt::k_recovery_max_payload;
+				request.stamp_only = true;
+				std::vector<std::byte> bytes;
+				const pb::read_result stamped = pb::read_beneath(request, bytes);
+				if (stamped.status == pb::read_status::missing) continue;
+				if (stamped.status != pb::read_status::ok || !stamped.stamp) return "its source could not be read to check it is a level";
+				if (m_used + stamped.stamp->size > edt::k_recovery_scan_budget) return "its source was not checked to be a level (limit)";
+				m_used += stamped.stamp->size;
+				request.stamp_only = false;
+				if (pb::read_beneath(request, bytes).status != pb::read_status::ok) return "its source could not be read to check it is a level";
+				return is_level_text(bytes) ? std::string{} : std::string{ "its source is not a level file" };
+			}
+			return "source missing: can only be discarded";
 		}
 
 		const edt::recovery_scan_options& m_options;
@@ -499,6 +554,9 @@ std::string edt::recovery_question_text(const std::vector<const recovery_session
 			line(std::format("  cache://{} was not fully read ({}): its folder is kept", autosave_session_folder(session->id),
 				recovery_shown_text(session->incomplete)));
 		}
+		if (session->unread > 0) {
+			line(std::format("  {} other file(s) in cache://{} were not read", session->unread, autosave_session_folder(session->id)));
+		}
 		rejected += session->rejected.size();
 		over_limit += session->over_limit;
 		not_checked += session->not_checked;
@@ -513,6 +571,9 @@ std::string edt::recovery_question_text(const std::vector<const recovery_session
 	}
 	out += "\nRestore all opens them with these changes, unsaved: no file is changed until you save. Discard all deletes these "
 		"autosaves. Later keeps them for the next start.";
+	if (unverifiable) {
+		out += " Restore all also moves the restored autosaves out of that editor's folder, even if that editor is still running.";
+	}
 	return out;
 }
 
@@ -611,11 +672,7 @@ void edt::autosave_recovery::take(std::shared_ptr<recovery_scan_result> scan)
 		prepare(session);
 		if (session.empty()) {
 			// A run that died before it wrote anything: nothing to ask about.
-			if (session.state == recovery_state::dead && !m_ports.headless) {
-				if (const std::string error = remove_autosave_tree(m_root, session.id); !error.empty()) {
-					egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", autosave_session_folder(session.id), error);
-				}
-			}
+			if (session.state == recovery_state::dead && !m_ports.headless) remove_if_still_empty(session);
 			session.lock.reset();
 			continue;
 		}
@@ -748,13 +805,49 @@ void edt::autosave_recovery::remove_listed(recovery_session& session)
 	}
 }
 
+void edt::autosave_recovery::remove_if_still_empty(recovery_session& session)
+{
+	const std::string folder = autosave_session_folder(session.id);
+	if (!session.lock) return;
+	// Listed again under the lock: a record that arrived after the scan keeps the folder.
+	bool empty = false;
+	try {
+		pb::pinned_root root{ m_root };
+		const pb::list_result listed = pb::list_beneath(root, relative_of(folder), 64);
+		empty = listed.error.empty() && !listed.truncated;
+		for (const pb::folder_entry& entry : listed.entries) {
+			const std::string name = name_of(entry.name);
+			if (entry.kind == pb::entry_kind::file && (name == k_autosave_session_file || name == k_autosave_lock_file)) continue;
+			if (entry.kind == pb::entry_kind::folder && is_autosave_kind(name)) {
+				const pb::list_result inside = pb::list_beneath(root, relative_of(folder + "/" + name), 1);
+				if (inside.error.empty() && inside.entries.empty() && !inside.truncated) continue;
+			}
+			empty = false;
+			break;
+		}
+	} catch (const std::exception&) {
+		empty = false;
+	}
+	if (!empty) {
+		egLOG_INFO("editor/autosave", "cache://{} holds files the scan did not see: it is kept", folder);
+		return;
+	}
+	std::string error = remove_autosave_tree(m_root, session.id);
+	if (!error.empty()) {
+		// Some file systems refuse to remove a file that is still open locked: once more after the lock went.
+		session.lock.reset();
+		error = remove_autosave_tree(m_root, session.id);
+	}
+	if (!error.empty()) egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", folder, error);
+}
+
 void edt::autosave_recovery::discard_batch()
 {
 	for (std::size_t index : m_current->sessions) {
 		recovery_session& session = m_scan->sessions[index];
 		const std::string folder = autosave_session_folder(session.id);
-		// Not dead, or not read whole: only what was looked at goes; the folder, session.json and session.lock stay.
-		if (m_current->unverifiable || !session.fully_read()) {
+		// Not dead, or not listed whole: only what was looked at goes; the folder, session.json and session.lock stay.
+		if (m_current->unverifiable || !session.incomplete.empty()) {
 			remove_listed(session);
 			egLOG_INFO("editor/autosave", "the autosaves read from cache://{} were discarded; the folder is kept", folder);
 			continue;
@@ -883,12 +976,7 @@ void edt::autosave_recovery::end_batch()
 		const bool restored_all = std::ranges::all_of(session.records, [](const recovery_record& record) { return record.restored; });
 		const bool any_restored = std::ranges::any_of(session.records, [](const recovery_record& record) { return record.restored; });
 		if (session.state == recovery_state::dead && any_restored && restored_all && session.rejected.empty() && session.fully_read()) {
-			std::string error = remove_autosave_tree(m_root, session.id);
-			if (!error.empty() && session.lock) {
-				session.lock.reset();
-				error = remove_autosave_tree(m_root, session.id);
-			}
-			if (!error.empty()) egLOG_WARN("editor/autosave", "cache://{} could not be removed: {}", autosave_session_folder(session.id), error);
+			remove_if_still_empty(session);
 		}
 		session.lock.reset();
 	}
