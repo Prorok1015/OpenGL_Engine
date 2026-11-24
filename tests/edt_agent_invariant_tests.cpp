@@ -943,8 +943,13 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 		}
 	};
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
-	pump_frames();
-	BOOST_REQUIRE(!editor().level_load_in_progress());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (editor().level_load_in_progress() && std::chrono::steady_clock::now() < deadline) {
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		test_util::pump(tasks);
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	BOOST_REQUIRE_MESSAGE(!editor().level_load_in_progress(), "the level was still loading after 5 s");
 	person_allows(true);
 	const std::string garbage = "not a model";
 	std::vector<std::byte> bytes(garbage.size());
