@@ -429,7 +429,10 @@ BOOST_AUTO_TEST_CASE(a_module_marks_its_types_as_data_documents_and_they_go_with
 	BOOST_TEST(!resident(g_module_path));
 	auto* after = contexts().game_layer();
 	BOOST_REQUIRE(after != nullptr);
-	BOOST_TEST(after->descs().document_types().empty());
+	// The engine's own document types (material_desc, #1196) stay; the module's go with it.
+	const std::vector<std::string> left = after->descs().document_types();
+	BOOST_TEST(std::ranges::count(left, std::string{ dll_game::document_type }) == 0);
+	BOOST_TEST(std::ranges::count(left, std::string{ dll_game::schema_document_type }) == 0);
 }
 
 // #786: migrations a module registers are written by the engine's code (register_migration is out of line since 4.0), are
