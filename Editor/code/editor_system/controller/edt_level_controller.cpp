@@ -25,6 +25,9 @@
 
 namespace
 {
+	// Names the level that has no file yet; nothing is read from or written to it.
+	constexpr std::string_view k_untitled_level_file = "untitled.desc";
+
 	// The records an instance holds are written against the version of their component's type the file had; the editor shows and
 	// edits them at the current one (#1255). Returns how many moved their path or value.
 	std::size_t migrate_worlds(const edt::editor_services& services, std::vector<scn::world_desc>& worlds)
@@ -469,7 +472,7 @@ edt::autosave_snapshot edt::level_controller::capture_autosave() const
 	m_scene_editor.write_live_transforms_into(worlds);
 	// As quick_save_level names the level: the stem of its file, the same __guid.
 	std::string name = m_state.level_name.empty() ? std::string{ "untitled" } : m_state.level_name;
-	res::tag target = res::tag::make("untitled.desc");
+	res::tag target = res::tag::make(k_untitled_level_file);
 	if (m_state.level_tag.is_valid()) {
 		target = m_state.level_tag;
 		const std::string stem = std::filesystem::path(std::string(target.relative())).stem().string();
