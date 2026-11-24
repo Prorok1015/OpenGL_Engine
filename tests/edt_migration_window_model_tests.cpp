@@ -159,6 +159,29 @@ BOOST_AUTO_TEST_CASE(ARefusedPlan_DisablesMigrate)
 	BOOST_TEST(!model.can_migrate());
 }
 
+// #1278: project.migration_plan is busy until the editor's asset index is ready: the window shows why and offers no Migrate.
+BOOST_AUTO_TEST_CASE(APlanWaitingForTheAssetIndex_ShowsWhy_AndDisablesMigrate)
+{
+	const std::string why = "the asset index is still being built; the index is not attached yet (the first scan is running)";
+	plan_answer = cmd::result::failure(cmd::codes::busy, why);
+	plan();
+	BOOST_TEST((model.state() == phase::idle));
+	BOOST_TEST(!model.plan().has_value());
+	BOOST_TEST(model.error_code() == "busy");
+	BOOST_TEST(model.error_text() == why);
+	BOOST_TEST(!model.error_hint().empty());
+	BOOST_TEST(!model.can_migrate());
+	model.migrate();
+	BOOST_TEST(calls.size() == 1u);
+
+	// Asked again once the index is ready: the plan, and Migrate.
+	plan_answer.reset();
+	plan();
+	BOOST_TEST_REQUIRE((model.state() == phase::plan_shown));
+	BOOST_TEST(model.error_code().empty());
+	BOOST_TEST(model.can_migrate());
+}
+
 BOOST_AUTO_TEST_CASE(APlanThatFails_ShowsWhy)
 {
 	plan_answer = cmd::result::failure("no_project", "no project is open");

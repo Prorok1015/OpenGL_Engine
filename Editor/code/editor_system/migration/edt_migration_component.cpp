@@ -66,6 +66,7 @@ void edt::migration_component::install(std::vector<registration>& out, const std
 		migration.descs = [this]() -> desc::desc_system& { return *m_ports.services.descs(); };
 		migration.resources = [this]() -> res::resource_system& { return *m_ports.services.resources(); };
 		migration.busy_reason = m_ports.busy_reason;
+		migration.index_wait = m_ports.index_wait;
 		migration.unsaved_reason = m_ports.unsaved_reason;
 		migration.close_documents_and_detach_level = [this] {
 			m_ports.prefab.close();

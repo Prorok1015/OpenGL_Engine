@@ -99,6 +99,7 @@ struct migration_fixture : test_util::scene_env
 		deps.descs = [this]() -> desc::desc_system& { return *descs; };
 		deps.resources = [this]() -> res::resource_system& { return *rs; };
 		deps.busy_reason = [this] { return busy; };
+		deps.index_wait = [this] { return index_pending; };
 		deps.unsaved_reason = [this] { return unsaved; };
 		deps.close_documents_and_detach_level = [this] {
 			closed = true;
@@ -279,6 +280,8 @@ struct migration_fixture : test_util::scene_env
 
 	bool project_open = true;
 	std::optional<std::string> busy;
+	// The editor's asset index is not ready (#1278); nullopt: ready, as in every test that does not set it.
+	std::optional<std::string> index_pending;
 	std::optional<std::string> unsaved;
 	res::tag current_level;
 	bool closed = false;
@@ -962,6 +965,50 @@ BOOST_AUTO_TEST_CASE(UnsavedChanges_NeedInput_AndABusyEditor_IsBusy)
 	BOOST_TEST(error_code_of(info->result->as_object()) == cmd::codes::busy);
 	BOOST_TEST(!closed);
 	BOOST_TEST((snapshot(copy.root()) == before));
+}
+
+// #1278: before the editor's asset index is attached a plan misjudges materials over the engine's base and lists them as
+// invalid. The plan, the question, the migration and the rollback wait with the index's reason; after it, the normal plan.
+BOOST_AUTO_TEST_CASE(APendingAssetIndex_IsBusy_AndNoPlanIsMadeBeforeIt)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = snapshot(copy.root());
+	index_pending = "the asset index is still being built; the index is not attached yet (the first scan is running)";
+
+	const cmd::result waiting = call("project.migration_plan");
+	BOOST_TEST(!waiting.ok);
+	BOOST_TEST(waiting.code == cmd::codes::busy);
+	BOOST_TEST(waiting.error == *index_pending);
+	const std::string question = ask();
+	BOOST_TEST(question.find("will be refused: " + *index_pending) != std::string::npos, question);
+	BOOST_TEST(question.find("Not migrated") == std::string::npos, question);
+
+	const cmd::result agent = call("project.migrate");
+	BOOST_TEST(agent.code == cmd::codes::busy);
+	BOOST_TEST(agent.error == *index_pending);
+	const cmd::result person = call("project.migrate", {}, cmd::origin::ui());
+	BOOST_TEST(person.code == cmd::codes::busy);
+	BOOST_TEST(person.error == *index_pending);
+	BOOST_TEST(call("project.migrate_rollback", { { "id", "m1" } }, cmd::origin::ui()).code == cmd::codes::busy);
+	BOOST_TEST(implicit.empty());
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
+
+	index_pending.reset();
+	const cmd::result planned = call("project.migration_plan");
+	BOOST_REQUIRE_MESSAGE(planned.ok, planned.error);
+	BOOST_TEST(planned.value.at("code").as_int64() == pmg::k_exit_migration_needed);
+	BOOST_TEST(!planned.value.at("plan").as_object().contains("refused"));
+	// The approval of the question that showed no plan runs nothing.
+	const json::object stale = migrate();
+	BOOST_TEST(error_code_of(stale) == cmd::codes::denied);
+	BOOST_TEST(!closed);
+	BOOST_TEST((snapshot(copy.root()) == before));
+
+	static_cast<void>(ask());
+	const json::object result = migrate();
+	BOOST_TEST(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.contains("id"));
 }
 
 // A second migration while one runs is busy.

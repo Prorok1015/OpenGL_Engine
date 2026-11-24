@@ -50,6 +50,9 @@ namespace edt
 		std::function<res::resource_system&()> resources;
 		// Why nothing may migrate now (Play, a load, a build or reload, an import); nullopt: it may.
 		std::function<std::optional<std::string>()> busy_reason;
+		// Why the asset index is not ready (#1278); nullopt or null: ready. A plan made before it misjudges what is over the
+		// engine's base, so the plan, the question, the migration and the rollback are `busy` until then.
+		std::function<std::optional<std::string>()> index_wait;
 		// Unsaved changes of a document; nullopt: none.
 		std::function<std::optional<std::string>()> unsaved_reason;
 		// Closes the prefab editor and the data documents, lets go of the level (detach) and returns its tag (invalid: none).
