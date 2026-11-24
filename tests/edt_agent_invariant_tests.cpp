@@ -40,12 +40,19 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
+#include "edt_mesh_document.h"
+#include "edt_mesh_editor_panel.h"
+#include "edt_mesh_documents.h"
+#include "edt_mesh_shape_asset.h"
+#include "edt_modeller_component.h"
+#include "edt_save_all.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/editor/edt_dialog_service.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -936,8 +943,13 @@ BOOST_FIXTURE_TEST_CASE(AnAgentNamingAModelInSceneOrDescCommands_IsRefused_AndNo
 		}
 	};
 	BOOST_REQUIRE(invoke_as_agent("file.open", boost::json::object{ { "path", "levels/test_level.desc" } }).ok);
-	pump_frames();
-	BOOST_REQUIRE(!editor().level_load_in_progress());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (editor().level_load_in_progress() && std::chrono::steady_clock::now() < deadline) {
+		gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+		test_util::pump(tasks);
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	BOOST_REQUIRE_MESSAGE(!editor().level_load_in_progress(), "the level was still loading after 5 s");
 	person_allows(true);
 	const std::string garbage = "not a model";
 	std::vector<std::byte> bytes(garbage.size());
@@ -1121,14 +1133,17 @@ struct desc_problems_fixture : agent_editor_fixture
 	void open_prefab(const res::tag& tag)
 	{
 		gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag)); });
-		// The prefab opens in the background (#152): frames until the window is done loading, with a limit.
+		// The prefab opens in the background (#152): frames until the window is done loading. The limit is wall-clock,
+		// so a slow shared runner cannot run out of frames first.
 		const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
-		for (int frame = 0; frame < 300; ++frame) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		do {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
 			if (!window || !window->loading()) break;
-		}
-		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 300 frames");
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		} while (std::chrono::steady_clock::now() < deadline);
+		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 5 s");
 	}
 
 	const res::tag level_tag = res::tag::make("levels/desc_problems.desc");
@@ -1515,7 +1530,8 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), second)); });
 	BOOST_TEST(window->loading());
-	window->cancel_loading();
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	window->cancel_loading(window->loadings().front().id);
 
 	BOOST_TEST(!window->loading());
 	document = test_util::prefab_of(editor().context()->documents());
@@ -1632,9 +1648,24 @@ struct multi_prefab_fixture : desc_problems_fixture
 		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 	}
 
-	void pump_frames(int frames)
+	// Frames until `done`, for up to 5 s of wall-clock: a frame count would run out first on a slow shared runner.
+	template <class Done>
+	bool pump_until(Done&& done)
 	{
-		for (int frame = 0; frame < frames; ++frame) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		do {
+			test_util::pump(tasks);
+			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			if (done()) return true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		} while (std::chrono::steady_clock::now() < deadline);
+		return false;
+	}
+
+	// A fixed number of frames, for a check that nothing changes while they run (pump_until is for waiting for something).
+	void run_frames(int frames)
+	{
+		for (int i = 0; i < frames; ++i) {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
 		}
@@ -1691,8 +1722,7 @@ BOOST_FIXTURE_TEST_CASE(ApplyDirty_WritesInOpenOrder_AndStopsAtTheFirstRefusal, 
 	project.write("res/prefabs/multi_b.prefab.desc",
 		R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"outside"}]})json");
 	storage.require<res::resource_system>().signal_changed(tag_of('b'));
-	pump_frames(5);
-	BOOST_REQUIRE(b.changed_on_disk());
+	BOOST_REQUIRE_MESSAGE(pump_until([&b] { return b.changed_on_disk(); }), "the changed file was not noticed within 5 s");
 
 	BOOST_TEST(!editor().prefab_editor().apply_dirty());
 
@@ -1710,9 +1740,8 @@ BOOST_FIXTURE_TEST_CASE(APrefabThatFinishesLoading_AfterAnotherPrefabWasClosed_O
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
 
 	documents().close(a_id);
-	pump_frames(30);
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return !window->loading(); }), "the second prefab was still loading after 5 s");
 
-	BOOST_TEST(!window->loading());
 	const std::vector<edt::prefab_document*> open_now = edt::prefabs_of(documents());
 	BOOST_REQUIRE_EQUAL(open_now.size(), 1u);
 	BOOST_TEST(open_now.front()->source_tag() == tag_of('b'));
@@ -1726,8 +1755,14 @@ BOOST_FIXTURE_TEST_CASE(TheInspectorNode_NeverBelongsToAPrefabTheWindowStoppedSh
 	window->select_node({ 0xe1 });
 	BOOST_REQUIRE(inspector->selected_node() == a.working_node({ 0xe1 }));
 
+	// A node is picked in A, so B opens as a tab (#1303): the window and the Inspector stay on A.
 	edt::prefab_document& b = open('b');
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
+	BOOST_TEST(inspector->selected_node() == a.working_node({ 0xe1 }));
 
+	// The window moves to B: the Inspector lets go of A's node at once.
+	documents().set_active(b.id());
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &b);
 	BOOST_TEST(inspector->selected_node() == nullptr);
 	window->select_node({ 0xe1 });
 	BOOST_TEST(inspector->selected_node() == b.working_node({ 0xe1 }));
@@ -1735,6 +1770,7 @@ BOOST_FIXTURE_TEST_CASE(TheInspectorNode_NeverBelongsToAPrefabTheWindowStoppedSh
 
 	documents().set_active(a.id());
 
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
 	BOOST_TEST(inspector->selected_node() == nullptr);
 }
 
@@ -1755,6 +1791,135 @@ BOOST_FIXTURE_TEST_CASE(APrefabTheWindowStoppedShowing_GivesUpTheRenderTarget_It
 		BOOST_TEST(!rnd::effective_camera_viewport(cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), glm::ivec2{ 1280, 720 }).has_value());
 	}
 	BOOST_TEST(cameras > 0u);
+}
+
+// #1303: every load has a row and a Cancel of its own; what is open stays drawn and editable under the banner.
+BOOST_FIXTURE_TEST_CASE(TwoLoads_CancelOfOne_LeavesTheOtherToOpen, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] {
+		static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b')));
+		static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('c')));
+	});
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 2u);
+	const auto of_b = std::ranges::find_if(window->loadings(), [](const auto& item) { return item.text.find("multi_b") != std::string::npos; });
+	BOOST_REQUIRE(of_b != window->loadings().end());
+
+	window->cancel_loading(of_b->id);
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return document_of('c') != nullptr && !window->loading(); }), "the other load did not finish within 5 s");
+
+	BOOST_TEST(!window->loading());
+	const std::vector<edt::prefab_document*> opened = edt::prefabs_of(documents());
+	BOOST_REQUIRE_EQUAL(opened.size(), 1u);
+	BOOST_TEST(opened.front()->source_tag() == tag_of('c'));
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfTheOnlyLoad_WithAPrefabOpen_KeepsItOpenAndTheWindowOpen, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+
+	window->cancel_loading(window->loadings().front().id);
+	run_frames(20);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(window->is_open());
+	BOOST_TEST(a.is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ADirtyPrefab_StaysShownAndEditable_WhileAnotherPrefabLoads, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "first edit"));
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE(window->loading());
+
+	BOOST_TEST(rename(a, "second edit"));
+
+	BOOST_TEST(a.is_dirty());
+	BOOST_TEST(a.is_open());
+	BOOST_TEST(window->is_open());
+}
+
+// #1303: a load that finishes does not take the window from a prefab the person is working in.
+BOOST_FIXTURE_TEST_CASE(ALoadThatFinishes_WhileThePersonWorksInTheShownPrefab_OpensAsATabAndLeavesTheWindow, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	window->select_node({ 0xe1 });
+	BOOST_REQUIRE(rename(a, "typed"));
+	BOOST_REQUIRE(inspector->selected_node() == a.working_node({ 0xe1 }));
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return document_of('b') != nullptr; }), "the load did not finish within 5 s");
+	BOOST_TEST(document_of('b')->is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 2u);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == &a);
+	BOOST_TEST(inspector->selected_node() == a.working_node({ 0xe1 }));
+	BOOST_REQUIRE(documents().active() != nullptr);
+	BOOST_TEST(documents().active()->id() == a.id());
+	BOOST_TEST(a.is_dirty());
+}
+
+BOOST_FIXTURE_TEST_CASE(ALoadThatFinishes_WhileTheShownPrefabIsClean_IsShownAsBefore, multi_prefab_fixture)
+{
+	open('a');
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return document_of('b') != nullptr; }), "the load did not finish within 5 s");
+	edt::prefab_document* b = document_of('b');
+	BOOST_REQUIRE(b != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == b);
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfAnUnknownOrFinishedLoad_ChangesNothing, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('a'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	const std::uint64_t id = window->loadings().front().id;
+
+	window->cancel_loading(id + 1000);
+	BOOST_TEST(window->loadings().size() == 1u);
+
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return document_of('a') != nullptr; }), "the load did not finish within 5 s");
+	window->cancel_loading(id);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(document_of('a') != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == document_of('a'));
+}
+
+BOOST_FIXTURE_TEST_CASE(ClosingTheShownPrefab_WhileLoadsArePending_KeepsTheBanner_AndTheLoadStillOpens, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	const edt::document_id a_id = a.id();
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+
+	documents().close(a_id);
+
+	BOOST_TEST(window->loadings().size() == 1u);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == nullptr);
+	BOOST_TEST(inspector->selected_node() == nullptr);
+
+	BOOST_REQUIRE_MESSAGE(pump_until([this] { return document_of('b') != nullptr && !window->loading(); }), "the load did not finish within 5 s");
+	edt::prefab_document* b = document_of('b');
+	BOOST_REQUIRE(b != nullptr);
+	BOOST_TEST(editor().prefab_editor().shown_prefab() == b);
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfTheOnlyLoad_WithNothingOpen_ClosesTheWindow, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('a'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	BOOST_REQUIRE(window->is_open());
+
+	window->cancel_loading(window->loadings().front().id);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(!window->is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(ClosingABackgroundTab_DoesNotReopenAHiddenWindow, multi_prefab_fixture)
@@ -1808,6 +1973,231 @@ BOOST_FIXTURE_TEST_CASE(AFailedOpen_LeavesTheShownPrefabsProblemsAlone, multi_pr
 	BOOST_TEST(desc_rows().empty());
 }
 
+
+
+// The prefab editor and the mesh modeller side by side (#1011): the editor's own flows over files in the project's res folder.
+struct mixed_documents_fixture : multi_prefab_fixture
+{
+	mixed_documents_fixture()
+	{
+		const edt::mesh::shape_asset_result box = edt::mesh::build_shape_asset(edt::mesh::box_params{}, res::tag{ "res://shapes/m1.geom.desc" });
+		BOOST_REQUIRE(box.files.has_value());
+		box_poly = box.files->poly;
+		for (const char* name : { "m1", "m2" }) project.write(std::string("res/shapes/") + name + ".poly.desc", box_poly);
+	}
+
+	static res::tag poly_tag(std::string_view name) { return res::tag::make(std::string("shapes/") + std::string(name) + ".poly.desc"); }
+
+	edt::mesh_document& open_mesh(std::string_view name)
+	{
+		editor().modeller().open(poly_tag(name));
+		edt::mesh_document* mesh = edt::mesh_of_source(documents(), poly_tag(name));
+		BOOST_REQUIRE(mesh && mesh->is_open());
+		return *mesh;
+	}
+
+	static bool move_first_vertex(edt::mesh_document& mesh)
+	{
+		return mesh.edit([](edt::mesh::poly_mesh& edited) {
+			return edited.set_position(edited.vertices().begin()->first, glm::vec3{ 9.f, 9.f, 9.f });
+		});
+	}
+
+	std::string file_of(std::string_view name, std::string_view suffix = ".poly.desc")
+	{
+		std::ifstream in(project.path() / "res" / "shapes" / (std::string(name) + std::string(suffix)), std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	void write_foreign_geometry(std::string_view name)
+	{
+		const edt::mesh::shape_asset_result sphere = edt::mesh::build_shape_asset(edt::mesh::sphere_params{ 0.5f, 8, 4 },
+			res::tag{ std::string("res://shapes/") + std::string(name) + ".geom.desc" });
+		BOOST_REQUIRE(sphere.files.has_value());
+		BOOST_REQUIRE(edt::mesh::write_mesh_geometry(storage.require<res::resource_system>(),
+			res::tag{ std::string("res://shapes/") + std::string(name) + ".geom.desc" }, sphere.files->data).empty());
+	}
+
+	std::vector<edt::problem> mesh_rows()
+	{
+		std::vector<edt::problem> rows;
+		for (const auto& entry : editor().context()->problems().list()) {
+			if (entry.source == "mesh") rows.push_back(entry.item);
+		}
+		return rows;
+	}
+
+	edt::dialog_service& dialogs() { return editor().context()->dialogs(); }
+
+	std::string box_poly;
+};
+
+BOOST_FIXTURE_TEST_CASE(ADirtyPrefab_WithAMeshActive_IsStillSeen_ByTheQuitQuestion_TheUnsavedListAndApply, mixed_documents_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "armA"));
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(documents().active() == &mesh);
+
+	BOOST_TEST(editor().prefab_editor().dirty() == &a);
+	std::size_t prefabs = 0;
+	for (const edt::unsaved_item& item : edt::list_unsaved(documents())) {
+		if (item.kind == "prefab" && item.id == a.id()) ++prefabs;
+	}
+	BOOST_TEST(prefabs == 1u);
+	BOOST_REQUIRE(move_first_vertex(mesh));
+	BOOST_TEST(editor().modeller().dirty());
+
+	BOOST_TEST(editor().prefab_editor().apply_dirty());
+
+	BOOST_TEST(!a.is_dirty());
+	BOOST_TEST(file_text('a').find("armA") != std::string::npos);
+	BOOST_TEST(mesh.is_dirty());
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_AsksFirst_CancelKeepsItAndItsEdits, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "unsaved");
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "cancel" } }).ok);
+
+	edt::mesh_document* kept = edt::mesh_of_source(documents(), poly_tag("m1"));
+	BOOST_REQUIRE(kept && kept->is_open());
+	BOOST_TEST(kept->is_dirty());
+	BOOST_TEST(file_of("m1") == box_poly);
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_SaveWritesTheFilesThenCloses, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "save" } }).ok);
+
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(file_of("m1") != box_poly);
+	BOOST_TEST(!file_of("m1", ".geom.desc").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyMesh_DiscardClosesAndWritesNothing, mixed_documents_fixture)
+{
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(move_first_vertex(mesh));
+
+	editor().modeller().request_close(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "discard" } }).ok);
+
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(file_of("m1") == box_poly);
+	BOOST_TEST(file_of("m1", ".geom.desc").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(SaveDirty_WithTwoMeshes_SavesTheFirst_AndStopsAtTheSecondThatIsRefused, mixed_documents_fixture)
+{
+	edt::mesh_document& first = open_mesh("m1");
+	edt::mesh_document& second = open_mesh("m2");
+	BOOST_REQUIRE(move_first_vertex(first));
+	BOOST_REQUIRE(move_first_vertex(second));
+	project.write("res/shapes/m2.poly.desc", box_poly + "\n");
+
+	BOOST_TEST(!editor().modeller().save_dirty());
+
+	BOOST_TEST(!first.is_dirty());
+	BOOST_TEST(file_of("m1") != box_poly);
+	BOOST_TEST(second.is_dirty());
+	BOOST_TEST(file_of("m2") == box_poly + "\n");
+	bool shown = false;
+	for (const auto& dialog : dialogs().list()) shown = shown || dialog.kind == "message";
+	BOOST_TEST(shown);
+}
+
+BOOST_FIXTURE_TEST_CASE(OverwriteGeometry_AnsweredCancel_ChangesNothing_AnsweredAfterTheMeshClosed_ChangesNothing, mixed_documents_fixture)
+{
+	write_foreign_geometry("m1");
+	const std::string foreign = file_of("m1", ".geom.desc");
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(mesh.geometry_mismatch());
+	BOOST_REQUIRE_EQUAL(mesh_rows().size(), 1u);
+	BOOST_TEST((mesh_rows().front().severity == edt::problem_severity::warning));
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "choice");
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "cancel", true } }).ok);
+	BOOST_TEST(mesh.geometry_mismatch());
+	BOOST_TEST(file_of("m1", ".geom.desc") == foreign);
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	documents().close(mesh.id());
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(file_of("m1", ".geom.desc") == foreign);
+	BOOST_TEST(mesh_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(OverwriteGeometry_Answered_ReplacesTheForeignFile_AndTheProblemRowGoes, mixed_documents_fixture)
+{
+	write_foreign_geometry("m1");
+	const std::string foreign = file_of("m1", ".geom.desc");
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE_EQUAL(mesh_rows().size(), 1u);
+
+	editor().modeller().request_overwrite_geometry(mesh.id());
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+
+	BOOST_TEST(!mesh.geometry_mismatch());
+	BOOST_TEST(file_of("m1", ".geom.desc") != foreign);
+	BOOST_TEST(mesh_rows().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheModellersCloseButton_ClosesACleanMeshAtOnce_AndTheWindowLetsGoOfIt, mixed_documents_fixture)
+{
+	auto* panel = dynamic_cast<edt::mesh_editor_panel*>(editor().context()->panels().find("mesh_editor"));
+	BOOST_REQUIRE(panel != nullptr);
+	open_mesh("m1");
+	BOOST_REQUIRE(panel->context() != nullptr);
+
+	panel->press_close();
+
+	BOOST_TEST(panel->context() == nullptr);
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == nullptr);
+	BOOST_TEST(dialogs().list().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseDirty_ClosesTheDirtyPrefabs_KeepsTheMeshes_AndTheQuitGateSeesBothKinds, mixed_documents_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "armA"));
+	edt::mesh_document& mesh = open_mesh("m1");
+	BOOST_REQUIRE(documents().active() == &mesh);
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+
+	editor().prefab_editor().close_dirty();
+
+	BOOST_TEST(edt::prefabs_of(documents()).empty());
+	BOOST_TEST(edt::mesh_of_source(documents(), poly_tag("m1")) == &mesh);
+	BOOST_TEST(editor().prefab_editor().dirty() == nullptr);
+	BOOST_TEST(!editor().modeller().dirty());
+
+	BOOST_REQUIRE(move_first_vertex(mesh));
+	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
+	BOOST_TEST(editor().modeller().dirty());
+}
 
 BOOST_AUTO_TEST_SUITE_END()
 

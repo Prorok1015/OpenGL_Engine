@@ -260,13 +260,18 @@ bool edt::scene_editor::reload_world(std::size_t index)
 
 void edt::scene_editor::sync_ecs_transforms_to_desc()
 {
-	auto ctx_mgr = m_services.ctx_manager.lock();
-	auto* world_desc = m_state.active_world_desc();
-	const std::string* world_name = m_state.active_world_name();
-	if (!ctx_mgr || !world_desc || !world_name) return;
+	if (write_live_transforms_into(m_state.world_descs)) {
+		m_state.touch_descs();
+	}
+}
 
-	m_state.touch_descs();
-	auto& children = world_desc->get_root().children;
+bool edt::scene_editor::write_live_transforms_into(std::vector<scn::world_desc>& worlds) const
+{
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	const std::string* world_name = m_state.active_world_name();
+	if (!ctx_mgr || !m_state.has_active_world() || !world_name || m_state.active_world_idx >= static_cast<int>(worlds.size())) return false;
+
+	auto& children = worlds[static_cast<std::size_t>(m_state.active_world_idx)].get_root().children;
 	auto& reg = ctx_mgr->level_set().get(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(
 		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
@@ -276,6 +281,7 @@ void edt::scene_editor::sync_ecs_transforms_to_desc()
 			if (!address.owner || !address.target.empty()) return;
 			write_live_transform(*address.owner, lt.local);
 		});
+	return true;
 }
 
 void edt::scene_editor::write_live_transform(prefab_node& node, const glm::mat4& local)

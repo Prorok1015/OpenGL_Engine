@@ -1,4 +1,5 @@
 #pragma once
+#include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document.h>
@@ -33,7 +34,7 @@ namespace edt
 	// A prefab opened in the Prefab Editor: the owner of the set "preview:<tag>" while it is open, with a working copy
 	// (a prefab_desc of its own, never the cache's) that edit() changes, apply (save()) writes and revert() takes from the
 	// file again (#147, EPIC-25 US-25-2). The state is the editor's: no field was added to an engine type.
-	class prefab_document final : public previewable_document
+	class prefab_document final : public previewable_document, public autosave_source
 	{
 	public:
 		explicit prefab_document(editor_services& services);
@@ -77,6 +78,9 @@ namespace edt
 		std::string reload() { return revert(); }
 		// Keeps the edits and writes them over the file as it is now.
 		save_result overwrite();
+
+		// The bytes Apply would write for the working copy (#1186); nothing is written, nothing changes.
+		autosave_snapshot autosave_capture() const override;
 
 		// Where the project's desc files are (the checks of an Apply); without it nothing can be written.
 		void set_files(desc_file_layout files) { m_files = std::move(files); }

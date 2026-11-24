@@ -29,6 +29,9 @@ namespace edt
 			asset_open_component& asset_open;
 			// Ends the person's Play (a plain module load or unload: nothing restarts it); late-bound, Play is made after.
 			std::function<void()> stop_play = {};
+			// The mesh modeller's documents drop their preview worlds before the layer goes and make them again after it (EPIC-77, #1011).
+			std::function<void()> meshes_before = {};
+			std::function<void()> meshes_after = {};
 		};
 
 		explicit game_layer_component(ports from);

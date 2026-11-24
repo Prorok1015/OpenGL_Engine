@@ -26,4 +26,4 @@
 - матрица, записанная после системы трансформаций и не через `transform_updated`, видна в лучшем случае со следующего кадра.
 
 ## ABI
-Запись: `docs/abi/changes/1326.md` (layout_revision 26, `spatial_backend_abi_revision` 1, типы `ray/ray_filter/ray_hit` в ключе, `spatial_layers` в `engine_component_types`).
+Записи: `docs/abi/changes/1326.md` (layout_revision 26) и `1326-async.md` (layout_revision 27: типы `ray_request`, `ray_result`, `ray_batch` в ключе).

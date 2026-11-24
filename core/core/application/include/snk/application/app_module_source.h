@@ -2,6 +2,7 @@
 #include <snk/application/app_module_entry.h>
 #include <snk/common/snk_api.h>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -71,6 +72,37 @@ namespace app::modules {
 	private:
 		std::filesystem::path m_path;
 		std::filesystem::path m_module_dir;
+		void* m_handle = nullptr;
+		module_entry m_entry;
+	};
+
+	// A module in a shared library whose folder and files a host holds (#1304), loaded by `load_path`, the exact path
+	// that reaches the held file (Linux /proc/self/fd/<folder>/<name>, Windows the final path of the file's handle),
+	// never resolved first: on Linux $ORIGIN is then the held folder, so the libraries beside it come from there too.
+	// Windows: the module the system loaded must lie at that path (GetModuleFileNameW), else it is unloaded and
+	// refused. `keep` holds the folder and is let go with the source, after close(); while the system still maps the
+	// image after close() it is never let go (a load of a later hold could get the same descriptor, so the same name,
+	// and be handed this image). `shown`: the path logs name. Same rules for module authors as native_library_source.
+	class SNK_API held_library_source final : public module_source {
+	public:
+		held_library_source(std::filesystem::path load_path, std::filesystem::path shown, std::shared_ptr<void> keep);
+		~held_library_source() override;
+
+		held_library_source(const held_library_source&) = delete;
+		held_library_source& operator=(const held_library_source&) = delete;
+
+		std::string open() override;
+		const module_entry& entry() const override { return m_entry; }
+		void close() override;
+		std::string describe() const override;
+
+		const std::filesystem::path& load_path() const { return m_load_path; }
+		bool is_open() const { return m_handle != nullptr; }
+
+	private:
+		std::filesystem::path m_load_path;
+		std::filesystem::path m_shown;
+		std::shared_ptr<void> m_keep;
 		void* m_handle = nullptr;
 		module_entry m_entry;
 	};

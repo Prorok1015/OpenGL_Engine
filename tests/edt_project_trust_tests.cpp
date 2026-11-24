@@ -38,6 +38,12 @@ namespace {
 	std::filesystem::path fs_bin(std::string_view file) { return std::filesystem::path("build/bin") / file; }
 	std::filesystem::path fs_copy(std::string_view file) { return std::filesystem::path("cache/1-0") / file; }
 
+	// What the host hands the gate for a copy (#1304): its path and the digest of its folder's libraries.
+	core::library_copy copy_of(const std::filesystem::path& copy)
+	{
+		return { copy, core::module_library_set_digest(copy.parent_path()).value_or(std::string{}) };
+	}
+
 	// edt://settings in a scratch folder. The temp dir first: the resource system's io thread is joined before it goes.
 	struct settings_env
 	{
@@ -162,8 +168,8 @@ BOOST_AUTO_TEST_CASE(AForeignLibrary_WaitsForTheAnswer)
 	const auto trust = settings.service();
 	const std::filesystem::path copy = settings.dir.write("cache/libgame.so", "foreign code");
 	BOOST_CHECK(!trust->trusted());
-	BOOST_CHECK(!trust->allow_library("game", copy));
-	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
 	BOOST_REQUIRE(trust->waiting());
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 }
@@ -202,10 +208,10 @@ BOOST_AUTO_TEST_CASE(HeldModules_AreShownUntilTheyLoad)
 	const std::filesystem::path copy = settings.dir.write("cache/libgame.so", "foreign code");
 	const auto trust = settings.service();
 	BOOST_CHECK(!edt::held_modules_status(trust->held_modules()));
-	BOOST_CHECK(!trust->allow_library("game", copy));
-	BOOST_CHECK(!trust->allow_library("game_editor", copy));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
+	BOOST_CHECK(!trust->allow_library("game_editor", copy_of(copy)));
 	trust->answer(edt::trust_answer::refused);
-	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
 	BOOST_TEST((trust->held_modules() == std::vector<std::string>{ "game", "game_editor" }));
 	const std::optional<std::string> status = edt::held_modules_status(trust->held_modules());
 	BOOST_REQUIRE(status.has_value());
@@ -213,7 +219,7 @@ BOOST_AUTO_TEST_CASE(HeldModules_AreShownUntilTheyLoad)
 	BOOST_TEST(status->find("Project > Trust Project Modules") != std::string::npos);
 
 	trust->answer(edt::trust_answer::trusted);
-	BOOST_CHECK(trust->allow_library("game", copy));
+	BOOST_CHECK(trust->allow_library("game", copy_of(copy)));
 	BOOST_TEST((trust->held_modules() == std::vector<std::string>{ "game_editor" }));
 }
 
@@ -226,16 +232,16 @@ BOOST_AUTO_TEST_CASE(Trust_IsPersistedPerProject)
 
 	const auto next = settings.service();
 	BOOST_CHECK(next->trusted());
-	BOOST_CHECK(next->allow_library("game", copy));
+	BOOST_CHECK(next->allow_library("game", copy_of(copy)));
 	BOOST_CHECK(!next->waiting());
 
 	const auto other = settings.service(std::string(k_other));
 	BOOST_CHECK(!other->trusted());
-	BOOST_CHECK(!other->allow_library("game", copy));
+	BOOST_CHECK(!other->allow_library("game", copy_of(copy)));
 
 	settings.service(std::string(k_other))->answer(edt::trust_answer::refused);
 	const auto refused = settings.service(std::string(k_other));
-	BOOST_CHECK(!refused->allow_library("game", copy));
+	BOOST_CHECK(!refused->allow_library("game", copy_of(copy)));
 	BOOST_CHECK(!refused->waiting());
 }
 
@@ -248,12 +254,12 @@ BOOST_AUTO_TEST_CASE(AnOwnBuild_LoadsWithoutAsking_UntilItChanges)
 	settings.service()->record_own_build("game", built);
 
 	const auto trust = settings.service();
-	BOOST_CHECK(trust->allow_library("game", copy));
+	BOOST_CHECK(trust->allow_library("game", copy_of(copy)));
 	BOOST_CHECK(!trust->waiting());
 	BOOST_CHECK(!trust->trusted());
 
 	settings.dir.write(fs_copy(library_name("game")), "built by the editoR");
-	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 
 	// A digest handed over by the builder counts the same.
@@ -261,7 +267,7 @@ BOOST_AUTO_TEST_CASE(AnOwnBuild_LoadsWithoutAsking_UntilItChanges)
 	BOOST_REQUIRE(digest.has_value());
 	trust->record_own_build_digest("game", *digest);
 	trust->clear_waiting();
-	BOOST_CHECK(trust->allow_library("game", copy));
+	BOOST_CHECK(trust->allow_library("game", copy_of(copy)));
 }
 
 // #921 review: the loader also loads the libraries the copy takes along, so a library planted next to the editor's
@@ -276,10 +282,10 @@ BOOST_AUTO_TEST_CASE(ALibraryPlantedBesideAnOwnBuild_IsAskedAbout)
 	settings.dir.write(fs_copy("game.pdb"), "symbols of another build");
 #endif
 	const auto trust = settings.service();
-	BOOST_CHECK(trust->allow_library("game", copy));
+	BOOST_CHECK(trust->allow_library("game", copy_of(copy)));
 
 	settings.dir.write(fs_copy(library_name("version")), "planted");
-	BOOST_CHECK(!trust->allow_library("game", copy));
+	BOOST_CHECK(!trust->allow_library("game", copy_of(copy)));
 	BOOST_TEST((trust->waiting_modules() == std::vector<std::string>{ "game" }));
 }
 
@@ -293,14 +299,14 @@ BOOST_AUTO_TEST_CASE(AnOwnBuild_IsNotRecorded_WhenOnlyTheFlagTrusts)
 	flagged->set_flag_trust(true);
 	flagged->record_own_build("game", built);
 	BOOST_CHECK(settings.service()->current_answer() == edt::trust_answer::none);
-	BOOST_CHECK(!settings.service()->allow_library("game", copy));
+	BOOST_CHECK(!settings.service()->allow_library("game", copy_of(copy)));
 
 	const auto trusted = settings.service();
 	trusted->answer(edt::trust_answer::trusted);
 	trusted->set_flag_trust(true);
 	trusted->record_own_build("game", built);
 	trusted->answer(edt::trust_answer::none);
-	BOOST_CHECK(settings.service()->allow_library("game", copy));
+	BOOST_CHECK(settings.service()->allow_library("game", copy_of(copy)));
 }
 
 // --trust-project: everything loads, nothing is stored; without a project key only the flag trusts.
@@ -311,14 +317,14 @@ BOOST_AUTO_TEST_CASE(TheFlag_TrustsForThisRunOnly)
 	const auto flagged = settings.service();
 	flagged->set_flag_trust(true);
 	BOOST_CHECK(flagged->trusted());
-	BOOST_CHECK(flagged->allow_library("game", copy));
+	BOOST_CHECK(flagged->allow_library("game", copy_of(copy)));
 	BOOST_CHECK(!settings.service()->trusted());
 
 	const auto keyless = settings.service(std::nullopt);
 	BOOST_CHECK(!keyless->has_project());
-	BOOST_CHECK(!keyless->allow_library("game", copy));
+	BOOST_CHECK(!keyless->allow_library("game", copy_of(copy)));
 	keyless->set_flag_trust(true);
-	BOOST_CHECK(keyless->allow_library("game", copy));
+	BOOST_CHECK(keyless->allow_library("game", copy_of(copy)));
 }
 
 // The dialog stores "Trust" / "Don't Trust"; a cancel stores nothing; one question at a time.

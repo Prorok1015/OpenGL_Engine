@@ -4,7 +4,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_json_text.h>
 #include <snk/resource/res_desc_binary.h>
-#include <snk/resource/res_shipping_dirs.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <algorithm>
@@ -282,12 +282,14 @@ int prj::migration::run_migrate_prune(const prune_command& command, const comman
 	if (command.dry_run) return k_exit_done;
 
 	int code = k_exit_done;
+	platform::beneath::pinned_root pinned{ context.root };
+	const fs::path migrations = fs_paths::path_from_utf8(".snk/migrations");
 	for (std::size_t i = 0; i < doomed; ++i) {
-		const fs::path folder = context.root / fs_paths::path_from_utf8(std::format(".snk/migrations/{}", finished[i].id));
-		std::error_code ec;
-		const bool removed = context.remove_tree ? context.remove_tree(folder, ec) : core::res::remove_tree_without_following(folder, ec);
-		if (!removed) {
-			print_error(context, std::format("migration {} not deleted: {}", journal_path_text(finished[i].id), ec.message()));
+		const fs::path id = fs_paths::path_from_utf8(finished[i].id);
+		const std::string problem = context.remove_tree ? context.remove_tree(context.root / migrations / id)
+														: platform::beneath::remove_tree_beneath(pinned, migrations, id);
+		if (!problem.empty()) {
+			print_error(context, std::format("migration {} not deleted: {}", journal_path_text(finished[i].id), problem));
 			code = k_exit_refused;
 		}
 	}

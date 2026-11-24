@@ -44,12 +44,12 @@ namespace rnd
 		render_system& operator= (const render_system&) = delete;
 		render_system& operator= (render_system&&) = delete;
 
-		const rnd::texture_manager& get_texture_manager() const { return *m_textures; }
-		rnd::texture_manager& get_texture_manager() { return *m_textures; }
+		SNK_API const rnd::texture_manager& get_texture_manager() const;
+		SNK_API rnd::texture_manager& get_texture_manager();
 
 		// The slots of the render targets the passes make (stable per tag, the generation grows on re-creation).
-		const rnd::render_targets::registry& get_render_targets() const { return *m_targets; }
-		rnd::render_targets::registry& get_render_targets() { return *m_targets; }
+		SNK_API const rnd::render_targets::registry& get_render_targets() const;
+		SNK_API rnd::render_targets::registry& get_render_targets();
 
 		// Runs the passes over the packets of `context`. Each pass gets a render_context for the frame, which
 		// hides the managers behind it.
@@ -59,27 +59,23 @@ namespace rnd
 		// build_frame / render_frame.
 		void begin_frame(frame_context& context);
 
-		void add_render_pass(std::shared_ptr<render_pass_interface> pass) {
-			render_passes.push_back(pass);
-		}
+		SNK_API void add_render_pass(std::shared_ptr<render_pass_interface> pass);
+		SNK_API void remove_render_pass(std::shared_ptr<render_pass_interface> pass);
 
-		void remove_render_pass(std::shared_ptr<render_pass_interface> pass) {
-			render_passes.erase(std::remove(render_passes.begin(), render_passes.end(), pass));
-		}
+		SNK_API rnd::driver::driver_interface* get_driver() const;
 
-		rnd::driver::driver_interface* get_driver() const { return drv.get(); }
+		SNK_API void set_skinning_manager(rnd::skinning_manager* sm);
+		SNK_API rnd::skinning_manager* get_skinning_manager() const;
 
-		void set_skinning_manager(rnd::skinning_manager* sm) { m_skinning_manager = sm; }
-		rnd::skinning_manager* get_skinning_manager() const { return m_skinning_manager; }
-
-		void set_material_compiler(std::shared_ptr<material_compiler_interface> mc) { m_material_compiler = std::move(mc); }
-		material_compiler_interface* get_material_compiler() const { return m_material_compiler.get(); }
+		SNK_API void set_material_compiler(std::shared_ptr<material_compiler_interface> mc);
+		SNK_API material_compiler_interface* get_material_compiler() const;
 
 		// The cache the draws' material ids refer to (valid between begin_frame and the next one).
-		material_instance_cache& material_instances() { return *m_instances; }
+		SNK_API material_instance_cache& material_instances();
 
-		// Why the shader programs that did not build last time did not, at their files and lines (#1201); main thread,
-		// as the frames that build them. The generation changes whenever the problems do.
+		// Why the shader programs that did not build last time did not, at their files and lines (#1201), then the shader
+		// descs that materials could not load (#1272); main thread, as the frames that build them. The generation changes
+		// whenever the problems do.
 		SNK_API std::uint64_t shader_problems_generation() const;
 		SNK_API std::vector<rnd::shader_problem> shader_problems() const;
 

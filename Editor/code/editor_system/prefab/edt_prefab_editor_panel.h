@@ -43,12 +43,19 @@ namespace edt
 		}
 		void clear_selection() { m_selected_path.clear(); m_has_selection = false; }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
-		// While a prefab loads in the background the window says so (and offers Cancel); an empty text ends it.
-		void set_loading(std::string text) { m_loading = std::move(text); }
-		void set_on_cancel_loading(std::function<void()> cb) { m_on_cancel_loading = std::move(cb); }
-		bool loading() const { return !m_loading.empty(); }
-		// What the Cancel button does (tests press it here).
-		void cancel_loading() { if (m_on_cancel_loading) m_on_cancel_loading(); }
+		// A prefab that loads in the background (#152): one row of the banner above the content, with a Cancel of its own.
+		struct loading_item
+		{
+			std::uint64_t id = 0;
+			std::string text;
+		};
+		// The loads in progress; none ends the banner. The shown prefab is drawn under it as usual (#1303).
+		void set_loadings(std::vector<loading_item> items) { m_loadings = std::move(items); }
+		void set_on_cancel_loading(std::function<void(std::uint64_t id)> cb) { m_on_cancel_loading = std::move(cb); }
+		bool loading() const { return !m_loadings.empty(); }
+		const std::vector<loading_item>& loadings() const { return m_loadings; }
+		// What the Cancel button of the load `id` does (tests press it here).
+		void cancel_loading(std::uint64_t id) { if (m_on_cancel_loading) m_on_cancel_loading(id); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
 		// A shape picked in "Add shape" (the request names the parent node); called after the tree is drawn, so the edit may change the working copy.
 		void set_on_add_shape(std::function<void(const shape_request&)> cb) { m_on_add_shape = std::move(cb); }
@@ -65,6 +72,7 @@ namespace edt
 		void render_tree();
 		void render_tree_node(const scn::prefab_desc::prefab_node& node, std::vector<std::uint64_t>& path);
 		void render_viewport();
+		void render_loading_banner();
 		void update_camera_viewport(float width, float height);
 		static void park_camera(prefab_document* ctx);
 
@@ -73,8 +81,8 @@ namespace edt
 		prefab_document* m_ctx = nullptr;
 		bool m_hide_reported = false;
 		std::function<void()> m_on_close;
-		std::function<void()> m_on_cancel_loading;
-		std::string m_loading;
+		std::function<void(std::uint64_t id)> m_on_cancel_loading;
+		std::vector<loading_item> m_loadings;
 		std::function<void()> m_on_apply;
 		std::function<void()> m_on_revert;
 		inp::input_router* m_router = nullptr;

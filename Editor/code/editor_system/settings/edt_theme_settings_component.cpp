@@ -10,6 +10,11 @@
 #include <snk/gui/gui_gui_service_init.h>
 #include <snk/gui/gui_theme_service.h>
 
+edt::editor_settings_panel& edt::theme_settings_component::settings_panel() const
+{
+	return *m_panel;
+}
+
 edt::theme_settings_component::theme_settings_component(ports from)
 	: m_ports(from)
 {

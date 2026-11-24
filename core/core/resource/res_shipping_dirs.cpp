@@ -1,6 +1,7 @@
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_process.h>
 #include <array>
 #include <cstdlib>
@@ -8,6 +9,7 @@
 #include <format>
 #include <random>
 #include <string>
+#include <string_view>
 #include <system_error>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -138,6 +140,29 @@ namespace {
 	}
 
 	// POSIX: a real directory (lstat), owned by this user, mode 0700. Windows: a real directory, not a link or junction.
+	// What remove_scratch_dir renames a folder it cannot remove to: the sweep counts these and leaves them (#1316).
+	constexpr std::string_view k_quarantine_suffix = ".quarantine";
+
+	// A symlink, a junction or anything else that is neither a folder nor a file: removed as itself, never entered.
+	bool is_link_entry(const fs::file_status& status)
+	{
+		return fs::is_symlink(status)
+			|| (fs::exists(status) && !fs::is_directory(status) && !fs::is_regular_file(status));
+	}
+
+	// A link of this user, which this user may remove (POSIX: another user's in a shared temp folder is left alone).
+	bool is_own_link(const fs::path& path)
+	{
+#ifdef _WIN32
+		std::error_code ec;
+		const fs::file_status status = fs::symlink_status(path, ec);
+		return !ec && is_link_entry(status);
+#else
+		struct stat info{};
+		return ::lstat(path.c_str(), &info) == 0 && S_ISLNK(info.st_mode) && info.st_uid == ::geteuid();
+#endif
+	}
+
 	bool is_private_directory(const fs::path& path)
 	{
 #ifdef _WIN32
@@ -331,28 +356,36 @@ std::size_t core::res::remove_stale_scratch_dirs(std::string_view project_name)
 	const std::string prefix = scratch_prefix(project_name);
 	const std::int64_t own = platform::current_process_id();
 	std::size_t removed = 0;
+	std::size_t quarantined = 0;
 	std::error_code ec;
 	for (fs::directory_iterator it{ base, fs::directory_options::skip_permission_denied, ec }, end; !ec && it != end; it.increment(ec)) {
 		const std::string name = fs_paths::utf8_of(it->path().filename());
 		if (!name.starts_with(prefix)) {
 			continue;
 		}
+		if (name.ends_with(k_quarantine_suffix)) {
+			++quarantined;
+			continue;
+		}
 		const std::int64_t pid = scratch_pid(std::string_view{ name }.substr(prefix.size()));
 		if (pid < 0 || pid == own || platform::process_is_running(pid)) {
 			continue;
 		}
-		if (!is_private_directory(it->path())) {
+		// A run folder its child turned into a link: remove_scratch_dir takes the link away, never what it points at.
+		if (!is_own_link(it->path()) && !is_private_directory(it->path())) {
 			egLOG_DEBUG("resource", "left alone: '{}' is not a private folder of this user", fs_paths::utf8_of(it->path()));
 			continue;
 		}
-		std::error_code remove_ec;
-		remove_tree_without_following(it->path(), remove_ec);
-		if (remove_ec) {
+		if (const std::string problem = remove_scratch_dir(it->path()); !problem.empty()) {
 			egLOG_WARN("resource", "cannot remove the scratch folder of an ended run '{}': {}", fs_paths::utf8_of(it->path()),
-				remove_ec.message());
+				problem);
 		} else {
 			++removed;
 		}
+	}
+	if (quarantined > 0) {
+		egLOG_WARN("resource", "{} scratch folder(s) of ended runs nested too deep to remove are kept as '*{}' in '{}': "
+			"delete them by hand", quarantined, k_quarantine_suffix, fs_paths::utf8_of(base));
 	}
 	return removed;
 }
@@ -412,28 +445,89 @@ namespace {
 }
 #endif
 
+#ifndef _WIN32
+namespace {
+	bool remove_tree_below(const fs::path& path, std::error_code& ec)
+	{
+		const fs::file_status status = fs::symlink_status(path, ec);
+		if (ec) {
+			if (ec == std::errc::no_such_file_or_directory) ec.clear();
+			return !ec;
+		}
+		if (fs::is_directory(status)) {
+			std::error_code list_ec;
+			for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
+				std::error_code child_ec;
+				if (!remove_tree_below(it->path(), child_ec) && !ec) ec = child_ec;
+			}
+			if (list_ec && !ec) ec = list_ec;
+		}
+		std::error_code remove_ec;
+		fs::remove(path, remove_ec);
+		if (remove_ec && !ec) ec = remove_ec;
+		return !ec;
+	}
+}
+#endif
+
 bool core::res::remove_tree_without_following(const fs::path& path, std::error_code& ec)
 {
 	ec.clear();
 #ifdef _WIN32
 	return remove_tree_below(extended_form(path), ec);
 #else
-	const fs::file_status status = fs::symlink_status(path, ec);
-	if (ec) {
-		if (ec == std::errc::no_such_file_or_directory) ec.clear();
-		return !ec;
-	}
-	if (fs::is_directory(status)) {
-		std::error_code list_ec;
-		for (fs::directory_iterator it{ path, list_ec }, end; !list_ec && it != end; it.increment(list_ec)) {
-			std::error_code child_ec;
-			if (!remove_tree_without_following(it->path(), child_ec) && !ec) ec = child_ec;
-		}
-		if (list_ec && !ec) ec = list_ec;
-	}
-	std::error_code remove_ec;
-	fs::remove(path, remove_ec);
-	if (remove_ec && !ec) ec = remove_ec;
+	return remove_tree_below(path, ec);
 #endif
-	return !ec;
+}
+
+std::string core::res::remove_scratch_dir(const fs::path& folder)
+{
+	if (folder.empty() || !folder.has_filename()) {
+		return std::format("'{}' names no folder", fs_paths::utf8_of(folder));
+	}
+	std::error_code ec;
+	// The scratch base the engine chose, resolved once (macOS /tmp is a link to /private/tmp): the root below is opened
+	// without following a link.
+	const fs::path base = fs::canonical(folder.parent_path(), ec);
+	if (ec) {
+		return ec == std::errc::no_such_file_or_directory
+			? std::string{}
+			: std::format("cannot resolve '{}': {}", fs_paths::utf8_of(folder.parent_path()), ec.message());
+	}
+	const fs::path name = folder.filename();
+	const fs::path at = base / name;
+	const fs::file_status status = fs::symlink_status(at, ec);
+	if (ec || !fs::exists(status)) {
+		return ec && ec != std::errc::no_such_file_or_directory
+			? std::format("cannot inspect '{}': {}", fs_paths::utf8_of(at), ec.message())
+			: std::string{};
+	}
+	if (is_link_entry(status)) {
+		// Not the tree: the link alone goes (fs::remove never follows one), so nothing it points at is touched.
+		fs::remove(at, ec);
+		if (ec) {
+			return std::format("'{}' is a link, not a folder, and cannot be removed: {}", fs_paths::utf8_of(at),
+				ec.message());
+		}
+		egLOG_WARN("resource", "'{}' was a link, not a folder: the link was removed, nothing it points at",
+			fs_paths::utf8_of(at));
+		return {};
+	}
+	platform::beneath::pinned_root pinned{ base };
+	std::string problem = platform::beneath::remove_tree_beneath(pinned, fs::path{}, name);
+	if (problem.find(platform::beneath::k_tree_too_deep) == std::string::npos) {
+		return problem;
+	}
+	// Left where it is, every later sweep would walk it again: it is moved aside, out of the sweep, once.
+	fs::path quarantine = at;
+	quarantine += std::string{ k_quarantine_suffix };
+	fs::rename(at, quarantine, ec);
+	if (ec) {
+		egLOG_ERROR("resource", "'{}' cannot be removed ({}) nor moved aside: {}", fs_paths::utf8_of(at), problem,
+			ec.message());
+		return std::format("{}; it cannot be moved aside: {}", problem, ec.message());
+	}
+	egLOG_ERROR("resource", "'{}' cannot be removed ({}): kept as '{}', delete it by hand", fs_paths::utf8_of(at),
+		problem, fs_paths::utf8_of(quarantine));
+	return std::format("{}; kept as '{}'", problem, fs_paths::utf8_of(quarantine));
 }

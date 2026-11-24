@@ -168,7 +168,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
 	, m_materials(std::make_unique<rnd::material_groups>(*drv, *m_textures))
-	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
+	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures, &res_sys))
 {
 	auto& texture_manager = *m_textures;
 	// A loader that gives nothing is asked again every frame: what it could not load is said once.
@@ -311,10 +311,74 @@ void rnd::render_system::render_frame(frame_context& context) const
 }
 std::uint64_t rnd::render_system::shader_problems_generation() const
 {
-	return m_shaders->problems_generation();
+	// A valid change signal only because neither generation ever decreases.
+	return m_shaders->problems_generation() + m_instances->problems_generation();
 }
 
 std::vector<rnd::shader_problem> rnd::render_system::shader_problems() const
 {
-	return m_shaders->problems();
+	std::vector<rnd::shader_problem> problems = m_shaders->problems();
+	const std::vector<rnd::shader_problem> materials = m_instances->problems();
+	problems.insert(problems.end(), materials.begin(), materials.end());
+	return problems;
+}
+
+const rnd::texture_manager& rnd::render_system::get_texture_manager() const
+{
+	return *m_textures;
+}
+
+rnd::texture_manager& rnd::render_system::get_texture_manager()
+{
+	return *m_textures;
+}
+
+const rnd::render_targets::registry& rnd::render_system::get_render_targets() const
+{
+	return *m_targets;
+}
+
+rnd::render_targets::registry& rnd::render_system::get_render_targets()
+{
+	return *m_targets;
+}
+
+void rnd::render_system::add_render_pass(std::shared_ptr<render_pass_interface> pass)
+{
+	render_passes.push_back(std::move(pass));
+}
+
+void rnd::render_system::remove_render_pass(std::shared_ptr<render_pass_interface> pass)
+{
+	std::erase(render_passes, pass);
+}
+
+rnd::driver::driver_interface* rnd::render_system::get_driver() const
+{
+	return drv.get();
+}
+
+void rnd::render_system::set_skinning_manager(rnd::skinning_manager* sm)
+{
+	m_skinning_manager = sm;
+}
+
+rnd::skinning_manager* rnd::render_system::get_skinning_manager() const
+{
+	return m_skinning_manager;
+}
+
+void rnd::render_system::set_material_compiler(std::shared_ptr<material_compiler_interface> mc)
+{
+	m_material_compiler = std::move(mc);
+}
+
+rnd::material_compiler_interface* rnd::render_system::get_material_compiler() const
+{
+	return m_material_compiler.get();
+}
+
+rnd::material_instance_cache& rnd::render_system::material_instances()
+{
+	return *m_instances;
 }

@@ -16,7 +16,7 @@ edt::project_trust_service::project_trust_service(res::resource_system& res, std
 	if (m_key) m_record = read_project_trust(m_res, *m_key);
 }
 
-bool edt::project_trust_service::allow_library(std::string_view module, const std::filesystem::path& copy)
+bool edt::project_trust_service::allow_library(std::string_view module, const core::library_copy& copy)
 {
 	const bool allowed = decide_library(module, copy);
 	const auto held = std::ranges::find(m_held, module);
@@ -26,7 +26,7 @@ bool edt::project_trust_service::allow_library(std::string_view module, const st
 	return allowed;
 }
 
-bool edt::project_trust_service::decide_library(std::string_view module, const std::filesystem::path& copy)
+bool edt::project_trust_service::decide_library(std::string_view module, const core::library_copy& copy)
 {
 	if (m_flag) return true;
 	if (!m_key) {
@@ -40,8 +40,10 @@ bool edt::project_trust_service::decide_library(std::string_view module, const s
 			"Modules... changes that)", module);
 		return false;
 	}
-	// Every library the copy brings along counts: the loader also loads those from the copy's folder.
-	if (judge_library(m_record, module, core::module_library_set_digest(copy.parent_path())) == library_verdict::load) {
+	// Every library the copy brings along counts: the loader also loads those from the copy's folder. The digest is
+	// the host's, read through its hold: reading the folder again here could see other bytes than load (#1304).
+	const std::optional<std::string> digest = copy.digest.empty() ? std::nullopt : std::optional{ copy.digest };
+	if (judge_library(m_record, module, digest) == library_verdict::load) {
 		return true;
 	}
 	if (std::ranges::find(m_waiting, module) == m_waiting.end()) m_waiting.emplace_back(module);

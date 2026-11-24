@@ -4,6 +4,8 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
+#include <utility>
+
 rnd::material_shader_state rnd::read_material_shader(const material_desc& mat)
 {
 	material_shader_state state;
@@ -45,11 +47,9 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 		cdata = shader.desc->config(mat.defines).cdata;
 	} else {
 		cdata.defines = mat.defines;
+		// A shader that failed to load is reported by material_instance_cache, once per material (#1273).
 		if (!mat.shader.is_valid()) {
 			egLOG_WARN("render/material", "'{}' has no shader, it is not drawn", mat.get_tag().view());
-		} else if (shader.failed) {
-			egLOG_ERROR("render/material", "the shader '{}' of '{}' did not load, the material is not drawn: {}",
-				mat.shader.get_tag().view(), mat.get_tag().view(), mat.shader.error_text());
 		}
 	}
 
@@ -66,12 +66,20 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	std::shared_ptr<const material_desc> mat, bool skinned)
 {
 	ASSERT_MSG(mat, "build_compiled_material needs a loaded material");
+	const material_shader_state shader = read_material_shader(*mat);
+	return build_compiled_material(compiler, variants, textures, std::move(mat), skinned, shader);
+}
+
+std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
+	material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
+	std::shared_ptr<const material_desc> mat, bool skinned, const material_shader_state& shader)
+{
+	ASSERT_MSG(mat, "build_compiled_material needs a loaded material");
 	auto out = std::make_shared<compiled_material>();
 	out->source = mat;
 	out->skinned = skinned;
 	out->texture_generation = textures.generation();
 
-	const material_shader_state shader = read_material_shader(*mat);
 	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned, shader });
 	out->base = variants.intern(cfg.cdata);
 	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);

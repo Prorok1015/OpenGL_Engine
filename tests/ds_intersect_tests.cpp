@@ -168,20 +168,20 @@ BOOST_AUTO_TEST_CASE(RayTriangle_ATinyTriangle_IsHit_AndTheDirectionsLengthDoesN
 	const glm::vec3 c{ 0.f, 1e-3f, 0.f };
 	const auto unit = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -1.f }, a, b, c);
 	BOOST_REQUIRE(unit);
-	BOOST_TEST(unit->t == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(unit->t == 1.f, boost::test_tools::tolerance(1e-4f));
 	const auto stretched = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -100.f }, a, b, c);
 	BOOST_REQUIRE(stretched);
-	BOOST_TEST(stretched->t == 0.01f, boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(stretched->t == 0.01f, boost::test_tools::tolerance(1e-3f));
 	const auto shrunk = ds::ray_triangle({ 2e-4f, 2e-4f, 1.f }, { 0.f, 0.f, -1e-3f }, a, b, c);
 	BOOST_REQUIRE(shrunk);
-	BOOST_TEST(shrunk->t == 1000.f, boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(shrunk->t == 1000.f, boost::test_tools::tolerance(1e-3f));
 }
 
 BOOST_AUTO_TEST_CASE(RayTriangle_AnOriginOnTheTriangle_HitsAtZero)
 {
 	const auto hit = ds::ray_triangle({ 0.25f, 0.25f, 0.f }, { 0.f, 0.f, -1.f }, { 0.f, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 1.f, 0.f });
 	BOOST_REQUIRE(hit);
-	BOOST_TEST(hit->t == 0.f, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(hit->t == 0.f, boost::test_tools::tolerance(1e-6f));
 }
 
 BOOST_AUTO_TEST_CASE(RayTriangle_ADegenerateTriangle_IsNeverHit)

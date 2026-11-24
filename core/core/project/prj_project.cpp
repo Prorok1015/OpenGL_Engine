@@ -283,6 +283,13 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 
 std::optional<std::string> prj::link_below(const fs::path& dir, std::size_t max_entries)
 {
+	link_walk_options options;
+	options.max_entries = max_entries;
+	return link_below(dir, options);
+}
+
+std::optional<std::string> prj::link_below(const fs::path& dir, const link_walk_options& options)
+{
 	std::error_code ec;
 	const auto own = fs::symlink_status(dir, ec);
 	if (own.type() == fs::file_type::not_found) {
@@ -306,24 +313,92 @@ std::optional<std::string> prj::link_below(const fs::path& dir, std::size_t max_
 		if (ec) {
 			return unreadable(ec);
 		}
-		if (++entries > max_entries) {
+		if (++entries > options.max_entries) {
 			return std::format("'{}' holds more than {} entries, so it was not checked for links to the end; the "
-				"project is not opened: empty that folder (it is the project's cache) and open the project again",
-				fs_paths::generic_utf8_of(dir), max_entries);
+				"project is not opened: empty that folder (it is {}) and open the project again",
+				fs_paths::generic_utf8_of(dir), options.max_entries, options.what);
 		}
 		const auto status = it->symlink_status(ec);
 		if (ec) {
 			return unreadable(ec);
 		}
 		if (is_link(status)) {
-			return std::format("'{}' is a link (symlink or junction) in the project's cache: remove it and open the "
-				"project again", fs_paths::generic_utf8_of(it->path()));
+			return std::format("'{}' is a link (symlink or junction) in {}: remove it and open the "
+				"project again", fs_paths::generic_utf8_of(it->path()), options.what);
+		}
+		if (options.skip_folder && fs::is_directory(status)
+			&& options.skip_folder(fs_paths::generic_utf8_of(it->path().lexically_relative(dir)))) {
+			it.disable_recursion_pending();
 		}
 	}
 	if (ec) {
 		return unreadable(ec);
 	}
 	return std::nullopt;
+}
+
+prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::path& root, std::size_t max_entries,
+	const std::vector<fs::path>& private_dirs)
+{
+	leaving_links out;
+	std::error_code ec;
+	const auto own = fs::symlink_status(dir, ec);
+	if (own.type() == fs::file_type::not_found) {
+		return out;
+	}
+	const fs::path real_root = fs::weakly_canonical(root, ec);
+	if (ec) {
+		out.complete = false;
+		return out;
+	}
+	std::vector<fs::path> real_private;
+	real_private.reserve(private_dirs.size());
+	for (const fs::path& private_dir : private_dirs) {
+		std::error_code private_error;
+		fs::path real = fs::weakly_canonical(private_dir, private_error);
+		if (!private_error) real_private.push_back(std::move(real));
+	}
+	fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec);
+	if (ec) {
+		out.complete = false;
+		return out;
+	}
+	std::size_t entries = 0;
+	for (const fs::recursive_directory_iterator end{}; it != end; it.increment(ec)) {
+		if (ec || ++entries > max_entries) {
+			out.complete = false;
+			return out;
+		}
+		const auto status = it->symlink_status(ec);
+		if (ec) {
+			out.complete = false;
+			return out;
+		}
+		if (!is_link(status)) {
+			continue;
+		}
+		std::error_code resolve_error;
+		// A link whose target is gone is judged by where it points: weakly_canonical would stop at the link and answer
+		// with the link's own (inside) place.
+		fs::path target;
+		if (fs::exists(it->path(), resolve_error)) {
+			target = fs::weakly_canonical(it->path(), resolve_error);
+		} else {
+			const fs::path written = fs::read_symlink(it->path(), resolve_error);
+			if (!resolve_error) {
+				target = fs::weakly_canonical(written.is_absolute() ? written : it->path().parent_path() / written, resolve_error);
+			}
+		}
+		const bool into_private = !resolve_error
+			&& std::ranges::any_of(real_private, [&target](const fs::path& private_dir) { return is_inside(private_dir, target); });
+		if (resolve_error || !is_inside(real_root, target) || into_private) {
+			out.found.push_back({ it->path(), resolve_error ? fs::path{} : target });
+		}
+	}
+	if (ec) {
+		out.complete = false;
+	}
+	return out;
 }
 
 std::optional<std::string> prj::content_root_error(std::string_view relative)

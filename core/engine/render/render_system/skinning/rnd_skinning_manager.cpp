@@ -31,3 +31,30 @@ std::vector<uint32_t> rnd::skinning_manager::build_indices(const res::tag& skin)
 
      return bufferData;
 }
+
+rnd::skinning_manager::skinning_manager() = default;
+
+rnd::skinning_manager::~skinning_manager() = default;
+
+void rnd::skinning_manager::register_weights(res::tag tag, std::vector<std::vector<uint32_t>> weights)
+{
+	auto& entry = m_weights_registry[tag];
+	entry.columns = std::move(weights);
+	entry.version = ++m_generation;
+}
+
+std::uint64_t rnd::skinning_manager::generation() const noexcept
+{
+	return m_generation;
+}
+
+std::uint64_t rnd::skinning_manager::version(const res::tag& skin) const
+{
+	const auto it = m_weights_registry.find(skin);
+	return it == m_weights_registry.end() ? 0 : it->second.version;
+}
+
+std::size_t rnd::skinning_manager::index_builds() const noexcept
+{
+	return m_index_builds;
+}

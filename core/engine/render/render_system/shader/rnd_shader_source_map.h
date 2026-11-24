@@ -30,10 +30,12 @@ namespace rnd
 	};
 
 	// expand_includes that also wraps every included file in `#line 1 <k>` before its text and `#line <n> <parent>`
-	// after it (n: the line after the include in the file that has it), k its index in `sources`. A line the expansion
-	// leaves out (an include of a file already expanded, or one that failed) keeps its line break, so the lines after it
-	// keep their numbers. In every file an #else, #elif or #endif line is followed by `#line <n> <k>` again: a #line in a group
-	// the compiler skips is not followed.
+	// after it (n: the line after the include in the file that has it), k its index in `sources`: one index per file,
+	// however often it is included. Every include is expanded inside the file's guard (`#ifndef SNK_INCLUDE_<hash>`,
+	// `#define`, before the `#line 1 <k>`, and `#endif` before the `#line <n> <parent>`), so the compiler, not the
+	// expansion, keeps the first copy it takes (#1301). A line the expansion leaves out (an include that failed) keeps its
+	// line break, so the lines after it keep their numbers. In every file an #else, #elif or #endif line is followed by
+	// `#line <n> <k>` again: a #line in a group the compiler skips is not followed.
 	mapped_includes expand_includes_with_lines(std::string& source, const res::tag& origin, res::resource_system& res_sys, std::vector<res::tag>* files);
 
 	struct source_location

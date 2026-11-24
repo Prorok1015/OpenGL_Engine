@@ -1,3 +1,4 @@
+#include "edt_prefab_document.h"
 #include "edt_asset_open_component.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_builtin_asset_kinds.h"
@@ -23,7 +24,7 @@ edt::asset_open_component::asset_open_component(ports from)
 {
 	m_data_documents = std::make_unique<data_document_host>(m_ports.context, m_ports.services, [this] { return desc_layout(); },
 		[this](document& open) {
-			if (m_ports.context.documents().preview() == &open) m_ports.show_prefab();
+			if (dynamic_cast<const prefab_document*>(&open)) m_ports.show_prefab();
 		});
 	m_data_documents->set_asset_source(m_ports.asset_catalog);
 }
