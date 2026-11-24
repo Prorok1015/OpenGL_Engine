@@ -20,6 +20,7 @@
 #include <format>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -163,8 +164,8 @@ namespace
 		const prepared_geometry prepared = prepare_geometry(path, desc);
 		if (!prepared.problem.empty()) return { {}, prepared.problem };
 
-		// The applier creates a file before its journal names it: a run stopped between the two leaves this very binary file
-		// beside an unchanged desc, which the next run takes as it is.
+		// An older applier created a file before its journal named it: a run stopped between the two left this very binary
+		// file beside an unchanged desc, which the next run takes as it is. Any other bytes are not ours.
 		bool keep_binary = false;
 		if (std::optional<std::string> reason = taken(files, binary_path)) {
 			std::string beside;
@@ -673,16 +674,32 @@ std::vector<std::string> prj::migration::refused_material_stages(const boost::js
 	return pointers;
 }
 
-std::string prj::migration::material_shaders_problem(const std::filesystem::path& root, const project_assets& assets, const std::string& path,
-	const boost::json::object& material)
+struct prj::migration::material_shaders_checker::state
 {
-	const desc_finder finder(assets, [&root](const std::string& file) {
+	desc_finder finder;
+};
+
+prj::migration::material_shaders_checker::material_shaders_checker(const std::filesystem::path& root, const project_assets& assets)
+	: m_state(std::make_unique<state>(state{ desc_finder(assets, [root](const std::string& file) {
 		const prj::project_file_text read = prj::read_project_file(root, fs_paths::path_from_utf8(file), k_max_desc_bytes);
 		if (!read.error.empty()) throw std::runtime_error(std::format("{}: {}", file, read.error));
 		if (!read.exists) throw std::runtime_error(std::format("{} is gone", file));
 		return read.text;
-	});
-	return conversion_problem(finder, path, material);
+	}) }))
+{
+}
+
+prj::migration::material_shaders_checker::~material_shaders_checker() = default;
+
+std::string prj::migration::material_shaders_checker::problem(const std::string& path, const boost::json::object& material) const
+{
+	return conversion_problem(m_state->finder, path, material);
+}
+
+std::string prj::migration::material_shaders_problem(const std::filesystem::path& root, const project_assets& assets, const std::string& path,
+	const boost::json::object& material)
+{
+	return material_shaders_checker(root, assets).problem(path, material);
 }
 
 std::string prj::migration::geometry_conversion_problem(std::string_view path, const boost::json::object& root)

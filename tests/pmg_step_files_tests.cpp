@@ -13,17 +13,22 @@
 #include <snk/resource/res_asset_walk.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
@@ -104,6 +109,22 @@ std::string new_meta_text()
 	return res::write_asset_meta(meta);
 }
 
+constexpr std::string_view k_in_new_folder = "res/made/new.txt";
+
+bool is_journal(const fs::path& relative)
+{
+	return relative.generic_string().ends_with("/report.json");
+}
+
+// Whether the journal text names `path` among its created_files.
+bool journal_lists(std::string_view text, std::string_view path)
+{
+	const json::value journal = json::parse(text);
+	const json::value* created = journal.as_object().if_contains("created_files");
+	if (!created || !created->is_array()) return false;
+	return std::ranges::any_of(created->as_array(), [path](const json::value& entry) { return entry.is_string() && entry.as_string() == path; });
+}
+
 pmg::project_step test_step(std::string id, pmg::project_phase phase, void (*apply)(pmg::project_step_context&))
 {
 	pmg::project_step step;
@@ -142,6 +163,21 @@ struct step_files_fixture : test_util::scene_env
 		step_log.push_back("pre id " + id_text(context.assets.id_of(k_plain)));
 		context.files.create(k_plain_meta, new_meta_text());
 		context.warn("created a .resource");
+	}
+
+	static void pre_creates_in_a_new_folder(pmg::project_step_context& context)
+	{
+		context.files.create(k_in_new_folder, "new");
+	}
+
+	// Goes on past a create that is refused, as a step may.
+	static void pre_creates_and_goes_on(pmg::project_step_context& context)
+	{
+		try {
+			context.files.create(k_plain_meta, new_meta_text());
+		} catch (const std::exception& e) {
+			refusals.push_back(e.what());
+		}
 	}
 
 	static void post_reads_the_migrated_files(pmg::project_step_context& context)
@@ -216,6 +252,12 @@ struct step_files_fixture : test_util::scene_env
 		pmg::apply_context context{ copy.root(), *descs, *rs, {}, {}, {}, {}, &registry, {}, {} };
 		context.make_id = [] { return std::string{ "test-migration" }; };
 		return context;
+	}
+
+	// The journal on the disk at the end of the run.
+	json::value final_journal() const
+	{
+		return json::parse(read_text(copy.root() / ".snk/migrations/test-migration/report.json"));
 	}
 
 	const pmg::applied_file* file_of(const pmg::migration_report& report, std::string_view path) const
@@ -546,6 +588,172 @@ BOOST_AUTO_TEST_CASE(TheProjectFolderAsItsContentRoot_IsWalkedAsTheEditorWalksIt
 	BOOST_TEST(!assets.orphans().contains("build/lost.png.resource"));
 	BOOST_TEST(assets.assets().contains(std::string(k_plain)));
 	BOOST_TEST(assets.assets().at(std::string(k_plain)).res_path == "res/textures/plain.png");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(PmgCreateJournalTests, step_files_fixture)
+
+// #1278: the journal names a created file before it is there, as every other write; a run stopped between the two leaves
+// an entry with no file, which a rollback passes over.
+BOOST_AUTO_TEST_CASE(ACreatedFile_IsInTheJournal_BeforeItIsThere)
+{
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_the_resource));
+	pmg::apply_context hooked = context();
+	std::optional<bool> there_when_listed;
+	const fs::path created = copy.root() / k_plain_meta;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative) && !there_when_listed && journal_lists(text, k_plain_meta)) there_when_listed = fs::exists(created);
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE_MESSAGE(outcome.refused.empty(), outcome.refused);
+	BOOST_REQUIRE_MESSAGE((outcome.report.status == pmg::migration_status::ok), outcome.report.error);
+	BOOST_REQUIRE(there_when_listed.has_value());
+	BOOST_TEST(!*there_when_listed);
+	BOOST_TEST(fs::exists(created));
+}
+
+// The journal write that would name the file fails (a crash there): nothing is created, the run rolls back.
+BOOST_AUTO_TEST_CASE(AJournalThatCannotNameTheFile_CreatesNothing_AndRollsBack)
+{
+	const auto before = content_of(copy.root());
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_the_resource));
+	pmg::apply_context hooked = context();
+	bool failed = false;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative) && !failed && journal_lists(text, k_plain_meta)) {
+			failed = true;
+			return std::string{ "injected journal failure" };
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(failed);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("injected journal failure") != std::string::npos);
+	BOOST_TEST(outcome.report.created_files.empty());
+	BOOST_TEST(!fs::exists(copy.root() / k_plain_meta));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// Another writer takes the name between the check and the create: the entry leaves the journal again, and neither
+// rollback deletes that file.
+BOOST_AUTO_TEST_CASE(ANameTakenAfterTheJournal_IsLeftToItsWriter_AndLeavesTheJournal)
+{
+	auto expected = content_of(copy.root());
+	expected[std::string(k_plain_meta)] = "foreign";
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_the_resource));
+	pmg::apply_context hooked = context();
+	bool taken = false;
+	bool dropped = false;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative)) {
+			const bool lists = journal_lists(text, k_plain_meta);
+			if (!taken && lists) {
+				taken = true;
+				write_text(root / k_plain_meta, "foreign");
+			} else if (taken && !lists) {
+				dropped = true;
+			}
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(taken);
+	BOOST_TEST(dropped);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("something is at its name") != std::string::npos, outcome.report.error);
+	BOOST_TEST(outcome.report.created_files.empty());
+	BOOST_TEST(final_journal().at("created_files").as_array().empty());
+	BOOST_TEST((content_of(copy.root()) == expected));
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST(read_text(copy.root() / k_plain_meta) == "foreign");
+}
+
+#ifndef _WIN32
+// The create fails for another reason (its folder takes no new file) while nothing is at its name: the entry leaves the
+// journal, the rollback is clean. (A file in place of the folder would read as something at the name: taken.)
+BOOST_AUTO_TEST_CASE(ACreateThatFails_LeavesTheJournal_AndRollsBack)
+{
+	if (::geteuid() == 0) {
+		BOOST_TEST_MESSAGE("root writes into every folder: the create cannot be made to fail");
+		return;
+	}
+	const auto before = content_of(copy.root());
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_in_a_new_folder));
+	pmg::apply_context hooked = context();
+	const fs::path locked = copy.res() / "made";
+	struct restore_on_exit {
+		fs::path path;
+		~restore_on_exit()
+		{
+			std::error_code ec;
+			fs::permissions(path, fs::perms::owner_all, ec);
+			fs::remove_all(path, ec);
+		}
+	} restore{ locked };
+	bool blocked = false;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative) && !blocked && journal_lists(text, k_in_new_folder)) {
+			blocked = true;
+			fs::create_directories(locked);
+			fs::permissions(locked, fs::perms::owner_read | fs::perms::owner_exec);
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(blocked);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("cannot be created") != std::string::npos, outcome.report.error);
+	BOOST_TEST(outcome.report.error.find("something is at its name") == std::string::npos, outcome.report.error);
+	BOOST_TEST(outcome.report.created_files.empty());
+	BOOST_TEST(final_journal().at("created_files").as_array().empty());
+	BOOST_TEST(fs::is_empty(locked));
+	fs::permissions(locked, fs::perms::owner_all);
+	fs::remove(locked);
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+#endif
+
+// The journal cannot drop the entry of a refused create: the run stops with both errors, even though the step goes on,
+// and the in-process rollback (by the list in memory) leaves the other writer's file.
+BOOST_AUTO_TEST_CASE(AJournalThatCannotDropTheEntry_StopsTheRun_EvenWhenTheStepGoesOn)
+{
+	auto expected = content_of(copy.root());
+	expected[std::string(k_plain_meta)] = "foreign";
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_and_goes_on));
+	pmg::apply_context hooked = context();
+	bool taken = false;
+	bool failed = false;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative)) {
+			const bool lists = journal_lists(text, k_plain_meta);
+			if (!taken && lists) {
+				taken = true;
+				write_text(root / k_plain_meta, "foreign");
+			} else if (taken && !failed && !lists) {
+				failed = true;
+				return std::string{ "injected journal failure" };
+			}
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(failed);
+	BOOST_TEST(refusals.size() == 1u);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	BOOST_TEST(outcome.report.error.find("something is at its name") != std::string::npos, outcome.report.error);
+	BOOST_TEST(outcome.report.error.find("injected journal failure") != std::string::npos, outcome.report.error);
+	BOOST_TEST(outcome.report.project_steps.empty());
+	BOOST_TEST(outcome.report.created_files.empty());
+	BOOST_TEST((content_of(copy.root()) == expected));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -96,8 +96,11 @@ namespace prj::migration
 		std::string geometry_left;
 		// A material_desc object at version 1 (the file's root or an inline one) has shader stages the type step refuses
 		// (refused_material_stages): engine.material_shaders writes a .shader.desc for them before the type migrations, so
-		// the plan does not run the type step on the file (#1200).
+		// the plan dry-runs the type steps on a copy whose refused materials have a placeholder "shader" instead (#1200).
+		// False for an invalid file, which the step leaves.
 		bool material_stages = false;
+		// The JSON pointers of those materials, in the file as the scan read it.
+		std::vector<std::string> material_stage_pointers;
 	};
 
 	struct manifest_state

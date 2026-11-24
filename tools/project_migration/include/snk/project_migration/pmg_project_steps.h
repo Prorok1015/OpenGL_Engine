@@ -4,6 +4,7 @@
 #include <boost/json/object.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -99,11 +100,28 @@ namespace prj::migration
 	// shader stages rnd::migrate_material_v1 refuses, `id_of` answering its migration_context::id_of (#1200).
 	std::vector<std::string> refused_material_stages(const boost::json::object& root, const desc::migration_id_lookup& id_of);
 
-	// Why engine.material_shaders would leave `material` (one refused_material_stages lists, in the desc at `path` of the
-	// project under `root`) as it is, resolved as the step resolves it through `assets` and the files on the disk: its
-	// __parent chain does not read, a vertex or a fragment stage is missing, or its triple needs a new file and the asset
-	// walk does not list the desc. Empty when it converts. The scan makes such a desc invalid with it, so --force leaves
-	// it and the rest of the project migrates.
+	// Why engine.material_shaders would leave a material as it is, resolved as the step resolves it through `assets` and the
+	// files on the disk of the project under `root`: its __parent chain does not read, a vertex or a fragment stage is
+	// missing, or its triple needs a new file and the asset walk does not list the desc. The scan makes such a desc invalid
+	// with it, so --force leaves it and the rest of the project migrates. One checker indexes the assets once and serves
+	// every material of a scan; `assets` must outlive it.
+	class material_shaders_checker
+	{
+	public:
+		material_shaders_checker(const std::filesystem::path& root, const project_assets& assets);
+		~material_shaders_checker();
+		material_shaders_checker(const material_shaders_checker&) = delete;
+		material_shaders_checker& operator=(const material_shaders_checker&) = delete;
+
+		// For `material` (one refused_material_stages lists) in the desc at `path`; empty when it converts.
+		std::string problem(const std::string& path, const boost::json::object& material) const;
+
+	private:
+		struct state;
+		std::unique_ptr<state> m_state;
+	};
+
+	// material_shaders_checker for one material: it indexes the assets on every call.
 	std::string material_shaders_problem(const std::filesystem::path& root, const project_assets& assets, const std::string& path,
 		const boost::json::object& material);
 
@@ -113,9 +131,10 @@ namespace prj::migration
 	// engine.manifest_format (pre): brings format_version of project.snkproj to prj::k_manifest_format_version.
 	// engine.geometry_blobs (post, EPIC-79 #1129): every desc the scan marks geometry_arrays gets its vertices and indices
 	// in <name>.<ext>.bin beside it (created) and keeps their ranges (written), as rnd::encode_geometry_files makes the
-	// pair. A .bin already at the name with exactly the bytes it would write (a run stopped between creating it and its
-	// journal) is taken as it is. A desc it cannot convert then (a .bin.new or another .bin at the name, a check that the
-	// type migrations made fail) stays as it is with a line "<path>: not migrated: <why>" in the report.
+	// pair. A .bin already at the name with exactly the bytes it would write is taken as it is (an older engine journaled
+	// a created file only after creating it, so a run stopped between the two left it unlisted). A desc it cannot convert
+	// then (a .bin.new or another .bin at the name, a check that the type migrations made fail) stays as it is with a
+	// line "<path>: not migrated: <why>" in the report.
 	// engine.material_shaders (pre, #1200): every material the scan marks material_stages (a material_desc file or an
 	// inline one, e.g. a mesh node's in a prefab) gets its effective stages (its own shader_* keys, the others from its
 	// __parent chain through the project and the read-only layers) as a reference "shader" instead of its shader_* keys;
@@ -124,6 +143,7 @@ namespace prj::migration
 	// -2, -3... while the res:// path (or its .resource) is taken in any content root or read-only layer: nothing is
 	// overwritten or shadowed. Each gets a .resource of a new ID; a triple that is one of the engine's shaders takes the
 	// engine's file. The report lists every file and the materials that point to it. A material the step could not
-	// convert is invalid in the scan already (material_shaders_problem), so it never reaches the step.
+	// convert is invalid in the scan already (material_shaders_checker), so it never reaches the step; so is a file whose
+	// type steps fail on a copy with a placeholder "shader" in place of the stages the step rewrites (the plan's dry run).
 	void register_engine_project_steps(project_step_registry& registry);
 }

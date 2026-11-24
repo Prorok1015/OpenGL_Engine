@@ -554,16 +554,33 @@ namespace
 				overwrite(relative, text);
 				return;
 			}
+			// Journaled before the file is there, as every write: a run stopped between the two leaves an entry with no file,
+			// which a rollback passes over.
+			m_report.created_files.push_back(relative);
+			try {
+				journal();
+			} catch (const std::exception&) {
+				// The in-process rollback deletes what the list names: not a file someone else may create there.
+				m_report.created_files.pop_back();
+				throw;
+			}
 			std::string error;
-			switch (create_new_file(m_context.root, relative, text, error)) {
-			case create_result::created: break;
-			case create_result::taken: throw std::runtime_error(std::format("{}: {} cannot be created: something is at its name", m_step, relative));
-			case create_result::failed: throw std::runtime_error(std::format("{}: {} cannot be created: {}", m_step, relative, error));
+			const create_result created = create_new_file(m_context.root, relative, text, error);
+			if (created != create_result::created) {
+				std::string why = created == create_result::taken
+					? std::format("{}: {} cannot be created: something is at its name", m_step, relative)
+					: std::format("{}: {} cannot be created: {}", m_step, relative, error);
+				m_report.created_files.pop_back();
+				try {
+					journal();
+				} catch (const std::exception& e) {
+					// The journal on the disk names a file that is not ours: the run stops even if the step goes on.
+					why += std::format("; {}", e.what());
+					m_journal_error = why;
+				}
+				throw std::runtime_error(why);
 			}
 			note_written(relative);
-			// After the file is there: a failure before it leaves nothing for a rollback to delete.
-			m_report.created_files.push_back(relative);
-			journal();
 			m_current.insert_or_assign(key, written_file{ relative, std::string(text) });
 			m_step_touched.insert(key);
 		}
@@ -749,6 +766,7 @@ namespace
 				m_step = planned.id;
 				project_step_context step_context{ m_context.root, plan.scan, manifest, m_report.project_notes, *this, m_assets, m_step, &m_context.descs };
 				step->apply(step_context);
+				if (!m_journal_error.empty()) throw std::runtime_error(m_journal_error);
 				m_report.project_steps.push_back(planned.id);
 			}
 			m_step.clear();
@@ -933,6 +951,8 @@ namespace
 		std::set<std::string> m_step_touched;
 		// Written since the engine last loaded: evicted from the cache before it loads again (evict_written).
 		std::vector<res::tag> m_stale;
+		// A create that was refused could not take its entry out of the journal on the disk; empty otherwise.
+		std::string m_journal_error;
 	};
 
 	// project.snkproj changed after the migration (a later migration, an edit by hand): only what this migration
