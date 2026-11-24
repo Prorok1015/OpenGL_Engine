@@ -307,7 +307,8 @@ namespace {
 			// Closed to others before anything is in it: nobody else can open, add or rename an entry in it.
 			std::string problem = platform::beneath::make_new_folder_beneath(pinned, below, 0700, &made);
 			if (!problem.empty()) {
-				// A home that cannot make a private folder (a file system without the ACLs) is not one for the copy.
+				// Whatever stopped the private folder (no ACLs on the file system, a name taken meanwhile...), the copy
+				// goes to the scratch fallback instead.
 				why = std::format("cannot make '{}': {}", utf8(candidate), problem);
 				return copy_outcome::not_held_here;
 			}

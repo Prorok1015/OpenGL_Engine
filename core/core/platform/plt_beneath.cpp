@@ -590,7 +590,7 @@ std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const 
 		if (opened.get() < 0 || ::fstat(opened.get(), &information) != 0) {
 			return errno_text("cannot inspect the folder just made", reached);
 		}
-		*made = { static_cast<std::uint64_t>(information.st_ino), static_cast<std::uint64_t>(information.st_dev) };
+		*made = { static_cast<std::uint64_t>(information.st_ino), 0, static_cast<std::uint64_t>(information.st_dev) };
 	}
 	return {};
 }
@@ -922,8 +922,9 @@ platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_roo
 	if (::fstat(kept->folder.get(), &information) != 0) {
 		return hold_refused(hold_status::failed, errno_text("cannot inspect", reached));
 	}
-	if (folder_identity{ static_cast<std::uint64_t>(information.st_ino), static_cast<std::uint64_t>(information.st_dev) }
-		!= made) {
+	const folder_identity held_identity{ static_cast<std::uint64_t>(information.st_ino), 0,
+		static_cast<std::uint64_t>(information.st_dev) };
+	if (held_identity != made) {
 		return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
 			fs_paths::utf8_of(reached)));
 	}
@@ -1203,6 +1204,33 @@ namespace {
 	{
 		return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh
 			&& a.nFileIndexLow == b.nFileIndexLow;
+	}
+
+	// FileIdInfo and FILE_ID_INFO (Windows 8), spelled out: the SDK declares them only for a high enough _WIN32_WINNT.
+	constexpr auto k_file_id_info = static_cast<FILE_INFO_BY_HANDLE_CLASS>(18);
+	struct file_id_info {
+		ULONGLONG volume_serial_number;
+		BYTE identifier[16];
+	};
+
+	// False with the last error set when neither the file ID nor the file index can be read.
+	bool identity_of(HANDLE file, platform::beneath::folder_identity& out)
+	{
+		file_id_info id{};
+		if (::GetFileInformationByHandleEx(file, k_file_id_info, &id, sizeof(id))) {
+			std::uint64_t halves[2]{};
+			static_assert(sizeof(halves) == sizeof(id.identifier));
+			std::memcpy(halves, id.identifier, sizeof(halves));
+			out = { halves[0], halves[1], static_cast<std::uint64_t>(id.volume_serial_number) };
+			return true;
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(file, &information)) {
+			return false;
+		}
+		out = { (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow, 0,
+			static_cast<std::uint64_t>(information.dwVolumeSerialNumber) };
+		return true;
 	}
 
 	enum class reparse_kind { none, redirect, filter, unknown };
@@ -1776,13 +1804,8 @@ std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const 
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the folder was not made below the root under these names", reached);
 	}
-	if (made) {
-		BY_HANDLE_FILE_INFORMATION information{};
-		if (!::GetFileInformationByHandle(created.get(), &information)) {
-			return last_error_text("cannot inspect the folder just made", reached);
-		}
-		*made = { (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow,
-			static_cast<std::uint64_t>(information.dwVolumeSerialNumber) };
+	if (made && !identity_of(created.get(), *made)) {
+		return last_error_text("cannot inspect the folder just made", reached);
 	}
 	return {};
 }
@@ -2143,8 +2166,10 @@ platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_roo
 			|| !same_file(held_information, inspected_information)) {
 			return hold_refused(hold_status::failed, last_error_text("cannot read the permissions of", reached));
 		}
-		const folder_identity held_identity{ (static_cast<std::uint64_t>(held_information.nFileIndexHigh) << 32)
-				| held_information.nFileIndexLow, static_cast<std::uint64_t>(held_information.dwVolumeSerialNumber) };
+		folder_identity held_identity;
+		if (!identity_of(kept->chain.last(), held_identity)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot inspect", reached));
+		}
 		if (held_identity != made) {
 			return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
 				fs_paths::utf8_of(reached)));

@@ -115,9 +115,12 @@ namespace platform::beneath {
 	SNK_API std::string make_folders_beneath(pinned_root& root, const std::filesystem::path& folder,
 		bool must_be_new = false);
 
-	// Which folder: POSIX inode and device; Windows file index and volume serial number.
+	// Which folder: POSIX inode and device; Windows the 128-bit file ID (FileIdInfo: the 64-bit index is not unique on
+	// ReFS; where the file system gives none, that index) and volume serial number.
 	struct folder_identity {
 		std::uint64_t file_id = 0;
+		// The upper half of a Windows 128-bit file ID; 0 elsewhere.
+		std::uint64_t file_id_high = 0;
 		std::uint64_t device = 0;
 
 		bool operator==(const folder_identity&) const = default;
