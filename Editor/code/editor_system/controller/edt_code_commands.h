@@ -1,7 +1,9 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_registration.h>
+#include <snk/platform/plt_beneath.h>
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -27,6 +29,8 @@ namespace edt
 		res::resource_system& res;
 		// agent_action after each change an agent made; null: none.
 		editor_events* events = nullptr;
+		// Tests only: handed to the read of code.read and the version checks (platform::beneath::read_request::hook).
+		const std::function<void(platform::beneath::read_stage)>* read_hook = nullptr;
 	};
 
 	[[nodiscard]] std::vector<registration> register_code_commands(cmd::command_registry& commands, code_commands_deps deps);
