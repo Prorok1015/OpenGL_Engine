@@ -379,7 +379,7 @@ BOOST_AUTO_TEST_CASE(ScanDefineNames_SkipsBlockComments_AndWhatTheSourceDefines)
 {
 	BOOST_TEST((edt::scan_define_names("/* #ifdef HIDDEN\n#ifdef ALSO_HIDDEN */\n#ifdef SHOWN\n#endif\n/* #if defined(INLINE_HIDDEN) */\n")
 		== std::vector<std::string>{ "SHOWN" }));
-	BOOST_TEST((edt::scan_define_names("#ifndef MY_GUARD\n#define MY_GUARD\n#ifdef REAL\n#endif\n#if defined(GL_ES)\n#endif\n#define GL_ES 1\n#endif\n")
+	BOOST_TEST((edt::scan_define_names("#ifndef MY_GUARD\n#define MY_GUARD\n#ifdef REAL\n#endif\n#if defined(PLATFORM_ES)\n#endif\n#define PLATFORM_ES 1\n#endif\n")
 		== std::vector<std::string>{ "REAL" }));
 }
 

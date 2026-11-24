@@ -48,7 +48,7 @@ namespace edt
 	// A preprocessor identifier: [A-Za-z_][A-Za-z0-9_]*.
 	bool is_define_name(std::string_view name);
 	// The names a GLSL source tests: #ifdef X, #ifndef X and defined(X) / defined X in #if and #elif, each once, in order of
-	// appearance, without the comments and without the names the source #defines itself (include guards, GL_ES...). No
+	// appearance, without the comments and without the names the source #defines itself (include guards, platform macros...). No
 	// include is followed (the caller expands them) and nothing is evaluated.
 	std::vector<std::string> scan_define_names(std::string_view source);
 
