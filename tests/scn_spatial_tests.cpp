@@ -386,7 +386,7 @@ BOOST_AUTO_TEST_CASE(TheRayThroughTheCenterOfTheImage_RunsAlongTheViewAxis)
 	const glm::mat4 projection = glm::perspective(glm::radians(60.f), 2.f, 0.1f, 100.f);
 	const scn::ray center = scn::ray_from_screen(view, projection, { 100.f, 50.f }, { 200.f, 100.f });
 	BOOST_TEST(center.direction.z == -1.f, boost::test_tools::tolerance(1e-4f));
-	BOOST_TEST(center.direction.x == 0.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(std::abs(center.direction.x) < 1e-4f);
 	const scn::ray top_left = scn::ray_from_screen(view, projection, { 0.f, 0.f }, { 200.f, 100.f });
 	BOOST_TEST(top_left.direction.x < 0.f);
 	BOOST_TEST(top_left.direction.y > 0.f);
