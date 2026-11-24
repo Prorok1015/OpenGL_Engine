@@ -1,7 +1,6 @@
 #include "scn_engine_components_detail.h"
 #include <snk/scene/scn_component_schema.h>
 #include <snk/scene/scn_model.h>
-#include <snk/scene/scn_spatial.h>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_screen_anchor.h>
@@ -28,27 +27,6 @@ namespace scn
 	BOOST_DESCRIBE_STRUCT(mouse_controller_component, (), (movement_speed, rotating_speed, distance, rotation, position,
 		last_mouse_pos, is_moving, is_rotating, input_enabled))
 	BOOST_DESCRIBE_STRUCT(screen_anchor_component, (), (target, offset))
-	BOOST_DESCRIBE_STRUCT(spatial_layers, (), (mask))
-}
-
-namespace desc
-{
-	// The layers as one number: bit i is layer i.
-	template<>
-	struct json_codec<scn::spatial_mask>
-	{
-		static json::value to_json(const scn::spatial_mask& mask) { return json::value(static_cast<std::uint64_t>(mask.raw())); }
-
-		static bool from_json(scn::spatial_mask& mask, const json::value& in)
-		{
-			double number = 0.0;
-			if (!json_to_double(in, number) || number < 0.0 || number > 4294967295.0) {
-				return false;
-			}
-			mask = scn::spatial_mask::from_raw(static_cast<std::uint32_t>(number));
-			return true;
-		}
-	};
 }
 
 void scn::register_engine_components(component_catalog& catalog)
@@ -68,7 +46,6 @@ void scn::register_engine_components(component_catalog& catalog)
 	add_engine_component<directional_light>(catalog, "scn.directional_light");
 	add_engine_component<mouse_controller_component>(catalog, "scn.mouse_controller");
 	add_engine_component<screen_anchor_component>(catalog, "scn.screen_anchor");
-	add_engine_component<spatial_layers>(catalog, "scn.spatial_layers");
 
 	add_engine_derived<world_transform>(catalog, "scn.world_transform");
 	add_engine_derived<depth_level>(catalog, "scn.depth_level");

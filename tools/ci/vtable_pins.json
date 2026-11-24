@@ -1,5 +1,5 @@
 {
-  "layout_revision": 26,
+  "layout_revision": 24,
   "editor_layout_revision": 2,
   "interfaces": [
     {
@@ -474,20 +474,6 @@
       "virtuals": [
         "~material_compiler_interface()",
         "rnd::shader_config compile(const material_desc&, const material_compile_context&)"
-      ]
-    },
-    {
-      "class": "spatial_backend",
-      "header": "core/engine/scene/include/snk/scene/scn_spatial.h",
-      "constant": "spatial_backend_abi_revision",
-      "revision": 1,
-      "bases": [],
-      "virtuals": [
-        "~spatial_backend()",
-        "std::optional<ray_hit> raycast_closest(entt::registry&, const ray&, const ray_filter&)",
-        "bool raycast_any(entt::registry&, const ray&, const ray_filter&)",
-        "void raycast_all(entt::registry&, const ray&, const ray_filter&, std::vector<ray_hit>&)",
-        "void entities_moved(entt::registry&, std::span<const entt::entity>)"
       ]
     }
   ],
