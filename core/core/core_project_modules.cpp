@@ -5,6 +5,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_process.h>
 #include <snk/project/prj_modules.h>
 #include <snk/project/prj_project.h>
@@ -115,6 +116,84 @@ namespace {
 #endif
 	}
 
+	// Where the copies are (#1294): `below` named literally from `base`, the project root or the run's scratch folder,
+	// and every folder of it opened from the one above it, never resolved first: a link swapped in at .cache or
+	// .cache/modules is refused, never followed to put a copy, or remove one, where it leads.
+	struct copies_home
+	{
+		fs::path base;
+		fs::path below;
+
+		fs::path folder() const { return base / below; }
+	};
+
+	copies_home home_of(const prj::project_context& project, const fs::path* scratch)
+	{
+		if (scratch) {
+			return { *scratch, "modules" };
+		}
+		return { project.root, module_cache_dir(project).lexically_relative(project.root) };
+	}
+
+	// The copies of a module are a few libraries and their symbols: a file past this is refused, not copied.
+	constexpr std::uint64_t k_max_copied_file_bytes = std::uint64_t{ 2 } << 30;
+
+	// `folder` (home.folder() / <pid>-<n>) removed with all it holds; a folder of a module a process still maps cannot
+	// go on Windows and stays.
+	void remove_copy_folder(const copies_home& home, const fs::path& folder)
+	{
+		if (folder.parent_path() != home.folder() || !folder.has_filename()) {
+			egLOG_WARN("project", "'{}' is not a module copy of '{}' and is not removed", utf8(folder),
+				utf8(home.folder()));
+			return;
+		}
+		platform::beneath::pinned_root pinned{ home.base };
+		const std::string error = platform::beneath::remove_tree_beneath(pinned, home.below, folder.filename());
+		if (!error.empty()) {
+			egLOG_WARN("project", "the module copy '{}' stays: {}", utf8(folder), error);
+		}
+	}
+
+	// `source` (canonical, a regular file) copied to `leaf` in the copy's folder, streamed and never replacing a file.
+	std::string copy_into(const copies_home& home, const fs::path& source, const fs::path& folder, const fs::path& leaf)
+	{
+		std::string problem;
+		const platform::beneath::chunk_source stream = [&](const platform::beneath::chunk_sink& sink) {
+			platform::beneath::read_request read;
+			read.root = source.parent_path();
+			read.leaf = source.filename();
+			read.max_bytes = k_max_copied_file_bytes;
+			bool sink_failed = false;
+			const platform::beneath::read_result result =
+				platform::beneath::read_beneath_stream(read, [&](std::span<const std::byte> chunk) {
+					sink_failed = !sink(chunk);
+					return !sink_failed;
+				});
+			if (result.status == platform::beneath::read_status::too_large) {
+				problem = std::format("'{}' is larger than {} bytes, the most a module copy takes", utf8(source),
+					k_max_copied_file_bytes);
+				return false;
+			}
+			if (result.status != platform::beneath::read_status::ok) {
+				problem = result.error.empty() ? std::format("'{}' cannot be read", utf8(source)) : result.error;
+				return false;
+			}
+			return !sink_failed;
+		};
+		platform::beneath::pinned_root pinned{ home.base };
+		platform::beneath::write_request write;
+		write.folder = home.below / folder.filename();
+		write.leaf = leaf;
+		write.tmp_leaf = fs::path{ utf8(leaf) + ".copying" };
+		write.tmp_path = folder / write.tmp_leaf;
+		write.stream = &stream;
+		write.replace = false;
+		// A copy in the cache: a crash leaves a folder the next start removes, so nothing is flushed.
+		write.durable = false;
+		const std::string error = platform::beneath::write_beneath(pinned, write);
+		return error.empty() || problem.empty() ? error : problem;
+	}
+
 	bool is_library(const fs::path& file)
 	{
 		const std::string extension = utf8(file.extension());
@@ -150,20 +229,6 @@ namespace {
 		fs::file_time_type source_time{};
 	};
 
-	// The checked, canonical <root>/.cache/modules, made if missing; empty string on success.
-	std::string cache_folder(const prj::project_context& project, fs::path& out)
-	{
-		std::error_code ec;
-		// Checked before anything is created in it: a .cache linked out of the project gets no folders.
-		if (fs::path cache; fs::exists(project.cache_dir(), ec)) {
-			if (std::string why = folder_inside(project.root, project.cache_dir(), cache); !why.empty()) {
-				return why;
-			}
-		}
-		fs::create_directories(module_cache_dir(project), ec);
-		return folder_inside(project.root, module_cache_dir(project), out);
-	}
-
 	// A read-only project (a shipped game, a migration: #593, #757) gets nothing written into it: the copies go to the
 	// run's scratch folder, which resource_term removes. Null for a project the editor writes into.
 	const fs::path* run_scratch(ds::app_data_storage& data)
@@ -172,6 +237,14 @@ namespace {
 			return nullptr;
 		}
 		return &data.require<core::res::run_scratch_folder>().path;
+	}
+
+	// A copy the host made, removed from where the copies of this run are.
+	void remove_copy(ds::app_data_storage& data, const fs::path& folder)
+	{
+		if (data.has_value<prj::project_context>()) {
+			remove_copy_folder(home_of(data.require<prj::project_context>(), run_scratch(data)), folder);
+		}
 	}
 
 	// Empty string on success; on failure nothing of the copy is left.
@@ -185,16 +258,14 @@ namespace {
 		if (std::string why = file_inside(output, found, library); !why.empty()) {
 			return why;
 		}
-		fs::path cache;
-		if (scratch) {
-			std::error_code made;
-			cache = *scratch / "modules";
-			fs::create_directories(cache, made);
-			if (made) return std::format("cannot make '{}': {}", utf8(cache), made.message());
-		} else if (::res::resource_system::read_only_project()) {
+		if (!scratch && ::res::resource_system::read_only_project()) {
 			return "a read-only project has no folder for the copies of its modules";
-		} else if (std::string why = cache_folder(project, cache); !why.empty()) {
-			return why;
+		}
+		const copies_home home = home_of(project, scratch);
+		const fs::path cache = home.folder();
+		platform::beneath::pinned_root pinned{ home.base };
+		if (std::string why = platform::beneath::make_folders_beneath(pinned, home.below); !why.empty()) {
+			return std::format("cannot make '{}': {}", utf8(cache), why);
 		}
 
 		std::error_code ec;
@@ -202,18 +273,22 @@ namespace {
 		fs::path folder;
 		for (int n = 0; n < k_max_copies && folder.empty(); ++n) {
 			const fs::path candidate = cache / std::format("{}-{}", pid, n);
-			if (fs::create_directory(candidate, ec)) {
-				folder = candidate;
-			} else if (ec) {
-				return std::format("cannot make '{}': {}", utf8(candidate), ec.message());
+			std::error_code status_ec;
+			if (fs::symlink_status(candidate, status_ec).type() != fs::file_type::not_found) {
+				continue;
 			}
+			const fs::path below = home.below / candidate.filename();
+			if (std::string why = platform::beneath::make_folders_beneath(pinned, below, true); !why.empty()) {
+				return std::format("cannot make '{}': {}", utf8(candidate), why);
+			}
+			folder = candidate;
 		}
 		if (folder.empty()) {
 			return std::format("no free folder for a copy of '{}' in '{}'", utf8(library), utf8(cache));
 		}
 
 		const auto fail = [&](std::string why) {
-			fs::remove_all(folder, ec);
+			remove_copy_folder(home, folder);
 			return why;
 		};
 		const fs::path target = folder / library.filename();
@@ -221,8 +296,8 @@ namespace {
 		out.source = library;
 		out.source_size = fs::file_size(library, ec);
 		out.source_time = fs::last_write_time(library, ec);
-		if (!fs::copy_file(library, target, fs::copy_options::none, ec)) {
-			return fail(std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), ec.message()));
+		if (std::string why = copy_into(home, library, folder, library.filename()); !why.empty()) {
+			return fail(std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), why));
 		}
 		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
 			fs::path real;
@@ -230,8 +305,7 @@ namespace {
 				|| !file_inside(output, it->path(), real).empty()) {
 				continue;
 			}
-			std::error_code copy_ec;
-			if (fs::copy_file(real, folder / it->path().filename(), fs::copy_options::none, copy_ec) && is_library(real)) {
+			if (copy_into(home, real, folder, it->path().filename()).empty() && is_library(real)) {
 				std::error_code stamp_ec;
 				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
 			}
@@ -435,14 +509,16 @@ void core::project_module_host::remove_unused_copies() const
 	if (!m_data.has_value<prj::project_context>()) {
 		return;
 	}
-	const auto& project = m_data.require<prj::project_context>();
+	const copies_home home = home_of(m_data.require<prj::project_context>(), nullptr);
+	const fs::path cache = home.folder();
 	std::error_code ec;
-	if (!fs::exists(module_cache_dir(project), ec)) {
-		return;
-	}
-	fs::path cache;
-	if (!cache_folder(project, cache).empty()) {
-		return;
+	// Only listed when no link stands in the way (nor a junction, which MSVC calls neither a folder nor a link); a link
+	// swapped in after this is met by the removal, which refuses it.
+	for (fs::path step = home.base; const fs::path& part : home.below) {
+		step /= part;
+		if (fs::symlink_status(step, ec).type() != fs::file_type::directory) {
+			return;
+		}
 	}
 	const auto in_use = [&](const fs::path& folder) {
 		return std::ranges::any_of(m_copies, [&](const auto& entry) {
@@ -467,7 +543,7 @@ void core::project_module_host::remove_unused_copies() const
 	}
 	// One still mapped by a process cannot go on Windows and stays.
 	for (const auto& entry : unused) {
-		fs::remove_all(entry, ec);
+		remove_copy_folder(home, entry);
 	}
 }
 
@@ -543,9 +619,8 @@ void core::project_module_host::load_runtime_module(const std::string& name, pro
 		report.loaded.push_back(name);
 		return;
 	}
-	std::error_code ec;
 	if (!copy.folder.empty()) {
-		fs::remove_all(copy.folder, ec);
+		remove_copy(m_data, copy.folder);
 	}
 	if (untrusted) {
 		egLOG_WARN("project", "module '{}' not loaded: {}", name, problem);
@@ -645,8 +720,7 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 	}
 	// Before anything is unloaded: the running module stays.
 	if (!trusted(m_options, name, copy.library)) {
-		std::error_code ec;
-		fs::remove_all(copy.folder, ec);
+		remove_copy(m_data, copy.folder);
 		if (m_loader.state(name) != app::modules::module_state::initialized) {
 			add_once(m_untrusted_runtime, name);
 		}
@@ -737,10 +811,9 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
 	const std::optional<loaded_copy>& copy, bool keep_copy)
 {
-	std::error_code ec;
 	const auto drop_copy = [&] {
 		if (copy && !keep_copy) {
-			fs::remove_all(copy->folder, ec);
+			remove_copy(m_data, copy->folder);
 		}
 	};
 
@@ -895,8 +968,7 @@ core::reload_report core::project_module_host::reload_editor_module(const std::s
 		return refused(std::move(why));
 	}
 	if (!trusted(m_options, name, copy.library)) {
-		std::error_code ec;
-		fs::remove_all(copy.folder, ec);
+		remove_copy(m_data, copy.folder);
 		if (m_loader.state(name) != app::modules::module_state::initialized) {
 			add_once(m_untrusted_editor, name);
 		}
@@ -919,10 +991,9 @@ core::reload_report core::project_module_host::swap_editor(const std::string& na
 	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
 	const std::optional<loaded_copy>& copy)
 {
-	std::error_code ec;
 	const auto drop_copy = [&] {
 		if (copy) {
-			fs::remove_all(copy->folder, ec);
+			remove_copy(m_data, copy->folder);
 		}
 	};
 	if (!m_options.with_editor_modules || !m_options.check_editor_module) {
@@ -1125,8 +1196,7 @@ core::project_modules_report core::project_module_host::load_editor(
 			continue;
 		}
 		if (!copy.folder.empty()) {
-			std::error_code ec;
-			fs::remove_all(copy.folder, ec);
+			remove_copy(m_data, copy.folder);
 		}
 		if (untrusted) {
 			egLOG_WARN("project", "editor module '{}' is not loaded: {}", ref.name, problem);

@@ -90,7 +90,7 @@ namespace snapshot_test
 
 		void spawn(entt::registry& reg)
 		{
-			const auto tag = put("snap.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+			const auto tag = put("snap.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 				{"__id":"00000000000000b1","name":"Cam","transform":{"position":[0,2,5]},
 					"components":{"camera":{"__type":"camera_desc","__version":2,"fov":70}}},
 				{"__id":"00000000000000b2","name":"Sun","components":{"light":{"__type":"directional_light_desc"}}},

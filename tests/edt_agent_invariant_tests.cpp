@@ -1059,22 +1059,22 @@ BOOST_FIXTURE_TEST_CASE(ALoadedLevel_IsReportedOnceItsLoadsSettled_AndNotAfterAN
 namespace {
 
 constexpr std::string_view k_level_with_unknown = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]}]})json";
 constexpr std::string_view k_clean_level = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"odd"}]}]})json";
 constexpr std::string_view k_level_with_unknown_system = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]},
-	{"__type":"world_desc","__version":4,"name":"w1","systems":["no_such_system"],"children":[]}]})json";
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]},
+	{"__type":"world_desc","__version":5,"name":"w1","systems":["no_such_system"],"children":[]}]})json";
 constexpr std::string_view k_level_with_world_file = R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
 	"res://worlds/desc_problems_world.desc"]})json";
-constexpr std::string_view k_world_file_with_unknown = R"json({"__type":"world_desc","__version":4,"name":"wf","systems":[],"children":[
+constexpr std::string_view k_world_file_with_unknown = R"json({"__type":"world_desc","__version":5,"name":"wf","systems":[],"children":[
 	{"__id":"00000000000000f1","name":"plain"},
 	{"__id":"00000000000000f2","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
-constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":4,"children":[
+constexpr std::string_view k_prefab_with_unknown = R"json({"__type":"prefab_desc","__version":5,"children":[
 	{"__id":"00000000000000e1","name":"odd","components":{"x":{"__type":"no_such_component_desc"}}}]})json";
-constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":4,"children":[
+constexpr std::string_view k_clean_prefab = R"json({"__type":"prefab_desc","__version":5,"children":[
 	{"__id":"00000000000000e1","name":"plain"}]})json";
 
 struct desc_problems_fixture : agent_editor_fixture
@@ -1310,9 +1310,9 @@ BOOST_FIXTURE_TEST_CASE(GoingToAWorldRow_MakesItsWorldActive, desc_problems_fixt
 BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevelStaysClean, desc_problems_fixture)
 {
 	const res::tag prefab = res::tag::make("prefabs/apply_instance.prefab.desc");
-	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 			{"__id":"00000000000000d1","name":"inst","components":{"p":{"__type":"prefab_desc","__parent":"res://prefabs/apply_instance.prefab.desc"}}}]}]})json");
 	auto& contexts = storage.require<scn::context_manager>();
 	const auto world_has = [&contexts](std::string_view name) {
@@ -1359,9 +1359,9 @@ BOOST_FIXTURE_TEST_CASE(ApplyingAPrefab_ReloadsItsInstanceInTheLevel_AndTheLevel
 BOOST_FIXTURE_TEST_CASE(APendingInspectorEdit_OfAPrefabNode_LandsOnThePrefab_WhenALevelSelectionTakesTheInspector, desc_problems_fixture)
 {
 	const res::tag prefab = res::tag::make("prefabs/pending_edit.prefab.desc");
-	store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+	store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 			{"__id":"00000000000000d1","name":"other"}]}]})json");
 	edt::editor_context& context = *editor().context();
 	auto* inspector = dynamic_cast<edt::inspector_panel*>(context.panels().find("inspector"));
@@ -1393,9 +1393,9 @@ struct prefab_inspector_fixture : desc_problems_fixture
 {
 	prefab_inspector_fixture()
 	{
-		store(prefab, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+		store(prefab, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 		open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-			{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+			{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 				{"__id":"00000000000000d1","name":"other"}]}]})json");
 		inspector = dynamic_cast<edt::inspector_panel*>(editor().context()->panels().find("inspector"));
 		tree = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
@@ -1449,7 +1449,7 @@ struct prefab_on_disk_fixture : prefab_inspector_fixture
 	prefab_on_disk_fixture()
 	{
 		project.write("res/prefabs/inspector_target.prefab.desc",
-			R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
+			R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"plain"}]})json");
 		auto& rs = storage.require<res::resource_system>();
 		// The resource system already has a res:// mount (its roots are what mount_roots answers: the first mount of a protocol),
 		// so the project's folder takes its place; a second mount of the protocol would never be asked.
@@ -1503,10 +1503,10 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 {
 	const res::tag first = res::tag::make("prefabs/open_first.prefab.desc");
 	const res::tag second = res::tag::make("prefabs/open_second.prefab.desc");
-	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
-	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	store(first, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]}]})json");
 	auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
 	BOOST_REQUIRE(window);
 	open_prefab(first);
@@ -1535,10 +1535,10 @@ BOOST_FIXTURE_TEST_CASE(OpeningAnotherPrefabWhileOneLoads_LoadsBothAndShowsTheLa
 {
 	const res::tag first = res::tag::make("prefabs/replace_first.prefab.desc");
 	const res::tag second = res::tag::make("prefabs/replace_second.prefab.desc");
-	store(first, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
-	store(second, R"json({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
+	store(first, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e1","name":"one"}]})json");
+	store(second, R"json({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000e2","name":"two"}]})json");
 	open_level(R"json({"__type":"level_desc","__version":2,"name":"desc_problems","worlds":[
-		{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[]}]})json");
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[]}]})json");
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), first)); });
 	open_prefab(second);

@@ -42,7 +42,7 @@ BOOST_FIXTURE_TEST_SUITE(ScnCameraTransformTests, camera_transform_fixture)
 
 BOOST_AUTO_TEST_CASE(ACameraNodeKeepsItsOwnTransformWhenSpawned)
 {
-	const auto tag = put("cam.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	const auto tag = put("cam.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000c1","name":"Cam","transform":{"position":[0,5,0]},
 		 "components":{"camera":{"__type":"camera_desc","__version":2}}}]})");
 	entt::registry reg;
@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_CASE(TheMigrationWritesTheRenderedPoseIntoTheNodeAndDropsTheCame
 	auto world = migrated(R"({"__type":"world_desc","__version":3,"name":"w","children":[
 		{"__id":"00000000000000c1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1,
 			"fov":50,"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}}}]})");
-	BOOST_TEST(world.at("__version").as_int64() == 4);
+	BOOST_TEST(world.at("__version").as_int64() == 5);
 
 	const auto& node = world.at("children").as_array()[0].as_object();
 	const auto& position = node.at("transform").at("position");
@@ -140,7 +140,7 @@ BOOST_AUTO_TEST_CASE(OverrideRecordsOnALegacyCameraAreMigratedOrDroppedWithAWarn
 				"transform":{"position":[0,1,3],"rotation":[-5,0,0]}}},
 			{"target":["00000000000000c1"],"component":"camera","path":"/transform/position","value":[1,2,3]},
 			{"target":["00000000000000c1"],"component":"camera","path":"/fov","value":60}]}]})");
-	BOOST_TEST(prefab.at("__version").as_int64() == 4);
+	BOOST_TEST(prefab.at("__version").as_int64() == 5);
 
 	const auto& records = prefab.at("children").as_array()[0].at("overrides").as_array();
 	BOOST_REQUIRE(records.size() == 4u); // the camera, its pose as two transform records, the fov; the /transform edit is dropped

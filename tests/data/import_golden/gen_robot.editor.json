@@ -189,7 +189,7 @@
 	"memory://gen_robot/gen_robot.prefab.desc": {
 		"json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "e0193e2c8cae2385",
 			"children": [
 				{
@@ -3076,7 +3076,7 @@
 		],
 		"prefab_json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "e0193e2c8cae2385",
 			"children": [
 				{

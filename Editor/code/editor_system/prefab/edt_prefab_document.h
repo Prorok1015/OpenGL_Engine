@@ -118,7 +118,9 @@ namespace edt
 		save_result save_with(bool without_base);
 		// The same state as a string for the dirty test; no references are resolved, no file is read.
 		std::string working_form() const;
-		void take_from(const scn::prefab_desc& source);
+		// Returns the copy's form as `source` holds it: not working_form() when records of its prefab instances were moved to the
+		// current versions of their types (#1255), which leaves the copy edited.
+		std::string take_from(const scn::prefab_desc& source);
 		void sync_preview();
 		void watch_source();
 		void unwatch_source();
