@@ -14,6 +14,11 @@
 #include <snk/editor/edt_action_registry.h>
 #include "edt_prefab_save_all.h"
 #include "edt_save_all.h"
+#include "edt_builtin_asset_kinds.h"
+#include "edt_document_cast.h"
+#include <snk/editor/edt_asset_kind_registry.h>
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/common/logger/engine_log_sinks.h>
@@ -1424,6 +1429,44 @@ BOOST_AUTO_TEST_CASE(SaveAll_AVariantThatNeedsItsBaseDropped_IsAskedAndSavesWhol
 	BOOST_TEST(ask_and_answer(edt::save_all_question::base_layer, 0) == 1);
 	BOOST_TEST(!document->is_dirty());
 	BOOST_TEST(text_of(res_root, "prefabs/v.prefab.desc").find("__parent") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAll_TwoOpenDirtyPrefabs_AreBothWritten_AndACleanOneIsLeftAlone)
+{
+	write(res_root, "prefabs/b.prefab.desc", PREFAB);
+	write(res_root, "prefabs/c.prefab.desc", PREFAB);
+	edt::scene_document level;
+	edt::editor_events events;
+	edt::document_manager documents{ level, events };
+	edt::asset_kind_registry kinds;
+	edt::asset_kind_hooks hooks;
+	hooks.desc_layout = [this] { return layout(); };
+	const std::vector<edt::registration> registrations = edt::register_builtin_asset_kinds(kinds, std::move(hooks));
+	documents.set_preview_kinds(kinds, services);
+	edt::prefab_document& first = edt::open_prefab(documents, tag);
+	edt::prefab_document& second = edt::open_prefab(documents, res::tag::make("prefabs/b.prefab.desc"));
+	edt::prefab_document& clean = edt::open_prefab(documents, res::tag::make("prefabs/c.prefab.desc"));
+	const auto rename = [](edt::prefab_document& prefab, const std::string& name) {
+		return prefab.edit([&name](scn::prefab_desc& desc) {
+			desc.get_root().children[0].name = name;
+			return true;
+		});
+	};
+	BOOST_REQUIRE(rename(first, "armA"));
+	BOOST_REQUIRE(rename(second, "armB"));
+	BOOST_TEST(!clean.is_dirty());
+	BOOST_TEST(edt::dirty_prefabs_of(documents).size() == 2u);
+
+	const edt::save_all_report report = edt::save_all_write(documents, {});
+
+	BOOST_TEST(report.saved.size() == 2u);
+	BOOST_TEST(report.failed.empty());
+	BOOST_TEST(report.asked.empty());
+	BOOST_TEST(text_of(res_root, "prefabs/a.prefab.desc").find("armA") != std::string::npos);
+	BOOST_TEST(text_of(res_root, "prefabs/b.prefab.desc").find("armB") != std::string::npos);
+	BOOST_TEST(text_of(res_root, "prefabs/c.prefab.desc").find("arm") != std::string::npos);
+	BOOST_TEST(edt::dirty_prefabs_of(documents).empty());
+	documents.shutdown();
 }
 
 // #746: a prefab with a shape survives Apply and a fresh read: the mesh node keeps its geometry file and its range.

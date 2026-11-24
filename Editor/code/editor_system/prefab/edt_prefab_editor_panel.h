@@ -23,8 +23,10 @@ namespace edt
 	public:
 		prefab_editor_panel(rnd::render_system& rnd, gui::gui_system& gui);
 
+		// A prefab the window stops showing keeps its preview but gives up the render target the shown one draws into (#1185).
 		void set_context(prefab_document* ctx)
 		{
+			if (m_ctx != ctx) park_camera(m_ctx);
 			m_ctx = ctx;
 			m_error.clear();
 			m_banner_later = false;
@@ -64,10 +66,12 @@ namespace edt
 		void render_tree_node(const scn::prefab_desc::prefab_node& node, std::vector<std::uint64_t>& path);
 		void render_viewport();
 		void update_camera_viewport(float width, float height);
+		static void park_camera(prefab_document* ctx);
 
 		rnd::render_system& m_rnd;
 		gui::gui_system& m_gui;
 		prefab_document* m_ctx = nullptr;
+		bool m_hide_reported = false;
 		std::function<void()> m_on_close;
 		std::function<void()> m_on_cancel_loading;
 		std::string m_loading;

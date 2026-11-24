@@ -102,6 +102,8 @@ namespace edt
 		const res::tag& source_tag() const { return m_source_tag; }
 		// The preview is the only context of its own set; the panel binds its input to this target.
 		const std::string& set_name() const { return m_set_name; }
+		// The tag the preview is assembled under: its own per open, so another open prefab never shares it.
+		const std::string& working_tag() const { return m_working_tag; }
 		static constexpr std::string_view context_name() { return CONTEXT_NAME; }
 
 		static constexpr std::string_view RT_COLOR = "memory://__prefab_camera_rt";

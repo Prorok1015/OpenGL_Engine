@@ -91,7 +91,7 @@ edt::file_menu_component::file_menu_component(ports from)
 {
 	m_tabs = std::make_unique<document_tabs>(m_ports.context.documents(),
 		document_tab_ports{ focus_ports(), [this](document_id id) { m_ports.asset_open.data_documents().request_close(id); },
-			[this] { m_ports.prefab.request_close(); }, [this] { return m_menu && m_menu->save_all_running(); } });
+			[this](document_id id) { m_ports.prefab.request_close(id); }, [this] { return m_menu && m_menu->save_all_running(); } });
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_ports.state.editor_tag.is_valid(); };
 	hooks.is_dirty = [this] { return m_ports.state.is_dirty(); };
@@ -120,7 +120,7 @@ edt::file_menu_component::file_menu_component(ports from)
 	};
 	hooks.discard_other_documents = [this] {
 		for (const document_id id : m_ports.asset_open.data_documents().dirty()) m_ports.asset_open.data_documents().close(id);
-		if (m_ports.prefab.dirty()) m_ports.prefab.close();
+		m_ports.prefab.close_dirty();
 	};
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_ports.resources.get_resources_path());

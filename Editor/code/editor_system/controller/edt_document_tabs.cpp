@@ -70,7 +70,7 @@ bool edt::document_tabs::close(document_id id)
 		return true;
 	}
 	if (open->kind() == "prefab" && m_ports.request_close_prefab) {
-		m_ports.request_close_prefab();
+		m_ports.request_close_prefab(id);
 		return true;
 	}
 	return false;
