@@ -233,13 +233,13 @@ BOOST_AUTO_TEST_CASE(ANonUniformScale_StretchesTheHitAndKeepsTheNormalPerpendicu
 {
 	put_quad("quad.geom.desc");
 	entt::registry reg;
-	// 4 wide, 1 tall, tilted 45 degrees about X: the normal is (0, sin 45, cos 45) however the scale stretches the quad.
+	// 4 wide, 1 tall, tilted 45 degrees about X: the normal is (0, -sin 45, cos 45) however the scale stretches the quad.
 	glm::mat4 matrix = glm::rotate(at({ 0.f, 0.f, -3.f }), glm::radians(45.f), glm::vec3{ 1.f, 0.f, 0.f });
 	matrix = glm::scale(matrix, glm::vec3{ 4.f, 1.f, 1.f });
 	add_quad(reg, matrix);
 	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 1.8f, 0.f, 2.f }));
 	BOOST_REQUIRE(hit);
-	BOOST_TEST(hit->normal.y == std::sin(glm::radians(45.f)), boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(hit->normal.y == -std::sin(glm::radians(45.f)), boost::test_tools::tolerance(1e-3f));
 	BOOST_TEST(hit->normal.z == std::cos(glm::radians(45.f)), boost::test_tools::tolerance(1e-3f));
 	BOOST_TEST(glm::length(hit->normal) == 1.f, boost::test_tools::tolerance(1e-4f));
 	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 2.5f, 0.f, 2.f })));
@@ -265,10 +265,10 @@ BOOST_AUTO_TEST_CASE(AMeshComponentGivenAnotherRange_IsHitByTheNewRange)
 	put_quad("quad.geom.desc");
 	entt::registry reg;
 	const auto quad = add_quad(reg, at({ 0.f, 0.f, -3.f }));
-	BOOST_REQUIRE(scn::raycast_closest(reg, toward_minus_z({ 0.4f, 0.4f, 2.f })));
-	// Only the first triangle (indices 0..3): the point (0.4, 0.4) lies in the second one.
+	BOOST_REQUIRE(scn::raycast_closest(reg, toward_minus_z({ -0.3f, 0.4f, 2.f })));
+	// Only the first triangle (indices 0..3, the lower right half): the point (-0.3, 0.4) lies in the second one.
 	reg.replace<scn::mesh_component>(quad, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 3 } });
-	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 0.4f, 0.4f, 2.f })));
+	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ -0.3f, 0.4f, 2.f })));
 	BOOST_TEST(scn::raycast_closest(reg, toward_minus_z({ 0.4f, -0.4f, 2.f })).has_value());
 }
 
@@ -285,8 +285,8 @@ BOOST_AUTO_TEST_CASE(AMeshWhoseGeometryLoadsLater_IsHitOnceItIsLoaded)
 	BOOST_REQUIRE(!scn::raycast_closest(reg, ray));
 
 	put("later.geom.desc", test_util::quad_geometry_json());
-	scn::geometry_holds::of(reg).hold(entity, tag_of("later.geom.desc"));
-	require_loaded<rnd::geometry_desc>(tag_of("later.geom.desc"));
+	rs->signal_changed(tag_of("later.geom.desc"));
+	pump();
 	BOOST_TEST(scn::raycast_closest(reg, ray).has_value());
 }
 
