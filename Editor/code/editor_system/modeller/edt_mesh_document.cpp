@@ -136,6 +136,8 @@ bool edt::mesh_document::load_source(std::string& error)
 	}
 	m_working = std::move(loaded);
 	m_view.reset();
+	m_history.clear();
+	m_gesture.reset();
 	m_saved_text = working_text();
 	m_disk_version = file.version;
 	m_dirty = false;
@@ -199,6 +201,8 @@ void edt::mesh_document::close()
 	m_stale_message.clear();
 	m_working = {};
 	m_view.reset();
+	m_history.clear();
+	m_gesture.reset();
 	m_baked = {};
 	m_stats = {};
 }
@@ -242,9 +246,50 @@ void edt::mesh_document::announce()
 	}
 }
 
-bool edt::mesh_document::edit(const std::function<bool(mesh::poly_mesh&)>& change)
+bool edt::mesh_document::record_change(const mesh::poly_mesh& before, const std::optional<mesh::shape_params>& generator_before,
+	const mesh::mesh_selection& selection_before, std::string label, const cmd::origin& origin)
 {
-	if (!m_open || edits_locked()) {
+	if (auto moves = mesh::moves_between(before, m_working.mesh)) {
+		if (moves->empty()) return false;
+		m_history.record(std::move(label), origin, std::make_unique<mesh_positions_change>(*this, std::move(*moves), selection_before, m_view.selection()));
+		return true;
+	}
+	m_history.record(std::move(label), origin, std::make_unique<mesh_snapshot_change>(*this, before, generator_before, m_working.mesh, m_working.generator,
+		selection_before, m_view.selection()));
+	return true;
+}
+
+bool edt::mesh_document::edit(const std::function<bool(mesh::poly_mesh&)>& change, std::string label, cmd::origin origin)
+{
+	if (!m_open || edits_locked() || m_gesture) {
+		return false;
+	}
+	const mesh::poly_mesh before = m_working.mesh;
+	const std::optional<mesh::shape_params> generator_before = m_working.generator;
+	const mesh::mesh_selection selection_before = m_view.selection();
+	if (!change(m_working.mesh)) {
+		return false;
+	}
+	record_change(before, generator_before, selection_before, std::move(label), origin);
+	++m_generation;
+	rebake();
+	m_dirty = working_text() != m_saved_text;
+	announce();
+	return true;
+}
+
+bool edt::mesh_document::begin_gesture(std::string label, cmd::origin origin)
+{
+	if (!m_open || edits_locked() || m_gesture) {
+		return false;
+	}
+	m_gesture = gesture_state{ m_working.mesh, m_working.generator, m_view.selection(), std::move(label), std::move(origin) };
+	return true;
+}
+
+bool edt::mesh_document::gesture_edit(const std::function<bool(mesh::poly_mesh&)>& change)
+{
+	if (!m_open || !m_gesture || edits_locked()) {
 		return false;
 	}
 	if (!change(m_working.mesh)) {
@@ -255,6 +300,74 @@ bool edt::mesh_document::edit(const std::function<bool(mesh::poly_mesh&)>& chang
 	m_dirty = working_text() != m_saved_text;
 	announce();
 	return true;
+}
+
+bool edt::mesh_document::end_gesture()
+{
+	if (!m_gesture) {
+		return false;
+	}
+	const gesture_state started = std::move(*m_gesture);
+	m_gesture.reset();
+	return record_change(started.mesh, started.generator, started.selection, started.label, started.origin);
+}
+
+void edt::mesh_document::cancel_gesture()
+{
+	if (!m_gesture) {
+		return;
+	}
+	const gesture_state started = std::move(*m_gesture);
+	m_gesture.reset();
+	history_replace(started.mesh, started.generator);
+	history_applied(started.selection);
+}
+
+bool edt::mesh_document::undo()
+{
+	if (!m_open || edits_locked() || m_gesture) {
+		return false;
+	}
+	return m_history.undo();
+}
+
+bool edt::mesh_document::redo()
+{
+	if (!m_open || edits_locked() || m_gesture) {
+		return false;
+	}
+	return m_history.redo();
+}
+
+std::optional<edt::history_entry> edt::mesh_document::next_undo_entry() const
+{
+	const history_record* record = m_history.next_undo();
+	if (!record) return std::nullopt;
+	return history_entry{ record->label, record->origin };
+}
+
+std::optional<edt::history_entry> edt::mesh_document::next_redo_entry() const
+{
+	const history_record* record = m_history.next_redo();
+	if (!record) return std::nullopt;
+	return history_entry{ record->label, record->origin };
+}
+
+void edt::mesh_document::history_replace(const mesh::poly_mesh& mesh, const std::optional<mesh::shape_params>& generator)
+{
+	m_working.mesh = mesh;
+	m_working.generator = generator;
+	// A copy carries the generation of the mesh it was taken from, which a cache built for another mesh may have too.
+	m_view.reset();
+}
+
+void edt::mesh_document::history_applied(const mesh::mesh_selection& selection)
+{
+	m_view.selection() = selection;
+	++m_generation;
+	rebake();
+	m_dirty = working_text() != m_saved_text;
+	announce();
 }
 
 std::string edt::mesh_document::geometry_file_problem(bool replace_foreign_geometry) const

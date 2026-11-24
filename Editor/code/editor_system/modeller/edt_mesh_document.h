@@ -2,6 +2,7 @@
 #include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
 #include "edt_mesh_bake.h"
+#include "edt_mesh_history.h"
 #include "edt_mesh_io.h"
 #include "edt_mesh_view.h"
 #include <snk/editor/edt_document.h>
@@ -48,7 +49,7 @@ namespace edt
 	// the preview draws, and the save that writes both the source and the `x.geom.desc` + `x.geom.bin` pair the game loads.
 	// No new file format: the files are the ones the shape tools make. A previewable_document, so the document_manager opens
 	// it like the prefab editor's and Save All, the Unsaved list and the close questions see it.
-	class mesh_document final : public previewable_document, public autosave_source
+	class mesh_document final : public previewable_document, public autosave_source, private mesh_history_target
 	{
 	public:
 		explicit mesh_document(editor_services& services);
@@ -112,7 +113,27 @@ namespace edt
 		mesh::mesh_view& view() { return m_view; }
 		// Changes the working mesh: `change` gets it and says whether it changed anything. The preview follows. False: closed,
 		// locked, or nothing changed.
-		bool edit(const std::function<bool(mesh::poly_mesh&)>& change);
+		// One record of the undo history, labelled and by `origin`: the moves of vertices, or the whole mesh before and after when anything else changed. The
+		// selection at the time comes back with an undo or a redo. Refused during a gesture.
+		bool edit(const std::function<bool(mesh::poly_mesh&)>& change, std::string label = "Edit mesh", cmd::origin origin = cmd::origin::ui());
+
+		// A gesture (a drag of the gizmo): its edits show at once but are one record, made when it ends. `begin_gesture` is refused while another runs, while
+		// the document is closed or locked.
+		bool begin_gesture(std::string label, cmd::origin origin = cmd::origin::ui());
+		// Changes the working mesh as `edit` does, without a record. False: no gesture, or nothing changed.
+		bool gesture_edit(const std::function<bool(mesh::poly_mesh&)>& change);
+		// Records the gesture as one change; false (and nothing recorded) when the mesh is as it was at the start.
+		bool end_gesture();
+		// Puts the mesh back as it was at the start of the gesture.
+		void cancel_gesture();
+		bool gesture_active() const { return m_gesture.has_value(); }
+
+		// Undo and redo of the history (EPIC-77 M4); refused while Play runs, while a gesture runs and when there is nothing to do.
+		bool undo() override;
+		bool redo() override;
+		std::optional<history_entry> next_undo_entry() const override;
+		std::optional<history_entry> next_redo_entry() const override;
+		const document_history& history() const { return m_history; }
 
 		// The tag the preview's mesh node draws: the working mesh baked, stored in memory and signalled on every change.
 		const res::tag& preview_geometry() const { return m_preview_tag; }
@@ -149,6 +170,11 @@ namespace edt
 
 	private:
 		entt::entity camera_entity();
+		mesh::poly_mesh& history_mesh() override { return m_working.mesh; }
+		void history_replace(const mesh::poly_mesh& mesh, const std::optional<mesh::shape_params>& generator) override;
+		void history_applied(const mesh::mesh_selection& selection) override;
+		bool record_change(const mesh::poly_mesh& before, const std::optional<mesh::shape_params>& generator_before, const mesh::mesh_selection& selection_before,
+			std::string label, const cmd::origin& origin);
 		save_result save_impl(bool replace_foreign_geometry);
 		void check_geometry_match();
 		void open_preview_world();
@@ -173,6 +199,16 @@ namespace edt
 		targets_release m_release_targets;
 
 		mesh::poly_mesh_desc m_working;
+		document_history m_history;
+		struct gesture_state
+		{
+			mesh::poly_mesh mesh;
+			std::optional<mesh::shape_params> generator;
+			mesh::mesh_selection selection;
+			std::string label;
+			cmd::origin origin;
+		};
+		std::optional<gesture_state> m_gesture;
 		mesh::mesh_view m_view;
 		mesh::baked_mesh m_baked;
 		mesh_stats m_stats;

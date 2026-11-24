@@ -510,6 +510,140 @@ BOOST_AUTO_TEST_CASE(AutosaveCapture_IsTheSourceSaveWrites_AndChangesNothing)
 	BOOST_TEST(std::string(reinterpret_cast<const char*>(captured.data()), captured.size()) == text_of(res_root / "shapes/crate.poly.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(History_UndoRedo_RestoreTheBytesAndTheSelection)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	document->view().selection().apply_vertex(first, select_op::replace);
+
+	BOOST_REQUIRE(document->edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(5.f)); }, "Move"));
+	BOOST_TEST(document->is_dirty());
+	BOOST_REQUIRE(document->next_undo_entry().has_value());
+	BOOST_TEST(document->next_undo_entry()->label == "Move");
+
+	document->view().selection().clear();
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->view().selection().vertices().count(first) == 1u);
+	BOOST_TEST((document->working()->vertices().at(first).position != glm::vec3(5.f)));
+
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST((document->working()->vertices().at(first).position == glm::vec3(5.f)));
+	BOOST_TEST(!document->redo());
+}
+
+BOOST_AUTO_TEST_CASE(History_ATopologyEdit_UndoesAsASnapshot)
+{
+	open_crate();
+	const std::size_t faces = document->working()->faces().size();
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.remove_face(mesh.faces().begin()->first); }, "Delete face"));
+	BOOST_TEST(document->working()->faces().size() == faces - 1);
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->working()->faces().size() == faces);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_AfterSave_AnEditAndItsUndo_IsClean_AndUndoPastSaveIsDirty)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	BOOST_REQUIRE(document->save().saved);
+	BOOST_TEST(!document->is_dirty());
+
+	BOOST_REQUIRE(document->edit([](poly_mesh& mesh) { return mesh.set_position(mesh.vertices().begin()->first, glm::vec3(7.f)); }));
+	BOOST_TEST(document->is_dirty());
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_WhileLocked_RefusesEditsAndUndo)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	bool locked = true;
+	document->set_lock_source([&locked] { return locked; });
+
+	BOOST_TEST(!document->undo());
+	BOOST_TEST(!move_first_vertex());
+	BOOST_TEST(!document->begin_gesture("Drag"));
+	locked = false;
+	BOOST_TEST(document->undo());
+}
+
+BOOST_AUTO_TEST_CASE(History_AGesture_IsOneRecord_AndBlocksEditAndUndoWhileItRuns)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	const glm::vec3 start = document->working()->vertices().at(first).position;
+
+	BOOST_REQUIRE(document->begin_gesture("Move"));
+	BOOST_TEST(document->gesture_active());
+	BOOST_TEST(!document->begin_gesture("Again"));
+	BOOST_REQUIRE(document->gesture_edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(1.f)); }));
+	BOOST_REQUIRE(document->gesture_edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(2.f)); }));
+	BOOST_TEST(!move_first_vertex());
+	BOOST_TEST(!document->undo());
+	BOOST_TEST(document->history().size() == 0u);
+
+	BOOST_REQUIRE(document->end_gesture());
+	BOOST_TEST(!document->gesture_active());
+	BOOST_TEST(document->history().size() == 1u);
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+}
+
+BOOST_AUTO_TEST_CASE(History_ACancelledGesture_PutsTheMeshBack_AndRecordsNothing)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	const glm::vec3 start = document->working()->vertices().at(first).position;
+
+	BOOST_REQUIRE(document->begin_gesture("Move"));
+	BOOST_REQUIRE(document->gesture_edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(9.f)); }));
+	document->cancel_gesture();
+
+	BOOST_TEST(!document->gesture_active());
+	BOOST_TEST((document->working()->vertices().at(first).position == start));
+	BOOST_TEST(document->history().size() == 0u);
+	BOOST_TEST(!document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_AGestureThatChangedNothing_RecordsNothing)
+{
+	open_crate();
+	BOOST_REQUIRE(document->begin_gesture("Move"));
+	BOOST_TEST(!document->end_gesture());
+	BOOST_TEST(document->history().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(History_RevertAndClose_ClearTheHistory)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	BOOST_TEST(document->history().size() == 1u);
+	BOOST_TEST(document->revert().empty());
+	BOOST_TEST(document->history().size() == 0u);
+	BOOST_TEST(!document->undo());
+
+	BOOST_REQUIRE(move_first_vertex());
+	document->close();
+	BOOST_TEST(document->history().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(History_ALimitOf100_DropsTheOldest)
+{
+	open_crate();
+	const vertex_id first = document->working()->vertices().begin()->first;
+	for (int i = 1; i <= 105; ++i) {
+		BOOST_REQUIRE(document->edit([&](poly_mesh& mesh) { return mesh.set_position(first, glm::vec3(static_cast<float>(i))); }));
+	}
+	BOOST_TEST(document->history().size() == 100u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtMeshDocumentWorld, mesh_world_fixture)
