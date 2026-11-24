@@ -155,8 +155,11 @@
    "public": [
     "common.h",
     "core_thread_utils.hpp",
+    "ds/ds_aabb3.hpp",
     "ds/ds_bbox.hpp",
     "ds/ds_bit_frags.hpp",
+    "ds/ds_bvh.hpp",
+    "ds/ds_intersect.hpp",
     "ds/ds_event.hpp",
     "ds/ds_fixed_vector.hpp",
     "ds/ds_polymorphic_cast.hpp",
