@@ -464,6 +464,45 @@ BOOST_AUTO_TEST_CASE(AnImportedMaterialOverTheEnginesBase_IsConvertedByTheTypeSt
 	check_material_v2(read_json("res/materials/imported.desc"), "res://shaders/mix_opaque_trans_scene.shader.desc");
 }
 
+// A material over the engine's base with a fragment of its own (no engine pair): the type step refuses its stages, so
+// it has material_stages. --migrate --dry-run checks it on a placeholder copy: it is planned, not invalid, and nothing
+// is written.
+BOOST_AUTO_TEST_CASE(AMaterialWithStagesOverTheEnginesBase_IsPlanned_InTheDryRunCommand)
+{
+	serve_engine_base();
+	constexpr std::string_view glow = R"({
+		"__type": "material_desc",
+		"__parent": "res://base_material.desc",
+		"shader_fragment": "res://shaders/glow.frag"
+	})";
+	write_text(at("res/materials/glow.desc"), glow);
+	const auto before = content_of(copy.root());
+
+	{
+		const pmg::scoped_project_index index(*rs, copy.root(), read_only);
+		const pmg::migration_plan planned_now = plan();
+		const pmg::scanned_file* file = planned_now.scan.find("res/materials/glow.desc");
+		BOOST_REQUIRE(file);
+		BOOST_TEST((file->kind == pmg::file_class::outdated), file->reason);
+		BOOST_TEST(file->material_stages);
+	}
+
+	pmg::command_context command{ copy.root(), *descs, *rs, &registry, {}, [] { return std::string{ "test-migration" }; }, {}, {}, {} };
+	std::string printed;
+	command.print = [&printed](std::string_view text) { printed += text; };
+	pmg::migrate_command dry_run;
+	dry_run.dry_run = true;
+	const int code = pmg::run_migrate(dry_run, command);
+	BOOST_TEST(code == pmg::k_exit_migration_needed, printed);
+	BOOST_TEST(printed.find("Material shader stages to a .shader.desc") != std::string::npos, printed);
+	BOOST_TEST(printed.find("- res/materials/glow.desc\n") != std::string::npos, printed);
+	BOOST_TEST(printed.find("invalid") == std::string::npos, printed);
+	BOOST_TEST(printed.find("Not migrated") == std::string::npos, printed);
+	BOOST_TEST(read_text(at("res/materials/glow.desc")) == glow);
+	BOOST_TEST((content_of(copy.root()) == before));
+	BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
+}
+
 // An inline material (a mesh node's in a prefab) is converted like a file: its file is named after the prefab.
 BOOST_AUTO_TEST_CASE(AnInlineMaterialInAPrefab_GetsAShaderDescNamedAfterThePrefab)
 {

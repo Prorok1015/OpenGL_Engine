@@ -675,6 +675,38 @@ BOOST_AUTO_TEST_CASE(ANameTakenAfterTheJournal_IsLeftToItsWriter_AndLeavesTheJou
 	BOOST_TEST(read_text(copy.root() / k_plain_meta) == "foreign");
 }
 
+// The name reads as taken but holds the very bytes the step meant to write (a create that reached the disk and still
+// reported the name taken): the file is ours, the entry stays in the journal and the rollback deletes it. The hook puts
+// those bytes there between the journal and the create, the one seam that makes the create report taken.
+BOOST_AUTO_TEST_CASE(ANameTakenByOurOwnBytes_IsTheCreate_AndStaysInTheJournal)
+{
+	const auto before = content_of(copy.root());
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_the_resource));
+	pmg::apply_context hooked = context();
+	bool taken = false;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative) && !taken && journal_lists(text, k_plain_meta)) {
+			taken = true;
+			write_text(root / k_plain_meta, new_meta_text());
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(taken);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::ok), outcome.report.error);
+	BOOST_TEST((outcome.report.created_files == std::vector<std::string>{ std::string(k_plain_meta) }));
+	const json::value journal = final_journal();
+	const json::array& created = journal.at("created_files").as_array();
+	BOOST_REQUIRE(created.size() == 1u);
+	BOOST_TEST(created[0].as_string() == k_plain_meta);
+	BOOST_TEST(read_text(copy.root() / k_plain_meta) == new_meta_text());
+
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
 #ifndef _WIN32
 // The create fails for another reason (its folder takes no new file) while nothing is at its name: the entry leaves the
 // journal, the rollback is clean. (A file in place of the folder would read as something at the name: taken.)

@@ -566,7 +566,11 @@ namespace
 			}
 			std::string error;
 			const create_result created = create_new_file(m_context.root, relative, text, error);
-			if (created != create_result::created) {
+			// Our exact bytes at the name: the create reached the disk even though it reported the name taken (e.g. a
+			// network file system answering a retried rename). The file is what the step asked for and the journal
+			// already names it, so the create counts as done; a rollback deletes it as any created file.
+			const bool ours = created == create_result::taken && holds_bytes(relative, text);
+			if (created != create_result::created && !ours) {
 				std::string why = created == create_result::taken
 					? std::format("{}: {} cannot be created: something is at its name", m_step, relative)
 					: std::format("{}: {} cannot be created: {}", m_step, relative, error);
@@ -583,6 +587,13 @@ namespace
 			note_written(relative);
 			m_current.insert_or_assign(key, written_file{ relative, std::string(text) });
 			m_step_touched.insert(key);
+		}
+
+		// The file at `relative` read back as the step would see it, compared with `text`.
+		bool holds_bytes(const std::string& relative, std::string_view text) const
+		{
+			const prj::project_file_text now = prj::read_project_file(m_context.root, fs_paths::path_from_utf8(relative), k_max_file_bytes);
+			return now.exists && now.error.empty() && now.text == text;
 		}
 
 		void remove(std::string_view path) override
