@@ -974,6 +974,14 @@ BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
 namespace {
 
 // An entry of created_files as apply_migration writes it for `text` (#1346).
+// `json::array{ json::array{...} }` is a copy of the inner array on MSVC, not an array holding it.
+json::array array_holding(json::array inner)
+{
+	json::array outer;
+	outer.emplace_back(std::move(inner));
+	return outer;
+}
+
 json::object created_entry(const std::string& path, std::string_view text)
 {
 	return json::object{ { "path", path }, { "hash_after", pmg::journal_hash(text) }, { "size_after", text.size() } };
@@ -1104,7 +1112,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedEntryThatDoesNotRead)
 		{ json::array{ good, with("size_after", 6) }, "listed twice" },
 		{ json::array{ "res/created.bin", good }, "created_files[0] is a path without its hash_after and size_after" },
 		{ json::array{ good, 42 }, "created_files[1] is neither a path nor an object" },
-		{ json::array{ json::array{ "res/created.bin" } }, "created_files[0] is neither a path nor an object" },
+		{ array_holding(json::array{ "res/created.bin" }), "created_files[0] is neither a path nor an object" },
 		{ json::array{ nullptr }, "created_files[0] is neither a path nor an object" },
 	};
 	for (const auto& refused : cases) {
