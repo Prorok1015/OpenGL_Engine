@@ -2,6 +2,7 @@
 #include <snk/common/engine_assert.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <set>
 #include <span>
 #include <unordered_map>
@@ -34,9 +35,10 @@ namespace edt::mesh
 			return sum;
 		}
 
-		// Whether the face looks at the camera: judged by the ray through its centre, so a perspective and an orthographic camera
-		// both work. A face with no area counts as looking at it (its edges are still there); one whose centre is behind the
-		// camera does not.
+		// Whether the face looks at the camera: judged by the ray through its centre (or, when the centre is out of sight, through a
+		// corner that is in sight: a plane has one side whatever point of it is looked at), so a perspective and an orthographic camera
+		// both work. A face with no area, and one none of whose points can be looked through (all behind the camera: the clipping
+		// leaves nothing of it anyway), is not culled.
 		bool faces_camera(const poly_mesh& mesh, const face& f, const screen_view& view)
 		{
 			const std::optional<glm::vec3> normal = face_normal(mesh, f);
@@ -44,11 +46,27 @@ namespace edt::mesh
 			glm::vec3 centre{ 0.f };
 			for (const corner& c : f.corners) centre += mesh.find_vertex(c.vertex)->position;
 			centre /= static_cast<float>(f.corners.size());
-			const std::optional<glm::vec2> pixel = view.project(centre);
-			if (!pixel) return false;
-			const std::optional<ds::ray3> ray = view.ray_through(*pixel);
-			if (!ray) return false;
-			return glm::dot(*normal, ray->direction) < 0.f;
+			const auto looks = [&](const glm::vec3& point) -> std::optional<bool> {
+				const std::optional<glm::vec2> pixel = view.project(point);
+				if (!pixel) return std::nullopt;
+				const std::optional<ds::ray3> ray = view.ray_through(*pixel);
+				if (!ray) return std::nullopt;
+				return glm::dot(*normal, ray->direction) < 0.f;
+			};
+			if (const std::optional<bool> at_centre = looks(centre)) return *at_centre;
+			for (const corner& c : f.corners) {
+				if (const std::optional<bool> at_corner = looks(mesh.find_vertex(c.vertex)->position)) return *at_corner;
+			}
+			return true;
+		}
+
+		float distance_squared_to_segment(const glm::vec2& point, const glm::vec2& from, const glm::vec2& to)
+		{
+			const glm::vec2 along = to - from;
+			const float length_squared = glm::dot(along, along);
+			const float s = length_squared > 0.f ? std::clamp(glm::dot(point - from, along) / length_squared, 0.f, 1.f) : 0.f;
+			const glm::vec2 nearest = from + along * s;
+			return glm::dot(point - nearest, point - nearest);
 		}
 
 		void add_face_edges(const face& f, std::set<edge_key>& out)
@@ -78,9 +96,7 @@ namespace edt::mesh
 					const glm::vec2 cursor = *options.cursor;
 					std::nth_element(first_plain, first_plain + static_cast<std::ptrdiff_t>(keep), segments.end(),
 						[&cursor](const overlay_segment& lhs, const overlay_segment& rhs) {
-							const glm::vec2 lhs_mid = (lhs.from + lhs.to) * 0.5f - cursor;
-							const glm::vec2 rhs_mid = (rhs.from + rhs.to) * 0.5f - cursor;
-							return glm::dot(lhs_mid, lhs_mid) < glm::dot(rhs_mid, rhs_mid);
+							return distance_squared_to_segment(cursor, lhs.from, lhs.to) < distance_squared_to_segment(cursor, rhs.from, rhs.to);
 						});
 				}
 				frame.omitted_segments = plain - keep;
@@ -118,7 +134,7 @@ namespace edt::mesh
 
 		const auto edge_kind = [&](const edge_key& key) {
 			overlay_kind kind = overlay_kind::plain;
-			if (hover.edge == key || hovered_face_edges.contains(key)) kind = overlay_kind::hover;
+			if ((selection.mode() == select_mode::edge && hover.edge == key) || hovered_face_edges.contains(key)) kind = overlay_kind::hover;
 			bool picked = false;
 			switch (selection.mode()) {
 			case select_mode::vertex:

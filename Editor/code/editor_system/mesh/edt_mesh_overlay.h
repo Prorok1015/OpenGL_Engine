@@ -4,13 +4,15 @@
 #include "edt_mesh_picking.h"
 #include "edt_mesh_selection.h"
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 #include <glm/glm.hpp>
 
 namespace edt::mesh
 {
-	// The element the cursor is over; only the one of the selection's mode is looked for.
+	// The element the cursor is over; only the one of the selection's mode is looked for and drawn (a vertex in vertex mode, an edge
+	// in edge mode, a face in face mode).
 	struct hover_target
 	{
 		std::optional<vertex_id> vertex;
@@ -72,7 +74,7 @@ namespace edt::mesh
 	// What to draw over the preview image, in pixels, with no ImGui: the edges (a face turned away from the camera takes its
 	// own edges with it, and an edge or a vertex any of whose faces looks at the camera stays), the vertices in vertex mode, the
 	// selected and hovered faces as polygons. Selected goes over hovered goes over plain. Past the budget the selected and the
-	// hovered segments stay and the plain ones go, the ones farthest from the cursor first. A part of an edge behind the camera is
+	// hovered segments stay and the plain ones go, the ones farthest from the cursor first (by the distance from the cursor to the segment). A part of an edge behind the camera is
 	// cut off; a face with a corner behind the camera has no polygon. Depth is not tested (an edge behind a nearer face shows
 	// when its own face looks at the camera): the overlay is a layer over the image, as the design says.
 	overlay_frame build_overlay(const poly_mesh& mesh, const mesh_adjacency& adjacency, const mesh_selection& selection,

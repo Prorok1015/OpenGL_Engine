@@ -1,7 +1,14 @@
 #include "edt_mesh_gesture.h"
+#include <snk/common/engine_assert.h>
 
 namespace edt::mesh
 {
+	select_gesture::select_gesture(float drag_threshold)
+		: m_threshold(drag_threshold)
+	{
+		ASSERT_MSG(drag_threshold > 0.f, "the drag threshold must be above zero");
+	}
+
 	select_op select_op_of(const key_modifiers& modifiers)
 	{
 		if (modifiers.ctrl) return select_op::toggle;
@@ -49,5 +56,12 @@ namespace edt::mesh
 	{
 		m_phase = phase::idle;
 		m_dragging = false;
+	}
+
+	bool select_gesture::release_lost(bool button_down)
+	{
+		if (button_down || m_phase == phase::idle) return false;
+		cancel();
+		return true;
 	}
 }

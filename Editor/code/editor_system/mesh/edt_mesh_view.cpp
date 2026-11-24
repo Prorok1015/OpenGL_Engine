@@ -18,6 +18,12 @@ namespace edt::mesh
 		m_hover = {};
 	}
 
+	mesh_selection& mesh_view::current_selection(const poly_mesh& mesh)
+	{
+		refresh(mesh);
+		return m_selection;
+	}
+
 	const mesh_adjacency& mesh_view::adjacency(const poly_mesh& mesh)
 	{
 		refresh(mesh);
@@ -38,7 +44,7 @@ namespace edt::mesh
 
 	void mesh_view::reset()
 	{
-		m_selection = mesh_selection();
+		m_selection.clear();
 		m_hover = {};
 		m_adjacency.reset();
 		m_picker.reset();

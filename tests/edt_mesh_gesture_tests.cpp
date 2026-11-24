@@ -92,4 +92,37 @@ BOOST_AUTO_TEST_CASE(APressWhileOneRuns_IsIgnored_AndCancelEndsTheGesture)
 	BOOST_TEST((gesture.end({ 5.f, 5.f }).kind == gesture_end::none));
 }
 
+BOOST_AUTO_TEST_CASE(ADragToTheUpperLeft_GivesTheBoxWithItsCornersInOrder)
+{
+	select_gesture gesture(4.f);
+	gesture.begin({ 90.f, 100.f }, {});
+	gesture.move({ 60.f, 70.f });
+	BOOST_REQUIRE(gesture.dragging_box());
+	BOOST_TEST(gesture.box().min.x == 60.f);
+	BOOST_TEST(gesture.box().max.y == 100.f);
+
+	const gesture_result result = gesture.end({ 50.f, 60.f });
+	BOOST_TEST((result.kind == gesture_end::box));
+	BOOST_TEST(result.rect.min.x == 50.f);
+	BOOST_TEST(result.rect.min.y == 60.f);
+	BOOST_TEST(result.rect.max.x == 90.f);
+	BOOST_TEST(result.rect.max.y == 100.f);
+}
+
+BOOST_AUTO_TEST_CASE(ALostRelease_EndsTheGestureAndGivesTheCameraTheMouseBack)
+{
+	select_gesture gesture;
+	BOOST_TEST(!gesture.release_lost(false));
+
+	gesture.begin({ 5.f, 5.f }, {});
+	BOOST_TEST(!gesture.release_lost(true));
+	BOOST_TEST(gesture.selecting());
+	BOOST_TEST(!gesture.camera_input());
+
+	BOOST_TEST(gesture.release_lost(false));
+	BOOST_TEST(!gesture.active());
+	BOOST_TEST(gesture.camera_input());
+	BOOST_TEST((gesture.end({ 5.f, 5.f }).kind == gesture_end::none));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

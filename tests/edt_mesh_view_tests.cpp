@@ -68,16 +68,43 @@ BOOST_AUTO_TEST_CASE(AnEdit_DropsWhatTheMeshLost_FromTheSelection_AndClearsTheHo
 	BOOST_TEST(view.hover().empty());
 }
 
-BOOST_AUTO_TEST_CASE(Reset_ForgetsEverything)
+BOOST_AUTO_TEST_CASE(Reset_ForgetsTheIds_ButKeepsTheModeAndXray)
 {
 	view.set_mode(select_mode::face, mesh);
 	view.selection().apply_face(first_face(), select_op::replace);
+	view.set_hover({ std::nullopt, std::nullopt, first_face() });
 	view.set_xray(true);
 	view.reset();
 
 	BOOST_TEST(view.selection().empty());
-	BOOST_TEST((view.mode() == select_mode::vertex));
+	BOOST_TEST(view.hover().empty());
+	BOOST_TEST((view.mode() == select_mode::face));
 	BOOST_TEST(view.xray());
+}
+
+BOOST_AUTO_TEST_CASE(TheCaches_AreRebuiltForAChangedMesh_NotJustMarkedStale)
+{
+	poly_mesh grown;
+	const vertex_id a = grown.add_vertex({ 0.f, 0.f, 0.f });
+	const vertex_id b = grown.add_vertex({ 1.f, 0.f, 0.f });
+	const vertex_id c = grown.add_vertex({ 0.f, 1.f, 0.f });
+	const vertex_id d = grown.add_vertex({ 1.f, 1.f, 0.f });
+	grown.add_face({ { a }, { b }, { c } });
+	BOOST_TEST(view.adjacency(grown).edges().size() == 3u);
+	BOOST_TEST(view.picker(grown).triangle_count() == 1u);
+
+	grown.add_face({ { b }, { d }, { c } });
+	BOOST_TEST(view.adjacency(grown).edges().size() == 5u);
+	BOOST_TEST(view.picker(grown).triangle_count() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(CurrentSelection_DropsWhatAnEditRemoved_BeforeItIsRead)
+{
+	view.set_mode(select_mode::face, mesh);
+	view.selection().apply_face(first_face(), select_op::replace);
+	BOOST_REQUIRE(mesh.remove_face(first_face()));
+
+	BOOST_TEST(view.current_selection(mesh).empty());
 }
 
 BOOST_AUTO_TEST_CASE(Query_CarriesTheXrayFlag_AndPicksOnTheCurrentCaches)

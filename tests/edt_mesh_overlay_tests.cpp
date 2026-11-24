@@ -197,4 +197,58 @@ BOOST_AUTO_TEST_CASE(AnEdgeAcrossTheCameraPlane_IsDrawnByItsPartInFront_AndTheVe
 	BOOST_TEST(frame.points.size() == 2u);
 }
 
+BOOST_AUTO_TEST_CASE(AFloorYouStandOver_KeepsItsEdgesWithoutXray_ThoughItsCentreIsOutOfSight)
+{
+	poly_mesh floor;
+	const vertex_id a = floor.add_vertex({ -5.f, 0.f, 5.f });
+	const vertex_id b = floor.add_vertex({ 5.f, 0.f, 5.f });
+	const vertex_id c = floor.add_vertex({ 5.f, 0.f, -5.f });
+	const vertex_id d = floor.add_vertex({ -5.f, 0.f, -5.f });
+	floor.add_face({ { a }, { b }, { c }, { d } });
+	const mesh_adjacency floor_adjacency(floor);
+	const glm::mat4 look = glm::lookAt(glm::vec3{ 0.f, 2.f, 0.f }, glm::vec3{ 0.f, 2.f, -1.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const screen_view above(glm::perspective(glm::radians(60.f), 1.f, 0.1f, 100.f) * look, { 0.f, 0.f }, { k_image, k_image });
+	BOOST_REQUIRE(!above.project({ 0.f, 0.f, 0.f }).has_value());
+
+	const overlay_frame frame = build_overlay(floor, floor_adjacency, mesh_selection{}, {}, above);
+	BOOST_TEST(frame.segments.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(OverTheBudget_TheDistanceIsToTheSegment_NotToItsMiddle)
+{
+	poly_mesh flat;
+	const vertex_id a = flat.add_vertex({ -1.f, 0.f, 0.f });
+	const vertex_id b = flat.add_vertex({ 1.f, 0.f, 0.f });
+	const vertex_id c = flat.add_vertex({ 0.f, 0.1f, 0.f });
+	flat.add_face({ { a }, { b }, { c } });
+	const mesh_adjacency flat_adjacency(flat);
+	const screen_view identity(glm::mat4(1.f), { 0.f, 0.f }, { k_image, k_image });
+
+	overlay_options options;
+	options.xray = true;
+	options.segment_budget = 1;
+	options.cursor = glm::vec2{ 20.f, 100.f };
+	const overlay_frame frame = build_overlay(flat, flat_adjacency, mesh_selection{}, {}, identity, options);
+	BOOST_REQUIRE_EQUAL(frame.segments.size(), 1u);
+	BOOST_TEST(glm::distance(frame.segments.front().from, glm::vec2{ 0.f, 100.f }) < 0.01f);
+	BOOST_TEST(glm::distance(frame.segments.front().to, glm::vec2{ 200.f, 100.f }) < 0.01f);
+}
+
+BOOST_AUTO_TEST_CASE(OverTheBudget_TheHoveredSegmentStays)
+{
+	selection.set_mode(select_mode::edge, mesh, *adjacency);
+	hover.edge = adjacency->edges()[5];
+	const overlay_frame frame = build(true, 4, glm::vec2{ 0.f, 0.f });
+	BOOST_TEST(frame.segments.size() == 4u);
+	BOOST_TEST(count(frame, overlay_kind::hover) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AHoveredEdge_IsShownInEdgeModeOnly)
+{
+	hover.edge = adjacency->edges()[0];
+	BOOST_TEST(count(build(true), overlay_kind::hover) == 0u);
+	selection.set_mode(select_mode::edge, mesh, *adjacency);
+	BOOST_TEST(count(build(true), overlay_kind::hover) == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
