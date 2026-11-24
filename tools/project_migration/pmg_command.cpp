@@ -40,6 +40,16 @@ namespace
 		}
 	}
 
+	// To stderr by default (the log): what a person has to act on although the command succeeded.
+	void print_warning(const command_context& context, std::string_view text)
+	{
+		if (context.print) {
+			context.print(text);
+		} else {
+			egLOG_WARN("project/migrate", "{}", text);
+		}
+	}
+
 	bool is_within(const fs::path& path, const fs::path& folder)
 	{
 		std::error_code ec;
@@ -237,10 +247,14 @@ int prj::migration::rollback_exit_code(const std::optional<std::string>& error, 
 int prj::migration::run_migrate_rollback(std::string_view id, const command_context& context)
 {
 	bool wrote = false;
+	std::vector<std::string> warnings;
 	rollback_context rollback;
 	rollback.write = context.write;
 	rollback.wrote = &wrote;
-	if (const std::optional<std::string> error = rollback_migration(context.root, id, rollback)) {
+	rollback.warnings = &warnings;
+	const std::optional<std::string> error = rollback_migration(context.root, id, rollback);
+	for (const std::string& warning : warnings) print_warning(context, std::format("rollback of {}: {}", journal_path_text(id), warning));
+	if (error) {
 		print_error(context, std::format("rollback of {}: {}", journal_path_text(id), *error));
 		return rollback_exit_code(error, wrote);
 	}

@@ -38,6 +38,15 @@ namespace prj::migration
 		std::vector<std::string> notes;
 	};
 
+	// What a migration recorded of a file it created (#1346): the hash (journal_hash) and size of the last text it wrote
+	// there. A rollback deletes the file only while it still has both; an empty hash is an entry of a journal of format 1,
+	// deleted unchecked.
+	struct created_check
+	{
+		std::string hash;
+		std::uint64_t size = 0;
+	};
+
 	struct skipped_file
 	{
 		std::string path;
@@ -55,8 +64,12 @@ namespace prj::migration
 		migration_status status = migration_status::in_progress;
 		std::vector<applied_file> files;
 		std::vector<skipped_file> skipped;
-		// Files a project step created (EPIC-58 S5): a rollback deletes them.
+		// Files a project step created (EPIC-58 S5) and, parallel to them, what was last written there, journaled before
+		// each write: a rollback deletes such a file only while it is unchanged.
 		std::vector<std::string> created_files;
+		std::vector<created_check> created_checks;
+		// The created files a rollback kept because they changed after the migration wrote them, each named with what to do.
+		std::vector<std::string> rollback_warnings;
 		// The project steps that ran, in order, and what they said; project.snkproj adds them to applied_steps.
 		std::vector<std::string> project_steps;
 		std::vector<std::string> project_notes;
@@ -135,6 +148,10 @@ namespace prj::migration
 	// The report as report.md has it.
 	std::string report_text(const migration_report& report);
 
+	// The format of report.json this engine writes: 2 has journal_format and created_files entries {path, hash_after,
+	// size_after}; a journal without journal_format is format 1 (created_files as plain paths). A newer one is refused.
+	inline constexpr std::int64_t k_journal_format = 2;
+
 	// The report as report.json (the journal) has it.
 	boost::json::object report_to_json(const migration_report& report);
 
@@ -144,7 +161,8 @@ namespace prj::migration
 	// change and backs every file up, project.snkproj included. Then the pre project steps, the files, the post project
 	// steps, and last project.snkproj with engine_version and migrated_with of this engine and the steps added to
 	// applied_steps (EPIC-58 4.1); each written file is checked again from the disk. Any failure puts back every file it
-	// wrote, checked by its hash, and deletes the created files: rolled_back, or rollback_failed when one could not be
+	// wrote, checked by its hash, and deletes the created files that are unchanged (a changed one is kept, with a warning
+	// in report.rollback_warnings): rolled_back, or rollback_failed when one could not be
 	// put back. With context.on_main it may run on a worker thread (everything else it does is safe there, EPIC-58 4.5).
 	apply_outcome apply_migration(const migration_plan& plan, const apply_context& context);
 
@@ -177,6 +195,9 @@ namespace prj::migration
 		// journal_hash of report.json as the caller checked it: a journal that reads otherwise now is refused before any
 		// write. Empty: not checked.
 		std::string journal_hash;
+		// Set to the warnings of the created files the rollback kept (changed after the migration), as report.json's
+		// rollback_warnings has them; a rollback with kept files still succeeds. Null: not told.
+		std::vector<std::string>* warnings = nullptr;
 	};
 
 	// The hash a journal (and every file of it) is compared by: 16 hex digits.
@@ -195,8 +216,17 @@ namespace prj::migration
 		std::string backup;
 		// files[].path ("" for an entry without a string path).
 		std::vector<std::string> files;
+		// created_files[]: the path of each entry, and parallel to it the hash and size it was written with (an empty
+		// hash for a plain path of a format 1 journal). One path is listed once.
 		std::vector<std::string> created;
+		std::vector<created_check> created_checks;
 	};
+
+	// Reads what `journal` (a parsed report.json) names, as every rollback and its listing do: the error, nullopt when it
+	// reads. Refused: a journal_format that is no whole number or is newer than k_journal_format ("written by a newer
+	// engine"); a created_files that is not a list; an entry of it that is neither a path nor an object with a string
+	// path, a hash_after of 16 lowercase hex digits and a whole size_after; a path listed twice with another hash or size.
+	std::optional<std::string> parse_journal_paths(const boost::json::object& journal, journal_paths& paths);
 
 	// Why a rollback of migration `id` must not touch what `journal` names (#910); nullopt when every path passes. The
 	// first bad path is named (through journal_path_text) with the reason:
@@ -212,13 +242,17 @@ namespace prj::migration
 	//   prj::own_top_dir_names (code, .snk, .cache, build), whatever a content root says.
 	std::optional<std::string> check_journal_paths(const std::filesystem::path& root, std::string_view id, const journal_paths& journal);
 
-	// Reads the journal of migration `id` and checks it with check_journal_paths: the refusal (or why it does not read),
-	// nullopt when a rollback may touch what it names. The editor offers a rollback at open only for a journal that passes.
+	// Reads the journal of migration `id` and checks it with parse_journal_paths and check_journal_paths: the refusal (or
+	// why it does not read), nullopt when a rollback may touch what it names. The editor offers a rollback at open only for
+	// a journal that passes.
 	std::optional<std::string> check_journal(const std::filesystem::path& root, std::string_view id);
 
 	// Restores the backup of migration `id` and deletes the files it created. A file already back to its original is
 	// left as it is, so a rollback that stopped half way can be run again. Refuses before writing anything (naming the
-	// files) when a file is neither what the migration wrote nor the original, or the journal fails check_journal_paths.
-	// The error; nullopt on success.
+	// files) when a file is neither what the migration wrote nor the original, or the journal fails parse_journal_paths
+	// or check_journal_paths. A created file with a hash is deleted only while its size and hash are the journal's: one
+	// that is gone is passed over, a changed one (or one too big or unreadable to compare) is kept and named in
+	// report.json's rollback_warnings and context.warnings, and the rollback still succeeds (#1346). A plain path of a
+	// format 1 journal is deleted unchecked. The error; nullopt on success.
 	std::optional<std::string> rollback_migration(const std::filesystem::path& root, std::string_view id, const rollback_context& context = {});
 }
