@@ -22,7 +22,9 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 	switch (record_edit(label)) {
 	case scene_history_index::diff_result::changed:
 		// The worlds the edit changed, the active one or not; the others stay as they are.
-		reload_touched();
+		if (!patch_touched()) {
+			reload_touched();
+		}
 		break;
 	case scene_history_index::diff_result::unchanged:
 		// Nothing to record, but the active world is still rebuilt from its desc: an edit that came back to the desc's
@@ -247,6 +249,30 @@ void edt::scene_document::refresh_systems_cache()
 	for (std::size_t world = 0; world < world_descs.size(); ++world) {
 		worlds_systems_list[world] = world_descs[world].get_systems();
 	}
+}
+
+bool edt::scene_document::patch_touched()
+{
+	const auto& touched = m_index.touched();
+	if (!m_node_patcher || m_edits_locked || !m_index.last_diff_is_field_edits() || touched.size() != 1
+		|| static_cast<int>(touched.front()) != active_world_idx) {
+		return false;
+	}
+	const auto& edits = m_index.last_field_edits();
+	if (edits.empty()) {
+		return false;
+	}
+	try {
+		if (!m_node_patcher(edits)) {
+			return false;
+		}
+	} catch (const std::exception& error) {
+		egLOG_WARN("Editor/Patch", "a node patch threw, the world is rebuilt: {}", error.what());
+		return false;
+	}
+	m_index.take_touched();
+	notify_changed();
+	return true;
 }
 
 void edt::scene_document::reload_touched()

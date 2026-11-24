@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -122,6 +123,9 @@ namespace edt
 
 		// Set by scene_editor, which knows how to reload a world from its desc. Returns false when it did nothing.
 		void set_pusher(std::function<bool()> pusher) { m_pusher = std::move(pusher); }
+		// Applies the field edits of the last commit (edit of a node's transform, name or component data) to the live entities of
+		// the active world instead of rebuilding it; false: nothing was changed, the world is rebuilt as before. All or nothing.
+		void set_node_patcher(std::function<bool(std::span<const scene_node_edit>)> patcher) { m_node_patcher = std::move(patcher); }
 		// Reloads world `index` (not the active one) from its desc after undo/redo changed it; set by scene_editor.
 		void set_world_reloader(std::function<bool(std::size_t index)> reloader) { m_world_reloader = std::move(reloader); }
 		// Where document_changed goes; set by document_manager.
@@ -154,6 +158,8 @@ namespace edt
 		void finish_apply();
 		// Rebuilds the contexts of the worlds changed since the last call; document_changed if any was rebuilt.
 		void reload_touched();
+		// The active world's field edits applied in place; false: nothing was applied, the caller rebuilds.
+		bool patch_touched();
 		// worlds_systems_list follows the systems of the world descs, which an edit or an undo changes.
 		void refresh_systems_cache();
 
@@ -167,6 +173,7 @@ namespace edt
 		std::function<void()> m_before_apply;
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
+		std::function<bool(std::span<const scene_node_edit>)> m_node_patcher;
 		std::function<bool(std::size_t)> m_world_reloader;
 		std::function<autosave_snapshot()> m_autosave_capture;
 

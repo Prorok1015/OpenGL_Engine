@@ -27,6 +27,42 @@ namespace {
 		return true;
 	}
 
+	// The field edit `change` is, or nothing when it is a structural one (see scene_node_edit).
+	std::optional<edt::scene_node_edit> field_edit_of(const edt::scene_node_change& change)
+	{
+		if (change.positional || !change.before || !change.after || change.after->depth == 0) {
+			return std::nullopt;
+		}
+		const edt::scene_node_state& before = *change.before;
+		const edt::scene_node_state& after = *change.after;
+		if (before.parent != after.parent || before.previous != after.previous) {
+			return std::nullopt;
+		}
+		const prefab_node& a = before.node;
+		const prefab_node& b = after.node;
+		if (a.node_id != b.node_id || !same_records(a.overrides, b.overrides) || a.components.size() != b.components.size()) {
+			return std::nullopt;
+		}
+		edt::scene_node_edit edit;
+		edit.world = change.world;
+		edit.id = change.id;
+		edit.name = a.name != b.name;
+		edit.transform = a.position != b.position || a.rotation != b.rotation || a.scale != b.scale || a.has_transform != b.has_transform;
+		for (const auto& [key, component] : a.components) {
+			const auto other = b.components.find(key);
+			if (other == b.components.end() || component.type_name != other->second.type_name
+				|| !(component.parent_desc.get_tag() == other->second.parent_desc.get_tag())
+				|| component.type_name == "prefab_desc" || !component.edits.empty() || !other->second.edits.empty()) {
+				return std::nullopt;
+			}
+			if (component.overrides != other->second.overrides) {
+				edit.components.push_back(key);
+			}
+		}
+		std::sort(edit.components.begin(), edit.components.end());
+		return edit;
+	}
+
 	struct node_place
 	{
 		std::vector<prefab_node>* siblings = nullptr;
@@ -338,6 +374,8 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 	std::unique_ptr<history_change>& change, scene_commit_stats& stats)
 {
 	stats = {};
+	m_last_edits.clear();
+	m_last_field_edits_only = false;
 	if (!m_valid || worlds.size() != m_worlds.size()) {
 		return diff_result::unavailable;
 	}
@@ -425,6 +463,20 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 	stats.changes = changes.size() + world_changes.size();
 	if (changes.empty() && world_changes.empty()) {
 		return diff_result::unchanged;
+	}
+	m_last_field_edits_only = world_changes.empty();
+	for (const auto& entry : changes) {
+		if (!m_last_field_edits_only) {
+			break;
+		}
+		if (auto edit = field_edit_of(entry)) {
+			m_last_edits.push_back(std::move(*edit));
+		} else {
+			m_last_field_edits_only = false;
+		}
+	}
+	if (!m_last_field_edits_only) {
+		m_last_edits.clear();
 	}
 	for (const auto& entry : world_changes) {
 		m_systems[entry.world] = entry.after;
