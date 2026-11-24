@@ -20,6 +20,15 @@ namespace ds { class app_data_storage; }
 // initialized: the editor in its main(), a player (#23) in its own.
 namespace core
 {
+	// The copy of a module's library the host is about to load (#1304). `digest`: module_library_set_digest of the
+	// libraries in its folder, read through the hold the host keeps on them from then until they are unloaded, so the
+	// gate judges the bytes that load, not what the path names when it looks.
+	struct library_copy
+	{
+		std::filesystem::path path;
+		std::string digest;
+	};
+
 	struct project_modules_options
 	{
 		// Modules compiled into the host, by manifest name; looked up before the project's build output.
@@ -42,9 +51,9 @@ namespace core
 		std::uint64_t layout_key = 0;
 		// Whether the library `copy` (the copy about to be loaded of module `name`, runtime or editor, from the
 		// project's build output) may be loaded: the project's own code runs in the host (#921). Asked by load_all,
-		// load_editor_modules, load_waiting, reload and reload_editor_module after the copy is made and before it is
-		// loaded. Not set: none is loaded. Compiled-in modules are not asked.
-		std::function<bool(std::string_view name, const std::filesystem::path& copy)> trust_library;
+		// load_editor_modules, load_waiting, reload and reload_editor_module after the copy is made and held and
+		// before it is loaded (#1304). Not set: none is loaded. Compiled-in modules are not asked.
+		std::function<bool(std::string_view name, const library_copy& copy)> trust_library;
 	};
 
 	struct project_modules_report
@@ -106,11 +115,19 @@ namespace core
 	// symbols the module names (built with /PDBALTPATH:%_PDB%). Both folders must lie inside the project once symlinks
 	// are resolved. A folder of another process that still runs is left alone; of this one, the copy of each loaded
 	// module and the one before it (a rollback reloads it) stay. Main thread only, never from one of a module's callbacks.
+	// #1304: the copy's folder is made closed to others (POSIX 0700, its files 0400) and held (platform::beneath::
+	// hold_folder_beneath) before the gate is asked, and the library is loaded through that hold (Linux
+	// /proc/self/fd/<folder>/<name>, Windows the held file's final path), so someone else who writes into the project
+	// cannot swap or edit what loads; on Windows the folder's protected DACL lets nobody else add a file beside the
+	// module. Where the project's file system cannot give that (macOS, no usable /proc, no modes or ACLs), the copies
+	// go to a folder of this user outside the project (core::res::make_scratch_dir), removed with the host; without one
+	// no library is loaded.
 	class SNK_API project_module_host
 	{
 	public:
 		// `loader` and `data` outlive the host; the host is gone before the loader shuts its modules down.
 		project_module_host(app::modules::module_loader& loader, ds::app_data_storage& data, project_modules_options options);
+		~project_module_host();
 		project_module_host(const project_module_host&) = delete;
 		project_module_host& operator=(const project_module_host&) = delete;
 
@@ -186,6 +203,9 @@ namespace core
 			std::filesystem::path source;
 			std::uintmax_t source_size = 0;
 			std::filesystem::file_time_type source_time{};
+			// The path the library is loaded by and the hold on its folder (#1304), kept as long as the copy is.
+			std::filesystem::path load_path;
+			std::shared_ptr<void> hold;
 		};
 		struct module_copies
 		{
@@ -211,12 +231,14 @@ namespace core
 		// `keep_copy`: a failed load leaves the folder of `copy` (a previous build revert() loads again).
 		reload_report swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-			const std::optional<loaded_copy>& copy, bool keep_copy = false);
+			std::optional<loaded_copy> copy, bool keep_copy = false);
 		// The swap of an editor module (reload_editor_module): `copy` is null for a compiled-in or test source.
 		reload_report swap_editor(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 			const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
-			const std::optional<loaded_copy>& copy);
+			std::optional<loaded_copy> copy);
 		void remove_unused_copies() const;
+		// The folder of a copy removed from where it was made; its hold is let go first.
+		void remove_copy(const std::filesystem::path& folder) const;
 		// One runtime module of load_all / load_waiting, into `report`.
 		void load_runtime_module(const std::string& name, project_modules_report& report);
 		// load_editor_modules for the editor modules `wanted` accepts (all when it is empty).
@@ -235,6 +257,9 @@ namespace core
 		std::vector<std::string> m_untrusted_editor;
 		// A reload runs: one asked for from inside it (a hook, the module's own code) is refused.
 		bool m_reloading = false;
+		// The folder of this user outside the project the copies go to where the project cannot hold them (#1304);
+		// empty until one is needed.
+		std::filesystem::path m_private_scratch;
 	};
 
 	// project_module_host::load_all with a host of its own (no reload afterwards).
@@ -246,4 +271,8 @@ namespace core
 	// build/bin it is what the copies of its modules get; of a copy's folder, what that copy loads. Nullopt: the
 	// folder or one of them cannot be read.
 	SNK_API std::optional<std::string> module_library_set_digest(const std::filesystem::path& folder);
+	// The same digest of libraries already hashed (#1304): each one's file name and SHA-256 (64 lowercase hex digits),
+	// in any order. Nullopt when there is none.
+	SNK_API std::optional<std::string> module_library_set_digest_of(
+		std::vector<std::pair<std::string, std::string>> libraries);
 }

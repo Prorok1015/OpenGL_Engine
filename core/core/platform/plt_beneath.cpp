@@ -2,13 +2,17 @@
 #include <snk/platform/plt_reparse_tag.h>
 #include <snk/platform/plt_beneath_tree_hook.h>
 #include <snk/platform/plt_link_check.h>
+#include <snk/platform/plt_beneath_hold_hook.h>
 #include <snk/platform/plt_windows_names.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <iterator>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -26,6 +30,8 @@
 #endif
 #include <windows.h>
 #include <winternl.h>
+#include <aclapi.h>
+#include <sddl.h>
 #else
 #include <cerrno>
 #include <dirent.h>
@@ -104,6 +110,55 @@ bool platform::beneath::may_be_short_name(const fs::path& name)
 		}
 	}
 	return false;
+}
+
+namespace {
+
+	std::mutex g_hold_hook_mutex;
+	platform::beneath::hold_hook g_hold_hook;
+	std::atomic<bool> g_proc_fd_unusable{ false };
+
+	void call_hold_hook(const fs::path& folder)
+	{
+		platform::beneath::hold_hook hook;
+		{
+			const std::lock_guard lock(g_hold_hook_mutex);
+			hook = g_hold_hook;
+		}
+		if (hook) {
+			hook(folder);
+		}
+	}
+
+	platform::beneath::hold_result hold_refused(platform::beneath::hold_status status, std::string why)
+	{
+		platform::beneath::hold_result result;
+		result.status = status;
+		result.error = std::move(why);
+		return result;
+	}
+
+	// Where `name` is among the held names; nullopt when it is not one of them.
+	std::optional<std::size_t> held_index(const std::vector<fs::path>& names, const fs::path& name)
+	{
+		const auto found = std::ranges::find(names, name);
+		if (found == names.end()) {
+			return std::nullopt;
+		}
+		return static_cast<std::size_t>(std::distance(names.begin(), found));
+	}
+
+}
+
+void platform::beneath::set_hold_hook(hold_hook hook)
+{
+	const std::lock_guard lock(g_hold_hook_mutex);
+	g_hold_hook = std::move(hook);
+}
+
+void platform::beneath::set_proc_fd_unusable(bool unusable)
+{
+	g_proc_fd_unusable = unusable;
 }
 
 #if !defined(_WIN32)
@@ -502,8 +557,12 @@ namespace {
 
 std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs::path& folder, bool must_be_new)
 {
-	auto parts = folder_parts(folder);
-	if (!parts || (must_be_new && parts->empty())) {
+	if (must_be_new) {
+		// The umask applies, as it did to the folders std::filesystem made.
+		return make_new_folder_beneath(root, folder, 0777);
+	}
+	const auto parts = folder_parts(folder);
+	if (!parts) {
 		return std::string{ k_not_below };
 	}
 	std::string error;
@@ -512,11 +571,24 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 		return error;
 	}
 	fs::path reached = root.path();
-	if (!must_be_new) {
-		const fd_holder made = open_below(root_fd, *parts, true, reached);
-		return made.get() < 0 ? errno_text("cannot make the folder (a link, or not a folder, on the way)", reached)
-							  : std::string{};
+	const fd_holder made = open_below(root_fd, *parts, true, reached);
+	return made.get() < 0 ? errno_text("cannot make the folder (a link, or not a folder, on the way)", reached)
+						  : std::string{};
+}
+
+std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode,
+	folder_identity* made)
+{
+	auto parts = folder_parts(folder);
+	if (!parts || parts->empty()) {
+		return std::string{ k_not_below };
 	}
+	std::string error;
+	const int root_fd = root.descriptor(error);
+	if (root_fd < 0) {
+		return error;
+	}
+	fs::path reached = root.path();
 	const fs::path last = parts->back();
 	parts->pop_back();
 	const fd_holder parent = open_below(root_fd, *parts, true, reached);
@@ -524,10 +596,17 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 		return errno_text("cannot make the folder (a link, or not a folder, on the way)", reached);
 	}
 	reached /= last;
-	// The umask applies, as it did to the folders std::filesystem made.
-	if (::mkdirat(parent.get(), last.c_str(), 0777) != 0) {
+	if (::mkdirat(parent.get(), last.c_str(), static_cast<mode_t>(mode)) != 0) {
 		return errno == EEXIST ? std::format("'{}' already exists", fs_paths::utf8_of(reached))
 							   : errno_text("cannot make", reached);
+	}
+	if (made) {
+		const fd_holder opened{ ::openat(parent.get(), last.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) };
+		struct stat information;
+		if (opened.get() < 0 || ::fstat(opened.get(), &information) != 0) {
+			return errno_text("cannot inspect the folder just made", reached);
+		}
+		*made = { static_cast<std::uint64_t>(information.st_ino), 0, static_cast<std::uint64_t>(information.st_dev) };
 	}
 	return {};
 }
@@ -791,6 +870,154 @@ std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(co
 	return S_ISLNK(information.st_mode) ? link_entry::link : link_entry::plain;
 }
 
+struct platform::beneath::held_folder::state {
+	std::vector<fs::path> names;
+	fd_holder folder;
+	std::vector<fd_holder> files;
+	// "/proc/self/fd/<folder>" when it leads to the held files; empty otherwise.
+	std::string proc_folder;
+};
+
+platform::beneath::held_folder::held_folder(std::unique_ptr<state> held)
+	: m_state(std::move(held))
+{
+}
+
+platform::beneath::held_folder::~held_folder() = default;
+
+const std::vector<fs::path>& platform::beneath::held_folder::names() const
+{
+	return m_state->names;
+}
+
+fs::path platform::beneath::held_folder::load_path(const fs::path& name) const
+{
+	if (m_state->proc_folder.empty() || !held_index(m_state->names, name)) {
+		return {};
+	}
+	return fs::path{ m_state->proc_folder } / name;
+}
+
+bool platform::beneath::held_folder::read(const fs::path& name, const chunk_sink& sink) const
+{
+	const auto index = held_index(m_state->names, name);
+	if (!index) {
+		return false;
+	}
+	const int file = m_state->files[*index].get();
+	std::vector<std::byte> buffer(64 * 1024);
+	off_t offset = 0;
+	for (;;) {
+		const ssize_t got = ::pread(file, buffer.data(), buffer.size(), offset);
+		if (got < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			return false;
+		}
+		if (got == 0) {
+			return true;
+		}
+		offset += static_cast<off_t>(got);
+		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
+			return false;
+		}
+	}
+}
+
+platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_root& root, const fs::path& folder,
+	const folder_identity& made, std::span<const fs::path> names)
+{
+	const auto parts = folder_parts(folder);
+	if (!parts || parts->empty() || !std::ranges::all_of(names, is_plain_name)) {
+		return hold_refused(hold_status::failed, std::string{ k_not_below });
+	}
+	std::string error;
+	const int root_fd = root.descriptor(error);
+	if (root_fd < 0) {
+		return hold_refused(hold_status::failed, error);
+	}
+	fs::path reached = root.path();
+	auto kept = std::make_unique<held_folder::state>();
+	kept->names.assign(names.begin(), names.end());
+	kept->folder = open_below(root_fd, *parts, false, reached);
+	if (kept->folder.get() < 0) {
+		return hold_refused(hold_status::failed,
+			errno_text("cannot open the folder (a link, or not a folder)", reached));
+	}
+	const uid_t self = ::geteuid();
+	struct stat information;
+	if (::fstat(kept->folder.get(), &information) != 0) {
+		return hold_refused(hold_status::failed, errno_text("cannot inspect", reached));
+	}
+	const folder_identity held_identity{ static_cast<std::uint64_t>(information.st_ino), 0,
+		static_cast<std::uint64_t>(information.st_dev) };
+	if (held_identity != made) {
+		return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
+			fs_paths::utf8_of(reached)));
+	}
+	if (information.st_uid != self || (information.st_mode & 077) != 0) {
+		return hold_refused(hold_status::not_private, std::format("'{}' is not a folder of this user closed to others "
+			"(owner {}, mode {:o})", fs_paths::utf8_of(reached), information.st_uid, information.st_mode & 07777));
+	}
+	std::vector<std::string> present;
+	if (!list_folder(kept->folder.get(), present)) {
+		return hold_refused(hold_status::failed, errno_text("cannot list", reached));
+	}
+	for (const auto& entry : present) {
+		if (std::ranges::find(names, fs::path{ entry }) == names.end()) {
+			return hold_refused(hold_status::failed, std::format("'{}' holds '{}', which was not put there",
+				fs_paths::utf8_of(reached), entry));
+		}
+	}
+	std::vector<struct stat> seen;
+	seen.reserve(names.size());
+	for (const auto& name : names) {
+		const fs::path path = reached / name;
+		fd_holder file{ ::openat(kept->folder.get(), name.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) };
+		if (file.get() < 0) {
+			return hold_refused(hold_status::failed, errno_text("cannot open (a link, or missing)", path));
+		}
+		if (::fstat(file.get(), &information) != 0) {
+			return hold_refused(hold_status::failed, errno_text("cannot inspect", path));
+		}
+		if (!S_ISREG(information.st_mode)) {
+			return hold_refused(hold_status::failed, std::format("'{}' is not a regular file", fs_paths::utf8_of(path)));
+		}
+		if (information.st_uid != self) {
+			return hold_refused(hold_status::not_private, std::format("'{}' is not a file of this user (owner {})",
+				fs_paths::utf8_of(path), information.st_uid));
+		}
+		if (::fchmod(file.get(), S_IRUSR) != 0 || ::fstat(file.get(), &information) != 0
+			|| (information.st_mode & 07777) != S_IRUSR) {
+			return hold_refused(hold_status::not_private, std::format("'{}' cannot be made readable by this user "
+				"alone (mode {:o})", fs_paths::utf8_of(path), information.st_mode & 07777));
+		}
+		seen.push_back(information);
+		kept->files.push_back(std::move(file));
+	}
+#if defined(__linux__)
+	if (!g_proc_fd_unusable) {
+		// The loader is given this path: it must reach the very files held, not what another /proc would show.
+		std::string proc = std::format("/proc/self/fd/{}", kept->folder.get());
+		bool usable = true;
+		for (std::size_t index = 0; index < names.size() && usable; ++index) {
+			struct stat via;
+			usable = ::stat((fs::path{ proc } / names[index]).c_str(), &via) == 0 && via.st_dev == seen[index].st_dev
+				&& via.st_ino == seen[index].st_ino;
+		}
+		if (usable) {
+			kept->proc_folder = std::move(proc);
+		}
+	}
+#endif
+	hold_result result;
+	result.status = hold_status::held;
+	result.held = std::make_shared<held_folder>(std::move(kept));
+	call_hold_hook(folder);
+	return result;
+}
+
 #else
 
 #ifndef FILE_OPEN
@@ -859,8 +1086,9 @@ namespace {
 
 	// `name` (one component) inside the folder `parent` holds, resolved from that handle and never through a reparse
 	// point: one at `name` is opened itself. Invalid with the last error set on failure.
+	// `security`: the descriptor an entry this call makes gets (null: inherited from the folder above).
 	handle_holder open_in(HANDLE parent, const fs::path& name, ACCESS_MASK access, ULONG share, ULONG disposition, ULONG options,
-		bool open_reparse_point = true)
+		bool open_reparse_point = true, PSECURITY_DESCRIPTOR security = nullptr)
 	{
 		const std::wstring& text = name.native();
 		if (text.size() * sizeof(wchar_t) > 0xfffe) {
@@ -876,6 +1104,7 @@ namespace {
 		attributes.RootDirectory = parent;
 		attributes.ObjectName = &unicode;
 		attributes.Attributes = OBJ_CASE_INSENSITIVE; // as Win32 opens names
+		attributes.SecurityDescriptor = security;
 		IO_STATUS_BLOCK status_block{};
 		HANDLE handle = nullptr;
 		// FILE_READ_ATTRIBUTES as CreateFileW adds it: GetFileInformationByHandle and GetFinalPathNameByHandleW need it.
@@ -889,10 +1118,147 @@ namespace {
 		return handle_holder{ handle };
 	}
 
+	// The TOKEN_USER of this process; empty when it cannot be read.
+	std::vector<std::byte> current_token_user()
+	{
+		HANDLE token = nullptr;
+		if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) {
+			return {};
+		}
+		const handle_holder held{ token };
+		DWORD size = 0;
+		::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+		std::vector<std::byte> buffer(size);
+		if (size == 0 || !::GetTokenInformation(token, TokenUser, buffer.data(), size, &size)) {
+			return {};
+		}
+		return buffer;
+	}
+
+	PSID user_sid(const std::vector<std::byte>& token_user)
+	{
+		return reinterpret_cast<const TOKEN_USER*>(token_user.data())->User.Sid;
+	}
+
+	// A security descriptor the system allocated, freed with LocalFree.
+	struct local_descriptor
+	{
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+
+		local_descriptor() = default;
+		explicit local_descriptor(PSECURITY_DESCRIPTOR owned) : descriptor(owned) {}
+		~local_descriptor()
+		{
+			if (descriptor) {
+				::LocalFree(descriptor);
+			}
+		}
+		local_descriptor(const local_descriptor&) = delete;
+		local_descriptor& operator=(const local_descriptor&) = delete;
+	};
+
+	// The Windows side of a folder made 0700 (#1304): owned by the current user, a protected DACL (nothing inherited
+	// from the project's folders) with one entry granting that user everything, inherited by what is made inside.
+	// False with the last error set when it cannot be built.
+	bool private_descriptor(local_descriptor& out)
+	{
+		const std::vector<std::byte> token_user = current_token_user();
+		if (token_user.empty()) {
+			return false;
+		}
+		LPWSTR text = nullptr;
+		if (!::ConvertSidToStringSidW(user_sid(token_user), &text)) {
+			return false;
+		}
+		const std::wstring sid{ text };
+		::LocalFree(text);
+		const std::wstring sddl = L"O:" + sid + L"D:P(A;OICI;FA;;;" + sid + L")";
+		return ::ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &out.descriptor,
+			nullptr) != 0;
+	}
+
+	// Why the folder `folder` (opened with READ_CONTROL) is not closed to everyone but the current user: not owned by
+	// them, a DACL that is not protected (inherits from above), or an allowing entry for anyone else. Empty when it is.
+	std::string not_private_reason(HANDLE folder)
+	{
+		const std::vector<std::byte> token_user = current_token_user();
+		if (token_user.empty()) {
+			return "the current user cannot be read";
+		}
+		const PSID self = user_sid(token_user);
+		PSID owner = nullptr;
+		PACL dacl = nullptr;
+		PSECURITY_DESCRIPTOR raw = nullptr;
+		const DWORD status = ::GetSecurityInfo(folder, SE_FILE_OBJECT,
+			OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &raw);
+		if (status != ERROR_SUCCESS) {
+			return std::format("its permissions cannot be read: {}",
+				std::system_category().message(static_cast<int>(status)));
+		}
+		const local_descriptor descriptor{ raw };
+		if (!owner || !::EqualSid(owner, self)) {
+			return "it is not owned by this user";
+		}
+		SECURITY_DESCRIPTOR_CONTROL control = 0;
+		DWORD revision = 0;
+		if (!::GetSecurityDescriptorControl(descriptor.descriptor, &control, &revision)
+			|| (control & SE_DACL_PROTECTED) == 0) {
+			return "its permissions are inherited from the folder above";
+		}
+		if (!dacl) {
+			return "it has no access list: everyone may use it";
+		}
+		for (DWORD index = 0; index < dacl->AceCount; ++index) {
+			void* ace = nullptr;
+			if (!::GetAce(dacl, index, &ace)) {
+				return "its access list cannot be read";
+			}
+			const auto* header = static_cast<const ACE_HEADER*>(ace);
+			if (header->AceType == ACCESS_DENIED_ACE_TYPE) {
+				continue;
+			}
+			if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+				return "its access list holds an entry of another kind";
+			}
+			auto* allowed = static_cast<ACCESS_ALLOWED_ACE*>(ace);
+			if (!::EqualSid(reinterpret_cast<PSID>(&allowed->SidStart), self)) {
+				return "its access list lets another account in";
+			}
+		}
+		return {};
+	}
+
 	bool same_file(const BY_HANDLE_FILE_INFORMATION& a, const BY_HANDLE_FILE_INFORMATION& b)
 	{
 		return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh
 			&& a.nFileIndexLow == b.nFileIndexLow;
+	}
+
+	// FileIdInfo and FILE_ID_INFO (Windows 8), spelled out: the SDK declares them only for a high enough _WIN32_WINNT.
+	constexpr auto k_file_id_info = static_cast<FILE_INFO_BY_HANDLE_CLASS>(18);
+	struct file_id_info {
+		ULONGLONG volume_serial_number;
+		BYTE identifier[16];
+	};
+
+	// False with the last error set when neither the file ID nor the file index can be read.
+	bool identity_of(HANDLE file, platform::beneath::folder_identity& out)
+	{
+		file_id_info id{};
+		if (::GetFileInformationByHandleEx(file, k_file_id_info, &id, sizeof(id))) {
+			std::uint64_t halves[2]{};
+			static_assert(sizeof(halves) == sizeof(id.identifier));
+			std::memcpy(halves, id.identifier, sizeof(halves));
+			out = { halves[0], halves[1], static_cast<std::uint64_t>(id.volume_serial_number) };
+			return true;
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(file, &information)) {
+			return false;
+		}
+		out = { (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow, 0,
+			static_cast<std::uint64_t>(information.dwVolumeSerialNumber) };
+		return true;
 	}
 
 	enum class reparse_kind { none, redirect, filter, unknown };
@@ -1425,12 +1791,28 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 	if (!parts || (must_be_new && parts->empty())) {
 		return std::string{ k_not_below };
 	}
+	if (must_be_new) {
+		return make_new_folder_beneath(root, folder, 0777);
+	}
 	fs::path reached;
-	if (!must_be_new) {
-		const held_chain chain = hold_chain(root.path(), *parts, true, reached, unnormalized::refuse);
-		return chain.empty()
-			? last_error_text("cannot make the folder (a link, a junction, or not a folder, on the way)", reached)
-			: std::string{};
+	const held_chain chain = hold_chain(root.path(), *parts, true, reached, unnormalized::refuse);
+	return chain.empty()
+		? last_error_text("cannot make the folder (a link, a junction, or not a folder, on the way)", reached)
+		: std::string{};
+}
+
+std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode,
+	folder_identity* made)
+{
+	auto parts = folder_parts(folder);
+	if (!parts || parts->empty()) {
+		return std::string{ k_not_below };
+	}
+	fs::path reached;
+	// Nothing for group and others: the folder lets the current user alone in, whatever the folders above allow.
+	local_descriptor private_security;
+	if ((mode & 077) == 0 && !private_descriptor(private_security)) {
+		return last_error_text("cannot build a private access list for", folder);
 	}
 	const fs::path last = parts->back();
 	parts->pop_back();
@@ -1439,17 +1821,20 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 		return last_error_text("cannot make the folder (a link, a junction, or not a folder, on the way)", reached);
 	}
 	reached /= last;
-	const handle_holder made =
-		open_in(chain.last(), last, k_folder_access, k_folder_share, FILE_CREATE, FILE_DIRECTORY_FILE);
-	if (!made.valid()) {
+	const handle_holder created = open_in(chain.last(), last, k_folder_access, k_folder_share, FILE_CREATE,
+		FILE_DIRECTORY_FILE, true, private_security.descriptor);
+	if (!created.valid()) {
 		const DWORD code = ::GetLastError();
 		const bool exists = code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS;
 		return exists ? std::format("'{}' already exists", fs_paths::utf8_of(reached))
 					  : last_error_text("cannot make", reached);
 	}
-	if (!lies_at(made.get(), chain.root_path, *parts, last, unnormalized::refuse)) {
+	if (!lies_at(created.get(), chain.root_path, *parts, last, unnormalized::refuse)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the folder was not made below the root under these names", reached);
+	}
+	if (made && !identity_of(created.get(), *made)) {
+		return last_error_text("cannot inspect the folder just made", reached);
 	}
 	return {};
 }
@@ -1768,6 +2153,146 @@ std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(co
 	}
 	const bool reparse_point = (information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 	return link_entry_of(information.FileAttributes, true, reparse_point ? information.ReparseTag : 0);
+}
+
+struct platform::beneath::held_folder::state {
+	std::vector<fs::path> names;
+	held_chain chain;
+	std::vector<handle_holder> files;
+	std::vector<std::wstring> final_paths;
+};
+
+platform::beneath::held_folder::held_folder(std::unique_ptr<state> held)
+	: m_state(std::move(held))
+{
+}
+
+platform::beneath::held_folder::~held_folder() = default;
+
+const std::vector<fs::path>& platform::beneath::held_folder::names() const
+{
+	return m_state->names;
+}
+
+fs::path platform::beneath::held_folder::load_path(const fs::path& name) const
+{
+	const auto index = held_index(m_state->names, name);
+	return index ? fs::path{ m_state->final_paths[*index] } : fs::path{};
+}
+
+bool platform::beneath::held_folder::read(const fs::path& name, const chunk_sink& sink) const
+{
+	const auto index = held_index(m_state->names, name);
+	if (!index) {
+		return false;
+	}
+	const HANDLE file = m_state->files[*index].get();
+	LARGE_INTEGER start{};
+	if (!::SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) {
+		return false;
+	}
+	std::vector<std::byte> buffer(64 * 1024);
+	for (;;) {
+		DWORD got = 0;
+		if (!::ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &got, nullptr)) {
+			return false;
+		}
+		if (got == 0) {
+			return true;
+		}
+		if (!sink(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)))) {
+			return false;
+		}
+	}
+}
+
+platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_root& root, const fs::path& folder,
+	const folder_identity& made, std::span<const fs::path> names)
+{
+	const auto parts = folder_parts(folder);
+	if (!parts || parts->empty() || !std::ranges::all_of(names, is_plain_name)) {
+		return hold_refused(hold_status::failed, std::string{ k_not_below });
+	}
+	fs::path reached;
+	auto kept = std::make_unique<held_folder::state>();
+	kept->names.assign(names.begin(), names.end());
+	kept->chain = hold_chain(root.path(), *parts, false, reached, unnormalized::refuse);
+	if (kept->chain.empty()) {
+		return hold_refused(hold_status::failed,
+			last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached));
+	}
+	{
+		// Its permissions are read through a handle of its own (the chain holds it without READ_CONTROL), checked to
+		// be the folder held: the Windows side of the POSIX owner and mode check.
+		const HANDLE parent = kept->chain.folders[kept->chain.folders.size() - 2].get();
+		const handle_holder inspected = open_in(parent, parts->back(), READ_CONTROL,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, FILE_DIRECTORY_FILE);
+		BY_HANDLE_FILE_INFORMATION held_information{};
+		BY_HANDLE_FILE_INFORMATION inspected_information{};
+		if (!inspected.valid() || !::GetFileInformationByHandle(kept->chain.last(), &held_information)
+			|| !::GetFileInformationByHandle(inspected.get(), &inspected_information)
+			|| !same_file(held_information, inspected_information)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot read the permissions of", reached));
+		}
+		folder_identity held_identity;
+		if (!identity_of(kept->chain.last(), held_identity)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot inspect", reached));
+		}
+		if (held_identity != made) {
+			return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
+				fs_paths::utf8_of(reached)));
+		}
+		if (std::string why = not_private_reason(inspected.get()); !why.empty()) {
+			return hold_refused(hold_status::not_private, std::format("'{}' is not a folder of this user closed to "
+				"others: {}", fs_paths::utf8_of(reached), why));
+		}
+	}
+	{
+		// The loader looks for a library's dependencies in its folder first: nothing may be there but the copy.
+		std::vector<std::wstring> present;
+		if (!list_folder(kept->chain.last(), present)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot list", reached));
+		}
+		for (const auto& entry : present) {
+			if (std::ranges::find(names, fs::path{ entry }) == names.end()) {
+				return hold_refused(hold_status::failed, std::format("'{}' holds '{}', which was not put there",
+					fs_paths::utf8_of(reached), fs_paths::utf8_of(fs::path{ entry })));
+			}
+		}
+	}
+	for (const auto& name : names) {
+		const fs::path path = reached / name;
+		// Sharing reading alone: refused while anyone has it open for writing or deleting, and nobody can while held.
+		handle_holder file = open_in(kept->chain.last(), name, FILE_GENERIC_READ, FILE_SHARE_READ, FILE_OPEN,
+			FILE_NON_DIRECTORY_FILE);
+		if (!file.valid()) {
+			return hold_refused(hold_status::failed,
+				last_error_text("cannot hold for reading alone (open for writing elsewhere, or missing)", path));
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(file.get(), &information)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot inspect", path));
+		}
+		if ((information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+			return hold_refused(hold_status::failed,
+				std::format("'{}' is a link, a reparse point or a folder", fs_paths::utf8_of(path)));
+		}
+		if (!lies_at(file.get(), kept->chain.root_path, *parts, name, unnormalized::refuse)) {
+			return hold_refused(hold_status::failed,
+				std::format("'{}' does not lie at its name", fs_paths::utf8_of(path)));
+		}
+		const auto held_path = final_path(file.get());
+		if (!held_path) {
+			return hold_refused(hold_status::failed, last_error_text("no final path of", path));
+		}
+		kept->final_paths.push_back(*held_path);
+		kept->files.push_back(std::move(file));
+	}
+	hold_result result;
+	result.status = hold_status::held;
+	result.held = std::make_shared<held_folder>(std::move(kept));
+	call_hold_hook(folder);
+	return result;
 }
 
 #endif

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -120,6 +121,26 @@ namespace platform::beneath {
 	SNK_API std::string make_folders_beneath(pinned_root& root, const std::filesystem::path& folder,
 		bool must_be_new = false);
 
+	// Which folder: POSIX inode and device; Windows the 128-bit file ID (FileIdInfo: the 64-bit index is not unique on
+	// ReFS; where the file system gives none, that index) and volume serial number.
+	struct folder_identity {
+		std::uint64_t file_id = 0;
+		// The upper half of a Windows 128-bit file ID; 0 elsewhere.
+		std::uint64_t file_id_high = 0;
+		std::uint64_t device = 0;
+
+		bool operator==(const folder_identity&) const = default;
+	};
+
+	// make_folders_beneath(root, folder, true) with the last folder made with `mode` (#1304): POSIX mkdirat(mode), the
+	// umask only narrows it, so a folder made 0700 is closed to others from its first moment. Windows: a mode with
+	// nothing for group and others makes it owned by the current user with a protected DACL granting that user alone
+	// (inherited by what is made inside), so nobody else can add a file to it or open one; other modes are not used.
+	// `made`, when given, gets the identity of the folder made (Windows: of the handle that made it; POSIX: of the
+	// folder opened from its parent right after), for hold_folder_beneath to prove it holds that one.
+	SNK_API std::string make_new_folder_beneath(pinned_root& root, const std::filesystem::path& folder,
+		std::uint32_t mode, folder_identity* made = nullptr);
+
 	// What the error of remove_tree_beneath holds when the tree is nested deeper than it walks (256 folders).
 	inline constexpr std::string_view k_tree_too_deep = "nested deeper than";
 
@@ -185,5 +206,52 @@ namespace platform::beneath {
 	// by the final path; when the file system gives none (some network redirectors), a read goes on only if no name of
 	// its path is such a one, and a write or a delete is refused.
 	SNK_API bool may_be_short_name(const std::filesystem::path& name);
+
+	// A folder below the root and files in it, held from one walk so that what is read through the hold is what a
+	// loader opens next (#1304). POSIX: the folder's descriptor, opened from the root without following a link, of this
+	// user and closed to others, holding nothing but the files; each file opened from it without following a link, a
+	// regular file of this user, made readable by this user only (0400). Windows: the chain of folders held without
+	// FILE_SHARE_DELETE, the folder owned by the current user with a protected DACL that allows nobody else, holding
+	// nothing but the files, and each file opened as itself (a reparse point refused) for reading, sharing reading
+	// only: while it is held nobody writes, renames or removes one. Destroying it lets all of that go.
+	class SNK_API held_folder
+	{
+	public:
+		struct state;
+		explicit held_folder(std::unique_ptr<state> held);
+		~held_folder();
+		held_folder(const held_folder&) = delete;
+		held_folder& operator=(const held_folder&) = delete;
+
+		// The files held, in the order hold_folder_beneath was given them.
+		const std::vector<std::filesystem::path>& names() const;
+		// The path that reaches the held file `name`: Linux /proc/self/fd/<folder>/<name> when it leads to that file;
+		// Windows the final path of its handle. Empty when there is none (macOS, a Linux without a usable /proc).
+		std::filesystem::path load_path(const std::filesystem::path& name) const;
+		// The held file `name` from its start, read through the held descriptor or handle and handed to `sink` in
+		// pieces; false when it cannot be read or `sink` refused a piece.
+		bool read(const std::filesystem::path& name, const chunk_sink& sink) const;
+
+	private:
+		std::unique_ptr<state> m_state;
+	};
+
+	enum class hold_status : std::uint8_t { held, not_private, failed };
+
+	struct hold_result {
+		hold_status status = hold_status::failed;
+		// Set for `held` only.
+		std::shared_ptr<held_folder> held;
+		// Why not, otherwise.
+		std::string error;
+	};
+
+	// Holds `folder` below the root and the files `names` (single names) in it. The folder held must be `made` (from
+	// make_new_folder_beneath): another one put at its name since is `failed`, as is a file missing, a link, not a
+	// regular file or anything in the folder but `names`. POSIX: the folder or a file not of this user, or open to
+	// others once made 0400 (a file system that keeps no modes), is `not_private`; Windows: a folder not owned by the
+	// current user, with an inherited DACL or one that allows anyone else (no ACLs there), is `not_private`.
+	SNK_API hold_result hold_folder_beneath(pinned_root& root, const std::filesystem::path& folder,
+		const folder_identity& made, std::span<const std::filesystem::path> names);
 
 }

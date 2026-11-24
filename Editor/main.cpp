@@ -186,7 +186,7 @@ int main(int argc, char* argv[])
 		// --trust-project. A migration runs without the editor: only the flag counts there.
 		if (migration) {
 			const bool trusted = trust_project_flag();
-			project_modules.trust_library = [trusted](std::string_view, const std::filesystem::path&) {
+			project_modules.trust_library = [trusted](std::string_view, const core::library_copy&) {
 				return trusted;
 			};
 		} else {

@@ -1,8 +1,11 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/fs_paths.h>
 #include <bit>
+#include <cstddef>
 #include <format>
+#include <string>
 #include <system_error>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -91,6 +94,69 @@ namespace {
 #endif
 	}
 
+	void resolve_entry(void* handle, app::modules::module_entry& entry)
+	{
+		entry.api_version = find_symbol<decltype(entry.api_version)>(handle, "snk_module_api_version");
+		entry.build_info = find_symbol<decltype(entry.build_info)>(handle, "snk_module_build_info");
+		entry.create = find_symbol<decltype(entry.create)>(handle, "snk_create_module");
+		entry.destroy = find_symbol<decltype(entry.destroy)>(handle, "snk_destroy_module");
+		entry.editor_api_version = find_symbol<decltype(entry.editor_api_version)>(handle, "snk_editor_api_version");
+		entry.layout_key = find_symbol<decltype(entry.layout_key)>(handle, "snk_module_layout_key");
+		entry.editor_layout_key = find_symbol<decltype(entry.editor_layout_key)>(handle, "snk_editor_layout_key");
+	}
+
+	// Whether the system still maps the library loaded by `path` (a closed one it keeps: GNU_UNIQUE symbols, another
+	// reference).
+	bool still_loaded(const std::filesystem::path& path)
+	{
+#if defined(_WIN32)
+		return ::GetModuleHandleW(path.c_str()) != nullptr;
+#else
+		void* again = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+		if (again) {
+			::dlclose(again);
+		}
+		return again != nullptr;
+#endif
+	}
+
+#if defined(_WIN32)
+	// `path` without its \\?\ prefix: the form GetModuleFileNameW gives for a path the loader took either way.
+	std::wstring without_prefix(const std::wstring& path)
+	{
+		if (path.starts_with(L"\\\\?\\UNC\\")) {
+			return L"\\\\" + path.substr(8);
+		}
+		if (path.starts_with(L"\\\\?\\")) {
+			return path.substr(4);
+		}
+		return path;
+	}
+
+	// The final path of a held file as the loader takes it best: without the \\?\ prefix when it is short enough.
+	std::filesystem::path loader_form(const std::filesystem::path& path)
+	{
+		const std::wstring plain = without_prefix(path.native());
+		return plain.size() < static_cast<std::size_t>(MAX_PATH) ? std::filesystem::path{ plain } : path;
+	}
+
+	// The module `handle` lies at `path` (compared without case, as Windows names files).
+	bool loaded_from(void* handle, const std::filesystem::path& path)
+	{
+		std::wstring name(32768, L'\0');
+		const DWORD length =
+			::GetModuleFileNameW(static_cast<HMODULE>(handle), name.data(), static_cast<DWORD>(name.size()));
+		if (length == 0 || length >= name.size()) {
+			return false;
+		}
+		name.resize(length);
+		const std::wstring loaded = without_prefix(name);
+		const std::wstring expected = without_prefix(path.native());
+		return ::CompareStringOrdinal(loaded.c_str(), static_cast<int>(loaded.size()), expected.c_str(),
+			static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
+	}
+#endif
+
 }
 
 app::modules::native_library_source::native_library_source(std::filesystem::path path, std::filesystem::path module_dir)
@@ -117,13 +183,7 @@ std::string app::modules::native_library_source::open()
 	if (!m_handle) {
 		return std::format("cannot open '{}': {}", real.string(), last_error());
 	}
-	m_entry.api_version = find_symbol<decltype(m_entry.api_version)>(m_handle, "snk_module_api_version");
-	m_entry.build_info = find_symbol<decltype(m_entry.build_info)>(m_handle, "snk_module_build_info");
-	m_entry.create = find_symbol<decltype(m_entry.create)>(m_handle, "snk_create_module");
-	m_entry.destroy = find_symbol<decltype(m_entry.destroy)>(m_handle, "snk_destroy_module");
-	m_entry.editor_api_version = find_symbol<decltype(m_entry.editor_api_version)>(m_handle, "snk_editor_api_version");
-	m_entry.layout_key = find_symbol<decltype(m_entry.layout_key)>(m_handle, "snk_module_layout_key");
-	m_entry.editor_layout_key = find_symbol<decltype(m_entry.editor_layout_key)>(m_handle, "snk_editor_layout_key");
+	resolve_entry(m_handle, m_entry);
 	if (std::string problem = check_library_module(m_entry); !problem.empty()) {
 		close();
 		return std::format("refusing '{}': {}", real.string(), problem);
@@ -143,4 +203,72 @@ void app::modules::native_library_source::close()
 std::string app::modules::native_library_source::describe() const
 {
 	return m_path.string();
+}
+
+app::modules::held_library_source::held_library_source(std::filesystem::path load_path, std::filesystem::path shown,
+	std::shared_ptr<void> keep)
+	: m_load_path(std::move(load_path))
+	, m_shown(std::move(shown))
+	, m_keep(std::move(keep))
+{
+}
+
+app::modules::held_library_source::~held_library_source()
+{
+	close();
+}
+
+std::string app::modules::held_library_source::open()
+{
+	if (m_handle) {
+		return {};
+	}
+	if (!m_load_path.is_absolute()) {
+		return std::format("'{}' is not an absolute path", m_load_path.string());
+	}
+#if defined(_WIN32)
+	const std::filesystem::path path = loader_form(m_load_path);
+#else
+	// Never made canonical: that would resolve /proc/self/fd/<n> away to the folder's path, which can be replaced.
+	const std::filesystem::path& path = m_load_path;
+#endif
+	m_handle = open_library(path);
+	if (!m_handle) {
+		return std::format("cannot open '{}': {}", describe(), last_error());
+	}
+#if defined(_WIN32)
+	if (!loaded_from(m_handle, m_load_path)) {
+		close();
+		return std::format("refusing '{}': the system loaded another file under its name", describe());
+	}
+#endif
+	resolve_entry(m_handle, m_entry);
+	if (std::string problem = check_library_module(m_entry); !problem.empty()) {
+		close();
+		return std::format("refusing '{}': {}", describe(), problem);
+	}
+	return {};
+}
+
+void app::modules::held_library_source::close()
+{
+	if (m_handle) {
+		close_library(m_handle);
+		m_handle = nullptr;
+#if defined(_WIN32)
+		const std::filesystem::path path = loader_form(m_load_path);
+#else
+		const std::filesystem::path& path = m_load_path;
+#endif
+		if (m_keep && still_loaded(path)) {
+			// Never let go: see the class comment. Deliberately leaked with the image the system keeps.
+			static_cast<void>(new std::shared_ptr<void>(m_keep));
+		}
+	}
+	m_entry = {};
+}
+
+std::string app::modules::held_library_source::describe() const
+{
+	return m_shown.empty() ? m_load_path.string() : m_shown.string();
 }
