@@ -88,9 +88,22 @@ std::vector<std::byte> bytes_of(std::string_view text)
 	return { first, first + text.size() };
 }
 
+// A record name may be 160 characters below a deep build folder: past Windows' 260, a plain path cannot open it.
+fs::path openable(const fs::path& path)
+{
+#ifdef _WIN32
+	fs::path full = fs::absolute(path);
+	full.make_preferred();
+	if (full.native().starts_with(L"\\\\?\\")) return full;
+	return fs::path(L"\\\\?\\" + full.native());
+#else
+	return path;
+#endif
+}
+
 std::string read_file(const fs::path& path)
 {
-	std::ifstream in(path, std::ios::binary);
+	std::ifstream in(openable(path), std::ios::binary);
 	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
@@ -99,7 +112,7 @@ void write_file(const fs::path& path, std::string_view text)
 	std::error_code ec;
 	fs::create_directories(path.parent_path(), ec);
 	BOOST_REQUIRE_MESSAGE(!ec, "cannot make " << path.parent_path().string() << ": " << ec.message());
-	std::ofstream out(path, std::ios::binary);
+	std::ofstream out(openable(path), std::ios::binary);
 	out << text;
 	out.close();
 	BOOST_REQUIRE_MESSAGE(!out.fail(), "cannot write " << path.string());
