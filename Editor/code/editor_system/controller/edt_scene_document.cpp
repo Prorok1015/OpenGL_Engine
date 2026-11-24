@@ -284,3 +284,13 @@ edt::save_result edt::scene_document::save_as(const res::tag& target)
 	if (!can_save() || !m_save_as) return save_result::failure("no level is loaded");
 	return m_save_as(target) ? save_result::ok() : save_result::failure("the level could not be written");
 }
+
+edt::autosave_snapshot edt::scene_document::autosave_capture() const
+{
+	if (!m_autosave_capture) {
+		autosave_snapshot none;
+		none.error = "the level has no writer";
+		return none;
+	}
+	return m_autosave_capture();
+}

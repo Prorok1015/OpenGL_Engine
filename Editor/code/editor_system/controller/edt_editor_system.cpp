@@ -20,6 +20,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/text_escape.h>
 #include "edt_selection_wiring.h"
+#include "edt_modeller_component.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_prefab_file_edit.h"
@@ -85,6 +86,9 @@
 #include "edt_agent_component.h"
 #include "edt_agent_ui_component.h"
 #include "../settings/edt_theme_settings_component.h"
+#include "../settings/edt_editor_settings_panel.h"
+#include "../autosave/edt_autosave_component.h"
+#include "../autosave/edt_autosave_settings.h"
 #include <snk/gui/gui_theme_service.h>
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
@@ -229,6 +233,8 @@ edt::editor_system::~editor_system()
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
 		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
 		context->jobs().cancel_all_and_wait();
+		// A clean exit: no autosave is left to recover. Before the documents go, after the writes stopped.
+		if (m_autosave) m_autosave->shutdown();
 		if (m_asset_open) m_asset_open->data_documents().shutdown();
 		context->documents().shutdown();
 	}
@@ -236,6 +242,10 @@ edt::editor_system::~editor_system()
 	if (m_prefab) {
 		m_prefab->detach_document();
 		m_prefab.reset();
+	}
+	if (m_modeller) {
+		m_modeller->detach_document();
+		m_modeller.reset();
 	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
@@ -369,6 +379,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[this] { return m_asset_open->desc_layout(); },
 		[this](std::string_view id, std::function<bool()> poll) { editor_layer->register_implicit(id, std::move(poll)); } });
 
+	// The mesh modeller (EPIC-77, #1011).
+	m_modeller = std::make_unique<modeller_component>(modeller_component::ports{
+		.context = *m_context, .services = m_services, .rnd = m_rnd, .gui = m_gui, .input_router = m_input_router,
+		.desc_layout = [this] { return m_asset_open->desc_layout(); },
+		.edits_locked = [this] { return m_play && m_play->active(); } });
+
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
@@ -391,12 +407,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.asset_catalog = asset_catalog };
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
+	m_asset_open->data_documents().set_shown_prefab([this] {
+		const prefab_document* shown = m_prefab ? m_prefab->shown_prefab() : nullptr;
+		return shown ? shown->id() : document_id{};
+	});
+	m_asset_open->data_documents().set_shown_mesh([this] { return m_modeller ? m_modeller->shown_id() : document_id{}; });
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },
 		[this] { return m_prefab->shown_prefab(); } });
 
 	// Registration order is the render order and the View menu order (panels_component::install).
-	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
+	m_panels->install(m_registrations, [this] {
+		m_prefab->install(m_registrations);
+		m_modeller->install(m_registrations);
+	});
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -419,7 +443,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_level_load = std::make_unique<level_load_component>(std::move(level_ports));
 	m_game_layer = std::make_unique<game_layer_component>(game_layer_component::ports{ .services = m_services, .level_ctrl = m_level_ctrl,
 		.level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open,
-		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); } });
+		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); },
+		.meshes_before = [this] { m_modeller->park_for_layer_change(); },
+		.meshes_after = [this] { m_modeller->restore_after_layer_change(); } });
 
 	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
 		.level_ctrl = m_level_ctrl, .level_load = *m_level_load, .prefab = *m_prefab, .asset_open = *m_asset_open, .problems = *m_problems,
@@ -433,7 +459,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.migration_blocker = [this] { return migration_blocker(); },
 		.migration_stopped_reason = [this]() -> std::optional<std::string> { return m_migration ? m_migration->stopped_reason() : std::nullopt; },
 		.startup_pending = [this] { return m_modes && m_modes->startup_pending(); },
-		.assets = [this] { return m_asset_component.get(); } });
+		.assets = [this] { return m_asset_component.get(); },
+		.meshes_dirty = [this] { return m_modeller->dirty(); },
+		.save_meshes = [this] { return m_modeller->save_dirty(); },
+		.discard_meshes = [this] { m_modeller->drop_dirty(); },
+		.show_mesh = [this](document_id id) { m_modeller->show(id); },
+		.request_close_mesh = [this](document_id id) { m_modeller->request_close(id); } });
 	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
 	m_file_menu->install_edit_actions(m_registrations);
@@ -526,7 +557,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			const auto contexts = m_services.ctx_manager.lock();
 			return contexts && contexts->level_switch_pending();
 		},
-		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty(); },
+		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty() || m_modeller->dirty(); },
 		.live_mode_enabled = [this] { return m_live && m_live->enabled(); },
 		.play = [this] { return m_play; } };
 	m_build = std::make_unique<game_build_component>(std::move(build_ports));
@@ -617,6 +648,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		agent_ports.discard_changes = [this] {
 			m_state.mark_clean();
 			m_prefab->close_dirty();
+			m_modeller->drop_dirty();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		// The guard is in place before the server can take a call.
@@ -632,6 +664,33 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.layer = *editor_layer, .resources = m_res, .descs = desc_system,
 		.themes = data.has_value<::gui::theme_service>() ? &data.require<::gui::theme_service>() : nullptr });
 	m_theme_settings->install(m_registrations);
+
+	// #1186: the dirty documents into the project's cache://autosave/; the settings are a section of Editor Settings.
+	m_autosave = std::make_unique<autosave_component>(autosave_component::ports{ .documents = m_context->documents(),
+		.events = m_context->events(), .resources = m_res, .jobs = &m_context->jobs(),
+		.gesture_active = [this] { return person_is_editing(); }, .problems = &m_context->problems() });
+	m_autosave->set_settings(load_autosave_settings(m_res));
+	m_autosave->set_allowed(autosave_allowed_by_config());
+	m_state.set_autosave_capture([this] { return m_level_ctrl.capture_autosave(); });
+	m_theme_settings->settings_panel().set_autosave(autosave_settings_port{
+		.get = [this] { return m_autosave ? m_autosave->settings() : autosave_settings{}; },
+		.set = [this](const autosave_settings& settings) -> std::string {
+			if (!m_autosave) return "autosave is not available";
+			m_autosave->set_settings(settings);
+			return save_autosave_settings(m_res, settings) ? std::string{}
+				: std::string{ "The settings could not be written: they apply until the editor closes." };
+		},
+		.blocked = [this]() -> std::string {
+			if (!m_autosave) return {};
+			if (!m_autosave->allowed()) return "Off for this run: cfg editor/autosave is false.";
+			if (m_autosave->cache_root().empty()) return "No project is open: autosave has nowhere to write.";
+			return {};
+		} });
+}
+
+void edt::editor_system::tick_autosave()
+{
+	if (m_autosave && m_context) m_autosave->tick();
 }
 
 edt::agent_server* edt::editor_system::agent_server_object()

@@ -256,3 +256,30 @@ void rnd::texture_manager::clear_cache()
 		++m_generation;
 	}
 }
+
+rnd::texture_manager::texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys)
+	: desc_system(d)
+	, m_res_sys(res_sys)
+	, drv(driver)
+{
+}
+
+bool rnd::texture_manager::on_owner_thread() const noexcept
+{
+	return std::this_thread::get_id() == m_owner_thread;
+}
+
+std::uint64_t rnd::texture_manager::generation() const noexcept
+{
+	return m_generation;
+}
+
+void rnd::texture_manager::register_loader(const std::string& txm_type, loader_fn fn)
+{
+	loaders[txm_type] = std::move(fn);
+}
+
+void rnd::texture_manager::unregister_loader(const std::string& txm_type)
+{
+	loaders.erase(txm_type);
+}

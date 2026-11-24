@@ -17,6 +17,7 @@
 #include <snk/driver/rnd_buffer_interface.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_shader_interface.h>
+#include <snk/driver/rnd_texture_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/ecs/ecs_bus.hpp>
 #include <snk/ecs/ecs_channel.hpp>
@@ -39,8 +40,12 @@
 #include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/rnd_render_context.h>
+#include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_pass_interface.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <snk/render/shader/rnd_material_compiler.h>
+#include <snk/render/shader/rnd_shader_config_cache.h>
+#include <snk/render/texture/rnd_texture_id.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/model_codec/res_tag.h>
@@ -81,7 +86,8 @@ namespace gs
 			wnd::window_system_abi_revision, wnd::window_listener_interface_abi_revision,
 			rnd::driver::driver_interface_abi_revision, rnd::driver::shader_interface_abi_revision,
 			rnd::driver::vertex_array_interface_abi_revision, rnd::driver::buffer_interface_abi_revision,
-			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision>;
+			rnd::render_pass_interface_abi_revision, rnd::material_compiler_interface_abi_revision,
+			rnd::texture_resolver_abi_revision>;
 
 		// Module code instantiates EnTT, Boost.JSON and glm from the headers it was built with (on MSVC it links a
 		// Boost.JSON of its own): another version may change what crosses the boundary without changing a listed size.
@@ -162,6 +168,11 @@ namespace gs
 			res::binary_range,
 			// The geometry writers (encode_geometry_files, write_geometry_arrays) take a view and options a module builds.
 			rnd::geometry_view, rnd::geometry_file_options,
+			// Passed by value or reference through render_system's exports and the pinned render interfaces (#1312):
+			// texture_manager's ids and bindings, the material cache's ids and compiled materials, the shader problems and
+			// a texture's header.
+			rnd::texture_id, rnd::texture_binding, rnd::material_instance_id, rnd::compiled_material, rnd::shader_problem,
+			rnd::driver::texture_header,
 			// The third-party types every module holds or passes: the registry of a world, a JSON value, a transform.
 			entt::registry, boost::json::value, glm::mat4,
 			interface_abi_revisions, third_party_versions>;

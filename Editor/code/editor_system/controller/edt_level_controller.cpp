@@ -25,6 +25,9 @@
 
 namespace
 {
+	// Names the level that has no file yet; nothing is read from or written to it.
+	constexpr std::string_view k_untitled_level_file = "untitled.desc";
+
 	// The records an instance holds are written against the version of their component's type the file had; the editor shows and
 	// edits them at the current one (#1255). Returns how many moved their path or value.
 	std::size_t migrate_worlds(const edt::editor_services& services, std::vector<scn::world_desc>& worlds)
@@ -414,22 +417,12 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 		replaced_version = replaced.version;
 	}
 
-	auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
-	if (m_state.level_parent.is_valid()) {
-		keep_level_parent(*m_services.descs(), m_state.level_parent, res::tag::make(rel_path), level_json);
-	}
-
+	const auto tag = res::tag::make(rel_path);
 	// Same writer as every other desc save, so level files are indented and diff well.
-	boost::json::value level_file{ std::move(level_json) };
-	if (scn::ecs_assembler* assembler = m_services.assembler()) {
-		override_edit::write_record_references(*m_services.descs(), *assembler, m_state.world_descs, m_state.world_tags, level_file);
-	}
-	m_services.descs()->write_references(level_file);
-	const auto bytes = m_services.descs()->serialize_to_bytes(level_file);
+	const auto bytes = m_services.descs()->serialize_to_bytes(level_file_json(m_state.world_descs, level_name, guid, tag));
 	// Through the resolver, which keeps the file (and its temp file) inside the resource root: a Save As path with
 	// "..", an absolute path or a symlinked leaf is refused there. Waits for the write: the document is marked clean
 	// only once the level is on disk, or exit would no longer ask about the changes.
-	const auto tag = res::tag::make(rel_path);
 	if (!m_services.writable_resources()->store_sync(tag, bytes)) {
 		egLOG_ERROR("Editor/Save", "Level not saved: '{}' could not be written; the changes are kept", tag.view());
 		return false;
@@ -446,6 +439,47 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	}
 	m_state.level_file_version = current;
 	return true;
+}
+
+boost::json::value edt::level_controller::level_file_json(const std::vector<scn::world_desc>& worlds, std::string_view level_name,
+	std::string_view guid, const res::tag& target) const
+{
+	desc::desc_system& descs = *m_services.descs();
+	auto level_json = scn::level_desc::build_json(level_name, worlds, descs, guid);
+	if (m_state.level_parent.is_valid()) {
+		keep_level_parent(descs, m_state.level_parent, target, level_json);
+	}
+	boost::json::value level_file{ std::move(level_json) };
+	if (scn::ecs_assembler* assembler = m_services.assembler()) {
+		override_edit::write_record_references(descs, *assembler, worlds, m_state.world_tags, level_file);
+	}
+	descs.write_references(level_file);
+	return level_file;
+}
+
+edt::autosave_snapshot edt::level_controller::capture_autosave() const
+{
+	autosave_snapshot out;
+	if (is_detached()) {
+		out.error = "the level is detached (a game layer change or a project migration)";
+		return out;
+	}
+	if (!m_state.editor_tag.is_valid() || !m_services.descs()) {
+		out.error = "no level is loaded";
+		return out;
+	}
+	std::vector<scn::world_desc> worlds = m_state.world_descs;
+	m_scene_editor.write_live_transforms_into(worlds);
+	// As quick_save_level names the level: the stem of its file, the same __guid.
+	std::string name = m_state.level_name.empty() ? std::string{ "untitled" } : m_state.level_name;
+	res::tag target = res::tag::make(k_untitled_level_file);
+	if (m_state.level_tag.is_valid()) {
+		target = m_state.level_tag;
+		const std::string stem = std::filesystem::path(std::string(target.relative())).stem().string();
+		if (!stem.empty()) name = stem;
+	}
+	out.tree = level_file_json(worlds, name, m_state.level_guid, target);
+	return out;
 }
 
 void edt::level_controller::resync_worlds_after_reload()

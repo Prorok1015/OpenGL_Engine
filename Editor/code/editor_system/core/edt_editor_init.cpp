@@ -65,6 +65,10 @@ namespace components {
 			editor.tick_asset_problems();
 			editor.tick_desc_binary_cache();
 		});
+		// #1186: after the job pump, which delivers the autosaves that finished.
+		stages.add_stage("editor_autosave", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().tick_autosave();
+		});
 		auto redirector = std::make_shared<edt::camera_redirector>();
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
 			[redirector](app::stage_context& c) {
@@ -78,6 +82,7 @@ namespace components {
 	{
 		auto& stages = data.require<app::frame_stage_registry>();
 		stages.remove_stage("editor_redirect_cameras");
+		stages.remove_stage("editor_autosave");
 		stages.remove_stage("editor_assets");
 		stages.remove_stage("editor_vcs");
 		stages.remove_stage("editor_live");

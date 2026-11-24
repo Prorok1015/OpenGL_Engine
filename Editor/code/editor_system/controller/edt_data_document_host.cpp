@@ -84,9 +84,18 @@ void edt::data_document_host::follow_focus()
 	const std::string_view stable_id = name.find("###") != std::string_view::npos ? name.substr(name.find("###") + 3) : std::string_view{};
 	const auto taken = std::find_if(panels.begin(), panels.end(),
 		[name, stable_id](const panel_info& panel) { return panel.title == name || (!stable_id.empty() && panel.id == stable_id); });
-	if (taken != panels.end() && taken->id == "prefab_editor" && manager.preview() != nullptr) {
-		manager.set_active(manager.preview()->id());
-		return;
+	if (taken != panels.end() && taken->id == "prefab_editor") {
+		const document_id shown = m_shown_prefab ? m_shown_prefab() : document_id{};
+		if (shown != document_id{}) {
+			manager.set_active(shown);
+			return;
+		}
+	}
+	if (taken != panels.end() && taken->id == "mesh_editor" && m_shown_mesh) {
+		if (const document_id shown = m_shown_mesh(); shown != document_id{}) {
+			manager.set_active(shown);
+			return;
+		}
 	}
 	manager.set_active(manager.scene().id());
 }

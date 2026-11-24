@@ -1,4 +1,5 @@
 #pragma once
+#include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
 #include <snk/editor/edt_document.h>
 #include "edt_document_history.h"
@@ -39,7 +40,7 @@ namespace edt
 	// says (`own`: __type, __parent and only the fields set there) apart from what it inherits (the chain of __parent files
 	// merged as JSON), so a save writes `own` and never the flattened result of the desc adapter. Views and edits go
 	// through schema_ui::compose / edit_component like the components of the Inspector.
-	class data_document final : public document
+	class data_document final : public document, public autosave_source
 	{
 	public:
 		// `files`: where the project's desc files are (what desc.write asks before it replaces one is asked here too).
@@ -61,6 +62,19 @@ namespace edt
 		std::uint64_t generation() const override { return m_generation; }
 		bool can_save() const override { return m_open; }
 		save_result save() override;
+		// What a save writes for `own` (#1186): checked (validate_desc_tree), stamped, with the references a file keeps, over a
+		// file that holds `on_disk` (empty: none). Nothing is written and the document does not change; `error` names the
+		// first invalid value, and then there are no bytes.
+		struct save_form
+		{
+			boost::json::value content;
+			std::vector<std::byte> bytes;
+			std::string error;
+		};
+		save_form save_bytes(const boost::json::object& on_disk) const;
+		// The same over the file as it is on disk now.
+		save_form save_bytes() const;
+		autosave_snapshot autosave_capture() const override;
 		// Where document_changed goes (set by the document_manager): announced when what the document shows changed
 		// without an edit of its own (a parent file was written, the file itself was changed by someone else).
 		void bind_events(editor_events* events) override { m_events = events; }

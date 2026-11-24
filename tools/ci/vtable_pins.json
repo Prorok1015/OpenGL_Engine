@@ -475,6 +475,17 @@
         "~material_compiler_interface()",
         "rnd::shader_config compile(const material_desc&, const material_compile_context&)"
       ]
+    },
+    {
+      "class": "texture_resolver",
+      "header": "core/engine/render/render_system/include/snk/render/texture/rnd_texture_id.h",
+      "constant": "texture_resolver_abi_revision",
+      "revision": 1,
+      "bases": [],
+      "virtuals": [
+        "~texture_resolver()",
+        "texture_binding binding(texture_id) const"
+      ]
     }
   ],
   "retired": []

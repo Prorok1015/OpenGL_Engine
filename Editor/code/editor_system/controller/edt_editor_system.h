@@ -55,6 +55,7 @@ namespace edt {
 	class agent_component;
 	class agent_ui_component;
 	class theme_settings_component;
+	class autosave_component;
 	class file_menu_component;
 	class game_build_component;
 	class project_trust_service;
@@ -81,6 +82,7 @@ namespace edt {
 	class world_systems_panel;
 	class asset_browser_panel;
 	class prefab_editor_component;
+	class modeller_component;
 	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
@@ -98,6 +100,7 @@ namespace edt {
 		editor_context* context() const { return m_context; }
 		// The prefab editor (tests drive its close/apply/open flows through it).
 		prefab_editor_component& prefab_editor() const { return *m_prefab; }
+		modeller_component& modeller() const { return *m_modeller; }
 		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
@@ -129,6 +132,8 @@ namespace edt {
 		void tick_asset_problems();
 		// The cache of checked binary files (EPIC-79 section 7) written at most every 5 s: the `editor_assets` frame stage.
 		void tick_desc_binary_cache();
+		// Autosave of the dirty documents (#1186): the `editor_autosave` frame stage.
+		void tick_autosave();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
 		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
 		bool person_is_editing() const;
@@ -193,6 +198,9 @@ namespace edt {
 		// The prefab editor (EPIC-25, #1004): its window, its Inspector hand-over, its close question. After the panels it
 		// reaches, so it goes before them; the preview document itself is owned by the editor_context's document_manager.
 		std::unique_ptr<prefab_editor_component> m_prefab;
+
+		// The mesh modeller (EPIC-77, #1011): its window, its asset kinds and close question; the mesh documents belong to the document_manager.
+		std::unique_ptr<modeller_component> m_modeller;
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
@@ -260,6 +268,9 @@ namespace edt {
 		std::unique_ptr<agent_ui_component> m_agent_ui;
 		// The editor's theme and the Editor Settings window (#1109).
 		std::unique_ptr<theme_settings_component> m_theme_settings;
+		// Autosave (#1186): reads the documents, the level controller and the job service; destroyed before them (its files
+		// are removed by shutdown() in the destructor, once the jobs stopped).
+		std::unique_ptr<autosave_component> m_autosave;
 
 		// Set on the base resource system with a project open (#1126); taken off it and written in the destructor.
 		std::shared_ptr<res::file_desc_binary_hash_cache> m_desc_binary_cache;

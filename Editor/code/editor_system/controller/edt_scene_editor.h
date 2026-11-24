@@ -48,6 +48,9 @@ namespace edt
 		// Reloads world `index` from its desc, the editor camera kept when it is the active one.
 		bool reload_world(std::size_t index);
 		void sync_ecs_transforms_to_desc();
+		// What sync_ecs_transforms_to_desc writes, written into `worlds` (a copy of the document's world descs, same order)
+		// instead: the document is not touched (#1186). False when there is no live active world to read.
+		bool write_live_transforms_into(std::vector<scn::world_desc>& worlds) const;
 
 		// Copies a live transform into the node. A node that references a desc and has no transform of its own is
 		// placed by the referenced prefab; that placement is not the user's, so it is left alone.

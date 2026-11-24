@@ -318,3 +318,63 @@ std::vector<rnd::shader_problem> rnd::render_system::shader_problems() const
 {
 	return m_shaders->problems();
 }
+
+const rnd::texture_manager& rnd::render_system::get_texture_manager() const
+{
+	return *m_textures;
+}
+
+rnd::texture_manager& rnd::render_system::get_texture_manager()
+{
+	return *m_textures;
+}
+
+const rnd::render_targets::registry& rnd::render_system::get_render_targets() const
+{
+	return *m_targets;
+}
+
+rnd::render_targets::registry& rnd::render_system::get_render_targets()
+{
+	return *m_targets;
+}
+
+void rnd::render_system::add_render_pass(std::shared_ptr<render_pass_interface> pass)
+{
+	render_passes.push_back(std::move(pass));
+}
+
+void rnd::render_system::remove_render_pass(std::shared_ptr<render_pass_interface> pass)
+{
+	std::erase(render_passes, pass);
+}
+
+rnd::driver::driver_interface* rnd::render_system::get_driver() const
+{
+	return drv.get();
+}
+
+void rnd::render_system::set_skinning_manager(rnd::skinning_manager* sm)
+{
+	m_skinning_manager = sm;
+}
+
+rnd::skinning_manager* rnd::render_system::get_skinning_manager() const
+{
+	return m_skinning_manager;
+}
+
+void rnd::render_system::set_material_compiler(std::shared_ptr<material_compiler_interface> mc)
+{
+	m_material_compiler = std::move(mc);
+}
+
+rnd::material_compiler_interface* rnd::render_system::get_material_compiler() const
+{
+	return m_material_compiler.get();
+}
+
+rnd::material_instance_cache& rnd::render_system::material_instances()
+{
+	return *m_instances;
+}
