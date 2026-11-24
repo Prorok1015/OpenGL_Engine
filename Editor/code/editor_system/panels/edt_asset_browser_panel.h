@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
+#include "edt_asset_filter.h"
 #include "edt_asset_layers.h"
 #include "edt_asset_operation_form.h"
 #include "edt_asset_usages.h"
@@ -13,6 +14,7 @@
 
 namespace edt
 {
+	class asset_kind_registry;
 	class code_section;
 	class document_creator;
 	class document_create_form;
@@ -37,6 +39,9 @@ namespace edt
 		// window to pick a document type and a name; `on_created` gets the tag of the new file. Without a creator the menu has no
 		// such item.
 		void set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created);
+
+		// The registry the "Kinds" filter reads the kinds of modules from; null: only the fixed kinds.
+		void set_asset_kinds(const asset_kind_registry* kinds) { m_kinds = kinds; }
 
 		~asset_browser_panel() override;
 
@@ -93,6 +98,9 @@ namespace edt
 		std::filesystem::path m_selected_rel;
 		usage_list m_usages;
 		char m_search[128] = {};
+		asset_filter m_filter;
+		desc_type_cache m_desc_types;
+		const asset_kind_registry* m_kinds = nullptr;
 
 		struct entry {
 			layer_entry src;
