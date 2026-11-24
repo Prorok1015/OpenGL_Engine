@@ -672,34 +672,64 @@ BOOST_AUTO_TEST_CASE(a_module_cache_that_is_a_link_gets_no_copy_and_loses_nothin
 	BOOST_TEST(fs::is_regular_file(textures / std::format("{}-0", k_dead_pid) / "keep.txt"));
 }
 
-// A name of this process that the cleanup could not take back (a link stands there) is skipped, never entered.
+// A name of this process taken by something else (a link stands there) is skipped, never entered. The copy names
+// never repeat in a process (#1304), so the link is put at the name after the first copy's, while it is asked about.
 BOOST_AUTO_TEST_CASE(a_taken_copy_name_is_skipped)
 {
-	open({ manifest_module("test_game") });
+	open({ manifest_module("test_game"), manifest_module("extra_game") });
 	put_broken_library("test_game");
+	put_broken_library("extra_game");
 	const fs::path outside = dir.write(fs::path{ "outside" } / "keep.txt", "keep").parent_path();
 	const fs::path cache = root / ".cache" / "modules";
-	fs::create_directories(cache);
-	const fs::path taken = cache / std::format("{}-0", platform::current_process_id());
-#ifdef _WIN32
-	const std::string command = "cmd /c mklink /J \"" + taken.string() + "\" \"" + outside.string() + "\" >nul";
-	const bool linked = std::system(command.c_str()) == 0 && fs::exists(taken);
-	BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << taken.string());
-#else
-	std::error_code ec;
-	fs::create_directory_symlink(outside, taken, ec);
-	BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
-#endif
-	fs::path asked_copy;
+	const std::string prefix = std::format("{}-", platform::current_process_id());
+	const auto number_of = [&](const fs::path& copy) {
+		const std::string name = copy.parent_path().filename().string();
+		BOOST_REQUIRE(name.starts_with(prefix));
+		return std::stoull(name.substr(prefix.size()));
+	};
+	std::vector<fs::path> asked;
 	core::project_modules_options options;
 	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
-		asked_copy = copy.path;
-		return true;
+		asked.push_back(copy.path);
+		if (asked.size() == 1) {
+			const fs::path taken = cache / std::format("{}{}", prefix, number_of(copy.path) + 1);
+#ifdef _WIN32
+			const std::string command = "cmd /c mklink /J \"" + taken.string() + "\" \"" + outside.string() + "\" >nul";
+			const bool linked = std::system(command.c_str()) == 0 && fs::exists(taken);
+			BOOST_REQUIRE_MESSAGE(linked, "mklink /J failed at " << taken.string());
+#else
+			std::error_code ec;
+			fs::create_directory_symlink(outside, taken, ec);
+			BOOST_REQUIRE_MESSAGE(!ec, "no symlink: " << ec.message());
+#endif
+		}
+		return false;
 	};
 	load(options);
 
-	BOOST_TEST(asked_copy.parent_path().filename() == std::format("{}-1", platform::current_process_id()));
+	BOOST_REQUIRE_EQUAL(asked.size(), 2u);
+	BOOST_TEST(number_of(asked[1]) == number_of(asked[0]) + 2);
 	BOOST_TEST(files_in(outside) == std::vector<std::string>{ "keep.txt" }, "nothing was copied through the link");
+}
+
+// #1304 review: a name is never used for a second copy in a process, so the loader cannot hand back the image of an
+// earlier copy it still maps by that name.
+BOOST_AUTO_TEST_CASE(copy_names_never_repeat_in_a_process)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	std::vector<fs::path> asked;
+	core::project_modules_options options;
+	options.trust_library = [&](std::string_view, const core::library_copy& copy) {
+		asked.push_back(copy.path.parent_path().filename());
+		return false;
+	};
+	load(options);
+	load(options);
+
+	BOOST_REQUIRE_EQUAL(asked.size(), 2u);
+	BOOST_TEST(asked[0] != asked[1]);
+	BOOST_TEST(files_in(root / ".cache" / "modules").empty(), "an untrusted copy is not kept");
 }
 
 // A read-only project keeps its copies in the run's scratch folder, reached from it by literal names too.

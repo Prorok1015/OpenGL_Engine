@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <atomic>
 #include <filesystem>
 #include <format>
 #include <map>
@@ -35,6 +36,10 @@ namespace {
 	namespace fs = std::filesystem;
 
 	constexpr int k_max_copies = 1000;
+
+	// The <n> of the next copy folder <pid>-<n>: never the same twice in a process, so a name the loader saw once never
+	// names another copy (#1304).
+	std::atomic<std::uint64_t> g_next_copy{ 0 };
 
 	// path::string() throws on Windows for a name outside the ANSI code page.
 	std::string utf8(const fs::path& path)
@@ -291,18 +296,20 @@ namespace {
 		std::error_code ec;
 		const std::int64_t pid = platform::current_process_id();
 		fs::path folder;
-		for (int n = 0; n < k_max_copies && folder.empty(); ++n) {
-			const fs::path candidate = cache / std::format("{}-{}", pid, n);
+		platform::beneath::folder_identity made;
+		for (int attempt = 0; attempt < k_max_copies && folder.empty(); ++attempt) {
+			const fs::path candidate = cache / std::format("{}-{}", pid, g_next_copy.fetch_add(1));
 			std::error_code status_ec;
 			if (fs::symlink_status(candidate, status_ec).type() != fs::file_type::not_found) {
 				continue;
 			}
 			const fs::path below = home.below / candidate.filename();
 			// Closed to others before anything is in it: nobody else can open, add or rename an entry in it.
-			std::string problem = platform::beneath::make_new_folder_beneath(pinned, below, 0700);
+			std::string problem = platform::beneath::make_new_folder_beneath(pinned, below, 0700, &made);
 			if (!problem.empty()) {
+				// A home that cannot make a private folder (a file system without the ACLs) is not one for the copy.
 				why = std::format("cannot make '{}': {}", utf8(candidate), problem);
-				return copy_outcome::failed;
+				return copy_outcome::not_held_here;
 			}
 			folder = candidate;
 		}
@@ -330,13 +337,18 @@ namespace {
 		}
 		std::vector<fs::path> copied{ library.filename() };
 		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
-			fs::path real;
-			if (it->path().filename() == library.filename() || !travels_with_module(it->path())
-				|| !file_inside(output, it->path(), real).empty()) {
+			if (it->path().filename() == library.filename() || !travels_with_module(it->path())) {
 				continue;
 			}
-			if (!copy_into(home, real, folder, it->path().filename()).empty()) {
-				continue;
+			// A sibling left behind would be looked for by the loader elsewhere: the copy is refused instead.
+			fs::path real;
+			if (std::string problem = file_inside(output, it->path(), real); !problem.empty()) {
+				return fail(copy_outcome::failed, std::format("cannot copy '{}' with '{}': {}", utf8(it->path()),
+					utf8(library), problem));
+			}
+			if (std::string problem = copy_into(home, real, folder, it->path().filename()); !problem.empty()) {
+				return fail(copy_outcome::failed, std::format("cannot copy '{}' with '{}': {}", utf8(real),
+					utf8(library), problem));
 			}
 			copied.push_back(it->path().filename());
 			if (is_library(real)) {
@@ -344,10 +356,13 @@ namespace {
 				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
 			}
 		}
+		if (ec) {
+			return fail(copy_outcome::failed, std::format("cannot list '{}': {}", utf8(output), ec.message()));
+		}
 
 		// Held, then hashed through the hold: what the gate is told is what the loader reads.
 		platform::beneath::hold_result held =
-			platform::beneath::hold_folder_beneath(pinned, home.below / folder.filename(), copied);
+			platform::beneath::hold_folder_beneath(pinned, home.below / folder.filename(), made, copied);
 		if (held.status == platform::beneath::hold_status::not_private) {
 			return fail(copy_outcome::not_held_here, std::move(held.error));
 		}

@@ -560,7 +560,8 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 						  : std::string{};
 }
 
-std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode)
+std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode,
+	folder_identity* made)
 {
 	auto parts = folder_parts(folder);
 	if (!parts || parts->empty()) {
@@ -582,6 +583,14 @@ std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const 
 	if (::mkdirat(parent.get(), last.c_str(), static_cast<mode_t>(mode)) != 0) {
 		return errno == EEXIST ? std::format("'{}' already exists", fs_paths::utf8_of(reached))
 							   : errno_text("cannot make", reached);
+	}
+	if (made) {
+		const fd_holder opened{ ::openat(parent.get(), last.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) };
+		struct stat information;
+		if (opened.get() < 0 || ::fstat(opened.get(), &information) != 0) {
+			return errno_text("cannot inspect the folder just made", reached);
+		}
+		*made = { static_cast<std::uint64_t>(information.st_ino), static_cast<std::uint64_t>(information.st_dev) };
 	}
 	return {};
 }
@@ -889,7 +898,7 @@ bool platform::beneath::held_folder::read(const fs::path& name, const chunk_sink
 }
 
 platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_root& root, const fs::path& folder,
-	std::span<const fs::path> names)
+	const folder_identity& made, std::span<const fs::path> names)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || parts->empty() || !std::ranges::all_of(names, is_plain_name)) {
@@ -912,6 +921,11 @@ platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_roo
 	struct stat information;
 	if (::fstat(kept->folder.get(), &information) != 0) {
 		return hold_refused(hold_status::failed, errno_text("cannot inspect", reached));
+	}
+	if (folder_identity{ static_cast<std::uint64_t>(information.st_ino), static_cast<std::uint64_t>(information.st_dev) }
+		!= made) {
+		return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
+			fs_paths::utf8_of(reached)));
 	}
 	if (information.st_uid != self || (information.st_mode & 077) != 0) {
 		return hold_refused(hold_status::not_private, std::format("'{}' is not a folder of this user closed to others "
@@ -1730,7 +1744,8 @@ std::string platform::beneath::make_folders_beneath(pinned_root& root, const fs:
 		: std::string{};
 }
 
-std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode)
+std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const fs::path& folder, std::uint32_t mode,
+	folder_identity* made)
 {
 	auto parts = folder_parts(folder);
 	if (!parts || parts->empty()) {
@@ -1749,17 +1764,25 @@ std::string platform::beneath::make_new_folder_beneath(pinned_root& root, const 
 		return last_error_text("cannot make the folder (a link, a junction, or not a folder, on the way)", reached);
 	}
 	reached /= last;
-	const handle_holder made = open_in(chain.last(), last, k_folder_access, k_folder_share, FILE_CREATE,
+	const handle_holder created = open_in(chain.last(), last, k_folder_access, k_folder_share, FILE_CREATE,
 		FILE_DIRECTORY_FILE, true, private_security.descriptor);
-	if (!made.valid()) {
+	if (!created.valid()) {
 		const DWORD code = ::GetLastError();
 		const bool exists = code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS;
 		return exists ? std::format("'{}' already exists", fs_paths::utf8_of(reached))
 					  : last_error_text("cannot make", reached);
 	}
-	if (!lies_at(made.get(), chain.root_path, *parts, last, unnormalized::refuse)) {
+	if (!lies_at(created.get(), chain.root_path, *parts, last, unnormalized::refuse)) {
 		::SetLastError(ERROR_CANT_ACCESS_FILE);
 		return last_error_text("the folder was not made below the root under these names", reached);
+	}
+	if (made) {
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(created.get(), &information)) {
+			return last_error_text("cannot inspect the folder just made", reached);
+		}
+		*made = { (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow,
+			static_cast<std::uint64_t>(information.dwVolumeSerialNumber) };
 	}
 	return {};
 }
@@ -2093,7 +2116,7 @@ bool platform::beneath::held_folder::read(const fs::path& name, const chunk_sink
 }
 
 platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_root& root, const fs::path& folder,
-	std::span<const fs::path> names)
+	const folder_identity& made, std::span<const fs::path> names)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || parts->empty() || !std::ranges::all_of(names, is_plain_name)) {
@@ -2120,9 +2143,28 @@ platform::beneath::hold_result platform::beneath::hold_folder_beneath(pinned_roo
 			|| !same_file(held_information, inspected_information)) {
 			return hold_refused(hold_status::failed, last_error_text("cannot read the permissions of", reached));
 		}
+		const folder_identity held_identity{ (static_cast<std::uint64_t>(held_information.nFileIndexHigh) << 32)
+				| held_information.nFileIndexLow, static_cast<std::uint64_t>(held_information.dwVolumeSerialNumber) };
+		if (held_identity != made) {
+			return hold_refused(hold_status::failed, std::format("'{}' is not the folder made for the copy",
+				fs_paths::utf8_of(reached)));
+		}
 		if (std::string why = not_private_reason(inspected.get()); !why.empty()) {
 			return hold_refused(hold_status::not_private, std::format("'{}' is not a folder of this user closed to "
 				"others: {}", fs_paths::utf8_of(reached), why));
+		}
+	}
+	{
+		// The loader looks for a library's dependencies in its folder first: nothing may be there but the copy.
+		std::vector<std::wstring> present;
+		if (!list_folder(kept->chain.last(), present)) {
+			return hold_refused(hold_status::failed, last_error_text("cannot list", reached));
+		}
+		for (const auto& entry : present) {
+			if (std::ranges::find(names, fs::path{ entry }) == names.end()) {
+				return hold_refused(hold_status::failed, std::format("'{}' holds '{}', which was not put there",
+					fs_paths::utf8_of(reached), fs_paths::utf8_of(fs::path{ entry })));
+			}
 		}
 	}
 	for (const auto& name : names) {
