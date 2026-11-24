@@ -339,8 +339,8 @@ BOOST_AUTO_TEST_CASE(StoredBoundsTheLoaderBuilds_AreMigrated)
 	BOOST_TEST(desc.contains("bounds"));
 }
 
-// A run stopped between creating the binary file and its journal leaves that very file beside the unchanged desc: the
-// next run takes it as it is (it is not the run's to delete on a rollback, so it is not listed as created).
+// A run of an older engine stopped between creating the binary file and its journal left that very file beside the
+// unchanged desc: the next run takes it as it is (it is not the run's to delete on a rollback, so it is not listed as created).
 BOOST_AUTO_TEST_CASE(TheBinaryFileOfAnInterruptedRun_IsTakenAsItIs)
 {
 	const std::string arrays = arrays_desc({ 0, 1, 2 });
@@ -366,6 +366,32 @@ BOOST_AUTO_TEST_CASE(TheBinaryFileOfAnInterruptedRun_IsTakenAsItIs)
 	const std::string problem = rnd::decode_geometry_files(res::tag{ "res://geom/tri.geom.desc" }, desc, bytes_of(binary), read);
 	BOOST_REQUIRE_MESSAGE(problem.empty(), problem);
 	BOOST_TEST((read.vertices == vertex_bytes()));
+}
+
+// #1278: only the very bytes are taken; a .bin that differs from them in one byte is not ours and stays, as any other.
+BOOST_AUTO_TEST_CASE(ABinaryFileOneByteOff_IsNotTaken_AndLeavesTheDescAsItIs)
+{
+	const std::string arrays = arrays_desc({ 0, 1, 2 });
+	write_text(at(k_desc), arrays);
+	rnd::geometry_desc geometry;
+	const json::object parsed = json::parse(arrays).as_object();
+	BOOST_REQUIRE(rnd::decode_geometry_files(res::tag{ k_desc }, parsed, {}, geometry).empty());
+	const rnd::geometry_files pair = rnd::encode_geometry_files(res::tag{ k_desc }, geometry);
+	BOOST_REQUIRE(pair);
+	std::string binary(reinterpret_cast<const char*>(pair.binary.data()), pair.binary.size());
+	BOOST_REQUIRE(!binary.empty());
+	binary.back() = static_cast<char>(binary.back() ^ 0x01);
+	write_text(at(k_binary), binary);
+
+	const pmg::migration_plan planned_now = plan();
+	BOOST_REQUIRE(planned(planned_now));
+	const pmg::apply_outcome outcome = pmg::apply_migration(planned_now, context());
+	BOOST_REQUIRE_MESSAGE(outcome.report.status == pmg::migration_status::ok, outcome.report.error);
+	BOOST_TEST(any_note(outcome.report, std::string(k_desc) + ": not migrated: " + std::string(k_binary) + " is already beside it"));
+	BOOST_TEST(!any_note(outcome.report, "which an interrupted run had already written"));
+	BOOST_TEST(read_text(at(k_desc)) == arrays);
+	BOOST_TEST(read_text(at(k_binary)) == binary);
+	BOOST_TEST(outcome.report.created_files.empty());
 }
 
 // A geometry desc over the scan's limit is not read: it is listed as not migrated, and the migration is not refused for
