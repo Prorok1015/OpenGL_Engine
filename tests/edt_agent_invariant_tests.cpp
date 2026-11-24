@@ -1132,11 +1132,12 @@ struct desc_problems_fixture : agent_editor_fixture
 		// so a slow shared runner cannot run out of frames first.
 		const auto* window = dynamic_cast<edt::prefab_editor_panel*>(editor().context()->panels().find("prefab_editor"));
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-		while (window && window->loading() && std::chrono::steady_clock::now() < deadline) {
+		do {
 			test_util::pump(tasks);
 			gui().run_without_drawing([this] { editor().run_implicit_callbacks(); });
+			if (!window || !window->loading()) break;
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
-		}
+		} while (std::chrono::steady_clock::now() < deadline);
 		BOOST_REQUIRE_MESSAGE(!window || !window->loading(), "the prefab was still loading after 5 s");
 	}
 
