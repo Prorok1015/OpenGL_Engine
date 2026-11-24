@@ -378,7 +378,17 @@ prj::leaving_links prj::links_leaving_project(const fs::path& dir, const fs::pat
 			continue;
 		}
 		std::error_code resolve_error;
-		const fs::path target = fs::weakly_canonical(it->path(), resolve_error);
+		// A link whose target is gone is judged by where it points: weakly_canonical would stop at the link and answer
+		// with the link's own (inside) place.
+		fs::path target;
+		if (fs::exists(it->path(), resolve_error)) {
+			target = fs::weakly_canonical(it->path(), resolve_error);
+		} else {
+			const fs::path written = fs::read_symlink(it->path(), resolve_error);
+			if (!resolve_error) {
+				target = fs::weakly_canonical(written.is_absolute() ? written : it->path().parent_path() / written, resolve_error);
+			}
+		}
 		const bool into_private = !resolve_error
 			&& std::ranges::any_of(real_private, [&target](const fs::path& private_dir) { return is_inside(private_dir, target); });
 		if (resolve_error || !is_inside(real_root, target) || into_private) {
