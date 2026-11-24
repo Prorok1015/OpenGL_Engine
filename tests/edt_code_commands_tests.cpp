@@ -448,6 +448,27 @@ BOOST_AUTO_TEST_CASE(AFolderLinkedOutOfCode_IsNeitherListedNorRead)
 	BOOST_TEST(read.value.as_object().if_contains("text") == nullptr);
 }
 
+BOOST_AUTO_TEST_CASE(ALinkThatLeavesCode_IsRefusedToEveryOrigin_ReadingThroughItIsTheBuildsAndAnIdesWork)
+{
+	dir.write("project/res/levels/secret.cpp", "secret");
+	std::error_code ec;
+	fs::create_directory_symlink(content / "levels", code / "src" / "linked", ec);
+	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	fs::create_symlink(content / "levels" / "secret.cpp", code / "src" / "file_link.cpp", ec);
+	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+
+	for (const cmd::origin& from : { cmd::origin::agent("s1"), cmd::origin::ui(), cmd::origin::test() }) {
+		const auto through_folder = call("code.read", json::object{ { "path", "src/linked/secret.cpp" } }, from);
+		BOOST_TEST(through_folder.code == cmd::codes::failed);
+		BOOST_TEST(through_folder.value.as_object().if_contains("text") == nullptr);
+		const auto file_link = call("code.read", json::object{ { "path", "src/file_link.cpp" } }, from);
+		BOOST_TEST(file_link.code == cmd::codes::failed);
+		BOOST_TEST(file_link.value.as_object().if_contains("text") == nullptr);
+		BOOST_TEST(call("code.list", json::object{ { "dir", "src/linked" } }, from).code == cmd::codes::failed);
+	}
+	BOOST_TEST(read_file(content / "levels" / "secret.cpp") == "secret");
+}
+
 BOOST_AUTO_TEST_CASE(NoChangeGoesThroughAFolderLinkedOutOfCode)
 {
 	dir.write("project/res/levels/secret.cpp", "secret");
