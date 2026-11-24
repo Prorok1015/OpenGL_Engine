@@ -507,8 +507,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	// EPIC-58 (#759, #761): the migration commands, the Project Migration window and the offer to roll an unfinished migration
-	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs, or before the
-	// asset index is ready (busy), and with an uncommitted edit or any dirty document (needs_input).
+	// back. Refused while Play, a load, a build or a module reload, an import, the export dialog or a git write runs, or (not the
+	// rollback) before the asset index is ready (busy), and with an uncommitted edit or any dirty document (needs_input).
 	m_migration = std::make_unique<migration_component>(migration_component::ports{
 		.context = *m_context, .services = m_services, .resources = m_res, .layer = *editor_layer, .level_ctrl = m_level_ctrl,
 		.state = m_state, .prefab = *m_prefab, .asset_open = *m_asset_open, .level_load = *m_level_load,

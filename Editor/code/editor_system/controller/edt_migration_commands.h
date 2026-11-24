@@ -35,6 +35,10 @@ namespace edt
 	// report waits meanwhile (resource_system::hold_changes). The job answers with the report. Main thread only.
 	// project.migrate_rollback {id, journal_fingerprint?} (#761, #910) runs prj::migration::rollback_migration through the same run (modal, hand-over
 	// to the io work, hold, documents closed and the level opened again) and answers as editor --migrate-rollback exits.
+	// A `busy` answer that waits for the asset index carries {k_index_wait_key: true} in its value (#1278): the code stays
+	// `busy`, which agent_confirmations retries, and the window tells it apart.
+	inline constexpr std::string_view k_index_wait_key = "index_wait";
+
 	struct migration_deps
 	{
 		explicit migration_deps(job_service& job_service_) : jobs(job_service_) {}
@@ -51,7 +55,8 @@ namespace edt
 		// Why nothing may migrate now (Play, a load, a build or reload, an import); nullopt: it may.
 		std::function<std::optional<std::string>()> busy_reason;
 		// Why the asset index is not ready (#1278); nullopt or null: ready. A plan made before it misjudges what is over the
-		// engine's base, so the plan, the question, the migration and the rollback are `busy` until then.
+		// engine's base, so the plan, the question and the migration are `busy` until then. The rollback makes no plan and
+		// does not wait: right after a migration the index is pending again for the files it rewrote.
 		std::function<std::optional<std::string>()> index_wait;
 		// Unsaved changes of a document; nullopt: none.
 		std::function<std::optional<std::string>()> unsaved_reason;

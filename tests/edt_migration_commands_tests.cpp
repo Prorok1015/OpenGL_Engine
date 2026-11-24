@@ -5,6 +5,8 @@
 #include "test_temp_dir.hpp"
 #include "test_watchdog.hpp"
 #include "edt_agent_policy.h"
+#include "edt_asset_database.h"
+#include "edt_asset_index.h"
 #include "edt_migration_commands.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_job_service.h>
@@ -99,7 +101,7 @@ struct migration_fixture : test_util::scene_env
 		deps.descs = [this]() -> desc::desc_system& { return *descs; };
 		deps.resources = [this]() -> res::resource_system& { return *rs; };
 		deps.busy_reason = [this] { return busy; };
-		deps.index_wait = [this] { return index_pending; };
+		deps.index_wait = [this] { return index_link ? edt::asset_index_wait(index_link) : index_pending; };
 		deps.unsaved_reason = [this] { return unsaved; };
 		deps.close_documents_and_detach_level = [this] {
 			closed = true;
@@ -282,6 +284,8 @@ struct migration_fixture : test_util::scene_env
 	std::optional<std::string> busy;
 	// The editor's asset index is not ready (#1278); nullopt: ready, as in every test that does not set it.
 	std::optional<std::string> index_pending;
+	// A real link instead of index_pending; null: index_pending.
+	const edt::asset_index_link* index_link = nullptr;
 	std::optional<std::string> unsaved;
 	res::tag current_level;
 	bool closed = false;
@@ -968,7 +972,7 @@ BOOST_AUTO_TEST_CASE(UnsavedChanges_NeedInput_AndABusyEditor_IsBusy)
 }
 
 // #1278: before the editor's asset index is attached a plan misjudges materials over the engine's base and lists them as
-// invalid. The plan, the question, the migration and the rollback wait with the index's reason; after it, the normal plan.
+// invalid. The plan, the question and the migration wait with the index's reason; after it, the normal plan.
 BOOST_AUTO_TEST_CASE(APendingAssetIndex_IsBusy_AndNoPlanIsMadeBeforeIt)
 {
 	fs::remove(copy.res() / "broken.desc");
@@ -979,6 +983,7 @@ BOOST_AUTO_TEST_CASE(APendingAssetIndex_IsBusy_AndNoPlanIsMadeBeforeIt)
 	BOOST_TEST(!waiting.ok);
 	BOOST_TEST(waiting.code == cmd::codes::busy);
 	BOOST_TEST(waiting.error == *index_pending);
+	BOOST_TEST(waiting.value.at(edt::k_index_wait_key).as_bool());
 	const std::string question = ask();
 	BOOST_TEST(question.find("will be refused: " + *index_pending) != std::string::npos, question);
 	BOOST_TEST(question.find("Not migrated") == std::string::npos, question);
@@ -989,7 +994,7 @@ BOOST_AUTO_TEST_CASE(APendingAssetIndex_IsBusy_AndNoPlanIsMadeBeforeIt)
 	const cmd::result person = call("project.migrate", {}, cmd::origin::ui());
 	BOOST_TEST(person.code == cmd::codes::busy);
 	BOOST_TEST(person.error == *index_pending);
-	BOOST_TEST(call("project.migrate_rollback", { { "id", "m1" } }, cmd::origin::ui()).code == cmd::codes::busy);
+	BOOST_TEST(person.value.at(edt::k_index_wait_key).as_bool());
 	BOOST_TEST(implicit.empty());
 	BOOST_TEST(!closed);
 	BOOST_TEST((snapshot(copy.root()) == before));
@@ -1009,6 +1014,50 @@ BOOST_AUTO_TEST_CASE(APendingAssetIndex_IsBusy_AndNoPlanIsMadeBeforeIt)
 	const json::object result = migrate();
 	BOOST_TEST(error_code_of(result).empty(), json::serialize(result));
 	BOOST_TEST(result.contains("id"));
+}
+
+// #1278: the rollback makes no plan and does not wait for the index, which its migration's own writes keep pending: it
+// runs at the call and at the frame that checks again.
+BOOST_AUTO_TEST_CASE(ARollback_DoesNotWaitForTheAssetIndex)
+{
+	fs::remove(copy.res() / "broken.desc");
+	const auto before = content();
+	const std::string id = migrated();
+	index_pending = "the asset index is still being built; 3 file(s) are still being hashed";
+	BOOST_TEST(call("project.migration_plan").code == cmd::codes::busy);
+	const json::object result = roll_back(id);
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done);
+	BOOST_TEST((content() == before));
+}
+
+// #1278 with the editor's own link: not attached, the plan waits with its text; attached after a walk of an empty layer
+// (nothing to hash, no ID to wait for), the normal plan.
+BOOST_AUTO_TEST_CASE(ARealAssetIndexLink_HoldsThePlanUntilItIsAttached)
+{
+	fs::remove(copy.res() / "broken.desc");
+	test_util::temp_dir layer{ "migration_index_layer" };
+	edt::asset_database assets(jobs, nullptr, { layer.path() });
+	edt::asset_index_link link(assets, *rs);
+	index_link = &link;
+
+	const cmd::result waiting = call("project.migration_plan");
+	BOOST_TEST(!waiting.ok);
+	BOOST_TEST(waiting.code == cmd::codes::busy);
+	BOOST_TEST(waiting.error == std::string(edt::k_guid_index_pending));
+
+	assets.rebuild();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+	while (link.pending() && std::chrono::steady_clock::now() < deadline) {
+		job_tasks.drain_main(std::chrono::milliseconds(1));
+		link.poll();
+	}
+	BOOST_REQUIRE(link.attached());
+	BOOST_REQUIRE(!link.pending());
+	const cmd::result planned = call("project.migration_plan");
+	BOOST_REQUIRE_MESSAGE(planned.ok, planned.error);
+	BOOST_TEST(planned.value.at("code").as_int64() == pmg::k_exit_migration_needed);
+	index_link = nullptr;
 }
 
 // A second migration while one runs is busy.

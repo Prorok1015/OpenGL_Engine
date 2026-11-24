@@ -118,6 +118,12 @@ namespace {
 		return json::object{ { "error", json::object{ { "code", code }, { "message", message } } } };
 	}
 
+	cmd::result index_wait_refusal(cmd::result refused)
+	{
+		refused.value = json::object{ { edt::k_index_wait_key, true } };
+		return refused;
+	}
+
 	// FNV-1a 64.
 	class fnv1a_hash
 	{
@@ -689,7 +695,7 @@ namespace {
 		{
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root) return cmd::result::failure(k_no_project, "no project is open");
-			if (auto why = index_wait()) return cmd::result::failure(cmd::codes::busy, *why);
+			if (auto why = index_wait()) return index_wait_refusal(cmd::result::failure(cmd::codes::busy, *why));
 			const pmg::migration_plan plan = make_plan(*root);
 			json::object planned = plan_json(plan);
 			const std::vector<std::string> unfinished = pmg::unfinished_migrations(*root);
@@ -773,7 +779,8 @@ namespace {
 				return cmd::result::failure(std::move(code), std::move(message));
 			};
 			if (m_running) return refuse(cmd::codes::busy, "a migration of the project is already running");
-			if (auto why = busy_now()) return refuse(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return refuse(cmd::codes::busy, *why);
+			if (auto why = index_wait()) return index_wait_refusal(refuse(cmd::codes::busy, *why));
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return refuse(cmd::codes::needs_input, *why);
 
 			auto run = std::make_shared<migration_run>();
@@ -832,7 +839,7 @@ namespace {
 				return cmd::result::failure(std::move(code), std::move(message));
 			};
 			if (m_running) return refuse(cmd::codes::busy, "a migration or a rollback of the project is already running");
-			if (auto why = busy_now()) return refuse(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return refuse(cmd::codes::busy, *why);
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return refuse(cmd::codes::needs_input, *why);
 
 			auto run = std::make_shared<migration_run>();
@@ -996,10 +1003,9 @@ namespace {
 			return m_deps.index_wait ? m_deps.index_wait() : std::nullopt;
 		}
 
-		std::optional<std::string> busy_now() const
+		std::optional<std::string> busy_reason_now() const
 		{
-			if (auto why = m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt) return why;
-			return index_wait();
+			return m_deps.busy_reason ? m_deps.busy_reason() : std::nullopt;
 		}
 
 		pmg::migration_plan make_plan(const fs::path& root) const
@@ -1084,7 +1090,9 @@ namespace {
 			if (run.abandoned->load()) return error_value(cmd::codes::failed, "the job was cancelled: nothing was written");
 			const std::optional<fs::path> root = m_deps.project_root ? m_deps.project_root() : std::nullopt;
 			if (!root || *root != run.root) return error_value(k_no_project, "the project is not open any more: nothing was written");
-			if (auto why = busy_now()) return error_value(cmd::codes::busy, *why);
+			if (auto why = busy_reason_now()) return error_value(cmd::codes::busy, *why);
+			// The rollback does not wait for the index: its migration's own writes keep it pending.
+			if (auto why = run.rollback ? std::optional<std::string>{} : index_wait()) return error_value(cmd::codes::busy, *why);
 			if (auto why = m_deps.unsaved_reason ? m_deps.unsaved_reason() : std::nullopt) return error_value(cmd::codes::needs_input, *why);
 			return std::nullopt;
 		}
@@ -1430,8 +1438,8 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	cmd::command_desc rollback;
 	rollback.id = "project.migrate_rollback";
 	rollback.summary = "Roll back a migration of the open project from its journal and backup in .snk/migrations/<id> (as editor "
-		"--migrate-rollback <id>) after a person approved it. Refused while Play runs, a level loads or a build runs (`busy`) and with "
-		"unsaved changes (`needs_input`). Open documents are closed and the level is opened again; the job's result is "
+		"--migrate-rollback <id>) after a person approved it. Refused while Play runs, a level loads or a build runs (`busy`; it does "
+		"not wait for the asset index) and with unsaved changes (`needs_input`). Open documents are closed and the level is opened again; the job's result is "
 		"{code, status, id, text}: code 0 rolled back, 2 refused (nothing written), 6 put back only in part";
 	rollback.args_schema = parse_schema(k_rollback_args_schema);
 	rollback.result_schema = parse_schema(k_job_result_schema);

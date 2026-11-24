@@ -158,6 +158,7 @@ void edt::migration_component::install(std::vector<registration>& out, const std
 			if (project == nullptr) return rollback_listing{ "no project is open", {}, {} };
 			return rollback_listing_of(project->root, id);
 		};
+		window.index_wait = m_ports.index_wait;
 		m_panel = std::make_shared<migration_panel>(m_ports.context.events(), std::move(window));
 		add_panel(m_panel);
 		out.push_back(register_migration_window_action(m_ports.context.actions(),

@@ -79,6 +79,7 @@ void edt::migration_panel::on_render()
 		m_planning_drawn = false;
 		m_model.tick();
 	}
+	m_model.poll_index();
 	switch (m_model.state()) {
 	case migration_window_model::phase::idle: draw_idle(); break;
 	case migration_window_model::phase::planning:
