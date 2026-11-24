@@ -1153,6 +1153,17 @@ BOOST_AUTO_TEST_CASE(CreateVariant_ATakenName_GetsANumber_AndANamedOneThatIsTake
 	BOOST_TEST(again.error.find("already exists") != std::string::npos);
 }
 
+// #1279 review: the suggestion skips what the layers hold and what the editor's own rules refuse, as the loop over check did.
+BOOST_AUTO_TEST_CASE(TheSuggestedVariantName_PassesOverTakenAndRefusedCandidates)
+{
+	const auto creator = variant_creator();
+	write(res_root, "prefabs/a_variant.prefab.desc", "{}");
+	write(lower, "prefabs/A_Variant2.prefab.desc.resource", "{}");
+	BOOST_TEST(creator.suggested_name(res::tag::make("prefabs/a.prefab.desc")) == "a_variant3");
+	// The asset list hides a leading dot: no number makes that name acceptable, so nothing is suggested.
+	BOOST_TEST(creator.suggested_name(res::tag::make("prefabs/.hidden.prefab.desc")).empty());
+}
+
 BOOST_AUTO_TEST_CASE(CreateVariant_OfSomethingThatIsNoPrefab_OrWhileTheProjectIsLocked_IsRefusedWritingNothing)
 {
 	BOOST_TEST(!variant_creator().create(res::tag::make("prefabs/a.desc"), "x").ok());
