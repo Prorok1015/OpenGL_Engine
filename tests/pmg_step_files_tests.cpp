@@ -16,6 +16,7 @@
 #include <snk/project/prj_json_text.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -116,13 +117,30 @@ bool is_journal(const fs::path& relative)
 	return relative.generic_string().ends_with("/report.json");
 }
 
-// Whether the journal text names `path` among its created_files.
-bool journal_lists(std::string_view text, std::string_view path)
+// The path of an entry of created_files: the entry itself in a journal of format 1, its `path` since #1346.
+std::string_view created_path(const json::value& entry)
+{
+	if (entry.is_string()) return entry.as_string();
+	const json::value* path = entry.is_object() ? entry.as_object().if_contains("path") : nullptr;
+	return path && path->is_string() ? std::string_view(path->as_string()) : std::string_view{};
+}
+
+// The entry of `path` in the journal text's created_files; none when it is not listed.
+std::optional<json::value> created_entry_of(std::string_view text, std::string_view path)
 {
 	const json::value journal = json::parse(text);
 	const json::value* created = journal.as_object().if_contains("created_files");
-	if (!created || !created->is_array()) return false;
-	return std::ranges::any_of(created->as_array(), [path](const json::value& entry) { return entry.is_string() && entry.as_string() == path; });
+	if (!created || !created->is_array()) return std::nullopt;
+	for (const json::value& entry : created->as_array()) {
+		if (created_path(entry) == path) return entry;
+	}
+	return std::nullopt;
+}
+
+// Whether the journal text names `path` among its created_files.
+bool journal_lists(std::string_view text, std::string_view path)
+{
+	return created_entry_of(text, path).has_value();
 }
 
 pmg::project_step test_step(std::string id, pmg::project_phase phase, void (*apply)(pmg::project_step_context&))
@@ -303,7 +321,7 @@ BOOST_AUTO_TEST_CASE(PreRunsBeforeTheTypes_PostAfter_AndSeesWhatPreCreated)
 	BOOST_TEST((outcome.report.created_files == std::vector<std::string>{ std::string(k_plain_meta) }));
 	const json::value journal = json::parse(read_text(copy.root() / ".snk/migrations/test-migration/report.json"));
 	BOOST_TEST(journal.at("created_files").as_array().size() == 1u);
-	BOOST_TEST(journal.at("created_files").as_array()[0].as_string() == k_plain_meta);
+	BOOST_TEST(created_path(journal.at("created_files").as_array()[0]) == k_plain_meta);
 	BOOST_TEST(read_text(copy.root() / k_plain_meta) == new_meta_text());
 	BOOST_TEST((std::ranges::find(outcome.report.project_notes, "test.pre: created a .resource") != outcome.report.project_notes.end()));
 	// project.snkproj stays the last file of the report.
@@ -601,9 +619,13 @@ BOOST_AUTO_TEST_CASE(ACreatedFile_IsInTheJournal_BeforeItIsThere)
 	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_the_resource));
 	pmg::apply_context hooked = context();
 	std::optional<bool> there_when_listed;
+	std::optional<json::value> first_entry;
 	const fs::path created = copy.root() / k_plain_meta;
 	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
-		if (is_journal(relative) && !there_when_listed && journal_lists(text, k_plain_meta)) there_when_listed = fs::exists(created);
+		if (is_journal(relative) && !there_when_listed && journal_lists(text, k_plain_meta)) {
+			there_when_listed = fs::exists(created);
+			first_entry = created_entry_of(text, k_plain_meta);
+		}
 		return prj::write_project_file(root, relative, text);
 	};
 	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
@@ -612,6 +634,11 @@ BOOST_AUTO_TEST_CASE(ACreatedFile_IsInTheJournal_BeforeItIsThere)
 	BOOST_REQUIRE(there_when_listed.has_value());
 	BOOST_TEST(!*there_when_listed);
 	BOOST_TEST(fs::exists(created));
+	// #1346: the first entry already carries the hash and size of what the create writes.
+	BOOST_REQUIRE(first_entry && first_entry->is_object());
+	const std::string text = new_meta_text();
+	BOOST_TEST(first_entry->at("hash_after").as_string() == pmg::journal_hash(text));
+	BOOST_TEST(first_entry->at("size_after").to_number<std::uint64_t>() == text.size());
 }
 
 // The journal write that would name the file fails (a crash there): nothing is created, the run rolls back.
@@ -699,7 +726,9 @@ BOOST_AUTO_TEST_CASE(ANameTakenByOurOwnBytes_IsTheCreate_AndStaysInTheJournal)
 	const json::value journal = final_journal();
 	const json::array& created = journal.at("created_files").as_array();
 	BOOST_REQUIRE(created.size() == 1u);
-	BOOST_TEST(created[0].as_string() == k_plain_meta);
+	BOOST_TEST(created_path(created[0]) == k_plain_meta);
+	// The bytes at the name are the step's: the hash the journal took before the create matches them.
+	BOOST_TEST(created[0].at("hash_after").as_string() == pmg::journal_hash(new_meta_text()));
 	BOOST_TEST(read_text(copy.root() / k_plain_meta) == new_meta_text());
 
 	const auto error = pmg::rollback_migration(copy.root(), "test-migration");
@@ -793,6 +822,149 @@ BOOST_AUTO_TEST_CASE(AJournalThatCannotDropTheEntry_StopsTheRun_EvenWhenTheStepG
 	BOOST_TEST(outcome.report.error.find("injected journal failure") != std::string::npos, outcome.report.error);
 	BOOST_TEST(outcome.report.project_steps == ran_before, boost::test_tools::per_element());
 	BOOST_TEST(outcome.report.created_files.empty());
+	BOOST_TEST((content_of(copy.root()) == expected));
+}
+
+// #1346 (the second window of #1354): the entry of a refused create cannot leave the journal, and no later journal write
+// goes through either, so the journal on the disk still names the other writer's file with the migration's hash. A
+// rollback from that journal keeps the file and says so.
+BOOST_AUTO_TEST_CASE(AJournalLeftNamingAForeignFile_ARollbackFromTheDiskKeepsIt)
+{
+	auto expected = content_of(copy.root());
+	expected[std::string(k_plain_meta)] = "foreign";
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_and_goes_on));
+	pmg::apply_context hooked = context();
+	bool taken = false;
+	int failed = 0;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		if (is_journal(relative)) {
+			if (!taken && journal_lists(text, k_plain_meta)) {
+				taken = true;
+				write_text(root / k_plain_meta, "foreign");
+			} else if (taken) {
+				++failed;
+				return std::string{ "injected journal failure" };
+			}
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST(taken);
+	// The re-journal of the refused create and the journal after the in-process rollback.
+	BOOST_TEST(failed >= 2);
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back));
+	const json::value left = final_journal();
+	BOOST_TEST(left.at("status").as_string() == "in_progress");
+	BOOST_TEST(journal_lists(json::serialize(left), k_plain_meta));
+	BOOST_TEST((pmg::unfinished_migrations(copy.root()) == std::vector<std::string>{ "test-migration" }));
+
+	std::vector<std::string> warnings;
+	pmg::rollback_context rollback;
+	rollback.warnings = &warnings;
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration", rollback);
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST(read_text(copy.root() / k_plain_meta) == "foreign");
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].find(k_plain_meta) != std::string::npos, warnings[0]);
+	BOOST_TEST(final_journal().at("status").as_string() == "rolled_back");
+	BOOST_TEST((content_of(copy.root()) == expected));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// Writes `res/made/new.txt` twice in one run: the second write is a change of a created file.
+void pre_creates_then_writes_again(pmg::project_step_context& context)
+{
+	context.files.create(k_in_new_folder, "new");
+	context.files.write(k_in_new_folder, "written again");
+}
+
+// Someone else edits the created file while the run goes on, then the run fails.
+void post_edits_behind_the_run_and_fails(pmg::project_step_context& context)
+{
+	write_text(context.root / k_in_new_folder, "edited by a person");
+	throw std::runtime_error("injected step failure");
+}
+
+void post_fails_too(pmg::project_step_context&)
+{
+	throw std::runtime_error("injected step failure");
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(PmgCreatedHashTests, step_files_fixture)
+
+// #1346: a created file the same run writes again gets the hash and size of the new text, journaled before the write;
+// the rollback after a failure deletes it, as what the migration wrote last.
+BOOST_AUTO_TEST_CASE(ACreatedFileWrittenAgain_IsDeletedByTheRollback)
+{
+	const auto before = content_of(copy.root());
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_then_writes_again));
+	registry.add(test_step("test.post", pmg::project_phase::post, post_fails_too));
+	pmg::apply_context hooked = context();
+	std::optional<std::string> on_disk_when_journaled;
+	hooked.write = [&](const fs::path& root, const fs::path& relative, std::string_view text) -> std::optional<std::string> {
+		const std::optional<json::value> entry = is_journal(relative) ? created_entry_of(text, k_in_new_folder) : std::nullopt;
+		if (entry && !on_disk_when_journaled && entry->at("hash_after").as_string() == pmg::journal_hash("written again")) {
+			on_disk_when_journaled = read_text(root / k_in_new_folder);
+		}
+		return prj::write_project_file(root, relative, text);
+	};
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), hooked);
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back), outcome.report.error);
+	BOOST_TEST((on_disk_when_journaled == std::optional<std::string>{ "new" }));
+	BOOST_TEST(outcome.report.rollback_warnings.empty());
+	BOOST_TEST(!fs::exists(copy.root() / k_in_new_folder));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #1346: the same, rolled back later from the journal on the disk.
+BOOST_AUTO_TEST_CASE(ACreatedFileWrittenAgain_IsDeletedByARollbackFromTheDisk)
+{
+	const auto before = content_of(copy.root());
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_then_writes_again));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_REQUIRE_MESSAGE((outcome.report.status == pmg::migration_status::ok), outcome.report.error);
+	const std::optional<json::value> entry = created_entry_of(json::serialize(final_journal()), k_in_new_folder);
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->at("hash_after").as_string() == pmg::journal_hash("written again"));
+	BOOST_TEST(entry->at("size_after").to_number<std::uint64_t>() == std::string_view("written again").size());
+
+	std::vector<std::string> warnings;
+	pmg::rollback_context rollback;
+	rollback.warnings = &warnings;
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration", rollback);
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST(warnings.empty());
+	BOOST_TEST(!fs::exists(copy.root() / k_in_new_folder));
+	BOOST_TEST(!final_journal().as_object().contains("rollback_warnings"));
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #1346: the in-process rollback checks too: a created file someone changed while the run went on is kept, with a
+// warning in the report and its journal, and the migration is still rolled back.
+BOOST_AUTO_TEST_CASE(ACreatedFileChangedDuringTheRun_IsKeptByTheRollback)
+{
+	auto expected = content_of(copy.root());
+	expected[std::string(k_in_new_folder)] = "edited by a person";
+	registry.add(test_step("test.pre", pmg::project_phase::pre, pre_creates_in_a_new_folder));
+	registry.add(test_step("test.post", pmg::project_phase::post, post_edits_behind_the_run_and_fails));
+	const pmg::apply_outcome outcome = pmg::apply_migration(plan(), context());
+	BOOST_REQUIRE(outcome.refused.empty());
+	BOOST_TEST((outcome.report.status == pmg::migration_status::rolled_back), outcome.report.error);
+	BOOST_REQUIRE(outcome.report.rollback_warnings.size() == 1u);
+	BOOST_TEST(outcome.report.rollback_warnings[0].starts_with(std::string(k_in_new_folder) + " was changed after the migration and was kept"),
+		outcome.report.rollback_warnings[0]);
+	BOOST_TEST(read_text(copy.root() / k_in_new_folder) == "edited by a person");
+	const json::value journal = final_journal();
+	BOOST_REQUIRE(journal.as_object().contains("rollback_warnings"));
+	BOOST_TEST(journal.at("rollback_warnings").as_array()[0].as_string() == outcome.report.rollback_warnings[0]);
 	BOOST_TEST((content_of(copy.root()) == expected));
 }
 

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -235,10 +236,12 @@ BOOST_AUTO_TEST_CASE(ARollback_RestoresTheBackup_AndDeletesTheCreatedFiles)
 	const pmg::apply_outcome outcome = apply(copy.root(), context_for(copy.root()));
 	BOOST_REQUIRE(outcome.refused.empty());
 
-	// What a project step of S5 records: a file the migration created.
+	// What a project step of S5 records: a file the migration created. A plain path, as a journal of format 1 (before
+	// #1346) has it, is deleted unchecked.
 	write_text(copy.res() / "created.resource", "{}");
 	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
 	json::value journal = json::parse(read_text(journal_path));
+	journal.as_object().erase("journal_format");
 	journal.as_object()["created_files"] = json::array{ "res/created.resource" };
 	write_text(journal_path, json::serialize(journal));
 
@@ -958,6 +961,171 @@ BOOST_AUTO_TEST_CASE(AMigration_RefusesContentRootsItsRollbackWouldRefuse)
 			BOOST_TEST(!fs::exists(copy.root() / ".snk/migrations"));
 		}
 	}
+}
+
+namespace {
+
+// An entry of created_files as apply_migration writes it for `text` (#1346).
+json::object created_entry(const std::string& path, std::string_view text)
+{
+	return json::object{ { "path", path }, { "hash_after", pmg::journal_hash(text) }, { "size_after", text.size() } };
+}
+
+void edit_journal(const fs::path& root, const std::function<void(json::object&)>& edit)
+{
+	const fs::path journal_path = root / ".snk/migrations/test-migration/report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	edit(journal.as_object());
+	write_text(journal_path, json::serialize(journal));
+}
+
+json::object journal_of(const fs::path& root)
+{
+	return json::parse(read_text(root / ".snk/migrations/test-migration/report.json")).as_object();
+}
+
+}
+
+// #1346: a journal this engine writes says its format.
+BOOST_AUTO_TEST_CASE(AJournal_HasItsFormat)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	BOOST_TEST(journal_of(copy.root()).at("journal_format").to_number<std::int64_t>() == pmg::k_journal_format);
+}
+
+// #1346: a plain path (format 1) and an entry with its hash in one journal: the first is deleted unchecked, the second
+// only while it is what the migration wrote; one that changed is kept with a warning, and the rollback still succeeds.
+BOOST_AUTO_TEST_CASE(ARollback_OfAMixedJournal_DeletesWhatIsUnchanged_AndKeepsWhatChanged)
+{
+	const auto before = content_of(copy.root());
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.res() / "legacy.resource", "{}");
+	write_text(copy.res() / "ours.bin", "as written");
+	write_text(copy.res() / "edited.bin", "as written, then edited by a person");
+	edit_journal(copy.root(), [](json::object& journal) {
+		journal["created_files"] = json::array{ "res/legacy.resource", created_entry("res/ours.bin", "as written"),
+			created_entry("res/edited.bin", "as written"), created_entry("res/gone.bin", "never created") };
+	});
+
+	std::vector<std::string> warnings;
+	pmg::rollback_context context;
+	context.warnings = &warnings;
+	const auto error = pmg::rollback_migration(copy.root(), "test-migration", context);
+	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
+	BOOST_TEST(!fs::exists(copy.res() / "legacy.resource"));
+	BOOST_TEST(!fs::exists(copy.res() / "ours.bin"));
+	BOOST_TEST(read_text(copy.res() / "edited.bin") == "as written, then edited by a person");
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].starts_with("res/edited.bin was changed after the migration and was kept: delete it yourself"), warnings[0]);
+
+	const json::object journal = journal_of(copy.root());
+	BOOST_TEST(journal.at("status").as_string() == "rolled_back");
+	BOOST_REQUIRE(journal.at("rollback_warnings").as_array().size() == 1u);
+	BOOST_TEST(journal.at("rollback_warnings").as_array()[0].as_string() == warnings[0]);
+	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
+	fs::remove(copy.res() / "edited.bin");
+	BOOST_TEST((content_of(copy.root()) == before));
+}
+
+// #1346: the size alone does not make a file the migration's: other bytes of the same size are kept.
+BOOST_AUTO_TEST_CASE(ARollback_KeepsACreatedFileOfTheSameSizeWithOtherBytes)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.res() / "same.bin", "abcd");
+	edit_journal(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ created_entry("res/same.bin", "abce") }; });
+	std::vector<std::string> warnings;
+	pmg::rollback_context context;
+	context.warnings = &warnings;
+	BOOST_TEST(!pmg::rollback_migration(copy.root(), "test-migration", context).has_value());
+	BOOST_TEST(read_text(copy.res() / "same.bin") == "abcd");
+	BOOST_TEST(warnings.size() == 1u);
+}
+
+// #1346 (windows of #1354): a run stopped between the journal's entry and the create, after which someone put a file at
+// the name, or one that stopped after the name was found taken and before the entry went out again. The journal names
+// the file with the migration's hash, the bytes at the name are another's: the rollback keeps them and says so.
+BOOST_AUTO_TEST_CASE(ARollback_AfterAStoppedRun_KeepsAForeignFileAtACreatedName)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.res() / "geometry.bin", "a person's own file");
+	edit_journal(copy.root(), [](json::object& journal) {
+		journal["status"] = "in_progress";
+		journal["created_files"] = json::array{ created_entry("res/geometry.bin", "what the step would have written") };
+	});
+	BOOST_TEST((pmg::unfinished_migrations(copy.root()) == std::vector<std::string>{ "test-migration" }));
+	std::vector<std::string> warnings;
+	pmg::rollback_context context;
+	context.warnings = &warnings;
+	BOOST_TEST(!pmg::rollback_migration(copy.root(), "test-migration", context).has_value());
+	BOOST_TEST(read_text(copy.res() / "geometry.bin") == "a person's own file");
+	BOOST_REQUIRE(warnings.size() == 1u);
+	BOOST_TEST(warnings[0].find("res/geometry.bin") != std::string::npos);
+	BOOST_TEST(journal_of(copy.root()).at("status").as_string() == "rolled_back");
+	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
+}
+
+// #1346: an entry of created_files that does not read refuses the whole rollback before it writes anything, as a file of
+// files[] without a hash does: skipped, it would be a file left without a word.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedEntryThatDoesNotRead)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.res() / "created.bin", "bytes");
+	const json::object good = created_entry("res/created.bin", "bytes");
+	const auto without = [&good](std::string_view key) {
+		json::object entry = good;
+		entry.erase(key);
+		return entry;
+	};
+	const auto with = [&good](std::string_view key, json::value value) {
+		json::object entry = good;
+		entry[key] = std::move(value);
+		return entry;
+	};
+	const std::vector<std::pair<json::array, std::string>> cases{
+		{ json::array{ with("hash_after", "not a hash") }, "hash_after of 16 hex digits" },
+		{ json::array{ with("hash_after", "0123456789ABCDEF") }, "hash_after of 16 hex digits" },
+		{ json::array{ with("hash_after", 42) }, "hash_after of 16 hex digits" },
+		{ json::array{ without("hash_after") }, "hash_after of 16 hex digits" },
+		{ json::array{ without("size_after") }, "size_after" },
+		{ json::array{ with("size_after", -1) }, "size_after" },
+		{ json::array{ with("size_after", 5.0) }, "size_after" },
+		{ json::array{ with("size_after", "5") }, "size_after" },
+		{ json::array{ without("path") }, "created_files[0] has no string path" },
+		{ json::array{ with("path", 7) }, "created_files[0] has no string path" },
+		{ json::array{ good, with("hash_after", pmg::journal_hash("other")) }, "listed twice" },
+		{ json::array{ good, with("size_after", 6) }, "listed twice" },
+		{ json::array{ "res/created.bin", good }, "listed twice" },
+		{ json::array{ good, 42 }, "created_files[1] is neither a path nor an object" },
+		{ json::array{ json::array{ "res/created.bin" } }, "created_files[0] is neither a path nor an object" },
+		{ json::array{ nullptr }, "created_files[0] is neither a path nor an object" },
+	};
+	for (const auto& refused : cases) {
+		const json::array& created = refused.first;
+		BOOST_TEST_CONTEXT(json::serialize(created)) {
+			expect_refused(copy.root(), [&created](json::object& journal) { journal["created_files"] = created; }, refused.second);
+			BOOST_TEST(fs::exists(copy.res() / "created.bin"));
+		}
+	}
+	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = "res/created.bin"; }, "created_files is not a list");
+	// An entry with a path outside the content roots is checked as a plain path is.
+	expect_refused(copy.root(), [](json::object& journal) {
+		journal["created_files"] = json::array{ created_entry(".git/config", "x") };
+	}, "created file");
+	// The same path twice with the same hash and size is one entry.
+	edit_journal(copy.root(), [&good](json::object& journal) { journal["created_files"] = json::array{ good, good }; });
+	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+}
+
+// #1346: a journal of a newer format is refused by every reader, before anything is written.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAJournalOfANewerFormat)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	expect_refused(copy.root(), [](json::object& journal) { journal["journal_format"] = pmg::k_journal_format + 1; }, "written by a newer engine");
+	expect_refused(copy.root(), [](json::object& journal) { journal["journal_format"] = "2"; }, "journal_format");
+	edit_journal(copy.root(), [](json::object& journal) { journal["journal_format"] = 3; });
+	const std::vector<pmg::migration_folder> folders = pmg::migration_folders(copy.root());
+	BOOST_REQUIRE(folders.size() == 1u);
+	BOOST_TEST(folders[0].problem.find("written by a newer engine") != std::string::npos, folders[0].problem);
 }
 
 BOOST_AUTO_TEST_CASE(TheProjectTemplate_KeepsMigrationsOutOfGit_ButNotTheAgentPolicy)
