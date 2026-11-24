@@ -5,6 +5,7 @@
 
 #include "edt_input_binding.h"
 #include "edt_transform_gizmo.hpp"
+#include "edt_viewport_click.h"
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>
@@ -50,6 +51,8 @@ namespace edt
 		void set_on_asset_dropped(std::function<void(const std::string&)> cb) { m_on_asset_dropped = std::move(cb); }
 
 		void set_on_transform_committed(std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
+		// A click on the image: the path of the node under it, or nullopt for empty space. Not called in Play.
+		void set_on_pick(std::function<void(std::optional<std::vector<uint64_t>>)> cb) { m_on_pick = std::move(cb); }
 		// True while the document must not change (Play): no gizmo, no asset drop, a hint instead.
 		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
 		// The banner "The level file changed on disk." drawn over the scene while it is visible (#1188); null: none.
@@ -78,6 +81,7 @@ namespace edt
 		void on_hidden() override;
 
 	private:
+		void run_click(entt::registry& reg, bool takes_input, bool usable, bool locked, const glm::mat4& cam_view, const glm::mat4& cam_proj);
 		void render_toolbar();
 		void render_disk_banner();
 		void render_fps_overlay();
@@ -106,6 +110,8 @@ namespace edt
 		float m_fps = 0.f;
 		float m_fps_timer = 0.f;
 		int m_frame_count = 0;
+		std::optional<viewport_click> m_click;
+		std::function<void(std::optional<std::vector<uint64_t>>)> m_on_pick;
 		std::function<void(const std::string&)> m_on_asset_dropped;
 		std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> m_on_transform_committed;
 	};

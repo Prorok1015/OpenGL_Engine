@@ -14,8 +14,10 @@
 #include "edt_desc_file_commands.h"
 #include "edt_desc_problems.h"
 #include "edt_file_menu.h"
+#include "edt_input_target.h"
 #include "edt_level_controller.h"
 #include "edt_level_disk_banner.h"
+#include "edt_registry_token.h"
 #include "edt_save_all.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
@@ -537,6 +539,32 @@ BOOST_AUTO_TEST_CASE(PlayStoppedForAModuleReload_DoesNotTakeTheFile)
 	level_ctrl.tick_disk_change();
 	BOOST_TEST(world_name() == "alpha");
 	BOOST_TEST(state.changed_on_disk());
+}
+
+// The viewport's click gesture and selection (#1363, #728) are tied to the registry token: a reload from disk must hand the
+// view a registry of another token, also when the queued Reload rebuilds the level between two frames.
+BOOST_AUTO_TEST_CASE(AReloadFromDisk_GivesTheViewARegistryOfAnotherToken)
+{
+	open_level("alpha");
+	entt::registry* before = edt::view_registry(services, state);
+	BOOST_REQUIRE(before);
+	const std::uint64_t first = edt::registry_token(*before);
+
+	write_from_outside(level_text("beta"));
+	entt::registry* silent = edt::view_registry(services, state);
+	BOOST_REQUIRE(silent);
+	const std::uint64_t second = edt::registry_token(*silent);
+	BOOST_TEST(second != first);
+
+	make_dirty();
+	write_from_outside(level_text("gamma"));
+	banner.reload();
+	answer_front(0);
+	banner.run_pending();
+	BOOST_REQUIRE(world_name() == "gamma");
+	entt::registry* queued = edt::view_registry(services, state);
+	BOOST_REQUIRE(queued);
+	BOOST_TEST(edt::registry_token(*queued) != second);
 }
 
 BOOST_AUTO_TEST_CASE(AReloadAnsweredAfterAnotherLevelWasOpened_DoesNothingToIt)

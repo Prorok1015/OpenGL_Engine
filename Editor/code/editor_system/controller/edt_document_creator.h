@@ -51,8 +51,9 @@ namespace edt
 
 		// Why `name` cannot be the name of a new document in `folder` (below res://, '/' separated, empty = the root): empty
 		// when it can. A name taken in any layer is refused naming the layer, so a new file never hides one below it; so is a
-		// name whose `.resource` is still there (a deleted file's label: its ID would pass to the new file).
-		// Walks the folder in every layer: call it when the name changes, not every frame.
+		// name whose `.resource` is still there (a deleted file's label: its ID would pass to the new file), or a leftover binary
+		// file of the desc (res::name_taken; letter case never tells names apart). Walks the folder in every layer: call it
+		// when the name changes, not every frame.
 		std::string check(std::string_view folder, std::string_view name) const;
 
 		// Writes `{"__type", "__version"}` and nothing else (the fields read as the schema's defaults, the ID of the file is

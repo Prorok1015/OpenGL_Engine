@@ -1,6 +1,9 @@
 #include <boost/test/unit_test.hpp>
+#include "test_reparse_tag.hpp"
 #include "test_temp_dir.hpp"
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_file_lock.h>
+#include <snk/platform/plt_link_check.h>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -146,6 +149,63 @@ BOOST_AUTO_TEST_CASE(a_junction_at_a_folder_is_not_followed)
 	BOOST_TEST(!error.empty());
 	BOOST_TEST(!std::filesystem::exists(outside.path() / ".lock"));
 	std::filesystem::remove(link);
+}
+#endif
+
+#if defined(_WIN32)
+// #1352: a cache root whose own path runs past MAX_PATH: the lock is taken, a second holder is refused, and it is free
+// again once released; a folder on the way that is a reparse point is still refused there.
+BOOST_AUTO_TEST_CASE(a_lock_under_a_root_longer_than_max_path_is_taken_and_held)
+{
+	test_util::temp_dir dir("file_lock_long");
+	std::wstring deep = (dir.path() / "tree").lexically_normal().make_preferred().wstring();
+	while (deep.size() < MAX_PATH + 60) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	std::error_code made;
+	std::filesystem::create_directories(std::filesystem::path(L"\\\\?\\" + deep), made);
+	BOOST_REQUIRE_MESSAGE(!made, made.message());
+	struct remove_on_exit {
+		std::filesystem::path base;
+		~remove_on_exit()
+		{
+			platform::beneath::pinned_root pinned{ base };
+			platform::beneath::remove_tree_beneath(pinned, "", "tree");
+		}
+	} remove{ dir.path() };
+	const std::filesystem::path root{ deep };
+	const std::filesystem::path relative = std::filesystem::path("autosave") / "0123abcd" / "session.lock";
+
+	std::string error;
+	std::optional<platform::file_lock> first = platform::file_lock::try_acquire(root, relative, &error);
+	BOOST_REQUIRE_MESSAGE(first.has_value(), error);
+	BOOST_TEST((platform::file_lock::acquire(root, relative).outcome == platform::lock_outcome::held));
+	first.reset();
+	BOOST_TEST(platform::file_lock::try_acquire(root, relative).has_value());
+
+	const std::wstring tagged = L"\\\\?\\" + deep + L"\\tagged";
+	BOOST_REQUIRE(std::filesystem::create_directory(std::filesystem::path(tagged), made));
+	BOOST_REQUIRE_MESSAGE(test_util::set_third_party_surrogate_tag(std::filesystem::path(tagged)).empty(), "tagged");
+	const std::filesystem::path through_tagged = std::filesystem::path("tagged") / "x.lock";
+	const platform::lock_attempt through = platform::file_lock::acquire(root, through_tagged);
+	BOOST_TEST((through.outcome == platform::lock_outcome::failed), through.error);
+	RemoveDirectoryW(tagged.c_str());
+}
+
+// A short root keeps its plain spelling: a UNC share is made and opened as before, Win32 normalization applies.
+BOOST_AUTO_TEST_CASE(only_a_root_past_max_path_takes_the_long_form)
+{
+	const std::filesystem::path short_unc{ L"\\\\server\\share\\project" };
+	BOOST_TEST((platform::beneath::long_path_if_needed(short_unc) == short_unc));
+	test_util::temp_dir dir("file_lock_short");
+	BOOST_TEST((platform::beneath::long_path_if_needed(dir.path()) == dir.path()));
+
+	std::wstring deep = L"\\\\server\\share";
+	while (deep.size() < MAX_PATH) {
+		deep += L"\\a_folder_name_of_some_length";
+	}
+	BOOST_TEST((platform::beneath::long_path_if_needed(std::filesystem::path(deep)).native()
+		== L"\\\\?\\UNC\\" + deep.substr(2)));
 }
 #endif
 

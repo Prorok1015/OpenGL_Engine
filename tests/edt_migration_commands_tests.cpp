@@ -1158,6 +1158,39 @@ BOOST_AUTO_TEST_CASE(ARollback_PutsTheProjectBack_AndOpensTheLevelAgain)
 	BOOST_TEST((rolled_back_ids == std::vector<std::string>{ id }));
 	BOOST_TEST((running_said == std::vector<bool>{ true, false }));
 	BOOST_TEST(!rs->changes_held());
+	BOOST_TEST(result.at("warnings").as_array().empty());
+}
+
+// #1346: a file the migration created and someone changed since is kept: the question marks it (by its size), the
+// rollback still succeeds, and its answer names the file in `warnings` and its text.
+BOOST_AUTO_TEST_CASE(ARollback_KeepsACreatedFileChangedSince_AndSaysSo)
+{
+	const std::string id = migrated();
+	const fs::path journal_path = copy.root() / ".snk" / "migrations" / id / "report.json";
+	json::value journal = json::parse(read_text(journal_path));
+	json::array& created = journal.as_object()["created_files"].as_array();
+	created.push_back(json::object{ { "path", "res/kept.bin" }, { "hash_after", pmg::journal_hash("as migrated") }, { "size_after", 11 } });
+	created.push_back(json::object{ { "path", "res/ours.bin" }, { "hash_after", pmg::journal_hash("as migrated") }, { "size_after", 11 } });
+	write_text(journal_path, json::serialize(journal));
+	write_text(copy.res() / "kept.bin", "changed by a person");
+	write_text(copy.res() / "ours.bin", "as migrated");
+
+	const std::string text = ask_rollback(id);
+	BOOST_TEST(text.find("\n    res/kept.bin  (kept: changed after the migration)\n") != std::string::npos, text);
+	BOOST_TEST(text.find("\n    res/ours.bin\n") != std::string::npos, text);
+
+	const json::object result = roll_back(id);
+	BOOST_TEST_REQUIRE(error_code_of(result).empty(), json::serialize(result));
+	BOOST_TEST(result.at("code").as_int64() == pmg::k_exit_done, json::serialize(result));
+	BOOST_TEST(std::string(result.at("status").as_string()) == "rolled_back");
+	const json::array& warnings = result.at("warnings").as_array();
+	BOOST_REQUIRE(warnings.size() == 1u);
+	const std::string warning(warnings[0].as_string());
+	BOOST_TEST(warning.starts_with("res/kept.bin was changed after the migration and was kept"), warning);
+	BOOST_TEST(std::string(result.at("text").as_string()).find(warning) != std::string::npos, json::serialize(result));
+	BOOST_TEST(read_text(copy.res() / "kept.bin") == "changed by a person");
+	BOOST_TEST(!fs::exists(copy.res() / "ours.bin"));
+	BOOST_TEST(pmg::unfinished_migrations(copy.root()).empty());
 }
 
 // A file changed after the migration refuses the whole rollback: code 2, nothing written, the level is opened again.

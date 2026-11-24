@@ -15,6 +15,7 @@
 #include "edt_editor_camera.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
+#include "edt_viewport_picker.h"
 #include <imgui.h>
 #include <format>
 #include <optional>
@@ -44,6 +45,7 @@ namespace edt
 	void viewport_panel::on_hidden()
 	{
 		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"viewport_toolbar"});
+		if (m_click) m_click->cancel();
 		if (entt::registry* reg = m_get_registry ? m_get_registry() : nullptr)
 			set_editor_camera_input(*reg, false);
 	}
@@ -112,7 +114,8 @@ namespace edt
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		// A registry that is not the one seen last time (the world was rebuilt): the selected entity is taken again and a
 		// drag of the rotate ring that was in progress ends.
-		if (m_selection.refresh(reg)) m_rotate.reset();
+		const bool world_replaced = m_selection.refresh(reg);
+		if (world_replaced) m_rotate.reset();
 		const bool locked = m_edits_locked && m_edits_locked();
 
 		render_toolbar();
@@ -132,6 +135,7 @@ namespace edt
 
 		// Update camera viewport so the renderer creates a correctly-sized render target
 		glm::mat4 cam_view(1.f), cam_proj(1.f);
+		bool have_camera = false;
 		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
 		if (reg && size.x > 0 && size.y > 0) {
 			for (auto ent : reg->view<scn::camera_component>()) {
@@ -144,6 +148,7 @@ namespace edt
 					cam_view = glm::inverse(reg->get<scn::local_transform>(ent).local);
 				float aspect = size.x / size.y;
 				cam_proj = glm::perspective(glm::radians(cam.fov), aspect, cam.near_distance, cam.far_distance);
+				have_camera = true;
 				break;
 			}
 		}
@@ -178,7 +183,9 @@ namespace edt
 
 		// Re-fetch: on_transform_committed inside the gizmo may have triggered
 		// reload_world(), which destroys the old scn::world_context and its registry.
+		entt::registry* const shown_reg = reg;
 		reg = m_get_registry ? m_get_registry() : nullptr;
+		const bool same_world = !world_replaced && reg == shown_reg;
 
 		// Input (and the camera focus derived from it) reaches the world only while the image is hovered and no gizmo handle
 		// is in the way; the editor camera reads it only then (the Game view shares the world and must not move it, #545).
@@ -187,11 +194,46 @@ namespace edt
 			target = m_input_target();
 		const bool takes_input = bind_view_input(m_router, target, view, is_dragging_gizmo());
 		if (reg)
-			set_editor_camera_input(*reg, takes_input);
+			run_click(*reg, takes_input && !locked, have_camera && same_world, locked, cam_view, cam_proj);
+		else if (m_click)
+			m_click->cancel();
+		reg = m_get_registry ? m_get_registry() : nullptr;
+		if (reg)
+			set_editor_camera_input(*reg, takes_input && (!m_click || m_click->camera_input()));
 
 		if (reg)
 			render_orientation_gizmo(*reg);
 		render_fps_overlay();
+	}
+
+	void viewport_panel::run_click(entt::registry& reg, bool takes_input, bool usable, bool locked, const glm::mat4& cam_view, const glm::mat4& cam_proj)
+	{
+		if (!m_click)
+			m_click.emplace(dpi_px(4.f));
+		const ImGuiIO& io = ImGui::GetIO();
+		const ImVec2 mouse = io.MousePos;
+		const glm::vec2 pixel{ mouse.x - m_image_pos.x, mouse.y - m_image_pos.y };
+		if (!usable) {
+			m_click->cancel();
+			return;
+		}
+		const mesh::gesture_result result = m_click->update({
+			.takes_input = takes_input,
+			.locked = locked,
+			.pressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+			.down = ImGui::IsMouseDown(ImGuiMouseButton_Left),
+			.released = ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+			.interrupted = !m_focused,
+			.pixel = pixel,
+			.modifiers = { io.KeyShift, io.KeyCtrl, io.KeyAlt },
+		});
+		if (result.kind != mesh::gesture_end::click || !m_on_pick)
+			return;
+		const auto picked = pick_node(reg, { cam_view, cam_proj, result.point, m_viewport_size });
+		if (picked)
+			m_on_pick(picked->path);
+		else
+			m_on_pick(std::nullopt);
 	}
 
 	void viewport_panel::render_toolbar()
