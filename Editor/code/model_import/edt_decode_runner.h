@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -40,6 +41,9 @@ namespace edt {
 		// The AppContainer process_decoder makes (or finds) once from this name, and the one it runs the child in.
 		std::wstring container_name = L"snk.model_decoder";
 		std::shared_ptr<const platform::app_container> container;
+		// Tests only (#1316): called with the run folder once the child is done, right before the folder is removed,
+		// to put there what a child could have left.
+		std::function<void(const std::filesystem::path& run_folder)> before_cleanup;
 	};
 
 	// Reads the child's stderr lines in their order: only the first may be the status.

@@ -36,15 +36,22 @@ namespace core::res {
 		explicit run_scratch_folder(std::filesystem::path folder) : path(std::move(folder)) {}
 		std::filesystem::path path;
 	};
-	// Removes the scratch folders of this game whose process is gone (a run that crashed). Only a real directory (not a
-	// link or a junction) is removed; on POSIX also only one owned by this user with mode 0700, so a folder someone else
-	// put in a shared temp folder is never walked. Returns how many.
+	// Removes the scratch folders of this game whose process is gone (a run that crashed). Only a real directory is
+	// walked; on POSIX also only one owned by this user with mode 0700, so a folder someone else put in a shared temp
+	// folder is never walked. A link of this user at such a name (a run folder its child replaced) is removed as the
+	// link, never followed. `<name>.quarantine` folders (remove_scratch_dir) are left and counted in a WARN. Returns how
+	// many entries went.
 	SNK_API std::size_t remove_stale_scratch_dirs(std::string_view project_name);
-	// Removes `path` and what it holds without ever going through a link: a symlink, a junction or any other reparse point
-	// inside is removed itself, never entered (#1054: a child that wrote the folder could plant one that points at the
-	// user's files). False with `ec` set when something could not be removed; what could be is gone. Only for a tree no
-	// one writes into any more: an entry swapped for a link between its check and its removal is not caught. Windows:
-	// READONLY is cleared on an entry itself, a link included, never on what it points at; a path past MAX_PATH is removed
-	// too (#1099).
+	// Removes a scratch folder (make_scratch_dir) and what it holds through platform::beneath::remove_tree_beneath from
+	// the folder above it, resolved once (#1316): a link inside is removed as itself, never entered, so a child that
+	// wrote the folder cannot point the removal at the user's files. A link at `folder` itself is removed as the link
+	// (WARN). A tree nested too deep to walk is renamed to `<folder>.quarantine` (ERROR), which
+	// remove_stale_scratch_dirs counts and leaves. Nothing there: success. Empty on success, else why not; what could be
+	// removed is gone.
+	SNK_API std::string remove_scratch_dir(const std::filesystem::path& folder);
+	// Removes `path` and what it holds by path, without entering a link inside (#1054, #1099): an entry swapped for a link
+	// between its check and its removal is not caught. False with `ec` set when something could not be removed.
+	[[deprecated("remove_scratch_dir or platform::beneath::remove_tree_beneath; remove at the next major of "
+		"SNK_MODULE_API_VERSION")]]
 	SNK_API bool remove_tree_without_following(const std::filesystem::path& path, std::error_code& ec);
 }
