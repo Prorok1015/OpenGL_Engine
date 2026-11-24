@@ -779,9 +779,9 @@ BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToT
 BOOST_AUTO_TEST_CASE(Override_WithTheOwnersFile_ARecordThatInstantiatesTheOwnersPrefabAgainIsListedAndFound)
 {
 	namespace oe = edt::override_edit;
-	load<scn::prefab_desc>(put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	load<scn::prefab_desc>(put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"tip"}]})"));
-	const res::tag file = put("grown.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	const res::tag file = put("grown.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000c1","name":"n","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
 			{"op":"add_node","target":[],"value":{"__id":"00000000000000e1","name":"added",
 				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");

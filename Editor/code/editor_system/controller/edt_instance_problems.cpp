@@ -88,6 +88,7 @@ namespace
 	struct collector
 	{
 		const std::string& file;
+		const scn::ecs_assembler* assembler;
 		std::vector<res::diagnostic>& out;
 		cycle_finder& cycles;
 		std::set<std::tuple<std::string, std::string, std::string>>& reported;
@@ -106,20 +107,35 @@ namespace
 						out.push_back({ res::diagnostic_severity::error, std::string(res::diagnostic_kind::cycle), file, pointer, text });
 					}
 				}
+				if (assembler && !node.overrides.empty()) migration_rows(node, pointer);
 			}
 			for (std::size_t i = 0; i < node.children.size(); ++i) walk(node.children[i], child_pointer(pointer, i));
+		}
+
+		void migration_rows(const prefab_node& node, const std::string& pointer)
+		{
+			for (const scn::stale_override& stale : scn::find_stale_records(*assembler, node)) {
+				using reason = scn::stale_override::reason;
+				const bool duplicated = stale.why == reason::duplicated_by_migration;
+				if (!duplicated && stale.why != reason::dropped_by_migration && stale.why != reason::not_migrated
+					&& stale.why != reason::field_gone_without_version) continue;
+				// A dropped edit is gone and one the steps cannot follow is applied as written; a duplicated one is not applied at all
+				// until a person decides.
+				const res::diagnostic_severity severity = duplicated ? res::diagnostic_severity::error : res::diagnostic_severity::warning;
+				out.push_back({ severity, "override", file, pointer, std::format("node '{}': {}", shown_name(node), stale.what) });
+			}
 		}
 	};
 }
 
-std::vector<res::diagnostic> edt::instance_diagnostics(std::span<const instance_world> worlds)
+std::vector<res::diagnostic> edt::instance_diagnostics(std::span<const instance_world> worlds, const scn::ecs_assembler* assembler)
 {
 	std::vector<res::diagnostic> out;
 	cycle_finder cycles;
 	std::set<std::tuple<std::string, std::string, std::string>> reported;
 	for (const instance_world& entry : worlds) {
 		if (!entry.world) continue;
-		collector{ entry.file, out, cycles, reported }.walk(entry.world->get_root(), entry.pointer_prefix);
+		collector{ entry.file, assembler, out, cycles, reported }.walk(entry.world->get_root(), entry.pointer_prefix);
 	}
 	return out;
 }

@@ -54,10 +54,10 @@ void despawner_system(entt::registry& reg)
 
 // The level's own node has the id the prefab's head has: their paths must still differ.
 constexpr const char* LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w",
+	{"__type":"world_desc","__version":5,"name":"w",
 	 "systems":["test::spawner","test::despawner","scn::depth_system","scn::transform_system"],
 	 "children":[{"__id":"00000000000000a1","name":"level_node"}]}]})";
-constexpr const char* SEGMENT = R"({"__type":"prefab_desc","__version":4,"transform":{"position":[0,0,7]},"children":[
+constexpr const char* SEGMENT = R"({"__type":"prefab_desc","__version":5,"transform":{"position":[0,0,7]},"children":[
 	{"__id":"00000000000000a1","name":"head","transform":{"position":[0,1,0]},
 	 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})";
 
@@ -223,7 +223,7 @@ BOOST_AUTO_TEST_CASE(AHotReloadOfThePrefabSpawnedUnder_KeepsTheSpawnedTree)
 	const entt::entity second_tail = at({ own_id(first), 0xa1, own_id(second), 0xa1, 0xa2 });
 	BOOST_REQUIRE(second_tail != entt::null);
 
-	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"head","transform":{"position":[0,2,0]},
 		 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})");
 	rs->signal_changed(segment);
@@ -277,7 +277,7 @@ BOOST_AUTO_TEST_CASE(AHotReloadOfTheSpawnedPrefab_KeepsWhereTheGameMovedItsRoot)
 	BOOST_REQUIRE(root != entt::null);
 	reg->get<scn::local_transform>(root).local = placed_at({ 3.0f, 0.0f, 0.0f }).to_matrix();
 
-	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":4,"transform":{"position":[0,0,9]},"children":[
+	put("segment.prefab.desc", R"({"__type":"prefab_desc","__version":5,"transform":{"position":[0,0,9]},"children":[
 		{"__id":"00000000000000a1","name":"head","transform":{"position":[0,2,0]},
 		 "children":[{"__id":"00000000000000a2","name":"tail"}]}]})");
 	rs->signal_changed(segment);
