@@ -667,7 +667,7 @@ BOOST_AUTO_TEST_CASE(Rebuild_WhenTheSourceCannotBeWritten_PutsTheOldGeometryBack
 	BOOST_TEST(same_json(read_file(res_root / "shapes" / "ball.geom.desc"), built(small_sphere).geometry));
 }
 
-BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyInCaseWhereNamesFoldCase_AndABinWithoutItsDesc)
+BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyInCase_AndABinWithoutItsDesc)
 {
 	for (const char* name : { "a.poly", "A.GEOM", "a.bin" }) {
 		BOOST_TEST_CONTEXT(name) {
@@ -677,12 +677,9 @@ BOOST_AUTO_TEST_CASE(Create_RefusesTheNamesOfFilesOfAShape_ANameThatDiffersOnlyI
 	BOOST_REQUIRE(create_sphere().ok);
 	const std::string poly_before = read_file(res_root / "shapes" / "ball.poly.desc");
 	const auto folded = call("shape.create", json::object{ { "name", "Ball" }, { "kind", "box" } });
-	if constexpr (res::asset_names_case_insensitive) {
-		BOOST_TEST(folded.code == cmd::codes::needs_input);
-		BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
-	} else {
-		BOOST_TEST(folded.ok);
-	}
+	// #1279: a new name folds case on every system, so a project made on Linux does not break on Windows.
+	BOOST_TEST(folded.code == cmd::codes::needs_input);
+	BOOST_TEST(read_file(res_root / "shapes" / "ball.poly.desc") == poly_before);
 
 	write_file(res_root / "shapes" / "orphan.geom.bin", "x");
 	const auto orphan = call("shape.create", json::object{ { "name", "orphan" }, { "kind", "box" } });

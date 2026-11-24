@@ -1,10 +1,13 @@
 #include "edt_prefab_variant_creator.h"
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_free_name.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
+#include <filesystem>
 #include <format>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -25,11 +28,18 @@ std::string edt::prefab_variant_creator::suggested_name(const res::tag& base) co
 {
 	std::string folder, stem;
 	if (!split(base, folder, stem)) return {};
-	for (int number = 1; number < 1000; ++number) {
-		std::string candidate = number == 1 ? std::format("{}_variant", stem) : std::format("{}_variant{}", stem, number);
-		if (check(base, candidate).empty()) return candidate;
-	}
-	return {};
+	const std::vector<std::filesystem::path> layers = m_ports.layers ? m_ports.layers() : std::vector<std::filesystem::path>{};
+	// "hero_variant", "hero_variant2", ...: no separator before the number. A candidate the editor's own name rules refuse is
+	// passed over for the next number, as the layers' taken names are.
+	const auto refused = [this, &base](std::string_view relative) {
+		const std::size_t slash = relative.rfind('/');
+		std::string_view name = slash == std::string_view::npos ? relative : relative.substr(slash + 1);
+		name.remove_suffix(file_suffix.size());
+		return !check(base, name).empty();
+	};
+	const res::free_name_result found = res::free_name(layers, folder, std::format("{}_variant", stem), file_suffix, "", refused);
+	if (!found.ok()) return {};
+	return found.name.substr(0, found.name.size() - file_suffix.size());
 }
 
 std::string edt::prefab_variant_creator::check(const res::tag& base, std::string_view stem) const
