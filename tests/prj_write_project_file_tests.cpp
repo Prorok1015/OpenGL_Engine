@@ -233,6 +233,39 @@ BOOST_AUTO_TEST_CASE(FolderEntry_FilterPlaceholdersAreEntered_LinksAndJunctionsR
 	BOOST_TEST((folder_entry_of(0, true, 0) == folder_entry::not_a_folder));
 }
 
+// #1295: the check of a project's folders when it is opened finds a link by the entry's own reparse tag, so a name
+// surrogate std::filesystem does not call a symlink or a junction is a link too. Pure, so it runs everywhere.
+BOOST_AUTO_TEST_CASE(LinkEntry_EveryRedirectingTagIsALink_PlaceholdersAndCompressedFilesAreNot)
+{
+	using platform::beneath::link_entry;
+	using platform::beneath::link_entry_of;
+	constexpr std::uint32_t directory = platform::beneath::k_file_attribute_directory;
+	constexpr std::uint32_t reparse = platform::beneath::k_file_attribute_reparse_point;
+	constexpr std::uint32_t folder_point = directory | reparse;
+
+	BOOST_TEST((link_entry_of(directory, true, 0) == link_entry::plain));
+	BOOST_TEST((link_entry_of(0, true, 0) == link_entry::plain));
+	BOOST_TEST((link_entry_of(folder_point, true, 0x9000001Au) == link_entry::kept_in_place)); // CLOUD (OneDrive)
+	BOOST_TEST((link_entry_of(folder_point, true, 0x9000301Au) == link_entry::kept_in_place)); // CLOUD_3
+	BOOST_TEST((link_entry_of(folder_point, true, 0x80000013u) == link_entry::kept_in_place)); // DEDUP
+	BOOST_TEST((link_entry_of(folder_point, true, 0xA0000003u) == link_entry::link)); // junction
+	BOOST_TEST((link_entry_of(folder_point, true, 0xA000000Cu) == link_entry::link)); // symlink
+	BOOST_TEST((link_entry_of(folder_point, true, 0xA0000027u) == link_entry::link)); // WCI_LINK, a name surrogate
+	BOOST_TEST((link_entry_of(folder_point, true, 0x2000ABCDu) == link_entry::link)); // a third party's name surrogate
+	BOOST_TEST((link_entry_of(folder_point, true, 0x80000017u) == link_entry::link)); // WOF on a folder: not allowlisted
+	BOOST_TEST((link_entry_of(folder_point, true, 0x0000ABCDu) == link_entry::link)); // an unknown tag
+	BOOST_TEST((link_entry_of(folder_point, false, 0) == link_entry::link)); // tag unreadable
+
+	BOOST_TEST((link_entry_of(reparse, true, 0xA000000Cu) == link_entry::link)); // file symlink
+	BOOST_TEST((link_entry_of(reparse, true, 0x2000ABCDu) == link_entry::link)); // a third party's name surrogate
+	BOOST_TEST((link_entry_of(reparse, true, 0x8000001Bu) == link_entry::link)); // APPEXECLINK
+	BOOST_TEST((link_entry_of(reparse, true, 0x80000017u) == link_entry::kept_in_place)); // WOF: compressed by Windows
+	BOOST_TEST((link_entry_of(reparse, true, 0x9000001Au) == link_entry::kept_in_place)); // CLOUD file
+	BOOST_TEST((link_entry_of(reparse, true, 0x80000013u) == link_entry::kept_in_place)); // DEDUP file
+	BOOST_TEST((link_entry_of(reparse, true, 0x0000ABCDu) == link_entry::link)); // an unknown tag
+	BOOST_TEST((link_entry_of(reparse, false, 0) == link_entry::link)); // tag unreadable
+}
+
 BOOST_AUTO_TEST_CASE(Read_GivesTheText_AndNothingAtTheNameIsNoError)
 {
 	test_util::temp_dir dir("prj_read_project_file_plain");

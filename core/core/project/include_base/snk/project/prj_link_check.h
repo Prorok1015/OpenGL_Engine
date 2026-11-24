@@ -12,9 +12,10 @@ namespace prj
 	// is refused rather than checked in part: a link past the limit would go unseen.
 	inline constexpr std::size_t k_link_walk_limit = 200'000;
 
-	// Why `dir` holds a link (a symlink or a junction) at any depth, every entry checked without following one; empty
-	// when it holds none or does not exist. A walk past `max_entries` entries, or one that cannot read an entry, is a
-	// refusal too. Every reason names the entry and tells the person what to do; nothing is removed here.
+	// Why `dir` holds a link (a symlink, a junction or any other entry that redirects its name: on Windows by its
+	// reparse tag, platform::beneath::link_entry_at, #1295) at any depth, every entry checked without following one;
+	// empty when it holds none or does not exist. A walk past `max_entries` entries, or one that cannot read an entry,
+	// is a refusal too. Every reason names the entry and tells the person what to do; nothing is removed here.
 	SNK_API std::optional<std::string> link_below(const std::filesystem::path& dir,
 		std::size_t max_entries = k_link_walk_limit);
 }

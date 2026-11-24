@@ -1,6 +1,7 @@
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_reparse_tag.h>
 #include <snk/platform/plt_beneath_tree_hook.h>
+#include <snk/platform/plt_link_check.h>
 #include <snk/platform/plt_windows_names.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
@@ -775,6 +776,19 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	read_result result{ read_status::ok, {} };
 	result.stamp = stamp_after_read(file.get(), stamp, total);
 	return result;
+}
+
+std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(const fs::path& path, std::error_code& ec)
+{
+	ec.clear();
+	struct stat information;
+	if (::lstat(path.c_str(), &information) != 0) {
+		if (errno != ENOENT && errno != ENOTDIR) {
+			ec = std::error_code(errno, std::generic_category());
+		}
+		return std::nullopt;
+	}
+	return S_ISLNK(information.st_mode) ? link_entry::link : link_entry::plain;
 }
 
 #else
@@ -1715,6 +1729,28 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	read_result result{ read_status::ok, {} };
 	result.stamp = stamp_after_read(file.get(), stamp, total);
 	return result;
+}
+
+std::optional<platform::beneath::link_entry> platform::beneath::link_entry_at(const fs::path& path, std::error_code& ec)
+{
+	ec.clear();
+	const handle_holder entry{ ::CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
+	if (!entry.valid()) {
+		const DWORD code = ::GetLastError();
+		if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) {
+			ec = std::error_code(static_cast<int>(code), std::system_category());
+		}
+		return std::nullopt;
+	}
+	FILE_ATTRIBUTE_TAG_INFO information{};
+	if (!::GetFileInformationByHandleEx(entry.get(), FileAttributeTagInfo, &information, sizeof(information))) {
+		ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+		return std::nullopt;
+	}
+	const bool reparse_point = (information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	return link_entry_of(information.FileAttributes, true, reparse_point ? information.ReparseTag : 0);
 }
 
 #endif
