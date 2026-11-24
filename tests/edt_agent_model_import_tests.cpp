@@ -305,6 +305,18 @@ BOOST_AUTO_TEST_CASE(Resolve_AnExistingTargetNeedsInput_InAnyLayer)
 	BOOST_CHECK(service->resolve(request("other")).ok());
 }
 
+// #1361: the prefab's name is held by a .resource a deleted file left: the import asks before anything is parsed.
+BOOST_AUTO_TEST_CASE(Resolve_APrefabNameALeftoverResourceHolds_NeedsInput)
+{
+	dir.write("res/assets/robot/robot.prefab.desc.resource", R"({"__type":"resource_meta","__version":1,)"
+		R"("__guid":"5d8a1f3e-2b4c-4e6f-8a9b-0c1d2e3f4a5b"})");
+	const edt::agent_import_plan plan = service->resolve(request());
+	BOOST_CHECK(!plan.ok());
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::needs_input);
+	BOOST_CHECK(plan.error.find("robot.prefab.desc.resource") != std::string::npos);
+	BOOST_CHECK(service->resolve(request("other")).ok());
+}
+
 BOOST_AUTO_TEST_CASE(Resolve_IsBusyWhileAnotherImportRunsOrTheEditorBlocks)
 {
 	blocked = "Stop Play to import.";
@@ -609,6 +621,26 @@ BOOST_AUTO_TEST_CASE(AModelTheScanRefuses_FailsTheJobWithTheReason_AndWritesNoth
 	BOOST_CHECK(info->error.find("hidden") != std::string::npos);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+// #1361: one asset of the import is a name a leftover .resource holds: the job fails naming it, nothing is written,
+// and the .resource keeps its bytes (the new file would have taken the deleted asset's ID).
+BOOST_AUTO_TEST_CASE(AnAssetNameALeftoverResourceHolds_FailsTheJob_AndWritesNothing)
+{
+	const std::string meta = R"({"__type":"resource_meta","__version":1,)"
+		R"("__guid":"5d8a1f3e-2b4c-4e6f-8a9b-0c1d2e3f4a5b"})";
+	dir.write("res/models/hero.geom.desc.resource", meta);
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs_until_settled(started.job);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("hero.geom.desc.resource") != std::string::npos, info->error);
+	for (const char* name : { "hero.prefab.desc", "hero.geom.desc", "hero.geom.bin" }) {
+		BOOST_TEST_CONTEXT(name) { BOOST_CHECK(!fs::exists(res_root / "models" / name)); }
+	}
+	BOOST_CHECK_EQUAL(read_file(res_root / "models" / "hero.geom.desc.resource"), meta);
 }
 
 BOOST_AUTO_TEST_CASE(Start_WithoutAnApproval_LooksAtNoPath)
