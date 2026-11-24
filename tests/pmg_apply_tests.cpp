@@ -834,7 +834,7 @@ BOOST_AUTO_TEST_CASE(AFileNamedLikeAShortName_MigratesAndRollsBack)
 	write_text(copy.res() / "IMG~1.PNG", "png");
 	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
 	json::value journal = json::parse(read_text(journal_path));
-	journal.as_object()["created_files"] = json::array{ "res/IMG~1.PNG" };
+	as_format_1(journal.as_object(), json::array{ "res/IMG~1.PNG" });
 	write_text(journal_path, json::serialize(journal));
 
 	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
