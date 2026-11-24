@@ -2,7 +2,9 @@
 #include "test_scene_env.hpp"
 #include "edt_node_patch.h"
 #include "edt_scene_document.h"
+#include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_node_index.h>
+#include <boost/json/serialize.hpp>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_camera_component.hpp>
@@ -119,6 +121,44 @@ BOOST_AUTO_TEST_CASE(AFieldEdit_GivesWhatARebuildGives_OnTheSameEntity)
 	BOOST_TEST(reg.get<scn::camera_component>(cam).fov == 40.f);
 	BOOST_TEST((reg.get<scn::local_transform>(cam).local == rebuilt.get<scn::local_transform>(fresh).local));
 	BOOST_TEST(reg.get<scn::name_component>(cam).name == rebuilt.get<scn::name_component>(fresh).name);
+}
+
+// The descs of the document are the source of truth (a push reloads the world from them, a save writes them): a patch
+// never writes anywhere else, so every later rebuild, hot reload and save must still see what it applied.
+BOOST_AUTO_TEST_CASE(APatchedField_SurvivesAHotReloadOfItsParentDesc_ARebuild_AndIsSaved)
+{
+	const res::tag lens_tag = put("lens.desc", R"({ "__type": "camera_desc", "fov": 30.0 })");
+	scn::prefab_desc::prefab_comp_node lens;
+	lens.type_name = "camera_desc";
+	lens.parent_desc = require_loaded<desc::desc_base>(lens_tag);
+	lens.overrides["fov"] = 50.0;
+	node(BOX_ID).components["lens"] = lens;
+
+	entt::registry live_reg;
+	const auto live_root = live_reg.create();
+	scn::spawn_world(*assembler, live_reg, live_root, scene.world_descs[0], "w0", res::tag{});
+	const entt::entity box = live(live_reg, BOX_ID);
+	BOOST_REQUIRE(live_reg.valid(box));
+	BOOST_TEST(live_reg.get<scn::camera_component>(box).fov == 50.f);
+
+	node(BOX_ID).components["lens"].overrides["fov"] = 65.0;
+	const edt::scene_node_edit edit{ 0, BOX_ID, false, false, { "lens" } };
+	BOOST_REQUIRE(edt::patch_live_nodes(scene.world_descs[0], live_reg, *assembler, std::span(&edit, 1)));
+	BOOST_TEST(live_reg.get<scn::camera_component>(box).fov == 65.f);
+
+	put("lens.desc", R"({ "__type": "camera_desc", "fov": 31.0 })");
+	rs->signal_changed(lens_tag);
+	pump();
+	assembler->trigger_hot_reload_for_component(live_reg, require_loaded<desc::desc_base>(lens_tag));
+	BOOST_TEST(live_reg.get<scn::camera_component>(box).fov == 65.f);
+
+	entt::registry rebuilt;
+	const auto rebuilt_root = rebuilt.create();
+	scn::spawn_world(*assembler, rebuilt, rebuilt_root, scene.world_descs[0], "w0", res::tag{});
+	BOOST_TEST(rebuilt.get<scn::camera_component>(live(rebuilt, BOX_ID)).fov == 65.f);
+
+	const auto saved = scn::level_desc::build_json("lvl", scene.world_descs, *descs);
+	BOOST_TEST(boost::json::serialize(saved).find("65") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AnEditOfANodeThatIsNotLive_TouchesNothing_AndIsRefused)
