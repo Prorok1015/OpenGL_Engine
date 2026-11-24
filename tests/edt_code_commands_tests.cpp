@@ -9,6 +9,7 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>.
+#include "test_folder_link.hpp"
 #include "test_manual_tasks.hpp"
 #include "test_reparse_tag.hpp"
 #include "test_temp_dir.hpp"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -55,6 +57,8 @@ struct code_fixture
 	edt::editor_events events;
 	std::vector<edt::agent_action_info> actions;
 	edt::connection seen;
+	// Handed to every read of the commands (code_commands_deps::read_hook); empty: nothing happens.
+	std::function<void(platform::beneath::read_stage)> read_hook;
 	cmd::command_registry commands;
 	std::vector<edt::registration> registrations;
 
@@ -72,7 +76,7 @@ struct code_fixture
 		sys = std::make_unique<res::resource_system>(tasks,
 			res::resource_system::project_mount_table({}, { content }, cache, cache / "user_profile", code));
 		seen = events.agent_action.subscribe([this](const edt::agent_action_info& info) { actions.push_back(info); });
-		registrations = edt::register_code_commands(commands, { *sys, &events });
+		registrations = edt::register_code_commands(commands, { *sys, &events, &read_hook });
 	}
 
 	cmd::result call(const std::string& id, json::value args, cmd::origin from = cmd::origin::agent("s1"))
@@ -219,6 +223,44 @@ BOOST_AUTO_TEST_CASE(Write_OverTheLimit_IsRefused)
 	const std::string big(edt::k_code_file_limit + 1, 'x');
 	const auto written = call("code.write", json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") }, { "text", big } });
 	BOOST_TEST(written.code == cmd::codes::failed);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
+}
+
+// #1349: a file over the limit is refused before it is read, and the answer gives the limit, never the file's size.
+BOOST_AUTO_TEST_CASE(Read_OverTheLimit_IsRefused_WithoutSayingItsSize)
+{
+	dir.write("project/code/src/big.cpp", std::string(edt::k_code_file_limit + 1, 'x'));
+	const auto read = call("code.read", json::object{ { "path", "src/big.cpp" } });
+	BOOST_TEST(read.code == cmd::codes::failed);
+	BOOST_TEST(read.error.find("larger than") != std::string::npos, read.error);
+	BOOST_TEST(read.error.find(std::to_string(edt::k_code_file_limit + 1)) == std::string::npos, read.error);
+	BOOST_TEST(read.value.as_object().if_contains("text") == nullptr);
+}
+
+// #1349: a folder swapped for a link after every check, right before the read walks to the file, is refused by the read
+// itself, and the answer is that of a missing file: nothing of what the link leads to comes back.
+BOOST_AUTO_TEST_CASE(Read_AFolderSwappedForALinkAfterTheChecks_IsRefusedLikeAMissingFile)
+{
+	dir.write("outside/game.cpp", "secret");
+	const fs::path moved = code / "src_moved";
+	bool swapped = false;
+	read_hook = [&](platform::beneath::read_stage stage) {
+		if (stage != platform::beneath::read_stage::before_walk || swapped) return;
+		swapped = true;
+		fs::rename(code / "src", moved);
+		test_util::make_folder_link(code / "src", dir.path() / "outside");
+	};
+
+	const auto read = call("code.read", json::object{ { "path", "src/game.cpp" } });
+
+	read_hook = nullptr;
+	BOOST_REQUIRE(swapped);
+	std::error_code ec;
+	fs::remove(code / "src", ec);
+	fs::rename(moved, code / "src", ec);
+	BOOST_TEST(read.code == cmd::codes::failed);
+	BOOST_TEST(read.error == "no file 'src/game.cpp' in code/", read.error);
+	BOOST_TEST(json::serialize(read.value).find("secret") == std::string::npos);
 	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
 }
 
@@ -746,7 +788,7 @@ BOOST_AUTO_TEST_CASE(EdtCodeCommands_WithoutACodeFolder_SayNoProject)
 	ds::task_system tasks{ test_util::manual_tasks() };
 	res::resource_system sys{ tasks, res::resource_system::project_mount_table({}, { content }, cache, cache / "user_profile") };
 	cmd::command_registry commands;
-	const auto registrations = edt::register_code_commands(commands, { sys, nullptr });
+	const auto registrations = edt::register_code_commands(commands, { sys, nullptr, nullptr });
 	BOOST_TEST(commands.invoke("code.list", json::object{}, cmd::origin::agent("s1")).code == "no_project");
 	BOOST_TEST(commands.invoke("code.read", json::object{ { "path", "a.cpp" } }, cmd::origin::agent("s1")).code == "no_project");
 }

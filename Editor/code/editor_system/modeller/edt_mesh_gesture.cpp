@@ -9,6 +9,12 @@ namespace edt::mesh
 		ASSERT_MSG(drag_threshold > 0.f, "the drag threshold must be above zero");
 	}
 
+	void select_gesture::set_drag_threshold(float pixels)
+	{
+		ASSERT_MSG(pixels > 0.f, "the drag threshold must be above zero");
+		m_threshold = pixels;
+	}
+
 	select_op select_op_of(const key_modifiers& modifiers)
 	{
 		if (modifiers.ctrl) return select_op::toggle;

@@ -487,7 +487,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	// A7 (#451): the agent's edits of code/ through code://; without a code folder they answer no_project.
-	for (auto& command : register_code_commands(m_context->actions().commands(), { m_res, &m_context->events() })) {
+	const code_commands_deps code_deps{ m_res, &m_context->events(), nullptr };
+	for (auto& command : register_code_commands(m_context->actions().commands(), code_deps)) {
 		m_registrations.push_back(std::move(command));
 	}
 	// #550: the agent's reads and writes of the desc files of res/, checked against the schemas first.
