@@ -16,7 +16,9 @@ namespace scn {
 	{
 	public:
 		// Made on first use, with hooks that hold each geometry_component made or retagged and let go of one removed.
-		// Without `resources` only what assemble_mesh_node hands it is held; a later call keeps the first resources.
+		// The resources are fixed by the first call. Given them, the holds follow a reload of a held geometry (revision()). Without
+		// (a bare registry: a tool, a test, a prefab assembled outside a context set) only what assemble_mesh_node hands it is held,
+		// as the handle was made, and a reload is not followed. Resources given to holds made without them are a contract error.
 		static geometry_holds& attach(entt::registry& reg, res::resource_system* resources);
 
 		geometry_holds();

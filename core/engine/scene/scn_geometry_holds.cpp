@@ -42,13 +42,8 @@ void release_on_destroy(entt::registry& reg, entt::entity entity)
 scn::geometry_holds& scn::geometry_holds::attach(entt::registry& reg, res::resource_system* resources)
 {
 	if (auto* holds = reg.ctx().find<geometry_holds>()) {
-		if (!holds->m_resources && resources) {
-			holds->m_resources = resources;
-			// Holds made before the resources were known are watched now, so the counts match what is watched.
-			for (const auto& [entity, held] : holds->m_held) {
-				holds->watch_tag(held.get_tag());
-			}
-		}
+		ASSERT_MSG(holds->m_resources || !resources,
+			"geometry_holds: the resources are fixed when the holds are made; attach them in the first call");
 		return *holds;
 	}
 	auto& holds = reg.ctx().emplace<geometry_holds>();
