@@ -111,12 +111,6 @@ namespace edt::mesh
 		{
 			return step > 0.f ? snap_to_step(value, step) : value;
 		}
-
-		glm::vec3 view_direction_of(const screen_view& screen, const glm::vec2& pixel)
-		{
-			const auto ray = screen.ray_through(pixel);
-			return ray ? ray->direction : glm::vec3(0.f, 0.f, -1.f);
-		}
 	}
 
 	const gizmo_shape* gizmo_layout::find(gizmo_part part) const
@@ -153,6 +147,7 @@ namespace edt::mesh
 			shape.part = part;
 			shape.visibility = visibility_of_axis(axis, layout.view_direction);
 			if (tool == gizmo_tool::rotate) {
+				shape.visibility = 1.f;
 				const glm::vec3 u = std::abs(axis.y) < 0.9f ? glm::normalize(glm::cross(axis, glm::vec3(0.f, 1.f, 0.f))) : glm::normalize(glm::cross(axis, glm::vec3(1.f, 0.f, 0.f)));
 				const glm::vec3 v = glm::cross(axis, u);
 				bool complete = true;

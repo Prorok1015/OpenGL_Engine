@@ -2,6 +2,8 @@
 #include <snk/editor/edt_panel_base.h>
 #include "edt_input_binding.h"
 #include "edt_mesh_gesture.h"
+#include "edt_mesh_gizmo.h"
+#include "edt_modeller_settings.h"
 #include "edt_mesh_picking.h"
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +36,11 @@ namespace edt
 		// What the Close button does (tests press it here).
 		void press_close() { if (m_on_close) m_on_close(); }
 		void set_input_router(inp::input_router* router) { m_router = router; }
+		// The snap steps (Editor Settings); read when a drag starts and while it runs. Null: the defaults.
+		void set_settings_source(std::function<modeller_settings()> source) { m_settings = std::move(source); }
+		mesh::gizmo_tool tool() const { return m_tool; }
+		mesh::gizmo_orientation orientation() const { return m_orientation; }
+		bool dragging() const { return m_drag.has_value(); }
 
 	protected:
 		void on_before_begin() override;
@@ -45,6 +52,15 @@ namespace edt
 		void render_banners();
 		void render_viewport();
 		void render_mode_bar();
+		void render_transform_bar();
+		void apply_numbers(const mesh::pivot_frame& frame);
+		mesh::gizmo_metrics gizmo_metrics_now() const;
+		std::optional<mesh::pivot_frame> current_frame() const;
+		// True when the gizmo has the mouse (hovered, or a drag runs): the selection gesture must not begin.
+		bool update_gizmo(const mesh::screen_view& screen, bool hovered, const glm::vec2& mouse);
+		void begin_drag(const mesh::screen_view& screen, const mesh::pivot_frame& frame, const glm::vec2& mouse);
+		void end_drag(bool commit);
+		void draw_gizmo(const ImVec2& image_pos, const ImVec2& image_size);
 		void handle_mode_keys();
 		void interact_with_image(const mesh::screen_view& screen, bool hovered);
 		void draw_overlay(const mesh::screen_view& screen, const ImVec2& image_pos, const ImVec2& image_size, bool hovered);
@@ -63,6 +79,26 @@ namespace edt
 		std::string m_error;
 		mesh::select_gesture m_gesture;
 		std::size_t m_omitted_segments = 0;
+		std::function<modeller_settings()> m_settings;
+		mesh::gizmo_tool m_tool = mesh::gizmo_tool::move;
+		mesh::gizmo_orientation m_orientation = mesh::gizmo_orientation::world;
+		std::optional<mesh::gizmo_layout> m_layout;
+		mesh::gizmo_part m_hot_part = mesh::gizmo_part::none;
+		std::optional<mesh::gizmo_drag> m_drag;
+		mesh::pivot_frame m_drag_frame;
+		mesh::vertex_snapshot m_snapshot;
+		mesh::gizmo_delta m_drag_delta;
+		// What the numbers panel shows, and what it was made from.
+		glm::vec3 m_numbers{ 0.f };
+		struct numbers_key
+		{
+			mesh::gizmo_tool tool = mesh::gizmo_tool::move;
+			std::uint64_t generation = 0;
+			bool valid = false;
+			bool operator==(const numbers_key&) const = default;
+		};
+		numbers_key m_numbers_key;
+		bool m_numbers_editing = false;
 		// What the hover was computed from: it is looked for again only when one of these changed.
 		struct hover_key
 		{

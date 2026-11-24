@@ -264,3 +264,8 @@ void edt::modeller_component::publish_problems()
 		m_ports.context.problems().set(k_problem_source, std::move(items));
 	}
 }
+
+void edt::modeller_component::set_settings_source(std::function<modeller_settings()> source)
+{
+	if (m_panel) m_panel->set_settings_source(std::move(source));
+}
