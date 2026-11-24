@@ -24,3 +24,6 @@
 	path = projects/sandbox/res/samples
 	url = https://github.com/Prorok1015/OpenGL_Engine_samples.git
 	update = none
+[submodule "lib3dparty/ImGuiColorTextEdit"]
+	path = lib3dparty/ImGuiColorTextEdit
+	url = https://github.com/goossens/ImGuiColorTextEdit

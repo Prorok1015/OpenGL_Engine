@@ -186,7 +186,7 @@ endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE color_text_edit PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 target_link_libraries(unit_tests PRIVATE snk::project_migration)
 # The model import library (#1108): the engine's model adapter and the editor's importer run in the tests.
 if(TARGET snk::model_import_assimp)
