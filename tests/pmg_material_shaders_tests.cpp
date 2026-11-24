@@ -6,8 +6,13 @@
 #include <snk/project_migration/pmg_command.h>
 #include <snk/project_migration/pmg_project_steps.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/project/prj_manifest.h>
+#include <snk/project/prj_project.h>
 #include <snk/model_codec/res_asset_id.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/resource/res_asset_meta.h>
+#include <snk/resource/res_mount_table.h>
+#include <snk/resource/res_system.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
@@ -399,6 +404,85 @@ BOOST_AUTO_TEST_CASE(ANameTakenInAReadOnlyLayer_GetsADashSuffix)
 	const pmg::migration_report report = migrate();
 	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
 	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// Names compare with the letter case folded on every platform (#1279): a project made on Linux still loads on Windows.
+BOOST_AUTO_TEST_CASE(ANameTakenInOtherLetterCase_GetsADashSuffix)
+{
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	write_text(at("res/materials/Rock.shader.desc"), k_foreign_shader);
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
+	BOOST_TEST(read_text(at("res/materials/Rock.shader.desc")) == k_foreign_shader);
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// A .resource left at the name would give its deleted file's ID to the new one: the name is taken.
+BOOST_AUTO_TEST_CASE(ALeftoverResourceAtTheName_GetsADashSuffix)
+{
+	write_text(at("res/materials/rock.desc"), k_custom_pair);
+	res::asset_meta meta;
+	meta.guid = res::generate_asset_id();
+	const std::string left = res::write_asset_meta(meta);
+	write_text(at("res/materials/rock.shader.desc.resource"), left);
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report) == std::vector<std::string>{ "res/materials/rock-2.shader.desc" }));
+	BOOST_TEST(read_text(at("res/materials/rock.shader.desc.resource")) == left);
+	BOOST_TEST(!fs::exists(at("res/materials/rock.shader.desc")));
+	check_material_v2(read_json("res/materials/rock.desc"), "res://materials/rock-2.shader.desc");
+}
+
+// Two pairs in one file both name a file after it: the second skips the name the first was given in this run.
+BOOST_AUTO_TEST_CASE(TwoNamesOfOneRun_GetTheNextNumbers)
+{
+	write_text(at("res/prefabs/rock.prefab.shader.desc"), k_foreign_shader);
+	const auto node = [](std::string_view id, std::string_view material) {
+		json::object mesh{ { "__type", "mesh_node_desc" }, { "__version", 1 }, { "material", json::parse(material) } };
+		return json::object{ { "__id", id }, { "name", "mesh" }, { "components", json::object{ { "mesh_node_desc", mesh } } } };
+	};
+	constexpr std::string_view other_pair = R"({"__type": "material_desc", "shader_vertex": "res://shaders/x.vert", "shader_fragment": "res://shaders/y.frag"})";
+	json::object prefab{ { "__type", "prefab_desc" }, { "__version", 4 },
+		{ "children", json::array{ node("00000000000000c1", k_custom_pair), node("00000000000000c2", other_pair) } } };
+	write_text(at("res/prefabs/rock.prefab.desc"), json::serialize(prefab));
+
+	const pmg::migration_report report = migrate();
+	BOOST_TEST((created_shaders(report)
+		== std::vector<std::string>{ "res/prefabs/rock.prefab-2.shader.desc", "res/prefabs/rock.prefab-3.shader.desc" }));
+	BOOST_TEST(read_text(at("res/prefabs/rock.prefab.shader.desc")) == k_foreign_shader);
+}
+
+// The layers the step names files in (#1279) are the ones res:// mounts for the project, in the same order: the engine's
+// layer lowest, the first content root of project.snkproj highest.
+BOOST_AUTO_TEST_CASE(TheStepsLayers_AreTheResolversLayers_InOrder)
+{
+	serve_engine_base();
+	json::object manifest = json::parse(read_text(at("project.snkproj"))).as_object();
+	manifest["content_roots"] = json::array{ "res", "extra" };
+	write_text(at("project.snkproj"), json::serialize(manifest));
+	fs::create_directories(at("extra"));
+
+	const prj::open_result opened = prj::open_project(copy.root());
+	BOOST_REQUIRE_MESSAGE(opened.context, opened.error);
+	const res::mount_table table = res::resource_system::project_mount_table(engine.path, opened.context->content_roots,
+		opened.context->cache_dir(), opened.context->user_profile_dir());
+	const auto mounted = std::ranges::find(table, res::tag::default_protocol(), &res::mount::protocol);
+	BOOST_REQUIRE(mounted != table.end());
+	BOOST_REQUIRE(rs->remount(res::tag::default_protocol(), mounted->roots));
+
+	const prj::manifest_result loaded = prj::load_manifest(copy.root());
+	BOOST_REQUIRE(loaded.data);
+	// As the migration builds it: the read-only layers from the resolver, the content roots from project.snkproj.
+	const pmg::project_assets assets(copy.root(), loaded.data->content_roots, pmg::read_only_layers(*rs, copy.root()));
+	const auto canonical = [](const std::vector<fs::path>& layers) {
+		std::vector<fs::path> out;
+		for (const fs::path& layer : layers) out.push_back(fs::weakly_canonical(layer));
+		return out;
+	};
+	const std::vector<fs::path> resolver = canonical(rs->get_resource_layers());
+	BOOST_TEST(resolver.size() == 3u);
+	BOOST_TEST((canonical(assets.res_layers()) == resolver));
 }
 
 // A material the step could not convert (its parent is missing) is invalid in the plan, as a file whose type step fails:

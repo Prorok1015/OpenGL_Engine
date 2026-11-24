@@ -94,6 +94,14 @@ prj::migration::project_assets::project_assets(fs::path root, std::vector<fs::pa
 {
 }
 
+std::vector<fs::path> prj::migration::project_assets::res_layers() const
+{
+	std::vector<fs::path> layers = m_read_only_layers;
+	layers.reserve(layers.size() + m_content_roots.size());
+	for (auto it = m_content_roots.rbegin(); it != m_content_roots.rend(); ++it) layers.push_back((m_root / *it).lexically_normal());
+	return layers;
+}
+
 void prj::migration::project_assets::rebuild()
 {
 	m_assets.clear();
