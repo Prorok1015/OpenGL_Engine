@@ -594,7 +594,8 @@ namespace {
 		}
 		copy.overrides.reserve(node.overrides.size());
 		for (const auto& record : node.overrides) {
-			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op });
+			copy.overrides.push_back({ record.target, record.component, record.path, json::value(record.value, json::storage_ptr{}), record.op,
+				record.type_version });
 		}
 		copy.children.reserve(node.children.size());
 		for (const auto& child : node.children) {
@@ -925,28 +926,84 @@ namespace {
 		struct forward { std::size_t record; std::vector<uint64_t> prefix; std::size_t position; };
 		std::vector<scn::stale_override> stale;
 		std::vector<forward> forwarded;
+		// Records the steps of their component's type rewrote, or that got the current version (#1255), by number.
+		std::vector<std::pair<std::size_t, scn::override_record>> migrated;
 	};
 
-	// False: the record names a component the node does not have and cannot add it (its target is gone).
-	bool apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& record, bool quiet)
+	// A record is applied on every expansion of its instance: what the steps did to it is said once a run, not each time.
+	void log_once(bool error, const std::string& text)
 	{
-		if (record.component == scn::transform_pseudo_component) {
-			apply_transform_record(node, record);
+		static std::mutex mutex;
+		static std::unordered_set<std::string> said;
+		constexpr std::size_t remembered = 4096;
+		{
+			std::lock_guard lock(mutex);
+			if (said.contains(text)) return;
+			// Bounded: a long session that meets many records starts over rather than keeping every text.
+			if (said.size() >= remembered) said.clear();
+			said.insert(text);
+		}
+		if (error) egLOG_ERROR("desc", "{}", text);
+		else egLOG_WARN("desc", "{}", text);
+	}
+
+	// False: the record names a component the node does not have and cannot add it (its target is gone).
+	bool apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& given,
+		std::size_t index, stale_sink* sink)
+	{
+		const bool quiet = sink != nullptr;
+		const scn::override_record* applied = &given;
+		if (given.component == scn::transform_pseudo_component) {
+			apply_transform_record(node, given);
 			return true;
 		}
 
-		auto it = node.components.find(record.component);
+		auto it = node.components.find(given.component);
 		if (it == node.components.end()) {
-			if (record.path.empty() && (record.value.is_object() || record.value.is_string())) {
-				node.components.emplace(record.component, scn::parse_component(desc_system, owner, record.value, record.component));
+			if (given.path.empty() && (given.value.is_object() || given.value.is_string())) {
+				node.components.emplace(given.component, scn::parse_component(desc_system, owner, given.value, given.component));
 			} else {
-				if (!quiet) egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", record.component, record.path);
+				if (!quiet) egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", given.component, given.path);
 				return false;
 			}
 			return true;
 		}
 		// The component's type decides, not the record's key: a typed component may well have a field called "path".
 		const prefab_comp_node& held = it->second;
+		std::string type = held.type_name;
+		if (type.empty() && held.parent_desc.is_valid() && held.parent_desc.is_ready()) type = std::string(held.parent_desc->get_type());
+		scn::override_record migrated;
+		if (!type.empty()) {
+			migrated = given;
+			const scn::record_migration_result result = scn::migrate_override_record(desc_system, type, migrated);
+			switch (result.outcome) {
+			case scn::record_migration::kept:
+			case scn::record_migration::moved:
+				applied = &migrated;
+				if (sink && (result.outcome == scn::record_migration::moved || migrated.type_version != given.type_version)) {
+					sink->migrated.emplace_back(index, migrated);
+				}
+				break;
+			case scn::record_migration::dropped:
+				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::dropped_by_migration, result.reason });
+				else log_once(false, result.reason + ": the edit is dropped");
+				return true;
+			case scn::record_migration::duplicated:
+				if (sink) sink->stale.push_back({ index, scn::stale_override::reason::duplicated_by_migration, result.reason });
+				else log_once(true, result.reason + ": the record is not applied");
+				return true;
+			case scn::record_migration::failed:
+				// Not worse than before records had versions: applied as written.
+				// A record without a version fails only when its field is gone; any other one may still work as written.
+				if (sink) {
+					sink->stale.push_back({ index, given.type_version <= 0 ? scn::stale_override::reason::field_gone_without_version
+						: scn::stale_override::reason::not_migrated, result.reason });
+				}
+				else log_once(false, result.reason);
+				break;
+			}
+		}
+		const scn::override_record& record = *applied;
 		const bool has_fields = !held.type_name.empty() && (desc_system.is_registered(held.type_name) || held.parent_desc.is_valid());
 		const bool whole_reference = record.value.is_string() || (!has_fields && res::reference_from_json(record.value));
 		if (record.path.empty() && whole_reference) {
@@ -1031,7 +1088,7 @@ namespace {
 				break;
 
 			case scn::override_op::set:
-				if (!apply_set_record(desc_system, owner, *node, record, sink != nullptr) && sink) {
+				if (!apply_set_record(desc_system, owner, *node, record, index, sink) && sink) {
 					sink->stale.push_back({ index, scn::stale_override::reason::component_gone,
 						std::format("component '{}' is not on '{}' any more", record.component, node->name) });
 				}
@@ -1277,18 +1334,25 @@ namespace {
 // The records of `node` that find nothing to change when it is expanded, by their number among `node.overrides`. A record handed
 // down to a nested instance is judged there: each nested instance is expanded once, whatever number of records it was handed. `open`
 // are the prefabs `node` is inside, as in a spawn: a prefab that instantiates itself is refused at once, so a cycle ends. `guard`
-// bounds the nesting that is followed. A node that cannot be expanded (no prefab, no records) reports nothing.
-std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembler, const prefab_node& node,
-	std::span<const res::tag> open, std::size_t guard)
+// bounds the nesting that is followed. A node that cannot be expanded (no prefab, no records) reports nothing. The records the steps of
+// their component's type rewrite come along by number too (#1255).
+struct judged_records
 {
-	std::vector<scn::stale_override> found;
+	std::vector<scn::stale_override> stale;
+	std::vector<std::pair<std::size_t, scn::override_record>> migrated;
+};
+
+judged_records judge_node(const scn::ecs_assembler& assembler, const prefab_node& node, std::span<const res::tag> open, std::size_t guard)
+{
+	judged_records found;
 	if (guard == 0) return found;
 	prefab_node out;
 	res::tag source;
 	expansion made;
 	stale_sink sink;
 	if (!materialize(assembler, node, out, source, open, 0, made, {}, &sink)) return found;
-	found = std::move(sink.stale);
+	found.stale = std::move(sink.stale);
+	found.migrated = std::move(sink.migrated);
 
 	std::vector<res::tag> inside(open.begin(), open.end());
 	if (!source.string().empty()) inside.push_back(source);
@@ -1309,12 +1373,16 @@ std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembl
 			nested = &*child;
 		}
 		if (!nested) continue;
-		const std::vector<scn::stale_override> inner = stale_in_node(assembler, *nested, inside, guard - 1);
+		judged_records inner = judge_node(assembler, *nested, inside, guard - 1);
 		for (const auto* note : notes) {
-			for (const scn::stale_override& entry : inner) {
+			for (const scn::stale_override& entry : inner.stale) {
 				if (entry.index != note->position) continue;
-				found.push_back(entry);
-				found.back().index = note->record;
+				found.stale.push_back(entry);
+				found.stale.back().index = note->record;
+			}
+			for (const auto& [index, record] : inner.migrated) {
+				if (index != note->position) continue;
+				found.migrated.emplace_back(note->record, record);
 			}
 		}
 	}
@@ -1326,14 +1394,36 @@ std::vector<scn::stale_override> stale_in_node(const scn::ecs_assembler& assembl
 std::vector<scn::stale_override> scn::find_stale_records(const ecs_assembler& assembler, const prefab_desc::prefab_node& node)
 {
 	constexpr std::size_t nesting_followed = 64;
-	std::vector<stale_override> found = stale_in_node(assembler, node, {}, nesting_followed);
+	std::vector<stale_override> found = judge_node(assembler, node, {}, nesting_followed).stale;
 	std::ranges::sort(found, {}, &stale_override::index);
 	return found;
 }
 
+std::size_t scn::migrate_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node)
+{
+	constexpr std::size_t nesting_followed = 64;
+	std::size_t rewritten = 0;
+	judged_records judged = judge_node(assembler, node, {}, nesting_followed);
+	for (auto& [index, migrated] : judged.migrated) {
+		if (index >= node.overrides.size()) continue;
+		// The target stays the node's own: a record handed down to a nested instance comes back with the target it had there.
+		override_record& record = node.overrides[index];
+		record.path = std::move(migrated.path);
+		record.value = std::move(migrated.value);
+		ds::keep_in_default_resource(record.value);
+		record.type_version = migrated.type_version;
+		++rewritten;
+	}
+	return rewritten;
+}
+
 std::size_t scn::prune_stale_records(const ecs_assembler& assembler, prefab_desc::prefab_node& node)
 {
-	const std::vector<stale_override> found = find_stale_records(assembler, node);
+	std::vector<stale_override> found = find_stale_records(assembler, node);
+	// Which place a duplicated record meant, and whether one the steps cannot follow still does its job, is for a person to say.
+	std::erase_if(found, [](const stale_override& entry) {
+		return entry.why == stale_override::reason::duplicated_by_migration || entry.why == stale_override::reason::not_migrated;
+	});
 	for (auto it = found.rbegin(); it != found.rend(); ++it) {
 		node.overrides.erase(node.overrides.begin() + static_cast<std::ptrdiff_t>(it->index));
 	}

@@ -2,7 +2,7 @@
 	"memory://models/obj_mixed/mixed.desc": {
 		"json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "ef799a2f24928fff",
 			"children": [
 				{

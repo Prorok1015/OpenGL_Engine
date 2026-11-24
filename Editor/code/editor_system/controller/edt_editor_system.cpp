@@ -372,7 +372,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
-			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty());
+			std::string error = apply_override_records(m_services, m_asset_open->desc_layout(), tag, records, m_prefab->dirty_for(tag));
 			if (error.empty()) m_state.reset_history();
 			return error;
 		},
@@ -392,7 +392,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_asset_open = std::make_unique<asset_open_component>(std::move(open_ports));
 	m_asset_open->install(m_registrations);
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
-		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); } });
+		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },
+		[this] { return m_prefab->shown_prefab(); } });
 
 	// Registration order is the render order and the View menu order (panels_component::install).
 	m_panels->install(m_registrations, [this] { m_prefab->install(m_registrations); });
@@ -615,7 +616,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		};
 		agent_ports.discard_changes = [this] {
 			m_state.mark_clean();
-			m_prefab->drop_dirty_document();
+			m_prefab->close_dirty();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		// The guard is in place before the server can take a call.

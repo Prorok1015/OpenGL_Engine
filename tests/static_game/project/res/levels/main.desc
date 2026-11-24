@@ -6,7 +6,7 @@
     "worlds" : [
         {
             "__type" : "world_desc",
-            "__version" : 4,
+            "__version" : 5,
             "name" : "main",
             "systems" : [
                 "static_game::tick"

@@ -32,7 +32,7 @@ namespace
 {
 	// A prefab with one node per scene desc; a skinning node with bones adds the skeleton and the bone matrices to the
 	// root.
-	constexpr const char* k_every_desc = R"json({"__type":"prefab_desc","__version":4,"children":[
+	constexpr const char* k_every_desc = R"json({"__type":"prefab_desc","__version":5,"children":[
 				{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 				{"__id":"00000000000000a2","name":"Sun","components":{"light":{"__type":"directional_light_desc"}}},
 				{"__id":"00000000000000a3","name":"Marker","components":{"marker":{"__type":"screen_anchor_desc"}}},

@@ -689,6 +689,117 @@ BOOST_AUTO_TEST_CASE(AnUndo_RefusesWhenATouchedFileChangedSince_AndTouchesNothin
 	BOOST_TEST(clouds_reported);
 }
 
+// #1309: a file put at the source between the undo's check and its step is not taken for the deleted one.
+BOOST_AUTO_TEST_CASE(AnUndoOfADelete_WithAnotherFileAtItsPlace_FailsSayingWhatToDo_AndKeepsTheDeletedFile)
+{
+	open();
+	const auto before = snapshot();
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const fs::path kept = journal.path() / report.operation_id / "files" / "lonely.desc";
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:lonely.desc") write("lonely.desc", "someone else's file");
+	};
+
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	BOOST_REQUIRE(failed.failures.size() == 1u);
+	BOOST_TEST(failed.failures.front().find("lonely.desc") != std::string::npos, failed.failures.front());
+	BOOST_TEST(failed.failures.front().find("rename or delete that file, then undo again") != std::string::npos,
+		failed.failures.front());
+	BOOST_TEST(text_of("lonely.desc") == "someone else's file", "the other file is left as it is");
+	BOOST_TEST(fs::is_regular_file(kept), "the deleted file is still kept in the journal");
+
+	on_step = {};
+	fs::remove(layer.path() / "lonely.desc");
+	const edt::undo_report again = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST((snapshot() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfADelete_WithTheSameBytesAtItsPlace_CountsTheStepAsDone)
+{
+	open();
+	const std::string original = text_of("lonely.desc");
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:lonely.desc") write("lonely.desc", original);
+	};
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(text_of("lonely.desc") == original);
+}
+
+BOOST_AUTO_TEST_CASE(ARollbackOfADelete_WithAnotherFileAtItsPlace_KeepsTheStepAndTheDeletedFileInTheJournal)
+{
+	open();
+	fail_at = "stash:lonely.desc.resource";
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:lonely.desc") write("lonely.desc", "someone else's file");
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_REQUIRE(report.rollback_failures.size() == 1u);
+	const std::string& stuck = report.rollback_failures.front();
+	BOOST_TEST(stuck.find("lonely.desc") != std::string::npos, stuck);
+	BOOST_TEST(text_of("lonely.desc") == "someone else's file");
+
+	const fs::path folder = journal.path() / report.operation_id;
+	BOOST_TEST(fs::is_regular_file(folder / "files" / "lonely.desc"), "the deleted file is still kept in the journal");
+	std::ifstream in(folder / "journal.json", std::ios::binary);
+	const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	const json::value written = json::parse(text);
+	const json::array& left = written.at("steps").as_array();
+	BOOST_REQUIRE(left.size() == 1u);
+	const json::object& step = left.front().as_object();
+	BOOST_TEST(json::value_to<std::string>(step.at("kind")) == "stash");
+	BOOST_TEST(json::value_to<std::string>(step.at("from")) == "lonely.desc");
+	BOOST_TEST(json::value_to<std::string>(step.at("to")) == "files/lonely.desc", "the step still names the kept file");
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfARename_WithAnotherFileAtTheOldName_FailsAndLeavesTheMovedFile)
+{
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const std::string moved = text_of("clouds.desc");
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:sky.desc") write("sky.desc", "someone else's file");
+	};
+
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	const bool named = std::ranges::any_of(failed.failures, [](const std::string& failure) {
+		return failure.find("sky.desc") != std::string::npos
+			&& failure.find("rename or delete that file, then undo again") != std::string::npos;
+	});
+	BOOST_TEST(named);
+	BOOST_TEST(text_of("sky.desc") == "someone else's file");
+	BOOST_TEST(text_of("clouds.desc") == moved, "the moved file stays where the rename put it");
+}
+
+BOOST_AUTO_TEST_CASE(AnUndoOfARename_WhoseOldNameIsBackWhileTheNewOneIsStillThere_Fails_AndRemovesNeither)
+{
+	open();
+	const std::string original = text_of("sky.desc");
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:sky.desc") write("sky.desc", original);
+	};
+
+	const edt::undo_report failed = ops().undo(report.journal);
+	BOOST_TEST(!failed.ok);
+	const bool named = std::ranges::any_of(failed.failures, [](const std::string& failure) {
+		return failure.find("clouds.desc") != std::string::npos && failure.find("then undo again") != std::string::npos;
+	});
+	BOOST_TEST(named);
+	BOOST_TEST(text_of("sky.desc") == original);
+	BOOST_TEST(has("clouds.desc"), "the file at the new name is not taken away");
+}
+
 BOOST_AUTO_TEST_CASE(ADeleteOrAMoveOfAFileOpenWithUnsavedChanges_IsRefused_AsIsARename)
 {
 	open();

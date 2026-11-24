@@ -102,6 +102,8 @@ namespace edt
 		const res::tag& source_tag() const { return m_source_tag; }
 		// The preview is the only context of its own set; the panel binds its input to this target.
 		const std::string& set_name() const { return m_set_name; }
+		// The tag the preview is assembled under: its own per open, so another open prefab never shares it.
+		const std::string& working_tag() const { return m_working_tag; }
 		static constexpr std::string_view context_name() { return CONTEXT_NAME; }
 
 		static constexpr std::string_view RT_COLOR = "memory://__prefab_camera_rt";
@@ -116,7 +118,9 @@ namespace edt
 		save_result save_with(bool without_base);
 		// The same state as a string for the dirty test; no references are resolved, no file is read.
 		std::string working_form() const;
-		void take_from(const scn::prefab_desc& source);
+		// Returns the copy's form as `source` holds it: not working_form() when records of its prefab instances were moved to the
+		// current versions of their types (#1255), which leaves the copy edited.
+		std::string take_from(const scn::prefab_desc& source);
 		void sync_preview();
 		void watch_source();
 		void unwatch_source();

@@ -31,8 +31,8 @@ struct counter { int value = 0; };
 void spin(counter& c) { ++c.value; }
 void fade(counter& c) { --c.value; }
 
-constexpr const char* WORLD = R"({ "__type": "world_desc", "__version": 4, "name": "w0", "systems": ["game::spin", "gone::system"], "children": [] })";
-constexpr const char* WORLD_1 = R"({ "__type": "world_desc", "__version": 4, "name": "w1", "systems": [], "children": [] })";
+constexpr const char* WORLD = R"({ "__type": "world_desc", "__version": 5, "name": "w0", "systems": ["game::spin", "gone::system"], "children": [] })";
+constexpr const char* WORLD_1 = R"({ "__type": "world_desc", "__version": 5, "name": "w1", "systems": [], "children": [] })";
 
 struct systems_fixture : test_util::scene_env
 {

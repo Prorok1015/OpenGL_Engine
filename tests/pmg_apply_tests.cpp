@@ -260,7 +260,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAFileChangedAfterTheMigration)
 BOOST_AUTO_TEST_CASE(AFileWithAParent_KeepsItsParentAndOnlyItsOwnFields)
 {
 	write_text(copy.res() / "derive/base.prefab.desc",
-		R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000b1","name":"body"}]})");
+		R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000b1","name":"body"}]})");
 	write_text(copy.res() / "derive/variant.prefab.desc",
 		R"({"__type":"prefab_desc","__version":3,"__parent":"res://derive/base.prefab.desc","children":[{"__id":"00000000000000c1","name":"extra"}]})");
 	write_text(copy.res() / "derive/base_cam.desc", R"({"__type":"camera_desc","__version":2,"fov":60,"near_distance":0.5})");

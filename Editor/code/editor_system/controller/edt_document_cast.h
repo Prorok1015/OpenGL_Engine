@@ -5,6 +5,8 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/common/engine_assert.h>
 #include <memory>
+#include <vector>
+#include <algorithm>
 
 namespace edt
 {
@@ -13,13 +15,27 @@ namespace edt
 	// where a static_cast would be undefined behaviour.
 	inline scene_document& scene_of(document_manager& documents) { return dynamic_cast<scene_document&>(documents.scene()); }
 	inline const scene_document& scene_of(const document_manager& documents) { return dynamic_cast<const scene_document&>(documents.scene()); }
-	// Null when no preview is open (or it is not a prefab).
-	inline prefab_document* prefab_of(document_manager& documents) { return dynamic_cast<prefab_document*>(documents.preview()); }
-	// The open prefab document when it has unapplied edits, else null (what quit, New, Open and a module reload must not lose).
+	// The open prefab documents in the order they were opened (a prefab preview is of kind `multiple`, #1185).
+	inline std::vector<prefab_document*> prefabs_of(document_manager& documents)
+	{
+		std::vector<prefab_document*> out;
+		for (previewable_document* open : documents.previews()) {
+			if (auto* prefab = dynamic_cast<prefab_document*>(open)) out.push_back(prefab);
+		}
+		return out;
+	}
+	// The open prefab documents with unapplied edits (what quit, New, Open and a module reload must not lose).
+	inline std::vector<prefab_document*> dirty_prefabs_of(document_manager& documents)
+	{
+		std::vector<prefab_document*> out = prefabs_of(documents);
+		std::erase_if(out, [](const prefab_document* prefab) { return !prefab->is_dirty(); });
+		return out;
+	}
+	// The first of them, else null.
 	inline prefab_document* dirty_prefab_of(document_manager& documents)
 	{
-		prefab_document* prefab = prefab_of(documents);
-		return prefab && prefab->is_open() && prefab->is_dirty() ? prefab : nullptr;
+		const std::vector<prefab_document*> dirty = dirty_prefabs_of(documents);
+		return dirty.empty() ? nullptr : dirty.front();
 	}
 	// By the id of the built-in prefab preview (register_builtin_asset_kinds), not by suffix: a module's preview for a longer
 	// suffix (".ui.prefab.desc") must not hand the prefab editor a document that is not a prefab_document.

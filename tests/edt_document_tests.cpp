@@ -29,7 +29,7 @@
 namespace {
 
 constexpr const char* PREVIEW_TEMPLATE = R"({
-	"__type": "world_desc", "__version": 4, "name": "__prefab_preview", "systems": [],
+	"__type": "world_desc", "__version": 5, "name": "__prefab_preview", "systems": [],
 	"components": { "anchor": { "__type": "anchor_desc", "__version": 1 } },
 	"children": [
 		{ "__id": "09705f78a49797f0", "name": "PrefabLight",
@@ -194,7 +194,7 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_OwnsThePreviewSetAndCloseDestroysIt)
 	BOOST_TEST(documents.preview() == nullptr);
 }
 
-BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneReplacesTheFirst)
+BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneIsOpenedNextToTheFirst)
 {
 	const auto first = edt::open_prefab(documents, prefab_a).id();
 	log.clear();
@@ -203,11 +203,59 @@ BOOST_AUTO_TEST_CASE(OpenPrefab_ASecondOneReplacesTheFirst)
 
 	BOOST_REQUIRE(second.is_open());
 	BOOST_TEST(second.id() != first);
-	BOOST_TEST(documents.find(first) == nullptr);
-	BOOST_TEST(count_documents() == 2u);
-	BOOST_TEST((log == std::vector<std::string>{
-		"activated:" + std::to_string(scene.id()), "closed:" + std::to_string(first),
-		"opened:" + std::to_string(second.id()), "activated:" + std::to_string(second.id()) }));
+	BOOST_TEST(documents.find(first) != nullptr);
+	BOOST_TEST(count_documents() == 3u);
+	BOOST_TEST((log == std::vector<std::string>{ "opened:" + std::to_string(second.id()), "activated:" + std::to_string(second.id()) }));
+	BOOST_TEST(test_util::prefab_of(documents) == &second);
+	BOOST_TEST(edt::prefabs_of(documents).size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_TheSameFileTwiceFocusesTheOpenOne)
+{
+	auto& first = edt::open_prefab(documents, prefab_a);
+	edt::open_prefab(documents, prefab_b);
+
+	auto& again = edt::open_prefab(documents, prefab_a);
+
+	BOOST_TEST(&again == &first);
+	BOOST_TEST(count_documents() == 3u);
+	BOOST_TEST(documents.active() == &first);
+	BOOST_TEST(test_util::prefab_of(documents) == &first);
+}
+
+BOOST_AUTO_TEST_CASE(PrefabOf_IsTheActivePrefab_NotTheLastOpened_AndTheLastOpenedWhileTheSceneIsActive)
+{
+	auto& first = edt::open_prefab(documents, prefab_a);
+	auto& second = edt::open_prefab(documents, prefab_b);
+	documents.set_active(first.id());
+	BOOST_TEST(test_util::prefab_of(documents) == &first);
+
+	documents.set_active(scene.id());
+
+	BOOST_TEST(test_util::prefab_of(documents) == &second);
+}
+
+BOOST_AUTO_TEST_CASE(OpenPrefab_EachOpenPrefabHasItsOwnSetAndWorkingTag_ClosingOneKeepsTheOther)
+{
+	auto& first = edt::open_prefab(documents, prefab_a);
+	const std::size_t first_entities = first.get_registry()->storage<entt::entity>().size();
+	auto& second = edt::open_prefab(documents, prefab_b);
+	// Every open stores the preview template again under one memory tag and signals it changed: an open preview is not disturbed.
+	BOOST_TEST(first.is_open());
+	BOOST_REQUIRE(first.get_registry() != nullptr);
+	BOOST_TEST(first.get_registry()->storage<entt::entity>().size() == first_entities);
+	const std::string first_set = first.set_name();
+	const std::string second_set = second.set_name();
+	BOOST_REQUIRE(first_set != second_set);
+	BOOST_TEST(mgr->find_set(first_set) != nullptr);
+	BOOST_TEST(mgr->find_set(second_set) != nullptr);
+	BOOST_TEST(first.working_tag() != second.working_tag());
+
+	documents.close(first.id());
+
+	BOOST_TEST(mgr->find_set(first_set) == nullptr);
+	BOOST_TEST(mgr->find_set(second_set) != nullptr);
+	BOOST_TEST(documents.preview() != nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(Close_Preview_ReturnsTheActiveDocumentToTheScene)
