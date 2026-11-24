@@ -6,21 +6,29 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <format>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace {
 	// Every level of the recursion holds two copies of a file's text; distinct files alone do not bound the depth.
 	constexpr std::size_t max_include_depth = 32;
+	// A file is expanded at every #include of it (its guard leaves out the copies after the first), so a file included
+	// twice by each of a few nested files multiplies: the text is bounded, not only the depth.
+	constexpr std::size_t max_expanded_bytes = 4 * 1024 * 1024;
 
 	struct include_context
 	{
 		res::resource_system& res_sys;
 		std::vector<std::string> chain;				// the files being expanded, outermost first
-		std::unordered_set<std::string> expanded;	// every file that already stands in the output
+		std::unordered_set<std::string> listed;		// every file already in `files`
+		std::unordered_map<std::string, std::size_t> source_index;	// a file's index in `sources`, one per file
+		std::size_t expanded_bytes = 0;
+		bool too_large_reported = false;
 		std::vector<rnd::include_problem> problems;
 		std::vector<res::tag>* files = nullptr;
 		// Set: every included file is wrapped in #line directives that name its index here (0: the origin).
@@ -142,6 +150,18 @@ namespace {
 		return false;
 	}
 
+	// The macro of a file's include guard. Hashed: a name made of the path could clash once its characters are replaced,
+	// and GLSL reserves names with "__" and the "GL_" prefix.
+	std::string guard_macro(std::string_view file)
+	{
+		std::uint64_t hash = 0xcbf29ce484222325ull;
+		for (const char c : file) {
+			hash ^= static_cast<unsigned char>(c);
+			hash *= 0x100000001b3ull;
+		}
+		return std::format("SNK_INCLUDE_{:016X}", hash);
+	}
+
 	std::string chain_text(const include_context& ctx, const std::string& again)
 	{
 		std::string text;
@@ -212,11 +232,16 @@ namespace {
 				report(std::format("include depth exceeded ({} files deep) {}", max_include_depth, chain_text(ctx, key)));
 				continue;
 			}
-			if (!ctx.expanded.insert(key).second) {
-				drop_line();
+			if (ctx.expanded_bytes > max_expanded_bytes) {
+				if (ctx.too_large_reported) {
+					drop_line();
+				} else {
+					ctx.too_large_reported = true;
+					report(std::format("the includes expand to more than {} bytes; is a file included again and again?", max_expanded_bytes));
+				}
 				continue;
 			}
-			if (ctx.files) {
+			if (ctx.files && ctx.listed.insert(key).second) {
 				ctx.files->push_back(target);
 			}
 			const auto included = ctx.res_sys.require_sync<res::text_resource>(target).get_sync();
@@ -225,10 +250,20 @@ namespace {
 				continue;
 			}
 			std::string body = included->str();
+			// Expanded at every #include: the guard, not the expansion, leaves out a copy the compiler already has. An
+			// include in a group the compiler skips does not hide the file from a later include in a group it keeps.
+			const std::string guard = guard_macro(key);
+			const std::string_view eol = line_break_of(line).empty() ? std::string_view{ "\n" } : line_break_of(line);
+			const std::string guard_open = std::format("#ifndef {0}{1}#define {0}{1}", guard, eol);
+			ctx.expanded_bytes += body.size() + guard_open.size();
+			result += guard_open;
 			std::size_t target_index = 0;
 			if (ctx.sources) {
-				target_index = ctx.sources->size();
-				ctx.sources->push_back(target);
+				const auto [index, added] = ctx.source_index.try_emplace(key, ctx.sources->size());
+				if (added) {
+					ctx.sources->push_back(target);
+				}
+				target_index = index->second;
 				result += std::format("#line 1 {}\n", target_index);
 			}
 			ctx.chain.push_back(key);
@@ -238,6 +273,8 @@ namespace {
 			if (!body.empty() && body.back() != '\n') {
 				result += '\n';
 			}
+			result += "#endif";
+			result += eol;
 			if (ctx.sources) {
 				result += std::format("#line {} {}\n", line_number + 1, file_index);
 			}
@@ -248,9 +285,9 @@ namespace {
 
 std::string rnd::expand_includes(std::string& source, const res::tag& origin, res::resource_system& res_sys, std::vector<res::tag>* files)
 {
-	include_context ctx{ res_sys, {}, {}, {}, files, nullptr };
+	include_context ctx{ res_sys, {}, {}, {}, 0, false, {}, files, nullptr };
 	ctx.chain.push_back(origin.string());
-	ctx.expanded.insert(origin.string());
+	ctx.listed.insert(origin.string());
 	expand(source, origin, 0, ctx);
 	std::string errors;
 	for (const include_problem& problem : ctx.problems) {
@@ -263,9 +300,10 @@ rnd::mapped_includes rnd::expand_includes_with_lines(std::string& source, const 
 {
 	mapped_includes out;
 	out.sources.push_back(origin);
-	include_context ctx{ res_sys, {}, {}, {}, files, &out.sources };
+	include_context ctx{ res_sys, {}, {}, {}, 0, false, {}, files, &out.sources };
 	ctx.chain.push_back(origin.string());
-	ctx.expanded.insert(origin.string());
+	ctx.listed.insert(origin.string());
+	ctx.source_index.emplace(origin.string(), 0);
 	expand(source, origin, 0, ctx);
 	out.problems = std::move(ctx.problems);
 	return out;
