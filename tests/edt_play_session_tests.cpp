@@ -196,25 +196,25 @@ constexpr std::uint64_t crate_id = 0xa2;
 
 // w0: a camera that draws to the backbuffer (redirected in the editor) and a crate; w1: empty.
 constexpr const char* LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
-	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
+	{"__type":"world_desc","__version":5,"name":"w1","systems":[]}]})";
 
 // The same level after a change on disk: the crate is gone and a world was added.
 constexpr const char* LEVEL_CHANGED = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}}]},
-	{"__type":"world_desc","__version":4,"name":"w1","systems":[]},
-	{"__type":"world_desc","__version":4,"name":"w2","systems":[]}]})";
+	{"__type":"world_desc","__version":5,"name":"w1","systems":[]},
+	{"__type":"world_desc","__version":5,"name":"w2","systems":[]}]})";
 
 // LEVEL with a system that runs only in Play (not in Edit, the level's mode) and holds a resource nothing else holds.
 constexpr const char* PLAY_ONLY_SYSTEM = "test::hold_play_only_resource";
 constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
+	{"__type":"world_desc","__version":5,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":2}}},
 		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
-	{"__type":"world_desc","__version":4,"name":"w1","systems":[]}]})";
+	{"__type":"world_desc","__version":5,"name":"w1","systems":[]}]})";
 
 namespace {
 
@@ -258,11 +258,11 @@ void hold_play_only_resource(play_only_holder& holder)
 
 // A level with a component of the module's desc type.
 constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":[],"components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
+	{"__type":"world_desc","__version":5,"name":"w0","systems":[],"components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
 
 // MODULE_LEVEL whose world runs the module's systems.
 constexpr const char* SYSTEMS_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
-	{"__type":"world_desc","__version":4,"name":"w0","systems":["play_test::keeper","play_test::spin"],
+	{"__type":"world_desc","__version":5,"name":"w0","systems":["play_test::keeper","play_test::spin"],
 	 "components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
 
 using state_change = std::pair<edt::play_state, edt::play_reason>;
@@ -462,8 +462,8 @@ namespace {
 // A world whose instance N of leaf adds, by a record, A that instantiates leaf again: content of the world's file (#1039).
 res::tag open_grown_level(play_fixture& fixture)
 {
-	fixture.put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
-	const res::tag world_file = fixture.put("w2.desc", R"({"__type":"world_desc","__version":4,"name":"w2","systems":[],"children":[
+	fixture.put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag world_file = fixture.put("w2.desc", R"({"__type":"world_desc","__version":5,"name":"w2","systems":[],"children":[
 		{"__id":"00000000000000d1","name":"N","components":{"ref":"memory://t/leaf.prefab.desc"},"overrides":[
 			{"op":"add_node","target":[],"value":{"__id":"00000000000000d2","name":"A",
 				"components":{"ref":"memory://t/leaf.prefab.desc"}}}]}]})");
@@ -653,7 +653,7 @@ BOOST_AUTO_TEST_CASE(a_level_switch_in_play_replaces_only_plays_worlds_and_the_g
 	});
 	open_level();
 	const res::tag other = put("other.desc", R"({"__type":"level_desc","__version":2,"name":"other","worlds":[
-		{"__type":"world_desc","__version":4,"name":"far","systems":[],"children":[
+		{"__type":"world_desc","__version":5,"name":"far","systems":[],"children":[
 			{"__id":"00000000000000b1","name":"FarCam","components":{"camera":{"__type":"camera_desc","__version":2}}}]}]})");
 	const std::string before = level_json();
 	const bool dirty = state.is_dirty();

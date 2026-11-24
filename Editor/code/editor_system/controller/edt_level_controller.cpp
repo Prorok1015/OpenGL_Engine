@@ -23,6 +23,24 @@
 #include <vector>
 #include <snk/common/logger/engine_log.h>
 
+namespace
+{
+	// The records an instance holds are written against the version of their component's type the file had; the editor shows and
+	// edits them at the current one (#1255). Returns how many moved their path or value.
+	std::size_t migrate_worlds(const edt::editor_services& services, std::vector<scn::world_desc>& worlds)
+	{
+		const scn::ecs_assembler* assembler = services.assembler();
+		if (!assembler) return 0;
+		std::size_t moved = 0;
+		for (scn::world_desc& world : worlds) {
+			std::size_t in_world = 0;
+			edt::override_edit::migrate_instance_records(*assembler, world.get_root(), &in_world);
+			moved += in_world;
+		}
+		return moved;
+	}
+}
+
 edt::level_controller::level_controller(
 	scene_document& state, editor_services& services, scene_editor& scene_ed, world_controller& world_ctrl)
 	: m_state(state)
@@ -218,13 +236,20 @@ bool edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		m_state.level_guid = level_res->get_guid();
 		m_state.level_parent = level_res->get_parent();
 		m_state.level_file_version = file_version;
-		populate_worlds_from_level(level_res);
+		const std::size_t migrated = populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
 		if (auto p = m_state.level_name.rfind('/');  p != std::string::npos) m_state.level_name = m_state.level_name.substr(p + 1);
 
 		// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 		m_state.mark_clean();
+		if (migrated > 0 && !m_state.edits_locked()) {
+			// Only a moved record makes the level differ from its file; a record that only got the current version is written with
+			// it by the next save, whenever that is.
+			egLOG("Editor/LoadLevel", "{} override record(s) of prefab instances follow a newer version of their component's type: save the level to keep them",
+				migrated);
+			m_state.commit("Migrate override records", commit_mode::state_only);
+		}
 		if (m_state.world_names.empty()) {
 			egLOG_WARN("Editor/LoadLevel", "Level '{}' has no worlds", m_state.level_name);
 			m_world_ctrl.clear_active_world();
@@ -446,6 +471,8 @@ void edt::level_controller::resync_worlds_after_reload()
 		desc_worlds.push_back(*world);
 		desc_tags.push_back(world->get_tag());
 	}
+	// In memory only: the dirty flag stays as the reload leaves it.
+	migrate_worlds(m_services, desc_worlds);
 
 	apply_world_resync(m_state, m_world_ctrl, desc_worlds, desc_tags, !level_res->get_worlds().empty(),
 		[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
@@ -504,7 +531,7 @@ void edt::apply_world_resync(
 	worlds.select_world(idx); // the active world may have been rebuilt without the editor camera
 }
 
-void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res)
+std::size_t edt::level_controller::populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res)
 {
 	m_state.touch_descs();
 	m_state.world_descs.clear();
@@ -513,7 +540,7 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 	m_state.world_tags.clear();
 	if (!level_res.is_ready()) {
 		m_state.reset_history();
-		return;
+		return 0;
 	}
 	// world_descs is the single ordered source of truth (desc order); names and systems
 	// are derived from it so all three parallel arrays stay index-aligned.
@@ -525,6 +552,8 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 		m_state.world_descs.push_back(*world);
 		m_state.world_tags.push_back(world->get_tag());
 	}
+	const std::size_t migrated = migrate_worlds(m_services, m_state.world_descs);
 	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
 	m_state.reset_history();
+	return migrated;
 }

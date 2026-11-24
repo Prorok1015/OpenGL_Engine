@@ -28,7 +28,7 @@ BOOST_AUTO_TEST_CASE(NothingStarted_IsIdle_AndCancelEndsTheWait)
 	edt::prefab_open_watch watch;
 	BOOST_TEST((watch.poll() == state::idle));
 
-	watch.begin(rs->require<scn::prefab_desc>(put("a.prefab.desc", R"({"__type":"prefab_desc","__version":4})")));
+	watch.begin(rs->require<scn::prefab_desc>(put("a.prefab.desc", R"({"__type":"prefab_desc","__version":5})")));
 	BOOST_TEST(watch.active());
 	watch.cancel();
 
@@ -38,10 +38,10 @@ BOOST_AUTO_TEST_CASE(NothingStarted_IsIdle_AndCancelEndsTheWait)
 
 BOOST_AUTO_TEST_CASE(APrefabWithNestedPrefabs_IsLoadingUntilEverythingItReferesToIsThere_ThenReady)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
-	put("mid.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	put("mid.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000b1","name":"leaf","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
-	const res::tag host = put("host.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	const res::tag host = put("host.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"mid","components":{"ref":"memory://t/mid.prefab.desc"}}]})");
 	edt::prefab_open_watch watch;
 
@@ -67,7 +67,7 @@ BOOST_AUTO_TEST_CASE(AWaitThatIsStillLoadingAtTheDeadline_TimesOut_AndAReadyOneD
 {
 	edt::prefab_open_watch watch;
 	const auto start = edt::prefab_open_watch::clock::now();
-	watch.begin(rs->require<scn::prefab_desc>(put("slow.prefab.desc", R"({"__type":"prefab_desc","__version":4})")), start);
+	watch.begin(rs->require<scn::prefab_desc>(put("slow.prefab.desc", R"({"__type":"prefab_desc","__version":5})")), start);
 
 	BOOST_TEST((watch.poll(start) == state::loading));
 	BOOST_TEST((watch.poll(start + edt::prefab_open_watch::k_deadline + std::chrono::seconds(1)) == state::timed_out));
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(AWaitThatIsStillLoadingAtTheDeadline_TimesOut_AndAReadyOneD
 BOOST_AUTO_TEST_CASE(Take_EndsTheWaitAndKeepsThePrefabForWhoeverHoldsTheHandle)
 {
 	edt::prefab_open_watch watch;
-	const res::tag tag = put("kept.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag tag = put("kept.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
 	watch.begin(rs->require<scn::prefab_desc>(tag));
 	BOOST_TEST((pump_until_settled(watch) == state::ready));
 
@@ -93,8 +93,8 @@ BOOST_AUTO_TEST_CASE(Take_EndsTheWaitAndKeepsThePrefabForWhoeverHoldsTheHandle)
 
 BOOST_AUTO_TEST_CASE(ASettledSubtree_IsNotWalkedAgain)
 {
-	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
-	const res::tag host = put("host.prefab.desc", R"({"__type":"prefab_desc","__version":4,"children":[
+	put("leaf.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000f1","name":"tip"}]})");
+	const res::tag host = put("host.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
 		{"__id":"00000000000000a1","name":"leaf","components":{"ref":"memory://t/leaf.prefab.desc"}}]})");
 	const auto handle = rs->require_sync<scn::prefab_desc>(host);
 	pump();

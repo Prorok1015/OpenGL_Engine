@@ -58,7 +58,7 @@
 	"memory://dots/dots.prefab.desc": {
 		"json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "d5b70fbcbb5436fa",
 			"children": [
 				{
@@ -128,7 +128,7 @@
 		],
 		"prefab_json": {
 			"__type": "prefab_desc",
-			"__version": 4,
+			"__version": 5,
 			"__id": "d5b70fbcbb5436fa",
 			"children": [
 				{
