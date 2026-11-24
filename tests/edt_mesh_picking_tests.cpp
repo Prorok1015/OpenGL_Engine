@@ -34,6 +34,25 @@ struct scene
 	mesh_picker picker;
 };
 
+struct crossing_triangle
+{
+	poly_mesh mesh;
+	vertex_id a = invalid_id;
+	vertex_id b = invalid_id;
+	vertex_id c = invalid_id;
+};
+
+// A triangle in the plane x = -1 whose vertex b lies behind a camera at (0,0,3) looking at the origin.
+crossing_triangle make_crossing_triangle()
+{
+	crossing_triangle result;
+	result.a = result.mesh.add_vertex({ -1.f, 0.f, 0.f });
+	result.b = result.mesh.add_vertex({ -1.f, 0.f, 10.f });
+	result.c = result.mesh.add_vertex({ -1.f, 1.f, 0.f });
+	result.mesh.add_face({ { result.a }, { result.b }, { result.c } });
+	return result;
+}
+
 struct picking_fixture
 {
 	picking_fixture()
@@ -385,6 +404,70 @@ BOOST_AUTO_TEST_CASE(AfterAnEdit_ARebuiltPickerAndAdjacency_FindTheMovedVertexAn
 	BOOST_TEST(picker->is_current(mesh));
 	BOOST_TEST((pick_vertex(query(), pixel_of({ 0.5f, 0.3f, 0.5f }), 2.f) == std::optional<vertex_id>(corner)));
 	BOOST_TEST(!pick_vertex(query(), before, 2.f).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AnEdgeWithAnEndBehindTheCamera_IsPickedFromEveryAngle)
+{
+	for (const float degrees : { 0.f, 15.f, 30.f, 45.f, 60.f, 75.f }) {
+		const float angle = glm::radians(degrees);
+		const glm::vec3 eye = 3.f * glm::vec3{ std::sin(angle), 0.f, std::cos(angle) };
+		const screen_view slanted = camera_at(eye, { 0.f, 0.f, 0.f });
+
+		poly_mesh edge_mesh;
+		const glm::vec3 near_end{ 0.f };
+		const glm::vec3 far_end = eye * 2.f + glm::vec3{ 0.7f, 0.3f, 0.2f };
+		const vertex_id a = edge_mesh.add_vertex(near_end);
+		const vertex_id b = edge_mesh.add_vertex(far_end);
+		const vertex_id c = edge_mesh.add_vertex(near_end + glm::vec3{ 0.f, 0.001f, 0.f });
+		edge_mesh.add_face({ { a }, { b }, { c } });
+		const scene behind(std::move(edge_mesh));
+		BOOST_REQUIRE(slanted.depth(far_end) < 0.f);
+
+		const auto clipped = slanted.clip_segment(near_end, far_end);
+		BOOST_REQUIRE(clipped.has_value());
+		const std::optional<glm::vec2> from = slanted.project(clipped->first);
+		const std::optional<glm::vec2> to = slanted.project(clipped->second);
+		BOOST_REQUIRE_MESSAGE(from.has_value() && to.has_value(), "the cut is not projected at " << degrees << " degrees");
+		BOOST_REQUIRE(glm::length(*to - *from) > 1.f);
+
+		const glm::vec2 cursor = *from + glm::normalize(*to - *from) * 40.f;
+		const std::optional<edge_key> found = pick_edge(behind.query(slanted, true), cursor, 2.f);
+		BOOST_REQUIRE_MESSAGE(found.has_value(), "no edge picked at " << degrees << " degrees");
+		BOOST_TEST((found->a == b || found->b == b));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(OfTwoFacesAtTheSameDistance_TheLowerIdIsHit)
+{
+	poly_mesh twins;
+	const vertex_id a = twins.add_vertex({ -1.f, -1.f, 0.f });
+	const vertex_id b = twins.add_vertex({ 1.f, -1.f, 0.f });
+	const vertex_id c = twins.add_vertex({ 0.f, 1.f, 0.f });
+	const face_id first = twins.add_face({ { a }, { b }, { c } });
+	const face_id second = twins.add_face({ { a }, { b }, { c } });
+	BOOST_REQUIRE(first < second);
+	const scene doubled(std::move(twins));
+
+	const std::optional<face_hit> hit = doubled.picker.first_hit(ds::ray3({ 0.f, 0.f, 3.f }, { 0.f, 0.f, -1.f }));
+	BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->face == first);
+}
+
+BOOST_AUTO_TEST_CASE(ABoxWithoutXray_LeavesOutAVertexBehindTheCamera_AndTakesTheVisibleOnes)
+{
+	crossing_triangle built = make_crossing_triangle();
+	const vertex_id behind_camera = built.b;
+	const vertex_id a = built.a;
+	const vertex_id c = built.c;
+	const scene crossing(std::move(built.mesh));
+	const screen_view view = camera_at({ 0.f, 0.f, 3.f }, { 0.f, 0.f, 0.f });
+
+	mesh_selection selection;
+	box_select(selection, crossing.query(view), whole_image, select_op::replace);
+	BOOST_TEST(selection.vertices().size() == 2u);
+	BOOST_TEST(selection.vertices().contains(a));
+	BOOST_TEST(selection.vertices().contains(c));
+	BOOST_TEST(!selection.vertices().contains(behind_camera));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

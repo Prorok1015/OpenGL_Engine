@@ -11,8 +11,11 @@ namespace edt::mesh
 {
 	namespace
 	{
-		// What is in front of the camera by less than this counts as behind it.
+		// What is in front of the camera by less than this counts as behind it (project() gives nothing for it).
 		constexpr float k_min_depth = 1e-4f;
+		// A segment is cut here, well inside what project() accepts: a cut at k_min_depth itself could land on either side of it
+		// by rounding, and a point close to the camera plane lies far off the image.
+		constexpr float k_clip_depth = 1e-2f;
 
 		void check_current(const pick_query& query)
 		{
@@ -118,11 +121,11 @@ namespace edt::mesh
 	{
 		const float depth_from = depth(from);
 		const float depth_to = depth(to);
-		const bool from_in = depth_from > k_min_depth;
-		const bool to_in = depth_to > k_min_depth;
+		const bool from_in = depth_from >= k_clip_depth;
+		const bool to_in = depth_to >= k_clip_depth;
 		if (!from_in && !to_in) return std::nullopt;
 		if (from_in && to_in) return std::pair{ from, to };
-		const float s = (k_min_depth - depth_from) / (depth_to - depth_from);
+		const float s = (k_clip_depth - depth_from) / (depth_to - depth_from);
 		const glm::vec3 cut = from + (to - from) * s;
 		return from_in ? std::pair{ from, cut } : std::pair{ cut, to };
 	}
