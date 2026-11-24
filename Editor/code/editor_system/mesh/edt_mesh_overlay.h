@@ -3,6 +3,7 @@
 #include "edt_mesh_model.h"
 #include "edt_mesh_picking.h"
 #include "edt_mesh_selection.h"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -43,10 +44,12 @@ namespace edt::mesh
 		overlay_kind kind = overlay_kind::plain;
 	};
 
-	// A selected or hovered face as the polygon it covers on the screen.
+	// A selected or hovered face as the polygon it covers on the screen: its corners and the triangles of the bake's cut of the face
+	// (corner indices), so a concave face is filled right.
 	struct overlay_polygon
 	{
 		std::vector<glm::vec2> corners;
+		std::vector<std::array<std::uint32_t, 3>> triangles;
 		overlay_kind kind = overlay_kind::hover;
 	};
 

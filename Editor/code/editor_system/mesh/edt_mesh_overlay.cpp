@@ -1,4 +1,5 @@
 #include "edt_mesh_overlay.h"
+#include "edt_mesh_bake.h"
 #include <snk/common/engine_assert.h>
 #include <algorithm>
 #include <cmath>
@@ -6,6 +7,7 @@
 #include <set>
 #include <span>
 #include <unordered_map>
+#include <utility>
 
 namespace edt::mesh
 {
@@ -180,8 +182,11 @@ namespace edt::mesh
 			const auto add_polygon = [&](face_id id, overlay_kind kind) {
 				const face* f = mesh.find_face(id);
 				if (!f || !shown(std::span<const face_id>(&id, 1))) return;
+				std::optional<std::vector<std::array<std::uint32_t, 3>>> cut = triangulate_face(mesh, id);
+				if (!cut) return;
 				overlay_polygon polygon;
 				polygon.kind = kind;
+				polygon.triangles = std::move(*cut);
 				polygon.corners.reserve(f->corners.size());
 				for (const corner& c : f->corners) {
 					const std::optional<glm::vec3> position = position_of(mesh, c.vertex);

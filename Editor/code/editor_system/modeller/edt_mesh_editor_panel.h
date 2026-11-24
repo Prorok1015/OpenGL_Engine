@@ -1,11 +1,15 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
 #include "edt_input_binding.h"
+#include "edt_mesh_gesture.h"
+#include "edt_mesh_picking.h"
+#include <cstddef>
 #include <functional>
 #include <string>
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
+struct ImVec2;
 
 namespace edt
 {
@@ -38,6 +42,11 @@ namespace edt
 		void render_toolbar();
 		void render_banners();
 		void render_viewport();
+		void render_mode_bar();
+		void handle_mode_keys();
+		void interact_with_image(const mesh::screen_view& screen, bool hovered);
+		void draw_overlay(const mesh::screen_view& screen, const ImVec2& image_pos, const ImVec2& image_size, bool hovered);
+		void release_camera();
 
 		rnd::render_system& m_rnd;
 		gui::gui_system& m_gui;
@@ -48,5 +57,7 @@ namespace edt
 		std::function<void()> m_on_overwrite_geometry;
 		std::function<void()> m_on_close;
 		std::string m_error;
+		mesh::select_gesture m_gesture;
+		std::size_t m_omitted_segments = 0;
 	};
 }

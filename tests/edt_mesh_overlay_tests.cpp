@@ -111,6 +111,7 @@ BOOST_AUTO_TEST_CASE(ASelectedFace_IsAPolygon_AndItsEdgesAreSelected)
 	BOOST_REQUIRE_EQUAL(frame.polygons.size(), 1u);
 	BOOST_TEST((frame.polygons.front().kind == overlay_kind::selected));
 	BOOST_TEST(frame.polygons.front().corners.size() == 4u);
+	BOOST_TEST(frame.polygons.front().triangles.size() == 2u);
 	BOOST_TEST(count(frame, overlay_kind::selected) == 4u);
 }
 

@@ -10,10 +10,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <glm/glm.hpp>
 #include <entt/entt.hpp>
 
 namespace res
@@ -25,6 +27,7 @@ namespace scn
 {
 	class prefab_desc;
 	struct camera_component;
+	struct mouse_controller_component;
 }
 
 namespace edt
@@ -126,6 +129,11 @@ namespace edt
 		// The resource the preview world was made from (given up with it).
 		const res::tag& world_template() const { return m_world_tag; }
 		scn::camera_component* camera();
+		// The camera's controller: the window turns its input off while a selection gesture runs.
+		scn::mouse_controller_component* camera_controller();
+		// The preview camera's view-projection as the renderer builds it for the size the camera draws this frame (the picking and the
+		// overlay need the same matrix); nullopt without a preview or while the camera is parked (size zero).
+		std::optional<glm::mat4> view_projection();
 		// The window stops showing this document: its camera draws nothing until it is shown again.
 		void park_camera();
 		// The render targets of the preview's camera and the template of its world are given up when the document closes: this takes the
@@ -140,6 +148,7 @@ namespace edt
 		std::string overwrite_geometry_question() const;
 
 	private:
+		entt::entity camera_entity();
 		save_result save_impl(bool replace_foreign_geometry);
 		void check_geometry_match();
 		void open_preview_world();
