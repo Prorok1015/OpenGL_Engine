@@ -1515,7 +1515,8 @@ BOOST_FIXTURE_TEST_CASE(CancelOfAnOpenInTheBackground_KeepsThePrefabThatWasOpen,
 
 	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), second)); });
 	BOOST_TEST(window->loading());
-	window->cancel_loading();
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	window->cancel_loading(window->loadings().front().id);
 
 	BOOST_TEST(!window->loading());
 	document = test_util::prefab_of(editor().context()->documents());
@@ -1755,6 +1756,68 @@ BOOST_FIXTURE_TEST_CASE(APrefabTheWindowStoppedShowing_GivesUpTheRenderTarget_It
 		BOOST_TEST(!rnd::effective_camera_viewport(cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), glm::ivec2{ 1280, 720 }).has_value());
 	}
 	BOOST_TEST(cameras > 0u);
+}
+
+// #1303: every load has a row and a Cancel of its own; what is open stays drawn and editable under the banner.
+BOOST_FIXTURE_TEST_CASE(TwoLoads_CancelOfOne_LeavesTheOtherToOpen, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] {
+		static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b')));
+		static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('c')));
+	});
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 2u);
+	const auto of_b = std::ranges::find_if(window->loadings(), [](const auto& item) { return item.text.find("multi_b") != std::string::npos; });
+	BOOST_REQUIRE(of_b != window->loadings().end());
+
+	window->cancel_loading(of_b->id);
+	pump_frames(30);
+
+	BOOST_TEST(!window->loading());
+	const std::vector<edt::prefab_document*> opened = edt::prefabs_of(documents());
+	BOOST_REQUIRE_EQUAL(opened.size(), 1u);
+	BOOST_TEST(opened.front()->source_tag() == tag_of('c'));
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfTheOnlyLoad_WithAPrefabOpen_KeepsItOpenAndTheWindowOpen, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+
+	window->cancel_loading(window->loadings().front().id);
+	pump_frames(20);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(window->is_open());
+	BOOST_TEST(a.is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).size() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ADirtyPrefab_StaysShownAndEditable_WhileAnotherPrefabLoads, multi_prefab_fixture)
+{
+	edt::prefab_document& a = open('a');
+	BOOST_REQUIRE(rename(a, "first edit"));
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('b'))); });
+	BOOST_REQUIRE(window->loading());
+
+	BOOST_TEST(rename(a, "second edit"));
+
+	BOOST_TEST(a.is_dirty());
+	BOOST_TEST(a.is_open());
+	BOOST_TEST(window->is_open());
+}
+
+BOOST_FIXTURE_TEST_CASE(CancelOfTheOnlyLoad_WithNothingOpen_ClosesTheWindow, multi_prefab_fixture)
+{
+	gui().run_without_drawing([&] { static_cast<void>(editor().context()->asset_kinds().open(*editor().context(), tag_of('a'))); });
+	BOOST_REQUIRE_EQUAL(window->loadings().size(), 1u);
+	BOOST_REQUIRE(window->is_open());
+
+	window->cancel_loading(window->loadings().front().id);
+
+	BOOST_TEST(!window->loading());
+	BOOST_TEST(!window->is_open());
+	BOOST_TEST(edt::prefabs_of(documents()).empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(ClosingABackgroundTab_DoesNotReopenAHiddenWindow, multi_prefab_fixture)

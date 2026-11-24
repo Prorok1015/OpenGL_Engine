@@ -34,7 +34,7 @@ edt::prefab_editor_component::prefab_editor_component(ports from)
 {
 	m_panel = std::make_shared<prefab_editor_panel>(m_ports.rnd, m_ports.gui);
 	m_panel->set_on_close([this] { request_close(); });
-	m_panel->set_on_cancel_loading([this] { cancel_open(); });
+	m_panel->set_on_cancel_loading([this](std::uint64_t id) { cancel_open(id); });
 	m_panel->set_on_node_selected([this](const std::vector<std::uint64_t>& path) { select_node(path); });
 	m_panel->set_on_apply([this] {
 		if (prefab_document* prefab = shown()) apply(*prefab);
@@ -357,6 +357,7 @@ void edt::prefab_editor_component::open_now(const res::tag& tag)
 		return;
 	}
 	m_pending.push_back(std::make_unique<pending_open>());
+	m_pending.back()->id = m_next_pending_id++;
 	m_pending.back()->watch.begin(resources->require<scn::prefab_desc>(tag));
 	if (settle_open()) return;
 	m_panel->set_open(true);
@@ -370,15 +371,14 @@ void edt::prefab_editor_component::open_now(const res::tag& tag)
 	});
 }
 
-void edt::prefab_editor_component::show_loading_text()
+void edt::prefab_editor_component::show_loadings()
 {
-	if (m_pending.empty()) {
-		m_panel->set_loading({});
-	} else if (m_pending.size() == 1) {
-		m_panel->set_loading(std::format("Loading '{}'...", m_pending.front()->watch.tag().pure_name()));
-	} else {
-		m_panel->set_loading(std::format("Loading {} prefabs...", m_pending.size()));
+	std::vector<prefab_editor_panel::loading_item> items;
+	items.reserve(m_pending.size());
+	for (const auto& pending : m_pending) {
+		items.push_back({ pending->id, std::format("Loading '{}'...", pending->watch.tag().pure_name()) });
 	}
+	m_panel->set_loadings(std::move(items));
 }
 
 bool edt::prefab_editor_component::settle_open()
@@ -407,7 +407,7 @@ bool edt::prefab_editor_component::settle_open()
 		}
 		it = m_pending.erase(it);
 	}
-	show_loading_text();
+	show_loadings();
 	for (const ended& done : finished) {
 		if (done.outcome == prefab_open_watch::state::ready) {
 			finish_open(done.tag, done.handle);
@@ -436,8 +436,18 @@ void edt::prefab_editor_component::cancel_open()
 {
 	for (auto& pending : m_pending) pending->watch.cancel();
 	m_pending.clear();
-	m_panel->set_loading({});
+	m_panel->set_loadings({});
 	if (prefabs().empty()) m_panel->set_open(false);
+}
+
+void edt::prefab_editor_component::cancel_open(std::uint64_t id)
+{
+	const auto found = std::ranges::find(m_pending, id, [](const std::unique_ptr<pending_open>& open) { return open->id; });
+	if (found == m_pending.end()) return;
+	(*found)->watch.cancel();
+	m_pending.erase(found);
+	show_loadings();
+	if (prefabs().empty() && !loading()) m_panel->set_open(false);
 }
 
 void edt::prefab_editor_component::finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded)

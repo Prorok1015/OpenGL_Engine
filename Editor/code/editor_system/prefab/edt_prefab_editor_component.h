@@ -85,6 +85,8 @@ namespace edt
 		void close();
 		// Ends every wait for a prefab being opened and leaves the window as it was: prefabs that were open stay open.
 		void cancel_open();
+		// Ends the wait of the load `id` (the banner's Cancel); the other loads and the open prefabs are not touched.
+		void cancel_open(std::uint64_t id);
 		// Closes each prefab document with unapplied edits without asking (Discard of Exit/New/Open); the window shows another open one, if any.
 		void close_dirty();
 		// The game layer goes: the prefab editor closes, with a WARN when that loses edits.
@@ -107,10 +109,12 @@ namespace edt
 		// A prefab being opened: its own wait (several may load at once).
 		struct pending_open
 		{
+			std::uint64_t id = 0;
 			prefab_open_watch watch;
 			bool depth_warned = false;
 		};
 		std::vector<std::unique_ptr<pending_open>> m_pending;
+		std::uint64_t m_next_pending_id = 1;
 		bool m_polling = false;
 		// The prefab document the window shows: the last one brought to the front.
 		document_id m_shown{};
@@ -135,7 +139,7 @@ namespace edt
 		// A shown prefab went: the window moves to the one opened last, or shows nothing.
 		void leave_shown();
 		bool loading() const { return !m_pending.empty(); }
-		void show_loading_text();
+		void show_loadings();
 		void close_document(document_id id);
 		// `loaded`: the handle the wait held (it keeps the prefab cached while the document opens); empty: read it now.
 		void finish_open(const res::tag& tag, const res::res_handle<scn::prefab_desc>& loaded);
