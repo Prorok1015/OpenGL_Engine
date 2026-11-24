@@ -1,6 +1,7 @@
 #include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
 #include "edt_prefab_variant_creator.h"
+#include "edt_asset_filter.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
 #include "edt_ui_probe_imgui.h"
@@ -60,7 +61,7 @@ namespace edt
 
 	void asset_browser_panel::on_hidden()
 	{
-		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search"});
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search", "asset_browser_kinds"});
 	}
 
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
@@ -233,12 +234,17 @@ namespace edt
 		m_needs_refresh = false;
 		m_labels_have_icons = gui::ui_font_has_icons();
 
-		const std::string search_lower = to_lower(m_search);
+		m_filter.set_name(m_search);
 
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
-			// Search filter (dirs always pass)
-			if (!search_lower.empty() && !src.is_dir) {
-				if (to_lower(src.name).find(search_lower) == std::string::npos)
+			if (!src.is_dir) {
+				std::string kind;
+				if (m_filter.needs_kind()) {
+					const std::string relative = fs_paths::utf8_of(src.relative);
+					const bool is_desc = to_lower(relative).ends_with(".desc");
+					kind = asset_kind_of(m_kinds, relative, is_desc ? sniff_desc_type(src.path) : std::string{});
+				}
+				if (!m_filter.accepts(false, src.name, kind))
 					continue;
 			}
 			std::string label = src.is_dir
@@ -320,10 +326,29 @@ namespace edt
 		}
 
 		// ── search ───────────────────────────────────────────────────────────
-		ImGui::SetNextItemWidth(-1.f);
+		ImGui::SetNextItemWidth(-em(10.f));
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
 		edt::probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(-1.f);
+		if (ImGui::BeginCombo("##kinds", m_filter.summary().c_str())) {
+			if (ImGui::Selectable("All", !m_filter.needs_kind(), ImGuiSelectableFlags_DontClosePopups)) {
+				m_filter.clear_kinds();
+				m_needs_refresh = true;
+			}
+			ImGui::Separator();
+			for (const asset_filter_kind& kind : asset_filter_kinds(m_kinds)) {
+				const bool picked = m_filter.kind_picked(kind.id);
+				const std::string label = kind.label + "###kind_" + kind.id;
+				if (ImGui::Selectable(label.c_str(), picked, ImGuiSelectableFlags_DontClosePopups)) {
+					m_filter.set_kind(kind.id, !picked);
+					m_needs_refresh = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		edt::probe_last_item(m_ui_probe.get(), "asset_browser_kinds", "kinds");
 
 		ImGui::Separator();
 
