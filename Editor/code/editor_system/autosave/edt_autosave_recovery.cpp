@@ -161,7 +161,7 @@ namespace
 			}
 			out.unchecked_more = listed.truncated;
 			std::vector<std::string> names;
-			for (const pb::folder_entry& entry : listed.entries) {
+			for (const pb::listed_entry& entry : listed.entries) {
 				const std::string name = name_of(entry.name);
 				if (entry.kind != pb::entry_kind::folder || !edt::is_autosave_session_name(name) || name == m_options.own_session) continue;
 				names.push_back(name);
@@ -260,7 +260,7 @@ namespace
 				++session.over_limit;
 			}
 			std::size_t metas = 0;
-			for (const pb::folder_entry& kind_entry : kinds.entries) {
+			for (const pb::listed_entry& kind_entry : kinds.entries) {
 				const std::string kind = name_of(kind_entry.name);
 				if (kind == edt::k_autosave_session_file || kind == edt::k_autosave_lock_file) continue;
 				if (kind_entry.kind != pb::entry_kind::folder || !edt::is_autosave_kind(kind)) {
@@ -279,7 +279,7 @@ namespace
 					++session.over_limit;
 				}
 				std::set<std::string> accounted;
-				for (const pb::folder_entry& entry : entries.entries) {
+				for (const pb::listed_entry& entry : entries.entries) {
 					const std::string name = name_of(entry.name);
 					if (!name.ends_with(edt::k_autosave_meta_suffix)) continue;
 					if (metas >= edt::k_recovery_max_records) {
@@ -291,7 +291,7 @@ namespace
 					check_record(session, kind, kind_folder, name, entry.kind);
 				}
 				// A payload without its meta, a temp file of a write cut short: nothing checked them, so the folder is not empty.
-				for (const pb::folder_entry& entry : entries.entries) {
+				for (const pb::listed_entry& entry : entries.entries) {
 					const std::string name = name_of(entry.name);
 					if (!name.ends_with(edt::k_autosave_meta_suffix) && !accounted.contains(name)) ++session.unread;
 				}
@@ -815,7 +815,7 @@ void edt::autosave_recovery::remove_if_still_empty(recovery_session& session)
 		pb::pinned_root root{ m_root };
 		const pb::list_result listed = pb::list_beneath(root, relative_of(folder), 64);
 		empty = listed.error.empty() && !listed.truncated;
-		for (const pb::folder_entry& entry : listed.entries) {
+		for (const pb::listed_entry& entry : listed.entries) {
 			const std::string name = name_of(entry.name);
 			if (entry.kind == pb::entry_kind::file && (name == k_autosave_session_file || name == k_autosave_lock_file)) continue;
 			if (entry.kind == pb::entry_kind::folder && is_autosave_kind(name)) {

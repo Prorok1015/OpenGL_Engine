@@ -133,14 +133,14 @@ namespace platform::beneath {
 
 	enum class entry_kind : std::uint8_t { file, folder, link, other };
 
-	struct folder_entry {
+	struct listed_entry {
 		std::filesystem::path name;
 		// The entry as it is, never followed: a link (Windows: any reparse point) is `link`.
 		entry_kind kind = entry_kind::other;
 	};
 
 	struct list_result {
-		std::vector<folder_entry> entries;
+		std::vector<listed_entry> entries;
 		// The folder, a folder on the way or the root does not exist.
 		bool missing = false;
 		// More than `max_entries` were there: `entries` holds the first ones only.

@@ -337,7 +337,7 @@ bool edt::autosave_component::start_session()
 		pb::pinned_root root{ m_root };
 		// Folders of format 1 ("autosave/<kind>/") were never released: what is in them is ours and goes.
 		const pb::list_result listed = pb::list_beneath(root, fs::path(std::string(k_autosave_folder)), 4096);
-		for (const pb::folder_entry& entry : listed.entries) {
+		for (const pb::listed_entry& entry : listed.entries) {
 			const std::string name = fs_paths::generic_utf8_of(entry.name);
 			if (entry.kind != pb::entry_kind::folder || !is_autosave_kind(name)) continue;
 			if (const std::string error = remove_autosave_tree(m_root, name); !error.empty()) {

@@ -656,7 +656,7 @@ platform::beneath::list_result platform::beneath::list_beneath(pinned_root& root
 			out.truncated = true;
 			break;
 		}
-		folder_entry item;
+		listed_entry item;
 		item.name = fs::path(std::string(name));
 		if (entry->d_type == DT_UNKNOWN) {
 			struct stat information;
@@ -1625,7 +1625,7 @@ platform::beneath::list_result platform::beneath::list_beneath(pinned_root& root
 					out.truncated = true;
 					return out;
 				}
-				folder_entry item;
+				listed_entry item;
 				item.name = fs::path(std::move(name));
 				// Any reparse point is a link here, a cloud placeholder too: nothing is entered through one.
 				if ((entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
