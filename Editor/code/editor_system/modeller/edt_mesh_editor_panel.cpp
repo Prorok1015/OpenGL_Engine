@@ -24,12 +24,18 @@ namespace edt
 		m_open = false;
 	}
 
+	void mesh_editor_panel::restore_camera_input()
+	{
+		if (!m_ctx) return;
+		if (scn::mouse_controller_component* controller = m_ctx->camera_controller()) controller->input_enabled = true;
+	}
+
 	void mesh_editor_panel::release_camera()
 	{
 		m_gesture.cancel();
-		if (m_ctx) {
-			if (scn::mouse_controller_component* controller = m_ctx->camera_controller()) controller->input_enabled = true;
-		}
+		m_omitted_segments = 0;
+		m_hover_key.reset();
+		restore_camera_input();
 	}
 
 	void mesh_editor_panel::set_context(mesh_document* shown)
@@ -40,6 +46,8 @@ namespace edt
 		}
 		m_ctx = shown;
 		m_error.clear();
+		m_omitted_segments = 0;
+		m_hover_key.reset();
 	}
 
 	void mesh_editor_panel::on_hidden()
@@ -50,6 +58,8 @@ namespace edt
 
 	void mesh_editor_panel::on_before_begin()
 	{
+		// A frame in which the window is not drawn (collapsed, in a hidden tab) never reaches on_render: the camera must not stay locked.
+		restore_camera_input();
 		m_title = (m_ctx && m_ctx->is_open() ? "Mesh: " + m_ctx->display_title() : std::string{ "Mesh Modeller" }) + "###mesh_editor";
 		ImGui::SetNextWindowSize(ImVec2(em(800.f), em(600.f)), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSizeConstraints(ImVec2(em(420.f), em(300.f)), ImVec2(FLT_MAX, FLT_MAX));
@@ -58,6 +68,7 @@ namespace edt
 	void mesh_editor_panel::on_render()
 	{
 		if (!m_ctx || !m_ctx->is_open()) {
+			release_camera();
 			ImGui::TextDisabled("(no mesh open)");
 			return;
 		}
@@ -128,13 +139,17 @@ namespace edt
 	void mesh_editor_panel::handle_mode_keys()
 	{
 		const ImGuiIO& io = ImGui::GetIO();
-		if (io.WantTextInput || io.KeyCtrl || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
+		if (io.WantTextInput || m_gesture.active() || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
 		const mesh::poly_mesh* working = m_ctx->working();
 		mesh::mesh_view& view = m_ctx->view();
-		if (ImGui::IsKeyPressed(ImGuiKey_1, false)) view.set_mode(mesh::select_mode::vertex, *working);
-		if (ImGui::IsKeyPressed(ImGuiKey_2, false)) view.set_mode(mesh::select_mode::edge, *working);
-		if (ImGui::IsKeyPressed(ImGuiKey_3, false)) view.set_mode(mesh::select_mode::face, *working);
-		if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Z, false)) view.set_xray(!view.xray());
+		const bool no_modifier = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
+		if (no_modifier) {
+			if (ImGui::IsKeyPressed(ImGuiKey_1, false)) view.set_mode(mesh::select_mode::vertex, *working);
+			if (ImGui::IsKeyPressed(ImGuiKey_2, false)) view.set_mode(mesh::select_mode::edge, *working);
+			if (ImGui::IsKeyPressed(ImGuiKey_3, false)) view.set_mode(mesh::select_mode::face, *working);
+		}
+		const bool alt_alone = io.KeyAlt && !io.KeyCtrl && !io.KeyShift && !io.KeySuper;
+		if (alt_alone && ImGui::IsKeyPressed(ImGuiKey_Z, false)) view.set_xray(!view.xray());
 	}
 
 	void mesh_editor_panel::render_banners()
@@ -166,9 +181,13 @@ namespace edt
 	void mesh_editor_panel::render_viewport()
 	{
 		const ImVec2 size = ImGui::GetContentRegionAvail();
-		if (size.x <= 0 || size.y <= 0) return;
+		if (size.x <= 0 || size.y <= 0) {
+			release_camera();
+			return;
+		}
 		scn::camera_component* camera = m_ctx->camera();
 		if (!camera) {
+			release_camera();
 			ImGui::TextDisabled("(no preview)");
 			return;
 		}
@@ -194,6 +213,7 @@ namespace edt
 				release_camera();
 			}
 		} else {
+			release_camera();
 			ImGui::TextDisabled("(waiting for render target...)");
 		}
 	}
@@ -225,21 +245,26 @@ namespace edt
 		}
 		if (scn::mouse_controller_component* controller = m_ctx->camera_controller()) controller->input_enabled = m_gesture.camera_input();
 
-		mesh::hover_target hover;
-		if (hovered && !m_gesture.active() && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-			switch (view.mode()) {
-			case mesh::select_mode::vertex:
-				hover.vertex = mesh::pick_vertex(query, mouse, pick_radius);
-				break;
-			case mesh::select_mode::edge:
-				hover.edge = mesh::pick_edge(query, mouse, pick_radius);
-				break;
-			case mesh::select_mode::face:
-				hover.face = mesh::pick_face(query, mouse);
-				break;
+		const bool pointing = hovered && !m_gesture.active() && !ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		const hover_key key{ mouse, screen.view_projection(), screen.origin(), screen.size(), working.generation(), view.mode(), pointing };
+		if (m_hover_key != key) {
+			m_hover_key = key;
+			mesh::hover_target hover;
+			if (pointing) {
+				switch (view.mode()) {
+				case mesh::select_mode::vertex:
+					hover.vertex = mesh::pick_vertex(query, mouse, pick_radius);
+					break;
+				case mesh::select_mode::edge:
+					hover.edge = mesh::pick_edge(query, mouse, pick_radius);
+					break;
+				case mesh::select_mode::face:
+					hover.face = mesh::pick_face(query, mouse);
+					break;
+				}
 			}
+			view.set_hover(hover);
 		}
-		view.set_hover(hover);
 	}
 
 	void mesh_editor_panel::draw_overlay(const mesh::screen_view& screen, const ImVec2& image_pos, const ImVec2& image_size, bool hovered)
@@ -248,6 +273,7 @@ namespace edt
 		mesh::mesh_view& view = m_ctx->view();
 		mesh::overlay_options options;
 		options.xray = view.xray();
+		options.picker = &view.picker(working);
 		if (hovered) options.cursor = glm::vec2{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
 		const mesh::overlay_frame frame = mesh::build_overlay(working, view.adjacency(working), view.selection(), view.hover(), screen, options);
 		m_omitted_segments = frame.omitted_segments;

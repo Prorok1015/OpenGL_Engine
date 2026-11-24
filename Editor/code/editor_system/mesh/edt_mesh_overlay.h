@@ -72,6 +72,8 @@ namespace edt::mesh
 		std::size_t segment_budget = k_overlay_segment_budget;
 		// Over the budget the plain edges nearest to the cursor stay; without a cursor the first ones.
 		std::optional<glm::vec2> cursor;
+		// Where the triangles of the selected and hovered faces come from, cut once when the picker was made; without it each frame cuts them again.
+		const mesh_picker* picker = nullptr;
 	};
 
 	// What to draw over the preview image, in pixels, with no ImGui: the edges (a face turned away from the camera takes its

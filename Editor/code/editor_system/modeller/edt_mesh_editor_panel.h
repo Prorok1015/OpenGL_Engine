@@ -4,7 +4,9 @@
 #include "edt_mesh_gesture.h"
 #include "edt_mesh_picking.h"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace rnd { class render_system; }
@@ -47,6 +49,8 @@ namespace edt
 		void interact_with_image(const mesh::screen_view& screen, bool hovered);
 		void draw_overlay(const mesh::screen_view& screen, const ImVec2& image_pos, const ImVec2& image_size, bool hovered);
 		void release_camera();
+		// The camera reads the mouse again (the gesture stays as it is).
+		void restore_camera_input();
 
 		rnd::render_system& m_rnd;
 		gui::gui_system& m_gui;
@@ -59,5 +63,19 @@ namespace edt
 		std::string m_error;
 		mesh::select_gesture m_gesture;
 		std::size_t m_omitted_segments = 0;
+		// What the hover was computed from: it is looked for again only when one of these changed.
+		struct hover_key
+		{
+			glm::vec2 mouse{ 0.f };
+			glm::mat4 view_projection{ 1.f };
+			glm::vec2 image_origin{ 0.f };
+			glm::vec2 image_size{ 0.f };
+			std::uint64_t generation = 0;
+			mesh::select_mode mode = mesh::select_mode::vertex;
+			bool pointing = false;
+
+			bool operator==(const hover_key&) const = default;
+		};
+		std::optional<hover_key> m_hover_key;
 	};
 }

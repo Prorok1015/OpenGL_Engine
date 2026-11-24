@@ -709,6 +709,9 @@ BOOST_AUTO_TEST_CASE(ViewProjection_NeedsTheCamerasSize_AndPutsTheMeshInTheMiddl
 	BOOST_REQUIRE(middle.has_value());
 	BOOST_TEST(middle->x == 100.f, boost::test_tools::tolerance(1e-2f));
 	BOOST_TEST(middle->y == 100.f, boost::test_tools::tolerance(1e-2f));
+	const std::optional<glm::vec2> above = screen.project({ 0.f, 0.5f, 0.f });
+	BOOST_REQUIRE(above.has_value());
+	BOOST_TEST(above->y < middle->y);
 
 	document->park_camera();
 	BOOST_TEST(!document->view_projection().has_value());
@@ -723,21 +726,29 @@ BOOST_AUTO_TEST_CASE(TheCameraController_CanBeTurnedOff_AndBackOn)
 	BOOST_TEST(controller->input_enabled);
 	controller->input_enabled = false;
 	BOOST_TEST(!document->camera_controller()->input_enabled);
+	document->camera_controller()->input_enabled = true;
+	BOOST_TEST(document->camera_controller()->input_enabled);
 }
 
-BOOST_AUTO_TEST_CASE(TheView_IsEditorState_AnEditPrunesItsSelection_AndARevertForgetsIt)
+BOOST_AUTO_TEST_CASE(TheView_IsEditorState_AnEditThatRemovesAFacePrunesIt_AndARevertForgetsTheSelection)
 {
 	open_crate();
 	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
 	const edt::mesh::poly_mesh& working = *document->working();
 	edt::mesh::mesh_view& view = document->view();
 	view.set_mode(edt::mesh::select_mode::face, working);
-	view.selection().apply_face(working.faces().begin()->first, edt::mesh::select_op::replace);
-	BOOST_REQUIRE_EQUAL(view.selection().size(), 1u);
+	const auto first = working.faces().begin()->first;
+	const auto second = std::next(working.faces().begin())->first;
+	view.selection().apply_face(first, edt::mesh::select_op::replace);
+	view.selection().apply_face(second, edt::mesh::select_op::add);
+	BOOST_REQUIRE_EQUAL(view.selection().size(), 2u);
 	BOOST_TEST(!document->is_dirty());
 
-	BOOST_REQUIRE(move_first_vertex());
-	BOOST_TEST(view.current_selection(*document->working()).size() == 1u);
+	BOOST_REQUIRE(document->edit([first](edt::mesh::poly_mesh& mesh) { return mesh.remove_face(first); }));
+	const edt::mesh::mesh_selection& after = view.current_selection(*document->working());
+	BOOST_TEST(after.size() == 1u);
+	BOOST_TEST(!after.faces().contains(first));
+	BOOST_TEST(after.faces().contains(second));
 
 	BOOST_REQUIRE(document->revert().empty());
 	BOOST_TEST(view.selection().empty());

@@ -4,6 +4,7 @@
 #include "edt_mesh_selection.h"
 #include <snk/common/ds/ds_bvh.hpp>
 #include <snk/common/ds/ds_intersect.hpp>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -76,6 +77,8 @@ namespace edt::mesh
 		// A point that lies on the face itself, whatever its shape (concave and bent faces included): the centre of its
 		// largest triangle. A face is "seen" in a box when this point is.
 		std::optional<glm::vec3> face_point(face_id id) const;
+		// The bake's cut of a face (corner indices of the face), kept from when the picker was made; null for a face the bake leaves out.
+		const std::vector<std::array<std::uint32_t, 3>>* face_triangles(face_id id) const;
 
 	private:
 		struct triangle
@@ -89,6 +92,7 @@ namespace edt::mesh
 		std::uint64_t m_generation = 0;
 		ds::bvh<triangle> m_bvh;
 		std::map<face_id, glm::vec3> m_face_points;
+		std::map<face_id, std::vector<std::array<std::uint32_t, 3>>> m_face_triangles;
 	};
 
 	// What a click or a box over the image is told about, all of the same generation of the mesh (asserted). `xray` ignores

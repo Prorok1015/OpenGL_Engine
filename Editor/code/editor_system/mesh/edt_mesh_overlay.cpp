@@ -182,11 +182,17 @@ namespace edt::mesh
 			const auto add_polygon = [&](face_id id, overlay_kind kind) {
 				const face* f = mesh.find_face(id);
 				if (!f || !shown(std::span<const face_id>(&id, 1))) return;
-				std::optional<std::vector<std::array<std::uint32_t, 3>>> cut = triangulate_face(mesh, id);
-				if (!cut) return;
 				overlay_polygon polygon;
 				polygon.kind = kind;
-				polygon.triangles = std::move(*cut);
+				if (const auto* kept = options.picker ? options.picker->face_triangles(id) : nullptr) {
+					polygon.triangles = *kept;
+				} else if (options.picker) {
+					return;
+				} else if (auto cut = triangulate_face(mesh, id)) {
+					polygon.triangles = std::move(*cut);
+				} else {
+					return;
+				}
 				polygon.corners.reserve(f->corners.size());
 				for (const corner& c : f->corners) {
 					const std::optional<glm::vec3> position = position_of(mesh, c.vertex);
