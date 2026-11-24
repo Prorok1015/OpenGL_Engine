@@ -338,15 +338,13 @@ namespace {
 		}
 		std::vector<fs::path> copied{ library.filename() };
 		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
-			if (it->path().filename() == library.filename() || !travels_with_module(it->path())) {
+			// A link out of build/bin is not part of the build: it never travels with the module.
+			fs::path real;
+			if (it->path().filename() == library.filename() || !travels_with_module(it->path())
+				|| !file_inside(output, it->path(), real).empty()) {
 				continue;
 			}
-			// A sibling left behind would be looked for by the loader elsewhere: the copy is refused instead.
-			fs::path real;
-			if (std::string problem = file_inside(output, it->path(), real); !problem.empty()) {
-				return fail(copy_outcome::failed, std::format("cannot copy '{}' with '{}': {}", utf8(it->path()),
-					utf8(library), problem));
-			}
+			// A sibling of the build left behind would be looked for by the loader elsewhere: the copy is refused.
 			if (std::string problem = copy_into(home, real, folder, it->path().filename()); !problem.empty()) {
 				return fail(copy_outcome::failed, std::format("cannot copy '{}' with '{}': {}", utf8(real),
 					utf8(library), problem));
