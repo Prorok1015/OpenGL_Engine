@@ -62,9 +62,9 @@ BOOST_AUTO_TEST_CASE(ARay_HitsTheFrontOfAQuad_WithDistancePointNormalAndTriangle
 	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 0.1f, 0.1f, 2.f }));
 	BOOST_REQUIRE(hit);
 	BOOST_TEST((hit->entity == quad));
-	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4));
-	BOOST_TEST(hit->point.z == -3.f, boost::test_tools::tolerance(1e-4));
-	BOOST_TEST(hit->normal.z == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(hit->point.z == -3.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(hit->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
 	BOOST_TEST(!hit->back_face);
 	BOOST_TEST(hit->triangle < 2u);
 }
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(ARayFromBehind_IsABackFaceHit_UnlessBackFacesAreCulled)
 	const auto hit = scn::raycast_closest(reg, from_behind);
 	BOOST_REQUIRE(hit);
 	BOOST_TEST(hit->back_face);
-	BOOST_TEST(hit->normal.z == -1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->normal.z == -1.f, boost::test_tools::tolerance(1e-4f));
 
 	scn::ray_filter culling;
 	culling.cull_back_faces = true;
@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(AMirroredScale_TurnsTheFrontIntoABack)
 	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 0.f, 0.f, 2.f }));
 	BOOST_REQUIRE(hit);
 	BOOST_TEST(hit->back_face);
-	BOOST_TEST(hit->normal.z == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
 }
 
 BOOST_AUTO_TEST_CASE(ScaleAndRotation_AreInTheDistanceAndTheNormal)
@@ -116,8 +116,8 @@ BOOST_AUTO_TEST_CASE(ScaleAndRotation_AreInTheDistanceAndTheNormal)
 	const scn::ray along_x{ { 5.f, 0.5f, -4.5f }, { -1.f, 0.f, 0.f } };
 	const auto hit = scn::raycast_closest(reg, along_x);
 	BOOST_REQUIRE(hit);
-	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4));
-	BOOST_TEST(hit->normal.x == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(hit->normal.x == 1.f, boost::test_tools::tolerance(1e-4f));
 }
 
 BOOST_AUTO_TEST_CASE(TheNearerOfTwoQuadsWins_AndAllListsBothNearestFirst)
@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(WithoutTriangles_TheBoxOfTheMeshAnswers)
 	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 0.4f, -0.4f, 2.f }), boxes);
 	BOOST_REQUIRE(hit);
 	BOOST_TEST(hit->triangle == ~0u);
-	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->distance == 5.f, boost::test_tools::tolerance(1e-4f));
 }
 
 BOOST_AUTO_TEST_CASE(AMovedEntity_IsHitWhereItIsAfterTheTransformSystemToldTheWorld)
@@ -239,9 +239,9 @@ BOOST_AUTO_TEST_CASE(ANonUniformScale_StretchesTheHitAndKeepsTheNormalPerpendicu
 	add_quad(reg, matrix);
 	const auto hit = scn::raycast_closest(reg, toward_minus_z({ 1.8f, 0.f, 2.f }));
 	BOOST_REQUIRE(hit);
-	BOOST_TEST(hit->normal.y == std::sin(glm::radians(45.f)), boost::test_tools::tolerance(1e-3));
-	BOOST_TEST(hit->normal.z == std::cos(glm::radians(45.f)), boost::test_tools::tolerance(1e-3));
-	BOOST_TEST(glm::length(hit->normal) == 1.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(hit->normal.y == std::sin(glm::radians(45.f)), boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(hit->normal.z == std::cos(glm::radians(45.f)), boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(glm::length(hit->normal) == 1.f, boost::test_tools::tolerance(1e-4f));
 	BOOST_TEST(!scn::raycast_closest(reg, toward_minus_z({ 2.5f, 0.f, 2.f })));
 }
 
@@ -373,7 +373,7 @@ BOOST_AUTO_TEST_CASE(ManyRandomQuads_TheTreesAnswerAsABruteForceLoopDoes)
 		BOOST_REQUIRE_MESSAGE(hit.has_value() == std::isfinite(expected), "ray " << i);
 		if (hit) {
 			++hits;
-			BOOST_TEST(hit->distance == expected, boost::test_tools::tolerance(1e-3));
+			BOOST_TEST(hit->distance == expected, boost::test_tools::tolerance(1e-3f));
 		}
 		BOOST_TEST(scn::raycast_any(reg, ray) == std::isfinite(expected));
 	}
@@ -385,8 +385,8 @@ BOOST_AUTO_TEST_CASE(TheRayThroughTheCenterOfTheImage_RunsAlongTheViewAxis)
 	const glm::mat4 view = glm::lookAt(glm::vec3{ 0.f, 0.f, 5.f }, glm::vec3{ 0.f }, glm::vec3{ 0.f, 1.f, 0.f });
 	const glm::mat4 projection = glm::perspective(glm::radians(60.f), 2.f, 0.1f, 100.f);
 	const scn::ray center = scn::ray_from_screen(view, projection, { 100.f, 50.f }, { 200.f, 100.f });
-	BOOST_TEST(center.direction.z == -1.f, boost::test_tools::tolerance(1e-4));
-	BOOST_TEST(center.direction.x == 0.f, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST(center.direction.z == -1.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(center.direction.x == 0.f, boost::test_tools::tolerance(1e-4f));
 	const scn::ray top_left = scn::ray_from_screen(view, projection, { 0.f, 0.f }, { 200.f, 100.f });
 	BOOST_TEST(top_left.direction.x < 0.f);
 	BOOST_TEST(top_left.direction.y > 0.f);
