@@ -22,6 +22,7 @@
 #include <format>
 #include <optional>
 #include <system_error>
+#include <utility>
 #include <vector>
 #include <snk/common/logger/engine_log.h>
 
@@ -725,6 +726,7 @@ void edt::level_controller::on_level_file_changed()
 
 void edt::level_controller::tick_disk_change()
 {
+	if (std::exchange(m_play_stop_pending, false)) settle_after_play();
 	if (!m_disk_check_pending) return;
 	m_disk_check_pending = false;
 	check_level_file();
@@ -904,7 +906,11 @@ std::optional<std::string> edt::level_controller::disk_conflict()
 
 void edt::level_controller::on_play_stopped(bool for_module_reload)
 {
-	if (for_module_reload) return;
+	m_play_stop_pending = !for_module_reload;
+}
+
+void edt::level_controller::settle_after_play()
+{
 	if (!m_state.changed_on_disk() || m_state.is_dirty() || m_state.edits_locked() || is_detached()) return;
 	if (load_in_progress && load_in_progress()) return;
 	const std::optional<std::vector<std::byte>> bytes = read_level_file();

@@ -114,16 +114,25 @@ struct level_disk_fixture : test_util::scene_env
 	}
 
 	// As level_load_component::begin and poll do: the working copy gets the file's bytes, the document takes the level.
-	void open_level(std::string_view world)
+	void open_level(std::string_view world) { open_level_at(world, level_file_path, level_tag, working_copy); }
+
+	// File > Open of another level file, levels/other.desc.
+	void open_other_level(std::string_view world)
+	{
+		open_level_at(world, content / "levels" / "other.desc", res::tag::make("levels/other.desc"),
+			res::tag{ "memory://editor/loading/2/other.desc" });
+	}
+
+	void open_level_at(std::string_view world, const fs::path& file, const res::tag& tag, const res::tag& copy)
 	{
 		const std::string text = level_text(world);
-		write_file(text);
+		std::ofstream(file, std::ios::binary | std::ios::trunc) << text;
 		const auto bytes = test_util::to_bytes(text);
-		rs->store(working_copy, bytes);
-		auto handle = rs->require_sync<scn::level_desc>(working_copy);
+		rs->store(copy, bytes);
+		auto handle = rs->require_sync<scn::level_desc>(copy);
 		pump();
 		BOOST_REQUIRE(handle.is_ready());
-		BOOST_REQUIRE(level_ctrl.take_loaded_level(handle, level_tag, working_copy, edt::desc_root_version(bytes), edt::code_version_of(bytes)));
+		BOOST_REQUIRE(level_ctrl.take_loaded_level(handle, tag, copy, edt::desc_root_version(bytes), edt::code_version_of(bytes)));
 		BOOST_REQUIRE(!state.is_dirty());
 	}
 
@@ -427,6 +436,9 @@ BOOST_AUTO_TEST_CASE(DuringPlay_OnlyTheFlag_AndAfterStopACleanLevelTakesTheFile)
 
 	state.set_edits_locked(false);
 	level_ctrl.on_play_stopped();
+	// Stop may be pressed inside the UI: the level is rebuilt by the frame's tick.
+	BOOST_TEST(world_name() == "alpha");
+	level_ctrl.tick_disk_change();
 	BOOST_TEST(world_name() == "beta");
 	BOOST_TEST(!state.changed_on_disk());
 	BOOST_TEST(!state.is_dirty());
@@ -440,6 +452,7 @@ BOOST_AUTO_TEST_CASE(DuringPlay_ADirtyLevelKeepsTheBannerAfterStop)
 	write_from_outside(level_text("beta"));
 	state.set_edits_locked(false);
 	level_ctrl.on_play_stopped();
+	level_ctrl.tick_disk_change();
 
 	BOOST_TEST(world_name() == "alpha");
 	BOOST_TEST(state.changed_on_disk());
@@ -521,8 +534,81 @@ BOOST_AUTO_TEST_CASE(PlayStoppedForAModuleReload_DoesNotTakeTheFile)
 	write_from_outside(level_text("beta"));
 	state.set_edits_locked(false);
 	level_ctrl.on_play_stopped(true);
+	level_ctrl.tick_disk_change();
 	BOOST_TEST(world_name() == "alpha");
 	BOOST_TEST(state.changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(AReloadAnsweredAfterAnotherLevelWasOpened_DoesNothingToIt)
+{
+	open_level("alpha");
+	make_dirty();
+	const std::string beta = level_text("beta");
+	write_from_outside(beta);
+	bool reloaded = true;
+	banner.reload([&reloaded](bool done) { reloaded = done; });
+	BOOST_REQUIRE(dialogs.pending() == 1u);
+
+	open_other_level("other");
+	answer_front(0);
+	banner.run_pending();
+
+	BOOST_TEST(!reloaded);
+	BOOST_TEST(world_name() == "other");
+	BOOST_TEST((state.level_tag == res::tag::make("levels/other.desc")));
+	BOOST_TEST(read_file(level_file_path) == beta);
+	BOOST_TEST(!banner.error().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnOverwriteAnsweredAfterAnotherLevelWasOpened_WritesNothing)
+{
+	open_level("alpha");
+	make_dirty();
+	const std::string beta = level_text("beta");
+	write_from_outside(beta);
+	menu().quick_save();
+	BOOST_REQUIRE(dialogs.pending() == 1u);
+
+	open_other_level("other");
+	const std::string other_before = read_file(content / "levels" / "other.desc");
+	make_dirty();
+	answer_front(1);
+	banner.run_pending();
+
+	BOOST_TEST(read_file(level_file_path) == beta);
+	BOOST_TEST(read_file(content / "levels" / "other.desc") == other_before);
+	BOOST_TEST(state.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AnOverwriteAnsweredAfterAnotherOutsideChange_WritesNothing)
+{
+	open_level("alpha");
+	make_dirty();
+	write_from_outside(level_text("beta"));
+	menu().quick_save();
+	BOOST_REQUIRE(dialogs.pending() == 1u);
+
+	// The person was asked about beta; gamma came while the question was open.
+	const std::string gamma = level_text("gamma");
+	write_from_outside(gamma);
+	answer_front(1);
+	banner.run_pending();
+
+	BOOST_TEST(read_file(level_file_path) == gamma);
+	BOOST_TEST(state.changed_on_disk());
+	BOOST_TEST(banner.visible());
+}
+
+BOOST_AUTO_TEST_CASE(KeepMine_PutsOffOnlyTheVersionShownWhenItWasClicked)
+{
+	open_level("alpha");
+	make_dirty();
+	write_from_outside(level_text("beta"));
+	banner.keep_mine();
+	// A newer outside version before the frame's tick carries the click out.
+	write_from_outside(level_text("gamma"));
+	banner.run_pending();
+	BOOST_TEST(banner.visible());
 }
 
 BOOST_AUTO_TEST_CASE(AWriteBlocker_RefusesTheBannersOverwriteAndReload)

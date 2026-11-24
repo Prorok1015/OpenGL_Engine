@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -16,7 +17,8 @@ namespace edt
 	// The banner over the viewport while the level file changed on disk (#1188), without ImGui: whether it shows and what its
 	// buttons do (the viewport panel draws it). The question of a person's Save of a flagged level is asked through it too.
 	// Reload and Overwrite rebuild the level or write it, so a click or an answer only queues them: run_pending carries them
-	// out once a frame, outside the UI, where no panel holds a registry of the worlds.
+	// out once a frame, outside the UI, where no panel holds a registry of the worlds. An action is for the level and the
+	// outside version it was asked about: when the level or the version is another by then, it is dropped.
 	class level_disk_banner
 	{
 	public:
@@ -48,13 +50,21 @@ namespace edt
 
 	private:
 		enum class action : std::uint8_t { reload, overwrite, keep_mine };
+		// What an action was asked about: the level file and its outside version (scene_document::disk_change_serial).
+		struct asked_about
+		{
+			res::tag level;
+			std::uint64_t serial = 0;
+		};
 		struct queued
 		{
 			action what = action::reload;
+			asked_about about;
 			std::function<void(bool)> done;
 		};
 
-		bool run(action what);
+		asked_about now() const;
+		bool run(const queued& item);
 
 		scene_document& m_state;
 		level_controller& m_level;

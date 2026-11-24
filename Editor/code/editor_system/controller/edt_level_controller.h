@@ -181,8 +181,9 @@ namespace edt
 		// Why the level's own file must not be written now: it is flagged, or it is not the version the editor knows (a missed
 		// signal: the flag is set then). nullopt: it may.
 		std::optional<std::string> disk_conflict();
-		// Play stopped: a clean level flagged meanwhile takes the file (same checks as reload_from_disk). Not when it stopped
-		// for a module reload (`for_module_reload`): the game layer is being swapped, the check follows the attach.
+		// Play stopped: a clean level flagged meanwhile takes the file at the next tick_disk_change (same checks as
+		// reload_from_disk): Stop may be pressed inside the UI. Not when it stopped for a module reload
+		// (`for_module_reload`): the game layer is being swapped, the check follows the attach.
 		void on_play_stopped(bool for_module_reload = false);
 
 		// Set by the coordinator. A level load is in progress: a change of the file is ignored (the load reads it).
@@ -212,6 +213,7 @@ namespace edt
 		std::optional<std::vector<std::byte>> read_level_file() const;
 		// Compares the file with m_disk_version and acts on it (on_level_file_changed); may leave a retry for the next tick.
 		void check_level_file();
+		void settle_after_play();
 		// Checks that `bytes` load as a level (a probe copy) and makes them the level; false (and the row) when they do not.
 		bool take_disk_bytes(const std::vector<std::byte>& bytes, const std::string& version);
 		// An outside version of the file the editor cannot take now: flagged, the serial grows once per version.
@@ -233,6 +235,7 @@ namespace edt
 		std::string m_flagged_version;
 		std::uint32_t m_probe_serial = 0;
 		bool m_disk_check_pending = false;
+		bool m_play_stop_pending = false;
 		// Why the last write_level_to_disk did not write; empty after one that did.
 		std::string m_last_write_error;
 	};
