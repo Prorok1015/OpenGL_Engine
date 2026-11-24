@@ -41,3 +41,15 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 	}));
 	return out;
 }
+
+std::vector<std::pair<std::string, std::string>> edt::desc_kind_suffixes(const asset_kind_registry& registry)
+{
+	std::vector<std::pair<std::string, std::string>> out;
+	for (const std::string& id : registry.ids()) {
+		const asset_kind_desc* kind = registry.find(id);
+		if (kind && kind->suffix.ends_with(".desc")) {
+			out.emplace_back(id, kind->suffix);
+		}
+	}
+	return out;
+}
