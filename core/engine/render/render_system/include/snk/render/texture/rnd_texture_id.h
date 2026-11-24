@@ -30,6 +30,10 @@ namespace rnd
 		std::uint32_t generation = 0;
 	};
 
+	// Module code calls this vtable through the texture_manager that render_system::get_texture_manager() hands out
+	// (#1312): raised with any change of its bases or virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t texture_resolver_abi_revision = 1;
+
 	// The part of the texture manager that the draw side needs: ids to what is behind them.
 	// SNK_API: texture_manager (exported) derives from it, and an exported class needs an exported base (MSVC C4275).
 	class SNK_API texture_resolver

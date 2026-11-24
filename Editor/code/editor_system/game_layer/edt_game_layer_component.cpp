@@ -30,6 +30,7 @@ void edt::game_layer_component::follow(bool before)
 		// A plain module load or unload (no swap): the person's Play ends, nothing restarts it.
 		if (m_ports.stop_play) m_ports.stop_play();
 		m_ports.prefab.close_for_layer_change();
+		if (m_ports.meshes_before) m_ports.meshes_before();
 		m_ports.asset_open.drop_pending();
 		m_level_after_change = res::tag{};
 		if (m_ports.level_load.in_progress()) {
@@ -43,6 +44,7 @@ void edt::game_layer_component::follow(bool before)
 		level->set_mode(ecs::run_mode::edit);
 	}
 	m_ports.level_ctrl.attach_to_game_layer();
+	if (m_ports.meshes_after) m_ports.meshes_after();
 	if (m_level_after_change.is_valid()) {
 		m_ports.level_load.begin(std::exchange(m_level_after_change, res::tag{}));
 	}
