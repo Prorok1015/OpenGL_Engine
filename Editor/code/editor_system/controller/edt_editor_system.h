@@ -97,6 +97,8 @@ namespace edt {
 
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
+		// The prefab editor (tests drive its close/apply/open flows through it).
+		prefab_editor_component& prefab_editor() const { return *m_prefab; }
 		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level

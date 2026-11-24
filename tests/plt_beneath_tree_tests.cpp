@@ -18,13 +18,16 @@ namespace {
 namespace fs = std::filesystem;
 
 // A link to a folder at `link`: a directory symlink, or on Windows a junction when `junction`. False when this machine
-// cannot make one (Windows without the symlink privilege); the test then has nothing to check.
+// cannot make a symlink (Windows without the privilege); the test then has nothing to check. A junction needs no
+// privilege: one that cannot be made fails the test instead of skipping it.
 bool link_folder(const fs::path& target, const fs::path& link, bool junction = false)
 {
 #ifdef _WIN32
 	if (junction) {
 		const std::string command = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul";
-		return std::system(command.c_str()) == 0 && fs::exists(link);
+		const bool made = std::system(command.c_str()) == 0 && fs::exists(link);
+		BOOST_CHECK_MESSAGE(made, "mklink /J could not make a junction at " << link.string());
+		return made;
 	}
 #else
 	(void)junction;

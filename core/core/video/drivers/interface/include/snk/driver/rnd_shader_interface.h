@@ -4,6 +4,10 @@
 
 namespace rnd::driver
 {
+	// Module code calls this vtable through render_system::get_driver() (#1298): raised with any change of its bases or
+	// virtual functions (check_vtable_pins.py).
+	inline constexpr std::uint32_t shader_interface_abi_revision = 1;
+
 	class shader_interface
 	{
 	public:
