@@ -241,7 +241,6 @@ namespace edt
 		const ImGuiIO& io = ImGui::GetIO();
 		const glm::vec2 mouse{ io.MousePos.x, io.MousePos.y };
 		const float pick_radius = em(6.f);
-		const mesh::pick_query query = view.query(working, screen);
 
 		m_gesture.set_drag_threshold(em(4.f));
 		const bool gizmo_has_mouse = update_gizmo(screen, hovered, mouse);
@@ -251,6 +250,7 @@ namespace edt
 			m_hover_key.reset();
 			return;
 		}
+		const mesh::pick_query query = view.query(working, screen);
 		if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 			m_gesture.begin(mouse, mesh::key_modifiers{ .shift = io.KeyShift, .ctrl = io.KeyCtrl, .alt = io.KeyAlt });
 		}
@@ -547,9 +547,10 @@ namespace edt
 		ImGui::TextDisabled("|");
 
 		const std::optional<mesh::pivot_frame> frame = current_frame();
-		const numbers_key key{ m_tool, working->generation(), true };
-		if (frame && !m_numbers_editing && !(m_numbers_key == key)) {
-			m_numbers = mesh::numeric_defaults(m_tool, *frame);
+		const numbers_key key{ m_tool, m_orientation, m_ctx, working->generation(), mesh::selection_stamp(m_ctx->view().current_selection(*working)),
+			frame ? frame->origin : glm::vec3(0.f), frame.has_value() };
+		if (!m_numbers_editing && !(m_numbers_key == key)) {
+			if (frame) m_numbers = mesh::numeric_defaults(m_tool, *frame);
 			m_numbers_key = key;
 		}
 		ImGui::SameLine();
@@ -569,7 +570,11 @@ namespace edt
 		m_numbers_editing = any_active;
 		ImGui::TextDisabled("%s", m_tool == mesh::gizmo_tool::move ? "position" : m_tool == mesh::gizmo_tool::rotate ? "degrees" : "factors");
 		if (apply && frame) {
-			apply_numbers(*frame);
+			// Enter on a field nobody changed is no edit: it would only add a record that moves nothing.
+			if (m_numbers != mesh::numeric_defaults(m_tool, *frame)) {
+				m_error = mesh::numeric_problem(m_tool, m_numbers);
+				if (m_error.empty()) apply_numbers(*frame);
+			}
 			m_numbers_key = {};
 		}
 	}

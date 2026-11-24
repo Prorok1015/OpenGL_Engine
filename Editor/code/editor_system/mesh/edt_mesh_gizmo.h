@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -64,6 +65,7 @@ namespace edt::mesh
 		pivot_frame frame;
 		glm::vec2 origin{ 0.f };
 		float world_per_pixel = 0.f;
+		float arm_pixels = 0.f;
 		glm::vec3 view_direction{ 0.f, 0.f, -1.f };
 		float screen_ring_radius = 0.f;
 		std::vector<gizmo_shape> shapes;
@@ -101,8 +103,9 @@ namespace edt::mesh
 		// nullopt when the press cannot be turned into a drag (a ray that misses the plane, a pivot behind the camera).
 		static std::optional<gizmo_drag> begin(const screen_view& screen, const gizmo_layout& layout, gizmo_part part, const glm::vec2& mouse);
 
-		// nullopt for a mouse position the drag cannot read (a ray parallel to the plane or the axis): the caller keeps the last delta.
-		std::optional<gizmo_delta> update(const screen_view& screen, const glm::vec2& mouse, const gizmo_snap& snap) const;
+		// nullopt for a mouse position the drag cannot read (a ray nearly parallel to the plane or the axis): the caller keeps the last delta.
+		// A rotation adds up the turns between the calls, so a drag past a half turn goes on (270 degrees, not -90).
+		std::optional<gizmo_delta> update(const screen_view& screen, const glm::vec2& mouse, const gizmo_snap& snap);
 
 		gizmo_tool tool() const { return m_tool; }
 		gizmo_part part() const { return m_part; }
@@ -113,14 +116,18 @@ namespace edt::mesh
 		pivot_frame m_frame;
 		glm::vec3 m_view_direction{ 0.f, 0.f, -1.f };
 		glm::vec2 m_origin_pixel{ 0.f };
-		glm::vec2 m_press{ 0.f };
 		glm::vec3 m_start_point{ 0.f };
 		float m_start_param = 0.f;
+		float m_scale_start = 1.f;
+		float m_previous_angle = 0.f;
+		float m_total_angle = 0.f;
 	};
 
 	// Exact values typed in the numbers panel, as a matrix over the snapshot: move = the pivot goes to `values` (world), rotate = degrees about
 	// the frame's x, y, z in that order, scale = factors along the frame's axes.
 	glm::mat4 numeric_matrix(gizmo_tool tool, const pivot_frame& frame, const glm::vec3& values);
+	// Why typed values cannot be applied (empty: they can): a scale factor of 0 flattens the mesh and cannot be undone by a factor. A negative factor mirrors.
+	std::string numeric_problem(gizmo_tool tool, const glm::vec3& values);
 	// What the numbers panel starts with: the pivot's position, 0 degrees, factors of 1.
 	glm::vec3 numeric_defaults(gizmo_tool tool, const pivot_frame& frame);
 }

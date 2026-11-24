@@ -10,7 +10,10 @@ namespace edt::mesh
 	{
 		constexpr int k_ring_samples = 48;
 		constexpr float k_min_factor = 1e-3f;
-		constexpr float k_parallel = 1e-4f;
+		// A ray this close to the plane (or the axis) gives a point far away that jumps with the mouse: the drag keeps its last value.
+		constexpr float k_parallel = 0.05f;
+		// A handle that has faded below this is not drawn solid and is not picked.
+		constexpr float k_pick_visibility = 0.5f;
 
 		glm::vec3 axis_of(const pivot_frame& frame, gizmo_part part)
 		{
@@ -85,7 +88,7 @@ namespace edt::mesh
 			const float denominator = glm::dot(normal, ray.direction);
 			if (!(std::abs(denominator) > k_parallel)) return std::nullopt;
 			const float t = glm::dot(normal, point - ray.origin) / denominator;
-			if (!std::isfinite(t)) return std::nullopt;
+			if (!std::isfinite(t) || !(t > 0.f)) return std::nullopt;
 			return ray.at(t);
 		}
 
@@ -135,6 +138,7 @@ namespace edt::mesh
 		layout.frame = frame;
 		layout.origin = *origin;
 		layout.world_per_pixel = world_per_pixel;
+		layout.arm_pixels = metrics.arm;
 		layout.view_direction = here->direction;
 		layout.screen_ring_radius = metrics.arm * 1.25f;
 		const float arm = metrics.arm * world_per_pixel;
@@ -147,7 +151,8 @@ namespace edt::mesh
 			shape.part = part;
 			shape.visibility = visibility_of_axis(axis, layout.view_direction);
 			if (tool == gizmo_tool::rotate) {
-				shape.visibility = 1.f;
+				// A ring seen edge-on is a line: it fades like a plane does, and is not picked.
+				shape.visibility = visibility_of_plane(axis, layout.view_direction);
 				const glm::vec3 u = std::abs(axis.y) < 0.9f ? glm::normalize(glm::cross(axis, glm::vec3(0.f, 1.f, 0.f))) : glm::normalize(glm::cross(axis, glm::vec3(1.f, 0.f, 0.f)));
 				const glm::vec3 v = glm::cross(axis, u);
 				bool complete = true;
@@ -224,7 +229,7 @@ namespace edt::mesh
 			if (to_origin <= metrics.centre) return gizmo_part::centre;
 		}
 		for (const gizmo_shape& shape : layout.shapes) {
-			if (shape.visibility < 0.1f) continue;
+			if (shape.visibility < k_pick_visibility) continue;
 			switch (shape.part) {
 			case gizmo_part::x:
 			case gizmo_part::y:
@@ -268,12 +273,12 @@ namespace edt::mesh
 		drag.m_frame = layout.frame;
 		drag.m_view_direction = layout.view_direction;
 		drag.m_origin_pixel = layout.origin;
-		drag.m_press = mouse;
 		const glm::vec3 origin = layout.frame.origin;
 
 		const bool on_axis = part == gizmo_part::x || part == gizmo_part::y || part == gizmo_part::z;
 		if (layout.tool == gizmo_tool::scale) {
-			if (glm::length(mouse - layout.origin) < 1.f) return std::nullopt;
+			// A press near the pivot would make a small move of the mouse a huge factor: the start is never closer than a quarter of the arm.
+			drag.m_scale_start = std::max(glm::length(mouse - layout.origin), layout.arm_pixels * 0.25f);
 			return drag;
 		}
 		if (layout.tool == gizmo_tool::move && on_axis) {
@@ -291,7 +296,7 @@ namespace edt::mesh
 		return drag;
 	}
 
-	std::optional<gizmo_delta> gizmo_drag::update(const screen_view& screen, const glm::vec2& mouse, const gizmo_snap& snap) const
+	std::optional<gizmo_delta> gizmo_drag::update(const screen_view& screen, const glm::vec2& mouse, const gizmo_snap& snap)
 	{
 		const auto ray = screen.ray_through(mouse);
 		if (!ray) return std::nullopt;
@@ -333,15 +338,22 @@ namespace edt::mesh
 			const glm::vec3 to = *hit - origin;
 			if (!(glm::length(from) > 1e-6f) || !(glm::length(to) > 1e-6f)) return std::nullopt;
 			const glm::vec3 about = on_axis ? axis : -m_view_direction;
-			const float angle = snapped(signed_angle(glm::normalize(from), glm::normalize(to), about), snap.rotate_radians);
+			const float raw = signed_angle(glm::normalize(from), glm::normalize(to), about);
+			float step = raw - m_previous_angle;
+			if (step > std::numbers::pi_v<float>) step -= 2.f * std::numbers::pi_v<float>;
+			if (step < -std::numbers::pi_v<float>) step += 2.f * std::numbers::pi_v<float>;
+			m_total_angle += step;
+			m_previous_angle = raw;
+			const float angle = snapped(m_total_angle, snap.rotate_radians);
 			delta.angle_radians = angle;
 			delta.matrix = rotation_matrix(origin, about, angle);
 			return delta;
 		}
 
-		const float start = glm::length(m_press - m_origin_pixel);
 		const float now = glm::length(mouse - m_origin_pixel);
-		const float factor = std::max(snapped(now / start, snap.scale), k_min_factor);
+		const float ratio = now / m_scale_start;
+		// A snap step is also the smallest factor: a drag that rounds to 0 must not collapse the mesh.
+		const float factor = snap.scale > 0.f ? std::max(snap_to_step(ratio, snap.scale), snap.scale) : std::max(ratio, k_min_factor);
 		glm::vec3 factors(1.f);
 		if (on_axis) {
 			factors[m_part == gizmo_part::x ? 0 : m_part == gizmo_part::y ? 1 : 2] = factor;
@@ -368,6 +380,17 @@ namespace edt::mesh
 			return scale_matrix(frame, values);
 		}
 		return glm::mat4(1.f);
+	}
+
+	std::string numeric_problem(gizmo_tool tool, const glm::vec3& values)
+	{
+		for (int i = 0; i < 3; ++i) {
+			if (!std::isfinite(values[i])) return "A value is not a number.";
+		}
+		if (tool == gizmo_tool::scale && (values.x == 0.f || values.y == 0.f || values.z == 0.f)) {
+			return "A scale factor of 0 would flatten the mesh: use a small number instead.";
+		}
+		return {};
 	}
 
 	glm::vec3 numeric_defaults(gizmo_tool tool, const pivot_frame& frame)

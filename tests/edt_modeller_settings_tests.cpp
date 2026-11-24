@@ -1,6 +1,51 @@
 #include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
+#include "test_temp_dir.hpp"
+#include "edt_data_protocol.h"
+#include "edt_settings.h"
 #include "modeller/edt_modeller_settings.h"
+#include <filesystem>
 #include <limits>
+
+namespace {
+
+struct modeller_settings_fixture : test_util::ram_res_env
+{
+	test_util::temp_dir dir{ "edt_modeller_settings" };
+	std::filesystem::path data = dir.path() / "data";
+	std::filesystem::path user = dir.path() / "user";
+
+	modeller_settings_fixture()
+	{
+		BOOST_REQUIRE(std::filesystem::create_directories(data));
+		BOOST_REQUIRE(edt::register_data_protocol(*rs, data, user));
+	}
+
+	~modeller_settings_fixture() { rs.reset(); }
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtModellerSettingsFiles, modeller_settings_fixture)
+
+BOOST_AUTO_TEST_CASE(Load_ACorruptFile_GivesTheDefaults_AndASaveThenLoadRoundTrips)
+{
+	BOOST_REQUIRE(edt::write_setting(*rs, edt::k_modeller_settings_name, "{ not json"));
+	BOOST_TEST((edt::load_modeller_settings(*rs) == edt::modeller_settings{}));
+
+	edt::modeller_settings settings;
+	settings.move_step = 0.25f;
+	settings.rotate_step_degrees = 30.f;
+	BOOST_REQUIRE(edt::save_modeller_settings(*rs, settings));
+	BOOST_TEST((edt::load_modeller_settings(*rs) == settings));
+}
+
+BOOST_AUTO_TEST_CASE(Load_AMissingFile_IsTheDefaults)
+{
+	BOOST_TEST((edt::load_modeller_settings(*rs) == edt::modeller_settings{}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtModellerSettings)
 
@@ -47,11 +92,13 @@ BOOST_AUTO_TEST_CASE(Serialize_ThenParse_GivesTheSameSettings)
 	BOOST_TEST((parsed.settings == settings));
 }
 
-BOOST_AUTO_TEST_CASE(Clamped_ANonFiniteStep_BecomesTheSmallest)
+BOOST_AUTO_TEST_CASE(Clamped_ANonFiniteStep_BecomesTheDefaultStep)
 {
 	edt::modeller_settings settings;
 	settings.move_step = std::numeric_limits<float>::quiet_NaN();
-	BOOST_TEST(edt::clamped(settings).move_step == edt::k_modeller_min_step);
+	settings.rotate_step_degrees = std::numeric_limits<float>::infinity();
+	BOOST_TEST(edt::clamped(settings).move_step == edt::modeller_settings{}.move_step);
+	BOOST_TEST(edt::clamped(settings).rotate_step_degrees == edt::modeller_settings{}.rotate_step_degrees);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

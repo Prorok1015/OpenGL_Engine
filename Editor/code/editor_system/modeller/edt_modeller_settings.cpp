@@ -21,18 +21,19 @@ namespace
 		return std::nullopt;
 	}
 
-	float clamp_step(float value, float high)
+	float clamp_step(float value, float high, float fallback)
 	{
-		return std::isfinite(value) ? std::clamp(value, edt::k_modeller_min_step, high) : edt::k_modeller_min_step;
+		return std::isfinite(value) ? std::clamp(value, edt::k_modeller_min_step, high) : fallback;
 	}
 }
 
 edt::modeller_settings edt::clamped(const modeller_settings& settings)
 {
 	modeller_settings out;
-	out.move_step = clamp_step(settings.move_step, k_modeller_max_step);
-	out.rotate_step_degrees = clamp_step(settings.rotate_step_degrees, k_modeller_max_rotate_step);
-	out.scale_step = clamp_step(settings.scale_step, k_modeller_max_step);
+	const modeller_settings defaults;
+	out.move_step = clamp_step(settings.move_step, k_modeller_max_step, defaults.move_step);
+	out.rotate_step_degrees = clamp_step(settings.rotate_step_degrees, k_modeller_max_rotate_step, defaults.rotate_step_degrees);
+	out.scale_step = clamp_step(settings.scale_step, k_modeller_max_step, defaults.scale_step);
 	return out;
 }
 

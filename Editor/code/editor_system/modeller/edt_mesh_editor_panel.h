@@ -90,10 +90,15 @@ namespace edt
 		mesh::gizmo_delta m_drag_delta;
 		// What the numbers panel shows, and what it was made from.
 		glm::vec3 m_numbers{ 0.f };
+		// What the numbers were made from: they are made again when any of it changes and no field is being edited.
 		struct numbers_key
 		{
 			mesh::gizmo_tool tool = mesh::gizmo_tool::move;
+			mesh::gizmo_orientation orientation = mesh::gizmo_orientation::world;
+			const mesh_document* document = nullptr;
 			std::uint64_t generation = 0;
+			std::uint64_t selection = 0;
+			glm::vec3 origin{ 0.f };
 			bool valid = false;
 			bool operator==(const numbers_key&) const = default;
 		};
