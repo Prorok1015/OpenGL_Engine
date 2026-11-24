@@ -580,6 +580,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileOutsideTheContentRoots)
 		BOOST_TEST_INFO(path);
 		json::value journal = json::parse(read_text(journal_path));
 		journal.as_object()["created_files"] = json::array{ json::string(path) };
+		journal.as_object().erase("journal_format");
 		write_text(journal_path, json::serialize(journal));
 		const auto error = pmg::rollback_migration(copy.root(), "test-migration");
 		BOOST_TEST(error.has_value());
@@ -601,6 +602,13 @@ std::map<std::string, std::string> everything_of(const fs::path& root)
 		if (entry.is_regular_file()) files[fs::relative(entry.path(), root).generic_string()] = read_text(entry.path());
 	}
 	return files;
+}
+
+// A journal as an engine before #1346 wrote it: no journal_format, so plain created paths are read.
+void as_format_1(json::object& journal, json::array created)
+{
+	journal.erase("journal_format");
+	journal["created_files"] = std::move(created);
 }
 
 // The journal of the fixture's migration, edited by `edit`, then a rollback: it must be refused with nothing written.
@@ -674,7 +682,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedFileInAReservedFolder)
 			 "project.snkproj" }) {
 		BOOST_TEST_CONTEXT(path) {
 			if (path != "project.snkproj") write_text(copy.root() / path, "keep");
-			expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+			expect_refused(copy.root(), [&path](json::object& journal) { as_format_1(journal, json::array{ json::string(path) }); },
 				"created file");
 			BOOST_TEST(fs::exists(copy.root() / path));
 		}
@@ -808,7 +816,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesAPathTooLongToShow)
 	expect_refused(copy.root(), [&path](json::object& journal) {
 		journal["files"].as_array().push_back(json::object{ { "path", path }, { "hash_before", "0" }, { "hash_after", "removed" } });
 	}, "longer than 1024 bytes");
-	expect_refused(copy.root(), [&path](json::object& journal) { journal["created_files"] = json::array{ json::string(path) }; },
+	expect_refused(copy.root(), [&path](json::object& journal) { as_format_1(journal, json::array{ json::string(path) }); },
 		"longer than 1024 bytes");
 }
 
@@ -1003,8 +1011,8 @@ BOOST_AUTO_TEST_CASE(ARollback_OfAMixedJournal_DeletesWhatIsUnchanged_AndKeepsWh
 	write_text(copy.res() / "ours.bin", "as written");
 	write_text(copy.res() / "edited.bin", "as written, then edited by a person");
 	edit_journal(copy.root(), [](json::object& journal) {
-		journal["created_files"] = json::array{ "res/legacy.resource", created_entry("res/ours.bin", "as written"),
-			created_entry("res/edited.bin", "as written"), created_entry("res/gone.bin", "never created") };
+		as_format_1(journal, json::array{ "res/legacy.resource", created_entry("res/ours.bin", "as written"),
+			created_entry("res/edited.bin", "as written"), created_entry("res/gone.bin", "never created") });
 	});
 
 	std::vector<std::string> warnings;
@@ -1094,7 +1102,7 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedEntryThatDoesNotRead)
 		{ json::array{ with("path", 7) }, "created_files[0] has no string path" },
 		{ json::array{ good, with("hash_after", pmg::journal_hash("other")) }, "listed twice" },
 		{ json::array{ good, with("size_after", 6) }, "listed twice" },
-		{ json::array{ "res/created.bin", good }, "listed twice" },
+		{ json::array{ "res/created.bin", good }, "created_files[0] is a path without its hash_after and size_after" },
 		{ json::array{ good, 42 }, "created_files[1] is neither a path nor an object" },
 		{ json::array{ json::array{ "res/created.bin" } }, "created_files[0] is neither a path nor an object" },
 		{ json::array{ nullptr }, "created_files[0] is neither a path nor an object" },
@@ -1114,6 +1122,24 @@ BOOST_AUTO_TEST_CASE(ARollback_RefusesACreatedEntryThatDoesNotRead)
 	// The same path twice with the same hash and size is one entry.
 	edit_journal(copy.root(), [&good](json::object& journal) { journal["created_files"] = json::array{ good, good }; });
 	BOOST_TEST(!pmg::check_journal(copy.root(), "test-migration").has_value());
+}
+
+// #1346 review: a plain path is a format 1 entry; in a journal that has a format it would be deleted unchecked, so it is refused.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAPlainCreatedPathInAJournalWithAFormat)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	write_text(copy.res() / "created.bin", "bytes");
+	expect_refused(copy.root(), [](json::object& journal) { journal["created_files"] = json::array{ "res/created.bin" }; },
+		"created_files[0] is a path without its hash_after and size_after");
+	BOOST_TEST(fs::exists(copy.res() / "created.bin"));
+}
+
+// #1346 review: a files[] element that is not an object is refused, not passed over.
+BOOST_AUTO_TEST_CASE(ARollback_RefusesAFilesElementThatIsNotAnObject)
+{
+	BOOST_REQUIRE(apply(copy.root(), context_for(copy.root())).refused.empty());
+	expect_refused(copy.root(), [](json::object& journal) { journal["files"].as_array().push_back("res/plain.desc"); }, "is not an object");
+	expect_refused(copy.root(), [](json::object& journal) { journal["files"].as_array().push_back(42); }, "is not an object");
 }
 
 // #1346: a journal of a newer format is refused by every reader, before anything is written.

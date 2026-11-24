@@ -1468,8 +1468,10 @@ std::optional<std::string> prj::migration::parse_journal_paths(const json::objec
 	if (auto why = journal_format_error(journal)) return why;
 	if (const json::value* backup = journal.if_contains("backup"); backup && backup->is_string()) paths.backup = std::string(backup->as_string());
 	if (const json::value* list = journal.if_contains("files"); list && list->is_array()) {
-		for (const json::value& item : list->as_array()) {
-			if (!item.is_object()) continue;
+		const json::array& files = list->as_array();
+		for (std::size_t i = 0; i < files.size(); ++i) {
+			const json::value& item = files[i];
+			if (!item.is_object()) return std::format("files[{}] is not an object", i);
 			const json::value* path = item.as_object().if_contains("path");
 			paths.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
 		}
@@ -1477,6 +1479,8 @@ std::optional<std::string> prj::migration::parse_journal_paths(const json::objec
 	const json::value* list = journal.if_contains("created_files");
 	if (!list) return std::nullopt;
 	if (!list->is_array()) return std::string("its created_files is not a list");
+	// A path without its hash is only a format 1 entry: in a newer journal it would be deleted unchecked.
+	const bool hashed_format = journal.if_contains("journal_format") != nullptr;
 	// Skipped, an entry would be a file the rollback leaves without a word: every one reads or the journal is refused.
 	std::map<std::string, std::size_t> seen;
 	const json::array& entries = list->as_array();
@@ -1485,6 +1489,7 @@ std::optional<std::string> prj::migration::parse_journal_paths(const json::objec
 		std::string path;
 		created_check check;
 		if (item.is_string()) {
+			if (hashed_format) return std::format("created_files[{}] is a path without its hash_after and size_after", i);
 			path = std::string(item.as_string());
 		} else if (item.is_object()) {
 			const json::object& entry = item.as_object();
