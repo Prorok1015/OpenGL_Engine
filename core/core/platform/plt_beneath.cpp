@@ -241,15 +241,36 @@ namespace {
 		return fd;
 	}
 
+	// What open_below holds a walk to: `device` (the root's) may change only at the indexes of `mount_points`, and
+	// ends as the device of the last folder.
+	struct device_walk {
+		dev_t device{};
+		const std::vector<std::size_t>* mount_points = nullptr;
+	};
+
 	// The folder below the root, one component at a time. -1 with errno set when one is a link, not a folder, or
-	// (without `create`) missing.
-	fd_holder open_below(int root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
+	// (without `create`) missing; EXDEV when `walk` is given and a folder lies on another device where no mount point
+	// was named.
+	fd_holder open_below(int root, const std::vector<fs::path>& parts, bool create, fs::path& reached,
+		device_walk* walk = nullptr)
 	{
 		fd_holder current;
 		int at = root;
-		for (const auto& part : parts) {
+		for (std::size_t index = 0; index < parts.size(); ++index) {
+			const fs::path& part = parts[index];
 			reached /= part;
 			fd_holder next{ open_folder(at, part, create) };
+			struct stat information{};
+			if (next.get() >= 0 && walk) {
+				const bool mount_point = walk->mount_points
+					&& std::ranges::find(*walk->mount_points, index) != walk->mount_points->end();
+				if (::fstat(next.get(), &information) != 0 || (!mount_point && information.st_dev != walk->device)) {
+					next.reset();
+					errno = EXDEV;
+				} else {
+					walk->device = information.st_dev;
+				}
+			}
 			if (next.get() < 0) {
 				const int error = errno; // closing `current` must not change what the caller reports
 				current.reset();
@@ -839,8 +860,9 @@ namespace {
 
 	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
 	// `size_out`, `stamp_out` and `path_out` are set when the result is ok.
-	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, fd_holder& file_out,
-		std::uint64_t& size_out, std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
+	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request,
+		const platform::beneath::read_limits& limits, fd_holder& file_out, std::uint64_t& size_out,
+		std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
 	{
 		using namespace platform::beneath;
 		const auto parts = folder_parts(request.folder);
@@ -854,9 +876,18 @@ namespace {
 		if (root.get() < 0) {
 			return { errno == ENOENT ? read_status::missing : read_status::failed, errno_text("cannot open the root", request.root) };
 		}
+		struct stat root_information{};
+		if (limits.same_device && ::fstat(root.get(), &root_information) != 0) {
+			return { read_status::failed, errno_text("cannot inspect the root", request.root) };
+		}
+		device_walk walk{ root_information.st_dev, &limits.mount_points };
+		device_walk* const device = limits.same_device ? &walk : nullptr;
 		fs::path reached = request.root;
-		const fd_holder folder = open_below(root.get(), *parts, false, reached);
+		const fd_holder folder = open_below(root.get(), *parts, false, reached, device);
 		if (folder.get() < 0) {
+			if (errno == EXDEV) {
+				return { read_status::failed, std::format("'{}' {}", fs_paths::utf8_of(reached), k_other_device) };
+			}
 			return { errno == ENOENT ? read_status::missing : read_status::failed,
 				errno_text("cannot open the folder (a link, or not a folder)", reached) };
 		}
@@ -879,6 +910,10 @@ namespace {
 		if (!S_ISREG(information.st_mode)) {
 			return { read_status::not_regular, {} };
 		}
+		if (device && information.st_dev != device->device) {
+			const std::string file = fs_paths::utf8_of(reached / request.leaf);
+			return { read_status::failed, std::format("'{}' {}", file, k_other_device) };
+		}
 		// A regular file now: back to blocking reads, which FUSE and network file systems may need.
 		const int flags = ::fcntl(file_out.get(), F_GETFL);
 		if (flags < 0 || ::fcntl(file_out.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
@@ -896,12 +931,18 @@ namespace {
 
 platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
+	return read_beneath(request, read_limits{}, out);
+}
+
+platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, const read_limits& limits,
+	std::vector<std::byte>& out)
+{
 	out.clear();
 	fd_holder file;
 	std::uint64_t size = 0;
 	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, limits, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
 	}
 	if (request.stamp_only) {
@@ -938,7 +979,8 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	std::uint64_t size = 0;
 	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
+	const read_result opened = open_for_read(request, read_limits{}, file, size, stamp, path);
+	if (opened.status != read_status::ok) {
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);
@@ -1490,7 +1532,11 @@ namespace {
 	// (enter_folder), for writes too since #523; a link or a junction is refused anywhere.
 	// Each folder must lie at its names (lies_at) before the next is opened or made: a short (8.3) alias (GIT~1) would
 	// otherwise lead into another folder, and with `create` make folders there.
-	held_chain hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached, unnormalized fallback)
+	// Asked about each folder of a chain before it is opened from its parent; false (the last error set) refuses it.
+	using folder_judge = std::function<bool(HANDLE parent, const fs::path& part)>;
+
+	held_chain hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached,
+		unnormalized fallback, const folder_judge& before_open = {})
 	{
 		held_chain chain;
 		// Closing what was held must not change the error the caller reports.
@@ -1524,6 +1570,9 @@ namespace {
 			const fs::path& part = parts[index];
 			reached /= part;
 			const HANDLE parent = chain.last();
+			if (before_open && !before_open(parent, part)) {
+				return give_up();
+			}
 			handle_holder next = open_in(parent, part, k_folder_access, k_folder_share, create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
 			next = enter_folder(std::move(next), [parent, &part] {
 				return open_in(parent, part, k_folder_access, k_folder_share, FILE_OPEN, FILE_DIRECTORY_FILE, false);
@@ -2143,10 +2192,75 @@ namespace {
 		return opened;
 	}
 
-	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes; `file_out`,
-	// `size_out`, `stamp_out` and `path_out` are set when the result is ok.
-	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request, handle_holder& file_out,
-		std::uint64_t& size_out, std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
+	// FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE: what read_limits'
+	// refuse_recall refuses.
+	constexpr DWORD k_recall_attributes = 0x00400000u | 0x00040000u | FILE_ATTRIBUTE_OFFLINE;
+
+	struct listed_entry_attributes {
+		// False: the folder could not be listed (the last error says why).
+		bool listed = false;
+		// Unset: no entry of that exact name (a short 8.3 alias is not matched).
+		std::optional<DWORD> attributes;
+	};
+
+	// The attributes of `name` as the listing of the folder `folder` holds gives them. Nothing is opened at the name:
+	// an entry of a projected file system (VFS for Git) asks its provider when it is opened, not when it is listed.
+	listed_entry_attributes listed_attributes(HANDLE folder, const fs::path& name)
+	{
+		std::vector<std::uint64_t> buffer(64 * 1024 / sizeof(std::uint64_t));
+		const auto bytes = reinterpret_cast<const std::byte*>(buffer.data());
+		const std::wstring& wanted = name.native();
+		FILE_INFO_BY_HANDLE_CLASS what = FileIdBothDirectoryRestartInfo;
+		for (;;) {
+			const auto size = static_cast<DWORD>(buffer.size() * sizeof(std::uint64_t));
+			if (!::GetFileInformationByHandleEx(folder, what, buffer.data(), size)) {
+				if (::GetLastError() == ERROR_NO_MORE_FILES) {
+					::SetLastError(ERROR_FILE_NOT_FOUND);
+					return { true, std::nullopt };
+				}
+				return {};
+			}
+			what = FileIdBothDirectoryInfo;
+			for (std::size_t offset = 0;;) {
+				const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(bytes + offset);
+				const int length = static_cast<int>(entry->FileNameLength / sizeof(wchar_t));
+				const int wanted_length = static_cast<int>(wanted.size());
+				if (::CompareStringOrdinal(entry->FileName, length, wanted.c_str(), wanted_length, TRUE) == CSTR_EQUAL) {
+					return { true, entry->FileAttributes };
+				}
+				if (entry->NextEntryOffset == 0) {
+					break;
+				}
+				offset += entry->NextEntryOffset;
+			}
+		}
+	}
+
+	// Why `limits` refuse the folder or file `handle` holds at `path` by its own information; empty when they do not.
+	std::string limits_problem(HANDLE handle, const fs::path& path, const platform::beneath::read_limits& limits,
+		DWORD root_volume)
+	{
+		if (!limits.same_device && !limits.refuse_recall) {
+			return {};
+		}
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(handle, &information)) {
+			return last_error_text("cannot inspect", path);
+		}
+		if (limits.same_device && information.dwVolumeSerialNumber != root_volume) {
+			return std::format("'{}' {}", fs_paths::utf8_of(path), platform::beneath::k_other_device);
+		}
+		if (limits.refuse_recall && (information.dwFileAttributes & k_recall_attributes) != 0) {
+			return std::format("'{}' {}", fs_paths::utf8_of(path), platform::beneath::k_would_recall);
+		}
+		return {};
+	}
+
+	// What read_beneath and read_beneath_stream share: the file of `request` opened as read_beneath describes;
+	// `file_out`, `size_out`, `stamp_out` and `path_out` are set when the result is ok.
+	platform::beneath::read_result open_for_read(const platform::beneath::read_request& request,
+		const platform::beneath::read_limits& limits, handle_holder& file_out, std::uint64_t& size_out,
+		std::optional<platform::beneath::file_stamp>& stamp_out, fs::path& path_out)
 	{
 		using namespace platform::beneath;
 		const auto parts = folder_parts(request.folder);
@@ -2161,15 +2275,63 @@ namespace {
 			return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
 		};
 		fs::path reached;
-		const held_chain chain = hold_chain(request.root, *parts, false, reached, unnormalized::check_names);
+		// With refuse_recall every folder is judged by its parent's listing before it is opened (RECALL_ON_OPEN).
+		bool would_recall = false;
+		const auto judge_listed = [&would_recall](HANDLE parent, const fs::path& part) {
+			const listed_entry_attributes listed = listed_attributes(parent, part);
+			if (!listed.listed || !listed.attributes) {
+				return false;
+			}
+			if ((*listed.attributes & k_recall_attributes) != 0) {
+				would_recall = true;
+				::SetLastError(ERROR_CANT_ACCESS_FILE);
+				return false;
+			}
+			return true;
+		};
+		const held_chain chain = hold_chain(request.root, *parts, false, reached, unnormalized::check_names,
+			limits.refuse_recall ? folder_judge(judge_listed) : folder_judge{});
+		if (would_recall) {
+			return { read_status::failed, std::format("'{}' {}", fs_paths::utf8_of(reached), k_would_recall) };
+		}
 		if (chain.empty()) {
 			return { is_missing() ? read_status::missing : read_status::failed,
 				last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };
+		}
+		DWORD root_volume = 0;
+		if (limits.same_device || limits.refuse_recall) {
+			BY_HANDLE_FILE_INFORMATION root_information{};
+			if (!::GetFileInformationByHandle(chain.folders.front().get(), &root_information)) {
+				return { read_status::failed, last_error_text("cannot inspect the root", request.root) };
+			}
+			root_volume = root_information.dwVolumeSerialNumber;
+			fs::path folder_path = request.root;
+			for (std::size_t at = 1; at < chain.folders.size(); ++at) {
+				folder_path /= (*parts)[at - 1];
+				if (std::string why = limits_problem(chain.folders[at].get(), folder_path, limits, root_volume);
+					!why.empty()) {
+					return { read_status::failed, std::move(why) };
+				}
+			}
 		}
 		if (request.hook && *request.hook) {
 			(*request.hook)(read_stage::folders_held);
 		}
 		const fs::path path = reached / request.leaf;
+		if (limits.refuse_recall) {
+			// Fails closed: a name the listing does not hold as written (an 8.3 alias) or a listing that cannot be
+			// read is not opened.
+			const listed_entry_attributes listed = listed_attributes(chain.last(), request.leaf);
+			if (!listed.listed) {
+				return { read_status::failed, last_error_text("cannot list the folder of", path) };
+			}
+			if (!listed.attributes) {
+				return { read_status::missing, {} };
+			}
+			if ((*listed.attributes & k_recall_attributes) != 0) {
+				return { read_status::failed, std::format("'{}' {}", fs_paths::utf8_of(path), k_would_recall) };
+			}
+		}
 		// Opened itself if it is a reparse point (open_in adds FILE_OPEN_REPARSE_POINT); shared, so a writer may still
 		// replace or remove the file while it is read.
 		constexpr ULONG k_file_share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
@@ -2186,6 +2348,10 @@ namespace {
 		}
 		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
 			return { read_status::not_regular, {} };
+		}
+		// Before a placeholder is opened again through its filter, which may fetch it.
+		if (limits.refuse_recall && (information.dwFileAttributes & k_recall_attributes) != 0) {
+			return { read_status::failed, std::format("'{}' {}", fs_paths::utf8_of(path), k_would_recall) };
 		}
 		switch (reparse_of(file_out.get(), information)) {
 		case reparse_kind::none:
@@ -2213,6 +2379,9 @@ namespace {
 		if (::GetFileType(file_out.get()) != FILE_TYPE_DISK) {
 			return { read_status::not_regular, {} };
 		}
+		if (std::string why = limits_problem(file_out.get(), path, limits, root_volume); !why.empty()) {
+			return { read_status::failed, std::move(why) };
+		}
 		// A short (8.3) name or any other alias would read a file elsewhere than the names say.
 		if (!lies_at(file_out.get(), chain.root_path, *parts, request.leaf, unnormalized::check_names)) {
 			::SetLastError(ERROR_CANT_ACCESS_FILE);
@@ -2231,12 +2400,18 @@ namespace {
 
 platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, std::vector<std::byte>& out)
 {
+	return read_beneath(request, read_limits{}, out);
+}
+
+platform::beneath::read_result platform::beneath::read_beneath(const read_request& request, const read_limits& limits,
+	std::vector<std::byte>& out)
+{
 	out.clear();
 	handle_holder file;
 	std::uint64_t size = 0;
 	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
+	if (read_result opened = open_for_read(request, limits, file, size, stamp, path); opened.status != read_status::ok) {
 		return opened;
 	}
 	if (request.stamp_only) {
@@ -2271,7 +2446,8 @@ platform::beneath::read_result platform::beneath::read_beneath_stream(const read
 	std::uint64_t size = 0;
 	std::optional<file_stamp> stamp;
 	fs::path path;
-	if (read_result opened = open_for_read(request, file, size, stamp, path); opened.status != read_status::ok) {
+	const read_result opened = open_for_read(request, read_limits{}, file, size, stamp, path);
+	if (opened.status != read_status::ok) {
 		return opened;
 	}
 	std::vector<std::byte> buffer(64 * 1024);

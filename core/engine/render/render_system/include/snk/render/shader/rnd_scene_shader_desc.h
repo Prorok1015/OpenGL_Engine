@@ -185,6 +185,14 @@ namespace rnd
 		SNK_API load_result load(res::resource_system& res_sys, const driver::binding_table& bindings) const;
 		SNK_API static load_result load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings);
 
+		struct load_options
+		{
+			// A source that cannot be prepared is not logged as an error: the caller reports it (a check run by the person, #1386).
+			bool quiet = false;
+		};
+		SNK_API static load_result load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings,
+			const load_options& options);
+
 		constant_data cdata;
 		runtime_data rdata;
 	};

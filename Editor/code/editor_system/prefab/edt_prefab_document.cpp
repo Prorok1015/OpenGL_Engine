@@ -248,7 +248,7 @@ std::string edt::prefab_document::apply_blocker() const
 	if (edits_locked()) return "Stop Play to apply the prefab";
 	if (!m_files.top_layer) return "the project files are not known";
 	if (m_lower_layer) return "this prefab belongs to a lower layer (the engine or a package): it cannot be written from the project";
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) return *why;
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) return *why;
 	return {};
 }
 
@@ -305,7 +305,7 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 	if (!m_files.top_layer) {
 		return save_result::failure("the project files are not known: nothing was written");
 	}
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) {
 		return save_result::failure(*why);
 	}
 	desc::desc_system* descs = m_services.descs();
@@ -314,12 +314,7 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 	if (!descs || !reader || !writer) {
 		return save_result::failure("the project resources are not available");
 	}
-	const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_source_tag, m_disk_version);
-	if (allowed.changed_on_disk && !m_disk.changed()) {
-		// The watcher may not have said so yet: the file is known to differ now, and Save All's question depends on the flag.
-		m_disk.set_changed(true);
-		announce();
-	}
+	const file_write_check allowed = write_gate::check(*reader, *descs, m_files, m_source_tag, m_disk_version, m_disk, [this] { announce(); });
 	if (!allowed.error.empty()) {
 		return save_result::failure(allowed.error);
 	}

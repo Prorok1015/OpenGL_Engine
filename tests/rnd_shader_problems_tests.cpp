@@ -9,6 +9,7 @@
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <cctype>
 #include <chrono>
 #include <format>
@@ -234,6 +235,72 @@ struct shader_disk_fixture
 }
 
 BOOST_FIXTURE_TEST_SUITE(RndShaderProblemsTests, shader_problems_fixture)
+
+BOOST_AUTO_TEST_CASE(ACheckReportsTheProblemsOfAProgramWithoutTouchingTheCache)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		if (headers[0].body.find("BROKEN") == std::string::npos) {
+			return std::nullopt;
+		}
+		return stage_log(0, "1(1) : error C1008: undefined variable \"BROKEN\"\n");
+	});
+	const auto lib = put("check_lib.glsl", "BROKEN;\n");
+	const auto vertex = put("check.vert", "#version 450 core\n#include \"check_lib.glsl\"\nvoid main() {}\n");
+	const auto fragment = put("check.frag", good_fragment);
+	const std::uint64_t generation = shaders.problems_generation();
+	const std::size_t variants = shaders.variants().size();
+
+	std::vector<res::tag> files;
+	const std::vector<shader_problem> found = shaders.check(program_of(vertex, fragment), &files);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].file == lib);
+	BOOST_TEST(found[0].line == 1);
+	BOOST_TEST((std::ranges::find(files, lib) != files.end()));
+	BOOST_TEST((std::ranges::find(files, vertex) != files.end()));
+	BOOST_TEST(shaders.problems().empty());
+	BOOST_TEST(shaders.problems_generation() == generation);
+	BOOST_TEST(shaders.variants().size() == variants);
+}
+
+BOOST_AUTO_TEST_CASE(ACheckOfAGoodProgramHasNoProblems_AndKeepsNoProgram)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const std::size_t variants = shaders.variants().size();
+	std::vector<res::tag> files;
+	const std::vector<shader_problem> found = shaders.check(program_of(put("ok.vert", "#version 450 core\nvoid main() {}\n"), put("ok.frag", good_fragment)), &files);
+	BOOST_TEST(found.empty());
+	BOOST_TEST(files.size() == 2u);
+	BOOST_TEST(drv.stats().shaders.live() == 0u);
+	BOOST_TEST(shaders.variants().size() == variants);
+	BOOST_TEST(shaders.problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACheckOfASourceThatCannotBePrepared_IsAProblem_AndIsNotLoggedAsAnError)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const std::vector<shader_problem> found = shaders.check(program_of(put("nov.vert", "void main() {}\n"), put("nov.frag", good_fragment)));
+	BOOST_REQUIRE(!found.empty());
+	BOOST_TEST(found[0].code == "shader/load");
+}
+
+BOOST_AUTO_TEST_CASE(TheQuietLoadDoesNotLogAnError_TheOldLoadStillDoes)
+{
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.push_back(std::string(message));
+	});
+	const auto broken = program_of(put("quiet.vert", "void main() {}\n"), put("quiet.frag", good_fragment));
+	const auto quiet = shader_config::load(broken, *env.rs, driver::per_type_binding_table, shader_config::load_options{ true });
+	BOOST_TEST(!quiet.ok());
+	BOOST_TEST(errors.empty());
+	const auto loud = shader_config::load(broken, *env.rs, driver::per_type_binding_table);
+	BOOST_TEST(!loud.ok());
+	BOOST_TEST(errors.size() == 1u);
+}
 
 BOOST_AUTO_TEST_CASE(AnIncludeThatCannotBeReadIsAProblemOfTheIncludingFileAtItsLine)
 {
@@ -748,6 +815,26 @@ BOOST_AUTO_TEST_CASE(AConstantsLineIsTheDefineAndTheStageLineAfterTheDefinesKeep
 	BOOST_TEST(problems[1].file == vertex);
 	BOOST_TEST(problems[1].line == 2);
 	BOOST_TEST(problems[1].message == "error: after");
+}
+
+// The cache-free check builds through the same path: a define row reads the same as the render's.
+BOOST_AUTO_TEST_CASE(ACheck_NamesAnInjectedDefine_AsTheRenderDoes)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	auto cdata = program_of(put("check_defines.vert", "#version 450 core\nvoid main() {}\n"), put("check_defines.frag", good_fragment));
+	cdata.constants = { { "K_MARK", "INJECTED_MARK" } };
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		const auto injected = compiler_location_of(headers[0].body, "INJECTED_MARK");
+		if (!injected) {
+			return std::nullopt;
+		}
+		return stage_log(0, std::format("{}:{}(1): error: bad constant\n", injected->source, injected->line));
+	});
+	const std::vector<shader_problem> found = shaders.check(cdata);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].line == 0);
+	BOOST_TEST(found[0].message == "injected define #3 \"#define K_MARK INJECTED_MARK\" (constant): error: bad constant");
 }
 
 // An empty constant value is the line "#define NAME ": still one line, so the lines after it keep their kinds.

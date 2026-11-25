@@ -87,6 +87,34 @@ BOOST_AUTO_TEST_CASE(TheSourceFollowsTheGenerationAndIsClearedByAFix)
 	BOOST_TEST(problems.sources().empty());
 }
 
+BOOST_AUTO_TEST_CASE(ACheckResultIsRowsOfTheSourceUntilTheRenderersProblemsChange)
+{
+	edt::problem_list problems;
+	edt::shader_problem_publisher publisher;
+	const auto none = [] { return std::vector<rnd::shader_problem>{}; };
+	publisher.follow(problems, 3, none);
+	BOOST_TEST(problems.size() == 0u);
+
+	publisher.set_check({ compile_error("res://shaders/a.frag", 4, 0, "error: checked") });
+	publisher.follow(problems, 3, none);
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems.list()[0].source == "shader");
+	BOOST_TEST(problems.list()[0].item.line == 4);
+
+	publisher.follow(problems, 3, none);
+	BOOST_TEST(problems.size() == 1u);
+
+	publisher.follow(problems, 4, none);
+	BOOST_TEST(problems.size() == 0u);
+
+	publisher.set_check({ compile_error("res://shaders/a.frag", 4, 0, "error: checked") });
+	publisher.follow(problems, 4, none);
+	BOOST_REQUIRE(problems.size() == 1u);
+	publisher.set_check({});
+	publisher.follow(problems, 4, none);
+	BOOST_TEST(problems.size() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(ProblemsListGivesTheShaderRowsWithTheirLines)
 {
 	edt::problem_list problems;
