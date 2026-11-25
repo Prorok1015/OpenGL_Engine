@@ -51,11 +51,24 @@ namespace edt
 		void on_source_changed(std::string_view on_disk_version, std::string_view read_version, bool dirty, const std::function<bool()>& locked,
 			const std::function<bool()>& reload, const std::function<void()>& announce);
 
-		// An overwrite (prefab, mesh): `version` is the one the document read; it is taken as `on_disk_version` while `save`
-		// runs (the save compares it with the file), and put back with the flag set again when `failed(saved)` says the
-		// document was not written.
+		// Sets the flag and calls `announce` when it was not set: the one way a document raises a conflict (a check that found the
+		// file changed, a conflict the window raised). Returns whether it did.
+		bool raise(const std::function<void()>& announce);
+
+		// What an overwrite does with the flag when the save did not write the document.
+		enum class overwrite_flag
+		{
+			// The flag is set (prefab, mesh: the file is known to differ, and the save did not take it away).
+			raise_on_failure,
+			// The flag was cleared for the save (a raised conflict stands in the shader document's save) and is put back as it was.
+			restore_on_failure,
+		};
+
+		// An overwrite: `version` is the one the document read; it is taken as `on_disk_version` while `save` runs (the save
+		// compares it with the file), and put back when `failed(saved)` says the document was not written. `flag`: see
+		// overwrite_flag; restore_on_failure also clears the flag before the save.
 		save_result overwrite(std::string& version, std::string on_disk_version, const std::function<save_result()>& save,
-			const std::function<bool(const save_result&)>& failed);
+			const std::function<bool(const save_result&)>& failed, overwrite_flag flag = overwrite_flag::raise_on_failure);
 
 	private:
 		disk_serial m_serial_policy;
@@ -64,7 +77,7 @@ namespace edt
 		std::uint64_t m_serial = 0;
 	};
 
-	// One watched file of a document, registered on the writable resources and given back with the document (prefab, mesh;
+	// One watched file of a document, registered on the writable resources and given back with the document (prefab, mesh, shader;
 	// data watches several files and keeps its own list).
 	class source_watch
 	{

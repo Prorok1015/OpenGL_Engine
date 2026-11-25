@@ -38,20 +38,29 @@ void edt::disk_state::on_source_changed(std::string_view on_disk_version, std::s
 	if (!dirty && !locked() && reload()) {
 		return;
 	}
-	if (!m_changed) {
-		m_changed = true;
-		announce();
+	raise(announce);
+}
+
+bool edt::disk_state::raise(const std::function<void()>& announce)
+{
+	if (m_changed) {
+		return false;
 	}
+	m_changed = true;
+	announce();
+	return true;
 }
 
 edt::save_result edt::disk_state::overwrite(std::string& version, std::string on_disk_version,
-	const std::function<save_result()>& save, const std::function<bool(const save_result&)>& failed)
+	const std::function<save_result()>& save, const std::function<bool(const save_result&)>& failed, overwrite_flag flag)
 {
 	const std::string previous_version = std::exchange(version, std::move(on_disk_version));
+	const bool restoring = flag == overwrite_flag::restore_on_failure;
+	const bool previous_changed = restoring ? std::exchange(m_changed, false) : m_changed;
 	const save_result saved = save();
 	if (failed(saved)) {
 		version = previous_version;
-		m_changed = true;
+		m_changed = restoring ? previous_changed : true;
 	}
 	return saved;
 }

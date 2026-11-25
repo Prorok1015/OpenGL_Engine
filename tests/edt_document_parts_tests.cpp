@@ -179,6 +179,53 @@ BOOST_AUTO_TEST_CASE(Overwrite_WhoseFailureIsNotTheDocumentsOwn_IsKept)
 	BOOST_TEST(!state.changed());
 }
 
+BOOST_AUTO_TEST_CASE(Raise_FlagsAndAnnouncesOnce_AndSaysWhetherItDid)
+{
+	edt::disk_state state;
+	int announced = 0;
+	BOOST_TEST(state.raise([&announced] { ++announced; }));
+	BOOST_TEST(state.changed());
+	BOOST_TEST(announced == 1);
+	BOOST_TEST(!state.raise([&announced] { ++announced; }));
+	BOOST_TEST(announced == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_RestoringTheFlag_ClearsItForTheSave_AndPutsItBackWhenTheSaveFailed)
+{
+	edt::disk_state state;
+	state.set_changed(true);
+	std::string version = "mine";
+	bool changed_during_save = true;
+	const edt::save_result failed = state.overwrite(version, "theirs",
+		[&] {
+			changed_during_save = state.changed();
+			return edt::save_result::failure("could not be written");
+		},
+		[](const edt::save_result& result) { return !result.saved; }, edt::disk_state::overwrite_flag::restore_on_failure);
+	BOOST_TEST(!failed.saved);
+	BOOST_TEST(!changed_during_save);
+	BOOST_TEST(version == "mine");
+	BOOST_TEST(state.changed());
+
+	edt::disk_state clean;
+	std::string other = "mine";
+	clean.overwrite(other, "theirs", [] { return edt::save_result::failure("x"); },
+		[](const edt::save_result& result) { return !result.saved; }, edt::disk_state::overwrite_flag::restore_on_failure);
+	BOOST_TEST(!clean.changed());
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_RestoringTheFlag_LeavesItClearedWhenTheSaveWorked)
+{
+	edt::disk_state state;
+	state.set_changed(true);
+	std::string version = "mine";
+	const edt::save_result saved = state.overwrite(version, "theirs", [] { return edt::save_result::ok(); },
+		[](const edt::save_result& result) { return !result.saved; }, edt::disk_state::overwrite_flag::restore_on_failure);
+	BOOST_TEST(saved.saved);
+	BOOST_TEST(version == "theirs");
+	BOOST_TEST(!state.changed());
+}
+
 struct watch_env : test_util::scene_env {};
 
 BOOST_FIXTURE_TEST_CASE(SourceWatch_CallsBackForItsTag_AndNotAfterUnwatch_OrForAReplacedWatch, watch_env)
