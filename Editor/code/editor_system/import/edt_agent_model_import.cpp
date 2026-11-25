@@ -457,6 +457,7 @@ edt::source_volume_ports edt::agent_model_import::volumes() const
 	source_volume_ports ports;
 	ports.drive_type = m_options.drive_type;
 	ports.mount_table = m_options.mount_table;
+	if (m_options.read_below) ports.read_below = m_options.read_below;
 	return ports;
 }
 

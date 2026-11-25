@@ -94,6 +94,13 @@ struct import_fixture : test_util::scene_env
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.now = [this] { return clock; };
 		result.max_source_bytes = 4096;
+		result.read_below = [this](const platform::beneath::read_request& request,
+			const platform::beneath::read_limits& limits, std::vector<std::byte>& out) {
+			const platform::beneath::read_result read = platform::beneath::read_beneath(request, limits, out);
+			// The handle's stamp stays, the bytes differ: what only the content hash sees.
+			if (flip_read_bytes && !request.stamp_only && !out.empty()) out.back() ^= std::byte{ 1 };
+			return read;
+		};
 		result.drive_type = [this](char letter) {
 			++drive_type_calls;
 			return std::toupper(static_cast<unsigned char>(letter)) == remote_drive ? 4u : edt::k_drive_fixed;
@@ -221,6 +228,7 @@ struct import_fixture : test_util::scene_env
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
+	bool flip_read_bytes = false;
 	// What the fake decoder says of its OS sandbox (#1076), and what the editor expects before a run.
 	edt::decoder_sandbox_status scan_reports{};
 	edt::decoder_sandbox_status import_reports{};
@@ -841,6 +849,28 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_RefusesAModelWhoseBytesChangedSinceItsFilesWe
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 	BOOST_CHECK_MESSAGE(started.error.find("changed") != std::string::npos, started.error);
 	run_jobs();
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+// The content hash of the second job, for bytes no stamp tells apart: a reader that gives other bytes from the same
+// handle.
+BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesBytesOtherThanTheListedOnes_WhenTheStampIsTheSame)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+
+	flip_read_bytes = true;
+	const auto started = service->start(second, agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("content") != std::string::npos, info->error);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 }

@@ -102,6 +102,9 @@ namespace edt {
 		// mount.
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
+		// Tests: the reads of an agent's files (source_volume_ports::read_below); null: read_below_root.
+		std::function<platform::beneath::read_result(const platform::beneath::read_request&,
+			const platform::beneath::read_limits&, std::vector<std::byte>&)> read_below;
 	};
 
 	// The file lists jobs found and a person has not been shown yet; defined in the .cpp.
