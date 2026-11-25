@@ -1077,6 +1077,9 @@ BOOST_AUTO_TEST_CASE(AShaderSource_OfALowerLayer_IsNotRestored_ItsRecordIsKept)
 {
 	lower_layer = dir.path() / "lower";
 	write_file(lower_layer / "shaders" / "a.frag", "void main() {}\n");
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower_layer, content },
+		res::mount_access::read_write, res::write_policy::allow_all());
 	const std::string other = other_session();
 	const std::string file = put_record(other, "shader_source", "shaders/a.frag", bytes_of("void main() { discard; }\n"));
 	run();
