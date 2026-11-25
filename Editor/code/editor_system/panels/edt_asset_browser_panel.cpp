@@ -3,6 +3,7 @@
 #include "edt_prefab_variant_creator.h"
 #include "edt_asset_filter.h"
 #include "edt_code_section.h"
+#include "edt_thumbnail_service.h"
 #include "edt_document_creator.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
@@ -69,6 +70,8 @@ namespace edt
 		m_layers = std::move(layers);
 		m_current_rel.clear();
 		m_desc_types.clear();
+		if (m_thumbnails)
+			m_thumbnails->release_all();
 		m_needs_refresh = true;
 	}
 
@@ -234,6 +237,8 @@ namespace edt
 	{
 		m_current_rel   = rel_dir;
 		m_needs_refresh = true;
+		if (m_thumbnails)
+			m_thumbnails->release_all();
 	}
 
 	// ─── refresh ──────────────────────────────────────────────────────────────
@@ -280,6 +285,30 @@ namespace edt
 		}
 		if (types_pending)
 			m_needs_refresh = true;
+	}
+
+	void asset_browser_panel::draw_picture_row(const layer_entry& src, const std::string& label, float x, float y, float height, std::string& failure)
+	{
+		const float pad = ImGui::GetStyle().FramePadding.y;
+		const float slot = height - 2.f * pad;
+		thumbnail_service::view preview;
+		if (ImGui::IsItemVisible() && src.layer < m_layers.size())
+			preview = m_thumbnails->lookup(m_layers[src.layer], src.relative);
+		const bool ready = preview.state == thumbnail_service::view::state_t::ready && preview.texture != 0 && preview.width > 0 && preview.height > 0;
+		if (preview.state == thumbnail_service::view::state_t::failed)
+			failure = preview.error;
+
+		ImDrawList* list = ImGui::GetWindowDrawList();
+		if (ready) {
+			const float scale = slot / static_cast<float>(std::max(preview.width, preview.height));
+			const float w = static_cast<float>(preview.width) * scale;
+			const float h = static_cast<float>(preview.height) * scale;
+			const ImVec2 a{ x + pad + (slot - w) * 0.5f, y + pad + (slot - h) * 0.5f };
+			list->AddImage(static_cast<ImTextureID>(preview.texture), a, ImVec2(a.x + w, a.y + h));
+		}
+		// Without a thumbnail (waiting, failed) the row reads as every other row: the kind's icon in front of the name.
+		const std::string& text = ready ? src.name : label;
+		list->AddText(ImVec2(x + slot + 3.f * pad, y + (height - ImGui::GetTextLineHeight()) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
 	}
 
 	// ─── left panel: directory tree ───────────────────────────────────────────
@@ -332,6 +361,8 @@ namespace edt
 			ImGui::TextDisabled("(base path not set)");
 			return;
 		}
+		if (m_thumbnails)
+			m_thumbnails->tick();
 
 		// ── breadcrumb ───────────────────────────────────────────────────────
 		{
@@ -425,7 +456,19 @@ namespace edt
 				const bool from_lower_layer = e.src.layer != top_layer;
 				if (from_lower_layer)
 					ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-				const bool picked = ImGui::Selectable(e.label.c_str(), !e.src.is_dir && e.src.relative == m_selected_rel);
+				const bool picture_row = m_thumbnails && !e.src.is_dir && thumbnail_decodable(e.src.name);
+				const bool selected_row = !e.src.is_dir && e.src.relative == m_selected_rel;
+				std::string no_preview;
+				bool picked = false;
+				if (picture_row) {
+					const ImVec2 row_min = ImGui::GetCursorScreenPos();
+					const float row_height = em(2.5f);
+					// The name is drawn over the row below, next to the thumbnail: the selectable only holds the place and the id.
+					picked = ImGui::Selectable(("##" + e.label).c_str(), selected_row, ImGuiSelectableFlags_None, ImVec2(0.f, row_height));
+					draw_picture_row(e.src, e.label, row_min.x, row_min.y, row_height, no_preview);
+				} else {
+					picked = ImGui::Selectable(e.label.c_str(), selected_row);
+				}
 				if (m_ui_probe) {
 					// A row the list cuts off is "visible" to ImGui; only its part inside the list counts, so a
 					// driver that aims at the centre does not land below the list.
@@ -442,8 +485,15 @@ namespace edt
 				}
 				if (from_lower_layer)
 					ImGui::PopStyleColor();
-				if (ImGui::IsItemHovered() && m_layers.size() > 1)
-					ImGui::SetTooltip("layer %zu: %s", e.src.layer, fs_paths::utf8_of(m_layers[e.src.layer]).c_str());
+				if (ImGui::IsItemHovered()) {
+					std::string tip;
+					if (m_layers.size() > 1)
+						tip = "layer " + std::to_string(e.src.layer) + ": " + fs_paths::utf8_of(m_layers[e.src.layer]);
+					if (!no_preview.empty())
+						tip += (tip.empty() ? "" : "\n") + std::string("No preview: ") + no_preview;
+					if (!tip.empty())
+						ImGui::SetTooltip("%s", tip.c_str());
+				}
 
 				if (e.src.is_dir) {
 					// Navigate into folder on click
