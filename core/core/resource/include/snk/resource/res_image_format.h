@@ -29,4 +29,7 @@ namespace res::image_format
 	// and the editor's check of its answer, which link no renderer, take the same limits (#1206).
 	inline constexpr std::size_t max_inline_pixel_bytes = 64 * 1024;
 	inline constexpr std::uint32_t max_inline_pixel_side = 4096;
+	// A model's embedded textures (#1206) are stored only below this index: the import skips the rest, and the editor refuses
+	// an answer of the model decoder that names one past it.
+	inline constexpr std::size_t max_embedded_textures = 256;
 }

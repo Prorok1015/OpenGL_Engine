@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <cstdint>
@@ -265,7 +266,7 @@ std::string_view extension_of(std::string_view name)
 }
 
 // An embedded texture is named only by its place in the model (#1206): "<stem>.texture_<index>" and .txm.desc, .raw or
-// .pct, the index in decimal without leading zeros and below mdl::k_max_embedded_textures (256).
+// .pct, the index in decimal without leading zeros and below the import's limit (it stores no other).
 std::optional<blob_kind> embedded_kind(std::string_view name, std::string_view stem)
 {
 	const std::string head = std::string(stem) + ".texture_";
@@ -273,8 +274,10 @@ std::optional<blob_kind> embedded_kind(std::string_view name, std::string_view s
 	name.remove_prefix(head.size());
 	std::size_t digits = 0;
 	while (digits < name.size() && name[digits] >= '0' && name[digits] <= '9') ++digits;
-	if (digits == 0 || digits > 3 || (digits > 1 && name[0] == '0')) return std::nullopt;
-	if (std::stoi(std::string(name.substr(0, digits))) >= 256) return std::nullopt;
+	if (digits == 0 || (digits > 1 && name[0] == '0')) return std::nullopt;
+	std::size_t index = 0;
+	const auto [end, error] = std::from_chars(name.data(), name.data() + digits, index);
+	if (error != std::errc{} || end != name.data() + digits || index >= res::image_format::max_embedded_textures) return std::nullopt;
 	const std::string_view rest = name.substr(digits);
 	if (rest == ".txm.desc") return blob_kind::desc;
 	if (rest == ".raw") return blob_kind::embedded_raw;

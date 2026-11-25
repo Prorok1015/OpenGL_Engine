@@ -283,8 +283,8 @@ BOOST_AUTO_TEST_CASE(ExportToProject_AMaterialOverAnEarlierExport_NamesTheEmbedd
 {
 	const std::string folder = std::format("tests/export_1206_{}", std::chrono::steady_clock::now().time_since_epoch().count());
 	const std::string old_texture = "res://" + folder + "/__embedded_txm/Image_0.txm.desc";
-	BOOST_REQUIRE(rs->store_sync(res::tag::make(folder + "/materials/mat.mat.desc"),
-		test_util::to_bytes(std::format(R"json({{"__type":"material_desc","textures":["{}"]}})json", old_texture))));
+	const std::string earlier_material = std::format(R"json({{"__type":"material_desc","textures":["{}"]}})json", old_texture);
+	BOOST_REQUIRE(rs->store_sync(res::tag::make(folder + "/materials/mat.mat.desc"), test_util::to_bytes(earlier_material)));
 
 	edt::asset_exporter exporter(*rs);
 	edt::import_result imported;
@@ -292,9 +292,10 @@ BOOST_AUTO_TEST_CASE(ExportToProject_AMaterialOverAnEarlierExport_NamesTheEmbedd
 	imported.root_tag = res::tag{ res::tag::memory, "box/box.prefab.desc" };
 	const res::tag texture{ res::tag::memory, "box/__embedded_txm/box.texture_0.txm.desc" };
 	const res::tag material{ res::tag::memory, "box/materials/mat.mat.desc" };
-	BOOST_REQUIRE(rs->store_sync(texture, test_util::to_bytes(R"json({"__type":"texture_2d_desc"})json")));
-	BOOST_REQUIRE(rs->store_sync(material,
-		test_util::to_bytes(R"json({"__type":"material_desc","textures":["memory://box/__embedded_txm/box.texture_0.txm.desc"]})json")));
+	const std::string texture_json = R"json({"__type":"texture_2d_desc"})json";
+	const std::string material_json = R"json({"__type":"material_desc","textures":["memory://box/__embedded_txm/box.texture_0.txm.desc"]})json";
+	BOOST_REQUIRE(rs->store_sync(texture, test_util::to_bytes(texture_json)));
+	BOOST_REQUIRE(rs->store_sync(material, test_util::to_bytes(material_json)));
 	BOOST_REQUIRE(rs->store_sync(imported.root_tag, test_util::to_bytes("{}")));
 	imported.all_tags = { texture, material, imported.root_tag };
 	const auto remap = exporter.build_remap(imported, "box", folder);

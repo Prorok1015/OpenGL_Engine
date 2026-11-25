@@ -103,6 +103,13 @@ BOOST_AUTO_TEST_CASE(ATga_IsTakenOnlyWithAHeaderItsDecoderReads)
 	tga[2] = std::byte{ 2 };
 	tga[16] = std::byte{ 12 };	// no such depth
 	BOOST_TEST(!read_picture_size(tga).has_value());
+	tga[16] = std::byte{ 8 };	// 8 bits: an index or grey, never true colour
+	BOOST_TEST(!read_picture_size(tga).has_value());
+	tga[2] = std::byte{ 3 };	// grey of 8 bits
+	BOOST_TEST(read_picture_size(tga).has_value());
+	tga[16] = std::byte{ 24 };	// grey of 24 bits
+	BOOST_TEST(!read_picture_size(tga).has_value());
+	tga[2] = std::byte{ 2 };
 	tga[16] = std::byte{ 32 };
 	tga[1] = std::byte{ 1 };	// a colour map for a true-colour image
 	BOOST_TEST(!read_picture_size(tga).has_value());

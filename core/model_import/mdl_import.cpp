@@ -366,10 +366,12 @@ private:
 		m_sink.store(tag, desc::pretty_json_bytes(desc));
 	}
 
-	// Once per name: a glTF material names one texture as diffuse and as base color.
-	void missing_texture(std::string_view name, std::string_view why)
+	// Once per name: a glTF material names one texture as diffuse and as base color. An embedded texture's name ("*3") says
+	// nothing without its reason, so the reason is listed with it.
+	void missing_texture(std::string_view name, std::string_view why, bool with_reason = false)
 	{
-		std::string listed = cut_on_code_point(name, mdl::k_max_missing_texture_name_bytes);
+		std::string listed = cut_on_code_point(with_reason ? std::format("{}: {}", name, why) : std::string(name),
+			mdl::k_max_missing_texture_name_bytes);
 		if (!m_missing_seen.insert(listed).second) return;
 		if (m_out.missing_textures.size() >= mdl::k_max_missing_textures) {
 			if (m_out.missing_textures_not_listed++ == 0) {
@@ -378,7 +380,8 @@ private:
 			}
 			return;
 		}
-		egLOG_WARN(k_log, "model '{}': texture '{}' {}: no sampler for it", logged(m_options.display_name), logged(listed), why);
+		egLOG_WARN(k_log, "model '{}': texture '{}' {}{}: no sampler for it", logged(m_options.display_name),
+			logged(cut_on_code_point(name, mdl::k_max_missing_texture_name_bytes)), with_reason ? "was skipped: " : "", why);
 		m_out.missing_textures.push_back(std::move(listed));
 	}
 
@@ -402,14 +405,14 @@ private:
 
 	json::value store_embedded(const aiTexture& texture, unsigned int index, std::string_view name)
 	{
-		if (m_embedded.size() >= mdl::k_max_embedded_textures) {
-			missing_texture(name, std::format("is past the {} embedded textures an import stores", mdl::k_max_embedded_textures));
-			return {};
+		const auto skip = [this, name](std::string_view why) {
+			missing_texture(name, why, true);
+			return json::value{};
+		};
+		if (index >= mdl::k_max_embedded_textures) {
+			return skip(std::format("embedded texture {} is past the first {} an import stores", index, mdl::k_max_embedded_textures));
 		}
-		if (texture.pcData == nullptr || texture.mWidth == 0) {
-			missing_texture(name, "is an embedded texture without data");
-			return {};
-		}
+		if (texture.pcData == nullptr || texture.mWidth == 0) return skip("an embedded texture without data");
 		const std::string base = std::format("{}{}.texture_{}", m_options.embedded_folder, m_texture_stem, index);
 		const res::tag desc_tag{ res::tag::memory, base + ".txm.desc" };
 		json::object desc;
@@ -423,22 +426,19 @@ private:
 			const std::uint64_t width = texture.mWidth;
 			const std::uint64_t height = texture.mHeight;
 			constexpr std::uint64_t max_side = res::image_format::max_picture_side;
-			if (width > max_side || height > max_side) {
-				missing_texture(name, std::format("is {}x{}: a side is past {}", width, height, max_side));
-				return {};
-			}
+			if (width > max_side || height > max_side) return skip(std::format("{}x{}: a side is past {}", width, height, max_side));
 			// Both sides at most 16384: the product fits, and so does every index below.
 			const std::uint64_t pixel_bytes = width * height * 4;
 			if (pixel_bytes > res::image_format::max_picture_decoded_bytes) {
-				missing_texture(name, std::format("is {}x{}: past {} bytes of pixels", width, height, res::image_format::max_picture_decoded_bytes));
-				return {};
+				return skip(std::format("{}x{}: past {} bytes of pixels", width, height, res::image_format::max_picture_decoded_bytes));
 			}
-			if (!take_embedded_bytes(pixel_bytes, name)) return {};
+			if (!take_embedded_bytes(pixel_bytes)) return skip(total_bytes_reason());
 			// The texels go as bytes b, g, r, a: the fields of aiTexel, whatever achFormatHint says.
 			static_assert(sizeof(aiTexel) == 4 && offsetof(aiTexel, b) == 0 && offsetof(aiTexel, g) == 1 && offsetof(aiTexel, r) == 2
 				&& offsetof(aiTexel, a) == 3);
 			mdl::stored_texels stored = mdl::store_texels(std::span(reinterpret_cast<const std::byte*>(texture.pcData),
 				static_cast<std::size_t>(pixel_bytes)), static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+			if (stored.raw.empty() && stored.pixels.empty()) return skip("texels the import cannot read");
 			if (stored.raw.empty()) {
 				desc["pixels"] = std::move(stored.pixels);
 				store_embedded_desc(desc_tag, desc);
@@ -449,44 +449,44 @@ private:
 		} else {
 			const std::span<const std::byte> file(reinterpret_cast<const std::byte*>(texture.pcData), texture.mWidth);
 			const std::optional<res::image_header::picture_size> size = res::image_header::read_picture_size(file);
-			if (!size) {
-				missing_texture(name, "is an embedded picture that is no PNG, JPEG, BMP or TGA");
-				return {};
-			}
+			if (!size) return skip("an embedded picture that is no PNG, JPEG, BMP or TGA");
 			const std::uint64_t max_side = res::image_format::max_picture_side;
 			if (size->width > max_side || size->height > max_side
 				|| std::uint64_t{ size->width } * size->height * 4 > res::image_format::max_picture_decoded_bytes) {
-				missing_texture(name, std::format("is an embedded picture of {}x{}: past {} a side or {} bytes of pixels", size->width,
-					size->height, max_side, res::image_format::max_picture_decoded_bytes));
-				return {};
+				return skip(std::format("an embedded picture of {}x{}: past {} a side or {} bytes of pixels", size->width, size->height,
+					max_side, res::image_format::max_picture_decoded_bytes));
 			}
-			if (!take_embedded_bytes(file.size(), name)) return {};
+			if (!take_embedded_bytes(file.size())) return skip(total_bytes_reason());
 			bytes.assign(file.begin(), file.end());
 			// Whatever the picture is, the pct adapter decodes it by its content; no other extension is ever written.
 			extension = res::image_format::picture_extensions[0];
 		}
 
+		// Stored even when the tag is there: the names are the same for every model of this stem, and an earlier import's
+		// bytes must never stand for this one's.
 		const res::tag data_tag{ res::tag::memory, std::format("{}.{}", base, extension) };
-		if (!m_sink.exists(data_tag)) m_sink.store(data_tag, bytes);
+		m_sink.store(data_tag, bytes);
 		refer(data_tag);
 		desc["data"] = json::value_from(data_tag);
 		store_embedded_desc(desc_tag, desc);
 		return json::value_from(desc_tag);
 	}
 
-	bool take_embedded_bytes(std::uint64_t bytes, std::string_view name)
+	bool take_embedded_bytes(std::uint64_t bytes)
 	{
-		if (bytes > mdl::k_max_embedded_total_bytes - m_embedded_bytes) {
-			missing_texture(name, std::format("would pass the {} bytes of embedded textures an import stores", mdl::k_max_embedded_total_bytes));
-			return false;
-		}
+		if (bytes > mdl::k_max_embedded_total_bytes - m_embedded_bytes) return false;
 		m_embedded_bytes += bytes;
 		return true;
 	}
 
+	static std::string total_bytes_reason()
+	{
+		return std::format("it would pass the {} bytes of embedded textures an import stores", mdl::k_max_embedded_total_bytes);
+	}
+
 	void store_embedded_desc(const res::tag& desc_tag, const json::object& desc)
 	{
-		if (!m_sink.exists(desc_tag)) store_desc(desc_tag, desc);
+		store_desc(desc_tag, desc);
 		refer(desc_tag);
 	}
 
@@ -925,10 +925,11 @@ std::string mdl::scene_size_problem(const scene_size& size)
 mdl::stored_texels mdl::store_texels(std::span<const std::byte> bgra, std::uint32_t width, std::uint32_t height)
 {
 	constexpr auto max_side = static_cast<std::uint32_t>(res::image_format::max_picture_side);
-	ASSERT_MSG(width >= 1 && height >= 1 && width <= max_side && height <= max_side, "the caller checks the sides");
+	if (width < 1 || height < 1 || width > max_side || height > max_side) return {};
+	// Both sides at most 16384: no product below overflows.
 	const std::size_t row_bytes = std::size_t{ width } * 4;
 	const std::size_t pixel_bytes = row_bytes * height;
-	ASSERT_MSG(bgra.size() == pixel_bytes, "one texel of four bytes per pixel");
+	if (bgra.size() != pixel_bytes) return {};
 	const bool inline_pixels = pixel_bytes <= k_max_inline_texture_bytes && width <= k_max_inline_texture_side && height <= k_max_inline_texture_side;
 	const std::size_t offset = inline_pixels ? 0 : res::image_format::raw_header_size;
 

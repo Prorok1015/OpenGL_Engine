@@ -39,10 +39,11 @@ namespace mdl
 	static_assert(k_max_scene_vertices * 3 * sizeof(float) <= res::desc_binary::max_file_bytes);
 
 	// Embedded textures (#1206) are named by their place in the model, "<embedded_folder><stem>.texture_<index>" (the
-	// stem of geometry_tag's name), and stored as inline pixels, a .raw or a .pct. The import stores at most this many of
-	// a model, and at most this many bytes of them in all (pixels as stored, a picture file as it is); a texture past
-	// either, or one it cannot read, is skipped and listed in missing_textures.
-	inline constexpr std::size_t k_max_embedded_textures = 256;
+	// stem of geometry_tag's name), and stored as inline pixels, a .raw or a .pct. The import stores only those of an index
+	// below k_max_embedded_textures, and at most k_max_embedded_total_bytes of them in all (pixels as stored, a picture
+	// file as it is); a texture past either, or one it cannot read, is skipped and listed in missing_textures as
+	// "<name as the material names it>: <why>".
+	inline constexpr std::size_t k_max_embedded_textures = res::image_format::max_embedded_textures;
 	inline constexpr std::uint64_t k_max_embedded_total_bytes = 256ull * 1024 * 1024;
 	// An uncompressed embedded texture this small goes into its desc as inline pixels (rnd::texture_2d_desc's limits), a
 	// bigger one into a .raw file.
@@ -58,7 +59,8 @@ namespace mdl
 		std::vector<std::byte> raw;
 	};
 
-	// `bgra`: width * height texels of b, g, r, a (assimp's aiTexel), top row first; both sides 1..16384.
+	// `bgra`: width * height texels of b, g, r, a (assimp's aiTexel), top row first; both sides 1..16384. Anything else
+	// gives both empty.
 	SNK_MODEL_IMPORT_API stored_texels store_texels(std::span<const std::byte> bgra, std::uint32_t width, std::uint32_t height);
 
 	// A parsed scene as the limits above count it.

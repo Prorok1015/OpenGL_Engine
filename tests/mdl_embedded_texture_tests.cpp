@@ -89,22 +89,29 @@ struct memory_sink final : mdl::import_sink
 	}
 };
 
-// One triangle drawn once per image, each with a material whose base colour is that image (a data URI, as glTF embeds).
-std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images)
+// One triangle drawn once per used image (every image when `used` is empty), each with a material whose base colour is
+// that image (a data URI, as glTF embeds).
+std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images, std::vector<std::size_t> used = {})
 {
+	if (used.empty()) {
+		for (std::size_t i = 0; i < images.size(); ++i) used.push_back(i);
+	}
 	std::string primitives, materials, textures, list;
+	for (std::size_t m = 0; m < used.size(); ++m) {
+		const std::string comma = m == 0 ? "" : ",";
+		primitives += std::format(R"json({}{{"attributes":{{"POSITION":0}},"material":{}}})json", comma, m);
+		materials += std::format(R"json({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})json", comma, used[m]);
+	}
 	for (std::size_t i = 0; i < images.size(); ++i) {
 		const std::string comma = i == 0 ? "" : ",";
-		primitives += std::format(R"({}{{"attributes":{{"POSITION":0}},"material":{}}})", comma, i);
-		materials += std::format(R"({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})", comma, i);
-		textures += std::format(R"({}{{"source":{}}})", comma, i);
-		list += std::format(R"({}{{"name":"{}","uri":"{}"}})", comma, images[i].first, images[i].second);
+		textures += std::format(R"json({}{{"source":{}}})json", comma, i);
+		list += std::format(R"json({}{{"name":"{}","uri":"{}"}})json", comma, images[i].first, images[i].second);
 	}
-	return std::format(R"({{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],)"
-		R"("meshes":[{{"primitives":[{}]}}],"materials":[{}],"textures":[{}],"images":[{}],)"
-		R"("buffers":[{{"byteLength":36,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"}}],)"
-		R"("bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}}],)"
-		R"("accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}}]}})",
+	return std::format(R"json({{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],)json"
+		R"json("meshes":[{{"primitives":[{}]}}],"materials":[{}],"textures":[{}],"images":[{}],)json"
+		R"json("buffers":[{{"byteLength":36,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"}}],)json"
+		R"json("bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}}],)json"
+		R"json("accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}}]}})json",
 		primitives, materials, textures, list);
 }
 
@@ -301,10 +308,34 @@ BOOST_AUTO_TEST_CASE(APictureOverTheLimitsOrOfAnotherKind_IsSkippedWithItsReason
 
 	BOOST_REQUIRE(result.error.empty());
 	BOOST_TEST(result.missing_textures.size() == 2u);
-	BOOST_TEST(any_contains(result.missing_textures, "*0"));
-	BOOST_TEST(any_contains(result.missing_textures, "*1"));
+	BOOST_TEST(any_contains(result.missing_textures, "*0: an embedded picture of 100000x100000"));
+	BOOST_TEST(any_contains(result.missing_textures, "*1: an embedded picture that is no PNG, JPEG, BMP or TGA"));
 	const std::set<std::string> expected = { "memory://emb/__embedded_txm/m.texture_2.pct", "memory://emb/__embedded_txm/m.texture_2.txm.desc" };
 	BOOST_TEST((sink.embedded() == expected));
+}
+
+// The editor refuses an answer naming an index past the limit: the import must never store one, or the whole model fails.
+BOOST_AUTO_TEST_CASE(ATexturePastTheIndexLimit_IsSkipped_AndTheModelImports)
+{
+	std::vector<std::pair<std::string, std::string>> images(300, { "", png_uri(k_red_1x1) });
+	images[299] = { "", png_uri(k_green_2x1) };
+	memory_sink sink;
+	const mdl::import_result result = import_text("m.gltf", gltf_with_images(images, { 299, 0 }), sink);
+
+	BOOST_REQUIRE(result.error.empty());
+	BOOST_REQUIRE(result.missing_textures.size() == 1u);
+	BOOST_TEST(result.missing_textures.front().starts_with("*299: embedded texture 299 is past the first 256"), result.missing_textures.front());
+	const std::set<std::string> expected = { "memory://emb/__embedded_txm/m.texture_0.pct", "memory://emb/__embedded_txm/m.texture_0.txm.desc" };
+	BOOST_TEST((sink.embedded() == expected));
+}
+
+// The names are the same for every model of one stem: a second import into the same place writes its own bytes.
+BOOST_AUTO_TEST_CASE(ASecondImportOfOneStem_StoresItsOwnBytes)
+{
+	memory_sink sink;
+	BOOST_REQUIRE(import_text("m.gltf", gltf_with_images({ { "", png_uri(k_red_1x1) } }), sink).error.empty());
+	BOOST_REQUIRE(import_text("m.gltf", gltf_with_images({ { "", png_uri(k_green_2x1) } }), sink).error.empty());
+	BOOST_TEST((sink.stored.at("memory://emb/__embedded_txm/m.texture_0.pct") == decoded(k_green_2x1)));
 }
 
 BOOST_AUTO_TEST_CASE(ATgaWithAHeaderItsDecoderReads_IsAPctLikeTheOthers)
@@ -366,6 +397,20 @@ BOOST_AUTO_TEST_CASE(TexelsPastTheInlineLimit_AreARawFile_BottomRowFirst)
 	BOOST_TEST((last_row[0] == std::byte{ 255 } && last_row[2] == std::byte{ 0 }));	// red, the model's top row
 	const std::byte* first_row = stored.raw.data() + res::image_format::raw_header_size;
 	BOOST_TEST((first_row[0] == std::byte{ 0 } && first_row[2] == std::byte{ 255 }));	// blue
+}
+
+// Exported: a call that does not hold to the sides or the size gives nothing, in a release build too.
+BOOST_AUTO_TEST_CASE(TexelsOfAnotherSizeOrSide_GiveNothing)
+{
+	const std::vector<std::byte> four(16);
+	const std::pair<std::uint32_t, std::uint32_t> sizes[] = { { 0, 4 }, { 4, 0 }, { 16385, 1 }, { 3, 2 }, { 2, 1 } };
+	for (const auto& [width, height] : sizes) {
+		BOOST_TEST_INFO(width << "x" << height);
+		const mdl::stored_texels stored = mdl::store_texels(four, width, height);
+		BOOST_TEST((stored.raw.empty() && stored.pixels.empty()));
+	}
+	BOOST_TEST(!mdl::store_texels(four, 2, 2).pixels.empty());
+	BOOST_TEST(mdl::store_texels({}, 65535, 65535).raw.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
