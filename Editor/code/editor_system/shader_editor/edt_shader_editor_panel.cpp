@@ -16,6 +16,11 @@ namespace edt
 	{
 	}
 
+	shader_editor_panel::~shader_editor_panel()
+	{
+		flush_pending(true);
+	}
+
 	void shader_editor_panel::set_context(shader_source_document* shown)
 	{
 		if (m_ctx == shown) return;
@@ -25,7 +30,39 @@ namespace edt
 		m_unplaced.clear();
 		m_loaded = false;
 		m_markers_ready = false;
+		m_close_reported = false;
+		m_pending = false;
+		m_held_back = false;
 		m_pending_line = 0;
+	}
+
+	bool shader_editor_panel::is_dirty() const
+	{
+		return m_ctx && m_ctx->is_open() && (m_ctx->is_dirty() || m_pending);
+	}
+
+	void shader_editor_panel::press_close()
+	{
+		flush_pending(true);
+		if (m_on_close) m_on_close();
+	}
+
+	void shader_editor_panel::request_revert()
+	{
+		if (!m_ctx || !m_ctx->is_open()) return;
+		m_error = m_ctx->revert();
+		if (m_error.empty()) {
+			m_pending = false;
+			m_held_back = false;
+		}
+	}
+
+	void shader_editor_panel::request_overwrite()
+	{
+		if (!m_ctx || !m_ctx->is_open()) return;
+		flush_pending(true);
+		const save_result saved = m_ctx->overwrite();
+		m_error = saved.saved ? std::string{} : saved.error;
 	}
 
 	void shader_editor_panel::on_before_begin()
@@ -38,11 +75,17 @@ namespace edt
 	void shader_editor_panel::on_hidden()
 	{
 		flush_pending(true);
-		if (!is_open() && m_ctx && m_on_close) m_on_close();
+		if (is_open()) {
+			m_close_reported = false;
+		} else if (m_ctx && m_on_close && !m_close_reported) {
+			m_close_reported = true;
+			m_on_close();
+		}
 	}
 
 	void shader_editor_panel::on_render()
 	{
+		m_close_reported = false;
 		if (!m_ctx || !m_ctx->is_open()) {
 			ImGui::TextDisabled("(no shader open)");
 			return;
@@ -58,48 +101,56 @@ namespace edt
 			m_view.go_to_line(m_pending_line);
 			m_pending_line = 0;
 		}
-		if (auto edited = m_view.render("##shader_text", ImGui::GetContentRegionAvail())) {
-			m_pending_text = std::move(*edited);
-			m_pending_since = ImGui::GetTime();
+		if (m_view.render("##shader_text", ImGui::GetContentRegionAvail())) {
+			note_typing();
 		}
 		flush_pending(false);
 	}
 
+	void shader_editor_panel::note_typing()
+	{
+		m_pending = true;
+		m_pending_since = ImGui::GetTime();
+		// The widget keeps a marker on its line while the lines move under it: after an edit they are not where the build put them. They
+		// stay off until the next build brings new rows.
+		m_view.set_markers(shader_marker_set{}, colors());
+		m_markers_problems_generation = m_problems ? m_problems->generation() : 0;
+		m_markers_ready = true;
+	}
+
 	void shader_editor_panel::flush_pending(bool force)
 	{
-		if (!m_pending_text) return;
-		if (!force && ImGui::GetTime() - m_pending_since < k_typing_pause_seconds) return;
-		std::string text = std::move(*m_pending_text);
-		m_pending_text.reset();
-		if (!m_ctx || !m_ctx->is_open()) return;
-		if (m_ctx->set_text(std::move(text))) {
-			m_synced_generation = m_ctx->generation();
-		} else {
-			m_loaded = false;
+		if (!m_pending) return;
+		if (!m_ctx || !m_ctx->is_open()) {
+			m_pending = false;
+			return;
 		}
+		if (!force && ImGui::GetTime() - m_pending_since < k_typing_pause_seconds) return;
+		if (m_ctx->read_only() || m_ctx->edits_locked()) {
+			m_held_back = true;
+			return;
+		}
+		m_held_back = false;
+		m_pending = false;
+		m_ctx->set_text(m_view.text());
+		m_synced_generation = m_ctx->generation();
 	}
 
 	void shader_editor_panel::render_toolbar()
 	{
 		const bool can_save = m_ctx->can_save() && !m_ctx->edits_locked();
-		ImGui::BeginDisabled(!can_save || !m_ctx->is_dirty());
+		ImGui::BeginDisabled(!can_save || !is_dirty());
 		if (ImGui::Button("Save") && m_on_save) {
 			flush_pending(true);
 			m_on_save();
 		}
 		ImGui::EndDisabled();
 		ImGui::SameLine();
-		ImGui::BeginDisabled(!can_save || !m_ctx->is_dirty());
-		if (ImGui::Button("Revert") && m_on_revert) {
-			m_pending_text.reset();
-			m_on_revert();
-		}
+		ImGui::BeginDisabled(!can_save || !is_dirty());
+		if (ImGui::Button("Revert")) request_revert();
 		ImGui::EndDisabled();
 		ImGui::SameLine();
-		if (ImGui::Button("Close") && m_on_close) {
-			flush_pending(true);
-			m_on_close();
-		}
+		if (ImGui::Button("Close")) press_close();
 		const std::string reason = m_ctx->read_only_reason();
 		if (!reason.empty()) {
 			ImGui::SameLine();
@@ -110,16 +161,13 @@ namespace edt
 	void shader_editor_panel::render_banners()
 	{
 		if (m_ctx->changed_on_disk()) {
-			ImGui::TextColored(colors().warning, "The file changed on disk. Reload drops your edits, Overwrite replaces the file with them.");
-			if (ImGui::Button("Reload")) {
-				m_pending_text.reset();
-				m_error = m_ctx->revert();
-			}
+			ImGui::TextColored(colors().warning, "The shader was changed outside the window. Reload takes that text, Overwrite keeps yours.");
+			if (ImGui::Button("Reload")) request_revert();
 			ImGui::SameLine();
-			if (ImGui::Button("Overwrite")) {
-				const save_result saved = m_ctx->overwrite();
-				m_error = saved.saved ? std::string{} : saved.error;
-			}
+			if (ImGui::Button("Overwrite")) request_overwrite();
+		}
+		if (m_held_back) {
+			ImGui::TextColored(colors().warning, "Locked: your typing is not applied until Play stops.");
 		}
 		if (m_ctx->mixed_endings()) {
 			ImGui::TextColored(colors().info, "The file mixes line endings; Save writes the commonest one everywhere.");
@@ -139,6 +187,19 @@ namespace edt
 		m_view.set_palette(shader_palette_source_of_style(colors()));
 		m_view.set_read_only(m_ctx->read_only() || m_ctx->edits_locked());
 		if (m_loaded && m_synced_generation == m_ctx->generation()) return;
+		if (m_loaded && m_pending) {
+			// The document changed while typing waited for its handover: the typing goes in on top, and the person chooses.
+			m_pending = false;
+			const std::string typed = m_view.text();
+			if (m_ctx->set_text(typed)) {
+				m_ctx->raise_conflict();
+			} else if (m_ctx->text() != typed) {
+				m_pending = true;
+				m_held_back = true;
+			}
+			m_synced_generation = m_ctx->generation();
+			return;
+		}
 		m_view.load(m_ctx->text());
 		m_synced_generation = m_ctx->generation();
 		m_loaded = true;
@@ -149,14 +210,11 @@ namespace edt
 	{
 		if (!m_problems) return;
 		const std::uint64_t problems_generation = m_problems->generation();
-		const std::uint64_t document_generation = m_ctx->generation();
-		if (m_markers_ready && problems_generation == m_markers_problems_generation
-			&& document_generation == m_markers_document_generation) return;
+		if (m_markers_ready && problems_generation == m_markers_problems_generation) return;
 		const shader_marker_set markers = shader_markers_for(m_problems->list(), m_ctx->source().string(), m_view.line_count());
 		m_view.set_markers(markers, colors());
 		m_unplaced = markers.unplaced;
 		m_markers_problems_generation = problems_generation;
-		m_markers_document_generation = document_generation;
 		m_markers_ready = true;
 	}
 }

@@ -2,7 +2,6 @@
 #include "edt_shader_markers.h"
 #include "edt_shader_palette.h"
 #include <TextEditor.h>
-#include <optional>
 #include <string>
 
 namespace edt
@@ -25,8 +24,9 @@ namespace edt
 		// The cursor at the start of `line` (1-based), scrolled into view on the next render.
 		void go_to_line(int line);
 
-		// One frame of the widget. The new text when the person edited it (typing, paste, undo, redo) since the last call.
-		std::optional<std::string> render(const char* id, const ImVec2& size);
+		// One frame of the widget. True when the person edited the text (typing, paste, undo, redo) since the last call. The text itself is
+		// not copied here: `text()` does that, when the owner needs it.
+		bool render(const char* id, const ImVec2& size);
 
 		std::string text() const { return m_editor.GetText(); }
 		int line_count() const { return m_editor.GetLineCount(); }

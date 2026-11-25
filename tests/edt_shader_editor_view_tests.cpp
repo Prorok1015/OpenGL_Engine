@@ -13,6 +13,7 @@
 #include <imgui.h>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -166,9 +167,9 @@ BOOST_AUTO_TEST_CASE(Load_ThenText_GivesTheSameText_AndRenderReportsNoEdit)
 	BOOST_TEST(view.text().find("vec4(1.0)") != std::string::npos);
 	BOOST_TEST(view.line_count() >= 6);
 
-	std::optional<std::string> edited;
+	bool edited = false;
 	frame([&] { if (ImGui::Begin("code")) edited = view.render("##code", ImVec2(500.f, 300.f)); ImGui::End(); });
-	BOOST_TEST(!edited.has_value());
+	BOOST_TEST(!edited);
 }
 
 BOOST_AUTO_TEST_CASE(AnInsertedText_IsReportedOnceByTheNextRender)
@@ -177,13 +178,13 @@ BOOST_AUTO_TEST_CASE(AnInsertedText_IsReportedOnceByTheNextRender)
 	view.load("void main() {}\n");
 	view.insert_text("// x\n");
 
-	std::optional<std::string> first;
-	std::optional<std::string> second;
+	bool first = false;
+	bool second = false;
 	frame([&] { if (ImGui::Begin("code")) first = view.render("##code", ImVec2(500.f, 300.f)); ImGui::End(); });
 	frame([&] { if (ImGui::Begin("code")) second = view.render("##code", ImVec2(500.f, 300.f)); ImGui::End(); });
-	BOOST_REQUIRE(first.has_value());
-	BOOST_TEST(first->rfind("// x\n", 0) == 0u);
-	BOOST_TEST(!second.has_value());
+	BOOST_TEST(first);
+	BOOST_TEST(view.text().rfind("// x\n", 0) == 0u);
+	BOOST_TEST(!second);
 }
 
 BOOST_AUTO_TEST_CASE(Load_AfterAnEdit_IsNotReportedAsAnEdit)
@@ -193,9 +194,9 @@ BOOST_AUTO_TEST_CASE(Load_AfterAnEdit_IsNotReportedAsAnEdit)
 	view.insert_text("b");
 	view.load("c\n");
 
-	std::optional<std::string> edited;
+	bool edited = false;
 	frame([&] { if (ImGui::Begin("code")) edited = view.render("##code", ImVec2(500.f, 300.f)); ImGui::End(); });
-	BOOST_TEST(!edited.has_value());
+	BOOST_TEST(!edited);
 }
 
 BOOST_AUTO_TEST_CASE(Markers_AreReplacedAsAWhole_ByLineAndSeverity)
@@ -316,6 +317,154 @@ BOOST_AUTO_TEST_CASE(PressClose_FlushesTheTypedTextFirst)
 	panel.press_close();
 
 	BOOST_TEST(dirty_when_closed);
+}
+
+BOOST_AUTO_TEST_CASE(Revert_TakesTheFilesText_AndTheTypingNotHandedOverGoesWithIt)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	BOOST_TEST(panel.is_dirty());
+
+	panel.request_revert();
+	draw();
+
+	BOOST_TEST(panel.error().empty());
+	BOOST_TEST(!panel.has_pending_edits());
+	BOOST_TEST(!panel.is_dirty());
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(panel.widget_text() == document->text());
+}
+
+BOOST_AUTO_TEST_CASE(Revert_ThatFails_KeepsTheTyping)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	fs::remove(res_root / "shaders/scene.frag");
+
+	panel.request_revert();
+
+	BOOST_TEST(!panel.error().empty());
+	BOOST_TEST(panel.has_pending_edits());
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_HandsTheTypingOverFirst_ThenWritesIt)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+
+	panel.request_overwrite();
+
+	BOOST_TEST(panel.error().empty());
+	BOOST_TEST(!panel.has_pending_edits());
+	BOOST_TEST(!document->is_dirty());
+	std::ifstream in(res_root / "shaders/scene.frag", std::ios::binary);
+	const std::string written((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	BOOST_TEST(written.rfind("// typed\n", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnOutsideChangeWhileTyping_DoesNotPartTheWidgetFromTheDocument_AndRaisesTheConflict)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	BOOST_REQUIRE(!document->is_dirty());
+
+	std::ofstream(res_root / "shaders/scene.frag", std::ios::binary | std::ios::trunc) << "// from disk\n";
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_REQUIRE(document->text() == "// from disk\n");
+	draw();
+
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(document->text().rfind("// typed\n", 0) == 0u);
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(!panel.has_pending_edits());
+
+	panel.request_revert();
+	draw();
+	BOOST_TEST(document->text() == "// from disk\n");
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(!document->changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(TypingThatCannotBeHandedOver_StaysInTheWidget_AndGoesInWhenThePlayStops)
+{
+	bool locked = false;
+	document->set_lock_source([&locked] { return locked; });
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+
+	locked = true;
+	ImGui::GetIO().DeltaTime = 0.5f;
+	draw();
+	BOOST_TEST(panel.has_pending_edits());
+	BOOST_TEST(panel.edits_held_back());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(panel.is_dirty());
+
+	locked = false;
+	draw();
+	BOOST_TEST(!panel.has_pending_edits());
+	BOOST_TEST(!panel.edits_held_back());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(panel.widget_text() == document->text());
+}
+
+BOOST_AUTO_TEST_CASE(Typing_ClearsTheMarkersUntilTheNextProblemsUpdate)
+{
+	problems.set("shader", { shader_problem(3).item });
+	draw();
+	BOOST_REQUIRE(panel.has_markers());
+
+	panel.insert_text("// typed\n");
+	draw();
+	draw();
+	BOOST_TEST(!panel.has_markers());
+
+	problems.set("shader", { shader_problem(4).item });
+	draw();
+	BOOST_TEST(panel.has_markers());
+}
+
+BOOST_AUTO_TEST_CASE(ADocumentOfOneMegabyte_OpensEditsAndHandsOver)
+{
+	std::string big = "#version 450 core\n";
+	big.reserve(1024 * 1024 + 64);
+	while (big.size() < 1024 * 1024) big += "// a line of a long shader source that is only here for its size\n";
+	std::ofstream(res_root / "shaders/big.frag", std::ios::binary) << big;
+	document->open(res::tag{ "res://shaders/big.frag" });
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+	panel.set_context(nullptr);
+	panel.set_context(document.get());
+
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	draw();
+	panel.flush_edits();
+
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->text().size() == big.size() + 9);
+}
+
+BOOST_AUTO_TEST_CASE(TheClosedWindow_ReportsItOnce)
+{
+	int closed = 0;
+	panel.set_on_close([&] { ++closed; });
+	panel.set_open(false);
+	draw();
+	draw();
+	draw();
+	BOOST_TEST(closed <= 1);
 }
 
 BOOST_AUTO_TEST_CASE(Close_RunsTheCallback)

@@ -58,12 +58,12 @@ namespace edt
 		m_editor.SetCursor(line - 1, 0);
 	}
 
-	std::optional<std::string> shader_text_view::render(const char* id, const ImVec2& size)
+	bool shader_text_view::render(const char* id, const ImVec2& size)
 	{
 		m_editor.Render(id, size);
 		const size_t undo_index = m_editor.GetUndoIndex();
-		if (undo_index == m_undo_index) return std::nullopt;
+		if (undo_index == m_undo_index) return false;
 		m_undo_index = undo_index;
-		return m_editor.GetText();
+		return true;
 	}
 }
