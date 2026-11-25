@@ -14,7 +14,7 @@ namespace edt
 	// The window of one data document (EPIC-56, #793): its fields from the schema (schema_ui::draw_fields over
 	// data_document::edit), a Save button and what the document says about itself (the parents it inherits from, a broken
 	// chain, a file changed on disk). Closing the window asks for the document to be closed (`on_close`): the editor decides,
-	// it asks first when there are unsaved changes. A window of one type adds its sections under the fields (the material
+	// it asks first when there are unsaved changes. A window of one type adds its sections above or under the fields (the material
 	// window, #1196).
 	class data_document_panel : public panel_base
 	{
@@ -45,6 +45,8 @@ namespace edt
 		void on_before_begin() override;
 		void on_render() override;
 		void on_hidden() override;
+		// Under the Save button, above the fields' scrolling child; nothing here.
+		virtual void draw_before_fields() {}
 		// Under the fields, in their scrolling child; nothing here. Not called while the type has no schema.
 		virtual void draw_after_fields() {}
 
