@@ -30,7 +30,8 @@ namespace edt
 	picture_texture picture_texture_of(const res::tag& picture);
 
 	// The first own fields of a new document of `type` made by Create Document (document_creator::ports::initial_fields): a
-	// texture is a child of the engine's base texture, as Create Texture makes it; any other type gets none.
+	// texture is a child of the engine's base texture, as Create Texture makes it, a material of the base material, as New
+	// Material makes it (#1198); any other type gets none.
 	boost::json::object initial_document_fields(std::string_view type);
 
 	// Why "Create Texture" is refused for `picture`: the picture is not the project's own (`in_top_layer`), the project may
