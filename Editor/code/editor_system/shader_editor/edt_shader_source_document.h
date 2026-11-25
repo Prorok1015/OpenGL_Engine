@@ -69,6 +69,9 @@ namespace edt
 
 		// Somebody changed the file on disk since it was read, and the document has edits.
 		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		// The window's typing met a change made behind its back (a reload of the file, another edit): the person gets the Reload / Overwrite
+		// choice of a changed file.
+		void raise_conflict();
 		// Takes the file as it is on disk and drops the edits. The error text, empty when it worked.
 		std::string revert();
 		// Keeps the edits and writes them over the file as it is now.
