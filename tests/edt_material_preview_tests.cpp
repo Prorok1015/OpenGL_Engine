@@ -145,8 +145,45 @@ BOOST_AUTO_TEST_CASE(ASkyMaterial_HasNoPreview)
 	BOOST_TEST(!shown.has_world());
 	BOOST_TEST(shown.registry() == nullptr);
 	BOOST_TEST(!ram->files.contains(content->material_tag()));
-	BOOST_TEST(released.empty());
 	BOOST_TEST(shown.set_name().empty());
+	// Nothing was opened, so no render target was made or given up.
+	BOOST_TEST(shown.render_target().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AMaterialMadeSky_ClosesItsPreview)
+{
+	edt::preview_stage& shown = open(k_plain_material);
+	BOOST_REQUIRE(shown.has_world());
+	const std::string set = shown.set_name();
+	const res::tag material = content->material_tag();
+	BOOST_TEST(ram->files.contains(material));
+
+	BOOST_REQUIRE(document->edit([](json::value& value) {
+		value.as_object()["shader"] = "res://shaders/sky.shader.desc";
+		return true;
+	}));
+	document->commit_pending();
+	shown.update();
+
+	BOOST_TEST(content->sky_material());
+	BOOST_TEST(!shown.has_world());
+	BOOST_TEST(mgr->find_set(set) == nullptr);
+	BOOST_TEST(released.size() == 4u);
+	BOOST_TEST(!ram->files.contains(material));
+}
+
+BOOST_AUTO_TEST_CASE(AnUnchangedGeneration_DoesNotRewriteTheMemoryMaterial)
+{
+	edt::preview_stage& shown = open(k_plain_material);
+	BOOST_REQUIRE(shown.has_world());
+	const res::tag material = content->material_tag();
+	BOOST_REQUIRE(ram->files.contains(material));
+
+	const std::vector<std::byte> marker = test_util::to_bytes("marker");
+	ram->files[material] = marker;
+	shown.update();
+	shown.update();
+	BOOST_TEST((ram->files.at(material) == marker));
 }
 
 BOOST_AUTO_TEST_CASE(Close_ErasesTheMemoryMaterial)

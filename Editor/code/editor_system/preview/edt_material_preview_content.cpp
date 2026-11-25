@@ -96,7 +96,10 @@ bool edt::material_preview_content::write_material()
 {
 	res::resource_system* writer = m_services.writable_resources();
 	desc::desc_system* descs = m_services.descs();
-	if (!writer || !descs) return false;
+	if (!writer || !descs) {
+		report_write_failure("the project resources are not available");
+		return false;
+	}
 	const json::value shown = m_document.shown();
 	json::object body = shown.is_object() ? shown.as_object() : json::object{};
 	std::vector<std::string> headers;
@@ -110,15 +113,28 @@ bool edt::material_preview_content::write_material()
 	body["__version"] = m_document.current_version();
 	const json::value content(std::move(body));
 	try {
-		writer->store(m_material_tag, descs->serialize_to_bytes(content));
+		if (!writer->store(m_material_tag, descs->serialize_to_bytes(content))) {
+			report_write_failure("the memory copy was refused");
+			return false;
+		}
 	} catch (const std::exception& failure) {
-		egLOG_WARN("Editor/Material", "The material preview cannot be written: {}", failure.what());
+		report_write_failure(failure.what());
 		return false;
 	}
 	writer->signal_changed(m_material_tag);
 	m_material_written = true;
 	m_written_generation = m_document.generation();
 	return true;
+}
+
+void edt::material_preview_content::report_write_failure(std::string_view why)
+{
+	// update() retries every frame: one warning per document generation.
+	const std::uint64_t generation = m_document.generation();
+	if (m_write_failure_logged && m_failure_generation == generation) return;
+	m_write_failure_logged = true;
+	m_failure_generation = generation;
+	egLOG_WARN("Editor/Material", "The material preview cannot be written: {}", why);
 }
 
 void edt::material_preview_content::release()

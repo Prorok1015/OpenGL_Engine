@@ -53,6 +53,7 @@ namespace edt
 
 	private:
 		bool write_material();
+		void report_write_failure(std::string_view why);
 		boost::json::object node_fields() const;
 
 		data_document& m_document;
@@ -65,6 +66,9 @@ namespace edt
 		bool m_sky_material = false;
 		bool m_material_written = false;
 		std::uint64_t m_written_generation = 0;
+		// The generation whose write failure was logged last.
+		bool m_write_failure_logged = false;
+		std::uint64_t m_failure_generation = 0;
 		res::tag m_material_tag;
 	};
 }

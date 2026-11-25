@@ -26,6 +26,14 @@ namespace edt
 		inp::input_router* input = nullptr;
 	};
 
+	// Where the stage's orbit camera starts, around the origin of the content.
+	struct preview_framing
+	{
+		float distance = 2.2f;
+		// Negative: from above.
+		float pitch_degrees = -30.f;
+	};
+
 	// What a preview stage shows (a material on a shape, later a texture on a plane, a mesh): the nodes under the stage's
 	// root and the resources they read. Main thread only.
 	class preview_content
@@ -51,6 +59,8 @@ namespace edt
 		virtual void refresh(scn::prefab_desc::prefab_node& root) = 0;
 		// The stage closes: gives up what the content wrote (memory:// copies). Called again on a closed content.
 		virtual void release() = 0;
+		// Read when the camera is made and again at the stage's sync(); the default suits the unit shapes.
+		virtual preview_framing framing() const { return {}; }
 	};
 
 	// A reusable live preview (#1196): an isolated set of the context manager made from edt://templates/prefab_preview.desc
@@ -68,7 +78,7 @@ namespace edt
 		// Once per frame while the owner is shown: asks the content, makes the world when there is none, reconciles it
 		// when the content changed. A content with nothing to show gives everything up.
 		void update();
-		// The content changed outside update (a choice in the owner's UI): reconciles now.
+		// The content changed outside update (a choice in the owner's UI): reconciles now and frames the camera again.
 		void sync();
 
 		// The template's sky (true) or none: the camera's clear shows behind the content.
@@ -87,6 +97,7 @@ namespace edt
 		void release_world();
 		void rebuild_world();
 		// Gives up the world, the render targets, the world template and the content's resources (also done by the destructor).
+		// A failed open is tried again at the next update; a layer change in progress stays (rebuild_world ends it).
 		void close();
 
 		// The render targets are the renderer's: this gives their tags up when the stage closes. Set from the view's renderer.
@@ -104,6 +115,9 @@ namespace edt
 
 	private:
 		void open_world();
+		void reconcile();
+		void apply_framing(entt::registry& reg);
+		void drop_world();
 		void apply_sky();
 		void release_resources();
 
@@ -114,7 +128,7 @@ namespace edt
 
 		std::uint64_t m_serial = 0;
 		bool m_sky = true;
-		// The world could not be made (no context manager, no template): not tried again until rebuild_world.
+		// The world could not be made (no context manager, no template): not tried again until rebuild_world or close.
 		bool m_failed = false;
 		// Between release_world and rebuild_world (a game layer change).
 		bool m_layer_parked = false;
@@ -132,5 +146,6 @@ namespace edt
 		std::string m_working_tag;
 		std::unique_ptr<scn::prefab_desc> m_prefab;
 		entt::entity m_root = entt::null;
+		entt::entity m_camera = entt::null;
 	};
 }

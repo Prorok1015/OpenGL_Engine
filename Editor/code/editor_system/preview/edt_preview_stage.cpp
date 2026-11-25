@@ -31,10 +31,6 @@ namespace json = boost::json;
 namespace
 {
 	const res::tag k_template_tag{ "edt://templates/prefab_preview.desc" };
-
-	// The unit shapes are about 1 across: the camera starts far enough to see all of one, from above so a plane shows.
-	constexpr float k_camera_distance = 2.2f;
-	constexpr float k_camera_pitch_degrees = -30.f;
 }
 
 edt::preview_stage::preview_stage(editor_services& services, preview_content& content, preview_view view)
@@ -72,16 +68,38 @@ void edt::preview_stage::update()
 		if (!m_has_world) m_failed = true;
 		return;
 	}
-	if (state == preview_content::state::changed) sync();
+	// An edit keeps the orbit the user chose: only sync() frames the camera again.
+	if (state == preview_content::state::changed) reconcile();
 }
 
 void edt::preview_stage::sync()
+{
+	reconcile();
+	if (entt::registry* reg = registry()) apply_framing(*reg);
+}
+
+void edt::preview_stage::reconcile()
 {
 	entt::registry* reg = registry();
 	scn::ecs_assembler* assembler = m_services.assembler();
 	if (!reg || !assembler || !m_prefab || m_root == entt::null || !reg->valid(m_root)) return;
 	m_content.refresh(m_prefab->get_root());
 	scn::reconcile(*assembler, *reg, m_root, m_prefab->get_root(), scn::reconcile_mode::reload, res::tag{ m_working_tag });
+}
+
+void edt::preview_stage::apply_framing(entt::registry& reg)
+{
+	if (m_camera == entt::null || !reg.valid(m_camera)) return;
+	auto* ctrl = reg.try_get<scn::mouse_controller_component>(m_camera);
+	if (!ctrl) return;
+	const preview_framing framing = m_content.framing();
+	ctrl->position = glm::vec3{ 0.f };
+	ctrl->rotation = glm::vec3{ glm::radians(framing.pitch_degrees), 0.f, 0.f };
+	ctrl->distance = framing.distance;
+	const glm::mat4 cam_matrix = glm::translate(glm::mat4(1.0f), ctrl->position) * glm::toMat4(glm::quat(ctrl->rotation))
+		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl->distance));
+	reg.emplace_or_replace<scn::local_transform>(m_camera, scn::local_transform{ cam_matrix });
+	reg.emplace_or_replace<scn::world_transform>(m_camera, scn::world_transform{ cam_matrix });
 }
 
 void edt::preview_stage::set_sky(bool shown)
@@ -198,11 +216,9 @@ void edt::preview_stage::open_world()
 	m_rt_accum = std::format("memory://__preview_tp_accum_rt/{}", m_serial);
 	m_rt_reveal = std::format("memory://__preview_tp_reveal_rt/{}", m_serial);
 
-	editor_camera_state view;
-	view.position = glm::vec3{ 0.f };
-	view.rotation = glm::vec3{ glm::radians(k_camera_pitch_degrees), 0.f, 0.f };
-	view.distance = k_camera_distance;
+	const editor_camera_state view{};
 	const entt::entity cam = reg.create();
+	m_camera = cam;
 	reg.emplace<prefab_camera_tag>(cam);
 	scn::camera_component cam_comp;
 	cam_comp.fov = view.fov;
@@ -214,16 +230,10 @@ void edt::preview_stage::open_world()
 	cam_comp.tp_reveal_target = res::tag{ m_rt_reveal };
 	reg.emplace<scn::camera_component>(cam, cam_comp);
 	scn::mouse_controller_component ctrl;
-	ctrl.position = view.position;
-	ctrl.rotation = view.rotation;
-	ctrl.distance = view.distance;
 	ctrl.movement_speed = view.movement_speed;
 	ctrl.rotating_speed = view.rotating_speed;
 	reg.emplace<scn::mouse_controller_component>(cam, ctrl);
-	const glm::mat4 cam_matrix = glm::translate(glm::mat4(1.0f), ctrl.position) * glm::toMat4(glm::quat(ctrl.rotation))
-		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl.distance));
-	reg.emplace<scn::local_transform>(cam, scn::local_transform{ cam_matrix });
-	reg.emplace<scn::world_transform>(cam, scn::world_transform{ cam_matrix });
+	apply_framing(reg);
 	reg.emplace<scn::name_component>(cam, "Preview Camera");
 	reg.emplace<scn::depth_level>(cam);
 
@@ -247,16 +257,22 @@ void edt::preview_stage::apply_sky()
 	for (const entt::entity entity : skies) scn::set_visible(*reg, entity, m_sky);
 }
 
-void edt::preview_stage::release_world()
+void edt::preview_stage::drop_world()
 {
 	if (m_has_world) {
 		if (auto ctx_mgr = m_services.ctx_manager.lock()) ctx_mgr->destroy_preview(m_key);
 	}
 	m_has_world = false;
-	m_layer_parked = true;
 	m_root = entt::null;
+	m_camera = entt::null;
 	m_prefab.reset();
 	m_set_name.clear();
+}
+
+void edt::preview_stage::release_world()
+{
+	drop_world();
+	m_layer_parked = true;
 }
 
 void edt::preview_stage::rebuild_world()
@@ -288,9 +304,11 @@ void edt::preview_stage::release_resources()
 
 void edt::preview_stage::close()
 {
-	release_world();
-	m_layer_parked = false;
+	// m_layer_parked is the layer's state, not the stage's: a close from update() between release_world and
+	// rebuild_world must not let the next update open a world in the old layer.
+	drop_world();
 	release_resources();
 	m_content.release();
 	m_content_live = false;
+	m_failed = false;
 }

@@ -28,8 +28,10 @@ struct probe_content final : edt::preview_content
 	}
 	void refresh(scn::prefab_desc::prefab_node&) override { ++refreshes; }
 	void release() override { ++releases; }
+	edt::preview_framing framing() const override { return frame; }
 
 	state next = state::changed;
+	edt::preview_framing frame;
 	int builds = 0;
 	int refreshes = 0;
 	int releases = 0;
@@ -54,6 +56,18 @@ struct preview_stage_fixture : test_util::preview_env
 		stage->set_targets_release(record_released());
 		stage->update();
 		return *stage;
+	}
+
+	// The orbit controller of the stage's camera; null: none.
+	scn::mouse_controller_component* orbit()
+	{
+		scn::camera_component* camera = stage ? stage->camera() : nullptr;
+		if (!camera) return nullptr;
+		entt::registry& reg = *stage->registry();
+		for (const entt::entity entity : reg.view<scn::camera_component, scn::mouse_controller_component>()) {
+			if (&reg.get<scn::camera_component>(entity) == camera) return &reg.get<scn::mouse_controller_component>(entity);
+		}
+		return nullptr;
 	}
 
 	probe_content content;
@@ -195,6 +209,59 @@ BOOST_AUTO_TEST_CASE(AContentWithNothingToShow_ClosesTheStage)
 	BOOST_TEST(!shown.has_world());
 	BOOST_TEST(released.size() == 4u);
 	BOOST_TEST(content.releases >= 1);
+}
+
+BOOST_AUTO_TEST_CASE(TheContentsFraming_PlacesTheCamera_AndSyncAppliesItAgain)
+{
+	content.frame.distance = 5.f;
+	content.frame.pitch_degrees = -60.f;
+	open();
+	scn::mouse_controller_component* ctrl = orbit();
+	BOOST_REQUIRE(ctrl != nullptr);
+	BOOST_TEST(ctrl->distance == 5.f);
+	BOOST_TEST(ctrl->rotation.x == glm::radians(-60.f));
+
+	// The user orbits; an edit keeps it, a choice in the owner's UI frames the camera again.
+	ctrl->distance = 9.f;
+	content.next = probe_content::state::changed;
+	stage->update();
+	BOOST_TEST(orbit()->distance == 9.f);
+	content.frame.distance = 7.f;
+	stage->sync();
+	BOOST_TEST(orbit()->distance == 7.f);
+}
+
+BOOST_AUTO_TEST_CASE(AFailedOpen_IsTriedAgainAfterClose)
+{
+	// No context manager: the world cannot be made.
+	services.ctx_manager.reset();
+	edt::preview_stage& shown = open();
+	BOOST_TEST(!shown.has_world());
+	services.ctx_manager = mgr;
+	shown.update();
+	BOOST_TEST(!shown.has_world());
+
+	shown.close();
+	shown.update();
+	BOOST_TEST(shown.has_world());
+}
+
+BOOST_AUTO_TEST_CASE(ACloseDuringALayerChange_OpensNothingInTheOldLayer)
+{
+	edt::preview_stage& shown = open();
+	BOOST_REQUIRE(shown.has_world());
+	shown.release_world();
+
+	content.next = probe_content::state::none;
+	shown.update();
+	content.next = probe_content::state::changed;
+	shown.update();
+	BOOST_TEST(!shown.has_world());
+	BOOST_TEST(content.builds == 1);
+
+	shown.rebuild_world();
+	BOOST_TEST(shown.has_world());
+	BOOST_TEST(content.builds == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
