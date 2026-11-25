@@ -722,6 +722,32 @@ BOOST_AUTO_TEST_CASE(History_ARestoredAutosave_IsOneRecordThatUndoes_AndKeepsThe
 	BOOST_TEST(!document->is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(DiskFlag_IsAnnouncedWhenSet_NotAgainForTheSameOutsideVersion_AndWhenCleared)
+{
+	open_crate();
+	BOOST_REQUIRE(move_first_vertex());
+	changed.clear();
+	const res::tag poly{ "res://shapes/crate.poly.desc" };
+
+	write(res_root, "shapes/crate.poly.desc", box_text + "\n");
+	rs->signal_changed(poly);
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	rs->signal_changed(poly);
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	write(res_root, "shapes/crate.poly.desc", box_text);
+	rs->signal_changed(poly);
+	pump();
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(changed.size() == 2u);
+	BOOST_TEST(document->is_dirty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtMeshDocumentWorld, mesh_world_fixture)
