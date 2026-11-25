@@ -853,7 +853,7 @@ BOOST_AUTO_TEST_CASE(EmbeddedTextures_NamedByTheirIndex_AsPctRawOrInlinePixels_A
 BOOST_AUTO_TEST_CASE(AnEmbeddedTexture_UnderANameTheImporterNeverGives_IsRefused)
 {
 	for (const char* name : { "Image_0.pct", "m.texture_01.pct", "m.texture_256.pct", "m.texture_.pct", "other.texture_0.pct", "m.texture_0.png",
-		"m.texture_0.PCT", "sub/m.texture_0.pct", "m.texture_0.pct.pct" }) {
+		"m.texture_0.PCT", "sub/m.texture_0.pct", "m.texture_0.pct.pct", "m.texture_18446744073709551616.pct", "m.texture_+1.pct" }) {
 		std::string problem;
 		BOOST_TEST(!accepted(embedded_answer({ { name, base64_bytes(k_png_1x1) } }), problem), name);
 	}

@@ -115,4 +115,20 @@ BOOST_AUTO_TEST_CASE(ATga_IsTakenOnlyWithAHeaderItsDecoderReads)
 	BOOST_TEST(!read_picture_size(tga).has_value());
 }
 
+BOOST_AUTO_TEST_CASE(AColourMappedTga_NeedsAColourMapEntrySizeItsDecoderReads)
+{
+	std::vector<std::byte> tga = decoded("AAACAAAAAAAAAAAAAQABACAIAAD//w==");
+	tga[1] = std::byte{ 1 };
+	tga[2] = std::byte{ 1 };
+	tga[16] = std::byte{ 8 };
+	for (const int entry : { 8, 15, 16, 24, 32 }) {
+		tga[7] = static_cast<std::byte>(entry);
+		BOOST_TEST(read_picture_size(tga).has_value(), entry);
+	}
+	for (const int entry : { 0, 7, 12, 31, 255 }) {
+		tga[7] = static_cast<std::byte>(entry);
+		BOOST_TEST(!read_picture_size(tga).has_value(), entry);
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

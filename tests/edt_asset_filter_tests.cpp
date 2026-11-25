@@ -232,6 +232,26 @@ BOOST_AUTO_TEST_CASE(AKindOfAModule_IsTheKindOfItsFiles_ThePolyKindIsTheMeshKind
 	BOOST_TEST(std::ranges::count(offered, "mesh") == 1);
 }
 
+// #1205: a texture desc and a picture are textures, whichever kind of the registry opens them.
+BOOST_AUTO_TEST_CASE(ATextureDescAndAPicture_AreTextures_TheirKindsAreNotOfferedApart)
+{
+	edt::asset_kind_registry kinds;
+	const auto open = [](edt::editor_context&, const res::tag&) {};
+	const auto texture = kinds.add({ .id = "texture_2d_desc", .suffix = ".txm.desc", .open = open });
+	const auto png = kinds.add({ .id = "picture.png", .suffix = ".png", .open = open });
+	const auto pct = kinds.add({ .id = "picture.pct", .suffix = ".pct", .open = open });
+	BOOST_TEST(edt::asset_kind_of(&kinds, "t/rock.txm.desc") == "texture");
+	BOOST_TEST(edt::asset_kind_of(nullptr, "t/rock.txm.desc") == "texture");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "t/rock.png") == "texture");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "m/m.texture_0.pct") == "texture");
+	BOOST_TEST(!edt::asset_kind_needs_desc_type(&kinds, "t/rock.txm.desc"));
+	const auto offered = ids_of(edt::asset_filter_kinds(&kinds));
+	BOOST_TEST(std::ranges::count(offered, "texture") == 1);
+	BOOST_TEST(std::ranges::count(offered, "texture_2d_desc") == 0);
+	BOOST_TEST(std::ranges::count(offered, "picture.png") == 0);
+	BOOST_TEST(std::ranges::count(offered, "picture.pct") == 0);
+}
+
 BOOST_AUTO_TEST_CASE(OnlyAKindThatOpensIsOffered)
 {
 	edt::asset_kind_registry kinds;

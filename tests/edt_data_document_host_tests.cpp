@@ -8,6 +8,7 @@
 #include "edt_document_creator.h"
 #include "edt_data_document_panel.h"
 #include "edt_material_window_panel.h"
+#include "edt_texture_window_panel.h"
 #include "edt_save_all.h"
 #include "edt_data_document_view.h"
 #include "edt_scene_document.h"
@@ -1260,6 +1261,24 @@ BOOST_AUTO_TEST_CASE(OpenAsData_IsOfferedForAMaterial_AndOpensItInTheGenericWind
 	host->open(material, false);
 	BOOST_TEST(open_documents() == 2u);
 	BOOST_TEST(dynamic_cast<edt::material_window_panel*>(context->panels().find(edt::data_document_panel_id(opened->id()))) == nullptr);
+}
+
+// #1205: a texture desc opens in the texture window, with "Open as data" to the generic one.
+BOOST_AUTO_TEST_CASE(ATexture_OpensInTheTextureWindow)
+{
+	const res::tag texture = put("rock.txm.desc", R"json({"__type":"texture_2d_desc","__version":1,"header":{"wrap":"repeat"}})json");
+	BOOST_TEST(host->has_own_window(texture));
+	host->open(texture, false);
+	edt::document* opened = context->documents().find_by_source(texture);
+	BOOST_REQUIRE(opened != nullptr);
+	BOOST_REQUIRE(host->owns(opened->id()));
+	auto* window = dynamic_cast<edt::texture_window_panel*>(context->panels().find(edt::data_document_panel_id(opened->id())));
+	BOOST_REQUIRE(window != nullptr);
+	BOOST_TEST(window->model().wrap() == "repeat");
+	BOOST_TEST(dynamic_cast<edt::material_window_panel*>(context->panels().find(edt::data_document_panel_id(opened->id()))) == nullptr);
+	// The game layer goes and comes: the window's preview stage follows it.
+	host->release_previews();
+	host->rebuild_previews();
 }
 
 // An engine or package material (a lower layer) is refused as before: no window, and the reason is the document's (#1370 is

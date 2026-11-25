@@ -501,6 +501,49 @@ BOOST_FIXTURE_TEST_CASE(Builtin_HandlesRemoveTheKinds, builtin_kinds_fixture)
 	BOOST_CHECK(!context->asset_kinds().drop_into_scene(*context, res::tag::make("models/x.desc")));
 }
 
+// #1205: a texture desc and a picture are kinds of their own when the editor wires their hooks.
+struct texture_kinds_fixture : context_fixture
+{
+	texture_kinds_fixture()
+	{
+		edt::asset_kind_hooks hooks;
+		hooks.open_prefab = [this](const res::tag& tag) { log.push_back("prefab:" + std::string(tag.relative())); };
+		hooks.add_desc_to_scene = [this](const res::tag& tag) { log.push_back("add:" + std::string(tag.relative())); };
+		hooks.open_desc = [this](const res::tag& tag) { log.push_back("desc:" + std::string(tag.relative())); };
+		hooks.open_texture = [this](const res::tag& tag) { log.push_back("texture:" + std::string(tag.relative())); };
+		hooks.open_picture = [this](const res::tag& tag) { log.push_back("picture:" + std::string(tag.relative())); };
+		registrations = edt::register_builtin_asset_kinds(context->asset_kinds(), std::move(hooks));
+	}
+
+	std::vector<std::string> log;
+	std::vector<edt::registration> registrations;
+};
+
+BOOST_FIXTURE_TEST_CASE(Builtin_ATextureDesc_OpensThroughOpenTexture_APictureThroughOpenPicture, texture_kinds_fixture)
+{
+	auto& kinds = context->asset_kinds();
+	const edt::asset_kind_desc* texture = kinds.kind_for_open("textures/rock.txm.desc");
+	BOOST_REQUIRE(texture != nullptr);
+	BOOST_CHECK(texture->id == "texture_2d_desc");
+	BOOST_CHECK(texture->suffix == ".txm.desc");
+	BOOST_CHECK(kinds.open(*context, res::tag::make("textures/rock.txm.desc")));
+	for (const char* path : { "textures/rock.png", "m/__embedded_txm/m.texture_0.pct", "a.jpg", "a.jpeg", "a.tga", "a.bmp", "m.texture_1.raw" }) {
+		BOOST_CHECK(kinds.open(*context, res::tag::make(path)));
+	}
+	BOOST_CHECK((log == std::vector<std::string>{ "texture:textures/rock.txm.desc", "picture:textures/rock.png",
+		"picture:m/__embedded_txm/m.texture_0.pct", "picture:a.jpg", "picture:a.jpeg", "picture:a.tga", "picture:a.bmp",
+		"picture:m.texture_1.raw" }));
+	BOOST_REQUIRE(kinds.kind_for_open("a.png") != nullptr);
+	BOOST_CHECK(kinds.kind_for_open("a.png")->id == "picture.png");
+	// Suffixes are matched with their case; a dropped picture is still added through its desc.
+	BOOST_CHECK(kinds.kind_for_open("A.PNG") == nullptr);
+	BOOST_REQUIRE(kinds.kind_for_drop("a.png") != nullptr);
+	BOOST_CHECK(kinds.kind_for_drop("a.png")->id == "desc");
+	// Create Document names a texture's file by its kind (#1263).
+	const auto suffixes = edt::desc_kind_suffixes(kinds);
+	BOOST_CHECK((std::ranges::find(suffixes, std::pair<std::string, std::string>{ "texture_2d_desc", ".txm.desc" }) != suffixes.end()));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // ─────────────────────────────────────────────

@@ -9,8 +9,10 @@
 #include <snk/driver_validation/rnd_validation_driver.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
+#include <array>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
@@ -58,6 +60,36 @@ namespace {
 		topology.default_value = boost::json::value(std::string_view{});
 		return schema;
 	}
+
+	// What the editor reads of a texture_2d_desc (#1205): texture_desc reads its JSON itself, so the schema is written by
+	// hand. "header" and "pixels" are custom values the texture window draws; the file format is unchanged.
+	desc::type_schema texture_2d_schema(int version)
+	{
+		desc::type_schema schema;
+		schema.name = "texture_2d_desc";
+		schema.id = desc::schema_id(schema.name);
+		schema.version = version;
+		schema.kind = desc::schema_kind::desc;
+		const auto add = [&schema](std::string name, desc::field_kind kind, std::string tooltip) -> desc::field_schema& {
+			desc::field_schema& field = schema.fields.emplace_back();
+			field.key = "/" + name;
+			field.name = std::move(name);
+			field.kind = kind;
+			field.tooltip = std::move(tooltip);
+			field.optional = true;
+			return field;
+		};
+		add("name", desc::field_kind::string, "A name for the texture; the file's path is what refers to it").default_value =
+			boost::json::value(std::string_view{});
+		add("header", desc::field_kind::custom, "Sampling: wrap, min/mag filter, mip levels (only these apply to a 2D texture)")
+			.editor_hidden = true;
+		add("data", desc::field_kind::res_tag, "The picture file").filter = "png,jpg,jpeg,tga,bmp,pct,raw";
+		add("pixels", desc::field_kind::custom, "Inline pixels (#1204)").read_only = true;
+		return schema;
+	}
+
+	// The custom fields of texture_2d_schema: texture_desc reads and writes them as JSON.
+	constexpr std::array<std::string_view, 2> k_texture_2d_codec_fields{ "header", "pixels" };
 
 	// "gl" (default) or "null". A window without a GL surface selects null regardless.
 	// Unknown values warn and fall through to the surface check.
@@ -115,6 +147,9 @@ void engine::render::register_render_descs(desc::desc_system& desc_sys)
 	desc_sys.register_schema(geometry_schema(desc_sys.current_version("geometry_desc")));
 	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
 	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
+	// A document (#1205): the editor opens a .txm.desc in the texture window.
+	desc_sys.register_schema(texture_2d_schema(desc_sys.current_version("texture_2d_desc")));
+	desc_sys.mark_document("texture_2d_desc", k_texture_2d_codec_fields);
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
 	// A document: every field is on the schema, so the editor opens a .shader.desc as data.
 	desc_sys.register_document<rnd::shader_desc>("shader_desc");
