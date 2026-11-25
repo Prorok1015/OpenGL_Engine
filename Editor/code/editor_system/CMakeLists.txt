@@ -71,6 +71,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/file_menu"
 	"${CMAKE_CURRENT_SOURCE_DIR}/startup"
 	"${CMAKE_CURRENT_SOURCE_DIR}/game_layer"
+	"${CMAKE_CURRENT_SOURCE_DIR}/shader_editor"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface
@@ -91,6 +92,9 @@ if(SNK_ENGINE_SHARED AND MSVC)
 	target_link_libraries(snk_editor_api PRIVATE Boost::json)
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC snk_editor_api PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_boost_json} PRIVATE snk::mcp_server)
+# #1202: the syntax-highlighting text widget of the GLSL editor (a submodule of lib3dparty, built as third-party code).
+add_subdirectory(${THIRD_PARTY_PATH}/color_text_edit color_text_edit)
+target_link_libraries(${PROJECT_NAME} PRIVATE color_text_edit)
 # EPIC-58 S7 (#759): project.migration_plan / project.migrate run the migration library in the editor.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::project_migration)
 # The thumbnails (#1192) decode pictures with img::image: exported by snk_engine, headers only here (snk_check_engine_copies).
