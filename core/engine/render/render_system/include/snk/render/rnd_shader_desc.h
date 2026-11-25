@@ -2,6 +2,7 @@
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/model_codec/res_tag.h>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -79,7 +80,7 @@ namespace rnd
 		// Each entry is written as `#define <entry>`: "NAME" or "NAME VALUE" (not "NAME=VALUE", which defines NAME as "=VALUE").
 		std::vector<std::string> defines;
 		// Backend name -> the stages it replaces (#1203). Last: appended after the fields of #1199.
-		std::map<std::string, shader_stage_sources> backends;
+		std::map<std::string, shader_stage_sources, std::less<>> backends;
 
 		BOOST_DESCRIBE_CLASS(shader_desc, (), (vertex, fragment, geometry, defines, backends), (), ())
 	};

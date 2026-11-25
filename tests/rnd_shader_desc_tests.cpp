@@ -478,4 +478,86 @@ BOOST_AUTO_TEST_CASE(TheOverridesAreAMapOfARegisteredStructure)
 	BOOST_TEST(stages->fields.size() == 3u);
 }
 
+// The schema drops a key the structure does not have, and a save would lose it: the load says so.
+BOOST_AUTO_TEST_CASE(AKeyOfAnOverrideThatIsNoStage_IsAWarningAtItsKey)
+{
+	put("typo.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag",
+		"backends":{"vulkan":{"fragmnet":"res://shaders/v.frag","fragment":"res://shaders/v.frag"},"metal":{"compute":"res://shaders/m.comp"}}})");
+	const auto items = diagnostics_of(tag_of("typo.shader.desc"));
+	const res::diagnostic* typo = at(items, "/backends/vulkan/fragmnet");
+	BOOST_REQUIRE_MESSAGE(typo, "no diagnostic at /backends/vulkan/fragmnet");
+	BOOST_TEST((typo->severity == res::diagnostic_severity::warning));
+	BOOST_TEST(typo->kind == res::diagnostic_kind::schema);
+	BOOST_TEST(typo->reason == "unknown stage 'fragmnet' in the override of 'vulkan'");
+	const res::diagnostic* compute = at(items, "/backends/metal/compute");
+	BOOST_REQUIRE_MESSAGE(compute, "no diagnostic at /backends/metal/compute");
+	BOOST_TEST(compute->reason == "unknown stage 'compute' in the override of 'metal'");
+	// With its only key unknown, the metal override names no stage either.
+	BOOST_TEST(at(items, "/backends/metal"));
+	BOOST_TEST(!at(items, "/backends/vulkan"));
+	BOOST_TEST(!at(items, "/backends/vulkan/fragment"));
+}
+
+// A null is no map: the schema's own warning at the key, and the overrides stay empty.
+BOOST_AUTO_TEST_CASE(NullBackends_LoadAsNone_WithTheSchemasWarning)
+{
+	put("null.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag","backends":null})");
+	const auto shader = load<rnd::shader_desc>(tag_of("null.shader.desc"));
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->backends.empty());
+	BOOST_TEST(!ser(*shader).contains("backends"));
+	const auto items = diagnostics_of(tag_of("null.shader.desc"));
+	const res::diagnostic* null_value = at(items, "/backends");
+	BOOST_REQUIRE_MESSAGE(null_value, "no diagnostic at /backends");
+	BOOST_TEST(null_value->reason.find("does not fit") != std::string::npos, null_value->reason);
+	BOOST_TEST(items.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(EmptyBackends_AreLeftOutOnSave)
+{
+	put("empty.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag","backends":{}})");
+	const auto shader = load<rnd::shader_desc>(tag_of("empty.shader.desc"));
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->backends.empty());
+	BOOST_TEST(!ser(*shader).contains("backends"));
+	BOOST_TEST(diagnostics_of(tag_of("empty.shader.desc")).empty());
+}
+
+// A backend name is a JSON object key: "/" and "~" are escaped in the warnings' pointers, and the name round-trips.
+BOOST_AUTO_TEST_CASE(ABackendNameWithSlashAndTilde_IsEscapedInPointers_AndRoundTrips)
+{
+	put("escaped.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag",
+		"backends":{"a/b~c":{"fragment":"res://shaders/x.vert","x/y~z":"res://shaders/x.frag"}}})");
+	const auto items = diagnostics_of(tag_of("escaped.shader.desc"));
+	const res::diagnostic* unknown = at(items, "/backends/a~1b~0c");
+	BOOST_REQUIRE_MESSAGE(unknown, "no diagnostic at /backends/a~1b~0c");
+	BOOST_TEST(unknown->reason == "unknown backend 'a/b~c'");
+	BOOST_TEST(at(items, "/backends/a~1b~0c/fragment"));
+	const res::diagnostic* stage = at(items, "/backends/a~1b~0c/x~1y~0z");
+	BOOST_REQUIRE_MESSAGE(stage, "no diagnostic at /backends/a~1b~0c/x~1y~0z");
+	BOOST_TEST(stage->reason == "unknown stage 'x/y~z' in the override of 'a/b~c'");
+
+	const auto shader = load<rnd::shader_desc>(tag_of("escaped.shader.desc"));
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->stages_for("a/b~c").fragment.string() == "res://shaders/x.vert");
+	const json::object written = ser(*shader);
+	BOOST_TEST(written.at("backends").as_object().contains("a/b~c"));
+	rnd::shader_desc back;
+	back.deserialize(*descs, written);
+	BOOST_TEST(json::value(ser(back)) == json::value(written));
+}
+
+BOOST_AUTO_TEST_CASE(ABackendNameThatDiffersOnlyInCase_GetsAHint)
+{
+	put("case.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag",
+		"backends":{"Vulkan":{"fragment":"res://shaders/v.frag"}}})");
+	const auto items = diagnostics_of(tag_of("case.shader.desc"));
+	const res::diagnostic* named = at(items, "/backends/Vulkan");
+	BOOST_REQUIRE_MESSAGE(named, "no diagnostic at /backends/Vulkan");
+	BOOST_TEST(named->reason == "unknown backend 'Vulkan': did you mean 'vulkan'?");
+	const auto shader = load<rnd::shader_desc>(tag_of("case.shader.desc"));
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->stages_for("vulkan").fragment.string() == "res://shaders/a.frag");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
