@@ -1913,4 +1913,86 @@ BOOST_AUTO_TEST_CASE(History_WhileLocked_RefusesUndoAndRedo)
 	BOOST_TEST(arm_name() == "one");
 }
 
+BOOST_AUTO_TEST_CASE(History_ASaveWithoutBase_LeavesNoPhantomRecordBehind)
+{
+	write(res_root, "prefabs/base.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[
+		{"__id":"00000000000000a1","name":"arm","overrides":[{"target":["00000000000000a1"],"component":"stat","path":"/hp","value":5,"op":"set"}]}]})");
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":5,"__parent":"res://prefabs/base.prefab.desc","__layer":2})");
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& prefab) { prefab.get_root().children[0].overrides.clear(); return true; }));
+	BOOST_REQUIRE(document->save_without_base().saved);
+	const std::size_t records = document->history().size();
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->history().size() == records);
+	BOOST_TEST(!document->working()->get_parent().is_valid());
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(!document->working()->get_parent().is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(History_UndoAndRedo_KeepTheGuidAndTheParent)
+{
+	write(res_root, "prefabs/base.prefab.desc", PREFAB);
+	write(res_root, "prefabs/v.prefab.desc", R"({"__type":"prefab_desc","__version":2,"__guid":"0123456789abcdef","__parent":"res://prefabs/base.prefab.desc"})");
+	document->open(res::tag::make("prefabs/v.prefab.desc"));
+	const auto guid = document->working()->get_guid();
+	const std::string parent(document->working()->get_parent().view());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->working()->get_guid() == guid);
+	BOOST_TEST(std::string(document->working()->get_parent().view()) == parent);
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(document->working()->get_guid() == guid);
+	BOOST_TEST(std::string(document->working()->get_parent().view()) == parent);
+}
+
+BOOST_AUTO_TEST_CASE(History_ANewEdit_DropsWhatWasUndone)
+{
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("one"));
+	BOOST_REQUIRE(document->undo());
+	BOOST_REQUIRE(document->next_redo_entry().has_value());
+	BOOST_REQUIRE(rename_arm("two"));
+	BOOST_TEST(!document->next_redo_entry().has_value());
+	BOOST_TEST(!document->redo());
+}
+
+BOOST_AUTO_TEST_CASE(History_Overwrite_KeepsTheHistory_AReloadOfACleanCopyClearsIt)
+{
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("arm2"));
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+	BOOST_REQUIRE(document->changed_on_disk());
+	BOOST_REQUIRE(document->overwrite().saved);
+	BOOST_TEST(document->next_undo_entry().has_value());
+
+	BOOST_REQUIRE(document->revert().empty());
+	BOOST_TEST(!document->next_undo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(History_UndoWhileClosed_IsANoOp)
+{
+	BOOST_TEST(!document->undo());
+	BOOST_TEST(!document->redo());
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("one"));
+	document->close();
+	BOOST_TEST(!document->undo());
+}
+
+BOOST_AUTO_TEST_CASE(History_TheInspectorsRecord_IsLabelledWithTheNodesName)
+{
+	document->open(tag);
+	edt::scene_document level;
+	edt::inspector_target target;
+	target.select_prefab(document->id(), { 0xa1 }, document->working_replaced());
+	document->working_node(target.path())->name = "arm3";
+	BOOST_REQUIRE(edt::route_node_changed(target, document.get(), level));
+	const auto entry = document->next_undo_entry();
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->label == "Edit arm3");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

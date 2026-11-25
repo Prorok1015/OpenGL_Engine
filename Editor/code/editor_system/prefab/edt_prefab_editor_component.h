@@ -102,8 +102,9 @@ namespace edt
 		prefab_document* shown_prefab() const { return shown(); }
 		// The Inspector shows a node of a prefab.
 		bool owns_inspector() const { return m_inspector_target.is_prefab(); }
-		// The prefab document the Inspector's node belongs to: Edit > Undo acts on it, not on the level (null: the Inspector is on the level).
-		prefab_document* inspector_prefab() const { return m_inspector_target.is_prefab() ? prefab_by_id(m_inspector_target.prefab()) : nullptr; }
+		// The prefab Edit > Undo acts on instead of the level: the one the Inspector's node belongs to, kept after an undo that removed that node
+		// until a level selection takes the Inspector back or the prefab closes (null: none).
+		prefab_document* inspector_prefab() const { return m_history_prefab != 0 ? prefab_by_id(m_history_prefab) : nullptr; }
 		// The window opens (a data window of the host asked for it).
 		void show();
 		// The document goes first in editor_system's destructor: the window must not look at it any more.
@@ -115,6 +116,7 @@ namespace edt
 		// Weak copies of it keep the callbacks of dialogs from touching this component after it is gone.
 		std::shared_ptr<int> m_alive = std::make_shared<int>();
 		inspector_target m_inspector_target;
+		document_id m_history_prefab = 0;
 		// A prefab being opened: its own wait (several may load at once).
 		struct pending_open
 		{

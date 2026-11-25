@@ -414,7 +414,10 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 		return save_result::failure(std::format("{} could not be written", m_source_tag.view()));
 	}
 	writer->signal_changed(m_source_tag);
-	if (without_base) m_working->set_parent({});
+	if (without_base) {
+		m_working->set_parent({});
+		m_committed_form = working_form();
+	}
 	m_saved_form = working_form();
 	m_history.mark_saved();
 	m_disk_version = code_version_of(bytes);
