@@ -362,7 +362,17 @@ void edt::file_menu::import_model()
 	options.start_path = std::filesystem::current_path();
 	options.extensions = { ".glb", ".obj", ".fbx", ".gltf" };
 	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
-		if (alive.lock()) invoke("file.import_model", json::object{ { "path", to_json_string(picked) } });
+		if (!alive.lock()) return;
+		if (!m_hooks.ask_model_settings) {
+			invoke("file.import_model", json::object{ { "path", to_json_string(picked) } });
+			return;
+		}
+		m_hooks.ask_model_settings(picked, [this, alive, picked](const model_import_settings& settings) {
+			if (!alive.lock()) return;
+			const json::object chosen{ { "normals", model_normals_name(settings.normals) },
+				{ "tangents", settings.tangents } };
+			invoke("file.import_model", json::object{ { "path", to_json_string(picked) }, { "settings", chosen } });
+		});
 	});
 }
 
@@ -741,11 +751,14 @@ void edt::file_menu::register_actions()
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
-			&& !args.contains("folder") && !args.contains("settings");
+			&& !args.contains("folder");
 		if (dialog) {
-			// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
+			// A person at the menu or a script of theirs with a path and maybe settings: the dialog flow.
 			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
-			m_hooks.import_model(from_json_string(args.at("path").as_string()));
+			const json::value* settings = args.if_contains("settings");
+			const model_settings_parse parsed = parse_model_settings(settings != nullptr ? *settings : json::value{});
+			if (!parsed.ok()) return action_result::failure(cmd::codes::invalid_args, parsed.error);
+			m_hooks.import_model(from_json_string(args.at("path").as_string()), parsed.settings);
 			return action_result::success();
 		}
 		// An agent, or a person naming the asset and its folder: no dialog, one background job.

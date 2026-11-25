@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_async_import_task.h"
+#include "edt_model_import_form.h"
 #include "edt_process_decoder.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <cstdint>
@@ -75,14 +76,22 @@ namespace edt
 		bool person_import_running() const;
 		bool agent_import_running() const;
 
+		// File > Import Model...: the modal "Model Import Settings" for the picked model (#1195); Import calls
+		// `on_import` with the settings chosen, Cancel or Esc imports nothing. Ignored while the window is open.
+		void ask_settings(const std::filesystem::path& absolute_path, model_import_settings_form::import_fn on_import);
+		// The settings window is open: a modal for the editor's shortcuts (#470).
+		bool settings_open() const { return m_settings_form.is_open(); }
+
 #if SNK_HAS_ASSIMP
-		// File > Import Model...: the job, the "Importing" popup (Esc cancels) and then the export dialog.
-		void start_import(const std::filesystem::path& absolute_path);
+		// The job with `settings`, the "Importing" popup (Esc cancels) and then the export dialog.
+		void start_import(const std::filesystem::path& absolute_path, const model_import_settings& settings = {});
 #endif
 
 	private:
 		void build();
 		bool poll_pipeline();
+		// Implicit callback: true while the settings window is open.
+		bool draw_settings_window();
 #if SNK_HAS_ASSIMP
 		bool poll_progress();
 		void finish_import();
@@ -96,6 +105,7 @@ namespace edt
 		ports m_ports;
 		bool m_shut_down = false;
 		bool m_dialog_open = false;
+		model_import_settings_form m_settings_form;
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<model_importer> m_importer;
 		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this component with.

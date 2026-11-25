@@ -113,7 +113,8 @@ void edt::erase_imports_of_ended_runs(res::resource_system& resources, std::int6
 }
 
 edt::import_intermediate edt::person_model_import(const fs::path& path, const std::string& memory_folder,
-	const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx)
+	const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx,
+	const model_import_settings& settings)
 {
 	import_intermediate result;
 	result.source_path = path;
@@ -139,6 +140,7 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 	source.path = path;
 	source.preloaded = &bytes;
 	source.memory_folder = memory_folder;
+	source.settings = settings;
 
 	constexpr std::string_view listing = "listing the files the model reads";
 	model_file_scan found;

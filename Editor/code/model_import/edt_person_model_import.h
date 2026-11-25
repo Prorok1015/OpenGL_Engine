@@ -14,9 +14,11 @@ namespace edt {
 	// into memory://`memory_folder` (emptied first). As for an agent, the model may read files of its own folder and its
 	// non-hidden subfolders only. The model is never parsed in this process: without the decoder the import fails with the
 	// reason. A failure is `error`, naming the step and the size of the file; a stop request throws ds::task_cancelled, and
-	// one that arrives while the decoder imports erases what it stored first.
+	// one that arrives while the decoder imports erases what it stored first. The meshes are made with `settings`
+	// (#1195), which the result carries on to the prefab's `.resource`.
 	import_intermediate person_model_import(const std::filesystem::path& path, const std::string& memory_folder,
-		const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx);
+		const decoder_steps& decoder, res::resource_system& resources, ds::task_context& ctx,
+		const model_import_settings& settings = {});
 
 	// "__imports/<process id>/<serial>/<stem>/": one memory:// folder per import a person starts, apart from an agent's
 	// "<stem>/" and the "__models/" of the models levels refer to. memory:// is shared by every editor on the project, so

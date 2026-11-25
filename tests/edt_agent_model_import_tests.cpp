@@ -1343,7 +1343,10 @@ struct import_action_fixture : import_fixture
 {
 	import_action_fixture()
 	{
-		hooks.import_model = [this](const fs::path& model) { dialog_imports.push_back(model.string()); };
+		hooks.import_model = [this](const fs::path& model, const edt::model_import_settings& settings) {
+			dialog_imports.push_back(model.string());
+			dialog_settings.push_back(settings);
+		};
 		hooks.agent_import = service.get();
 		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
 		menu->register_actions();
@@ -1367,6 +1370,7 @@ struct import_action_fixture : import_fixture
 	edt::file_menu_hooks hooks;
 	std::unique_ptr<edt::file_menu> menu;
 	std::vector<std::string> dialog_imports;
+	std::vector<edt::model_import_settings> dialog_settings;
 };
 
 // A policy that says the same to every call, and a person who can be asked.
@@ -1406,6 +1410,7 @@ BOOST_AUTO_TEST_CASE(APerson_WithOnlyAPath_GetsTheDialogAsBefore)
 	const cmd::result result = call(cmd::origin::ui(), R"({"path":"/models/m.glb"})");
 	BOOST_CHECK(result.ok);
 	BOOST_TEST((dialog_imports == std::vector<std::string>{ "/models/m.glb" }));
+	BOOST_CHECK((dialog_settings == std::vector<edt::model_import_settings>{ {} }));
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
@@ -1441,9 +1446,33 @@ BOOST_AUTO_TEST_CASE(SettingsWithAKeyTheSchemaDoesNotName_AreRefused)
 	BOOST_CHECK(!properties.at("settings").as_object().at("additionalProperties").as_bool());
 }
 
-BOOST_AUTO_TEST_CASE(APerson_WithSettings_GetsTheBackgroundImport_NotTheDialog)
+BOOST_AUTO_TEST_CASE(APerson_WithAPathAndSettings_GetsTheDialog_WithThoseSettings)
 {
-	json::object args{ { "path", source.string() }, { "settings", json::object{ { "normals", "flat" } } } };
+	// What File > Import Model... sends after the settings window (#1195 PR 2).
+	json::object args{ { "path", "/models/m.glb" },
+		{ "settings", json::object{ { "normals", "flat" }, { "tangents", false } } } };
+	const cmd::result result = call(cmd::origin::ui(), json::serialize(args));
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((dialog_imports == std::vector<std::string>{ "/models/m.glb" }));
+	BOOST_REQUIRE_EQUAL(dialog_settings.size(), 1u);
+	BOOST_CHECK(dialog_settings[0].normals == edt::model_normals::flat);
+	BOOST_CHECK(!dialog_settings[0].tangents);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(APerson_WithBadSettings_IsRefused_BeforeTheDialog)
+{
+	json::object args{ { "path", "/models/m.glb" }, { "settings", json::object{ { "normals", "faceted" } } } };
+	const cmd::result result = call(cmd::origin::ui(), json::serialize(args));
+	BOOST_CHECK(!result.ok);
+	BOOST_CHECK_EQUAL(result.code, cmd::codes::invalid_args);
+	BOOST_CHECK(dialog_imports.empty());
+}
+
+BOOST_AUTO_TEST_CASE(APerson_NamingTheAsset_WithSettings_GetsTheBackgroundImport_WithThem)
+{
+	json::object args{ { "path", source.string() }, { "name", "robot" },
+		{ "settings", json::object{ { "normals", "flat" } } } };
 	const cmd::result result = call(cmd::origin::ui(), json::serialize(args));
 	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
 	BOOST_CHECK(dialog_imports.empty());
