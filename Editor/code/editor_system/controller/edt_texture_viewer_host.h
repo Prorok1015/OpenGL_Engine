@@ -41,8 +41,8 @@ namespace edt
 	res::tag picture_texture_tag(const document_creator& creator, const res::tag& picture);
 	// Writes the desc through the creator (never over a file).
 	document_creation create_picture_texture(const document_creator& creator, const res::tag& picture);
-	// The texture desc Create Texture made (or would make) for `picture` when it is there and its `data` names this picture;
-	// empty: none. Read fresh from the disk (read_desc_file), any layer.
+	// The texture desc Create Texture made (or would make) for `picture` when it is there, is a texture_2d_desc and its `data`
+	// names this picture; empty: none. Read fresh from the disk (read_desc_file), any layer.
 	res::tag existing_picture_texture(const document_creator& creator, res::resource_system& resources, const desc::desc_system& descs,
 		const desc_file_layout& layout, const res::tag& picture);
 

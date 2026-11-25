@@ -109,8 +109,12 @@ void edt::material_window_panel::draw_texture_slot(const texture_slot& slot, con
 	schema_ui::map_edit_state& state = map_state();
 	const ImGuiID slot_id = ImGui::GetID("##slot");
 	const texture_slot_state current = m_slots.state(slot);
+	const bool can_pick = catalog && catalog->ready();
+	const picker::reference_state verdict = can_pick && !current.text.empty() ? picker::judge_texture_text(current.text, *catalog)
+		: picker::reference_state{};
 
-	draw_slot_thumbnail(current.text);
+	draw_slot_thumbnail(slot, current.text, verdict.severity != picker::reference_state::level::error,
+		catalog ? catalog->revision() : 0);
 	ImGui::SameLine();
 	ImGui::BeginGroup();
 	ImGui::TextUnformatted(std::string(slot.name).c_str());
@@ -122,7 +126,6 @@ void edt::material_window_panel::draw_texture_slot(const texture_slot& slot, con
 		}
 	}
 
-	const bool can_pick = catalog && catalog->ready();
 	ImGui::BeginDisabled(!can_pick);
 	if (ImGui::SmallButton("...")) {
 		ImGui::OpenPopup(schema_ui::k_picker_popup);
@@ -142,7 +145,8 @@ void edt::material_window_panel::draw_texture_slot(const texture_slot& slot, con
 			ImGui::SetTooltip("ID %s", std::string(guid->as_string()).c_str());
 		}
 	}
-	if (ImGui::BeginDragDropTarget()) {
+	// Only a ready catalog tells a texture desc's type from another desc's.
+	if (can_pick && ImGui::BeginDragDropTarget()) {
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
 			// The browser sends the path below res:// with its terminating zero.
 			if (payload->DataSize > 0) {
@@ -187,22 +191,34 @@ void edt::material_window_panel::draw_texture_slot(const texture_slot& slot, con
 	if (const auto noted = state.drop_notes.find(slot_id); noted != state.drop_notes.end()) {
 		ImGui::TextDisabled("%s", noted->second.c_str());
 	}
-	if (catalog && !current.text.empty()) {
-		const picker::reference_state verdict = picker::judge_text(picker::texture_filter(), current.text, *catalog);
-		if (verdict.severity == picker::reference_state::level::error) {
-			ImGui::TextColored(colors().error, "%s", verdict.text.c_str());
-		} else if (verdict.severity == picker::reference_state::level::note) {
-			ImGui::TextDisabled("%s", verdict.text.c_str());
-		}
+	if (verdict.severity == picker::reference_state::level::error) {
+		ImGui::TextColored(colors().error, "%s", verdict.text.c_str());
+	} else if (verdict.severity == picker::reference_state::level::note) {
+		ImGui::TextDisabled("%s", verdict.text.c_str());
 	}
 	ImGui::EndGroup();
 }
 
-void edt::material_window_panel::draw_slot_thumbnail(const std::string& texture)
+void edt::material_window_panel::draw_slot_thumbnail(const texture_slot& slot, const std::string& texture, bool loadable,
+	std::uint64_t revision)
 {
 	const ImVec2 size(em(48.f), em(48.f));
 	gui::imgui_backend_interface* backend = m_gui ? m_gui->get_backend_interface() : nullptr;
-	if (m_render && backend && !texture.empty()) {
+	res::resource_system* resources = m_editor_services.writable_resources();
+	if (!m_render || !backend || !resources || texture.empty() || !loadable || !m_thumbnail_attempts.may_try(slot.index, texture, revision)) {
+		m_thumbnails.erase(slot.index);
+		ImGui::Dummy(size);
+		return;
+	}
+	thumbnail_load& load = m_thumbnails[slot.index];
+	if (load.tag != texture) {
+		load.tag = texture;
+		load.desc = resources->require<rnd::texture_desc>(res::tag{ texture });
+	}
+	if (load.desc.has_error()) {
+		m_thumbnail_attempts.fail(slot.index, texture, revision);
+		m_thumbnails.erase(slot.index);
+	} else if (load.desc.is_ready()) {
 		rnd::texture_manager& textures = m_render->get_texture_manager();
 		const rnd::texture_id id = textures.require(res::tag{ texture });
 		if (textures.is_ready(id)) {

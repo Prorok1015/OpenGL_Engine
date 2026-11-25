@@ -232,3 +232,12 @@ edt::picker::texture_choice edt::picker::choose_texture(std::string_view path, c
 	const asset_record* record = source && source->ready() ? source->find(texture) : nullptr;
 	return { {}, record ? reference_value(*record) : boost::json::value(boost::json::string(texture.string())) };
 }
+
+edt::picker::reference_state edt::picker::judge_texture_text(std::string_view text, const catalog& source)
+{
+	reference_state out = judge_text(texture_filter(), text, source);
+	if (out.severity == reference_state::level::error && extension_matches(text, k_picture_extensions) && source.find(res::tag{ text })) {
+		return { reference_state::level::note, "a picture, not a texture desc; works, Create Texture to edit its settings" };
+	}
+	return out;
+}

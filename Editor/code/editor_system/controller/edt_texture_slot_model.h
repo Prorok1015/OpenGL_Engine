@@ -3,6 +3,8 @@
 #include <boost/json/array.hpp>
 #include <boost/json/value.hpp>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +37,24 @@ namespace edt
 	// `samplers` with `value` at `index` (null fills a gap before it), and without the empty slots at its end; a hole in the
 	// middle stays null. Anything but an array counts as an empty list.
 	boost::json::array with_slot(const boost::json::value& samplers, std::size_t index, boost::json::value value);
+
+	// Which slot thumbnails may ask for their texture: a texture whose load failed is not asked for again (each failed
+	// texture_manager::require logs an error, and a thumbnail asks every frame) until the slot names another texture or the
+	// asset list's revision moves (the file may have been fixed).
+	class thumbnail_attempts
+	{
+	public:
+		bool may_try(std::size_t slot, std::string_view tag, std::uint64_t revision) const;
+		void fail(std::size_t slot, std::string_view tag, std::uint64_t revision);
+
+	private:
+		struct failure
+		{
+			std::string tag;
+			std::uint64_t revision = 0;
+		};
+		std::map<std::size_t, failure> m_failed;
+	};
 
 	// The texture slots of a material_desc data document without ImGui (#1205): each change writes the whole `/samplers` list
 	// (the field is one custom value) through data_document::edit, one record of the history labelled with the slot

@@ -177,6 +177,29 @@ BOOST_AUTO_TEST_CASE(APicture_IsTakenAsTheTextureDescThatNamesIt_ElseCreateTextu
 	BOOST_TEST(!fs::exists(res_root / "pictures" / "bare.txm.desc"));
 }
 
+BOOST_AUTO_TEST_CASE(ADescOfAnotherTypeBesideThePicture_IsNotItsTexture)
+{
+	put("pictures/leaf.png", "not decoded here");
+	put("pictures/leaf.txm.desc", R"({"__type":"material_desc","__version":2,"data":"res://pictures/leaf.png"})");
+	BOOST_TEST(!texture_of(res::tag{ "res://pictures/leaf.png" }).is_valid());
+}
+
+// A failed thumbnail load is not tried again (each try logs an error) until the slot names another texture or the asset
+// list moves.
+BOOST_AUTO_TEST_CASE(AFailedThumbnail_IsNotTriedAgain_UntilTheTextOrTheRevisionChanges)
+{
+	edt::thumbnail_attempts attempts;
+	BOOST_TEST(attempts.may_try(0, "res://broken.txm.desc", 1));
+	attempts.fail(0, "res://broken.txm.desc", 1);
+	BOOST_TEST(!attempts.may_try(0, "res://broken.txm.desc", 1));
+	BOOST_TEST(!attempts.may_try(0, "res://broken.txm.desc", 1));
+	BOOST_TEST(attempts.may_try(1, "res://broken.txm.desc", 1));
+	BOOST_TEST(attempts.may_try(0, "res://other.txm.desc", 1));
+	BOOST_TEST(attempts.may_try(0, "res://broken.txm.desc", 2));
+	attempts.fail(0, "res://broken.txm.desc", 2);
+	BOOST_TEST(!attempts.may_try(0, "res://broken.txm.desc", 2));
+}
+
 BOOST_AUTO_TEST_CASE(ASlot_IsWrittenAtItsPlace_UndoneAsOneRecord_AndSavedAsMaterialDescReadsIt)
 {
 	put("textures/spec.txm.desc", R"({"__type":"texture_2d_desc","__parent":"res://base_texture.desc"})");
@@ -256,9 +279,38 @@ BOOST_AUTO_TEST_CASE(AParentsSlots_AreInherited_AndAClearWritesTheOwnList)
 	BOOST_TEST(slots.state(slot(0)).value.is_null());
 	BOOST_TEST(!slots.state(slot(0)).inherited);
 
+	// Undoing the clear brings the parent's list back: no own list.
+	BOOST_REQUIRE(data.undo());
+	BOOST_TEST(own_samplers(data).is_null());
+	BOOST_TEST(slots.state(slot(0)).inherited);
+	BOOST_REQUIRE(data.redo());
+	BOOST_TEST((own_samplers(data) == json::value(json::array{})));
+
 	// Setting it back to the parent's list leaves no own list.
 	BOOST_REQUIRE(slots.set(slot(0), json::string("res://p.txm.desc")));
 	BOOST_TEST(own_samplers(data).is_null());
+}
+
+// A field edit still pending (a widget let go of later) is a record of its own, before the slot's.
+BOOST_AUTO_TEST_CASE(APendingFieldEdit_AndASlotClick_AreTwoRecords)
+{
+	edt::data_document& data = open(put("m.desc", k_plain_material));
+	edt::texture_slot_model slots(data);
+	BOOST_REQUIRE(data.edit([](json::value& shown) {
+		shown.as_object()["queue"] = "transparent";
+		return true;
+	}));
+	BOOST_REQUIRE(data.has_pending_edit());
+	BOOST_REQUIRE(slots.set(slot(0), json::string("res://d.txm.desc")));
+	BOOST_REQUIRE(data.next_undo_entry().has_value());
+	BOOST_TEST(data.next_undo_entry()->label == "Set Diffuse texture");
+	BOOST_REQUIRE(data.undo());
+	BOOST_TEST(own_samplers(data).is_null());
+	BOOST_TEST((data.own().at("queue") == json::value("transparent")));
+	BOOST_REQUIRE(data.next_undo_entry().has_value());
+	BOOST_TEST(data.next_undo_entry()->label != "Set Diffuse texture");
+	BOOST_REQUIRE(data.undo());
+	BOOST_TEST(!data.is_dirty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

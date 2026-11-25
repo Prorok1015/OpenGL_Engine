@@ -41,6 +41,17 @@ json::array edt::with_slot(const json::value& samplers, std::size_t index, json:
 	return out;
 }
 
+bool edt::thumbnail_attempts::may_try(std::size_t slot, std::string_view tag, std::uint64_t revision) const
+{
+	const auto found = m_failed.find(slot);
+	return found == m_failed.end() || found->second.tag != tag || found->second.revision != revision;
+}
+
+void edt::thumbnail_attempts::fail(std::size_t slot, std::string_view tag, std::uint64_t revision)
+{
+	m_failed.insert_or_assign(slot, failure{ .tag = std::string(tag), .revision = revision });
+}
+
 edt::texture_slot_state edt::texture_slot_model::state(const texture_slot& slot) const
 {
 	texture_slot_state out;

@@ -144,7 +144,9 @@ res::tag edt::existing_picture_texture(const document_creator& creator, res::res
 	if (!read.error.empty()) return {};
 	boost::system::error_code ec;
 	const json::value file = json::parse(std::string_view(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size()), ec);
-	if (ec) return {};
+	if (ec || !file.is_object()) return {};
+	const json::value* type = file.as_object().if_contains("__type");
+	if (!type || !type->is_string() || std::string_view(type->as_string()) != k_texture_type) return {};
 	const texture_source source = texture_source_of(file);
 	return source.from == texture_source::kind::file && source.file == picture.view() ? texture : res::tag{};
 }

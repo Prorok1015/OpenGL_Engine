@@ -309,4 +309,37 @@ BOOST_AUTO_TEST_CASE(TextureFilter_TakesTextureDescs_AndSendsAPictureToCreateTex
 	BOOST_CHECK(picker::choose_texture("models/tree.glb", &source, texture_of).answer.outcome == picker::verdict::result::rejected);
 }
 
+// A texture slot's drop asks the catalog for the desc's type: another type is refused, a type not read yet may fit.
+BOOST_AUTO_TEST_CASE(JudgeDrop_OfTheTextureFilter_WantsATextureDesc)
+{
+	fake_catalog source;
+	source.add("textures/rock.txm.desc", 2, "desc", "texture_2d_desc");
+	source.add("materials/wood.desc", 2, "desc", "material_desc");
+	source.add("textures/pending.txm.desc", 2, "desc", nullptr, false);
+	const picker::filter wanted = picker::texture_filter();
+	BOOST_CHECK(picker::judge_drop(wanted, "textures/rock.txm.desc", &source).fits());
+	const picker::verdict material = picker::judge_drop(wanted, "materials/wood.desc", &source);
+	BOOST_CHECK(material.outcome == picker::verdict::result::rejected);
+	BOOST_CHECK_EQUAL(material.reason, "is a desc of type 'material_desc', expected 'texture_2d_desc'");
+	BOOST_CHECK(picker::judge_drop(wanted, "textures/pending.txm.desc", &source).outcome == picker::verdict::result::unknown);
+	const auto none = [](const res::tag&) { return res::tag{}; };
+	BOOST_CHECK(picker::choose_texture("materials/wood.desc", &source, none).answer.outcome == picker::verdict::result::rejected);
+	BOOST_CHECK(picker::choose_texture("textures/pending.txm.desc", &source, none).answer.outcome == picker::verdict::result::unknown);
+}
+
+// A picture a slot already names (an imported material) loads at runtime: a note, not an error. A missing one stays an error.
+BOOST_AUTO_TEST_CASE(JudgeTextureText_APictureInASlot_IsANote)
+{
+	fake_catalog source;
+	source.add("pictures/x.png", 2, "texture");
+	source.add("textures/rock.txm.desc", 2, "desc", "texture_2d_desc");
+	source.add("materials/wood.desc", 2, "desc", "material_desc");
+	const picker::reference_state picture = picker::judge_texture_text("res://pictures/x.png", source);
+	BOOST_CHECK(picture.severity == picker::reference_state::level::note);
+	BOOST_CHECK_EQUAL(picture.text, "a picture, not a texture desc; works, Create Texture to edit its settings");
+	BOOST_CHECK(picker::judge_texture_text("res://textures/rock.txm.desc", source).severity == picker::reference_state::level::ok);
+	BOOST_CHECK(picker::judge_texture_text("res://materials/wood.desc", source).severity == picker::reference_state::level::error);
+	BOOST_CHECK(picker::judge_texture_text("res://pictures/gone.png", source).severity == picker::reference_state::level::error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

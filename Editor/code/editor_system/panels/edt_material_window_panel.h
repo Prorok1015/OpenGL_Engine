@@ -5,6 +5,10 @@
 #include "edt_material_window_model.h"
 #include "edt_preview_stage.h"
 #include "edt_texture_slot_model.h"
+#include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
+#include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -41,7 +45,8 @@ namespace edt
 	private:
 		void draw_textures();
 		void draw_texture_slot(const texture_slot& slot, const picker::catalog* catalog);
-		void draw_slot_thumbnail(const std::string& texture);
+		// `loadable`: the slot's text names a file that can be a texture (judge_texture_text gave no error).
+		void draw_slot_thumbnail(const texture_slot& slot, const std::string& texture, bool loadable, std::uint64_t revision);
 		void draw_defines();
 		void draw_add_define();
 		void draw_compile_errors();
@@ -56,6 +61,14 @@ namespace edt
 		material_window_model m_model;
 		texture_slot_model m_slots;
 		picker::picture_texture_lookup m_picture_texture;
+		// The thumbnails' texture descs, by slot: the renderer is asked only once one loaded, so a broken one costs it nothing.
+		struct thumbnail_load
+		{
+			std::string tag;
+			res::res_handle<rnd::texture_desc> desc;
+		};
+		std::map<std::size_t, thumbnail_load> m_thumbnails;
+		thumbnail_attempts m_thumbnail_attempts;
 		material_preview_content m_content;
 		// After the content: it is closed (and gives the content's copy up) before the content goes.
 		preview_stage m_stage;

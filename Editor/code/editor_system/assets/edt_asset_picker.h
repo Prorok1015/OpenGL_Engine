@@ -166,4 +166,8 @@ namespace edt::picker
 	// judge_drop judges it; a picture is taken as its texture desc (`texture_of`), and without one it is rejected with
 	// "Create Texture first". Writes nothing: making the desc is the picture viewer's Create Texture.
 	texture_choice choose_texture(std::string_view path, const catalog* source, const picture_texture_lookup& texture_of);
+
+	// judge_text of texture_filter for the value a texture slot holds, except that a picture there (an imported material's
+	// sampler) is a note, not an error: the runtime loads it, only its settings need a texture desc.
+	reference_state judge_texture_text(std::string_view text, const catalog& source);
 }
