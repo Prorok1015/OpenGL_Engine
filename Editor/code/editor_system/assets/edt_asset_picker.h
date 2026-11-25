@@ -61,6 +61,12 @@ namespace edt::picker
 
 	filter filter_of(const desc::field_schema& field);
 
+	// The `__type` of a 2D texture desc (`*.txm.desc`), what a material's texture slot takes.
+	inline constexpr std::string_view k_texture_desc_type = "texture_2d_desc";
+	// A material's texture slot (#1205): texture descs only. A picture is refused by judge ("Create Texture first"); a
+	// drop of one goes through choose_texture.
+	filter texture_filter();
+
 	// `path` ends with one of the extensions of `extensions` (letter case ignored); an empty list takes everything.
 	bool extension_matches(std::string_view path, std::string_view extensions);
 
@@ -143,4 +149,21 @@ namespace edt::picker
 	// A file dropped on the field: `path` is below res://, as the asset browser sends it. A file the records do not hold yet (just
 	// imported) is `unknown`, not refused: it comes from the browser, so it is there.
 	verdict judge_drop(const filter& wanted, std::string_view path, const catalog* source);
+
+	// The texture desc Create Texture made for a picture when it is there and its `data` names that picture; an empty tag
+	// otherwise. The editor reads the desc from the disk (texture_viewer_host); tests give their own.
+	using picture_texture_lookup = std::function<res::tag(const res::tag& picture)>;
+
+	struct texture_choice
+	{
+		verdict answer;
+		// What a texture slot gets when the answer is not `rejected`: the desc's reference_value, or its res:// path while
+		// the catalog does not hold it. Null when rejected.
+		boost::json::value value;
+	};
+
+	// A file dropped on a texture slot (`path` below res://, as the asset browser sends it): a texture desc is judged as
+	// judge_drop judges it; a picture is taken as its texture desc (`texture_of`), and without one it is rejected with
+	// "Create Texture first". Writes nothing: making the desc is the picture viewer's Create Texture.
+	texture_choice choose_texture(std::string_view path, const catalog* source, const picture_texture_lookup& texture_of);
 }

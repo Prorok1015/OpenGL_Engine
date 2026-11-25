@@ -270,4 +270,43 @@ BOOST_AUTO_TEST_CASE(JudgeDrop_WithoutACatalogOrBeforeTheFirstWalk_OnlyTheExtens
 	BOOST_CHECK(!picker::judge_drop(textures, "models/a.glb", &source).fits());
 }
 
+// A material's texture slot (#1205): texture descs only; a picture stands for the texture desc Create Texture made for it.
+BOOST_AUTO_TEST_CASE(TextureFilter_TakesTextureDescs_AndSendsAPictureToCreateTexture)
+{
+	fake_catalog source;
+	source.add("textures/rock.txm.desc", 2, "desc", "texture_2d_desc");
+	source.add("materials/wood.desc", 2, "desc", "material_desc");
+	source.add("pictures/rock.png", 2, "texture");
+	source.add("pictures/bare.png", 2, "texture");
+	const picker::filter wanted = picker::texture_filter();
+	BOOST_CHECK(wanted.kind == desc::field_kind::desc_ref);
+	BOOST_CHECK_EQUAL(wanted.ref_type, "texture_2d_desc");
+
+	BOOST_CHECK(picker::judge(wanted, *source.find(res::tag::make("textures/rock.txm.desc"))).fits());
+	BOOST_CHECK(!picker::judge(wanted, *source.find(res::tag::make("materials/wood.desc"))).fits());
+	BOOST_CHECK_EQUAL(picker::judge(wanted, *source.find(res::tag::make("pictures/bare.png"))).reason, "Create Texture first");
+	// The list holds the texture desc alone.
+	BOOST_CHECK((paths_of(picker::candidates(source, wanted, "", 50)) == std::vector<std::string>{ "textures/rock.txm.desc" }));
+
+	const auto texture_of = [](const res::tag& picture) {
+		return picture.relative() == "pictures/rock.png" ? res::tag::make("textures/rock.txm.desc") : res::tag{};
+	};
+	const picker::texture_choice desc = picker::choose_texture("textures/rock.txm.desc", &source, texture_of);
+	BOOST_CHECK(desc.answer.fits());
+	BOOST_CHECK(desc.value.is_string() && desc.value.as_string() == "res://textures/rock.txm.desc");
+	const picker::texture_choice material = picker::choose_texture("materials/wood.desc", &source, texture_of);
+	BOOST_CHECK(material.answer.outcome == picker::verdict::result::rejected);
+	BOOST_CHECK(material.value.is_null());
+	const picker::texture_choice bare = picker::choose_texture("pictures/bare.png", &source, texture_of);
+	BOOST_CHECK(bare.answer.outcome == picker::verdict::result::rejected);
+	BOOST_CHECK_EQUAL(bare.answer.reason, "Create Texture first");
+	BOOST_CHECK(bare.value.is_null());
+	BOOST_CHECK_EQUAL(picker::choose_texture("pictures/rock.png", &source, {}).answer.reason, "Create Texture first");
+	// A picture with its texture desc is taken as that desc.
+	const picker::texture_choice picture = picker::choose_texture("pictures/rock.png", &source, texture_of);
+	BOOST_CHECK(picture.answer.fits());
+	BOOST_CHECK(picture.value.is_string() && picture.value.as_string() == "res://textures/rock.txm.desc");
+	BOOST_CHECK(picker::choose_texture("models/tree.glb", &source, texture_of).answer.outcome == picker::verdict::result::rejected);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
