@@ -41,6 +41,15 @@ BOOST_AUTO_TEST_CASE(AltLeft_IsLeftToTheCamera_AndPicksNothing)
 	BOOST_TEST((click.update(frame(false, false, { 10.f, 10.f }, true)).kind == edt::mesh::gesture_end::none));
 }
 
+BOOST_AUTO_TEST_CASE(AltDragPastTheThreshold_MakesNoBox)
+{
+	edt::viewport_click click{ 4.f };
+	click.update(frame(true, true, { 10.f, 10.f }, true));
+	click.update(frame(false, true, { 60.f, 40.f }, true));
+	BOOST_TEST(click.camera_input());
+	BOOST_TEST((click.update(frame(false, false, { 60.f, 40.f }, true)).kind == edt::mesh::gesture_end::none));
+}
+
 BOOST_AUTO_TEST_CASE(APressWhereTheViewDoesNotTakeInput_StartsNothing)
 {
 	edt::viewport_click click{ 4.f };

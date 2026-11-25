@@ -117,6 +117,15 @@ namespace edt
 		return true;
 	}
 
+	bool scene_hierarchy_panel::may_hold_instance(const scn::prefab_desc::prefab_node& node) const
+	{
+		if (get_referenced_prefab(node)) return true;
+		// A prefab that is still loading (or did not load) is a reference that is not a desc yet: it may be an instance all the same.
+		return std::ranges::any_of(node.components, [](const auto& entry) {
+			return entry.second.parent_desc.is_valid() && !entry.second.parent_desc.is_ready();
+		});
+	}
+
 	void scene_hierarchy_panel::select_paths(const std::vector<std::vector<uint64_t>>& paths, pick_op op)
 	{
 		if (!m_world_desc) return;
@@ -124,13 +133,19 @@ namespace edt
 		for (const std::vector<uint64_t>& path : paths) {
 			scn::prefab_desc::prefab_node* node = nullptr;
 			auto* children = &m_world_desc->get_root().children;
+			bool known = true;
 			for (const uint64_t id : path) {
 				const auto it = std::ranges::find(*children, id, &scn::prefab_desc::prefab_node::node_id);
-				if (it == children->end()) break;
+				if (it == children->end()) {
+					// The ids that are left lie inside a prefab instance: only its node may take them. Under a plain node an unknown id
+					// means the path is not of this world.
+					known = node && may_hold_instance(*node);
+					break;
+				}
 				node = &*it;
 				children = &node->children;
 			}
-			if (node && std::ranges::find(found, node) == found.end()) found.push_back(node);
+			if (known && node && std::ranges::find(found, node) == found.end()) found.push_back(node);
 		}
 		std::vector<scn::prefab_desc::prefab_node*> now;
 		if (m_multi_selected.size() > 1) {
@@ -155,18 +170,25 @@ namespace edt
 			}
 			break;
 		}
-		if (op != pick_op::replace && result == now) return;
+		const auto same_nodes = [](std::vector<scn::prefab_desc::prefab_node*> a, std::vector<scn::prefab_desc::prefab_node*> b) {
+			std::ranges::sort(a);
+			std::ranges::sort(b);
+			return a == b;
+		};
+		scn::prefab_desc::prefab_node* primary_now = result.empty() ? nullptr : result.front();
+		for (auto* node : found) {
+			if (std::ranges::find(result, node) != result.end()) primary_now = node;
+		}
+		// Nothing to announce when the same nodes stay selected with the same primary one (a selection of a node inside an instance, which
+		// is read-only, counts as none: add and remove drop it, as the click on another node does).
+		if (!m_selected_readonly && same_nodes(result, now) && (op != pick_op::replace || primary_now == m_selected_node)) return;
 		m_last_clicked_flat_idx = -1;
 		m_multi_selected.clear();
 		m_selected_readonly = false;
 		if (result.empty()) {
 			m_selected_node = nullptr;
 		} else {
-			auto* primary = result.front();
-			for (auto* node : found) {
-				if (std::ranges::find(result, node) != result.end()) primary = node;
-			}
-			m_selected_node = primary;
+			m_selected_node = primary_now;
 			if (result.size() > 1) m_multi_selected.insert(result.begin(), result.end());
 		}
 		notify_selected();

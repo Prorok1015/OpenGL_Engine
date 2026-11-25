@@ -212,6 +212,7 @@ namespace edt
 	{
 		if (!m_click)
 			m_click.emplace(dpi_px(4.f));
+		m_click->set_drag_threshold(dpi_px(4.f));
 		const ImGuiIO& io = ImGui::GetIO();
 		const ImVec2 mouse = io.MousePos;
 		const glm::vec2 pixel{ mouse.x - m_image_pos.x, mouse.y - m_image_pos.y };
@@ -239,7 +240,11 @@ namespace edt
 		} else if (result.kind == mesh::gesture_end::box) {
 			pick.box = true;
 			const pick_box box{ cam_view, cam_proj, result.rect.min, result.rect.max, m_viewport_size };
-			for (const picked_node& node : pick_nodes_in_box(reg, box))
+			const auto nodes = pick_nodes_in_box(reg, box);
+			// No box at all (a drag that came back to where it began, nothing of the image inside it): nothing is selected or cleared.
+			if (!nodes)
+				return;
+			for (const picked_node& node : *nodes)
 				pick.paths.push_back(node.path);
 		} else {
 			return;

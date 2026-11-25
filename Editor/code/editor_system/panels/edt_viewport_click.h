@@ -58,6 +58,8 @@ namespace edt
 		mesh::gesture_result update(const viewport_click_frame& frame);
 		bool camera_input() const { return m_gesture.camera_input(); }
 		void cancel() { m_gesture.cancel(); }
+		// The threshold follows the DPI: set it every frame.
+		void set_drag_threshold(float pixels) { m_gesture.set_drag_threshold(pixels); }
 		const mesh::select_gesture& gesture() const { return m_gesture; }
 
 	private:

@@ -1,3 +1,4 @@
+#include "edt_viewport_pick_apply.h"
 #include "edt_panels_component.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_blackboard_panel.h"
@@ -270,22 +271,7 @@ void edt::panels_component::wire_scene_callbacks()
 	});
 
 	m_viewport->set_on_pick([this](const viewport_pick& pick) {
-		if (pick.box || pick.op != pick_op::replace || pick.paths.size() != 1) {
-			// A box, or a click with Shift or Ctrl: the nodes of the desc (a node inside an instance stands for the instance).
-			if (pick.op == pick_op::replace && pick.paths.empty()) {
-				m_ports.context.selection().clear();
-				return;
-			}
-			m_hierarchy->select_paths(pick.paths, pick.op);
-			return;
-		}
-		const std::vector<uint64_t>& path = pick.paths.front();
-		// Ids below a prefab instance are not nodes of the desc: the hierarchy takes them as the target tail.
-		const bool selected = select_longest_own_prefix(path, [this](const std::vector<uint64_t>& full, const std::vector<uint64_t>& target) {
-			return m_hierarchy->select_path(full, target);
-		});
-		if (!selected)
-			egLOG_WARN("editor", "viewport pick: the hierarchy does not know the picked node, the selection is kept");
+		apply_viewport_pick(*m_hierarchy, m_ports.context.selection(), pick);
 	});
 	m_viewport->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {

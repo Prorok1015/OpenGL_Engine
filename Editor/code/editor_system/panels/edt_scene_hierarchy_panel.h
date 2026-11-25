@@ -86,6 +86,7 @@ namespace edt
 		bool find_path(const std::vector<scn::prefab_desc::prefab_node>& nodes, const scn::prefab_desc::prefab_node* wanted, std::vector<uint64_t>& path) const;
 		void notify_selected();
 		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
+		bool may_hold_instance(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
 		void draw_new_world_popup();
 		bool locked() const { return m_edits_locked && m_edits_locked(); }

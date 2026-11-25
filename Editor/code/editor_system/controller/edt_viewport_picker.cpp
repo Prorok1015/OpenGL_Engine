@@ -83,22 +83,22 @@ std::optional<edt::picked_node> edt::pick_node(entt::registry& world, const pick
 	return std::nullopt;
 }
 
-std::vector<edt::picked_node> edt::pick_nodes_in_box(entt::registry& world, const pick_box& box)
+std::optional<std::vector<edt::picked_node>> edt::pick_nodes_in_box(entt::registry& world, const pick_box& box)
 {
 	if (!finite(box.view) || !finite(box.projection) || !finite(box.corner_a) || !finite(box.corner_b) || !finite(box.image_size)) {
-		return {};
+		return std::nullopt;
 	}
 	if (!(box.image_size.x > 0.f) || !(box.image_size.y > 0.f)) {
-		return {};
+		return std::nullopt;
 	}
 	const float determinant = glm::determinant(box.projection * box.view);
 	if (!std::isfinite(determinant) || !(std::abs(determinant) > 0.f)) {
-		return {};
+		return std::nullopt;
 	}
 	const glm::vec2 low = glm::clamp(glm::min(box.corner_a, box.corner_b), glm::vec2{ 0.f }, box.image_size);
 	const glm::vec2 high = glm::clamp(glm::max(box.corner_a, box.corner_b), glm::vec2{ 0.f }, box.image_size);
 	if (!(high.x > low.x) || !(high.y > low.y)) {
-		return {};
+		return std::nullopt;
 	}
 	scn::ray_filter filter;
 	filter.mask = ~scn::spatial_mask{ k_editor_helper_layer };
