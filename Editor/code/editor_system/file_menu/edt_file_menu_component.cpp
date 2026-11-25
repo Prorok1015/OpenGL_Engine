@@ -10,6 +10,7 @@
 #include "edt_level_load_component.h"
 #include "edt_main_menu.h"
 #include "edt_path_text.h"
+#include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_problems_component.h"
 #include "edt_recent_projects.h"
