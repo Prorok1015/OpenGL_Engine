@@ -378,10 +378,8 @@ namespace {
 		} catch (const std::exception& failed) {
 			std::vector<fs::path> roots = in.layers;
 			roots.push_back(in.top);
-			// The spellings of a source are looked up on the disk: only of one the rule still allows.
-			const std::string source_text = fs_paths::utf8_of(in.plan.source);
-			const bool local = edt::agent_source_path_problem(source_text, in.volumes).empty();
-			throw std::runtime_error(edt::without_paths(failed.what(), roots, local ? in.plan.source : fs::path{}));
+			// without_paths replaces the source by its text only: nothing of it is looked up on the disk.
+			throw std::runtime_error(edt::without_paths(failed.what(), roots, in.plan.source));
 		}
 	}
 }

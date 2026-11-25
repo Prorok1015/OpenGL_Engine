@@ -251,6 +251,40 @@ BOOST_AUTO_TEST_CASE(WithoutPaths_NamesTheSourcesFolderNeutrally)
 	BOOST_CHECK_EQUAL(rooted, "/a/b and robot.glb");
 }
 
+// #1408: Win32 strips a trailing space or dot, so `x ` and `x` could be two entries on the walk and one on the open.
+BOOST_AUTO_TEST_CASE(OnWindows_AComponentEndingInASpaceOrADot_IsRefused)
+{
+	edt::source_volume_ports windows;
+	windows.windows = true;
+	windows.drive_type = [](char) { return edt::k_drive_fixed; };
+	windows.mount_table = {};
+	for (const char* path : { "D:\\models\\x \\robot.glb", "D:\\models.\\robot.glb", "D:\\robot.glb.",
+		"D:/a /b.glb", "D:\\robot.glb " }) {
+		BOOST_TEST_CONTEXT(path)
+		{
+			const std::string why = edt::agent_source_path_problem(path, windows);
+			BOOST_CHECK_MESSAGE(why.find("ends in a space or a dot") != std::string::npos, why);
+		}
+	}
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\a.b\\robot.glb", windows)));
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\ a\\robot.glb", windows)));
+}
+
+// #1408: without_paths replaces the source by its text: a link on its way is never resolved.
+BOOST_AUTO_TEST_CASE(WithoutPaths_NeverResolvesTheSourceThroughALink)
+{
+	const test_util::temp_dir dir{ "agent_source_rule_unresolved" };
+	dir.write("real/robot.glb", "glb");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	test_util::make_folder_link(base / "linked", base / "real");
+	const fs::path source = base / "linked" / "robot.glb";
+	const fs::path target = base / "real" / "robot.glb";
+	const std::string clean = edt::without_paths("read " + source.string() + " as " + target.string(), {}, source);
+	BOOST_CHECK_MESSAGE(clean.find("read robot.glb as ") != std::string::npos, clean);
+	// The target's spelling would be replaced only had the source been resolved through the link.
+	BOOST_CHECK_MESSAGE(clean.find(target.string()) != std::string::npos, clean);
+}
+
 // #1408: the walk from the root down refuses at the first link and looks at nothing below it.
 BOOST_AUTO_TEST_CASE(TheLinksWalk_StopsAtTheFirstLink_AndLooksAtNothingBelowIt)
 {

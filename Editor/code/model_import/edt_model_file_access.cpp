@@ -221,12 +221,21 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		// A ".." that leaves the boundary is refused here, so weakly_canonical below never asks the disk about a path outside it.
 		return refuse(refusal_kind::rule, outside);
 	}
+	// With a rule of the caller, the path judged is the path resolved: `link/../x` must not reach the disk as written,
+	// where the `..` would be taken after the link is followed.
+	std::string judged;
 	if (m_may_read) {
-		// The name as written, before path_within_dir_from resolves it: a link on the way is judged, never followed.
+		const auto dotted = [](const fs::path& part) { return part == "." || part == ".."; };
+		if (std::any_of(given.begin(), given.end(), dotted)) {
+			return refuse(refusal_kind::rule, "a '.' or '..' in a name an agent's import reads");
+		}
+		if (absolute_name && kind != model_file_kind::side_file) return refuse(refusal_kind::rule, outside);
 		const fs::path candidate = absolute_name ? given.lexically_normal() : (m_dir / given).lexically_normal();
 		if (std::string why = m_may_read(candidate); !why.empty()) return refuse(refusal_kind::rule, std::move(why));
+		judged = fs_paths::generic_utf8_of(candidate);
 	}
-	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	const auto inside = m_may_read ? res::path_within_dir_from(m_boundary, m_dir, judged, true)
+		: res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(refusal_kind::rule, outside);
 	std::error_code ec;
 	const fs::path relative = inside->lexically_relative(m_boundary);

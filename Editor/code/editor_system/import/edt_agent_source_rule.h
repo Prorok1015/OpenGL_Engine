@@ -23,8 +23,8 @@ namespace edt
 	unsigned system_drive_type(char letter);
 	// The text of /proc/self/mounts; nullopt when it cannot be read (and on Windows).
 	std::optional<std::string> system_mount_table();
-	// GetFileAttributesW of `path`: the entry itself, never followed or fetched from a cloud; nullopt when it cannot be
-	// read, and always off Windows.
+	// GetFileAttributesW of `path`: the entry itself (a link's own attributes), no data read, so nothing is fetched
+	// from a cloud; nullopt when it cannot be read, and always off Windows.
 	std::optional<std::uint32_t> system_file_attributes(const std::filesystem::path& path);
 
 	// How agent_source_path_problem tells a local volume from another one, without touching the path.
@@ -87,7 +87,8 @@ namespace edt
 
 	// `text` with every spelling of each of `roots` read as res://, of `source` (when given) as its file name and of
 	// the source's folder as k_source_folder_text (a side file a decoder names): what an error that reaches an agent
-	// may hold of this machine's paths.
+	// may hold of this machine's paths. `source` is the resolved path of a plan: only the roots are looked up on the
+	// disk for their resolved spellings, the source and its folder never (#1408).
 	std::string without_paths(std::string text, const std::vector<std::filesystem::path>& roots,
 		const std::filesystem::path& source);
 }

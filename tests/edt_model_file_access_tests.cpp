@@ -531,6 +531,37 @@ BOOST_AUTO_TEST_CASE(AFolderLinkInsideTheModelFolder_IsRefusedForAnAgent_AndRead
 	BOOST_CHECK(person.read(found).has_value());
 }
 
+// `link/../x` resolved as written would follow the link before taking the `..`: refused for an agent, whatever is
+// behind the link, before the disk is asked.
+BOOST_AUTO_TEST_CASE(ADotDotAfterALink_IsRefusedForAnAgent_WhateverIsBehindIt)
+{
+	const fs::path models = fs::weakly_canonical(dir.path() / "models");
+	test_util::make_folder_link(models / "linked", models / "tex");
+	fs::create_directories(dir.path() / "gone");
+	test_util::make_folder_link(models / "dangling", fs::weakly_canonical(dir.path() / "gone"));
+	fs::remove(dir.path() / "gone");
+	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule());
+	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png", "./skin.png",
+		"tex/../skin.png" }) {
+		BOOST_TEST_CONTEXT(reference)
+		{
+			const auto refused = agent.resolve(reference, edt::model_file_kind::texture);
+			BOOST_CHECK(!refused.found());
+			BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+			BOOST_CHECK_MESSAGE(refused.error.find("'.' or '..'") != std::string::npos, refused.error);
+			BOOST_CHECK(!agent.read(refused).has_value());
+		}
+	}
+	BOOST_CHECK_EQUAL(walked, 0);
+	BOOST_CHECK(agent.files().empty());
+
+	// A person's import reads such names as before.
+	auto person = make();
+	BOOST_CHECK(person.resolve("tex/../skin.png", edt::model_file_kind::texture).found());
+	const auto through = person.resolve("linked/../skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK_MESSAGE(through.error.find("'.' or '..'") == std::string::npos, through.error);
+}
+
 #if !defined(_WIN32)
 BOOST_AUTO_TEST_CASE(ANetworkMountBelowTheModelFolder_IsRefusedForAnAgent_BeforeItIsLookedAt)
 {
