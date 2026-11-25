@@ -100,8 +100,10 @@ namespace edt
 		void close_for_layer_change();
 		// The prefab the window shows, null when none (what the Inspector's shape section rebuilds into).
 		prefab_document* shown_prefab() const { return shown(); }
-		// The Inspector shows a node of a prefab (Edit > Undo has nothing to undo there, #147).
+		// The Inspector shows a node of a prefab.
 		bool owns_inspector() const { return m_inspector_target.is_prefab(); }
+		// The prefab document the Inspector's node belongs to: Edit > Undo acts on it, not on the level (null: the Inspector is on the level).
+		prefab_document* inspector_prefab() const { return m_inspector_target.is_prefab() ? prefab_by_id(m_inspector_target.prefab()) : nullptr; }
 		// The window opens (a data window of the host asked for it).
 		void show();
 		// The document goes first in editor_system's destructor: the window must not look at it any more.

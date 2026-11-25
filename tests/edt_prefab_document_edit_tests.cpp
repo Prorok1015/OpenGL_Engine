@@ -1815,4 +1815,102 @@ BOOST_AUTO_TEST_CASE(DiskFlag_IsAnnouncedWhenSet_NotAgainForTheSameOutsideVersio
 	BOOST_TEST(arm_name() == "arm2");
 }
 
+BOOST_AUTO_TEST_CASE(History_AnEdit_IsOneRecordWithItsLabelAndOrigin_UndoAndRedoMoveTheCopyAndThePreview)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_REQUIRE(document->edit([](scn::prefab_desc& copy) { copy.get_root().children[0].name = "arm2"; return true; }, "Rename arm", cmd::origin::agent("s1")));
+
+	const auto entry = document->next_undo_entry();
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->label == "Rename arm");
+	BOOST_TEST(entry->origin.kind == cmd::origin::agent("s1").kind);
+
+	const std::uint64_t replaced = document->working_replaced();
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(arm_name() == "arm");
+	BOOST_TEST(preview_has_node_named("arm"));
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->working_replaced() > replaced);
+	BOOST_TEST(document->next_redo_entry().has_value());
+
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(arm_name() == "arm2");
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_ADragThatChangedTheNodeManyTimesBeforeItWasAnnounced_IsOneRecord)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	scn::prefab_desc::prefab_node* arm = document->working_node({ 0xa1 });
+	BOOST_REQUIRE(arm);
+	for (const char* step : { "a", "ab", "abc" }) {
+		arm->name = step;
+	}
+	BOOST_REQUIRE(document->notify_edited("Edit arm"));
+
+	BOOST_TEST(document->history().size() == 1);
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(arm_name() == "arm");
+	BOOST_TEST(!document->history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(History_NotifyEditedWithNothingChanged_RecordsNothing)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->notify_edited());
+	BOOST_TEST(document->history().size() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(History_AnInPlaceChangeNotYetAnnounced_IsRecordedBeforeAnUndo)
+{
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	document->working_node({ 0xa1 })->name = "quiet";
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(arm_name() == "arm");
+	BOOST_TEST(document->next_redo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(History_UndoBackToTheAppliedState_IsClean_AndApplyIsASavePoint)
+{
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("one"));
+	BOOST_REQUIRE(document->save().ok);
+	BOOST_TEST(!document->is_dirty());
+	BOOST_REQUIRE(rename_arm("two"));
+	BOOST_TEST(document->is_dirty());
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(arm_name() == "one");
+	BOOST_TEST(!document->is_dirty());
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(arm_name() == "arm");
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(History_RevertAndCloseAndReopen_StartOver)
+{
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("one"));
+	BOOST_REQUIRE(document->revert().empty());
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_REQUIRE(rename_arm("two"));
+	document->close();
+	document->open(tag);
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->next_redo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(History_WhileLocked_RefusesUndoAndRedo)
+{
+	document->open(tag);
+	BOOST_REQUIRE(rename_arm("one"));
+	document->set_lock_source([] { return true; });
+	BOOST_TEST(!document->undo());
+	BOOST_TEST(arm_name() == "one");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

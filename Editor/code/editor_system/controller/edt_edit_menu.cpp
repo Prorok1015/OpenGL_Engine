@@ -49,15 +49,16 @@ namespace {
 
 std::vector<edt::registration> edt::register_edit_actions(
 	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active,
-	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo, std::function<bool()> history_blocked)
+	std::function<std::optional<std::string>()> asset_undo_label, std::function<bool()> asset_undo, std::function<document*()> history_owner)
 {
 	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
 		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
 	};
 	// The active document follows the focus of the windows: a data window that has it is the one Undo and Redo act on (its
-	// own history), the scene otherwise. The read-only prefab preview has nothing to undo, so the items are off there.
-	const auto history_target = [&documents, history_blocked = std::move(history_blocked)]() -> document* {
-		return history_blocked && history_blocked() ? nullptr : documents.active();
+	// own history), the scene otherwise. A prefab node picked in the Inspector sends them to its prefab, never to the level.
+	const auto history_target = [&documents, history_owner = std::move(history_owner)]() -> document* {
+		document* owner = history_owner ? history_owner() : nullptr;
+		return owner ? owner : documents.active();
 	};
 	const auto undo_target = history_target;
 	const auto redo_target = history_target;

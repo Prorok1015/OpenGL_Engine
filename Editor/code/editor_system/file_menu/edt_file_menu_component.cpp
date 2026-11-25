@@ -243,7 +243,7 @@ void edt::file_menu_component::install_edit_actions(std::vector<registration>& o
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_ports.context.actions(), m_ports.context.documents(), m_ports.context.dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo, [this] { return m_ports.prefab.owns_inspector(); })) {
+			asset_undo_label, asset_undo, [this]() -> document* { return m_ports.prefab.inspector_prefab(); })) {
 		out.push_back(std::move(action));
 	}
 }
