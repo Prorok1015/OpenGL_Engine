@@ -17,7 +17,7 @@
 // on it, see lights_params) and the stage the source is compiled for. engine_define_lines lines, in front of the
 // constants and the defines: problems_of_build_log tells them apart by that count.
 static constexpr std::string_view engine_defines_format = "#define {} {}\n#define {}\n";
-static_assert(std::ranges::count(engine_defines_format, '\n') == rnd::engine_define_lines);
+static_assert(static_cast<std::size_t>(std::ranges::count(engine_defines_format, '\n')) == rnd::engine_define_lines);
 
 static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 {
