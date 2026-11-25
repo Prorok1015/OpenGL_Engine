@@ -279,11 +279,12 @@ open_context {
 
 ```text
 // экспортируемые, не inline (SNK_EDITOR_API)
-open_linked(unique_ptr<document>, open_context) -> document_id   // усыновляет документ и записывает звено
-link_existing(document_id, open_context)                         // звено для уже открытого документа (asset)
+open_instance(unique_ptr<document>, parent_id, anchor) -> document_id   // усыновляет документ как звено instance
+link_asset(document_id) -> document_id                          // звено asset для открытого документа; то же звено, если файл уже связан
+has_link / link_kind_of / link_parent / link_anchor              // простые значения; структура контекста через границу не ходит
 chain_of(document_id) -> vector<document_id>                     // от корня вниз, звено последним
 find_link(parent_id, anchor) -> optional<document_id>
-link_of / descendants_of / unhosted_links
+descendants_of / unhosted_links
 open_host(link) -> host_id / close_host(host_id)                 // окна-хосты
 host_of(link) / host_link(host) / hosts()
 set_host_link(host, link) -> host_id                             // активное звено — у ХОСТА; звено чужого хоста не отбирается

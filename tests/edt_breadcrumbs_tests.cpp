@@ -42,11 +42,7 @@ struct crumbs_fixture
 {
 	edt::document_id link(std::string name, edt::document_id parent, std::string anchor)
 	{
-		edt::open_context context;
-		context.kind = edt::link_kind::instance;
-		context.parent = parent;
-		context.anchor = std::move(anchor);
-		return documents.open_linked(std::make_unique<crumb_document>(std::move(name)), context);
+		return documents.open_instance(std::make_unique<crumb_document>(std::move(name)), parent, anchor);
 	}
 
 	crumb_document& doc(edt::document_id id) { return *static_cast<crumb_document*>(documents.find(id)); }
@@ -62,7 +58,7 @@ BOOST_FIXTURE_TEST_SUITE(EdtBreadcrumbs, crumbs_fixture)
 BOOST_AUTO_TEST_CASE(AnAssetWindow_NamesTheAssetBrowserThenItself)
 {
 	edt::document& opened = documents.adopt(std::make_unique<crumb_document>("Face"));
-	documents.link_existing(opened.id(), {});
+	documents.link_asset(opened.id());
 	const std::vector<edt::breadcrumb> rows = edt::breadcrumbs_of(documents, opened.id());
 	BOOST_REQUIRE(rows.size() == 2);
 	BOOST_TEST(rows[0].label == edt::k_asset_origin_label);

@@ -1,7 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_scene_document.h"
+#include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_editor_services.h>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,15 +27,28 @@ struct stub_document final : edt::document
 	bool m_dirty = false;
 };
 
+// A preview that can close itself, as the prefab and the mesh documents do.
+struct stub_preview final : edt::previewable_document
+{
+	void open(const res::tag& source) override { m_source = source; m_open = true; }
+	void close() override { m_open = false; }
+	bool is_open() const override { return m_open; }
+	std::string_view kind() const override { return "stub_preview"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return m_source; }
+	bool is_dirty() const override { return false; }
+	std::uint64_t generation() const override { return 0; }
+
+	std::string m_title = "Preview";
+	res::tag m_source;
+	bool m_open = false;
+};
+
 struct links_fixture
 {
 	edt::document_id link(std::string name, edt::document_id parent, std::string anchor, res::tag source = res::tag::null)
 	{
-		edt::open_context context;
-		context.kind = edt::link_kind::instance;
-		context.parent = parent;
-		context.anchor = std::move(anchor);
-		return documents.open_linked(std::make_unique<stub_document>(std::move(name), std::move(source)), context);
+		return documents.open_instance(std::make_unique<stub_document>(std::move(name), std::move(source)), parent, anchor);
 	}
 
 	edt::document_id level() { return documents.scene().id(); }
@@ -41,7 +56,7 @@ struct links_fixture
 	edt::document_id asset(std::string name, res::tag source)
 	{
 		edt::document& opened = documents.adopt(std::make_unique<stub_document>(std::move(name), std::move(source)));
-		documents.link_existing(opened.id(), {});
+		documents.link_asset(opened.id());
 		return opened.id();
 	}
 
@@ -106,8 +121,10 @@ BOOST_AUTO_TEST_CASE(AnAssetAndAnInstanceOfOneFile_AreOpenTogether_AndDifferInTh
 	const edt::document_id opened = asset("Face", file);
 	const edt::document_id instance = link("Face", level(), "node:3", file);
 	BOOST_REQUIRE(opened != instance);
-	BOOST_TEST(documents.link_of(opened)->kind == edt::link_kind::asset);
-	BOOST_TEST(documents.link_of(instance)->kind == edt::link_kind::instance);
+	BOOST_TEST(documents.link_kind_of(opened) == edt::link_kind::asset);
+	BOOST_TEST(documents.link_kind_of(instance) == edt::link_kind::instance);
+	BOOST_TEST(documents.link_parent(instance) == level());
+	BOOST_TEST(documents.link_anchor(instance) == "node:3");
 	BOOST_TEST((documents.chain_of(opened) == std::vector<edt::document_id>{ opened }), boost::test_tools::per_element());
 }
 
@@ -243,7 +260,7 @@ BOOST_AUTO_TEST_CASE(ClosingALink_ClosesItsDescendantsFirst_AndTheirHosts)
 	BOOST_TEST(documents.find(material) == nullptr);
 	BOOST_TEST(documents.find(texture) == nullptr);
 	BOOST_TEST(!documents.host_link(host).has_value());
-	BOOST_TEST(!documents.link_of(card3).has_value());
+	BOOST_TEST(!documents.has_link(card3));
 	BOOST_TEST(documents.descendants_of(card3).empty());
 }
 
@@ -257,6 +274,106 @@ BOOST_AUTO_TEST_CASE(ClosingTheChild_LeavesTheParentOpen_AndItsHostGoesBackToThe
 
 	BOOST_TEST(documents.find(card3) != nullptr);
 	BOOST_TEST(documents.host_link(host).value() == card3);
+}
+
+BOOST_AUTO_TEST_CASE(LinkingTheSameFileAsAnAssetTwice_ReturnsTheExistingLink)
+{
+	const res::tag file = res::tag::make("materials/face.material.desc");
+	const edt::document_id first = asset("Face", file);
+	edt::document& second = documents.adopt(std::make_unique<stub_document>("Face again", file));
+	BOOST_TEST(documents.link_asset(second.id()) == first);
+	BOOST_TEST(!documents.has_link(second.id()));
+	BOOST_TEST(documents.link_asset(first) == first);
+}
+
+BOOST_AUTO_TEST_CASE(TheScene_GetsNoAssetRecord_WhateverIsAskedOfIt)
+{
+	BOOST_TEST(documents.link_asset(level()) == 0);
+	const edt::host_id host = documents.open_host(level());
+	BOOST_TEST(host != 0);
+	BOOST_TEST(!documents.has_link(level()));
+	const edt::document_id card3 = link("Card#3", level(), "node:3");
+	BOOST_TEST(documents.set_host_link(host, card3) == host);
+	BOOST_TEST(!documents.has_link(level()));
+}
+
+BOOST_AUTO_TEST_CASE(TheLinkIsRecordedBeforeTheDocumentIsAnnounced_AndGoesAfterItsCloseIsAnnounced)
+{
+	bool linked_when_opened = false;
+	bool linked_when_closed = false;
+	const auto opened = events.document_opened.subscribe([&](edt::document_id id) { linked_when_opened = documents.has_link(id); });
+	const auto closed = events.document_closed.subscribe([&](edt::document_id id) { linked_when_closed = documents.has_link(id); });
+	const edt::document_id card3 = link("Card#3", level(), "node:3");
+	documents.close(card3);
+	BOOST_TEST(linked_when_opened);
+	BOOST_TEST(linked_when_closed);
+	BOOST_TEST(!documents.has_link(card3));
+}
+
+BOOST_AUTO_TEST_CASE(ClosingAHostedAssetRoot_ClosesItsInstancesAndHosts)
+{
+	const edt::document_id root = asset("Face", res::tag::make("materials/face.material.desc"));
+	const edt::document_id texture = link("Albedo", root, "field:albedo");
+	const edt::host_id host = documents.open_host(root);
+	const edt::host_id texture_host = documents.open_host(texture);
+	documents.close(root);
+	BOOST_TEST(documents.find(texture) == nullptr);
+	BOOST_TEST(!documents.host_link(host).has_value());
+	BOOST_TEST(!documents.host_link(texture_host).has_value());
+	BOOST_TEST(documents.hosts().empty());
+}
+
+BOOST_AUTO_TEST_CASE(APreviewThatClosedItself_LeavesNoLinkNoHostAndNoDescendant)
+{
+	edt::asset_kind_registry kinds;
+	edt::editor_services services;
+	documents.set_preview_kinds(kinds, services);
+	edt::asset_preview_desc desc;
+	desc.id = "stub";
+	desc.suffix = ".stub";
+	desc.multiple = true;
+	desc.make_preview = [](edt::editor_services&) { return std::make_unique<stub_preview>(); };
+	const edt::registration registered = kinds.add_preview(desc);
+
+	edt::previewable_document* preview = documents.open_preview(res::tag::make("a.stub"));
+	BOOST_REQUIRE(preview != nullptr && preview->is_open());
+	const edt::document_id preview_id = preview->id();
+	const edt::document_id child = link("Child", preview_id, "field:x");
+	BOOST_REQUIRE(child != 0);
+	const edt::host_id host = documents.open_host(preview_id);
+
+	preview->close();
+	documents.open_preview(res::tag::make("b.stub"));
+
+	BOOST_TEST(documents.find(child) == nullptr);
+	BOOST_TEST(!documents.has_link(child));
+	BOOST_TEST(!documents.has_link(preview_id));
+	BOOST_TEST(!documents.host_link(host).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AnInstanceUnderAPreviewParent_ClosesWithThePreview)
+{
+	edt::asset_kind_registry kinds;
+	edt::editor_services services;
+	documents.set_preview_kinds(kinds, services);
+	edt::asset_preview_desc desc;
+	desc.id = "stub";
+	desc.suffix = ".stub";
+	desc.multiple = true;
+	desc.make_preview = [](edt::editor_services&) { return std::make_unique<stub_preview>(); };
+	const edt::registration registered = kinds.add_preview(desc);
+
+	edt::previewable_document* preview = documents.open_preview(res::tag::make("a.stub"));
+	BOOST_REQUIRE(preview != nullptr);
+	const edt::document_id preview_id = preview->id();
+	const edt::document_id child = link("Child", preview_id, "field:x");
+	BOOST_REQUIRE(child != 0);
+	BOOST_TEST((documents.chain_of(child) == std::vector<edt::document_id>{ preview_id, child }), boost::test_tools::per_element());
+
+	documents.close(preview_id);
+
+	BOOST_TEST(documents.find(child) == nullptr);
+	BOOST_TEST(documents.descendants_of(preview_id).empty());
 }
 
 BOOST_AUTO_TEST_CASE(LinksRevision_MovesWithEveryChange)

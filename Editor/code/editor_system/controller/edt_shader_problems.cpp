@@ -43,7 +43,19 @@ void edt::shader_problem_publisher::follow(problem_list& problems, std::uint64_t
 		return;
 	}
 	m_generation = generation;
-	std::vector<problem> now = to_problems(snapshot());
+	if (m_check_fresh) {
+		m_check_fresh = false;
+	} else {
+		m_check.clear();
+	}
+	std::vector<rnd::shader_problem> items = snapshot();
+	for (const rnd::shader_problem& row : m_check) {
+		const auto same = std::ranges::find_if(items, [&row](const rnd::shader_problem& known) {
+			return known.file == row.file && known.line == row.line && known.message == row.message;
+		});
+		if (same == items.end()) items.push_back(row);
+	}
+	std::vector<problem> now = to_problems(items);
 	if (now.empty()) {
 		if (m_published) {
 			problems.clear(source);
@@ -53,6 +65,13 @@ void edt::shader_problem_publisher::follow(problem_list& problems, std::uint64_t
 	}
 	problems.set(source, std::move(now));
 	m_published = true;
+}
+
+void edt::shader_problem_publisher::set_check(std::vector<rnd::shader_problem> rows)
+{
+	m_check = std::move(rows);
+	m_check_fresh = true;
+	m_generation = ~std::uint64_t{ 0 };
 }
 
 void edt::shader_problem_publisher::follow(problem_list& problems, const rnd::render_system& renderer)

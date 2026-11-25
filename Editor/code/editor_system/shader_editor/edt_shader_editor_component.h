@@ -32,6 +32,8 @@ namespace edt
 			std::function<bool()> edits_locked = {};
 			// An open that is a link, an agent's or a recovery's shows no dialog (asset_open_component::open_is_quiet). Null: not quiet.
 			std::function<bool()> open_is_quiet = {};
+			// Check (#1386): builds the programs the file belongs to and gives the person a line about it. Null: no Check button.
+			std::function<std::string(const res::tag&)> check_source = {};
 		};
 
 		explicit shader_editor_component(ports from);

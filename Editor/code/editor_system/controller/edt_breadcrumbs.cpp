@@ -10,8 +10,7 @@ namespace edt
 		const std::vector<document_id> chain = documents.chain_of(link);
 		if (chain.empty()) return rows;
 
-		const std::optional<open_context> own = documents.link_of(chain.front());
-		if (own && own->kind == link_kind::asset) {
+		if (documents.has_link(chain.front()) && documents.link_kind_of(chain.front()) == link_kind::asset) {
 			rows.push_back({ 0, k_asset_origin_label, false, false, false });
 		}
 		for (const document_id id : chain) {
@@ -21,16 +20,16 @@ namespace edt
 			row.id = id;
 			row.label = open->title();
 			row.dirty = open->is_dirty();
-			row.draggable = documents.link_of(id).has_value();
-			if (const std::optional<open_context> context = documents.link_of(id); context && context->kind == link_kind::instance) {
+			row.draggable = documents.has_link(id);
+			if (documents.has_link(id) && documents.link_kind_of(id) == link_kind::instance) {
+				const document_id parent = documents.link_parent(id);
 				const auto same_title = [&](document_id other) {
-					const std::optional<open_context> other_context = documents.link_of(other);
 					const document* other_doc = documents.find(other);
-					return other != id && other_context && other_context->kind == link_kind::instance && other_context->parent == context->parent
+					return other != id && documents.link_kind_of(other) == link_kind::instance && documents.link_parent(other) == parent
 						&& other_doc && other_doc->title() == row.label;
 				};
-				std::vector<document_id> siblings = documents.descendants_of(context->parent);
-				if (std::ranges::any_of(siblings, same_title)) row.label = std::format("{} ({})", row.label, context->anchor);
+				const std::vector<document_id> siblings = documents.descendants_of(parent);
+				if (std::ranges::any_of(siblings, same_title)) row.label = std::format("{} ({})", row.label, documents.link_anchor(id));
 			}
 			rows.push_back(std::move(row));
 		}
@@ -40,7 +39,7 @@ namespace edt
 
 	host_id apply_crumb_drop(document_manager& documents, document_id link, const crumb_drop& drop)
 	{
-		if (!documents.link_of(link)) return 0;
+		if (!documents.has_link(link)) return 0;
 		switch (drop.kind) {
 		case drop_kind::empty_space:
 			return documents.move_link(link, 0);

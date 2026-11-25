@@ -78,6 +78,14 @@ namespace rnd
 		// whenever the problems do.
 		SNK_API std::uint64_t shader_problems_generation() const;
 		SNK_API std::vector<rnd::shader_problem> shader_problems() const;
+		// Builds the program of the shader desc `desc` (.shader.desc) as it says, the default variant, without a material and
+		// without touching the program cache: nothing is kept or watched, shader_problems() and its generation do not change (#1386).
+		// Main thread, the thread of the GL context. It is synchronous and may stall the frame while the driver compiles and
+		// links: call it from a button, never from a per-frame path.
+		// `files`, when given, gets every file the program is made of (the stages and what they include), `program` the stages and defines
+		// as a problem names the program.
+		SNK_API std::vector<rnd::shader_problem> check_shader_program(const res::tag& desc, std::vector<res::tag>* files = nullptr,
+			std::string* program = nullptr) const;
 
 	private:
 		rnd::skinning_manager* m_skinning_manager = nullptr;

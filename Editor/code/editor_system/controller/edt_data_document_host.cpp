@@ -180,7 +180,7 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 		panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	}
 	// The window is a host of its link; its crumbs lead to the other windows, none is dragged out yet (a data window shows its own document only).
-	documents.link_existing(id, {});
+	documents.link_asset(id);
 	auto host = std::make_shared<window_host>(documents, id, window_host::ports{ [this](document_id link) { show_link(link); }, false });
 	panel->set_header([host](const gui::theme_semantic_colors& colors) { host->draw(colors); });
 	panel->set_on_close([this, id] { request_close(id); });
