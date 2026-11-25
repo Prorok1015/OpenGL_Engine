@@ -1385,14 +1385,17 @@ jobs:
         run: |
           sha=$(git rev-parse HEAD:projects/sandbox/res/samples)
           echo "samples pinned at $sha"
-          (
-            cd projects/sandbox/res/samples
-            git init -q
-            git remote add origin https://github.com/Prorok1015/OpenGL_Engine_samples.git
-            git fetch -q --depth 1 --filter=blob:none origin "$sha"
-            git sparse-checkout set card
-            git checkout -q FETCH_HEAD
-          ) || true
+          samples=projects/sandbox/res/samples
+          git -C "$samples" init -q &&
+            git -C "$samples" remote add origin https://github.com/Prorok1015/OpenGL_Engine_samples.git
+          fetched=0
+          for attempt in 1 2 3; do
+            if git -C "$samples" fetch -q --depth 1 --filter=blob:none origin "$sha"; then fetched=1; break; fi
+            echo "fetch attempt $attempt failed"; sleep $((attempt * 10))
+          done
+          [ "$fetched" = 1 ] || { echo "::error::could not fetch the samples at $sha"; exit 1; }
+          git -C "$samples" sparse-checkout set card &&
+            git -C "$samples" checkout -q FETCH_HEAD
           test -f projects/sandbox/res/samples/card/card_demo.desc || { echo "::error::samples submodule (card/) missing"; exit 1; }
 
       # #1197: the card material in the Scene view, captured in-process like "Capture run (viewport.capture)". The level
@@ -1402,6 +1405,7 @@ jobs:
       # texture's blue. No reference picture yet: check_smoke.sh only checks the log (min stddev 0).
       - name: Capture run (card)
         run: |
+          HEADLESS_USER_DIR="$PWD/headless_out/card/user" \
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/card/final.png \
             --wait-for-log 'captured viewport' \
             -- --project projects/sandbox --set editor/startup_level samples/card/card_demo.desc capture/on_settled "$PWD/headless_out/card/scene.png"

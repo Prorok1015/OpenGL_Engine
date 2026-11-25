@@ -13,11 +13,14 @@
 #   SNK_CARD_BACK      middle of the back card                     (default 0.76,0.42,0.80,0.58)
 #   SNK_CARD_HOLE      the frame probe's transparent centre        (default 0.47,0.40,0.53,0.60)
 #   SNK_CARD_BEHIND    the backdrop beside the probe, no frame     (default 0.32,0.40,0.37,0.60)
-#   SNK_CARD_BAND      the probe's left opaque band (gold)         (default 0.39,0.40,0.41,0.60)
+#   SNK_CARD_BAND      the probe's left opaque band (gold)         (default 0.395,0.40,0.408,0.60)
 # Checks, on the mean colour (0..255 per channel) of each region:
-#   (a) FACE differs from BG by more than SNK_CARD_MIN_DIFF (default 60, euclidean RGB): the face card is drawn;
-#   (b) HOLE matches BEHIND within SNK_CARD_MAX_HOLE_DIFF (default 30) and BAND differs from BEHIND by more than
-#       SNK_CARD_MIN_DIFF: the frame is drawn, and its transparent centre shows what is behind it;
+#   (a) FACE differs from BG by more than SNK_CARD_MIN_DIFF (default 60, euclidean RGB) and its red exceeds its blue
+#       by SNK_CARD_MIN_RED (default 40): the face card is drawn with the face texture, not the back or a fallback;
+#   (b) BEHIND is green-dominant (green exceeds red and blue by SNK_CARD_MIN_GREEN, default 40), HOLE matches BEHIND
+#       within SNK_CARD_MAX_HOLE_DIFF (default 30) and BAND differs from BEHIND by more than SNK_CARD_MIN_DIFF: the
+#       frame is drawn, and its transparent centre shows the backdrop behind it;
+# The image's aspect must be within SNK_CARD_ASPECT (default 1.70,1.90): the regions assume that layout.
 #   (c) BACK has the back texture's dominant blue: blue exceeds red and green by SNK_CARD_MIN_BLUE (default 40).
 # A failed check prints an ::error:: line; the crops are written next to the shot (<shot>.<region>.png) for the
 # artifact. Needs ImageMagick (convert, identify).
@@ -29,10 +32,19 @@ shot="${1:?screenshot}"
 min_diff="${SNK_CARD_MIN_DIFF:-60}"
 max_hole_diff="${SNK_CARD_MAX_HOLE_DIFF:-30}"
 min_blue="${SNK_CARD_MIN_BLUE:-40}"
+min_red="${SNK_CARD_MIN_RED:-40}"
+min_green="${SNK_CARD_MIN_GREEN:-40}"
 fail=0
 
 read -r width height < <(identify -format '%w %h\n' "$shot" | head -1)
 echo "card check: $shot is ${width}x${height}"
+aspect=$(awk -v w="$width" -v h="$height" 'BEGIN { printf "%.3f", w / h }')
+IFS=, read -r aspect_min aspect_max <<<"${SNK_CARD_ASPECT:-1.70,1.90}"
+echo "aspect $aspect (expected $aspect_min..$aspect_max)"
+if ! awk -v a="$aspect" -v lo="$aspect_min" -v hi="$aspect_max" 'BEGIN { exit !(a >= lo && a <= hi) }'; then
+	echo "::error::card check: aspect $aspect is outside $aspect_min..$aspect_max, the regions do not fit this shot"
+	exit 1
+fi
 
 # "x0,y0,x1,y1" fractions -> an ImageMagick crop geometry in pixels.
 geometry() {
@@ -62,7 +74,7 @@ face=$(mean_rgb face "${SNK_CARD_FACE:-0.20,0.42,0.24,0.58}")
 back=$(mean_rgb back "${SNK_CARD_BACK:-0.76,0.42,0.80,0.58}")
 hole=$(mean_rgb hole "${SNK_CARD_HOLE:-0.47,0.40,0.53,0.60}")
 behind=$(mean_rgb behind "${SNK_CARD_BEHIND:-0.32,0.40,0.37,0.60}")
-band=$(mean_rgb band "${SNK_CARD_BAND:-0.39,0.40,0.41,0.60}")
+band=$(mean_rgb band "${SNK_CARD_BAND:-0.395,0.40,0.408,0.60}")
 echo "mean rgb: bg=($bg) face=($face) back=($back) hole=($hole) behind=($behind) band=($band)"
 
 # (a) the face card is visible.
@@ -72,8 +84,20 @@ if ! above "$d" "$min_diff"; then
 	echo "::error::card check (a): the face card region looks like the background (distance $d <= $min_diff)"
 	fail=1
 fi
+read -r r g b <<<"$face"
+echo "(a) face card: red $r vs blue $b (min margin $min_red)"
+if ! above "$((r - b))" "$min_red"; then
+	echo "::error::card check (a): the face card region is not the face texture's red (rgb $face)"
+	fail=1
+fi
 
 # (b) the frame is drawn, and its transparent centre shows the backdrop behind it.
+read -r r g b <<<"$behind"
+echo "(b) backdrop: green $g vs red $r, blue $b (min margin $min_green)"
+if ! { above "$((g - r))" "$min_green" && above "$((g - b))" "$min_green"; }; then
+	echo "::error::card check (b): the backdrop region is not green (rgb $behind)"
+	fail=1
+fi
 d=$(distance "$band" "$behind")
 echo "(b) frame band vs backdrop: $d (min $min_diff)"
 if ! above "$d" "$min_diff"; then
