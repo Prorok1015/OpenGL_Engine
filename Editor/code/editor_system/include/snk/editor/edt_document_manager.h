@@ -18,15 +18,9 @@ namespace edt
 	using host_id = std::uint64_t;
 
 	// Where a document was opened from. `asset`: from the asset browser or a menu, the file is the identity. `instance`: from
-	// a place inside `parent` named by `anchor` (a node and a field); the identity is the pair (parent, anchor), never the file.
+	// a place inside a parent document named by an anchor (a node and a field); the identity is the pair (parent, anchor), never the file.
+	// Only plain values cross the module boundary here: the context itself is the manager's private record.
 	enum class link_kind { asset, instance };
-
-	struct open_context
-	{
-		link_kind kind = link_kind::asset;
-		document_id parent = 0;
-		std::string anchor;
-	};
 
 	class asset_kind_registry;
 	class editor_events;
@@ -97,37 +91,42 @@ namespace edt
 
 		// Links and window hosts (EPIC-82 5.4, #1402). A link is a document plus where it was opened from; the tables live in the .cpp, per
 		// manager, so the class has no field for them. A document without a link is a chain of its own (the level, a prefab opened by name).
+		// Reads never make a table entry.
 		//
-		// Adopts `opened` as an `instance` (or `asset`) link of `context`; `context.parent` must be open for an instance. When the
-		// pair (parent, anchor) is linked already, that link's id is returned and `opened` is destroyed unopened; 0 when the parent is
-		// not open (nothing is adopted). The window is not made here: a host is (open_host).
-		document_id open_linked(std::unique_ptr<document> opened, const open_context& context);
-		// Records an `asset` link for a document that is open already (a preview, a data document); false for an id that names none.
-		bool link_existing(document_id id, const open_context& context);
+		// Adopts `opened` as an `instance` link of `parent` at `anchor` (announced after the link is recorded). When the pair is linked
+		// already, that link's id is returned and `opened` is destroyed unopened; 0 when `parent` is not open (nothing is adopted).
+		document_id open_instance(std::unique_ptr<document> opened, document_id parent, std::string_view anchor);
+		// Records an `asset` link for a document that is open (a preview, a data document; never the scene). The id of the link of that file when
+		// another document of the same source is linked as an asset already; `id` itself when it is linked; 0 for a document that is not open.
+		document_id link_asset(document_id id);
+		bool has_link(document_id id) const;
+		// `asset` for a document with no link.
+		link_kind link_kind_of(document_id id) const;
+		// The document an instance was opened from; 0 for an asset and for a document with no link.
+		document_id link_parent(document_id id) const;
+		std::string link_anchor(document_id id) const;
 		// The documents from the root down to `id`, `id` last. A document with no link: just itself. Empty for an unknown id.
-		std::vector<document_id> chain_of(document_id id);
+		std::vector<document_id> chain_of(document_id id) const;
 		// The `instance` link opened from `parent` at `anchor`.
-		std::optional<document_id> find_link(document_id parent, const std::string& anchor);
-		// The context `id` was opened with; nullopt when it has none.
-		std::optional<open_context> link_of(document_id id);
+		std::optional<document_id> find_link(document_id parent, std::string_view anchor) const;
 		// Every open link below `id`, the deepest first (the order they close in).
-		std::vector<document_id> descendants_of(document_id id);
+		std::vector<document_id> descendants_of(document_id id) const;
 		// Links that no host shows, in the order they were linked.
-		std::vector<document_id> unhosted_links();
+		std::vector<document_id> unhosted_links() const;
 
-		// A host showing `link` (a document that has no link record gets an `asset` one). A link another host shows keeps that host:
-		// its id is returned and no host is made. 0 for a document that is not open.
+		// A host showing `link` (a document that has no link record gets an `asset` one, the scene none). A link another host shows keeps that
+		// host: its id is returned and no host is made. 0 for a document that is not open.
 		host_id open_host(document_id link);
 		// The host stops showing anything and goes. The document and its unsaved changes stay open.
 		void close_host(host_id host);
-		std::optional<host_id> host_of(document_id link);
-		std::optional<document_id> host_link(host_id host);
-		std::vector<host_id> hosts();
+		std::optional<host_id> host_of(document_id link) const;
+		std::optional<document_id> host_link(host_id host) const;
+		std::vector<host_id> hosts() const;
 		// Back and forward along the chain: `host` shows `link`. When another host shows it, nothing moves and that host's id is
 		// returned (focus goes by identity). The link `host` showed stays open without a host. 0: no such host or link.
 		host_id set_host_link(host_id host, document_id link);
-		// Tear-off (`to_host` 0): a new host shows `link`; the host that showed it goes back to the link's parent when that has no host,
-		// else it closes. Dock-back (`to_host` set): `to_host` shows `link` and the host that showed it closes. The id of the host that
+		// Tear-off (`to_host` 0): a new host shows `link`; the host that showed it goes back to the link's parent when that is a link without a
+		// host, else it closes. Dock-back (`to_host` set): `to_host` shows `link` and the host that showed it closes. The id of the host that
 		// shows `link` now, 0 when nothing was done.
 		host_id move_link(document_id link, host_id to_host);
 		// Moves with every change of the links and the hosts: the windows redraw on it.
@@ -158,6 +157,11 @@ namespace edt
 		void close_descendants(document_id id);
 		void document_closed_link(document_id id);
 		void close_document(document_id id);
+		// The links of documents that closed without close() (a preview that closed itself) go, their descendants and hosts with them.
+		void forget_closed_links();
+		const document* find_open(document_id id) const;
+		document& adopt_quiet(std::unique_ptr<document> adopted);
+		void register_asset_link(document_id id);
 
 		document* m_scene;
 		editor_events& m_events;
