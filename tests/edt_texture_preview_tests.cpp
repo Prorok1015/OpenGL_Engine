@@ -37,7 +37,8 @@ struct texture_preview_fixture : test_util::preview_env
 		BOOST_REQUIRE_MESSAGE(opened.opened, opened.error);
 		content.emplace(edt::texture_preview_source{
 			.body = [this] { return json::value(document->own()); },
-			.generation = [this] { return document->generation(); } }, services);
+			.generation = [this] { return document->generation(); },
+			.parent = {} }, services);
 		return *content;
 	}
 

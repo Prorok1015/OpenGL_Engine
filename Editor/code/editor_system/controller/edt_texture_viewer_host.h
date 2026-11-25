@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace inp { class input_router; }
 
@@ -28,10 +29,16 @@ namespace edt
 	};
 	picture_texture picture_texture_of(const res::tag& picture);
 
-	// Why "Create Texture" is refused for `picture`: the picture is not the project's own (`in_top_layer`), or the creator
-	// refuses the name (taken in any layer, a project that may not be written: document_creator::check and its blocker).
-	// Empty: it may be made. Walks the folder: asked when a viewer opens and after a Create, not every frame.
+	// The first own fields of a new document of `type` made by Create Document (document_creator::ports::initial_fields): a
+	// texture is a child of the engine's base texture, as Create Texture makes it; any other type gets none.
+	boost::json::object initial_document_fields(std::string_view type);
+
+	// Why "Create Texture" is refused for `picture`: the picture is not the project's own (`in_top_layer`), the project may
+	// not be written now (the creator's blocker), or the creator refuses the name (taken in any layer). Empty: it may be
+	// made. Walks the folder: asked when a viewer opens and after a Create, not every frame.
 	std::string picture_texture_refusal(const document_creator& creator, const res::tag& picture, bool in_top_layer);
+	// The file Create Texture makes for `picture` (the type's suffix as the creator gives it).
+	res::tag picture_texture_tag(const document_creator& creator, const res::tag& picture);
 	// Writes the desc through the creator (never over a file).
 	document_creation create_picture_texture(const document_creator& creator, const res::tag& picture);
 
@@ -68,6 +75,9 @@ namespace edt
 		void close(const res::tag& source);
 		// A picture viewer's Create Texture: the desc, then the texture window. False (said in the viewer) when it was refused.
 		bool create_for(const res::tag& picture);
+		// The texture desc Create Texture made (or would make) for `picture` when it is there and names this picture; empty:
+		// none. Read fresh from the disk.
+		res::tag texture_of_picture(const res::tag& picture) const;
 
 		// Where the viewers' preview cameras take the mouse from; for the viewers opened after.
 		void set_input_router(inp::input_router* router) { m_input_router = router; }
@@ -86,6 +96,8 @@ namespace edt
 		bool focus(const res::tag& source);
 		void add(const res::tag& source, std::shared_ptr<texture_viewer_panel> panel);
 		bool picture_in_top_layer(const res::tag& picture) const;
+		// A picture viewer's button: "Open Texture" when its texture is there, else "Create Texture" with why it is refused.
+		void refresh_picture(texture_viewer_panel& viewer, const res::tag& picture);
 
 		ports m_ports;
 		inp::input_router* m_input_router = nullptr;

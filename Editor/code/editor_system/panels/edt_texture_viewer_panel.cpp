@@ -61,9 +61,15 @@ void edt::texture_viewer_panel::on_render()
 {
 	m_stage.update();
 	ImGui::TextDisabled("%s", std::string(m_source.view()).c_str());
-	if (m_create) {
+	if (m_open_existing) {
+		// A copy: the owner sets the buttons again from inside the call.
+		if (ImGui::Button("Open Texture")) std::function<void()>(m_open_existing)();
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("The texture desc beside the picture names it: open it in the texture window.");
+		}
+	} else if (m_create) {
 		ImGui::BeginDisabled(!m_refusal.empty());
-		if (ImGui::Button("Create Texture")) m_create();
+		if (ImGui::Button("Create Texture")) std::function<void()>(m_create)();
 		ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 			ImGui::SetTooltip("%s", m_refusal.empty() ? "Write a texture desc beside the picture and open it in the texture window."

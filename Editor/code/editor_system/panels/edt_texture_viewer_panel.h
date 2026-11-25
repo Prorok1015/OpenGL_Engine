@@ -29,6 +29,9 @@ namespace edt
 		// A picture's "Create Texture"; `refusal` non-empty: the button is off and says why. Unset: no button.
 		void set_create(std::function<void()> create, std::string refusal);
 		void set_refusal(std::string refusal) { m_refusal = std::move(refusal); }
+		// A picture whose texture is there already: "Open Texture" in place of Create Texture. Empty: none.
+		void set_existing(std::function<void()> open) { m_open_existing = std::move(open); }
+		bool has_existing() const { return static_cast<bool>(m_open_existing); }
 		// What the last Create said when it failed; empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
 		void request_focus() { m_focus = true; }
@@ -53,6 +56,7 @@ namespace edt
 		preview_stage m_stage;
 		std::function<void()> m_on_close;
 		std::function<void()> m_create;
+		std::function<void()> m_open_existing;
 		std::string m_refusal;
 		std::string m_error;
 		bool m_focus = false;

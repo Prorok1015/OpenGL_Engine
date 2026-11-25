@@ -34,7 +34,8 @@ edt::asset_open_component::asset_open_component(ports from)
 		[this] { return m_ports.services.writable_resources(); },
 		[this] { return m_ports.resources.get_resource_layers(); },
 		[this] { return m_ports.write_blocker(); },
-		[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); } });
+		[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); },
+		[](std::string_view type) { return edt::initial_document_fields(type); } });
 	m_texture_viewers = std::make_unique<texture_viewer_host>(texture_viewer_host::ports{
 		.context = m_ports.context,
 		.services = m_ports.services,

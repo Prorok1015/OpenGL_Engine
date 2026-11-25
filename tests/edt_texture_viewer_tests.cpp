@@ -133,6 +133,7 @@ BOOST_AUTO_TEST_CASE(CreateTexture_WritesTheDescBesideThePicture_ThenOpensIt_And
 	BOOST_REQUIRE(viewer != nullptr);
 	BOOST_TEST(context->panels().find(viewer->get_id()) == viewer);
 	BOOST_TEST(viewer->refusal().empty(), viewer->refusal());
+	BOOST_TEST(!viewer->has_existing());
 
 	BOOST_REQUIRE(host->create_for(picture));
 	BOOST_TEST((opened == std::vector<std::string>{ "res://pictures/rock.txm.desc" }));
@@ -143,8 +144,9 @@ BOOST_AUTO_TEST_CASE(CreateTexture_WritesTheDescBesideThePicture_ThenOpensIt_And
 	BOOST_TEST(written.at("data").as_string() == "res://pictures/rock.png");
 	BOOST_TEST(written.size() == 4u);
 
-	// The name is taken now: the button says so and a second Create writes nothing.
-	BOOST_TEST(!viewer->refusal().empty());
+	// The texture is there now: the viewer offers to open it, and a second Create writes nothing.
+	BOOST_TEST(viewer->has_existing());
+	BOOST_TEST((host->texture_of_picture(picture) == res::tag{ "res://pictures/rock.txm.desc" }));
 	const std::string before = read("pictures/rock.txm.desc");
 	BOOST_TEST(!host->create_for(picture));
 	BOOST_TEST(read("pictures/rock.txm.desc") == before);
@@ -162,8 +164,33 @@ BOOST_AUTO_TEST_CASE(CreateTexture_IsRefused_ForAPictureOfALowerLayer_AndWhileTh
 	const res::tag picture = write(res_root, "own.png", "not decoded here");
 	blocker = "a project migration is running";
 	host->open_picture(picture);
+	edt::texture_viewer_panel* blocked = host->find(picture);
+	BOOST_REQUIRE(blocked != nullptr);
+	BOOST_TEST(blocked->refusal() == "a project migration is running");
 	BOOST_TEST(!host->create_for(picture));
 	BOOST_TEST(!fs::exists(res_root / "own.txm.desc"));
+	BOOST_TEST(opened.empty());
+}
+
+// A texture beside the picture that names it is opened from the viewer; one that names another picture refuses the name.
+BOOST_AUTO_TEST_CASE(AnExistingTexture_OfThePictureIsOpened_OfAnotherIsAReason)
+{
+	const res::tag rock = write(res_root, "rock.png", "not decoded here");
+	write(res_root, "rock.txm.desc",
+		R"json({"__type":"texture_2d_desc","__version":1,"__parent":"res://base_texture.desc","data":"res://rock.png"})json");
+	host->open_picture(rock);
+	edt::texture_viewer_panel* own = host->find(rock);
+	BOOST_REQUIRE(own != nullptr);
+	BOOST_TEST(own->has_existing());
+
+	const res::tag sand = write(res_root, "sand.png", "not decoded here");
+	write(res_root, "sand.txm.desc", R"json({"__type":"texture_2d_desc","__version":1,"data":"res://other.png"})json");
+	host->open_picture(sand);
+	edt::texture_viewer_panel* other = host->find(sand);
+	BOOST_REQUIRE(other != nullptr);
+	BOOST_TEST(!other->has_existing());
+	BOOST_TEST(other->refusal().find("already exists") != std::string::npos, other->refusal());
+	BOOST_TEST(!host->create_for(sand));
 	BOOST_TEST(opened.empty());
 }
 

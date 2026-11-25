@@ -47,8 +47,8 @@ namespace edt
 	std::span<const std::string_view> texture_filter_options();
 
 	// The texture window without ImGui (#1205): the sampling of a texture_2d_desc data document and the change of its source.
-	// Every change writes the whole effective header into the file's own `header` (the runtime merges it over the parents'
-	// anyway) and is one record of the document's history.
+	// A change writes only its key into the file's own `header`, next to the keys the file sets already (the runtime merges
+	// the header over the parents' key by key), and is one record of the document's history.
 	class texture_window_model
 	{
 	public:

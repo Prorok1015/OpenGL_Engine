@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -409,8 +410,18 @@ BOOST_AUTO_TEST_CASE(TexelsOfAnotherSizeOrSide_GiveNothing)
 	}
 	BOOST_TEST(!mdl::store_texels(four, 2, 2).pixels.empty());
 	BOOST_TEST(mdl::store_texels({}, 65535, 65535).raw.empty());
-	// Sides within the limit, pixels past the decoded size: refused before anything is allocated.
-	const mdl::stored_texels huge = mdl::store_texels({}, 16384, 16384);
+}
+
+// Sides within the limit, a span of exactly w*h*4 bytes, pixels past the decoded size: only the cap refuses it.
+BOOST_AUTO_TEST_CASE(TexelsPastTheDecodedSize_AreRefusedByTheCap_BeforeAnythingIsRead)
+{
+	constexpr std::uint32_t side = 16384;
+	constexpr std::uint64_t claimed = std::uint64_t{ side } * side * 4;
+	static_assert(claimed > res::image_format::max_picture_decoded_bytes);
+	// store_texels must refuse before it reads: the span claims 1 GiB over a few bytes, and nothing may touch past them.
+	static const std::byte few[16] = {};
+	const std::span<const std::byte> claimed_texels(few, static_cast<std::size_t>(claimed));
+	const mdl::stored_texels huge = mdl::store_texels(claimed_texels, side, side);
 	BOOST_TEST((huge.raw.empty() && huge.pixels.empty()));
 }
 

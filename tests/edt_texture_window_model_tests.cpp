@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE(TheEffectiveHeader_IsTheOwnOverTheParentsOverTheDefaults)
 	BOOST_TEST(defaults.mip_levels() == 1);
 }
 
-BOOST_AUTO_TEST_CASE(EachSamplingChange_WritesTheWholeHeader_AsOneRecord_AndIsSaved)
+BOOST_AUTO_TEST_CASE(EachSamplingChange_WritesOnlyItsKey_AsOneRecord_AndIsSaved)
 {
 	const res::tag tag = put("pictures/rock.txm.desc", k_imported);
 	edt::data_document& data = open(tag);
@@ -182,15 +182,19 @@ BOOST_AUTO_TEST_CASE(EachSamplingChange_WritesTheWholeHeader_AsOneRecord_AndIsSa
 
 	BOOST_REQUIRE(model.set_wrap("repeat_mirror"));
 	BOOST_TEST(data.history().size() == records + 1);
-	BOOST_TEST((own_header(data) == model.effective_header()));
-	BOOST_TEST(own_header(data).at("mag").as_string() == "nearest");
-	BOOST_TEST(own_header(data).at("data").as_object().at("format").as_string() == "RGBA8");
+	const json::object first_change{ { "wrap", "repeat_mirror" }, { "min", "linear_mipmap_nearest" },
+		{ "data", json::object{ { "mip_levels", 4 } } } };
+	BOOST_TEST((own_header(data) == first_change));
+	BOOST_TEST(model.mag_filter() == "nearest");
 
 	BOOST_REQUIRE(model.set_min("nearest"));
 	BOOST_REQUIRE(model.set_mag("linear"));
 	BOOST_REQUIRE(model.set_mip_levels(0));
 	BOOST_TEST(data.history().size() == records + 4);
 	BOOST_TEST(model.mip_levels() == 1);
+	const json::object every_change{ { "wrap", "repeat_mirror" }, { "min", "nearest" }, { "data", json::object{ { "mip_levels", 1 } } },
+		{ "mag", "linear" } };
+	BOOST_TEST((own_header(data) == every_change));
 	// The same value again, or one that is no option, changes nothing.
 	BOOST_TEST(!model.set_mip_levels(1));
 	BOOST_TEST(!model.set_wrap("repeat_mirror"));
@@ -205,6 +209,26 @@ BOOST_AUTO_TEST_CASE(EachSamplingChange_WritesTheWholeHeader_AsOneRecord_AndIsSa
 	BOOST_TEST(reread.mag_filter() == "linear");
 	BOOST_TEST(reread.mip_levels() == 1);
 	BOOST_TEST(std::string(again.own().at("data").as_string()) == "res://pictures/rock.png");
+}
+
+// The child sets only its wrap: what its parent says of the rest still reaches it after the change.
+BOOST_AUTO_TEST_CASE(AParentsChange_StillReachesAChildThatSetOnlyItsWrap)
+{
+	const res::tag child = put("child.txm.desc",
+		R"json({"__type":"texture_2d_desc","__version":1,"__parent":"res://base_texture.desc","data":"res://pictures/rock.png"})json");
+	edt::data_document& data = open(child);
+	edt::texture_window_model model(data);
+	BOOST_REQUIRE(model.set_wrap("repeat"));
+	BOOST_TEST((own_header(data) == json::object{ { "wrap", "repeat" } }));
+	BOOST_REQUIRE(data.save().saved);
+
+	json::object parent = json::parse(read("base_texture.desc")).as_object();
+	parent["header"].as_object()["mag"] = "linear";
+	put("base_texture.desc", json::serialize(parent));
+	edt::data_document& again = open(child);
+	const edt::texture_window_model reread(again);
+	BOOST_TEST(reread.wrap() == "repeat");
+	BOOST_TEST(reread.mag_filter() == "linear");
 }
 
 BOOST_AUTO_TEST_CASE(AnUndo_TakesASamplingChangeBack)

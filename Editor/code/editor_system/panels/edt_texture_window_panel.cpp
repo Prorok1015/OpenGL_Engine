@@ -101,7 +101,8 @@ edt::texture_window_panel::texture_window_panel(data_document& document, editor_
 	, m_render(view.render)
 	, m_content(texture_preview_source{
 		.body = [&document] { return boost::json::value(document.own()); },
-		.generation = [&document] { return document.generation(); } }, services)
+		.generation = [&document] { return document.generation(); },
+		.parent = {} }, services)
 	, m_stage(services, m_content, view)
 {
 }
@@ -169,7 +170,7 @@ void edt::texture_window_panel::draw_file_picker()
 	if (ImGui::InputTextWithHint("##query", "search", buffer, sizeof(buffer))) {
 		m_query = buffer;
 	}
-	const picker::filter wanted{ .kind = desc::field_kind::res_tag, .extensions = std::string(k_picture_extensions) };
+	const picker::filter wanted{ .kind = desc::field_kind::res_tag, .ref_type = {}, .extensions = std::string(k_picture_extensions) };
 	const picker::candidates_page& page = picker::cached_candidates(m_page, *catalog, wanted, m_query, k_picker_rows);
 	ImGui::TextDisabled("%zu files", page.total);
 	if (ImGui::BeginChild("##list", ImVec2(em(420.f), em(260.f)))) {

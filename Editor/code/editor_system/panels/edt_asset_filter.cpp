@@ -1,5 +1,6 @@
 #include "edt_asset_filter.h"
 #include "edt_asset_database.h"
+#include "edt_asset_kind_names.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/platform/plt_beneath.h>
 #include <algorithm>
@@ -42,13 +43,11 @@ namespace {
 		return {};
 	}
 
-	// A built-in kind of the registry that is one of the fixed kinds: the modeller's poly is a mesh, a texture desc and a
-	// picture are textures (#1205). Empty: none.
-	std::string_view fixed_kind_of_registered(std::string_view id)
+	// The kind of the browser's filter for a kind of the registry: the modeller's poly is a mesh here, the rest as agents see it.
+	std::string_view filter_kind_of_registered(std::string_view id)
 	{
 		if (id == "poly") return edt::k_asset_kind_mesh;
-		if (id == "texture_2d_desc" || id.starts_with("picture.")) return "texture";
-		return {};
+		return edt::outward_kind_name(id);
 	}
 
 	std::string_view label_of(std::string_view id)
@@ -79,8 +78,7 @@ std::string edt::asset_kind_of(const asset_kind_registry* kinds, std::string_vie
 	if (kinds) {
 		if (const asset_kind_desc* registered = kinds->kind_for_open(path)) {
 			if (!registered->id.empty()) {
-				const std::string_view fixed = fixed_kind_of_registered(registered->id);
-				return fixed.empty() ? registered->id : std::string{ fixed };
+				return std::string{ filter_kind_of_registered(registered->id) };
 			}
 		}
 	}
@@ -235,7 +233,7 @@ std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_reg
 		for (const std::string& id : kinds->ids()) {
 			const asset_kind_desc* registered = kinds->find(id);
 			const bool opens = registered && registered->open;
-			const bool known = !fixed_kind_of_registered(id).empty() || id == "desc"
+			const bool known = filter_kind_of_registered(id) != id || id == "desc"
 				|| std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
 			if (opens && !known) {
 				out.push_back({ id, id });

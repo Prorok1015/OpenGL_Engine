@@ -1,4 +1,5 @@
 #include "edt_state_commands.h"
+#include "edt_asset_kind_names.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_services.h>
@@ -773,8 +774,8 @@ namespace {
 
 	std::string kind_of_asset(const edt::asset_kind_registry& kinds, const std::string& path)
 	{
-		if (const auto* kind = kinds.kind_for_open(path)) return kind->id;
-		if (const auto* kind = kinds.kind_for_drop(path)) return kind->id;
+		if (const auto* kind = kinds.kind_for_open(path)) return std::string(edt::outward_kind_name(kind->id));
+		if (const auto* kind = kinds.kind_for_drop(path)) return std::string(edt::outward_kind_name(kind->id));
 		return {};
 	}
 

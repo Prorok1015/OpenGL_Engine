@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -34,11 +35,25 @@ edt::picture_texture edt::picture_texture_of(const res::tag& picture)
 	return out;
 }
 
+json::object edt::initial_document_fields(std::string_view type)
+{
+	if (type == k_texture_type) return json::object{ { "__parent", k_base_texture } };
+	return {};
+}
+
 std::string edt::picture_texture_refusal(const document_creator& creator, const res::tag& picture, bool in_top_layer)
 {
 	if (!in_top_layer) return "The picture is not in the project's own layer: a texture of it would be the project's, apart from it.";
+	if (const std::optional<std::string> why = creator.blocker()) return *why;
 	const picture_texture planned = picture_texture_of(picture);
 	return creator.check(planned.folder, k_texture_type, planned.name);
+}
+
+res::tag edt::picture_texture_tag(const document_creator& creator, const res::tag& picture)
+{
+	const picture_texture planned = picture_texture_of(picture);
+	const std::string file = creator.file_name_of(k_texture_type, planned.name);
+	return res::tag::make(planned.folder.empty() ? file : std::format("{}/{}", planned.folder, file));
 }
 
 edt::document_creation edt::create_picture_texture(const document_creator& creator, const res::tag& picture)
@@ -116,11 +131,39 @@ void edt::texture_viewer_host::open_picture(const res::tag& picture)
 	auto panel = std::make_shared<texture_viewer_panel>(std::format("texture_viewer:{}", ++m_serial), picture, std::move(preview),
 		texture_source_of(json::value(body)), 1, m_ports.services,
 		preview_view{ .render = &m_ports.context.render(), .gui = &m_ports.context.gui(), .input = m_input_router });
-	const document_creator* creator = m_ports.creator ? m_ports.creator() : nullptr;
-	if (creator) {
-		panel->set_create([this, picture] { create_for(picture); }, picture_texture_refusal(*creator, picture, picture_in_top_layer(picture)));
-	}
+	texture_viewer_panel& viewer = *panel;
 	add(picture, std::move(panel));
+	refresh_picture(viewer, picture);
+}
+
+res::tag edt::texture_viewer_host::texture_of_picture(const res::tag& picture) const
+{
+	const document_creator* creator = m_ports.creator ? m_ports.creator() : nullptr;
+	res::resource_system* resources = m_ports.services.resources();
+	const desc::desc_system* descs = m_ports.services.descs();
+	if (!creator || !resources || !descs || !m_ports.layout) return {};
+	const res::tag texture = picture_texture_tag(*creator, picture);
+	const desc_file_read read = read_desc_file(*resources, *descs, m_ports.layout(), texture);
+	if (!read.error.empty()) return {};
+	boost::system::error_code ec;
+	const json::value file = json::parse(std::string_view(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size()), ec);
+	if (ec) return {};
+	const texture_source source = texture_source_of(file);
+	return source.from == texture_source::kind::file && source.file == picture.view() ? texture : res::tag{};
+}
+
+void edt::texture_viewer_host::refresh_picture(texture_viewer_panel& viewer, const res::tag& picture)
+{
+	if (const res::tag existing = texture_of_picture(picture); existing.is_valid()) {
+		viewer.set_existing([this, existing] {
+			if (m_ports.open_texture) m_ports.open_texture(existing);
+		});
+		return;
+	}
+	viewer.set_existing({});
+	const document_creator* creator = m_ports.creator ? m_ports.creator() : nullptr;
+	if (!creator) return;
+	viewer.set_create([this, picture] { create_for(picture); }, picture_texture_refusal(*creator, picture, picture_in_top_layer(picture)));
 }
 
 bool edt::texture_viewer_host::is_lower_layer_desc(const res::tag& tag) const
@@ -166,12 +209,12 @@ bool edt::texture_viewer_host::create_for(const res::tag& picture)
 	if (!made.ok()) {
 		egLOG_WARN("editor", "No texture was made for '{}': {}", picture.view(), made.error);
 		panel->set_error(made.error);
-		panel->set_refusal(picture_texture_refusal(*creator, picture, picture_in_top_layer(picture)));
+		refresh_picture(*panel, picture);
 		return false;
 	}
 	panel->set_error({});
-	// The name is taken now: the button says so.
-	panel->set_refusal(picture_texture_refusal(*creator, picture, picture_in_top_layer(picture)));
+	// The texture is there now: the button opens it.
+	refresh_picture(*panel, picture);
 	if (m_ports.open_texture) m_ports.open_texture(made.tag);
 	return true;
 }

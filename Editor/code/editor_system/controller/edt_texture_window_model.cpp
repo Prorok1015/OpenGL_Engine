@@ -138,10 +138,15 @@ int edt::texture_window_model::mip_levels() const
 
 bool edt::texture_window_model::write_header(const std::function<void(json::object& header)>& change)
 {
-	json::object header = effective_header();
-	const json::object before = header;
+	json::object effective = effective_header();
+	const json::object before = effective;
+	change(effective);
+	if (effective == before) return false;
+	// Only the changed key goes into the file's own header, over what it sets already: a parent's later change of any other
+	// key still reaches this texture. The edit records a custom field whole, so `header` is written as given.
+	const json::value* own = m_document.own().if_contains("header");
+	json::object header = own && own->is_object() ? own->as_object() : json::object{};
 	change(header);
-	if (header == before) return false;
 	// A choice is a click, not a drag: a record of its own, apart from an edit of a field still pending.
 	m_document.commit_pending();
 	const bool changed = m_document.edit([&header](json::value& shown) {

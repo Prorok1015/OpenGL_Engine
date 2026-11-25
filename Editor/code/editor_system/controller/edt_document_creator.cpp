@@ -140,7 +140,7 @@ std::string edt::document_creator::check_file(std::string_view folder, std::stri
 
 edt::document_creation edt::document_creator::create(std::string_view folder, std::string_view type, std::string_view name) const
 {
-	return create(folder, type, name, json::object{});
+	return create(folder, type, name, m_ports.initial_fields ? m_ports.initial_fields(type) : json::object{});
 }
 
 edt::document_creation edt::document_creator::create(std::string_view folder, std::string_view type, std::string_view name,

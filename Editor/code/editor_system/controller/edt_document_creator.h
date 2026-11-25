@@ -45,12 +45,17 @@ namespace edt
 			// type names the suffix of that type's files ("shader_desc" -> ".shader.desc", #1263). Null: every type
 			// gets ".desc".
 			std::function<std::vector<std::pair<std::string, std::string>>()> desc_kinds = {};
+			// The first own fields a new document of a type gets from create(folder, type, name) (a texture: its
+			// `__parent`, #1205). Null or empty: none.
+			std::function<boost::json::object(std::string_view type)> initial_fields = {};
 		};
 
 		explicit document_creator(ports wired) : m_ports(std::move(wired)) {}
 
 		// The desc types that are documents, by name.
 		std::vector<std::string> types() const;
+		// Why nothing may be written now (ports::blocker); nullopt: create() may write.
+		std::optional<std::string> blocker() const { return m_ports.blocker ? m_ports.blocker() : std::nullopt; }
 
 		// `name` ending with `suffix`: the longest of `suffix`, ".desc", one of `tails` or `suffix` without its
 		// ".desc" that ends the name (in any letter case) is replaced. "a" -> "a.desc", "A.DESC" -> "A.desc"; with
@@ -74,11 +79,12 @@ namespace edt
 		// The same for the file a document of `type` gets (file_name_of).
 		std::string check(std::string_view folder, std::string_view type, std::string_view name) const;
 
-		// Writes `{"__type", "__version"}` and nothing else (the fields read as the schema's defaults, the ID of the file is
-		// the asset database's). The file is made by create_sync: never over a file, also one that appears meanwhile.
+		// Writes `{"__type", "__version"}` and the type's initial fields (ports::initial_fields), nothing else (the fields read
+		// as the schema's defaults, the ID of the file is the asset database's). The file is made by create_sync: never over a
+		// file, also one that appears meanwhile.
 		document_creation create(std::string_view folder, std::string_view type, std::string_view name) const;
 		// The same with the file's first own fields after `__type` and `__version` (a texture made for a picture: its
-		// `__parent` and `data`, #1205); a `__type` or `__version` among them is not taken.
+		// `__parent` and `data`, #1205) in place of the type's initial ones; a `__type` or `__version` among them is not taken.
 		document_creation create(std::string_view folder, std::string_view type, std::string_view name,
 			const boost::json::object& fields) const;
 

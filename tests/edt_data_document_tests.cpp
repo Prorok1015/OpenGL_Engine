@@ -4,6 +4,7 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
+#include "edt_texture_viewer_host.h"
 #include "edt_migration_startup.h"
 #include "edt_version_notice.h"
 #include "test_fake_asset_catalog.hpp"
@@ -1925,6 +1926,28 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_CreateWithFields_WritesThemAfterTheTypeAndV
 	const edt::document_creation refused = creator.create("", "test.config", "other", fields);
 	BOOST_TEST(refused.error == "a project migration is running");
 	BOOST_TEST(!fs::exists(res_root / "other.desc"));
+}
+
+// #1205: Create Document gives a type its initial fields; the editor gives a texture the base texture as its parent.
+BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypesInitialFields)
+{
+	edt::document_creator::ports wired{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	wired.initial_fields = [](std::string_view type) {
+		return type == "test.config" ? json::object{ { "speed", 7.0 } } : json::object{};
+	};
+	const edt::document_creator creator{ std::move(wired) };
+	const edt::document_creation config = creator.create("", "test.config", "seeded");
+	BOOST_REQUIRE_MESSAGE(config.ok(), config.error);
+	BOOST_TEST(parsed("seeded.desc").at("speed").to_number<double>() == 7.0);
+	const edt::document_creation tagged = creator.create("", "test.tagged", "bare");
+	BOOST_REQUIRE_MESSAGE(tagged.ok(), tagged.error);
+	BOOST_TEST(parsed("bare.desc").size() == 2u);
+
+	const json::object texture = edt::initial_document_fields("texture_2d_desc");
+	BOOST_TEST(texture.at("__parent").as_string() == "res://base_texture.desc");
+	BOOST_TEST(texture.size() == 1u);
+	BOOST_TEST(edt::initial_document_fields("test.config").empty());
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_InAFolderThatDoesNotExistYet_MakesItInTheTopLayer)
