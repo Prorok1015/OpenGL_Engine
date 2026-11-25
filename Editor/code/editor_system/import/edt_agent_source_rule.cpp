@@ -1,7 +1,9 @@
 #include "edt_agent_source_rule.h"
 #include "edt_agent_log_filter.h"
 #include <snk/common/fs_paths.h>
+#include <snk/common/text_escape.h>
 #include <algorithm>
+#include <array>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -58,13 +60,22 @@ namespace
 		return {};
 	}
 
+	// The file systems of a local disk (or of memory): an allow-list, so a network, automount, FUSE or system one
+	// (proc, sysfs, devtmpfs...) and any type not known here is refused.
+	constexpr std::array<std::string_view, 14> k_local_mount_types = { "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs",
+		"f2fs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "tmpfs", "overlay" };
+
 	std::string posix_volume_problem(std::span<const std::string_view> parts, const edt::source_volume_ports& ports)
 	{
-		const std::optional<std::string> table = ports.mount_table ? ports.mount_table() : std::nullopt;
-		if (!table) return "the mount table cannot be read: an agent's source cannot be told to be on a local disk";
 		std::string normal;
 		for (const std::string_view part : parts) normal += "/" + std::string(part);
 		if (normal.empty()) normal = "/";
+		// /proc/self/root/... and the like reach any file of the system through the proc mount.
+		if (normal == "/proc" || normal.starts_with("/proc/")) {
+			return "the source is under /proc: an agent may import only from a local disk";
+		}
+		const std::optional<std::string> table = ports.mount_table ? ports.mount_table() : std::nullopt;
+		if (!table) return "the mount table cannot be read: an agent's source cannot be told to be on a local disk";
 		// The longest mount point on component boundaries holds the path; a later line over the same point wins.
 		const edt::agent_log_mount* holder = nullptr;
 		const std::vector<edt::agent_log_mount> mounts = edt::agent_log_mounts(*table);
@@ -75,8 +86,10 @@ namespace
 			if (under && (holder == nullptr || point.size() >= holder->point.size())) holder = &mount;
 		}
 		if (holder == nullptr) return "no mount of the mount table holds the source";
-		if (holder->remote) {
-			return "the source is on a network or automount file system: an agent may import only from a local disk";
+		if (std::ranges::find(k_local_mount_types, holder->type) == k_local_mount_types.end()) {
+			return std::format("the source is on a '{}' file system, which is no local disk one (a network, automount, "
+				"FUSE or system file system): an agent may import only from a local disk",
+				text_escape::escaped_text(holder->type, 64));
 		}
 		return {};
 	}
@@ -163,17 +176,31 @@ std::string edt::agent_source_path_problem(std::string_view path)
 
 std::string edt::without_paths(std::string text, const std::vector<fs::path>& roots, const fs::path& source)
 {
+	// Longest spelling first, whoever it belongs to: a source inside a root is named by its file name, a root inside
+	// the source's folder still reads res://.
+	std::vector<std::pair<std::string, std::string>> replacements;
 	if (!source.empty()) {
 		const std::string name = fs_paths::utf8_of(source.filename());
-		for (const std::string& spelling : spellings_of(source)) replace_all(text, spelling, name);
+		for (std::string& spelling : spellings_of(source)) replacements.emplace_back(std::move(spelling), name);
+		// A decoder's error may name a side file beside the source: its folder is no business of an agent's either.
+		// A root ("/", "C:/") is left: every path would lose its first separator.
+		const fs::path folder = source.parent_path();
+		if (folder.has_relative_path()) {
+			for (std::string& spelling : spellings_of(folder)) {
+				replacements.emplace_back(std::move(spelling), std::string(k_source_folder_text));
+			}
+		}
 	}
 	for (const fs::path& root : roots) {
 		if (root.empty()) continue;
 		for (const std::string& spelling : spellings_of(root)) {
-			replace_all(text, spelling + "/", "res://");
-			replace_all(text, spelling + "\\", "res://");
-			replace_all(text, spelling, "res://");
+			replacements.emplace_back(spelling + "/", "res://");
+			replacements.emplace_back(spelling + "\\", "res://");
+			replacements.emplace_back(spelling, "res://");
 		}
 	}
+	const auto longer = [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); };
+	std::ranges::stable_sort(replacements, longer);
+	for (const auto& [from, to] : replacements) replace_all(text, from, to);
 	return text;
 }

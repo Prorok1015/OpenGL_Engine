@@ -159,8 +159,10 @@ namespace edt
 
 		// What the person is asked for an agent's call: the source as given, the four files and the settings; or why
 		// the call will be refused. Never looks at the source on the disk (only the project's layers). Remembers the
-		// plan for the start that follows. A person's call is described from the disk.
-		std::optional<std::string> describe(const image_import_request& request, const cmd::origin& caller);
+		// plan for the start that follows, bound to `ticket` (the id of the question the registry is about to put,
+		// cmd::call::confirmation; empty for a call it allows). A person's call is described from the disk.
+		std::optional<std::string> describe(const image_import_request& request, const cmd::origin& caller,
+			std::string_view ticket = {});
 
 		struct started
 		{
@@ -172,8 +174,9 @@ namespace edt
 		// Anyone but a person needs the plan describe remembered for exactly this call: the command registry runs a
 		// call the policy asks about only with an approved ticket, and describes every allowed call first
 		// (describe_before_allowed_invoke). The job reads the picture, proves it decodes and writes the files; its
-		// result is {image, resource, texture, texture_resource, guid, texture_guid}.
-		started start(const image_import_request& request, const cmd::origin& caller);
+		// result is {image, resource, texture, texture_resource, guid, texture_guid}. `ticket` (the call's
+		// confirmation) must be the one the plan was described with: an approved call runs the plan of its own question.
+		started start(const image_import_request& request, const cmd::origin& caller, std::string_view ticket = {});
 
 		// Empty when `bytes` are a png or jpeg (matching `extension`) that decodes within the picture adapter's limits.
 		static std::string image_problem(std::span<const std::byte> bytes, std::string_view extension);
@@ -194,6 +197,7 @@ namespace edt
 		{
 			std::string key;
 			std::string session;
+			std::string ticket;
 			image_import_plan plan;
 			std::chrono::steady_clock::time_point at;
 		};
@@ -205,8 +209,9 @@ namespace edt
 			image_import_plan& plan) const;
 		// An agent's plan for the question, from the text of the request only.
 		image_import_plan text_plan(const image_import_request& request) const;
-		void remember(std::string key, std::string session, image_import_plan plan);
-		std::optional<image_import_plan> take(const std::string& key);
+		void remember(std::string key, std::string session, std::string ticket, image_import_plan plan);
+		// The plan remembered for `key` is used up either way; it comes back only when it was described for `ticket`.
+		std::optional<image_import_plan> take(const std::string& key, std::string_view ticket);
 
 		job_service& m_jobs;
 		image_import_options m_options;

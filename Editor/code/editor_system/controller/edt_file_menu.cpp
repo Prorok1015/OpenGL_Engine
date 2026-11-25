@@ -535,7 +535,7 @@ void edt::file_menu::register_image_import()
 	command.mutates = true;
 	command.invoke = [this, request_of](const cmd::call& request) {
 		const image_importer::started started =
-			m_hooks.image_import->start(request_of(request.args.as_object()), request.from);
+			m_hooks.image_import->start(request_of(request.args.as_object()), request.from, request.confirmation);
 		if (!started.ok()) return action_result::failure(started.code, started.error);
 		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
 	};
@@ -565,10 +565,11 @@ void edt::file_menu::register_image_import()
 	command.category = cmd::agent_category::scene_edit;
 	command.risk = cmd::danger::confirm;
 	command.describe = [this, request_of](const cmd::call& request) -> std::optional<std::string> {
-		return m_hooks.image_import->describe(request_of(request.args.as_object()), request.from);
+		return m_hooks.image_import->describe(request_of(request.args.as_object()), request.from, request.confirmation);
 	};
 	// The registry describes a call the policy allows only with this set (cmd_registry.cpp, apply_policy), and the
-	// import runs an agent's call only with the plan describe remembered for it.
+	// import runs an agent's call only with the plan describe remembered for it. The confirmation describe gets is the
+	// id of the question being put (set only with this flag); the plan is bound to it.
 	command.describe_before_allowed_invoke = true;
 	command.starts_job = true;
 	action_ui ui;
@@ -729,7 +730,7 @@ void edt::file_menu::register_actions()
 
 	// A command_desc for describe_before_allowed_invoke: the registry describes a call the policy allows right before
 	// it runs (cmd_registry.cpp, apply_policy), and the import runs an agent's call only with the plan describe
-	// remembered for it.
+	// remembered for it, bound to the id of the question being put (the confirmation describe gets with this flag).
 	cmd::command_desc import_command;
 	import_command.id = "file.import_model";
 	import_command.summary = "Import Model...";
@@ -746,7 +747,8 @@ void edt::file_menu::register_actions()
 		}
 		// An agent, or a person naming the asset and its folder: no dialog, one background job.
 		if (m_hooks.agent_import == nullptr) return action_result::failure(cmd::codes::disabled, IMPORT_UNAVAILABLE);
-		const agent_model_import::started started = m_hooks.agent_import->start(import_request_of(args), request.from);
+		const agent_model_import::started started =
+			m_hooks.agent_import->start(import_request_of(args), request.from, request.confirmation);
 		if (!started.ok()) return action_result::failure(started.code, started.error);
 		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
 	};
@@ -783,7 +785,8 @@ void edt::file_menu::register_actions()
 	import_command.risk = cmd::danger::confirm;
 	import_command.describe = [this, import_request_of](const cmd::call& request) -> std::optional<std::string> {
 		if (m_hooks.agent_import == nullptr) return std::nullopt;
-		return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from);
+		return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from,
+			request.confirmation);
 	};
 	import_command.describe_before_allowed_invoke = true;
 	import_command.starts_job = true;

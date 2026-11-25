@@ -320,7 +320,7 @@ edt::source_volume_ports edt::image_importer::volumes() const
 	return ports;
 }
 
-void edt::image_importer::remember(std::string key, std::string session, image_import_plan plan)
+void edt::image_importer::remember(std::string key, std::string session, std::string ticket, image_import_plan plan)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& item) { return item.key == key || at - item.at > k_shown_lifetime; });
@@ -328,17 +328,19 @@ void edt::image_importer::remember(std::string key, std::string session, image_i
 	if (static_cast<std::size_t>(std::ranges::count_if(m_shown, of_session)) >= k_max_shown) {
 		m_shown.erase(std::ranges::find_if(m_shown, of_session));
 	}
-	m_shown.push_back({ std::move(key), std::move(session), std::move(plan), at });
+	m_shown.push_back({ std::move(key), std::move(session), std::move(ticket), std::move(plan), at });
 }
 
-std::optional<edt::image_import_plan> edt::image_importer::take(const std::string& key)
+std::optional<edt::image_import_plan> edt::image_importer::take(const std::string& key, std::string_view ticket)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& item) { return at - item.at > k_shown_lifetime; });
 	const auto found = std::ranges::find_if(m_shown, [&](const shown_plan& item) { return item.key == key; });
 	if (found == m_shown.end()) return std::nullopt;
+	const bool same_ticket = found->ticket == ticket;
 	image_import_plan plan = std::move(found->plan);
 	m_shown.erase(found);
+	if (!same_ticket) return std::nullopt;
 	return plan;
 }
 
@@ -496,7 +498,8 @@ void edt::image_importer::plan_targets(const image_import_request& request, std:
 	if (running()) return refuse(cmd::codes::busy, "an image import is already running");
 }
 
-std::optional<std::string> edt::image_importer::describe(const image_import_request& request, const cmd::origin& caller)
+std::optional<std::string> edt::image_importer::describe(const image_import_request& request, const cmd::origin& caller,
+	std::string_view ticket)
 {
 	const bool person = caller.kind == cmd::origin_kind::ui;
 	image_import_plan plan = person ? resolve(request, true) : text_plan(request);
@@ -507,23 +510,26 @@ std::optional<std::string> edt::image_importer::describe(const image_import_requ
 		shown(fs_paths::generic_utf8_of(plan.source)), size, shown(plan.image.view()), shown(plan.meta.view()),
 		image_wrap_name(plan.settings.wrap), image_filter_name(plan.settings.filter), plan.settings.mips ? "on" : "off",
 		shown(plan.texture.view()), shown(plan.texture_meta.view()));
-	remember(call_key(request, caller), caller.session, std::move(plan));
+	remember(call_key(request, caller), caller.session, std::string(ticket), std::move(plan));
 	return text;
 }
 
-edt::image_importer::started edt::image_importer::start(const image_import_request& request, const cmd::origin& caller)
+edt::image_importer::started edt::image_importer::start(const image_import_request& request, const cmd::origin& caller,
+	std::string_view ticket)
 {
 	// A person's own call is the approval. Anyone else needs the plan describe remembered for exactly this call: the
 	// registry invokes an agent's call the policy asks about only after a person approved its ticket, and describes a
 	// call the policy allows right before it runs (describe_before_allowed_invoke). Without that plan nothing is looked
-	// at; with it, the source is looked at on the disk here for the first time, after the text rule once more.
+	// at; with it, the source is looked at on the disk here for the first time, after the text rule once more. The
+	// registry describes an asked call with its ticket's id and hands the command that id only once a person approved
+	// it; an allowed call is described and run without one: either way the two must match.
 	const bool person = caller.kind == cmd::origin_kind::ui;
 	std::optional<image_import_plan> shown_plan;
 	if (!person) {
-		shown_plan = take(call_key(request, caller));
+		shown_plan = take(call_key(request, caller), ticket);
 		if (!shown_plan) {
-			return { 0, cmd::codes::denied,
-				"this import was not shown to a person or described before it ran, or that is too old: ask again" };
+			return { 0, cmd::codes::denied, "this import was not shown to a person or described before it ran, "
+				"its approval was given for another question, or that is too old: ask again" };
 		}
 		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
 			return { 0, cmd::codes::invalid_args, std::move(why) };

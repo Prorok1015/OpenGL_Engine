@@ -950,6 +950,43 @@ BOOST_AUTO_TEST_CASE(Progress_StartsAtTheModelAndIsReportedToTheJob)
 	BOOST_CHECK_EQUAL(note, "Reading the model");
 }
 
+BOOST_AUTO_TEST_CASE(Start_RunsOnlyThePlanOfItsOwnTicket)
+{
+	// Described for one question: a call without that ticket, or with another, uses the plan up and runs nothing.
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent).code, cmd::codes::denied);
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-b").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(scans, 0);
+	// Described without one (an allowed call) and run with one: refused too.
+	BOOST_REQUIRE(service->describe(request(), agent).has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	const auto started = service->start(request(), agent, "ticket-a");
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK_EQUAL(imports, 1);
+}
+
+// A decoder's error that names a side file by its absolute path reaches the agent without this machine's folders.
+BOOST_AUTO_TEST_CASE(AJobsError_NamesNoFolderOfTheSource)
+{
+	scan_error = "cannot read '" + fs_paths::generic_utf8_of(source.parent_path() / "textures" / "skin.png") + "' of "
+		+ fs_paths::utf8_of(source);
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs_until_settled(started.job);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("<source folder>/textures/skin.png") != std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find("robot.glb") != std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find(fs_paths::utf8_of(source.parent_path())) == std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find("unit_test_tmp") == std::string::npos, info->error);
+}
+
 BOOST_AUTO_TEST_CASE(APersonsOwnCall_NeedsNoApproval)
 {
 	const auto started = service->start(request("mine", "models"), cmd::origin::ui());
@@ -1151,8 +1188,9 @@ BOOST_AUTO_TEST_CASE(APerson_WithOnlyAPath_GetsTheDialogAsBefore)
 
 BOOST_AUTO_TEST_CASE(AnAgent_GetsTheBackgroundImport_NeverTheDialog)
 {
-	// Asked for: the registry puts the question, then runs the call with its ticket.
-	const std::optional<std::string> text = actions.commands().find("file.import_model")->describe({ json::parse(path_json()), agent });
+	// Asked for: the registry puts the question (described with its ticket), then runs the call with that ticket.
+	const cmd::command_desc* command = actions.commands().find("file.import_model");
+	const std::optional<std::string> text = command->describe({ json::parse(path_json()), agent, 0, "ticket" });
 	BOOST_REQUIRE(text.has_value());
 	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
 
@@ -1220,6 +1258,23 @@ BOOST_AUTO_TEST_CASE(AnAgentsCall_WithATicketNotApprovedOrRejected_IsDenied_AnAp
 	run_jobs_until_settled(static_cast<std::uint64_t>(ran.value.as_object().at("job").as_int64()));
 	BOOST_CHECK(fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
 	actions.commands().set_policy_gate(nullptr);
+}
+
+// The plan is bound to the question it was made for: a call with another ticket, or none, after the person rejected it
+// runs nothing; the source was never looked at.
+BOOST_AUTO_TEST_CASE(APlanDescribedForARejectedTicket_RunsForNoOtherCall)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const cmd::result asked = call(agent, path_json());
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	actions.commands().discard(std::string(asked.value.at("ticket").as_string()));
+	// No gate judges these calls: the import alone holds the line.
+	actions.commands().set_policy_gate(nullptr);
+	BOOST_CHECK_EQUAL(call(agent, path_json()).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(call(agent, path_json(), "another-ticket").code, cmd::codes::denied);
+	run_jobs();
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
 }
 
 BOOST_AUTO_TEST_CASE(AnAgent_CannotUseTheDialogPathByNamingNothing)

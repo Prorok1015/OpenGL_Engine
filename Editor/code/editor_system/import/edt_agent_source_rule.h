@@ -39,13 +39,18 @@ namespace edt
 	// gave it, or as it resolved) may not be read for an agent; empty when it may. The text alone decides, plus the
 	// drive table or the mount table: the path itself is never looked at. Refused: UNC and device paths (two leading
 	// separators, `\??\`), a `.` or `..` component; Windows: no drive letter, a drive that is not
-	// DRIVE_FIXED/DRIVE_REMOVABLE; POSIX: a path whose longest mount point is a network or automount one
-	// (agent_log_mounts).
+	// DRIVE_FIXED/DRIVE_REMOVABLE; POSIX: a path under /proc, or whose longest mount point (agent_log_mounts) has a
+	// type outside the allow-list of local file systems (ext2/3/4, xfs, btrfs, zfs, f2fs, vfat, exfat, ntfs, ntfs3,
+	// fuseblk, tmpfs, overlay).
 	std::string agent_source_path_problem(std::string_view path, const source_volume_ports& ports);
 	std::string agent_source_path_problem(std::string_view path);
 
-	// `text` with every spelling of each of `roots` read as res:// and of `source` (when given) as its file name: what
-	// an error that reaches an agent may hold of this machine's paths.
+	// What stands in for the folder of the source in an error an agent reads.
+	inline constexpr std::string_view k_source_folder_text = "<source folder>";
+
+	// `text` with every spelling of each of `roots` read as res://, of `source` (when given) as its file name and of
+	// the source's folder as k_source_folder_text (a side file a decoder names): what an error that reaches an agent
+	// may hold of this machine's paths.
 	std::string without_paths(std::string text, const std::vector<std::filesystem::path>& roots,
 		const std::filesystem::path& source);
 }

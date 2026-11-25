@@ -419,7 +419,8 @@ std::string edt::agent_model_import::call_key(const agent_import_request& reques
 	return scan_key(request, caller) + "|" + request.files_token;
 }
 
-void edt::agent_model_import::remember(std::string key, std::string session, agent_import_plan plan)
+void edt::agent_model_import::remember(std::string key, std::string session, std::string ticket,
+	agent_import_plan plan)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key || at - shown.at > k_shown_lifetime; });
@@ -427,17 +428,19 @@ void edt::agent_model_import::remember(std::string key, std::string session, age
 	if (static_cast<std::size_t>(std::count_if(m_shown.begin(), m_shown.end(), of_session)) >= k_max_shown) {
 		m_shown.erase(std::find_if(m_shown.begin(), m_shown.end(), of_session));
 	}
-	m_shown.push_back({ std::move(key), session, std::move(plan), at });
+	m_shown.push_back({ std::move(key), session, std::move(ticket), std::move(plan), at });
 }
 
-std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::string& key)
+std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::string& key, std::string_view ticket)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& shown) { return at - shown.at > k_shown_lifetime; });
 	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_plan& shown) { return shown.key == key; });
 	if (found == m_shown.end()) return std::nullopt;
+	const bool same_ticket = found->ticket == ticket;
 	agent_import_plan plan = std::move(found->plan);
 	m_shown.erase(found);
+	if (!same_ticket) return std::nullopt;
 	return plan;
 }
 
@@ -586,7 +589,8 @@ void edt::agent_model_import::plan_targets(const agent_import_request& request, 
 	if (running()) return refuse(cmd::codes::busy, "a model import is already running");
 }
 
-std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request, const cmd::origin& caller)
+std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request,
+	const cmd::origin& caller, std::string_view ticket)
 {
 	const bool person = caller.kind == cmd::origin_kind::ui;
 	agent_import_plan plan = person ? resolve(request, true) : text_plan(request);
@@ -597,7 +601,9 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab));
 	edt::decoder_sandbox_status sandbox = m_options.sandbox_status ? m_options.sandbox_status() : decoder_sandbox_status{};
 	if (request.files_token.empty()) {
-		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
+		text += "Allowing this reads the model and, to list the files it refers to, reads and hashes every file of "
+			"its folder it names: the .bin/.mtl files it needs to be parsed and its textures. Nothing is copied into "
+			"the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
 		const std::lock_guard lock(m_scans->mutex);
 		const std::string key = scan_key(request, caller);
@@ -625,25 +631,27 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown_path(file.path), size_text(file.size));
 	}
 	if (const std::string warning = decoder_sandbox_warning(sandbox); !warning.empty()) text += "\n" + warning;
-	remember(call_key(request, caller), caller.session, std::move(plan));
+	remember(call_key(request, caller), caller.session, std::string(ticket), std::move(plan));
 	return text;
 }
 
 edt::agent_model_import::started edt::agent_model_import::start(const agent_import_request& request,
-	const cmd::origin& caller)
+	const cmd::origin& caller, std::string_view ticket)
 {
 	// A person's own call (a script of theirs) is the approval. Anyone else needs the plan describe remembered for
 	// exactly this call, whatever the call says of a confirmation: the registry invokes an agent's call the policy asks
 	// about only after a person approved its ticket, and describes a call the policy allows right before it runs
 	// (describe_before_allowed_invoke, cmd_registry.cpp apply_policy). Without that plan nothing is looked at; with
-	// it, the source is looked at on the disk here for the first time, after the source rule once more.
+	// it, the source is looked at on the disk here for the first time, after the source rule once more. The registry
+	// describes an asked call with its ticket's id and hands the command that id only once a person approved it; an
+	// allowed call is described and run without one: either way the two must match.
 	const bool person = caller.kind == cmd::origin_kind::ui;
 	std::optional<agent_import_plan> shown;
 	if (!person) {
-		shown = take(call_key(request, caller));
+		shown = take(call_key(request, caller), ticket);
 		if (!shown) {
-			return { 0, cmd::codes::denied,
-				"this import was not shown to a person or described before it ran, or that is too old: ask again" };
+			return { 0, cmd::codes::denied, "this import was not shown to a person or described before it ran, "
+				"its approval was given for another question, or that is too old: ask again" };
 		}
 		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
 			return { 0, cmd::codes::invalid_args, std::move(why) };

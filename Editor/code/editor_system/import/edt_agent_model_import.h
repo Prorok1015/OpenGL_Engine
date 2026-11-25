@@ -130,8 +130,10 @@ namespace edt {
 		// it never looks at the source on the disk (only the project's layers): the path as given, no size. A person's
 		// call is described from the disk. With `files_token` (the second call, after a job found that the model refers
 		// to other files) it lists every one of those files with its size and the total; for an agent each of them
-		// passes the source rule first. Remembers the plan for the start that follows.
-		std::optional<std::string> describe(const agent_import_request& request, const cmd::origin& caller);
+		// passes the source rule first. Remembers the plan for the start that follows, bound to `ticket` (the id of the
+		// question the registry is about to put, cmd::call::confirmation; empty for a call it allows).
+		std::optional<std::string> describe(const agent_import_request& request, const cmd::origin& caller,
+			std::string_view ticket = {});
 
 		struct started
 		{
@@ -145,8 +147,9 @@ namespace edt {
 		// (describe_before_allowed_invoke). Only then is the source looked at on the disk, after the source rule. The
 		// job reads and parses the model; when it refers to other files the job ends with {needs_files_approval,
 		// files_token, file_count} and writes nothing: the agent calls again with the token, a person is shown those
-		// files, and that job imports exactly them.
-		started start(const agent_import_request& request, const cmd::origin& caller);
+		// files, and that job imports exactly them. `ticket` (the call's confirmation) must be the one the plan was
+		// described with: an approved call runs the plan of its own question.
+		started start(const agent_import_request& request, const cmd::origin& caller, std::string_view ticket = {});
 
 		// Per agent session: one session cannot push another one's questions or file lists out.
 		static constexpr std::size_t k_max_shown = 32;
@@ -158,6 +161,7 @@ namespace edt {
 		{
 			std::string key;
 			std::string session;
+			std::string ticket;
 			agent_import_plan plan;
 			std::chrono::steady_clock::time_point at;
 		};
@@ -170,8 +174,9 @@ namespace edt {
 		agent_import_plan text_plan(const agent_import_request& request) const;
 		std::string scan_key(const agent_import_request& request, const cmd::origin& caller) const;
 		std::string call_key(const agent_import_request& request, const cmd::origin& caller) const;
-		void remember(std::string key, std::string session, agent_import_plan plan);
-		std::optional<agent_import_plan> take(const std::string& key);
+		void remember(std::string key, std::string session, std::string ticket, agent_import_plan plan);
+		// The plan remembered for `key` is used up either way; it comes back only when it was described for `ticket`.
+		std::optional<agent_import_plan> take(const std::string& key, std::string_view ticket);
 
 		asset_exporter& m_exporter;
 		job_service& m_jobs;

@@ -551,6 +551,24 @@ BOOST_AUTO_TEST_CASE(AnAgent_NeedsThePlanDescribedForThatVeryCall)
 	BOOST_CHECK_EQUAL(importer->start(request(nullptr, std::nullopt, "again"), agent).code, cmd::codes::denied);
 }
 
+BOOST_AUTO_TEST_CASE(AnAgent_RunsOnlyThePlanOfItsOwnTicket)
+{
+	// Described for one question: a call without that ticket, or with another, uses the plan up and runs nothing.
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(importer->start(request(), agent).code, cmd::codes::denied);
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(importer->start(request(), agent, "ticket-b").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(importer->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+	test_util::pump(tasks);
+	BOOST_CHECK(nothing_written());
+
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	const edt::image_importer::started started = importer->start(request(), agent, "ticket-a");
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	test_util::pump(tasks);
+	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
+}
+
 BOOST_AUTO_TEST_CASE(AnAgentsQuestion_DoesNotLookAtTheSource)
 {
 	// A file that is not there: the question is made from the text, the start (after approval) finds it missing.
@@ -779,6 +797,21 @@ BOOST_AUTO_TEST_CASE(AnAgentsCall_WithATicketNotApprovedOrRejected_IsDenied_AnAp
 	test_util::pump(tasks);
 	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
 	actions.commands().set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(APlanDescribedForARejectedTicket_RunsForNoOtherCall)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const json::object args{ { "path", source.string() } };
+	const cmd::result asked = call(agent, args);
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	actions.commands().discard(std::string(asked.value.at("ticket").as_string()));
+	// No gate judges these calls: the importer alone holds the line.
+	actions.commands().set_policy_gate(nullptr);
+	BOOST_CHECK_EQUAL(call(agent, args).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(call(agent, args, "another-ticket").code, cmd::codes::denied);
+	test_util::pump(tasks);
+	BOOST_CHECK(nothing_written());
 }
 
 BOOST_AUTO_TEST_CASE(ACallNeverDescribed_IsDenied)
