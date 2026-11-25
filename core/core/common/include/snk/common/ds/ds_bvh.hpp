@@ -20,6 +20,22 @@ namespace ds {
 		bool stop = false;
 	};
 
+	// What a nearest visitor answers: the distance the walk goes on to (it may only shrink: a closest-point search narrows it to
+	// what it found), and whether to stop at once.
+	struct bvh_nearest_action final
+	{
+		float max_distance = std::numeric_limits<float>::infinity();
+		bool stop = false;
+	};
+
+	// The distance from a point to a box: 0 inside or on it, infinity for an empty box.
+	inline float distance_to_box(const glm::vec3& point, const aabb3& box)
+	{
+		if (box.empty()) return std::numeric_limits<float>::infinity();
+		const glm::vec3 outside = glm::max(glm::max(box.min - point, point - box.max), glm::vec3{ 0.f });
+		return glm::length(outside);
+	}
+
 	// A bounding volume hierarchy over boxes, each carrying a value of type T. It knows no ECS and no render: the caller
 	// fills it (build), moves boxes (set_box: a refit, O(depth)), rebuilds it when it got bad (degradation), and walks it
 	// culled by a ray, a box or a frustum. Items are named by their index in the vector given to build (an `id`), which
@@ -192,6 +208,48 @@ namespace ds {
 					}
 					const frustum_test test = test_frustum(view, m_nodes[child].box);
 					if (test != frustum_test::outside) stack[top++] = { child, test == frustum_test::inside };
+				}
+			}
+		}
+
+		// Walks the items nearest to `point` first, the nearer child first, and not past `max_distance`. visit(id, value, distance) is
+		// called with the distance from the point to the item's own box and answers a bvh_nearest_action: a closest-point search
+		// narrows max_distance to the distance it found, so what is farther than that is not visited.
+		template <class Visit>
+		void query_nearest(const glm::vec3& point, float max_distance, Visit&& visit) const
+		{
+			if (m_nodes.empty()) return;
+			std::array<std::pair<std::uint32_t, float>, k_stack_size> stack;
+			std::size_t top = 0;
+			if (const float root = distance_to_box(point, m_nodes[0].box); std::isfinite(root) && root <= max_distance) stack[top++] = { 0, root };
+			while (top > 0) {
+				const auto [index, distance] = stack[--top];
+				if (distance > max_distance) continue;
+				const node& n = m_nodes[index];
+				if (n.is_leaf()) {
+					for (std::uint32_t k = n.first; k < n.first + n.count; ++k) {
+						const std::uint32_t id = m_order[k];
+						const float own = distance_to_box(point, m_items[id].box);
+						if (!std::isfinite(own) || own > max_distance) continue;
+						const bvh_nearest_action action = visit(id, m_items[id].value, own);
+						if (action.stop) return;
+						max_distance = std::min(max_distance, action.max_distance);
+					}
+					continue;
+				}
+				const float left = distance_to_box(point, m_nodes[n.first].box);
+				const float right = distance_to_box(point, m_nodes[n.first + 1].box);
+				const bool left_in = std::isfinite(left) && left <= max_distance;
+				const bool right_in = std::isfinite(right) && right <= max_distance;
+				// The farther one is pushed first so the nearer one is popped first.
+				if (left_in && right_in) {
+					const bool left_first = left <= right;
+					stack[top++] = left_first ? std::pair{ n.first + 1, right } : std::pair{ n.first, left };
+					stack[top++] = left_first ? std::pair{ n.first, left } : std::pair{ n.first + 1, right };
+				} else if (left_in) {
+					stack[top++] = { n.first, left };
+				} else if (right_in) {
+					stack[top++] = { n.first + 1, right };
 				}
 			}
 		}
