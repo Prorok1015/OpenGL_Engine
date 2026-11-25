@@ -48,6 +48,9 @@ namespace edt
 			std::function<bool()> play_active;
 			// Opens a file on the disk in the app the system gives it (a shader's row); the error, empty when it opened.
 			std::function<std::string(const std::filesystem::path&)> open_file;
+			// Opens a shader source in the GLSL editor at a line (1-based); false when it did not open. Late-bound: the editor is made after
+			// this component. Null (or false): the row's file goes to `open_file`.
+			std::function<bool(const res::tag&, int line)> open_shader_source = {};
 		};
 
 		explicit problems_component(ports from);

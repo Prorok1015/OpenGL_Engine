@@ -280,6 +280,19 @@ BOOST_AUTO_TEST_CASE(TheNameIsCheckedBeforeAnythingElse)
 	BOOST_TEST(edt::asset_filter{}.accepts_name("anything"));
 }
 
+BOOST_AUTO_TEST_CASE(TheGlslEditorsKinds_AreTheKindShader_AndAreNotOfferedAgain)
+{
+	edt::asset_kind_registry kinds;
+	const auto frag = kinds.add({ .id = "shader_source.frag", .suffix = ".frag", .open = [](edt::editor_context&, const res::tag&) {} });
+	const auto vert = kinds.add({ .id = "shader_source.vert", .suffix = ".vert", .open = [](edt::editor_context&, const res::tag&) {} });
+
+	BOOST_TEST(edt::asset_kind_of(&kinds, "a/b.frag") == "shader");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "a/b.vert") == "shader");
+	const auto offered = ids_of(edt::asset_filter_kinds(&kinds));
+	BOOST_TEST(std::ranges::count(offered, std::string{ "shader" }) == 1);
+	BOOST_TEST(std::ranges::count(offered, std::string{ "shader_source.frag" }) == 0);
+}
+
 BOOST_AUTO_TEST_CASE(TheFixedKindsAreOfferedOnceEach)
 {
 	const auto offered = ids_of(edt::asset_filter_kinds(nullptr));

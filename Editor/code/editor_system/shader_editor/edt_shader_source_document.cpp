@@ -259,6 +259,9 @@ edt::save_result edt::shader_source_document::save()
 	if (!m_open) {
 		return save_result::failure("the shader is not open");
 	}
+	if (m_flush_edits) {
+		m_flush_edits();
+	}
 	if (edits_locked()) {
 		return save_result::failure("Stop Play to save the shader");
 	}

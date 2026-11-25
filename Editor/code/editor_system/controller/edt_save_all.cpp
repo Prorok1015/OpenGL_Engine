@@ -17,6 +17,7 @@ namespace {
 		if (kind == "scene") return "Level";
 		if (kind == "prefab") return "Prefab";
 		if (kind == "mesh") return "Mesh";
+		if (kind == "shader_source") return "Shader";
 		if (kind == "data") return "Data";
 		return kind;
 	}

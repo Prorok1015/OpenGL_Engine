@@ -278,6 +278,34 @@ BOOST_AUTO_TEST_CASE(ADocumentTextSetFromOutside_IsTakenByTheWidgetOnTheNextFram
 	BOOST_TEST(document->is_dirty());
 }
 
+BOOST_AUTO_TEST_CASE(TheDocumentSeesTheTypingNotHandedOver_AsDirty_AndSaveHandsItOverFirst)
+{
+	draw();
+	panel.insert_text("// z\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	BOOST_TEST(document->is_dirty());
+
+	const edt::save_result saved = document->save();
+
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+	BOOST_TEST(!panel.has_pending_edits());
+	std::ifstream in(res_root / "shaders/scene.frag", std::ios::binary);
+	const std::string written((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	BOOST_TEST(written.rfind("// z\n", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AWindowThatLetsGo_LeavesTheDocumentWithoutAHookIntoIt)
+{
+	draw();
+	panel.insert_text("// z\n");
+	draw();
+	panel.set_context(nullptr);
+
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->save().saved);
+}
+
 BOOST_AUTO_TEST_CASE(TypedText_GoesToTheDocumentAfterAPause_NotAtOnce)
 {
 	draw();

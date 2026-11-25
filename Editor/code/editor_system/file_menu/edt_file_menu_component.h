@@ -65,6 +65,12 @@ namespace edt
 			std::function<void()> discard_meshes = {};
 			std::function<void(document_id)> show_mesh = {};
 			std::function<void(document_id)> request_close_mesh = {};
+			// The same for the GLSL editor (#1202): shader sources with unsaved edits (typing not handed over included).
+			std::function<bool()> shaders_dirty = {};
+			std::function<bool()> save_shaders = {};
+			std::function<void()> discard_shaders = {};
+			std::function<void(document_id)> show_shader_source = {};
+			std::function<void(document_id)> request_close_shader_source = {};
 			// The question of a person's save of a level whose file changed on disk (#1188); null: the save reports it.
 			level_disk_banner* level_disk = nullptr;
 		};

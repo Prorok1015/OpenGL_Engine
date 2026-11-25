@@ -37,6 +37,8 @@ namespace edt
 		std::function<void()> show_prefab;
 		// The mesh modeller's window, showing the mesh document `id` (EPIC-77, #1011).
 		std::function<void(document_id id)> show_mesh = {};
+		// The GLSL editor's window, showing the shader source `id` (#1202).
+		std::function<void(document_id id)> show_shader_source = {};
 	};
 
 	// Makes `id` the active document and brings its window to the front. An id that names no open document is ignored. The one
@@ -53,6 +55,8 @@ namespace edt
 		std::function<bool()> close_blocked;
 		// A mesh document's own close flow (EPIC-77, #1011).
 		std::function<void(document_id id)> request_close_mesh = {};
+		// A shader source's own close flow (#1202).
+		std::function<void(document_id id)> request_close_shader_source = {};
 	};
 
 	class document_tabs

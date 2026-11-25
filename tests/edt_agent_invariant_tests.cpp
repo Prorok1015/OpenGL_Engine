@@ -46,6 +46,11 @@
 #include "edt_mesh_shape_asset.h"
 #include "edt_modeller_component.h"
 #include "edt_save_all.h"
+#include "edt_shader_editor_component.h"
+#include "edt_shader_source_document.h"
+#include "edt_shader_source_documents.h"
+#include "edt_document_tabs.h"
+#include "edt_asset_filter.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/editor/edt_dialog_service.h>
@@ -2197,6 +2202,135 @@ BOOST_FIXTURE_TEST_CASE(CloseDirty_ClosesTheDirtyPrefabs_KeepsTheMeshes_AndTheQu
 	BOOST_REQUIRE(move_first_vertex(mesh));
 	BOOST_TEST((editor().prefab_editor().dirty() != nullptr || editor().modeller().dirty()));
 	BOOST_TEST(editor().modeller().dirty());
+}
+
+
+struct shader_documents_fixture : agent_editor_fixture
+{
+	shader_documents_fixture()
+	{
+		project.write("res/shaders/scene.frag", "#version 450 core\nvoid main() {}\n");
+		project.write("res/shaders/other.vert", "#version 450 core\nvoid main() {}\n");
+	}
+
+	static res::tag tag(std::string_view name) { return res::tag::make(std::string("shaders/") + std::string(name)); }
+	edt::document_manager& documents() { return editor().context()->documents(); }
+	edt::dialog_service& dialogs() { return editor().context()->dialogs(); }
+
+	edt::shader_source_document& open_shader(std::string_view name)
+	{
+		BOOST_REQUIRE(editor().shader_editor().open(tag(name)));
+		auto* shader = dynamic_cast<edt::shader_source_document*>(documents().find_by_source(tag(name)));
+		BOOST_REQUIRE(shader && shader->is_open());
+		return *shader;
+	}
+
+	std::string file_of(std::string_view name)
+	{
+		std::ifstream in(project.path() / "res" / "shaders" / std::string(name), std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+};
+
+BOOST_FIXTURE_TEST_CASE(EveryShaderSuffix_HasAKindThatOpensIt_AndTheFilterStillCallsItShader, shader_documents_fixture)
+{
+	const edt::asset_kind_registry& kinds = editor().context()->asset_kinds();
+	for (const std::string_view suffix : edt::k_shader_source_suffixes) {
+		const std::string path = "shaders/a" + std::string(suffix);
+		BOOST_TEST_CONTEXT(path) {
+			BOOST_TEST((kinds.kind_for_open(path) != nullptr));
+			BOOST_TEST((kinds.preview_for(path) != nullptr));
+			BOOST_TEST(edt::asset_kind_of(&kinds, path, {}) == "shader");
+		}
+	}
+}
+
+BOOST_FIXTURE_TEST_CASE(TheAssetBrowsersDoubleClick_OpensAShaderSourceInItsWindow_AndOpeningItAgainFocusesIt, shader_documents_fixture)
+{
+	BOOST_REQUIRE(editor().context()->asset_kinds().open(*editor().context(), tag("scene.frag")));
+	edt::shader_source_document* shader = dynamic_cast<edt::shader_source_document*>(documents().find_by_source(tag("scene.frag")));
+	BOOST_REQUIRE(shader && shader->is_open());
+	BOOST_TEST(documents().active() == shader);
+	BOOST_TEST(editor().shader_editor().shown_id() == shader->id());
+
+	open_shader("other.vert");
+	BOOST_TEST(edt::shader_sources_of(documents()).size() == 2u);
+	BOOST_TEST(editor().shader_editor().open(tag("scene.frag")));
+	BOOST_TEST(edt::shader_sources_of(documents()).size() == 2u);
+	BOOST_TEST(editor().shader_editor().shown_id() == shader->id());
+}
+
+BOOST_FIXTURE_TEST_CASE(AShaderSourceIsATab_ThatClosesThroughItsOwnQuestion, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	bool found = false;
+	for (const edt::document_tab& tab : edt::tabs_of(documents())) {
+		if (tab.id == shader.id()) {
+			found = true;
+			BOOST_TEST(tab.closable);
+			BOOST_TEST(tab.kind == "shader_source");
+		}
+	}
+	BOOST_TEST(found);
+}
+
+BOOST_FIXTURE_TEST_CASE(RequestCloseOfADirtyShader_AsksFirst_CancelKeepsTheEdits_SaveWritesThenCloses, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	BOOST_REQUIRE(shader.set_text("// edited\n"));
+	const edt::document_id id = shader.id();
+
+	editor().shader_editor().request_close(id);
+	auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_TEST(asked.front().kind == "unsaved");
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "cancel" } }).ok);
+	BOOST_TEST(documents().find(id) != nullptr);
+	BOOST_TEST(file_of("scene.frag") != "// edited\n");
+
+	editor().shader_editor().request_close(id);
+	asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "choice", "save" } }).ok);
+	BOOST_TEST(documents().find(id) == nullptr);
+	BOOST_TEST(file_of("scene.frag") == "// edited\n");
+}
+
+BOOST_FIXTURE_TEST_CASE(ExitAndSaveAll_SeeADirtyShader_AndSaveOrDropIt, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	BOOST_TEST(!editor().shader_editor().dirty());
+	BOOST_REQUIRE(shader.set_text("// edited\n"));
+	BOOST_TEST(editor().shader_editor().dirty());
+
+	bool listed = false;
+	for (const edt::unsaved_item& item : edt::list_unsaved(documents())) {
+		if (item.kind == "shader_source") listed = true;
+	}
+	BOOST_TEST(listed);
+
+	BOOST_TEST(editor().shader_editor().save_dirty());
+	BOOST_TEST(file_of("scene.frag") == "// edited\n");
+	BOOST_TEST(!editor().shader_editor().dirty());
+
+	BOOST_REQUIRE(shader.set_text("// again\n"));
+	editor().shader_editor().drop_dirty();
+	BOOST_TEST(edt::shader_sources_of(documents()).empty());
+	BOOST_TEST(file_of("scene.frag") == "// edited\n");
+}
+
+BOOST_FIXTURE_TEST_CASE(GoToOnAShaderRow_OpensTheFileInTheEditor, shader_documents_fixture)
+{
+	edt::problem row;
+	row.file = "res://shaders/scene.frag";
+	row.line = 2;
+	row.message = "syntax error";
+
+	editor().go_to_problem("shader", row);
+
+	edt::shader_source_document* shader = dynamic_cast<edt::shader_source_document*>(documents().find_by_source(tag("scene.frag")));
+	BOOST_REQUIRE(shader && shader->is_open());
+	BOOST_TEST(editor().shader_editor().shown_id() == shader->id());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
