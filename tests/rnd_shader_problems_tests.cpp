@@ -1,17 +1,24 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include "test_temp_dir.hpp"
 #include "rnd_null_driver.h"
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
+#include <snk/resource/res_asset_index.h>
+#include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <format>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // #1201: why a shader program did not build, at the file and line: the engine's preprocessing errors, the #line
@@ -145,6 +152,84 @@ driver::shader_build_log stage_log(std::size_t stage, std::string text)
 	return log;
 }
 
+// One ID per file and any spelling of it, as the editor's asset database answers (res_asset_index_tests' fake_index).
+// Locked: the file watcher's thread asks it too.
+class watch_index : public res::asset_index
+{
+public:
+	std::optional<res::asset_id> id_of(const res::tag& tag) const override
+	{
+		std::lock_guard lock(m_mutex);
+		const auto it = m_ids.find(tag);
+		return it == m_ids.end() ? std::nullopt : std::optional{ it->second };
+	}
+
+	std::optional<res::tag> path_of(const res::asset_id& id) const override
+	{
+		std::lock_guard lock(m_mutex);
+		const auto it = m_paths.find(id);
+		return it == m_paths.end() ? std::nullopt : std::optional{ it->second };
+	}
+
+	void put(const res::tag& tag, const res::asset_id& id)
+	{
+		std::lock_guard lock(m_mutex);
+		m_ids[tag] = id;
+		m_paths[id] = tag;
+	}
+
+	void spell(const res::tag& spelling, const res::asset_id& id)
+	{
+		std::lock_guard lock(m_mutex);
+		m_ids[spelling] = id;
+	}
+
+	void move(const res::tag& from, const res::tag& to)
+	{
+		std::lock_guard lock(m_mutex);
+		const res::asset_id id = m_ids.at(from);
+		m_ids.erase(from);
+		m_ids[to] = id;
+		m_paths[id] = to;
+	}
+
+private:
+	mutable std::mutex m_mutex;
+	std::unordered_map<res::tag, res::asset_id> m_ids;
+	std::unordered_map<res::asset_id, res::tag> m_paths;
+};
+
+const res::asset_id k_stage_id{ 0x6f1c0b5200004000ull, 0x8000000000001387ull };
+
+// res:// on disk that reports its changes and allows rename: the batches apply_asset_batch moves a watcher with.
+struct shader_disk_fixture
+{
+	test_util::temp_dir dir{ "rnd_shader_problems_disk" };
+	ds::task_system tasks{ test_util::manual_tasks() };
+	std::shared_ptr<watch_index> index = std::make_shared<watch_index>();
+	std::unique_ptr<res::resource_system> rs;
+
+	shader_disk_fixture()
+	{
+		dir.write("res/rename.vert", "#version 450 core\nvoid main() {}\n");
+		dir.write("res/rename.frag", good_fragment);
+		res::watch_options watch;
+		watch.report_changes = true;
+		rs = std::make_unique<res::resource_system>(tasks, res::mount_table{
+			res::mount{ res::tag::default_protocol(), { dir.path() / "res" }, res::mount_access::read_write,
+				res::write_policy::allow_all(), std::move(watch), true },
+		});
+		rs->set_asset_index(index);
+	}
+
+	~shader_disk_fixture()
+	{
+		rs.reset();
+	}
+
+	void pump() { test_util::pump(tasks); }
+};
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(RndShaderProblemsTests, shader_problems_fixture)
@@ -197,7 +282,7 @@ BOOST_AUTO_TEST_CASE(TheExpandedSourceNumbersItsLinesAsTheFilesDo)
 	const auto result = load(program_of(vertex, fragment));
 	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
 	const std::string& body = result.headers[0].body;
-	BOOST_TEST(body.starts_with("#version 450 core\n#define MAX_LIGHT_COUNT "));
+	BOOST_TEST(body.starts_with("#version 450 core\n#line 1 2\n#define MAX_LIGHT_COUNT "));	// the defines: one past the files
 	const std::string guard = first_guard(body);
 	BOOST_REQUIRE(guard.size() == std::string_view{ "SNK_INCLUDE_" }.size() + 16u);
 	BOOST_TEST(body.ends_with(std::format("#define SNK_VERTEX_SHADER\n#line 2 0\n#ifndef {0}\n#define {0}\n#line 1 1\nfloat a;\nfloat b;\n#endif\n"
@@ -598,6 +683,154 @@ BOOST_AUTO_TEST_CASE(TheEngineDefinesOfAStageAreTheNamedConstants)
 		BOOST_TEST(is_engine_define(name));
 	}
 	BOOST_TEST(!is_engine_define("USE_FOG"));
+}
+
+// #1387: the defines after #version are source N of the stage, one past its files. A log line that names N is a problem
+// of the stage file with no line that names the define and where it came from; a number past N is no source at all.
+BOOST_AUTO_TEST_CASE(AnErrorInAnInjectedDefineNamesTheDefineInEveryVendorForm)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto vertex = put("injected.vert", "#version 450 core\nvoid main() {}\n");
+	auto cdata = program_of(vertex, put("injected.frag", good_fragment));
+	cdata.constants = { { "K_ONE", "1" } };
+	cdata.defines = { "USE_FOG" };
+	const auto variant = shaders.variants().intern(cdata);
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		return stage_log(0,
+			"1(1) : error C0000: engine one\n"
+			"1:3(9): error: constant one\n"
+			"ERROR: 1:4: 'USE_FOG' : define one\n"
+			"2(1) : error C0000: past the defines\n");
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 4u);
+	for (const shader_problem& problem : problems) {
+		BOOST_TEST(problem.file == vertex);
+		BOOST_TEST(problem.line == 0);
+		BOOST_TEST(problem.column == 0);
+		BOOST_TEST(problem.code == "shader/compile");
+	}
+	BOOST_TEST(problems[0].message.starts_with(std::format("injected define #1 \"#define {} ", max_light_count_define)), problems[0].message);	// NVIDIA
+	BOOST_TEST(problems[0].message.ends_with("\" (engine): error C0000: engine one"), problems[0].message);
+	BOOST_TEST(problems[1].message == "injected define #3 \"#define K_ONE 1\" (constant): error: constant one");	// Mesa
+	BOOST_TEST(problems[2].message == "injected define #4 \"#define USE_FOG\" (define): 'USE_FOG' : define one");	// AMD
+	BOOST_TEST(problems[3].message == "error C0000: past the defines");	// N + 1: the unknown number, as before
+}
+
+// Where a GLSL preprocessor puts a constant's line and the stage line right after the defines (compiler_location_of).
+BOOST_AUTO_TEST_CASE(AConstantsLineIsTheDefineAndTheStageLineAfterTheDefinesKeepsItsNumber)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto vertex = put("after_defines.vert", "#version 450 core\nAFTER_DEFINES;\nvoid main() {}\n");
+	auto cdata = program_of(vertex, put("after_defines.frag", good_fragment));
+	cdata.constants = { { "K_MARK", "INJECTED_MARK" } };
+	cdata.defines = { "USE_FOG" };
+	const auto variant = shaders.variants().intern(cdata);
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		const auto injected = compiler_location_of(headers[0].body, "INJECTED_MARK");
+		const auto after = compiler_location_of(headers[0].body, "AFTER_DEFINES");
+		if (!injected || !after) {
+			return std::nullopt;
+		}
+		return stage_log(0, std::format("{}:{}(1): error: bad constant\n{}:{}(1): error: after\n", injected->source, injected->line,
+			after->source, after->line));
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(problems[0].file == vertex);
+	BOOST_TEST(problems[0].line == 0);
+	BOOST_TEST(problems[0].message == "injected define #3 \"#define K_MARK INJECTED_MARK\" (constant): error: bad constant");
+	BOOST_TEST(problems[1].file == vertex);
+	BOOST_TEST(problems[1].line == 2);
+	BOOST_TEST(problems[1].message == "error: after");
+}
+
+BOOST_AUTO_TEST_CASE(AnErrorInANestedIncludeIsALineOfTheInnermostFile)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto inner = put("nested_b.glsl", "float b1;\nINNER_ERROR;\n");
+	const auto outer = put("nested_a.glsl", "float a1;\n#include \"nested_b.glsl\"\nOUTER_ERROR;\n");
+	const auto vertex = put("nested.vert", "#version 450 core\n#include \"nested_a.glsl\"\nvoid main() {}\n");
+	const auto variant = shaders.variants().intern(program_of(vertex, put("nested.frag", good_fragment)));
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		const auto in_b = compiler_location_of(headers[0].body, "INNER_ERROR");
+		const auto in_a = compiler_location_of(headers[0].body, "OUTER_ERROR");
+		if (!in_b || !in_a) {
+			return std::nullopt;
+		}
+		return stage_log(0, std::format("{}({}) : error C1008: inner\n{}({}) : error C1008: outer\n", in_b->source, in_b->line, in_a->source, in_a->line));
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(problems[0].file == inner);
+	BOOST_TEST(problems[0].line == 2);
+	BOOST_TEST(problems[1].file == outer);	// the line after the inner include, numbered as its file again
+	BOOST_TEST(problems[1].line == 3);
+}
+
+// A watcher is told the path it watched, also when the signal came through another spelling of the file's ID.
+BOOST_AUTO_TEST_CASE(AStageWatchedByPathIsBuiltAgainWhenItsIdIsSignalled)
+{
+	const auto index = std::make_shared<watch_index>();
+	const auto vertex = put("by_id.vert", "#version 450 core\nvoid main() {}\n");
+	const auto spelled = put("BY_ID.vert", "#version 450 core\nvoid main() {}\n");
+	index->put(vertex, k_stage_id);
+	index->spell(spelled, k_stage_id);
+	env.rs->set_asset_index(index);
+	{
+		driver::null::driver drv;
+		ShaderManager shaders(&drv, *env.rs);
+		const auto variant = shaders.variants().intern(program_of(vertex, put("by_id.frag", good_fragment)));
+		driver::shader_interface* const first = shaders.program(variant);
+		BOOST_REQUIRE(first);
+
+		env.rs->signal_changed(spelled);
+		env.pump();
+		BOOST_TEST(shaders.program(variant) != nullptr);
+		BOOST_TEST(shaders.program(variant) != first);
+	}
+	env.rs->set_asset_index(nullptr);
+}
+
+// After a rename the watcher follows the file and is told its new path; the variants made of it are still found.
+BOOST_FIXTURE_TEST_CASE(AStageRenamedThroughTheIndexIsBuiltAgainWhenItChanges, shader_disk_fixture)
+{
+	const res::tag vertex{ "res://rename.vert" };
+	const res::tag fragment{ "res://rename.frag" };
+	const res::tag renamed{ "res://renamed.vert" };
+	index->put(vertex, k_stage_id);
+	std::size_t builds = 0;
+	driver::null::driver drv;
+	drv.judge_shaders_with([&builds](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		++builds;
+		return std::nullopt;
+	});
+	ShaderManager shaders(&drv, *rs);
+	shader_config::constant_data cdata;
+	cdata.program = shader_config::shader_program_data::build().set_vertex_shader(vertex).set_fragment_shader(fragment);
+	const auto variant = shaders.variants().intern(cdata);
+	BOOST_REQUIRE(shaders.program(variant) != nullptr);
+	BOOST_REQUIRE(builds == 1u);
+
+	BOOST_REQUIRE(rs->rename(vertex, renamed));
+	pump();
+	index->move(vertex, renamed);
+	const std::vector<std::pair<res::tag, res::tag>> moved{ { vertex, renamed } };
+	rs->apply_asset_batch(rs->delivering_batch(), moved);
+	pump();
+	shaders.program(variant);
+	const std::size_t before = builds;
+
+	rs->signal_changed(renamed);
+	pump();
+	shaders.program(variant);
+	BOOST_TEST(builds == before + 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

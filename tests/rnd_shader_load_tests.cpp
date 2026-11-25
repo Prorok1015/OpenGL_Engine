@@ -108,7 +108,8 @@ BOOST_AUTO_TEST_CASE(DefinesFollowTheVersionLineEvenWhenCommentsComeFirst)
 	BOOST_REQUIRE(version != std::string::npos);
 	BOOST_TEST(body.rfind("// Copyright", 0) == 0u);	// what was before the directive is still there
 	const std::string define_light = "#define MAX_LIGHT_COUNT " + std::to_string(lights_params::MAX_LIGHT_COUNT) + "\n";
-	BOOST_TEST(body.find(define_light) == version + std::string{ "\n#version 450 core\n" }.size());
+	// The defines are source 1 of the stage (#1387): its one file is source 0.
+	BOOST_TEST(body.find("#line 1 1\n" + define_light) == version + std::string{ "\n#version 450 core\n" }.size());
 	BOOST_TEST(body.find("#define SNK_VERTEX_SHADER\n") > version);
 	BOOST_TEST(body.find("#define MY_DEFINE\n") > version);
 	// The macro was expanded with the backend's table.

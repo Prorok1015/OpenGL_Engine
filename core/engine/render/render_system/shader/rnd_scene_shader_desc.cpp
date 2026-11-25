@@ -13,7 +13,8 @@
 #include <sstream>
 
 // The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
-// on it, see lights_params) and the stage the source is compiled for.
+// on it, see lights_params) and the stage the source is compiled for. engine_define_lines lines, in front of the
+// constants and the defines: problems_of_build_log tells them apart by that count.
 static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 {
     std::string_view stage = rnd::vertex_stage_define;
@@ -128,9 +129,11 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 			problems += std::format("'{}': {}", header.title, errors);
 			add_macro_problems(errors, header.body, result.sources[index], result.problems);
 		}
-		// The compiler numbers the lines after the inserted defines as the file does again (source 0: the stage).
+		// The defines are source number N (one past the stage's files, which problems_of_build_log reads as "injected"),
+		// then the compiler numbers the lines after them as the file does again (source 0: the stage).
 		const rnd::source_location after_version = rnd::locate_line(header.body, first_code_line(header.body));
-		const std::string inserted = engine_defines(header.type) + std::string{ addition_defines.view() }
+		const std::string inserted = std::format("#line 1 {}\n", result.sources[index].size())
+			+ engine_defines(header.type) + std::string{ addition_defines.view() }
 			+ std::format("#line {} {}\n", after_version.line + 1, after_version.source);
 		if (!rnd::insert_after_version(header.body, inserted)) {
 			problems += std::format("'{}': the source has to begin with a #version directive\n", header.title);

@@ -64,7 +64,9 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 	auto& slot = m_programs[variant.value];
 	if (slot.stale || (!slot.program && !slot.failed)) {
 		slot.stale = false;
-		auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
+		const shader_config::constant_data& cdata = m_variants.resolve(variant);
+		const std::size_t constant_count = cdata.constants.size();
+		auto source = shader_config::load(cdata, m_res_sys, drv->bindings());
 		track_files(variant, source.files);
 		std::vector<shader_problem> problems = std::move(source.problems);
 		std::unique_ptr<driver::shader_interface> fresh;
@@ -72,7 +74,7 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 			driver::shader_build_log log;
 			fresh = drv->create_shader(source.headers, &log);
 			if (!fresh) {
-				problems = problems_of_build_log(log, source.headers, source.sources, source.program);
+				problems = problems_of_build_log(log, source.headers, source.sources, source.program, constant_count);
 				if (problems.empty()) {
 					shader_problem unknown;
 					unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
@@ -128,7 +130,8 @@ void rnd::ShaderManager::track_files(variant_id variant, const std::vector<res::
 	for (const res::tag& file : files) {
 		auto [it, added] = m_users.try_emplace(file);
 		if (added) {
-			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this](const res::tag& changed) { on_file_changed(changed); });
+			// The users are keyed by the tag watched: after a rename the resource system tells the file's new path (#1387).
+			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this, file](const res::tag&) { on_file_changed(file); });
 		}
 		if (std::ranges::find(it->second, variant.value) == it->second.end()) {
 			it->second.push_back(variant.value);
