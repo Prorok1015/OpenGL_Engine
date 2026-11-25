@@ -385,6 +385,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (!data.has_value<prj::project_context>()) return std::nullopt;
 			return data.require<prj::project_context>().root;
 		},
+		.project_cache_dir = [&data]() -> std::optional<std::filesystem::path> {
+			if (!data.has_value<prj::project_context>()) return std::nullopt;
+			return data.require<prj::project_context>().cache_dir();
+		},
+		.project_trusted = [this] {
+			const auto trust = m_trust.lock();
+			return trust && trust->trusted();
+		},
 		.input_actions = [&data]() -> gs::input_actions* {
 			return data.has_value<gs::input_actions>() ? &data.require<gs::input_actions>() : nullptr;
 		},
