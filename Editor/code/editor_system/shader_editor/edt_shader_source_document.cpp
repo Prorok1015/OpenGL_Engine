@@ -1,4 +1,5 @@
 #include "edt_shader_source_document.h"
+#include "edt_document_parts.h"
 #include "edt_code_commands.h"
 #include "edt_file_menu.h"
 #include "edt_shader_problems.h"
@@ -271,7 +272,7 @@ edt::save_result edt::shader_source_document::save()
 	if (!m_dirty) {
 		return save_result::ok();
 	}
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) {
 		return save_result::failure(*why);
 	}
 	res::resource_system* writer = m_services.writable_resources();
@@ -364,7 +365,7 @@ edt::save_result edt::shader_source_document::overwrite()
 		const std::string error = revert();
 		return error.empty() ? save_result::ok() : save_result::failure(error);
 	}
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) {
 		return save_result::failure(*why);
 	}
 	const disk_read now = read_disk();
