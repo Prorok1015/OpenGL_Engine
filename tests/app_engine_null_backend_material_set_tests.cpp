@@ -424,6 +424,25 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	static_assert(std::is_same_v<decltype(config.rdata.material_params), std::vector<std::byte>>);
 }
 
+// #1386: Check builds the program of a shader desc without a material, and leaves the renderer's problems and generation as they were.
+BOOST_AUTO_TEST_CASE(ACheckOfAShaderDescBuildsItWithoutChangingTheRenderersProblems)
+{
+	auto& render = storage.require<rnd::render_system>();
+	const std::uint64_t generation = render.shader_problems_generation();
+	const std::size_t problems = render.shader_problems().size();
+	std::vector<res::tag> files;
+	const std::vector<rnd::shader_problem> found = render.check_shader_program(res::tag::make("shaders/scene.shader.desc"), &files);
+	BOOST_TEST(found.empty());
+	BOOST_TEST(!files.empty());
+	BOOST_TEST(render.shader_problems_generation() == generation);
+	BOOST_TEST(render.shader_problems().size() == problems);
+
+	const std::vector<rnd::shader_problem> missing = render.check_shader_program(res::tag::make("shaders/no_such.shader.desc"));
+	BOOST_REQUIRE(missing.size() == 1u);
+	BOOST_TEST(missing[0].code == "shader/load");
+	BOOST_TEST(render.shader_problems_generation() == generation);
+}
+
 // #1199, #1200: the material compiler builds the program and defines of the shader desc the material refers to.
 BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStages)
 {

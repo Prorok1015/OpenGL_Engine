@@ -122,9 +122,9 @@ namespace {
 }
 
 edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed,
-	const fs::path& boundary, bool on_disk, model_read_rule may_read)
+	const fs::path& boundary, bool on_disk, model_read_rule may_read, model_file_reader read_file)
 	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_may_read(std::move(may_read)),
-	m_on_disk(on_disk)
+	m_read_file(std::move(read_file)), m_on_disk(on_disk)
 {
 	m_root_extension = lowered_extension(m_root_file);
 	m_dir_as_given = m_root_file.parent_path().lexically_normal();
@@ -132,12 +132,14 @@ edt::model_file_access::model_file_access(fs::path root_file, model_file_limits 
 		m_dir = m_boundary = m_root_file.parent_path();
 		return;
 	}
+	// An agent's reader looks at nothing by the path: its source was spelled and walked already.
+	const bool lexical = m_may_read && m_read_file;
 	std::error_code ec;
-	m_dir = fs::weakly_canonical(m_root_file.parent_path(), ec);
+	m_dir = lexical ? m_root_file.parent_path().lexically_normal() : fs::weakly_canonical(m_root_file.parent_path(), ec);
 	if (ec) m_dir = m_root_file.parent_path();
 	m_boundary = m_dir;
 	if (!boundary.empty()) {
-		fs::path wide = fs::weakly_canonical(boundary, ec);
+		fs::path wide = lexical ? boundary.lexically_normal() : fs::weakly_canonical(boundary, ec);
 		if (ec) wide = boundary.lexically_normal();
 		const fs::path below = m_dir.lexically_relative(wide);
 		if (!below.empty() && *below.begin() != "..") m_boundary = wide;
@@ -225,17 +227,26 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	// where the `..` would be taken after the link is followed.
 	std::string judged;
 	if (m_may_read) {
-		const auto dotted = [](const fs::path& part) { return part == "." || part == ".."; };
-		if (std::any_of(given.begin(), given.end(), dotted)) {
-			return refuse(refusal_kind::rule, "a '.' or '..' in a name an agent's import reads");
+		// A lone '.' (glTF's "./tex.png") cannot pass a link and lexically_normal drops it; a '..' could.
+		if (std::any_of(given.begin(), given.end(), [](const fs::path& part) { return part == ".."; })) {
+			return refuse(refusal_kind::rule, "a '..' in a name an agent's import reads");
 		}
 		if (absolute_name && kind != model_file_kind::side_file) return refuse(refusal_kind::rule, outside);
 		const fs::path candidate = absolute_name ? given.lexically_normal() : (m_dir / given).lexically_normal();
 		if (std::string why = m_may_read(candidate); !why.empty()) return refuse(refusal_kind::rule, std::move(why));
 		judged = fs_paths::generic_utf8_of(candidate);
 	}
-	const auto inside = m_may_read ? res::path_within_dir_from(m_boundary, m_dir, judged, true)
-		: res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	const auto within = [&]() -> std::optional<fs::path> {
+		if (m_may_read && m_read_file) {
+			// An agent's reader looks at nothing by the path: the name the rule judged is the file.
+			const fs::path judged_path = fs_paths::path_from_utf8(judged).lexically_normal();
+			if (!lexically_under(judged_path, m_boundary)) return std::nullopt;
+			return judged_path;
+		}
+		if (m_may_read) return res::path_within_dir_from(m_boundary, m_dir, judged, true);
+		return res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	};
+	const std::optional<fs::path> inside = within();
 	if (!inside) return refuse(refusal_kind::rule, outside);
 	std::error_code ec;
 	const fs::path relative = inside->lexically_relative(m_boundary);
@@ -250,15 +261,30 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		if (!allowed_side) return refuse(refusal_kind::rule, "a file this kind of model may not read");
 	}
 
-	// Only stat-like calls here: the file is opened by read(), below the boundary and without blocking (a FIFO, a device).
-	if (!fs::exists(*inside, ec)) return out;
-	if (fs::symlink_status(*inside, ec).type() != fs::file_type::regular) return refuse(refusal_kind::other, "not a plain file");
-	out.size = fs::file_size(*inside, ec);
-	if (ec) return refuse(refusal_kind::other, "its size cannot be read");
-	out.modified = fs::last_write_time(*inside, ec);
-	if (ec) return refuse(refusal_kind::other, "its time cannot be read");
-	out.id = file_id_of(*inside);
-	if (!out.id.valid) return refuse(refusal_kind::other, "its identity on the disk cannot be read");
+	if (m_may_read && m_read_file) {
+		std::optional<platform::beneath::file_stamp> stamp;
+		try {
+			stamp = m_read_file.stamp(*inside);
+		} catch (const std::runtime_error& error) {
+			return refuse(refusal_kind::other, error.what());
+		}
+		if (!stamp) return out;
+		out.size = stamp->size;
+		out.stamp = stamp;
+	} else {
+		// Only stat-like calls here: the file is opened by read(), below the boundary and without blocking (a FIFO, a
+		// device).
+		if (!fs::exists(*inside, ec)) return out;
+		if (fs::symlink_status(*inside, ec).type() != fs::file_type::regular) {
+			return refuse(refusal_kind::other, "not a plain file");
+		}
+		out.size = fs::file_size(*inside, ec);
+		if (ec) return refuse(refusal_kind::other, "its size cannot be read");
+		out.modified = fs::last_write_time(*inside, ec);
+		if (ec) return refuse(refusal_kind::other, "its time cannot be read");
+		out.id = file_id_of(*inside);
+		if (!out.id.valid) return refuse(refusal_kind::other, "its identity on the disk cannot be read");
+	}
 	if (out.size > m_limits.max_file_bytes) {
 		return refuse(refusal_kind::limit, std::format("a side file of {} bytes exceeds {} per file ({})", out.size, limit_text(m_limits.max_file_bytes), k_step_side_files));
 	}
@@ -266,7 +292,9 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (m_allowed) {
 		const auto listed = std::find_if(m_allowed->begin(), m_allowed->end(), [&](const referenced_file& file) { return file.path == *inside; });
 		if (listed == m_allowed->end()) return refuse(refusal_kind::rule, "not among the files the person was shown");
-		if (listed->size != out.size || listed->modified != out.modified || !listed->id.same_as(out.id)) {
+		const bool same = out.stamp ? listed->stamp == out.stamp
+			: listed->size == out.size && listed->modified == out.modified && listed->id.same_as(out.id);
+		if (!same) {
 			return refuse(refusal_kind::other, "the file changed since the person was shown it");
 		}
 	} else if (m_seen.insert(key_of(*inside)).second) {
@@ -279,7 +307,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 			return refuse(refusal_kind::limit, std::format("the side files exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
 		}
 		m_listed_bytes += out.size;
-		referenced_file listed{ *inside, out.size, out.modified, out.id };
+		referenced_file listed{ *inside, out.size, out.modified, out.id, out.stamp };
 		listed.names.emplace_back(reference);
 		listed.kind = kind;
 		m_files.push_back(std::move(listed));
@@ -315,20 +343,27 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 	if (m_bytes_read > m_limits.max_total_bytes) {
 		throw std::runtime_error(std::format("the side files the import reads from the disk exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
 	}
-	// Opened below the boundary without following a link: a folder or the file swapped for one since resolve() is not read.
-	fs::path below = file.path.lexically_relative(m_boundary);
-	if (below.empty() || *below.begin() == "..") {
-		std::error_code ec;
-		below = (fs::weakly_canonical(file.path.parent_path(), ec) / file.path.filename()).lexically_relative(m_boundary);
-		if (ec || below.empty() || *below.begin() == "..") return std::nullopt;
-	}
-	platform::beneath::read_request request;
-	request.root = m_boundary;
-	request.folder = below.parent_path();
-	request.leaf = below.filename();
-	request.max_bytes = file.size;
 	std::optional<std::vector<std::byte>> bytes(std::in_place);
-	if (platform::beneath::read_beneath(request, *bytes).status != platform::beneath::read_status::ok) return std::nullopt;
+	if (m_read_file) {
+		*bytes = m_read_file.read(file);
+	} else {
+		// Opened below the boundary without following a link: a folder or the file swapped for one since resolve() is
+		// not read.
+		fs::path below = file.path.lexically_relative(m_boundary);
+		if (below.empty() || *below.begin() == "..") {
+			std::error_code ec;
+			const fs::path folder = fs::weakly_canonical(file.path.parent_path(), ec);
+			below = (folder / file.path.filename()).lexically_relative(m_boundary);
+			if (ec || below.empty() || *below.begin() == "..") return std::nullopt;
+		}
+		platform::beneath::read_request request;
+		request.root = m_boundary;
+		request.folder = below.parent_path();
+		request.leaf = below.filename();
+		request.max_bytes = file.size;
+		const platform::beneath::read_result read = platform::beneath::read_beneath(request, *bytes);
+		if (read.status != platform::beneath::read_status::ok) return std::nullopt;
+	}
 	if (bytes->size() != file.size) return std::nullopt;
 	if (file.kind == model_file_kind::texture) {
 		std::array<unsigned char, 18> head{};
@@ -337,8 +372,14 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 			throw std::runtime_error(std::format("'{}' is no image", shown_leaf(file.path)));
 		}
 	}
-	std::error_code ec;
-	if (fs::file_size(file.path, ec) != file.size || ec || fs::last_write_time(file.path, ec) != file.modified || ec || !file_id_of(file.path).same_as(file.id)) {
+	// The reader checked the handle it read from; the path is not opened again (file_id_of opens it on Windows).
+	const auto changed_on_disk = [&] {
+		std::error_code ec;
+		if (fs::file_size(file.path, ec) != file.size || ec) return true;
+		if (fs::last_write_time(file.path, ec) != file.modified || ec) return true;
+		return !file_id_of(file.path).same_as(file.id);
+	};
+	if (!m_read_file && changed_on_disk()) {
 		throw std::runtime_error(std::format("'{}' changed while it was read", shown_leaf(file.path)));
 	}
 	const content_digest digest = digest_of(*bytes);

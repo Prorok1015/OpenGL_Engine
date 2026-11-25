@@ -1,9 +1,14 @@
 #include <boost/test/unit_test.hpp>
+#include "test_file_attributes.hpp"
 #include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_source_rule.h"
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -46,6 +51,7 @@ struct fake_disk
 		out.entry_of = [this](const fs::path& path, std::error_code& ec) -> std::optional<link_entry> {
 			ec.clear();
 			asked.push_back(path);
+			order.push_back("open " + path.generic_string());
 			for (const auto& [at, kind] : entries) {
 				if (at == path) return kind;
 			}
@@ -53,6 +59,7 @@ struct fake_disk
 			return std::nullopt;
 		};
 		out.file_attributes = [this](const fs::path& path) -> std::optional<std::uint32_t> {
+			order.push_back("list " + path.generic_string());
 			return path == cloud ? cloud_attributes : 0x20u;
 		};
 		return out;
@@ -60,6 +67,7 @@ struct fake_disk
 
 	std::vector<std::pair<fs::path, link_entry>> entries;
 	std::vector<fs::path> asked;
+	std::vector<std::string> order;
 	fs::path broken;
 	fs::path cloud;
 	std::uint32_t cloud_attributes = 0;
@@ -105,7 +113,7 @@ BOOST_AUTO_TEST_CASE(SharesDevicePathsAndDotComponents_AreRefusedFromTheTextAlon
 	};
 	for (const char* path : { "\\\\server\\share\\x.png", "//server/share/x.glb", "\\\\?\\UNC\\server\\share\\x.glb",
 		"\\\\?\\D:\\x.png", "\\\\.\\D:\\x.png", "\\??\\D:\\x.png", "/\\server\\x.png", "\\pictures\\x.png",
-		"pictures\\x.png", "D:x.png", "D:\\a\\..\\x.png", "D:\\.\\x.png", "D:\\x.png:stream", "" }) {
+		"pictures\\x.png", "D:x.png", "D:\\a\\..\\x.png", "D:\\x.png:stream", "" }) {
 		BOOST_TEST_CONTEXT(path)
 		{
 			BOOST_CHECK(refused(edt::agent_source_path_problem(path, windows)));
@@ -122,7 +130,7 @@ BOOST_AUTO_TEST_CASE(SharesDevicePathsAndDotComponents_AreRefusedFromTheTextAlon
 		return std::string("/dev/sda1 / ext4 rw 0 0\n");
 	};
 	for (const char* path : { "\\\\server\\share\\x.glb", "//server/share/x.glb", "\\\\?\\UNC\\server\\share\\x.glb",
-		"/home/../x.glb", "/home/./x.glb", "x.glb" }) {
+		"/home/../x.glb", "x.glb" }) {
 		BOOST_TEST_CONTEXT(path)
 		{
 			const std::string why = edt::agent_source_path_problem(path, posix);
@@ -368,5 +376,292 @@ BOOST_AUTO_TEST_CASE(ARealFolderLink_OnTheWayToTheSource_IsRefused_EvenWhenItsTa
 	const std::string why = edt::agent_source_links_problem(base / "linked" / "robot.glb", ports);
 	BOOST_CHECK_MESSAGE(why.find("'linked' on the way to the source is a link") != std::string::npos, why);
 }
+
+// #1412 (a): `./tex.png` is common in glTF and a lone `.` cannot pass a link: it is no component; `..` stays refused.
+BOOST_AUTO_TEST_CASE(ALoneDot_IsNoComponent_ADotDotIsRefused)
+{
+	edt::source_volume_ports windows;
+	windows.windows = true;
+	windows.drive_type = [](char) { return edt::k_drive_fixed; };
+	windows.mount_table = {};
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\.\\x.png", windows)));
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:/models/./x.png", windows)));
+	const std::string up = edt::agent_source_path_problem("D:\\a\\..\\x.png", windows);
+	BOOST_CHECK_MESSAGE(up.find("'..'") != std::string::npos, up);
+
+	edt::source_volume_ports posix;
+	posix.windows = false;
+	posix.drive_type = {};
+	posix.mount_table = [] {
+		return std::optional<std::string>("/dev/sda1 / ext4 rw 0 0\nnas:/x /mnt/nas nfs4 rw 0 0\n");
+	};
+	BOOST_CHECK(!refused(edt::agent_source_path_problem("/home/./x.glb", posix)));
+	// The dot does not hide the mount it is under.
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt/./nas/x.glb", posix)));
+	BOOST_CHECK(refused(edt::agent_source_path_problem("/home/../x.glb", posix)));
+
+	fake_disk disk;
+	disk.entries = { { absolute_path("a"), link_entry::plain }, { absolute_path("a/x.glb"), link_entry::plain } };
+	BOOST_CHECK(!refused(edt::agent_source_links_problem(absolute_path("a/./x.glb"), disk.ports())));
+	BOOST_CHECK_EQUAL(disk.asked.size(), 2u);
+	const std::string walked_up = edt::agent_source_links_problem(absolute_path("a/../x.glb"), disk.ports());
+	BOOST_CHECK_MESSAGE(walked_up.find("'..'") != std::string::npos, walked_up);
+}
+
+// #1412: an entry of a projected file system (VFS for Git) asks its provider when it is opened, so its attributes come
+// from its folder's listing first, and an entry a read would fetch is never opened.
+BOOST_AUTO_TEST_CASE(OnWindows_TheAttributesComeFromTheListing_BeforeTheEntryIsOpened)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("vfs"), link_entry::plain },
+		{ absolute_path("vfs/robot.glb"), link_entry::plain } };
+	disk.cloud = absolute_path("vfs/robot.glb");
+	disk.cloud_attributes = edt::k_file_attribute_recall_on_open;
+	const std::string why = edt::agent_source_links_problem(absolute_path("vfs/robot.glb"), disk.ports(true));
+	BOOST_CHECK_MESSAGE(why.find("available offline") != std::string::npos, why);
+	BOOST_CHECK(std::ranges::find(disk.asked, absolute_path("vfs/robot.glb")) == disk.asked.end());
+	BOOST_REQUIRE_GE(disk.order.size(), 3u);
+	BOOST_CHECK_EQUAL(disk.order[0], "list " + absolute_path("vfs").generic_string());
+	BOOST_CHECK_EQUAL(disk.order[1], "open " + absolute_path("vfs").generic_string());
+	BOOST_CHECK_EQUAL(disk.order[2], "list " + absolute_path("vfs/robot.glb").generic_string());
+}
+
+// #1412 (review): the long spelling of a path is asked for only once the path as written passed the walk: it lists
+// each folder by its path, which would go through a link.
+BOOST_AUTO_TEST_CASE(TheLongSpelling_IsAskedForOnlyAfterTheWalkPassed)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("a"), link_entry::plain }, { absolute_path("a/b"), link_entry::link },
+		{ absolute_path("a/b/x.glb"), link_entry::plain } };
+	edt::source_volume_ports ports = disk.ports();
+	std::vector<fs::path> spelled;
+	ports.long_name = [&](const fs::path& path) {
+		spelled.push_back(path);
+		return path;
+	};
+	std::string why;
+	BOOST_CHECK(edt::agent_source_spelled(absolute_path("a/b/x.glb"), ports, why).empty());
+	BOOST_CHECK_MESSAGE(why.find("'b' on the way to the source is a link") != std::string::npos, why);
+	BOOST_CHECK(spelled.empty());
+
+	// A plain path is spelled long and walked again by that spelling.
+	disk.entries[1].second = link_entry::plain;
+	disk.asked.clear();
+	ports = disk.ports();
+	ports.long_name = [&](const fs::path& path) {
+		spelled.push_back(path);
+		return absolute_path("a/b/x.glb");
+	};
+	const fs::path got = edt::agent_source_spelled(absolute_path("a/B/x.glb"), ports, why);
+	BOOST_CHECK_MESSAGE(why.empty(), why);
+	BOOST_CHECK(got == absolute_path("a/b/x.glb"));
+	BOOST_REQUIRE_EQUAL(spelled.size(), 1u);
+	BOOST_CHECK(spelled.front() == absolute_path("a/B/x.glb"));
+}
+
+#if defined(_WIN32)
+// #1412 (review): a junction met under its 8.3 spelling is refused by the walk, and nothing beyond it is looked at.
+BOOST_AUTO_TEST_CASE(OnWindows_AJunctionUnderItsShortName_IsRefused_AndNothingBeyondItIsTouched)
+{
+	// Under the system's temp folder (C: on the runners): the build tree's volume may make no 8.3 names.
+	const fs::path base = fs::weakly_canonical(fs::temp_directory_path()) / "snk_agent_short_junction";
+	struct removed_at_end {
+		fs::path path;
+		~removed_at_end()
+		{
+			std::error_code ec;
+			fs::remove_all(path, ec);
+		}
+	} const cleanup{ base };
+	std::error_code ec;
+	fs::remove_all(base, ec);
+	fs::create_directories(base / "target");
+	std::ofstream(base / "target" / "robot.glb") << "glTF";
+	test_util::make_folder_link(base / "a_long_junction_name", base / "target");
+	const fs::path short_link = test_util::short_path(base / "a_long_junction_name");
+	BOOST_REQUIRE_MESSAGE(!short_link.empty() && short_link.filename() != "a_long_junction_name",
+		"no 8.3 name for " << (base / "a_long_junction_name").string());
+	edt::source_volume_ports ports;
+	std::vector<fs::path> asked;
+	ports.entry_of = [&](const fs::path& path, std::error_code& ec) {
+		asked.push_back(path);
+		return platform::beneath::link_entry_at(path, ec);
+	};
+	bool spelled = false;
+	ports.long_name = [&](const fs::path& path) {
+		spelled = true;
+		return path;
+	};
+	std::string why;
+	BOOST_CHECK(edt::agent_source_spelled(short_link / "robot.glb", ports, why).empty());
+	BOOST_CHECK_MESSAGE(why.find("is a link") != std::string::npos, why);
+	BOOST_CHECK(!spelled);
+	BOOST_REQUIRE(!asked.empty());
+	BOOST_CHECK(asked.back() == short_link);
+}
+#endif
+
+// #1412: a read starts at "/" (POSIX) and names every mount point on its way, so no folder of the path is opened by
+// its path; on Windows at the drive.
+BOOST_AUTO_TEST_CASE(TheReadRoute_StartsAtTheTop_AndNamesTheMountPointsOnTheWay)
+{
+	const std::optional<std::string> table = std::string("/dev/sda1 / ext4 rw 0 0\n/dev/sdb1 /mnt/data ext4 rw 0 0\n"
+		"/dev/sdc1 /mnt/data/usb vfat rw 0 0\n");
+	const auto route = edt::agent_read_route_of(fs::path("/mnt/data/usb/models/robot.glb"), false, table);
+	BOOST_REQUIRE(route.has_value());
+	BOOST_CHECK(route->root == fs::path("/"));
+	BOOST_CHECK_EQUAL(route->folder.generic_string(), "mnt/data/usb/models");
+	BOOST_CHECK(route->leaf == fs::path("robot.glb"));
+	BOOST_CHECK((route->mount_points == std::vector<std::size_t>{ 1, 2 }));
+	const auto dotted = edt::agent_read_route_of(fs::path("/mnt/./database/robot.glb"), false, table);
+	BOOST_REQUIRE(dotted.has_value());
+	BOOST_CHECK_EQUAL(dotted->folder.generic_string(), "mnt/database");
+	BOOST_CHECK(dotted->mount_points.empty());
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("/home/robot.glb"), false, std::nullopt));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("robot.glb"), false, table));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("/home/../robot.glb"), false, table));
+#if defined(_WIN32)
+	const auto drive = edt::agent_read_route_of(fs::path("D:\\models\\robot.glb"), true, std::nullopt);
+	BOOST_REQUIRE(drive.has_value());
+	BOOST_CHECK(drive->root == fs::path("D:\\"));
+	BOOST_CHECK(drive->folder == fs::path("models"));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("models\\robot.glb"), true, std::nullopt));
+#endif
+}
+
+namespace {
+
+std::string text_of(const std::vector<std::byte>& bytes)
+{
+	return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+// read_agent_file's read with `hook` called at its stages.
+edt::source_volume_ports hooked(const std::function<void(platform::beneath::read_stage)>& hook)
+{
+	edt::source_volume_ports ports;
+	ports.read_below = [&hook](const platform::beneath::read_request& request,
+		const platform::beneath::read_limits& limits, std::vector<std::byte>& out) {
+		BOOST_CHECK(limits.same_device);
+		BOOST_CHECK(limits.refuse_recall);
+		platform::beneath::read_request with_hook = request;
+		with_hook.hook = &hook;
+		return platform::beneath::read_beneath(with_hook, limits, out);
+	};
+	return ports;
+}
+
+}
+
+// #1412: the bytes come from the handle the walk opened, with its stamp; nothing is opened again by the path.
+BOOST_AUTO_TEST_CASE(AnAgentsRead_ComesFromTheHandleThatWasChecked)
+{
+	const test_util::temp_dir dir{ "agent_read_file" };
+	dir.write("real/robot.glb", "glTF-bytes");
+	dir.write("real/other.glb", "other");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const fs::path file = base / "real" / "robot.glb";
+	const edt::agent_file_read read = edt::read_agent_file(file, 64, edt::source_volume_ports{});
+	BOOST_REQUIRE_MESSAGE(read.problem.empty(), read.problem);
+	BOOST_CHECK_EQUAL(text_of(read.bytes), "glTF-bytes");
+	BOOST_REQUIRE(read.stamp);
+	const edt::agent_file_read stamped = edt::read_agent_file(file, 64, edt::source_volume_ports{}, true);
+	BOOST_REQUIRE_MESSAGE(stamped.problem.empty(), stamped.problem);
+	BOOST_CHECK(stamped.bytes.empty());
+	BOOST_CHECK(edt::same_file_stamp(*read.stamp, *stamped.stamp));
+	const edt::agent_file_read other = edt::read_agent_file(base / "real" / "other.glb", 64, edt::source_volume_ports{});
+	BOOST_REQUIRE_MESSAGE(other.problem.empty(), other.problem);
+	BOOST_CHECK(!edt::same_file_stamp(*read.stamp, *other.stamp));
+
+	const edt::agent_file_read grown = edt::read_agent_file(file, 4, edt::source_volume_ports{});
+	BOOST_CHECK_MESSAGE(grown.problem.find("larger") != std::string::npos, grown.problem);
+	BOOST_CHECK(grown.bytes.empty());
+	const edt::agent_file_read gone = edt::read_agent_file(base / "real" / "none.glb", 64, edt::source_volume_ports{});
+	BOOST_CHECK(!gone.problem.empty());
+	BOOST_CHECK(gone.missing);
+}
+
+// #1412: agent_file_changed refuses a link on the way, a plan without a stamp and another stamp; the shown file
+// passes.
+BOOST_AUTO_TEST_CASE(AgentFileChanged_RefusesALinkAMissingStampAndAnotherStamp)
+{
+	const test_util::temp_dir dir{ "agent_file_changed" };
+	dir.write("real/robot.glb", "glTF");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const fs::path file = base / "real" / "robot.glb";
+	edt::source_volume_ports ports;
+	const edt::agent_file_read shown = edt::read_agent_file(file, 64, ports, true);
+	BOOST_REQUIRE_MESSAGE(shown.problem.empty(), shown.problem);
+	BOOST_CHECK(edt::agent_file_changed(file, shown.stamp, ports).empty());
+	const std::string unstamped = edt::agent_file_changed(file, std::nullopt, ports);
+	BOOST_CHECK_MESSAGE(unstamped.find("changed since it was shown") != std::string::npos, unstamped);
+	platform::beneath::file_stamp other = *shown.stamp;
+	other.change_time_ns += 1;
+	BOOST_CHECK(!edt::agent_file_changed(file, other, ports).empty());
+	test_util::make_folder_link(base / "linked", base / "real");
+	const std::string linked = edt::agent_file_changed(base / "linked" / "robot.glb", shown.stamp, ports);
+	BOOST_CHECK_MESSAGE(linked.find("'linked' on the way to the source is a link") != std::string::npos, linked);
+}
+
+// #1412: a folder swapped for a link after the walk checked it is not followed by the read.
+BOOST_AUTO_TEST_CASE(AFolderSwappedForALink_AfterTheCheck_IsNotFollowed)
+{
+	const test_util::temp_dir dir{ "agent_read_swap" };
+	dir.write("real/robot.glb", "real");
+	dir.write("other/robot.glb", "other");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const fs::path file = base / "real" / "robot.glb";
+	BOOST_REQUIRE(!refused(edt::agent_source_links_problem(file, edt::source_volume_ports{})));
+	bool swapped = false;
+	const std::function<void(platform::beneath::read_stage)> swap = [&](platform::beneath::read_stage stage) {
+		if (stage != platform::beneath::read_stage::before_walk) return;
+		fs::rename(base / "real", base / "moved");
+		swapped = test_util::link_folder(base / "other", base / "real");
+	};
+	const edt::agent_file_read read = edt::read_agent_file(file, 64, hooked(swap));
+	BOOST_REQUIRE(swapped);
+	BOOST_CHECK_MESSAGE(!read.problem.empty(), text_of(read.bytes));
+	BOOST_CHECK(read.bytes.empty());
+	// An agent reads the reason, never the machine's paths.
+	BOOST_CHECK_MESSAGE(read.problem.find(base.filename().string()) == std::string::npos, read.problem);
+}
+
+#if !defined(_WIN32)
+// #1412: the file swapped for a link once its folders are held is not followed either.
+BOOST_AUTO_TEST_CASE(AFileSwappedForALink_OnceItsFoldersAreHeld_IsNotFollowed)
+{
+	const test_util::temp_dir dir{ "agent_read_file_swap" };
+	dir.write("real/robot.glb", "real");
+	dir.write("other.glb", "other");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const std::function<void(platform::beneath::read_stage)> swap = [&](platform::beneath::read_stage stage) {
+		if (stage != platform::beneath::read_stage::folders_held) return;
+		fs::remove(base / "real" / "robot.glb");
+		fs::create_symlink(base / "other.glb", base / "real" / "robot.glb");
+	};
+	const edt::agent_file_read read = edt::read_agent_file(base / "real" / "robot.glb", 64, hooked(swap));
+	BOOST_CHECK_MESSAGE(read.problem.find("no plain file") != std::string::npos, read.problem);
+	BOOST_CHECK(read.bytes.empty());
+}
+#endif
+
+#if defined(_WIN32)
+// #1412: an offline file is refused by the walk (from its folder's listing) and by the read (on its handle).
+BOOST_AUTO_TEST_CASE(OnWindows_AnOfflineFile_IsRefusedByTheWalkAndByTheRead)
+{
+	const test_util::temp_dir dir{ "agent_read_offline" };
+	dir.write("od/robot.glb", "glTF");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const fs::path file = base / "od" / "robot.glb";
+	BOOST_REQUIRE(test_util::set_offline(file, true));
+	const std::string walked = edt::agent_source_links_problem(file, edt::source_volume_ports{});
+	BOOST_CHECK_MESSAGE(walked.find("available offline") != std::string::npos, walked);
+	const edt::agent_file_read read = edt::read_agent_file(file, 64, edt::source_volume_ports{});
+	BOOST_CHECK_MESSAGE(read.problem.find("available offline") != std::string::npos, read.problem);
+	BOOST_CHECK(read.bytes.empty());
+	BOOST_REQUIRE(test_util::set_offline(file, false));
+	BOOST_CHECK(edt::read_agent_file(file, 64, edt::source_volume_ports{}).problem.empty());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

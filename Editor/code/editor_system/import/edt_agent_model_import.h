@@ -47,6 +47,9 @@ namespace edt {
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's plan: the stamp of the handle its walk opened (#1412), in place of `modified` and `id`, which a
+		// look by the path would take.
+		std::optional<platform::beneath::file_stamp> stamp{};
 		// What the job that listed the files read: the job that imports them must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
@@ -99,6 +102,9 @@ namespace edt {
 		// mount.
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
+		// Tests: the reads of an agent's files (source_volume_ports::read_below); null: read_below_root.
+		std::function<platform::beneath::read_result(const platform::beneath::read_request&,
+			const platform::beneath::read_limits&, std::vector<std::byte>&)> read_below;
 	};
 
 	// The file lists jobs found and a person has not been shown yet; defined in the .cpp.
@@ -125,6 +131,9 @@ namespace edt {
 		// every layer) without reading the model. `person`: no source rule; else agent_source_path_problem first, on the
 		// path given and on the path resolved. For an agent's call it runs only once a person approved it (start).
 		agent_import_plan resolve(const agent_import_request& request, bool person) const;
+		// resolve() of an agent's source past its walk: the stamp of the handle, nothing looked at by the path.
+		agent_import_plan resolve_for_agent(const agent_import_request& request, const std::filesystem::path& given,
+			agent_import_plan& plan) const;
 
 		// What the person is asked: the source, the destination, or why the call will be refused. For an agent's call
 		// it never looks at the source on the disk (only the project's layers): the path as given, no size. A person's

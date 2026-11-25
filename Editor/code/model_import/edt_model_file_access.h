@@ -2,6 +2,7 @@
 #include "edt_decoder_sandbox.h"
 #include "edt_file_identity.h"
 #include "edt_model_import_limits.h"
+#include <snk/platform/plt_beneath.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +24,8 @@ namespace edt {
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
+		std::optional<platform::beneath::file_stamp> stamp{};
 		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
@@ -88,10 +91,23 @@ namespace edt {
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
+		std::optional<platform::beneath::file_stamp> stamp{};
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		refusal_kind refusal = refusal_kind::none;
 		bool found() const { return !path.empty() && error.empty(); }
+	};
+
+	// An agent's look at a side file and read of it (#1412): both through the handle a no-follow walk opens, never by
+	// the path. Each throws std::runtime_error with the reason when the file may not be read.
+	struct model_file_reader {
+		// The stamp of the file at a path (absolute, lexically normal); nullopt when it is not there.
+		std::function<std::optional<platform::beneath::file_stamp>(const std::filesystem::path&)> stamp;
+		// The bytes of a resolved file, which must still have its stamp.
+		std::function<std::vector<std::byte>(const resolved_reference& file)> read;
+
+		explicit operator bool() const { return stamp && read; }
 	};
 
 	// What a model file may make the editor read from the disk for an agent's import: its own folder and the folders
@@ -112,9 +128,11 @@ namespace edt {
 
 		// `on_disk` false: the model was only given as bytes (served from memory or a pack, #925). It has no folder, so every
 		// file it refers to is refused and nothing is read from the disk. `may_read` (an agent's import, #1408): a
-		// non-empty answer refuses the file by the rule before the disk is asked about it.
+		// non-empty answer refuses the file by the rule before the disk is asked about it. `read_file` (an agent's
+		// import, #1412): reads a file in place of the read below the boundary.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
-			const std::filesystem::path& boundary = {}, bool on_disk = true, model_read_rule may_read = {});
+			const std::filesystem::path& boundary = {}, bool on_disk = true, model_read_rule may_read = {},
+			model_file_reader read_file = {});
 		// `provided` must outlive the access.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<provided_file>* provided, provided_mode mode);
 
@@ -149,6 +167,7 @@ namespace edt {
 		const std::vector<referenced_file>* m_allowed = nullptr;
 		const std::vector<provided_file>* m_provided = nullptr;
 		model_read_rule m_may_read;
+		model_file_reader m_read_file;
 		provided_mode m_mode = provided_mode::strict;
 		std::vector<requested_file> m_requested;
 		bool m_on_disk = true;
