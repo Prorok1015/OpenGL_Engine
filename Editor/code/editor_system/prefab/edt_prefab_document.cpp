@@ -35,7 +35,7 @@ edt::prefab_document::prefab_document(editor_services& services)
 
 edt::prefab_document::~prefab_document()
 {
-	unwatch_source();
+	m_watch.unwatch();
 }
 
 void edt::prefab_document::open(const res::tag& prefab_tag)
@@ -118,7 +118,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	sync_preview();
 	m_saved_form = std::move(as_read);
 	m_dirty = working_form() != m_saved_form;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	m_disk_version.clear();
 	m_lower_layer = false;
 	if (m_files.top_layer) {
@@ -127,7 +127,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 		m_lower_layer = on_disk.located && !on_disk.top_layer;
 	}
 
-	watch_source();
+	m_watch.watch(m_services.writable_resources(), m_source_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
 	egLOG("Editor/PrefabCtx", "Opened prefab '{}' for editing", prefab_tag.view());
 }
 
@@ -135,14 +135,14 @@ void edt::prefab_document::close()
 {
 	if (!m_open) return;
 
-	unwatch_source();
+	m_watch.unwatch();
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->destroy_preview(m_source_tag.view());
 	}
 
 	m_open = false;
 	m_dirty = false;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	m_working.reset();
 	m_root = entt::null;
 	m_saved_form.clear();
@@ -315,9 +315,9 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 		return save_result::failure("the project resources are not available");
 	}
 	const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_source_tag, m_disk_version);
-	if (allowed.changed_on_disk && !m_changed_on_disk) {
+	if (allowed.changed_on_disk && !m_disk.changed()) {
 		// The watcher may not have said so yet: the file is known to differ now, and Save All's question depends on the flag.
-		m_changed_on_disk = true;
+		m_disk.set_changed(true);
 		announce();
 	}
 	if (!allowed.error.empty()) {
@@ -348,7 +348,7 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 	m_saved_form = working_form();
 	m_disk_version = code_version_of(bytes);
 	m_dirty = false;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	announce();
 	return save_result::ok();
 }
@@ -372,30 +372,8 @@ edt::save_result edt::prefab_document::overwrite()
 	if (!on_disk.error.empty() && !on_disk.located) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_source_tag.view(), on_disk.error));
 	}
-	const std::string previous_version = std::exchange(m_disk_version, on_disk.version);
-	const save_result saved = save();
-	if (!saved.saved) {
-		m_disk_version = previous_version;
-		m_changed_on_disk = true;
-	}
-	return saved;
-}
-
-void edt::prefab_document::watch_source()
-{
-	unwatch_source();
-	m_watching = m_services.writable_resources();
-	if (m_watching) {
-		m_watching->watch(m_source_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
-	}
-}
-
-void edt::prefab_document::unwatch_source()
-{
-	if (m_watching) {
-		m_watching->unwatch(m_source_tag, this);
-		m_watching = nullptr;
-	}
+	return m_disk.overwrite(m_disk_version, on_disk.version, [this] { return save(); },
+		[](const save_result& saved) { return !saved.saved; });
 }
 
 void edt::prefab_document::on_source_changed(const res::tag& changed)
@@ -409,24 +387,16 @@ void edt::prefab_document::on_source_changed(const res::tag& changed)
 		return;
 	}
 	const desc_file_read on_disk = read_desc_file(*reader, *descs, m_files, m_source_tag);
-	if (on_disk.version == m_disk_version) {
-		if (m_changed_on_disk) {
-			m_changed_on_disk = false;
-			announce();
-		}
-		return;
-	}
-	if (!m_dirty && !edits_locked()) {
-		if (const std::string error = revert(); error.empty()) {
-			return;
-		} else {
-			egLOG_WARN("editor", "{}", error);
-		}
-	}
-	if (!m_changed_on_disk) {
-		m_changed_on_disk = true;
-		announce();
-	}
+	m_disk.on_source_changed(on_disk.version, m_disk_version, m_dirty, [this] { return edits_locked(); },
+		[this] {
+			if (const std::string error = revert(); error.empty()) {
+				return true;
+			} else {
+				egLOG_WARN("editor", "{}", error);
+				return false;
+			}
+		},
+		[this] { announce(); });
 }
 
 std::string edt::prefab_document::revert()
@@ -467,7 +437,7 @@ std::string edt::prefab_document::revert()
 	sync_preview();
 	m_disk_version = std::move(version);
 	m_dirty = working_form() != m_saved_form;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	announce();
 	return {};
 }
