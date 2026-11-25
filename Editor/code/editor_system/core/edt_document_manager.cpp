@@ -621,6 +621,11 @@ void edt::document_manager::forget_closed_links()
 	links_of(this).sweeping = false;
 }
 
+void edt::document_manager::close_descendants(document_id id)
+{
+	for (const document_id below : descendants_of(id)) close(below);
+}
+
 void edt::document_manager::close_or_release_descendants(document_id id)
 {
 	const std::vector<document_id> below = descendants_of(id);
