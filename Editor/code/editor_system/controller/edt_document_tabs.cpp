@@ -7,7 +7,7 @@ namespace
 {
 	bool has_close_flow(std::string_view kind)
 	{
-		return kind == "data" || kind == "prefab" || kind == "mesh";
+		return kind == "data" || kind == "prefab" || kind == "mesh" || kind == "shader_source";
 	}
 }
 
@@ -35,6 +35,10 @@ void edt::focus_document(document_manager& documents, document_id id, const docu
 	if (open->kind() == "prefab" && ports.show_prefab) ports.show_prefab();
 	if (open->kind() == "mesh" && ports.show_mesh) {
 		ports.show_mesh(id);
+		return;
+	}
+	if (open->kind() == "shader_source" && ports.show_shader_source) {
+		ports.show_shader_source(id);
 		return;
 	}
 	documents.set_active(id);
@@ -79,6 +83,10 @@ bool edt::document_tabs::close(document_id id)
 	}
 	if (open->kind() == "mesh" && m_ports.request_close_mesh) {
 		m_ports.request_close_mesh(id);
+		return true;
+	}
+	if (open->kind() == "shader_source" && m_ports.request_close_shader_source) {
+		m_ports.request_close_shader_source(id);
 		return true;
 	}
 	return false;

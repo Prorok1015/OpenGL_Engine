@@ -19,13 +19,16 @@ namespace edt
 	shader_editor_panel::~shader_editor_panel()
 	{
 		flush_pending(true);
+		if (m_ctx) m_ctx->set_edit_source({}, {});
 	}
 
 	void shader_editor_panel::set_context(shader_source_document* shown)
 	{
 		if (m_ctx == shown) return;
 		flush_pending(true);
+		if (m_ctx) m_ctx->set_edit_source({}, {});
 		m_ctx = shown;
+		if (m_ctx) m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); });
 		m_error.clear();
 		m_unplaced.clear();
 		m_loaded = false;
@@ -147,7 +150,13 @@ namespace edt
 		ImGui::EndDisabled();
 		ImGui::SameLine();
 		ImGui::BeginDisabled(!can_save || !is_dirty());
-		if (ImGui::Button("Revert")) request_revert();
+		if (ImGui::Button("Revert")) {
+			if (m_on_revert) {
+				m_on_revert();
+			} else {
+				request_revert();
+			}
+		}
 		ImGui::EndDisabled();
 		ImGui::SameLine();
 		if (ImGui::Button("Close")) press_close();

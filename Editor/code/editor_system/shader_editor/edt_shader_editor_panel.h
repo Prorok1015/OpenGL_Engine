@@ -32,6 +32,8 @@ namespace edt
 		// The Problems list; the window takes the `shader` rows of its file. Must outlive the window or be reset.
 		void set_problems(const problem_list* problems) { m_problems = problems; }
 		void set_on_save(std::function<void()> cb) { m_on_save = std::move(cb); }
+		// Revert asks first where the component wants it (it then calls `request_revert`); without one the button reverts at once.
+		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
 		void press_close();
 		// What the buttons do: Revert and Reload take the file's text (the typing not handed over goes with it, only when that worked);
@@ -75,6 +77,7 @@ namespace edt
 		shader_text_view m_view;
 		const problem_list* m_problems = nullptr;
 		std::function<void()> m_on_save;
+		std::function<void()> m_on_revert;
 		std::function<void()> m_on_close;
 		std::string m_error;
 		std::vector<std::string> m_unplaced;

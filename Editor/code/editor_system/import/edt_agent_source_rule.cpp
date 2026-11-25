@@ -43,8 +43,14 @@ namespace
 		return out;
 	}
 
-	std::string windows_volume_problem(std::string_view path, const edt::source_volume_ports& ports)
+	std::string windows_volume_problem(std::string_view path, std::span<const std::string_view> parts,
+		const edt::source_volume_ports& ports)
 	{
+		// Win32 strips a trailing space or dot: `x ` would open `x`, so the entry walked and the one read could differ.
+		const auto stripped = [](std::string_view part) { return part.back() == ' ' || part.back() == '.'; };
+		if (std::ranges::any_of(parts, stripped)) {
+			return "a component of the source path ends in a space or a dot: name the file by its plain absolute path";
+		}
 		const char letter = path.size() >= 3 ? path[0] : '\0';
 		const bool lettered = (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
 		if (!lettered || path[1] != ':' || !is_separator(path[2], true)) {
@@ -102,13 +108,14 @@ namespace
 		}
 	}
 
-	// The spellings of `path` a message may hold, longest first, without a trailing separator.
-	std::vector<std::string> spellings_of(const fs::path& path)
+	// The spellings of `path` a message may hold, longest first, without a trailing separator. `resolve`: also the
+	// path as the disk resolves it, which follows every link on the way.
+	std::vector<std::string> spellings_of(const fs::path& path, bool resolve)
 	{
 		std::vector<std::string> bases{ fs_paths::utf8_of(path), fs_paths::generic_utf8_of(path) };
 		std::error_code ec;
-		const fs::path resolved = fs::weakly_canonical(path, ec);
-		if (!ec) {
+		const fs::path resolved = resolve ? fs::weakly_canonical(path, ec) : fs::path{};
+		if (resolve && !ec) {
 			bases.push_back(fs_paths::utf8_of(resolved));
 			bases.push_back(fs_paths::generic_utf8_of(resolved));
 		}
@@ -153,6 +160,96 @@ std::optional<std::string> edt::system_mount_table()
 #endif
 }
 
+std::optional<std::uint32_t> edt::system_file_attributes(const fs::path& path)
+{
+#if defined(_WIN32)
+	// By name, no handle of ours: Windows reports the entry itself (a link's own attributes) and reads no data, so a
+	// placeholder is not fetched.
+	const DWORD attributes = GetFileAttributesW(platform::beneath::long_path(path).c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES) return std::nullopt;
+	return static_cast<std::uint32_t>(attributes);
+#else
+	static_cast<void>(path);
+	return std::nullopt;
+#endif
+}
+
+std::string edt::cloud_attributes_problem(std::uint32_t attributes)
+{
+	constexpr std::uint32_t fetched = k_file_attribute_offline | k_file_attribute_recall_on_open
+		| k_file_attribute_recall_on_data_access;
+	if ((attributes & fetched) == 0) return {};
+	return "it is a cloud file that is not on this disk (online-only): opening it would download it; make the file "
+		"available offline (keep it on this device) and ask again";
+}
+
+std::string edt::agent_source_links_problem(const fs::path& path, const source_volume_ports& ports,
+	const fs::path& checked)
+{
+	if (!path.is_absolute()) return "the source must be an absolute path";
+	if (!ports.entry_of) return "the entries on the way to the source cannot be inspected";
+	// The parts of `checked` that `path` starts with were walked already.
+	const fs::path relative = path.relative_path();
+	auto part = relative.begin();
+	const auto end = relative.end();
+	fs::path at = path.root_path();
+	if (!checked.empty() && checked.root_path() == path.root_path()) {
+		auto from = part;
+		fs::path walked = at;
+		bool under = true;
+		for (const fs::path& folder : checked.relative_path()) {
+			if (folder.empty()) continue;
+			if (from == end || *from != folder) {
+				under = false;
+				break;
+			}
+			walked /= *from;
+			++from;
+		}
+		if (under) {
+			part = from;
+			at = std::move(walked);
+		}
+	}
+	for (; part != end; ++part) {
+		if (part->empty()) continue;
+		if (*part == "." || *part == "..") {
+			return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
+		}
+		at /= *part;
+		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(*part), 256);
+		std::error_code ec;
+		const std::optional<platform::beneath::link_entry> entry = ports.entry_of(at, ec);
+		if (ec) return std::format("'{}' on the way to the source cannot be inspected", name);
+		if (!entry) return {};
+		// A POSIX mount point is a plain folder to lstat: the mount-table rule judges it (sound: no link led here).
+		if (*entry == platform::beneath::link_entry::link) {
+			return std::format("'{}' on the way to the source is a link (a symlink, a junction, a mount point or "
+				"another reparse point): an agent's import never follows one; name the file by its real path", name);
+		}
+		if (ports.windows && ports.file_attributes) {
+			const std::optional<std::uint32_t> attributes = ports.file_attributes(at);
+			if (!attributes) return std::format("'{}' on the way to the source cannot be inspected", name);
+			if (std::string why = cloud_attributes_problem(*attributes); !why.empty()) {
+				return std::format("'{}' on the way to the source: {}", name, why);
+			}
+		}
+	}
+	return {};
+}
+
+std::string edt::agent_side_file_problem(const fs::path& candidate, const fs::path& model_folder,
+	const source_volume_ports& ports)
+{
+	if (std::string why = agent_source_path_problem(fs_paths::utf8_of(candidate), ports); !why.empty()) {
+		return "an agent may not read it: " + why;
+	}
+	if (std::string why = agent_source_links_problem(candidate, ports, model_folder); !why.empty()) {
+		return "an agent may not read it: " + why;
+	}
+	return {};
+}
+
 std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)
 {
 	if (path.empty()) return "the source path is empty";
@@ -164,7 +261,7 @@ std::string edt::agent_source_path_problem(std::string_view path, const source_v
 	if (std::ranges::any_of(parts, [](std::string_view part) { return part == "." || part == ".."; })) {
 		return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
 	}
-	if (ports.windows) return windows_volume_problem(path, ports);
+	if (ports.windows) return windows_volume_problem(path, parts, ports);
 	if (path.front() != '/') return "the source must be an absolute path";
 	return posix_volume_problem(parts, ports);
 }
@@ -181,19 +278,23 @@ std::string edt::without_paths(std::string text, const std::vector<fs::path>& ro
 	std::vector<std::pair<std::string, std::string>> replacements;
 	if (!source.empty()) {
 		const std::string name = fs_paths::utf8_of(source.filename());
-		for (std::string& spelling : spellings_of(source)) replacements.emplace_back(std::move(spelling), name);
+		// The source is the resolved path of a plan: its text is all there is to replace, and the disk is not asked
+		// (a link swapped in since would be followed).
+		for (std::string& spelling : spellings_of(source, false)) {
+			replacements.emplace_back(std::move(spelling), name);
+		}
 		// A decoder's error may name a side file beside the source: its folder is no business of an agent's either.
 		// A root ("/", "C:/") is left: every path would lose its first separator.
 		const fs::path folder = source.parent_path();
 		if (folder.has_relative_path()) {
-			for (std::string& spelling : spellings_of(folder)) {
+			for (std::string& spelling : spellings_of(folder, false)) {
 				replacements.emplace_back(std::move(spelling), std::string(k_source_folder_text));
 			}
 		}
 	}
 	for (const fs::path& root : roots) {
 		if (root.empty()) continue;
-		for (const std::string& spelling : spellings_of(root)) {
+		for (const std::string& spelling : spellings_of(root, true)) {
 			replacements.emplace_back(spelling + "/", "res://");
 			replacements.emplace_back(spelling + "\\", "res://");
 			replacements.emplace_back(spelling, "res://");

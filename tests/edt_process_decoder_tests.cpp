@@ -1093,6 +1093,33 @@ BOOST_AUTO_TEST_CASE(ASideFileTheRuleRefuses_IsMissingToTheChild_WithOneWarning)
 	BOOST_CHECK(scan.files.empty());
 }
 
+// #1408: an agent's rule (import_source::may_read) refuses a side file before the editor looks at it on the disk.
+BOOST_AUTO_TEST_CASE(ASideFileTheCallersRuleRefuses_IsMissingToTheChild_AndIsNeverRead)
+{
+	const warn_capture warnings;
+	std::vector<fs::path> judged;
+	source.may_read = [&](const fs::path& candidate) -> std::string {
+		judged.push_back(candidate);
+		return candidate.filename() == "a.mtl" ? "a link on the way" : "";
+	};
+	std::vector<edt::provided_file> second;
+	const edt::model_file_scan scan = edt::broker_scan(source, [&](const std::vector<edt::provided_file>& provided) {
+		++calls;
+		if (calls == 1) return asking({ "a.mtl", "b.mtl" });
+		second = provided;
+		return asking({});
+	}, nullptr);
+	BOOST_CHECK_MESSAGE(scan.ok(), scan.error);
+	BOOST_REQUIRE_EQUAL(second.size(), 2u);
+	BOOST_CHECK_EQUAL(second[0].name, "a.mtl");
+	BOOST_CHECK(second[0].bytes == nullptr);
+	BOOST_CHECK(second[1].bytes != nullptr);
+	BOOST_CHECK_EQUAL(warnings.count("a link on the way"), 1u);
+	BOOST_CHECK_EQUAL(judged.size(), 2u);
+	BOOST_CHECK(std::none_of(scan.files.begin(), scan.files.end(),
+		[](const edt::referenced_file& file) { return file.path.filename() == "a.mtl"; }));
+}
+
 BOOST_AUTO_TEST_CASE(ASideFileOverALimit_FailsTheScan)
 {
 	const warn_capture warnings;

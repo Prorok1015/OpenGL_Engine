@@ -44,7 +44,8 @@ namespace edt
 		const res::tag& source() const override { return m_tag; }
 		std::uint64_t generation() const override { return m_generation; }
 
-		bool is_dirty() const override { return m_open && m_dirty; }
+		// Dirty also while the window holds typing it has not handed over (see `set_edit_source`).
+		bool is_dirty() const override { return m_open && (m_dirty || (m_pending_edits && m_pending_edits())); }
 		bool can_save() const override { return m_open && !read_only(); }
 		// Writes the text over the file as it is now and signals the change. Refuses, writing nothing, in Play, while the project may not be
 		// written, for a file of a lower layer and for a file somebody else changed since it was read (`changed_on_disk()`).
@@ -79,6 +80,13 @@ namespace edt
 
 		void set_files(desc_file_layout files) { m_files = std::move(files); }
 		void set_lock_source(std::function<bool()> locked) { m_locked = std::move(locked); }
+		// The window that edits the text: `pending` says it holds typing not handed over, `flush` hands it over (`set_text`). Save runs
+		// `flush` first, so a save that does not come from the window (Save All, Exit) never leaves typing behind. Cleared with empty functions.
+		void set_edit_source(std::function<bool()> pending, std::function<void()> flush)
+		{
+			m_pending_edits = std::move(pending);
+			m_flush_edits = std::move(flush);
+		}
 
 	private:
 		struct located
@@ -108,6 +116,8 @@ namespace edt
 		editor_events* m_events = nullptr;
 		desc_file_layout m_files;
 		std::function<bool()> m_locked;
+		std::function<bool()> m_pending_edits;
+		std::function<void()> m_flush_edits;
 		res::resource_system* m_watching = nullptr;
 
 		bool m_open = false;
