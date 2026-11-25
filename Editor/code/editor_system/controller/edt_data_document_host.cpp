@@ -151,7 +151,7 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 	std::shared_ptr<data_document_panel> panel;
 	if (kind == data_window_kind::by_type && has_window_of_its_own(data.type())) {
 		panel = std::make_shared<material_window_panel>(data, m_services, id, quiet,
-			material_preview_view{ .render = &m_context.render(), .gui = &m_context.gui(), .input = m_input_router });
+			preview_view{ .render = &m_context.render(), .gui = &m_context.gui(), .input = m_input_router });
 	} else {
 		panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	}
@@ -170,14 +170,14 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 void edt::data_document_host::release_previews()
 {
 	for (auto& [id, open] : m_windows) {
-		if (auto* material = dynamic_cast<material_window_panel*>(open.panel.get())) material->preview().release_world();
+		if (auto* material = dynamic_cast<material_window_panel*>(open.panel.get())) material->stage().release_world();
 	}
 }
 
 void edt::data_document_host::rebuild_previews()
 {
 	for (auto& [id, open] : m_windows) {
-		if (auto* material = dynamic_cast<material_window_panel*>(open.panel.get())) material->preview().rebuild_world();
+		if (auto* material = dynamic_cast<material_window_panel*>(open.panel.get())) material->stage().rebuild_world();
 	}
 }
 

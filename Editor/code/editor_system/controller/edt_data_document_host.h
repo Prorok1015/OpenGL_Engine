@@ -89,7 +89,7 @@ namespace edt
 		void set_shown_prefab(std::function<document_id()> shown_prefab) { m_shown_prefab = std::move(shown_prefab); }
 		// Where the material windows' preview cameras take the mouse from (#1196); null: no orbit. For the windows opened after.
 		void set_input_router(inp::input_router* router) { m_input_router = router; }
-		// The game layer goes / came: the material windows' preview worlds (sets of its context manager) are dropped and made
+		// The game layer goes / came: the material windows' preview stages (sets of its context manager) are dropped and made
 		// again, as the modeller's (modeller_component::park_for_layer_change).
 		void release_previews();
 		void rebuild_previews();
