@@ -36,7 +36,10 @@ namespace edt
 		file.text.reserve(body.size());
 		for (std::size_t i = 0; i < body.size(); ++i) {
 			if (body[i] == '\r' && i + 1 < body.size() && body[i + 1] == '\n') {
+				// One line break: the pair is counted once and becomes one LF.
 				++crlf;
+				file.text.push_back('\n');
+				++i;
 				continue;
 			}
 			if (body[i] == '\n') ++lf;
