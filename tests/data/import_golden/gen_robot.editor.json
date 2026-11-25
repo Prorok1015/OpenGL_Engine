@@ -1,14 +1,14 @@
 {
-	"memory://gen_robot/__embedded_txm/Image_0.pct": {
+	"memory://gen_robot/__embedded_txm/gen_robot.texture_0.pct": {
 		"size": 1456888,
 		"sha256": "3e887d5daa9bb189cc054cf6d1dc79e24fbcf21566e65a4d098f1d7a83b30c84"
 	},
-	"memory://gen_robot/__embedded_txm/Image_0.txm.desc": {
+	"memory://gen_robot/__embedded_txm/gen_robot.texture_0.txm.desc": {
 		"json": {
 			"__type": "texture_2d_desc",
 			"__parent": "res://base_texture.desc",
-			"name": "Image_0",
-			"data": "memory://gen_robot/__embedded_txm/Image_0.pct"
+			"name": "texture_0",
+			"data": "memory://gen_robot/__embedded_txm/gen_robot.texture_0.pct"
 		}
 	},
 	"memory://gen_robot/gen_robot.geom.bin": {
@@ -3031,7 +3031,7 @@
 			"__parent": "res://base_material.desc",
 			"name": "Material_0",
 			"samplers": [
-				"memory://gen_robot/__embedded_txm/Image_0.txm.desc"
+				"memory://gen_robot/__embedded_txm/gen_robot.texture_0.txm.desc"
 			],
 			"uniforms": {
 				"albedo": [
@@ -3060,15 +3060,15 @@
 		"geom_tag": "memory://gen_robot/gen_robot.geom.desc",
 		"prefab_tag": "memory://gen_robot/gen_robot.prefab.desc",
 		"all_tags": [
-			"memory://gen_robot/__embedded_txm/Image_0.pct",
-			"memory://gen_robot/__embedded_txm/Image_0.txm.desc",
+			"memory://gen_robot/__embedded_txm/gen_robot.texture_0.pct",
+			"memory://gen_robot/__embedded_txm/gen_robot.texture_0.txm.desc",
 			"memory://gen_robot/gen_robot.geom.desc",
 			"memory://gen_robot/gen_robot.prefab.desc",
 			"memory://gen_robot/materials/Material_0.mat.desc"
 		],
 		"created_tags": [
-			"memory://gen_robot/__embedded_txm/Image_0.pct",
-			"memory://gen_robot/__embedded_txm/Image_0.txm.desc",
+			"memory://gen_robot/__embedded_txm/gen_robot.texture_0.pct",
+			"memory://gen_robot/__embedded_txm/gen_robot.texture_0.txm.desc",
 			"memory://gen_robot/gen_robot.geom.bin",
 			"memory://gen_robot/gen_robot.geom.desc",
 			"memory://gen_robot/gen_robot.prefab.desc",

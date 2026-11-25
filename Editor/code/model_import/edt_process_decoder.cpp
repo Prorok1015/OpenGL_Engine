@@ -4,17 +4,22 @@
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
+#include <snk/command/cmd_base64.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/desc/desc_system.h>
 #include <snk/platform/plt_process.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_image_format.h>
+#include <snk/resource/res_image_header.h>
 #include <boost/json/parse_options.hpp>
 #include <boost/json/stream_parser.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <format>
 #include <iterator>
@@ -260,6 +265,26 @@ std::string_view extension_of(std::string_view name)
 	return dot == std::string_view::npos ? std::string_view{} : name.substr(dot + 1);
 }
 
+// An embedded texture is named only by its place in the model (#1206): "<stem>.texture_<index>" and .txm.desc, .raw or
+// .pct, the index in decimal without leading zeros and below the import's limit (it stores no other).
+std::optional<blob_kind> embedded_kind(std::string_view name, std::string_view stem)
+{
+	const std::string head = std::string(stem) + ".texture_";
+	if (!name.starts_with(head)) return std::nullopt;
+	name.remove_prefix(head.size());
+	std::size_t digits = 0;
+	while (digits < name.size() && name[digits] >= '0' && name[digits] <= '9') ++digits;
+	if (digits == 0 || (digits > 1 && name[0] == '0')) return std::nullopt;
+	std::size_t index = 0;
+	const auto [end, error] = std::from_chars(name.data(), name.data() + digits, index);
+	if (error != std::errc{} || end != name.data() + digits || index >= res::image_format::max_embedded_textures) return std::nullopt;
+	const std::string_view rest = name.substr(digits);
+	if (rest == ".txm.desc") return blob_kind::desc;
+	if (rest == ".raw") return blob_kind::embedded_raw;
+	if (rest == ".pct") return blob_kind::embedded_image;
+	return std::nullopt;
+}
+
 std::optional<blob_kind> classify(std::string_view relative, std::string_view stem)
 {
 	if (relative == std::string(stem) + ".prefab.desc" || relative == std::string(stem) + ".geom.desc") return blob_kind::desc;
@@ -274,12 +299,7 @@ std::optional<blob_kind> classify(std::string_view relative, std::string_view st
 		if (extension == "png" || extension == "jpg" || extension == "jpeg" || extension == "tga" || extension == "bmp") return blob_kind::image;
 		return std::nullopt;
 	}
-	if (in_folder("__embedded_txm/")) {
-		if (ends_with_text(relative, ".txm.desc")) return blob_kind::desc;
-		const std::string extension = lower(std::string(extension_of(relative)));
-		if (extension == "raw") return blob_kind::embedded_raw;
-		if (extension == "pct" || extension == "png" || extension == "jpg" || extension == "jpeg") return blob_kind::embedded_image;
-	}
+	if (in_folder("__embedded_txm/")) return embedded_kind(relative.substr(std::string_view("__embedded_txm/").size()), stem);
 	return std::nullopt;
 }
 
@@ -297,6 +317,28 @@ bool is_png(const std::vector<std::byte>& bytes) { return starts_with_bytes(byte
 bool is_jpeg(const std::vector<std::byte>& bytes) { return starts_with_bytes(bytes, { 0xFF, 0xD8, 0xFF }); }
 bool is_bmp(const std::vector<std::byte>& bytes) { return starts_with_bytes(bytes, { 'B', 'M' }); }
 
+// The importer writes a .raw of RGBA pixels and nothing else: its header, then exactly the pixels it names.
+bool embedded_raw_matches(const std::vector<std::byte>& bytes)
+{
+	if (bytes.size() < res::image_format::raw_header_size) return false;
+	res::image_format::raw_header header;
+	std::memcpy(&header, bytes.data(), res::image_format::raw_header_size);
+	if (header.channels != 4 || header.size.x <= 0 || header.size.y <= 0) return false;
+	if (header.size.x > res::image_format::max_picture_side || header.size.y > res::image_format::max_picture_side) return false;
+	const std::uint64_t pixels = std::uint64_t(header.size.x) * std::uint64_t(header.size.y) * 4;
+	return pixels <= res::image_format::max_picture_decoded_bytes && bytes.size() - res::image_format::raw_header_size == pixels;
+}
+
+// A picture the pct adapter decodes, of a size it takes, by its header alone (the editor decodes nothing it was handed).
+bool embedded_picture_matches(const std::vector<std::byte>& bytes)
+{
+	const std::optional<res::image_header::picture_size> size = res::image_header::read_picture_size(bytes);
+	if (!size) return false;
+	const std::uint64_t side = res::image_format::max_picture_side;
+	return size->width <= side && size->height <= side
+		&& std::uint64_t{ size->width } * size->height * 4 <= res::image_format::max_picture_decoded_bytes;
+}
+
 // What the exporter will copy under this name must be what the name says.
 bool content_matches(blob_kind kind, std::string_view relative, const std::vector<std::byte>& bytes)
 {
@@ -310,8 +352,8 @@ bool content_matches(blob_kind kind, std::string_view relative, const std::vecto
 		if (extension == "bmp") return is_bmp(bytes);
 		return bytes.size() >= 18;	// .tga has no magic: its header is 18 bytes
 	}
-	case blob_kind::embedded_raw: return bytes.size() >= 8;
-	case blob_kind::embedded_image: return is_png(bytes) || is_jpeg(bytes) || is_bmp(bytes);
+	case blob_kind::embedded_raw: return embedded_raw_matches(bytes);
+	case blob_kind::embedded_image: return embedded_picture_matches(bytes);
 	}
 	return false;
 }
@@ -358,6 +400,43 @@ bool windows_path_problem(std::string_view path)
 	return false;
 }
 
+std::optional<std::uint64_t> pixel_side(const boost::json::value* value)
+{
+	if (value == nullptr) return std::nullopt;
+	std::uint64_t side = 0;
+	if (value->is_int64() && value->as_int64() > 0) side = static_cast<std::uint64_t>(value->as_int64());
+	else if (value->is_uint64()) side = value->as_uint64();
+	if (side == 0 || side > res::image_format::max_inline_pixel_side) return std::nullopt;
+	return side;
+}
+
+// The inline pixels of a texture desc (#1204) as texture_2d_desc reads them: {width, height, format, base64} and nothing
+// else, the base64 canonical and exactly the pixels. Their text is data, never a tag, so it is not read as one.
+std::string pixels_problem(const boost::json::value& value)
+{
+	const std::string problem = "a desc of the import has inline pixels that are not {width, height, format, base64} of at most "
+		+ std::to_string(res::image_format::max_inline_pixel_bytes) + " bytes";
+	if (!value.is_object()) return problem;
+	const boost::json::object& pixels = value.as_object();
+	if (pixels.size() != 4) return problem;
+	const std::optional<std::uint64_t> width = pixel_side(pixels.if_contains("width"));
+	const std::optional<std::uint64_t> height = pixel_side(pixels.if_contains("height"));
+	const boost::json::value* format = pixels.if_contains("format");
+	const boost::json::value* text = pixels.if_contains("base64");
+	if (!width || !height || format == nullptr || !format->is_string() || text == nullptr || !text->is_string()) return problem;
+	std::uint64_t channels = 0;
+	if (format->as_string() == "R8") channels = 1;
+	else if (format->as_string() == "RGB8") channels = 3;
+	else if (format->as_string() == "RGBA8") channels = 4;
+	else return problem;
+	const std::uint64_t bytes = *width * *height * channels;
+	const std::string_view encoded(text->as_string().data(), text->as_string().size());
+	if (bytes > res::image_format::max_inline_pixel_bytes || encoded.size() != (bytes + 2) / 3 * 4) return problem;
+	const std::optional<std::vector<std::byte>> decoded = cmd::base64::decode(encoded);
+	if (!decoded || decoded->size() != bytes || cmd::base64::encode(*decoded) != encoded) return problem;
+	return {};
+}
+
 std::string json_problem(const boost::json::value& value, const std::unordered_set<std::string>& bundle_tags, std::size_t depth = 0)
 {
 	if (depth > 64) return "a desc of the import is nested too deep";
@@ -381,6 +460,10 @@ std::string json_problem(const boost::json::value& value, const std::unordered_s
 		if (key.starts_with("__") && !k_header_keys.contains(key)) return "a desc of the import has the key '" + cleaned(key) + "'";
 		if (reads_as_tag(key) && !bundle_tags.contains(std::string(key)) && !k_res_references.contains(key)) {
 			return "a desc of the import has the key '" + cleaned(key) + "', which reads as a tag";
+		}
+		if (depth == 0 && key == "pixels") {
+			if (std::string why = pixels_problem(member.value()); !why.empty()) return why;
+			continue;
 		}
 		if (key == "__parent") {
 			const boost::json::value& parent = member.value();
