@@ -173,7 +173,6 @@ struct recovery_fixture : test_util::scene_env
 		recovery.reset();
 		prefab.reset();
 		mesh.reset();
-		shader.reset();
 		autosave.reset();
 		documents.shutdown();
 		rs->unregistrate_resolver(res::tag::cache);
@@ -327,18 +326,35 @@ struct recovery_fixture : test_util::scene_env
 		};
 		ports.restore_shader_source = [this](const edt::autosave_recovery::restore_request& request, std::function<void(edt::autosave_recovery::restore_outcome)> done) {
 			++other_restores;
-			shader = std::make_unique<edt::shader_source_document>(services);
-			shader->assign_id(95);
-			shader->set_files(shader_layout());
-			shader->open(request.source);
-			if (!shader->is_open()) {
-				done({ shader->last_error(), {}, 0 });
-				return;
-			}
-			const std::string error = edt::restore_shader_source_bytes(*shader, *request.bytes, request.source_changed);
-			done({ error, {}, shader->generation() });
+			const edt::shader_restore_result restored = edt::restore_shader_source(documents, [this](const res::tag& tag) {
+				for (edt::shader_source_document* open : shaders_open()) {
+					if (open->source() == tag) return true;
+				}
+				auto made = std::make_unique<edt::shader_source_document>(services);
+				made->set_files(shader_layout());
+				made->open(tag);
+				if (!made->is_open()) return false;
+				documents.adopt(std::move(made));
+				return true;
+			}, request.source, *request.bytes, request.source_changed);
+			done({ restored.error, restored.document, restored.generation });
 		};
 		return ports;
+	}
+
+	std::vector<edt::shader_source_document*> shaders_open()
+	{
+		std::vector<edt::shader_source_document*> out;
+		documents.for_each([&out](edt::document& open) {
+			if (auto* found = dynamic_cast<edt::shader_source_document*>(&open)) out.push_back(found);
+		});
+		return out;
+	}
+
+	edt::shader_source_document* shader_open()
+	{
+		const std::vector<edt::shader_source_document*> all = shaders_open();
+		return all.empty() ? nullptr : all.front();
 	}
 
 	edt::desc_file_layout shader_layout()
@@ -408,7 +424,6 @@ struct recovery_fixture : test_util::scene_env
 	std::unique_ptr<edt::autosave_component> autosave;
 	std::unique_ptr<edt::prefab_document> prefab;
 	std::unique_ptr<edt::mesh_document> mesh;
-	std::unique_ptr<edt::shader_source_document> shader;
 	fs::path lower_layer;
 	std::unique_ptr<edt::autosave_recovery> recovery;
 	std::vector<asked_question> asked;
@@ -928,10 +943,16 @@ BOOST_AUTO_TEST_CASE(AShaderSource_IsRestoredDirty_ItsFileUnchanged_AndKeepsItsB
 {
 	write_file(content / "shaders" / "a.vert", k_shader_on_disk);
 	const std::string other = other_session();
-	put_record(other, "shader_source", "shaders/a.vert", bytes_of(k_shader_autosaved));
+	const std::vector<std::byte> payload = bytes_of(k_shader_autosaved);
+	edt::autosave_meta meta = meta_of(other, "shader_source", "shaders/a.vert", payload);
+	meta.source_size = std::string_view(k_shader_on_disk).size();
+	meta.source_sha256 = cmn::sha256_hex(bytes_of(k_shader_on_disk));
+	const std::string file = edt::autosave_file_of(other, "shader_source", res::tag::make("shaders/a.vert"));
+	put_raw(other, "shader_source", edt::autosave_leaf_of(file), k_shader_autosaved, edt::autosave_meta_text(meta));
 	run();
 	answer(edt::autosave_recovery::k_restore);
 	BOOST_TEST(messages.empty());
+	edt::shader_source_document* shader = shader_open();
 	BOOST_REQUIRE(shader != nullptr);
 	BOOST_TEST(shader->is_dirty());
 	BOOST_TEST(!shader->changed_on_disk());
@@ -957,10 +978,93 @@ BOOST_AUTO_TEST_CASE(AShaderSource_WhoseFileChangedSinceTheAutosave_IsRestoredAs
 	run();
 	answer(edt::autosave_recovery::k_restore);
 	BOOST_TEST(messages.empty());
+	edt::shader_source_document* shader = shader_open();
 	BOOST_REQUIRE(shader != nullptr);
 	BOOST_TEST(shader->is_dirty());
 	BOOST_TEST(shader->changed_on_disk());
 	BOOST_TEST(read_file(content / "shaders" / "a.frag") == "void main() {}\n");
+	BOOST_TEST(shader->save().saved == false);
+	BOOST_TEST(shader->revert().empty());
+	BOOST_TEST(!shader->is_dirty());
+	BOOST_TEST(shader->text() == "void main() {}\n");
+}
+
+BOOST_AUTO_TEST_CASE(AShaderSource_WhoseConflictIsOverwritten_WritesTheRestoredText)
+{
+	write_file(content / "shaders" / "a.frag", "void main() {}\n");
+	const std::string other = other_session();
+	const std::vector<std::byte> payload = bytes_of("void main() { discard; }\n");
+	edt::autosave_meta changed = meta_of(other, "shader_source", "shaders/a.frag", payload);
+	changed.source_size = 3;
+	changed.source_sha256 = std::string(64, '0');
+	const std::string file = edt::autosave_file_of(other, "shader_source", res::tag::make("shaders/a.frag"));
+	put_raw(other, "shader_source", edt::autosave_leaf_of(file), "void main() { discard; }\n", edt::autosave_meta_text(changed));
+	run();
+	answer(edt::autosave_recovery::k_restore);
+	edt::shader_source_document* shader = shader_open();
+	BOOST_REQUIRE(shader != nullptr);
+	BOOST_REQUIRE(shader->changed_on_disk());
+	BOOST_REQUIRE(shader->overwrite().saved);
+	BOOST_TEST(read_file(content / "shaders" / "a.frag") == "void main() { discard; }\n");
+	BOOST_TEST(!shader->changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(AShaderSourceAutosave_OfARunBeforeTheFix_WithoutASourceHash_IsRestoredAsADiskConflict)
+{
+	write_file(content / "shaders" / "a.frag", "void main() {}\n");
+	const std::string other = other_session();
+	put_record(other, "shader_source", "shaders/a.frag", bytes_of("void main() { discard; }\n"));
+	run();
+	answer(edt::autosave_recovery::k_restore);
+	BOOST_TEST(messages.empty());
+	edt::shader_source_document* shader = shader_open();
+	BOOST_REQUIRE(shader != nullptr);
+	BOOST_TEST(shader->is_dirty());
+	BOOST_TEST(shader->changed_on_disk());
+	BOOST_TEST(!session_exists(other));
+}
+
+BOOST_AUTO_TEST_CASE(AShaderSource_AlreadyOpenWithUnsavedChanges_IsNotRestoredOver_ItsRecordIsKept)
+{
+	write_file(content / "shaders" / "a.frag", "void main() {}\n");
+	auto made = std::make_unique<edt::shader_source_document>(services);
+	made->set_files(shader_layout());
+	made->open(res::tag::make("shaders/a.frag"));
+	BOOST_REQUIRE(made->is_open());
+	auto& open = dynamic_cast<edt::shader_source_document&>(documents.adopt(std::move(made)));
+	BOOST_REQUIRE(open.set_text("// the person's edit\n"));
+	const std::string other = other_session();
+	const std::string file = put_record(other, "shader_source", "shaders/a.frag", bytes_of("void main() { discard; }\n"));
+	run();
+	answer(edt::autosave_recovery::k_restore);
+	BOOST_REQUIRE(messages.size() == 1u);
+	BOOST_TEST(messages[0].find("unsaved changes") != std::string::npos);
+	BOOST_TEST(open.text() == "// the person's edit\n");
+	BOOST_TEST(fs::exists(cache / file));
+}
+
+BOOST_AUTO_TEST_CASE(RestoreShaderSource_WhenTheShaderDoesNotOpen_SaysSo)
+{
+	const edt::shader_restore_result result = edt::restore_shader_source(documents, [](const res::tag&) { return false; },
+		res::tag::make("shaders/a.frag"), bytes_of("x"), false);
+	BOOST_TEST(result.error == "the shader did not open");
+	const edt::shader_restore_result unfound = edt::restore_shader_source(documents, [](const res::tag&) { return true; },
+		res::tag::make("shaders/a.frag"), bytes_of("x"), false);
+	BOOST_TEST(unfound.error == "the shader did not open");
+}
+
+BOOST_AUTO_TEST_CASE(AShaderSourceWithTypingNotHandedOver_IsAutosavedWithTheTypedText_WithoutFlushing)
+{
+	write_file(content / "shaders" / "a.frag", "void main() {}\n");
+	edt::shader_source_document document(services);
+	document.set_files(shader_layout());
+	document.open(res::tag::make("shaders/a.frag"));
+	BOOST_REQUIRE(document.is_open());
+	int flushes = 0;
+	document.set_edit_source([] { return true; }, [&flushes] { ++flushes; }, [] { return std::string("void main() { typed(); }\r\n"); });
+	BOOST_TEST((document.autosave_capture().bytes == bytes_of("void main() { typed(); }\n")));
+	BOOST_TEST(flushes == 0);
+	document.set_edit_source({}, {});
 }
 
 BOOST_AUTO_TEST_CASE(AShaderSource_OfALowerLayer_IsNotRestored_ItsRecordIsKept)

@@ -388,7 +388,8 @@ edt::autosave_snapshot edt::shader_source_document::autosave_capture() const
 		return out;
 	}
 	shader_text_file file = m_file;
-	file.text = m_text;
+	const bool typing_waits = m_pending_edits && m_peek_edits && m_pending_edits();
+	file.text = typing_waits ? fold_line_breaks(m_peek_edits()) : m_text;
 	out.bytes = bytes_of(write_shader_text(file));
 	return out;
 }

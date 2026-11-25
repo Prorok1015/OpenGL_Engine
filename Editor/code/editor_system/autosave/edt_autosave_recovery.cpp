@@ -907,7 +907,7 @@ void edt::autosave_recovery::restore_next()
 	request.kind = found.meta.kind;
 	if (!found.meta.source.empty()) request.source = autosave_source_tag(found.meta.source).value_or(res::tag{});
 	request.bytes = found.bytes;
-	request.source_changed = found.source_changed;
+	request.source_changed = found.source_changed || found.source_not_checked || found.meta.source_sha256.empty();
 	request.leaf = std::string(autosave_leaf_of(found.file));
 	request.working_name = recovery_working_name(request.kind, request.leaf);
 	request.serial = ++m_serial;

@@ -156,7 +156,7 @@ namespace edt
 			// system reads it with the kind's adapter (recovery_working_name).
 			std::string working_name;
 			std::uint64_t serial = 0;
-			// The source file differs from the one the autosave was made over (see recovery_record::source_changed).
+			// The source file differs from the one the autosave was made over, or that was not checked (see recovery_record::source_changed).
 			bool source_changed = false;
 		};
 		struct restore_outcome
