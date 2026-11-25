@@ -53,6 +53,9 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);
 	});
+	// A material opens in the material window (#1196); this is the way to its generic data window.
+	m_ports.browser.set_open_as_data([this](const res::tag& tag) { return m_data_documents->has_own_window(tag); },
+		[this](const res::tag& tag) { m_data_documents->open(tag, false, data_window_kind::generic); });
 	document_creator::ports names{
 		[this] { return m_ports.services.descs(); },
 		[this] { return m_ports.services.writable_resources(); },

@@ -62,6 +62,7 @@ edt::panels_component::panels_component(ports from)
 	m_console = std::make_shared<console_panel>();
 	m_asset_browser = std::make_shared<asset_browser_panel>();
 	m_asset_browser->set_layers(m_ports.resources.get_resource_layers());
+	m_asset_browser->set_asset_kinds(&m_ports.context.asset_kinds());
 	m_asset_browser->set_ui_probe(m_ui_probe);
 	if (const auto code_roots = m_ports.resources.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_ports.resources, code_tree_model{ code_roots.back() },

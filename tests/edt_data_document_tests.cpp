@@ -1682,7 +1682,8 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Types_AreTheDocumentTypesOnly)
 {
 	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
 		[this] { return std::vector<fs::path>{ lower, res_root }; } } };
-	BOOST_TEST((creator.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+	// material_desc is the engine's (#1196): the scene types are registered here too.
+	BOOST_TEST((creator.types() == std::vector<std::string>{ "material_desc", "test.config", "test.linked", "test.tagged" }));
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
@@ -1829,15 +1830,22 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_ChecksTheNameAgainWhenTheTypeChange
 
 	edt::document_create_form form(creator);
 	form.open("");
-	BOOST_REQUIRE((form.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+	// By name: the engine registers document types of its own (material_desc, #1196).
+	const auto index_of = [&form](std::string_view type) {
+		const auto found = std::ranges::find(form.types(), type);
+		BOOST_REQUIRE_MESSAGE(found != form.types().end(), type);
+		return static_cast<std::size_t>(found - form.types().begin());
+	};
+	const std::size_t config = index_of("test.config");
+	const std::size_t tagged = index_of("test.tagged");
 	BOOST_TEST(form.file_name().empty());
-	form.set_type_index(2);
+	form.set_type_index(tagged);
 	form.set_name("game");
 	BOOST_TEST(form.file_name() == "game.desc");
 	BOOST_TEST(form.problem() == "'game.desc' already exists in the project layer");
 	BOOST_TEST(!form.suffix_replaced());
 
-	form.set_type_index(0);
+	form.set_type_index(config);
 	BOOST_TEST(form.file_name() == "game.config.desc");
 	BOOST_TEST(form.problem().empty());
 	BOOST_TEST(form.can_submit());
@@ -1858,12 +1866,12 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_ChecksTheNameAgainWhenTheTypeChange
 	BOOST_TEST(!form.suffix_replaced());
 
 	// a plain .desc type given another kind's tail: replaced, and shown as such
-	form.set_type_index(2);
+	form.set_type_index(tagged);
 	form.set_name("other.config.desc");
 	BOOST_TEST(form.file_name() == "other.desc");
 	BOOST_TEST(form.suffix_replaced());
 
-	form.set_type_index(0);
+	form.set_type_index(config);
 	form.set_name("game.prefab.desc");
 	const std::optional<res::tag> made = form.submit();
 	BOOST_REQUIRE(made.has_value());
@@ -2033,7 +2041,7 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	edt::document_create_form form(creator);
 	form.open("configs");
 	BOOST_TEST(form.folder() == "configs");
-	BOOST_TEST(form.types().size() == 3u);
+	BOOST_TEST(form.types().size() == 4u);
 	BOOST_TEST(!form.can_submit());
 	BOOST_TEST(form.problem().empty());
 	BOOST_TEST(!form.submit().has_value());
@@ -2042,7 +2050,7 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	BOOST_TEST(form.problem().size() > 0u);
 	BOOST_TEST(!form.can_submit());
 
-	form.set_type_index(2);
+	form.set_type_index(3);
 	form.set_name("game");
 	BOOST_TEST(form.can_submit());
 	const std::optional<res::tag> made = form.submit();

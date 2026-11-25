@@ -101,6 +101,8 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	registration_scope scope{ desc_sys, assembler };
 
 	scope.desc<material_desc>("material_desc");
+	// A document (#1196): the editor opens it in the material window. `samplers` is a custom field, described by its json_codec.
+	desc_sys.mark_document("material_desc", desc::schema_generator<material_desc>::codec_fields());
 	scope.desc<prefab_desc>("prefab_desc");
 	// Every write of a prefab over its `__parent` goes through the layer writer (#972): it keeps format v2 or refuses.
 	desc_sys.set_layer_writer("prefab_desc", [](desc::desc_system& descs, res::resource_system& resources, const desc::desc_base& desc, json::object& body) -> std::string {

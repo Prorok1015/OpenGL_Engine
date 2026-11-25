@@ -2,6 +2,7 @@
 #include "edt_mesh_model.h"
 #include "edt_mesh_selection.h"
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <utility>
@@ -35,6 +36,9 @@ namespace edt::mesh
 
 	// The vertices the selection touches (a face's corners, an edge's ends) that the mesh has.
 	std::set<vertex_id> selected_vertices(const poly_mesh& mesh, const mesh_selection& selection);
+
+	// A number that changes whenever what is selected changes (same elements, same stamp). For a UI that must notice a new selection.
+	std::uint64_t selection_stamp(const mesh_selection& selection);
 
 	// nullopt for a selection that touches no vertex.
 	std::optional<pivot_frame> selection_frame(const poly_mesh& mesh, const mesh_selection& selection, pivot_mode pivot, gizmo_orientation orientation);
