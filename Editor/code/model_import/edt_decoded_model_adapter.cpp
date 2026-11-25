@@ -17,9 +17,13 @@ namespace {
 
 // The bytes of the model and what decides how they decode. The side files are not in it: a hit reads again only the files
 // the scan listed, so a file the model names that was missing at the first load is not looked for until the bytes change.
+// What the editor accepts of a decoder's answer, apart from the decoder's own build: 2 = embedded textures named by their
+// index (#1206). A cached answer of another format is never reused.
+constexpr std::string_view k_answer_format = "answer-2";
+
 std::string cache_key(const std::string& decoder_version, const std::vector<std::byte>& model, const edt::import_source& source)
 {
-	return std::format("{}|{}|{}/{}/{}|{}|{}|{}", decoder_version, edt::digest_to_hex(edt::digest_of(model)),
+	return std::format("{}|{}|{}|{}/{}/{}|{}|{}|{}", k_answer_format, decoder_version, edt::digest_to_hex(edt::digest_of(model)),
 		source.limits.max_total_bytes, source.limits.max_file_bytes, source.limits.max_files, source.on_disk ? 1 : 0,
 		fs_paths::generic_utf8_of(source.boundary), fs_paths::generic_utf8_of(source.path));
 }

@@ -828,6 +828,8 @@ BOOST_AUTO_TEST_CASE(the_kind_of_asset_comes_from_the_suffix)
 {
 	BOOST_TEST(edt::asset_type_of("a/b.DESC") == "desc");
 	BOOST_TEST(edt::asset_type_of("t.Png") == "texture");
+	BOOST_TEST(edt::asset_type_of("m/__embedded_txm/m.texture_0.pct") == "texture");
+	BOOST_TEST(edt::asset_type_of("m/__embedded_txm/m.texture_1.RAW") == "texture");
 	BOOST_TEST(edt::asset_type_of("m.gltf") == "model");
 	BOOST_TEST(edt::asset_type_of("s.frag") == "shader");
 	BOOST_TEST(edt::asset_type_of("readme.md") == "file");

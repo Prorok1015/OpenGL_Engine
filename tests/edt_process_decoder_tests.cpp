@@ -6,6 +6,8 @@
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/render/geom/rnd_geometry_files.h>
+#include <snk/command/cmd_base64.h>
+#include <snk/resource/res_image_format.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
@@ -785,6 +787,116 @@ BOOST_AUTO_TEST_CASE(LinesAndPoints_InArrays_AreAccepted_WholeLinesOnly_AndIndic
 	const std::vector<std::byte> no_vertices = text_bytes(R"json({"__type":"geometry_desc","__parent":"res://base_geometry.desc",)json"
 		R"json("layout":{"position":"vec3"},"topology":"points","indices":[0,1,2],"vertices":[]})json");
 	BOOST_TEST(refused(answer_with_geometry(no_vertices, std::nullopt), "no vertex to index"));
+}
+
+// #1206: embedded textures of m.obj, as the importer names and writes them.
+namespace {
+
+std::vector<std::byte> base64_bytes(std::string_view text)
+{
+	std::optional<std::vector<std::byte>> bytes = cmd::base64::decode(text);
+	BOOST_REQUIRE(bytes.has_value());
+	return *bytes;
+}
+
+const std::string_view k_png_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const std::string_view k_tga_1x1 = "AAACAAAAAAAAAAAAAQABACAIAAD//w==";
+
+std::vector<std::byte> raw_of(int width, int height, int channels, std::size_t pixel_bytes)
+{
+	res::image_format::raw_header header{ { width, height }, channels };
+	std::vector<std::byte> bytes(res::image_format::raw_header_size + pixel_bytes);
+	std::memcpy(bytes.data(), &header, res::image_format::raw_header_size);
+	return bytes;
+}
+
+std::string embedded_desc(std::string_view field)
+{
+	return std::format(R"json({{"__type":"texture_2d_desc","__parent":"res://base_texture.desc","name":"t",{}}})json", field);
+}
+
+// The answer with prefab, geometry and these resources besides; every name under memory://m/__embedded_txm/.
+edt::decode_bundle embedded_answer(const std::vector<std::pair<std::string, std::vector<std::byte>>>& resources)
+{
+	std::vector<res::tag> tags = { k_prefab, k_geom };
+	std::vector<edt::bundle_blob> blobs = { blob_of(k_prefab, text_bytes("{}")), blob_of(k_geom, text_bytes("{}")) };
+	for (const auto& [name, bytes] : resources) {
+		const res::tag tag("memory://m/__embedded_txm/" + name);
+		tags.push_back(tag);
+		blobs.push_back(blob_of(tag, bytes));
+	}
+	return answer_with(blobs, tags, tags);
+}
+
+bool accepted(const edt::decode_bundle& bundle, std::string& problem)
+{
+	return edt::accept_import_answer(bundle, request_in(), problem).has_value();
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(EmbeddedTextures_NamedByTheirIndex_AsPctRawOrInlinePixels_AreAccepted)
+{
+	std::string problem;
+	// Inline pixels whose base64 begins like a tag ("res/"): data, never read as one.
+	const auto bundle = embedded_answer({
+		{ "m.texture_0.pct", base64_bytes(k_png_1x1) },
+		{ "m.texture_0.txm.desc", text_bytes(embedded_desc(R"json("data":"memory://m/__embedded_txm/m.texture_0.pct")json")) },
+		{ "m.texture_1.txm.desc", text_bytes(embedded_desc(R"json("pixels":{"width":2,"height":2,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAA=="})json")) },
+		{ "m.texture_2.raw", raw_of(2, 3, 4, 24) },
+		{ "m.texture_2.txm.desc", text_bytes(embedded_desc(R"json("data":"memory://m/__embedded_txm/m.texture_2.raw")json")) },
+		{ "m.texture_255.pct", base64_bytes(k_tga_1x1) },
+	});
+	BOOST_TEST(accepted(bundle, problem), problem);
+}
+
+BOOST_AUTO_TEST_CASE(AnEmbeddedTexture_UnderANameTheImporterNeverGives_IsRefused)
+{
+	for (const char* name : { "Image_0.pct", "m.texture_01.pct", "m.texture_256.pct", "m.texture_.pct", "other.texture_0.pct", "m.texture_0.png",
+		"m.texture_0.PCT", "sub/m.texture_0.pct", "m.texture_0.pct.pct" }) {
+		std::string problem;
+		BOOST_TEST(!accepted(embedded_answer({ { name, base64_bytes(k_png_1x1) } }), problem), name);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AnEmbeddedRawOrPicture_ThatIsNotWhatTheImporterWrites_IsRefused)
+{
+	const std::vector<std::byte> gif = base64_bytes("R0lGODlhAQABAAAAADs=");
+	const std::vector<std::byte> huge_png = base64_bytes("iVBORw0KGgoAAAANSUhEUgABhqAAAYagCAYAAACoUgvIAAAAAElFTkSuQmCC");
+	std::vector<std::byte> long_raw = raw_of(2, 3, 4, 24);
+	long_raw.push_back(std::byte{ 0 });
+	const std::vector<std::pair<std::string, std::vector<std::byte>>> cases = {
+		{ "m.texture_0.raw", raw_of(2, 3, 4, 23) },
+		{ "m.texture_0.raw", long_raw },
+		{ "m.texture_0.raw", raw_of(2, 3, 3, 18) },
+		{ "m.texture_0.raw", raw_of(0, 3, 4, 0) },
+		{ "m.texture_0.raw", raw_of(16385, 1, 4, 16385 * 4) },
+		{ "m.texture_0.raw", std::vector<std::byte>(8) },
+		{ "m.texture_0.pct", gif },
+		{ "m.texture_0.pct", huge_png },
+	};
+	for (const auto& [name, bytes] : cases) {
+		std::string problem;
+		BOOST_TEST(!accepted(embedded_answer({ { name, bytes } }), problem), name);
+		BOOST_TEST(problem.find("not what its name says") != std::string::npos, problem);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(InlinePixels_OtherThanTextureDescReadsThem_AreRefused)
+{
+	for (const char* pixels : {
+		R"json("pixels":{"width":2,"height":2,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAA"})json",	// no padding
+		R"json("pixels":{"width":2,"height":2,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAB=="})json",	// not canonical
+		R"json("pixels":{"width":2,"height":1,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAA=="})json",	// not the size
+		R"json("pixels":{"width":2,"height":2,"format":"BGRA8","base64":"res/AAAAAAAAAAAAAAAAAA=="})json",
+		R"json("pixels":{"width":2,"height":2,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAA==","data":"x"})json",
+		R"json("pixels":{"width":0,"height":2,"format":"RGBA8","base64":""})json",
+		R"json("pixels":{"width":4097,"height":1,"format":"R8","base64":""})json",
+		R"json("pixels":"memory://m/__embedded_txm/m.texture_0.pct")json" }) {
+		std::string problem;
+		BOOST_TEST(!accepted(embedded_answer({ { "m.texture_0.txm.desc", text_bytes(embedded_desc(pixels)) } }), problem), pixels);
+		BOOST_TEST(problem.find("inline pixels") != std::string::npos, problem);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1056,6 +1056,9 @@ struct import_question_fixture : question_fixture
 		options.scan = [](const edt::import_source&, ds::task_context*) { return edt::model_file_scan{}; };
 		options.resource_layers = [] { return std::vector<std::filesystem::path>{}; };
 		options.resources_path = [this] { return dir.path() / "res"; };
+		// Every volume a local disk: the test's folder may lie anywhere.
+		options.drive_type = [](char) { return edt::k_drive_fixed; };
+		options.mount_table = []() -> std::optional<std::string> { return std::string("/dev/sda1 / ext4 rw 0 0\n"); };
 		service = std::make_unique<edt::agent_model_import>(exporter, jobs, resources, std::move(options));
 		hooks.agent_import = service.get();
 		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
@@ -1103,7 +1106,9 @@ BOOST_FIXTURE_TEST_CASE(AModelImportAsksAboutExactlyThatFile_AndANoReadsNothing,
 	// The path as the question shows it (#991): '/' separators, escaped.
 	const std::string shown = text_escape::escaped_text(fs_paths::generic_utf8_of(dir.path() / "models" / "robot.glb"), 1024);
 	BOOST_TEST(waiting[0].detail.find(shown) != std::string::npos);
-	BOOST_TEST(waiting[0].detail.find("3 bytes") != std::string::npos);
+	// Made from the text: the source is looked at only once a person approved.
+	BOOST_TEST(waiting[0].detail.find("3 bytes") == std::string::npos);
+	BOOST_TEST(waiting[0].detail.find("(its size is read once approved)") != std::string::npos);
 	BOOST_TEST(waiting[0].detail.find("assets/robot") != std::string::npos);
 	BOOST_TEST(!waiting[0].can_grant_session);
 

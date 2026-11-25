@@ -42,6 +42,8 @@ namespace edt
 			std::function<void(const std::string& key)> release;
 			// Seconds, any origin.
 			std::function<double()> now;
+			// Called first in every tick() (optional): where the owner looks at what the workers depend on (the project, its trust).
+			std::function<void()> frame;
 		};
 
 		struct limits

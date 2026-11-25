@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/resource/resources/res_resource_picture.h>
+#include <snk/resource/res_image_format.h>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -21,8 +22,8 @@ namespace rnd
 	{
 	public:
 		// Inline pixels are for small textures (a colour, a checkerboard); a bigger one is a picture file.
-		static constexpr std::size_t k_max_inline_bytes = 64 * 1024;
-		static constexpr uint32_t k_max_inline_side = 4096;
+		static constexpr std::size_t k_max_inline_bytes = res::image_format::max_inline_pixel_bytes;
+		static constexpr uint32_t k_max_inline_side = res::image_format::max_inline_pixel_side;
 
 		using base_type = texture_desc;
 		texture_2d_desc() = default;

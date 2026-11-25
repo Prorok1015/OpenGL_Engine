@@ -17,6 +17,7 @@
 #include "edt_scene_editor.h"
 #include "edt_scene_hierarchy_panel.h"
 #include "edt_shape_request.h"
+#include "edt_thumbnail_cache.h"
 #include "edt_thumbnail_service.h"
 #include "edt_ui_probe.h"
 #include "edt_viewport_panel.h"
@@ -119,12 +120,38 @@ edt::panels_component::~panels_component()
 		m_asset_browser->set_thumbnails(nullptr);
 }
 
+namespace {
+
+// The cache a thumbnail job was started with, for the decode port that runs inside it on the worker: the job must not look
+// at the panels' current cache, which may be another project's by then.
+class bound_thumbnail_cache
+{
+public:
+	explicit bound_thumbnail_cache(std::shared_ptr<edt::thumbnail_disk_cache> cache) { slot() = std::move(cache); }
+	~bound_thumbnail_cache() { slot().reset(); }
+	bound_thumbnail_cache(const bound_thumbnail_cache&) = delete;
+	bound_thumbnail_cache& operator=(const bound_thumbnail_cache&) = delete;
+	static const std::shared_ptr<edt::thumbnail_disk_cache>& current() { return slot(); }
+
+private:
+	static std::shared_ptr<edt::thumbnail_disk_cache>& slot()
+	{
+		thread_local std::shared_ptr<edt::thumbnail_disk_cache> cache;
+		return cache;
+	}
+};
+
+}
+
 std::unique_ptr<edt::thumbnail_service> edt::panels_component::make_thumbnail_service()
 {
 	thumbnail_service::ports ports;
 	ports.dispatch = [this](std::function<thumbnail_decoded()> work, std::function<void(thumbnail_decoded)> done) {
 		m_ports.context.jobs().start(ds::lane::compute, { "Thumbnail", "thumbnail", false }, m_thumbnail_jobs,
-			[work = std::move(work)](ds::task_context&) -> thumbnail_decoded { return work(); },
+			[work = std::move(work), cache = refresh_thumbnail_cache()](ds::task_context&) -> thumbnail_decoded {
+				const bound_thumbnail_cache bound(cache);
+				return work();
+			},
 			[done = std::move(done)](ds::task_result<thumbnail_decoded>& result) {
 				if (result.ok())
 					done(std::move(*result.value));
@@ -133,7 +160,15 @@ std::unique_ptr<edt::thumbnail_service> edt::panels_component::make_thumbnail_se
 			});
 	};
 	ports.stat = &stat_asset_file;
-	ports.decode = &decode_thumbnail_file;
+	ports.decode = [](const std::filesystem::path& root, const std::filesystem::path& relative) {
+		const std::shared_ptr<thumbnail_disk_cache>& cache = bound_thumbnail_cache::current();
+		if (!cache || !cache->is_open())
+			return decode_thumbnail_file(root, relative);
+		return cache->load_or_decode(root, relative,
+			[](const std::filesystem::path& layer, const std::filesystem::path& file, std::optional<platform::beneath::file_stamp>& stamp) {
+				return decode_thumbnail_file(layer, file, stamp);
+			});
+	};
 	ports.upload = [this](const std::string& key, const thumbnail_pixels& pixels) -> std::uint64_t {
 		auto* backend = m_ports.gui.get_backend_interface();
 		if (!backend)
@@ -157,7 +192,41 @@ std::unique_ptr<edt::thumbnail_service> edt::panels_component::make_thumbnail_se
 		m_ports.rnd.get_texture_manager().remove(res::tag{ key });
 	};
 	ports.now = [] { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+	ports.frame = [this] { refresh_thumbnail_cache(); };
 	return std::make_unique<thumbnail_service>(std::move(ports));
+}
+
+std::shared_ptr<edt::thumbnail_disk_cache> edt::panels_component::refresh_thumbnail_cache()
+{
+	const std::optional<std::filesystem::path> dir = thumbnail_cache_location(
+		m_ports.project_cache_dir ? m_ports.project_cache_dir() : std::nullopt, m_ports.project_trusted && m_ports.project_trusted());
+	if (!dir || (m_thumbnail_cache && m_thumbnail_cache_root != *dir)) {
+		if (m_thumbnail_cache)
+			m_thumbnail_cache->close();
+		m_thumbnail_cache.reset();
+		m_thumbnail_cache_root.clear();
+	}
+	if (!dir)
+		return nullptr;
+	if (!m_thumbnail_cache) {
+		m_thumbnail_cache = std::make_shared<thumbnail_disk_cache>(*dir);
+		m_thumbnail_cache_root = *dir;
+	}
+	const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	constexpr double k_prune_lapse_seconds = 600;
+	const bool pruning = m_thumbnail_prune_running && *m_thumbnail_prune_running && now - m_thumbnail_prune_started < k_prune_lapse_seconds;
+	if (!pruning && m_thumbnail_cache->prune_due()) {
+		m_thumbnail_prune_running = std::make_shared<std::atomic<bool>>(true);
+		m_thumbnail_prune_started = now;
+		m_ports.context.jobs().start(ds::lane::io, { "Thumbnail cache", "thumbnail_cache", false }, m_thumbnail_jobs,
+			[cache = m_thumbnail_cache, running = m_thumbnail_prune_running](ds::task_context&) -> std::size_t {
+				const std::size_t removed = cache->prune();
+				*running = false;
+				return removed;
+			},
+			[](ds::task_result<std::size_t>&) {});
+	}
+	return m_thumbnail_cache;
 }
 
 void edt::panels_component::wire_scene_callbacks()

@@ -9,20 +9,25 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/text_escape.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/command/cmd_policy.h>
 #include <boost/json/parse.hpp>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
 
 // The model import an agent asks for (#548): the file a person is shown is the file that is imported, nothing is
 // written when the import fails or is cancelled, and nothing of the import stays in memory://. The model itself is
-// faked (a few memory:// resources), so these tests need no assimp.
+// faked (a few memory:// resources), so these tests need no assimp. An agent's source and its side files lie on a
+// local disk only, and are looked at only after a person approved the call (#1380).
 
 namespace {
 
@@ -87,7 +92,27 @@ struct import_fixture : test_util::scene_env
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.now = [this] { return clock; };
 		result.max_source_bytes = 4096;
+		result.drive_type = [this](char letter) {
+			++drive_type_calls;
+			return std::toupper(static_cast<unsigned char>(letter)) == remote_drive ? 4u : edt::k_drive_fixed;
+		};
+		result.mount_table = [this]() -> std::optional<std::string> {
+			++mount_table_calls;
+			return mounts;
+		};
 		return result;
+	}
+
+	// A path on a network volume as the classifier is faked for this platform.
+	std::string remote_volume_path(std::string_view leaf)
+	{
+#if defined(_WIN32)
+		remote_drive = 'Z';
+		return "Z:\\models\\" + std::string(leaf);
+#else
+		mounts += "nas:/export /mnt/nas nfs4 rw 0 0\n";
+		return "/mnt/nas/models/" + std::string(leaf);
+#endif
 	}
 
 	// What assimp would leave in memory://: textures, a geometry and a prefab that refers to it.
@@ -162,12 +187,12 @@ struct import_fixture : test_util::scene_env
 		return info->result->as_object();
 	}
 
-	// The question, the person's yes, the start: as the registry does it for an agent.
+	// The question, the person's yes, the start: as the registry does it for an agent (the ticket is the registry's).
 	edt::agent_model_import::started approved_start(const edt::agent_import_request& wanted, const cmd::origin& caller)
 	{
 		const auto shown = service->describe(wanted, caller);
 		BOOST_REQUIRE(shown.has_value());
-		return service->start(wanted, caller, true);
+		return service->start(wanted, caller);
 	}
 
 	test_util::temp_dir dir{ "agent_model_import" };
@@ -196,6 +221,11 @@ struct import_fixture : test_util::scene_env
 	edt::decoder_sandbox_status scan_reports{};
 	edt::decoder_sandbox_status import_reports{};
 	edt::decoder_sandbox_status expected_sandbox{};
+	// The classifier of an agent's source: every drive a fixed disk but this one, a local root file system.
+	int remote_drive = 0;
+	std::string mounts = "/dev/sda1 / ext4 rw 0 0\n";
+	int drive_type_calls = 0;
+	int mount_table_calls = 0;
 };
 
 edt::decoder_sandbox_status sandbox_report(bool fs, std::string why)
@@ -214,7 +244,7 @@ BOOST_FIXTURE_TEST_SUITE(EdtAgentModelImportTests, import_fixture)
 
 BOOST_AUTO_TEST_CASE(Resolve_NamesTheFileTheNameAndTheFilesItWillWrite)
 {
-	const edt::agent_import_plan plan = service->resolve(request());
+	const edt::agent_import_plan plan = service->resolve(request(), false);
 	BOOST_REQUIRE_MESSAGE(plan.ok(), plan.error);
 	BOOST_CHECK(plan.source == source);
 	BOOST_CHECK_EQUAL(plan.size, 22u);
@@ -222,7 +252,7 @@ BOOST_AUTO_TEST_CASE(Resolve_NamesTheFileTheNameAndTheFilesItWillWrite)
 	BOOST_CHECK_EQUAL(plan.folder, "assets/robot");
 	BOOST_CHECK_EQUAL(plan.prefab, "res://assets/robot/robot.prefab.desc");
 
-	const edt::agent_import_plan named = service->resolve(request("hero", "res://models/heroes"));
+	const edt::agent_import_plan named = service->resolve(request("hero", "res://models/heroes"), false);
 	BOOST_REQUIRE_MESSAGE(named.ok(), named.error);
 	BOOST_CHECK_EQUAL(named.prefab, "res://models/heroes/hero.prefab.desc");
 }
@@ -230,7 +260,7 @@ BOOST_AUTO_TEST_CASE(Resolve_NamesTheFileTheNameAndTheFilesItWillWrite)
 BOOST_AUTO_TEST_CASE(Resolve_RefusesWhatIsNoModelFileOnDisk)
 {
 	const auto code_of = [this](const edt::agent_import_request& wanted) {
-		const edt::agent_import_plan plan = service->resolve(wanted);
+		const edt::agent_import_plan plan = service->resolve(wanted, false);
 		BOOST_CHECK(!plan.ok());
 		return plan.code;
 	};
@@ -244,7 +274,8 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesWhatIsNoModelFileOnDisk)
 	BOOST_CHECK_EQUAL(code_of({ (dir.path() / "outside" / "notes.txt").string(), "", "" }), cmd::codes::invalid_args);	// no model extension
 	BOOST_CHECK_EQUAL(code_of({ (dir.path() / "outside" / "empty.glb").string(), "", "" }), cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(code_of({ (dir.path() / "outside" / "folder.glb").string(), "", "" }), cmd::codes::invalid_args);	// a folder
-	const edt::agent_import_plan big = service->resolve({ (dir.path() / "outside" / "big.glb").string(), "", "" });
+	const edt::agent_import_plan big =
+		service->resolve({ (dir.path() / "outside" / "big.glb").string(), "", "" }, false);
 	BOOST_CHECK(!big.ok());
 	BOOST_CHECK_EQUAL(big.code, cmd::codes::invalid_args);
 	BOOST_CHECK_MESSAGE(big.error.find("exceeds 4 KiB for an agent's import (source)") != std::string::npos, big.error);
@@ -260,7 +291,7 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesALinkToAModel)
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
 		return;
 	}
-	const edt::agent_import_plan plan = service->resolve({ link.string(), "", "" });
+	const edt::agent_import_plan plan = service->resolve({ link.string(), "", "" }, false);
 	BOOST_CHECK(!plan.ok());
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
 	BOOST_CHECK(plan.error.find("link") != std::string::npos);
@@ -269,26 +300,26 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesALinkToAModel)
 BOOST_AUTO_TEST_CASE(Resolve_RefusesAnAssetNameThatIsTheExtensionOfAModelFormat)
 {
 	for (const char* name : { "obj", "fbx", "glb", "gltf", "OBJ", "Fbx" }) {
-		const edt::agent_import_plan plan = service->resolve(request(name));
+		const edt::agent_import_plan plan = service->resolve(request(name), false);
 		BOOST_CHECK_MESSAGE(!plan.ok(), name);
 		BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
 		BOOST_CHECK_MESSAGE(plan.error.find("extension of a model format") != std::string::npos, plan.error);
 	}
-	BOOST_CHECK(service->resolve(request("objects")).ok());
+	BOOST_CHECK(service->resolve(request("objects"), false).ok());
 }
 
 BOOST_AUTO_TEST_CASE(Resolve_RefusesBadNamesAndFolders)
 {
 	for (const char* name : { "..", "a/b", "CON", "x.", "a:b", "a|b" }) {
 		BOOST_TEST_CONTEXT("name " << name) {
-			const edt::agent_import_plan plan = service->resolve(request(name));
+			const edt::agent_import_plan plan = service->resolve(request(name), false);
 			BOOST_CHECK(!plan.ok());
 			BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
 		}
 	}
 	for (const char* folder : { "../out", "/abs", "C:/x", "memory://x", "a//b", "a/./b", "a\\b", "nul/x", "a/b." }) {
 		BOOST_TEST_CONTEXT("folder " << folder) {
-			const edt::agent_import_plan plan = service->resolve(request("", folder));
+			const edt::agent_import_plan plan = service->resolve(request("", folder), false);
 			BOOST_CHECK(!plan.ok());
 			BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
 		}
@@ -298,11 +329,11 @@ BOOST_AUTO_TEST_CASE(Resolve_RefusesBadNamesAndFolders)
 BOOST_AUTO_TEST_CASE(Resolve_AnExistingTargetNeedsInput_InAnyLayer)
 {
 	dir.write("res/assets/robot/robot.prefab.desc", "{}");
-	const edt::agent_import_plan plan = service->resolve(request());
+	const edt::agent_import_plan plan = service->resolve(request(), false);
 	BOOST_CHECK(!plan.ok());
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::needs_input);
 	BOOST_CHECK(plan.error.find("res://assets/robot/robot.prefab.desc") != std::string::npos);
-	BOOST_CHECK(service->resolve(request("other")).ok());
+	BOOST_CHECK(service->resolve(request("other"), false).ok());
 }
 
 // #1361: the prefab's name is held by a .resource a deleted file left: the import asks before anything is parsed.
@@ -310,27 +341,27 @@ BOOST_AUTO_TEST_CASE(Resolve_APrefabNameALeftoverResourceHolds_NeedsInput)
 {
 	dir.write("res/assets/robot/robot.prefab.desc.resource", R"({"__type":"resource_meta","__version":1,)"
 		R"("__guid":"5d8a1f3e-2b4c-4e6f-8a9b-0c1d2e3f4a5b"})");
-	const edt::agent_import_plan plan = service->resolve(request());
+	const edt::agent_import_plan plan = service->resolve(request(), false);
 	BOOST_CHECK(!plan.ok());
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::needs_input);
 	BOOST_CHECK(plan.error.find("robot.prefab.desc.resource") != std::string::npos);
-	BOOST_CHECK(service->resolve(request("other")).ok());
+	BOOST_CHECK(service->resolve(request("other"), false).ok());
 }
 
 BOOST_AUTO_TEST_CASE(Resolve_IsBusyWhileAnotherImportRunsOrTheEditorBlocks)
 {
 	blocked = "Stop Play to import.";
-	const edt::agent_import_plan plan = service->resolve(request());
+	const edt::agent_import_plan plan = service->resolve(request(), false);
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::busy);
 	BOOST_CHECK_EQUAL(plan.error, "Stop Play to import.");
 	blocked.reset();
 
-	BOOST_REQUIRE(service->start(request(), cmd::origin::ui(), false).ok());
+	BOOST_REQUIRE(service->start(request(), cmd::origin::ui()).ok());
 	BOOST_CHECK(service->running());
-	BOOST_CHECK_EQUAL(service->resolve(request("second")).code, cmd::codes::busy);
+	BOOST_CHECK_EQUAL(service->resolve(request("second"), false).code, cmd::codes::busy);
 	run_jobs();
 	BOOST_CHECK(!service->running());
-	BOOST_CHECK(service->resolve(request("second")).ok());
+	BOOST_CHECK(service->resolve(request("second"), false).ok());
 }
 
 BOOST_AUTO_TEST_CASE(WithoutAnImporter_EverythingIsDisabledWithTheReason)
@@ -339,10 +370,10 @@ BOOST_AUTO_TEST_CASE(WithoutAnImporter_EverythingIsDisabledWithTheReason)
 	none.import = nullptr;
 	edt::agent_model_import bare(exporter, jobs, *rs, std::move(none));
 	BOOST_CHECK(!bare.available());
-	const edt::agent_import_plan plan = bare.resolve(request());
+	const edt::agent_import_plan plan = bare.resolve(request(), false);
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::disabled);
 	BOOST_CHECK(plan.error.find("assimp") != std::string::npos);
-	const auto started = bare.start(request(), cmd::origin::ui(), true);
+	const auto started = bare.start(request(), cmd::origin::ui());
 	BOOST_CHECK(!started.ok());
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::disabled);
 }
@@ -356,22 +387,24 @@ BOOST_AUTO_TEST_CASE(WithoutTheDecoder_EverythingIsDisabledWithAReasonThatNamesT
 	none.unavailable_reason = [] { return std::string("the model decoder 'bin/snk_model_decoder' was not found next to the editor"); };
 	edt::agent_model_import bare(exporter, jobs, *rs, std::move(none));
 	BOOST_CHECK(!bare.available());
-	const edt::agent_import_plan plan = bare.resolve(request());
+	const edt::agent_import_plan plan = bare.resolve(request(), false);
 	BOOST_CHECK_EQUAL(plan.code, cmd::codes::disabled);
 	BOOST_CHECK(plan.error.find("snk_model_decoder") != std::string::npos);
-	const auto started = bare.start(request(), cmd::origin::ui(), true);
+	const auto started = bare.start(request(), cmd::origin::ui());
 	BOOST_CHECK(!started.ok());
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::disabled);
 	BOOST_CHECK(started.error.find("snk_model_decoder") != std::string::npos);
 	BOOST_CHECK_EQUAL(parsed_here, 0);
 }
 
-BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
+BOOST_AUTO_TEST_CASE(Describe_ShowsThePathTheDestination_AndForAnAgentNoSize)
 {
 	const std::optional<std::string> text = service->describe(request("hero", "models"), agent);
 	BOOST_REQUIRE(text.has_value());
 	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
-	BOOST_CHECK(text->find("22 bytes") != std::string::npos);
+	// An agent's question is made from the text: the size is read once a person approved.
+	BOOST_CHECK(text->find("22 bytes") == std::string::npos);
+	BOOST_CHECK(text->find("(its size is read once approved)") != std::string::npos);
 	BOOST_CHECK(text->find("res://models/") != std::string::npos);
 	BOOST_CHECK(text->find("'hero'") != std::string::npos);
 	BOOST_CHECK(text->find("res://models/hero.prefab.desc") != std::string::npos);
@@ -379,13 +412,27 @@ BOOST_AUTO_TEST_CASE(Describe_ShowsTheFullPathTheSizeAndTheDestination)
 	const std::optional<std::string> refused = service->describe({ "relative.glb", "", "" }, agent);
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_CHECK(refused->rfind("This request will be refused", 0) == 0u);
+
+	// A person's call is described from the disk.
+	const std::optional<std::string> person = service->describe(request("hero", "models"), cmd::origin::ui());
+	BOOST_REQUIRE(person.has_value());
+	BOOST_CHECK(person->find("22 bytes") != std::string::npos);
 }
 
-// #991: the refusal escapes the agent's path where it is built, and the question shows that escape once.
+// #991: the refusal escapes the path where it is built, and the question shows that escape once; an agent's question
+// (made from the text) shows the path escaped once too.
 BOOST_AUTO_TEST_CASE(Describe_ARefusalShowsAnEscapeOfThePathOnce)
 {
-	const std::string missing = fs_paths::generic_utf8_of(fs::weakly_canonical(dir.path() / "outside")) + "/miss\xE2\x80\xAE" "ing.glb";
-	const std::optional<std::string> refused = service->describe({ missing, "hero", "models" }, agent);
+	const std::string missing = fs_paths::generic_utf8_of(fs::weakly_canonical(dir.path() / "outside"))
+		+ "/miss\xE2\x80\xAE" "ing.glb";
+	const std::optional<std::string> asked = service->describe({ missing, "hero", "models" }, agent);
+	BOOST_REQUIRE(asked.has_value());
+	BOOST_TEST(asked->rfind("This request will be refused", 0) != 0u, *asked);
+	BOOST_TEST(asked->find("/miss\\u{202E}ing.glb") != std::string::npos, *asked);
+	BOOST_TEST(asked->find("\\\\u{202E}") == std::string::npos, *asked);
+	BOOST_TEST(asked->find("\xE2\x80\xAE") == std::string::npos, *asked);
+
+	const std::optional<std::string> refused = service->describe({ missing, "hero", "models" }, cmd::origin::ui());
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_TEST(refused->rfind("This request will be refused", 0) == 0u, *refused);
 	BOOST_TEST(refused->find("/miss\\u{202E}ing.glb") != std::string::npos, *refused);
@@ -462,7 +509,7 @@ BOOST_AUTO_TEST_CASE(BothQuestions_SayWhenTheDecoderRunsWithoutOSIsolation)
 	expected_sandbox = {};
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	scan_reports = sandbox_report(false, "the OS sandbox is turned off (import/decoder_sandbox)");
-	const json::object parked = finished(service->start(request("hero", "models"), agent, true).job);
+	const json::object parked = finished(service->start(request("hero", "models"), agent).job);
 	edt::agent_import_request second = request("hero", "models");
 	second.files_token = std::string(parked.at("files_token").as_string());
 	const std::optional<std::string> text = service->describe(second, agent);
@@ -535,7 +582,7 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_ShowsEveryFileWithTheTotal_AndImportsExactlyT
 	BOOST_CHECK(text->find("25 files") != std::string::npos);
 	BOOST_CHECK(text->find("2500 bytes") != std::string::npos);
 
-	const auto started = service->start(second, agent, true);
+	const auto started = service->start(second, agent);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	scan_error = "must not be asked again";
 	const json::object result = finished(started.job);
@@ -569,7 +616,7 @@ BOOST_AUTO_TEST_CASE(TheSecondCall_WithoutAListOfItsOwn_IsRefused)
 	edt::agent_import_request wrong_token = request("hero", "models");
 	wrong_token.files_token = "files-999";
 	BOOST_CHECK(service->describe(wrong_token, agent)->rfind("This request will be refused", 0) == 0u);
-	BOOST_CHECK_EQUAL(service->start(wrong_token, agent, true).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(service->start(wrong_token, agent).code, cmd::codes::denied);
 
 	edt::agent_import_request other_name = request("villain", "models");
 	other_name.files_token = token;
@@ -593,7 +640,7 @@ BOOST_AUTO_TEST_CASE(OneSessionCannotPushAnotherSessionsQuestionOut)
 	for (std::size_t i = 0; i <= edt::agent_model_import::k_max_shown + 2; ++i) {
 		BOOST_REQUIRE(service->describe(request("n" + std::to_string(i), "models"), other).has_value());
 	}
-	const auto started = service->start(request("hero", "models"), agent, true);
+	const auto started = service->start(request("hero", "models"), agent);
 	BOOST_CHECK_MESSAGE(started.ok(), started.error);
 }
 
@@ -603,7 +650,7 @@ BOOST_AUTO_TEST_CASE(ADeniedSecondQuestion_LeavesNothingInTheProject)
 	finished(approved_start(request("hero", "models"), agent).job);
 	edt::agent_import_request second = request("hero", "models");
 	second.files_token = "whatever";
-	BOOST_CHECK_EQUAL(service->start(second, agent, false).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(service->start(second, agent).code, cmd::codes::denied);
 	run_jobs();
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
@@ -645,9 +692,9 @@ BOOST_AUTO_TEST_CASE(AnAssetNameALeftoverResourceHolds_FailsTheJob_AndWritesNoth
 
 BOOST_AUTO_TEST_CASE(Start_WithoutAnApproval_LooksAtNoPath)
 {
-	const auto missing = service->start({ (dir.path() / "no" / "such.glb").string(), "", "" }, agent, false);
+	const auto missing = service->start({ (dir.path() / "no" / "such.glb").string(), "", "" }, agent);
 	BOOST_CHECK_EQUAL(missing.code, cmd::codes::denied);
-	const auto present = service->start(request(), agent, false);
+	const auto present = service->start(request(), agent);
 	BOOST_CHECK_EQUAL(present.code, cmd::codes::denied);
 	BOOST_CHECK_EQUAL(missing.error, present.error);
 	BOOST_CHECK_EQUAL(scans, 0);
@@ -697,25 +744,23 @@ BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
 BOOST_AUTO_TEST_CASE(Start_IsNotFreeForAnAgent_ItNeedsTheShownApproval)
 {
 	// Never shown: nothing starts.
-	auto started = service->start(request(), agent, true);
+	auto started = service->start(request(), agent);
 	BOOST_CHECK(!started.ok());
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 
-	// Shown but not approved (the call carries no ticket).
-	BOOST_REQUIRE(service->describe(request(), agent).has_value());
-	started = service->start(request(), agent, false);
-	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	// Whether a person approved is the registry's to know (EdtImportModelActionTests): the service needs the plan
+	// described for exactly this call.
 
 	// Shown to another session.
 	BOOST_REQUIRE(service->describe(request(), agent).has_value());
-	started = service->start(request(), cmd::origin::agent("session-2"), true);
+	started = service->start(request(), cmd::origin::agent("session-2"));
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 
 	// The approval is used up by the start.
 	BOOST_REQUIRE(service->describe(request(), agent).has_value());
-	BOOST_REQUIRE(service->start(request(), agent, true).ok());
+	BOOST_REQUIRE(service->start(request(), agent).ok());
 	run_jobs();
-	started = service->start(request("again"), agent, true);
+	started = service->start(request("again"), agent);
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 	BOOST_CHECK_EQUAL(imports, 1);
 }
@@ -724,38 +769,50 @@ BOOST_AUTO_TEST_CASE(Start_RefusesAnApprovalThatIsTooOld)
 {
 	BOOST_REQUIRE(service->describe(request(), agent).has_value());
 	clock += edt::agent_model_import::k_shown_lifetime + std::chrono::seconds(1);
-	const auto started = service->start(request(), agent, true);
+	const auto started = service->start(request(), agent);
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
-BOOST_AUTO_TEST_CASE(Start_RefusesAFileThatChangedSinceItWasShown)
+// An agent's first question showed no size: the start takes the file as it is then, after the source rule.
+BOOST_AUTO_TEST_CASE(Start_ResolvesTheFileWhenItStarts_TheQuestionShowedNoSize)
 {
-	// Other bytes (the size).
 	BOOST_REQUIRE(service->describe(request(), agent).has_value());
 	dir.write("outside/robot.glb", "glb bytes of a much longer and different robot");
-	auto started = service->start(request(), agent, true);
-	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	const auto started = service->start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK_EQUAL(seen_bytes, "glb bytes of a much longer and different robot");
+}
 
-	// The same size, another time.
-	dir.write("outside/robot.glb", "glb bytes of the robot");
-	BOOST_REQUIRE(service->describe(request(), agent).has_value());
-	fs::last_write_time(source, fs::last_write_time(source) + std::chrono::hours(1));
-	started = service->start(request(), agent, true);
-	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+BOOST_AUTO_TEST_CASE(Start_RefusesAFileThatChangedSinceItsFilesWereListed)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+
+	// Other bytes (the size).
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+	dir.write("outside/robot.glb", "glb bytes of a much longer and different robot");
+	BOOST_CHECK_EQUAL(service->start(second, agent).code, cmd::codes::denied);
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
 BOOST_AUTO_TEST_CASE(Start_RefusesAnotherFileAtTheSamePathSizeAndTime)
 {
-	BOOST_REQUIRE(service->describe(request(), agent).has_value());
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
 	const auto shown_time = fs::last_write_time(source);
 	dir.write("outside/replacement.glb", "glb bytes of the robot");
 	fs::last_write_time(dir.path() / "outside" / "replacement.glb", shown_time);
 	fs::rename(dir.path() / "outside" / "replacement.glb", source);
 	BOOST_REQUIRE_EQUAL(fs::last_write_time(source), shown_time);
 
-	const auto started = service->start(request(), agent, true);
+	const auto started = service->start(second, agent);
 	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
 	BOOST_CHECK_EQUAL(imports, 0);
 }
@@ -773,7 +830,7 @@ BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWer
 	fs::last_write_time(source, time);
 	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
 
-	const auto started = service->start(second, agent, true);
+	const auto started = service->start(second, agent);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	run_jobs();
 	const auto info = jobs.info(started.job);
@@ -893,13 +950,165 @@ BOOST_AUTO_TEST_CASE(Progress_StartsAtTheModelAndIsReportedToTheJob)
 	BOOST_CHECK_EQUAL(note, "Reading the model");
 }
 
+BOOST_AUTO_TEST_CASE(Start_RunsOnlyThePlanOfItsOwnTicket)
+{
+	// Described for one question: a call without that ticket, or with another, uses the plan up and runs nothing.
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent).code, cmd::codes::denied);
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-b").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(scans, 0);
+	// Described without one (an allowed call) and run with one: refused too.
+	BOOST_REQUIRE(service->describe(request(), agent).has_value());
+	BOOST_CHECK_EQUAL(service->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+
+	BOOST_REQUIRE(service->describe(request(), agent, "ticket-a").has_value());
+	const auto started = service->start(request(), agent, "ticket-a");
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK_EQUAL(imports, 1);
+}
+
+// A decoder's error that names a side file by its absolute path reaches the agent without this machine's folders.
+BOOST_AUTO_TEST_CASE(AJobsError_NamesNoFolderOfTheSource)
+{
+	scan_error = "cannot read '" + fs_paths::generic_utf8_of(source.parent_path() / "textures" / "skin.png") + "' of "
+		+ fs_paths::utf8_of(source);
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs_until_settled(started.job);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("<source folder>/textures/skin.png") != std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find("robot.glb") != std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find(fs_paths::utf8_of(source.parent_path())) == std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find("unit_test_tmp") == std::string::npos, info->error);
+}
+
 BOOST_AUTO_TEST_CASE(APersonsOwnCall_NeedsNoApproval)
 {
-	const auto started = service->start(request("mine", "models"), cmd::origin::ui(), false);
+	const auto started = service->start(request("mine", "models"), cmd::origin::ui());
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	run_jobs();
 	BOOST_CHECK_EQUAL(scans, 1);
 	BOOST_CHECK(fs::exists(res_root / "models" / "mine.prefab.desc"));
+}
+
+// #1380: a share or a network volume is told from the text and the volume tables; the path is never looked at.
+BOOST_AUTO_TEST_CASE(AnAgentsNetworkSource_IsRefusedBeforeAnyDiskAccess)
+{
+	for (const std::string& path : { std::string("\\\\server\\share\\x.glb"), std::string("//server/share/x.glb"),
+		std::string("\\\\?\\UNC\\server\\share\\x.glb") }) {
+		BOOST_TEST_CONTEXT(path)
+		{
+			const edt::agent_import_request wanted{ path, "hero", "models" };
+			const std::optional<std::string> question = service->describe(wanted, agent);
+			BOOST_REQUIRE(question.has_value());
+			BOOST_CHECK_MESSAGE(question->rfind("This request will be refused", 0) == 0u, *question);
+			BOOST_CHECK_MESSAGE(question->find("network share or a device path") != std::string::npos, *question);
+			const edt::agent_import_plan plan = service->resolve(wanted, false);
+			BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+			BOOST_CHECK_MESSAGE(plan.error.find("no such file") == std::string::npos, plan.error);
+			BOOST_CHECK_EQUAL(service->start(wanted, agent).code, cmd::codes::denied);
+		}
+	}
+	// Told from the text alone: neither the drive table nor the mount table was asked.
+	BOOST_CHECK_EQUAL(drive_type_calls, 0);
+	BOOST_CHECK_EQUAL(mount_table_calls, 0);
+
+	// A mapped network drive (Windows) or a network mount (POSIX): the classifier says so.
+	const edt::agent_import_request remote{ remote_volume_path("x.glb"), "hero", "models" };
+	const std::optional<std::string> question = service->describe(remote, agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->rfind("This request will be refused", 0) == 0u, *question);
+	BOOST_CHECK_MESSAGE(question->find("network") != std::string::npos, *question);
+	const edt::agent_import_plan plan = service->resolve(remote, false);
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(plan.error.find("no such file") == std::string::npos, plan.error);
+	BOOST_CHECK_GT(drive_type_calls + mount_table_calls, 0);
+	BOOST_CHECK_EQUAL(service->start(remote, agent).code, cmd::codes::denied);
+	// A person may pick a file on a share: the rule is not theirs (the file is simply missing here).
+	BOOST_CHECK_EQUAL(service->resolve(remote, true).code, cmd::codes::not_found);
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsQuestion_DoesNotLookAtTheSource)
+{
+	// A file that is not there: the question is made from the text, the start (after approval) finds it missing.
+	const edt::agent_import_request missing{ (dir.path() / "outside" / "missing.glb").string(), "hero", "models" };
+	const std::optional<std::string> question = service->describe(missing, agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->find("This request will be refused") == std::string::npos, *question);
+	BOOST_CHECK_MESSAGE(question->find("no such file") == std::string::npos, *question);
+	BOOST_CHECK_MESSAGE(question->find("approved") != std::string::npos, *question);
+	const auto started = service->start(missing, agent);
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::not_found);
+	// What the agent reads names the file, not this machine's folders.
+	BOOST_CHECK_MESSAGE(started.error.find("missing.glb") != std::string::npos, started.error);
+	BOOST_CHECK_MESSAGE(started.error.find(dir.path().generic_string()) == std::string::npos, started.error);
+	BOOST_CHECK_MESSAGE(started.error.find(dir.path().string()) == std::string::npos, started.error);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(EdtAgentModelImportSideFileTests, import_fixture)
+
+BOOST_AUTO_TEST_CASE(ASideFileThatTheFirstJobListsOnANetworkVolume_FailsThatJob)
+{
+	listed_files = { { fs_paths::path_from_utf8(remote_volume_path("skin.png")), 1000 } };
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	run_jobs_until_settled(started.job);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("an agent may not read") != std::string::npos, info->error);
+	BOOST_CHECK_EQUAL(imports, 0);
+}
+
+BOOST_AUTO_TEST_CASE(ASideFileOnAVolumeThatTurnedRemote_IsRefusedByTheSecondCallBeforeItIsRead)
+{
+	listed_files = { { dir.path() / "outside" / "textures" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	const std::string local_mounts = mounts;
+	// The side file's folder is a network volume now (a share mounted there, or its drive mapped to one).
+	const auto turn_remote = [&] {
+#if defined(_WIN32)
+		remote_drive = std::toupper(static_cast<unsigned char>(fs_paths::utf8_of(dir.path()).front()));
+#else
+		mounts += "nas:/export " + fs_paths::generic_utf8_of(dir.path() / "outside" / "textures") + " nfs4 rw 0 0\n";
+#endif
+	};
+
+	// Before the question: the question says the call will be refused, and nothing was remembered for it.
+	turn_remote();
+	const std::optional<std::string> question = service->describe(second, agent);
+	BOOST_REQUIRE(question.has_value());
+	BOOST_CHECK_MESSAGE(question->rfind("This request will be refused", 0) == 0u, *question);
+#if !defined(_WIN32)
+	BOOST_CHECK_MESSAGE(question->find("refers to a file an agent may not read") != std::string::npos, *question);
+#endif
+	BOOST_CHECK_EQUAL(service->start(second, agent).code, cmd::codes::denied);
+
+	// After the question, before the start: the start refuses before a job reads it.
+	mounts = local_mounts;
+	remote_drive = 0;
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+	turn_remote();
+	const auto started = service->start(second, agent);
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::invalid_args);
+#if !defined(_WIN32)
+	// On Windows the source shares the drive and is refused first.
+	BOOST_CHECK_MESSAGE(started.error.find("an agent may not read") != std::string::npos, started.error);
+#endif
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -937,6 +1146,18 @@ struct import_action_fixture : import_fixture
 	std::vector<std::string> dialog_imports;
 };
 
+// A policy that says the same to every call, and a person who can be asked.
+struct fixed_gate final : cmd::policy_gate
+{
+	explicit fixed_gate(cmd::policy_mode answer) : mode(answer) {}
+	cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override
+	{
+		return { mode, "test policy", cmd::agent_category::unset };
+	}
+	bool can_ask() const override { return true; }
+	cmd::policy_mode mode;
+};
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtImportModelActionTests, import_action_fixture)
@@ -950,6 +1171,7 @@ BOOST_AUTO_TEST_CASE(TheCommandAsksAPersonAndStartsAJob)
 	BOOST_CHECK(command->starts_job);
 	BOOST_CHECK(command->mutates);
 	BOOST_CHECK(static_cast<bool>(command->describe));
+	BOOST_CHECK(command->describe_before_allowed_invoke);
 	const json::object& properties = command->args_schema.as_object().at("properties").as_object();
 	for (const char* name : { "path", "name", "folder" }) {
 		BOOST_TEST_CONTEXT(name) { BOOST_CHECK(properties.at(name).as_object().contains("description")); }
@@ -966,8 +1188,9 @@ BOOST_AUTO_TEST_CASE(APerson_WithOnlyAPath_GetsTheDialogAsBefore)
 
 BOOST_AUTO_TEST_CASE(AnAgent_GetsTheBackgroundImport_NeverTheDialog)
 {
-	// Asked for: the registry puts the question, then runs the call with its ticket.
-	const std::optional<std::string> text = actions.commands().find("file.import_model")->describe({ json::parse(path_json()), agent });
+	// Asked for: the registry puts the question (described with its ticket), then runs the call with that ticket.
+	const cmd::command_desc* command = actions.commands().find("file.import_model");
+	const std::optional<std::string> text = command->describe({ json::parse(path_json()), agent, 0, "ticket" });
 	BOOST_REQUIRE(text.has_value());
 	BOOST_CHECK(text->find(shown_path(source)) != std::string::npos);
 
@@ -983,13 +1206,15 @@ BOOST_AUTO_TEST_CASE(AnAgent_GetsTheBackgroundImport_NeverTheDialog)
 	BOOST_CHECK(fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
 }
 
-BOOST_AUTO_TEST_CASE(AnAgent_WithoutAnApprovalOrWithOnlyAPath_ImportsNothing)
+BOOST_AUTO_TEST_CASE(AnAgentCall_WithoutDescribe_IsRefused)
 {
-	// No ticket: denied, whatever was shown.
-	BOOST_REQUIRE(actions.commands().find("file.import_model")->describe({ json::parse(path_json()), agent }).has_value());
+	// No question was put and the registry described nothing (no gate judges here): the import refuses it, with or
+	// without a ticket, before the source is looked at.
 	const cmd::result without_ticket = call(agent, path_json());
 	BOOST_CHECK(!without_ticket.ok);
 	BOOST_CHECK_EQUAL(without_ticket.code, cmd::codes::denied);
+	const cmd::result test_call = call(cmd::origin::test(), path_json());
+	BOOST_CHECK_EQUAL(test_call.code, cmd::codes::denied);
 
 	// A ticket for a call nobody was asked about.
 	const cmd::result not_shown = call(agent, json::serialize(json::object{ { "path", source.string() }, { "name", "other" } }), "ticket");
@@ -997,6 +1222,59 @@ BOOST_AUTO_TEST_CASE(AnAgent_WithoutAnApprovalOrWithOnlyAPath_ImportsNothing)
 	BOOST_CHECK(dialog_imports.empty());
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK_EQUAL(jobs.running_count(), 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCallThePolicyAllows_IsDescribedByTheRegistry_AndRuns)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::allow));
+	const cmd::result result = call(agent, path_json());
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	run_jobs_until_settled(static_cast<std::uint64_t>(result.value.as_object().at("job").as_int64()));
+	BOOST_CHECK(fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
+	BOOST_CHECK(dialog_imports.empty());
+	actions.commands().set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCall_WithATicketNotApprovedOrRejected_IsDenied_AnApprovedOneRuns)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const cmd::result asked = call(agent, path_json());
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	const std::string ticket(asked.value.at("ticket").as_string());
+	BOOST_CHECK_EQUAL(call(agent, path_json(), ticket).code, cmd::codes::denied);
+
+	actions.commands().discard(ticket);
+	BOOST_CHECK_EQUAL(call(agent, path_json(), ticket).code, cmd::codes::denied);
+	run_jobs();
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
+
+	const cmd::result again = call(agent, path_json());
+	BOOST_REQUIRE_EQUAL(again.code, cmd::codes::confirmation_required);
+	const std::string approved(again.value.at("ticket").as_string());
+	BOOST_REQUIRE(actions.commands().approve(approved));
+	const cmd::result ran = call(agent, path_json(), approved);
+	BOOST_REQUIRE_MESSAGE(ran.ok, ran.error);
+	run_jobs_until_settled(static_cast<std::uint64_t>(ran.value.as_object().at("job").as_int64()));
+	BOOST_CHECK(fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
+	actions.commands().set_policy_gate(nullptr);
+}
+
+// The plan is bound to the question it was made for: a call with another ticket, or none, after the person rejected it
+// runs nothing; the source was never looked at.
+BOOST_AUTO_TEST_CASE(APlanDescribedForARejectedTicket_RunsForNoOtherCall)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const cmd::result asked = call(agent, path_json());
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	actions.commands().discard(std::string(asked.value.at("ticket").as_string()));
+	// No gate judges these calls: the import alone holds the line.
+	actions.commands().set_policy_gate(nullptr);
+	BOOST_CHECK_EQUAL(call(agent, path_json()).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(call(agent, path_json(), "another-ticket").code, cmd::codes::denied);
+	run_jobs();
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
 }
 
 BOOST_AUTO_TEST_CASE(AnAgent_CannotUseTheDialogPathByNamingNothing)

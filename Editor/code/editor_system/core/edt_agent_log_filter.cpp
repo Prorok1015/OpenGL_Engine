@@ -572,7 +572,7 @@ std::vector<edt::agent_log_mount> edt::agent_log_mounts(std::string_view mounts)
 		std::string point = unescaped_mount(next_mount_field(line));
 		const std::string_view type = next_mount_field(line);
 		if (point.empty() || point[0] != '/') continue;
-		out.push_back({ std::move(point), is_remote_mount_type(type) });
+		out.push_back({ std::move(point), is_remote_mount_type(type), std::string(type) });
 	}
 	return out;
 }

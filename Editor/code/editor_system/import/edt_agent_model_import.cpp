@@ -103,7 +103,10 @@ namespace {
 	{
 		const std::optional<res::name_refusal> taken = res::name_taken(layers, relative);
 		if (!taken) return {};
-		if (!taken->error.empty()) return std::format("'res://{}' cannot be checked: {}", relative, taken->error);
+		if (!taken->error.empty()) {
+			return std::format("'res://{}' cannot be checked: {}", relative,
+				edt::without_paths(taken->error, layers, {}));
+		}
 		const std::string held = fs_paths::utf8_of(taken->existing.filename());
 		if (taken->meta_left) {
 			return std::format("'res://{}' was the name of a deleted asset: its '{}' is still there and would give "
@@ -177,7 +180,21 @@ namespace {
 		std::vector<fs::path> layers;
 		fs::path top;
 		edt::agent_import_plan plan;
+		// An agent's import: the source and every side file pass the source rule again before they are read.
+		bool agent = false;
+		edt::source_volume_ports volumes;
 	};
+
+	// Why a file the model refers to may not be read for an agent; empty when it may (the source rule, text only).
+	std::string side_file_problem(const std::vector<edt::referenced_file>& files, const edt::source_volume_ports& ports)
+	{
+		for (const edt::referenced_file& file : files) {
+			if (std::string why = edt::agent_source_path_problem(fs_paths::utf8_of(file.path), ports); !why.empty()) {
+				return "the model refers to a file an agent may not read: " + why;
+			}
+		}
+		return {};
+	}
 
 	// What the decoder said of its OS sandbox goes back to the agent as it is, never hidden (#1076): the agent that started
 	// the editor itself could have turned it off.
@@ -230,6 +247,13 @@ namespace {
 	json::value run_import(const import_job_inputs& in, ds::task_context& ctx)
 	{
 		ctx.throw_if_stopped();
+		if (in.agent) {
+			const std::string why = edt::agent_source_path_problem(fs_paths::utf8_of(in.plan.source), in.volumes);
+			if (!why.empty()) throw std::runtime_error(why);
+			if (std::string side = side_file_problem(in.plan.files, in.volumes); !side.empty()) {
+				throw std::runtime_error(side);
+			}
+		}
 		ctx.set_progress(0.f, "Reading the model");
 		if (const std::string why = identity_problem(in.plan); !why.empty()) throw std::runtime_error(why);
 
@@ -246,6 +270,11 @@ namespace {
 		if (!in.plan.scanned) {
 			const edt::model_file_scan found = in.scan(source, &ctx);
 			if (!found.ok()) throw std::runtime_error(found.error);
+			if (in.agent) {
+				if (std::string side = side_file_problem(found.files, in.volumes); !side.empty()) {
+					throw std::runtime_error(side);
+				}
+			}
 			if (!found.files.empty() && in.ask_about_files) return park_files(in, found, digest);
 			files = found.files;
 		}
@@ -326,11 +355,32 @@ namespace {
 		add_decoder_sandbox(done, imported.sandbox);
 		return done;
 	}
+
+	// An agent's job: its error names the project's folders as res:// and the source by its file name.
+	json::value run_import_for(const import_job_inputs& in, ds::task_context& ctx)
+	{
+		if (!in.agent) return run_import(in, ctx);
+		try {
+			return run_import(in, ctx);
+		} catch (const std::exception& failed) {
+			std::vector<fs::path> roots = in.layers;
+			roots.push_back(in.top);
+			// The spellings of a source are looked up on the disk: only of one the rule still allows.
+			const std::string source_text = fs_paths::utf8_of(in.plan.source);
+			const bool local = edt::agent_source_path_problem(source_text, in.volumes).empty();
+			throw std::runtime_error(edt::without_paths(failed.what(), roots, local ? in.plan.source : fs::path{}));
+		}
+	}
 }
 
 bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 {
 	return source == other.source && size == other.size && modified == other.modified && id.same_as(other.id) && name == other.name && folder == other.folder;
+}
+
+bool edt::agent_import_plan::same_targets(const agent_import_plan& other) const
+{
+	return name == other.name && folder == other.folder && prefab == other.prefab;
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
@@ -350,6 +400,14 @@ std::chrono::steady_clock::time_point edt::agent_model_import::now() const
 	return m_options.now ? m_options.now() : std::chrono::steady_clock::now();
 }
 
+edt::source_volume_ports edt::agent_model_import::volumes() const
+{
+	source_volume_ports ports;
+	ports.drive_type = m_options.drive_type;
+	ports.mount_table = m_options.mount_table;
+	return ports;
+}
+
 std::string edt::agent_model_import::scan_key(const agent_import_request& request, const cmd::origin& caller) const
 {
 	return std::format("{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(), request.path,
@@ -361,7 +419,8 @@ std::string edt::agent_model_import::call_key(const agent_import_request& reques
 	return scan_key(request, caller) + "|" + request.files_token;
 }
 
-void edt::agent_model_import::remember(std::string key, std::string session, agent_import_plan plan)
+void edt::agent_model_import::remember(std::string key, std::string session, std::string ticket,
+	agent_import_plan plan)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& shown) { return shown.key == key || at - shown.at > k_shown_lifetime; });
@@ -369,17 +428,19 @@ void edt::agent_model_import::remember(std::string key, std::string session, age
 	if (static_cast<std::size_t>(std::count_if(m_shown.begin(), m_shown.end(), of_session)) >= k_max_shown) {
 		m_shown.erase(std::find_if(m_shown.begin(), m_shown.end(), of_session));
 	}
-	m_shown.push_back({ std::move(key), session, std::move(plan), at });
+	m_shown.push_back({ std::move(key), session, std::move(ticket), std::move(plan), at });
 }
 
-std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::string& key)
+std::optional<edt::agent_import_plan> edt::agent_model_import::take(const std::string& key, std::string_view ticket)
 {
 	const auto at = now();
 	std::erase_if(m_shown, [&](const shown_plan& shown) { return at - shown.at > k_shown_lifetime; });
 	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_plan& shown) { return shown.key == key; });
 	if (found == m_shown.end()) return std::nullopt;
+	const bool same_ticket = found->ticket == ticket;
 	agent_import_plan plan = std::move(found->plan);
 	m_shown.erase(found);
+	if (!same_ticket) return std::nullopt;
 	return plan;
 }
 
@@ -391,7 +452,7 @@ std::string edt::agent_model_import::unavailable_reason() const
 	return m_options.unavailable_reason ? m_options.unavailable_reason() : std::string{};
 }
 
-edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_request& request) const
+edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_request& request, bool person) const
 {
 	agent_import_plan plan;
 	const auto refuse = [&plan](const char* code, std::string why) {
@@ -399,6 +460,12 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 		plan.error = std::move(why);
 		return plan;
 	};
+	// A person may pick a file on a share in the dialog; an agent's source stays on a local disk.
+	if (!person) {
+		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, std::move(why));
+		}
+	}
 	if (const std::string why = unavailable_reason(); !why.empty()) {
 		return refuse(cmd::codes::disabled, why);
 	}
@@ -408,7 +475,11 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
-	if (ec || status.type() == fs::file_type::not_found) return refuse(cmd::codes::not_found, "no such file: " + shown(request.path));
+	if (ec || status.type() == fs::file_type::not_found) {
+		// An agent is told the file's name only: no absolute path of this machine in what it reads.
+		const std::string named = person ? request.path : to_utf8(given.filename());
+		return refuse(cmd::codes::not_found, "no such file: " + shown(named));
+	}
 	if (status.type() == fs::file_type::symlink) return refuse(cmd::codes::invalid_args, "the source is a link: name the file itself");
 	if (status.type() != fs::file_type::regular) return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 
@@ -419,10 +490,16 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 
 	const fs::path resolved = fs::canonical(given, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the source path cannot be resolved");
+	if (!person) {
+		if (std::string why = agent_source_path_problem(fs_paths::utf8_of(resolved), volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, "the source resolves to a path an agent may not read: " + why);
+		}
+	}
 	if (fs::symlink_status(resolved, ec).type() != fs::file_type::regular) {
 		return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 	}
 	plan.source = resolved;
+	plan.on_disk = true;
 	plan.size = fs::file_size(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the size of the source cannot be read");
 	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
@@ -434,7 +511,47 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	plan.id = file_id_of(resolved);
 	if (!plan.id.valid) return refuse(cmd::codes::invalid_args, "the identity of the source on the disk cannot be read");
 
-	const std::string wanted_name = request.name.empty() ? to_utf8(resolved.stem()) : request.name;
+	// An agent's asset is named after the path the person was shown (text_plan), a person's after the file.
+	plan_targets(request, to_utf8((person ? resolved : given).stem()), plan);
+	return plan;
+}
+
+edt::agent_import_plan edt::agent_model_import::text_plan(const agent_import_request& request) const
+{
+	agent_import_plan plan;
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+		return refuse(cmd::codes::invalid_args, std::move(why));
+	}
+	if (const std::string why = unavailable_reason(); !why.empty()) {
+		return refuse(cmd::codes::disabled, why);
+	}
+	const fs::path given = from_utf8(request.path);
+	if (!given.is_absolute()) {
+		return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
+	}
+	const std::string extension = lowered(to_utf8(given.extension()));
+	const auto known = [&](std::string_view model) { return model == extension; };
+	if (std::none_of(std::begin(k_model_extensions), std::end(k_model_extensions), known)) {
+		return refuse(cmd::codes::invalid_args, "the source is not a model file (.glb, .gltf, .obj or .fbx)");
+	}
+	plan.source = given;
+	plan_targets(request, to_utf8(given.stem()), plan);
+	return plan;
+}
+
+void edt::agent_model_import::plan_targets(const agent_import_request& request, const std::string& stem,
+	agent_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+	};
+	const std::string wanted_name = request.name.empty() ? stem : request.name;
 	const agent_level_path name = check_agent_name(wanted_name);
 	if (!name.ok()) return refuse(cmd::codes::invalid_args, "the asset name: " + name.error + (request.name.empty() ? " (give a name)" : ""));
 	// A name that is the extension of a model format would let the exporter's naming build a model file out of a resource.
@@ -451,6 +568,7 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	plan.folder = folder.path;
 	plan.prefab = "res://" + plan.folder + "/" + plan.name + ".prefab.desc";
 
+	// The project's own layers: looking at them is no look at the source.
 	const std::vector<fs::path> layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	switch (state_in_layers(layers, plan.folder + "/" + plan.name + ".prefab.desc")) {
 	case level_file_state::missing:
@@ -469,18 +587,23 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 		if (std::optional<std::string> why = m_options.blocker()) return refuse(cmd::codes::busy, *why);
 	}
 	if (running()) return refuse(cmd::codes::busy, "a model import is already running");
-	return plan;
 }
 
-std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request, const cmd::origin& caller)
+std::optional<std::string> edt::agent_model_import::describe(const agent_import_request& request,
+	const cmd::origin& caller, std::string_view ticket)
 {
-	agent_import_plan plan = resolve(request);
+	const bool person = caller.kind == cmd::origin_kind::ui;
+	agent_import_plan plan = person ? resolve(request, true) : text_plan(request);
 	if (!plan.ok()) return "This request will be refused: " + shown_message(plan.error);
-	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\nIts geometry, materials and textures are written next to the prefab.\n",
-		shown_path(plan.source), size_text(plan.size), shown(plan.folder), shown(plan.name), shown(plan.prefab));
+	const std::string size = plan.on_disk ? size_text(plan.size) : std::string{ "(its size is read once approved)" };
+	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\n"
+		"Its geometry, materials and textures are written next to the prefab.\n",
+		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab));
 	edt::decoder_sandbox_status sandbox = m_options.sandbox_status ? m_options.sandbox_status() : decoder_sandbox_status{};
 	if (request.files_token.empty()) {
-		text += "Allowing this reads the model, and the .bin/.mtl files it needs to be parsed, to list the files it refers to. Nothing is copied into the project until you approve that list in a second question (none, when the model is self-contained).";
+		text += "Allowing this reads the model and, to list the files it refers to, reads and hashes every file of "
+			"its folder it names: the .bin/.mtl files it needs to be parsed and its textures. Nothing is copied into "
+			"the project until you approve that list in a second question (none, when the model is self-contained).";
 	} else {
 		const std::lock_guard lock(m_scans->mutex);
 		const std::string key = scan_key(request, caller);
@@ -490,7 +613,15 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		if (found == m_scans->items.end()) {
 			return "This request will be refused: no list of files belongs to this token (too old, or from another call): import without files_token first";
 		}
-		if (!found->plan.same_file_as(plan)) return "This request will be refused: the model changed since its files were listed";
+		// An agent's question compares only what it was told (the list is bound to the same path by its key); the
+		// start compares the file on the disk with the one the list was made of.
+		const bool same = person ? found->plan.same_file_as(plan) : found->plan.same_targets(plan);
+		if (!same) return "This request will be refused: the model changed since its files were listed";
+		if (!person) {
+			if (const std::string why = side_file_problem(found->plan.files, volumes()); !why.empty()) {
+				return "This request will be refused: " + shown_message(why);
+			}
+		}
 		plan.files = found->plan.files;
 		plan.files_bytes = found->plan.files_bytes;
 		plan.scanned = true;
@@ -500,23 +631,37 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 		for (const referenced_file& file : plan.files) text += std::format("\n  {}  {}", shown_path(file.path), size_text(file.size));
 	}
 	if (const std::string warning = decoder_sandbox_warning(sandbox); !warning.empty()) text += "\n" + warning;
-	remember(call_key(request, caller), caller.session, std::move(plan));
+	remember(call_key(request, caller), caller.session, std::string(ticket), std::move(plan));
 	return text;
 }
 
-edt::agent_model_import::started edt::agent_model_import::start(const agent_import_request& request, const cmd::origin& caller, bool confirmed)
+edt::agent_model_import::started edt::agent_model_import::start(const agent_import_request& request,
+	const cmd::origin& caller, std::string_view ticket)
 {
-	// A person's own call (a script of theirs) is the approval; anyone else needs one, for exactly this file. Nothing about
-	// the disk is looked at before that, so an unapproved call cannot probe paths.
+	// A person's own call (a script of theirs) is the approval. Anyone else needs the plan describe remembered for
+	// exactly this call, whatever the call says of a confirmation: the registry invokes an agent's call the policy asks
+	// about only after a person approved its ticket, and describes a call the policy allows right before it runs
+	// (describe_before_allowed_invoke, cmd_registry.cpp apply_policy). Without that plan nothing is looked at; with
+	// it, the source is looked at on the disk here for the first time, after the source rule once more. The registry
+	// describes an asked call with its ticket's id and hands the command that id only once a person approved it; an
+	// allowed call is described and run without one: either way the two must match.
+	const bool person = caller.kind == cmd::origin_kind::ui;
 	std::optional<agent_import_plan> shown;
-	if (caller.kind != cmd::origin_kind::ui) {
-		if (!confirmed) return { 0, cmd::codes::denied, "an import needs a person's approval" };
-		shown = take(call_key(request, caller));
-		if (!shown) return { 0, cmd::codes::denied, "this import was not shown to a person, or the approval is too old: ask again" };
+	if (!person) {
+		shown = take(call_key(request, caller), ticket);
+		if (!shown) {
+			return { 0, cmd::codes::denied, "this import was not shown to a person or described before it ran, "
+				"its approval was given for another question, or that is too old: ask again" };
+		}
+		if (std::string why = agent_source_path_problem(request.path, volumes()); !why.empty()) {
+			return { 0, cmd::codes::invalid_args, std::move(why) };
+		}
 	}
-	agent_import_plan plan = resolve(request);
+	agent_import_plan plan = resolve(request, person);
 	if (!plan.ok()) return { 0, plan.code, plan.error };
-	if (shown && !shown->same_file_as(plan)) return { 0, cmd::codes::denied, "the file changed since a person was shown it: ask again" };
+	if (shown && !shown->same_targets(plan)) {
+		return { 0, cmd::codes::denied, "the files to write are not the ones a person was shown: ask again" };
+	}
 	if (!request.files_token.empty()) {
 		std::optional<agent_import_plan> listed;
 		{
@@ -537,6 +682,11 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 			});
 		};
 		if (shown && !same_list(shown->files, listed->files)) return { 0, cmd::codes::denied, "the files changed since a person was shown them: ask again" };
+		if (!person) {
+			if (std::string why = side_file_problem(listed->files, volumes()); !why.empty()) {
+				return { 0, cmd::codes::invalid_args, std::move(why) };
+			}
+		}
 		plan.files = std::move(listed->files);
 		plan.files_bytes = listed->files_bytes;
 		plan.digest = listed->digest;
@@ -554,13 +704,15 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 	inputs.scan_key = scan_key(request, caller);
 	inputs.session = caller.session;
 	inputs.time_limit = m_options.parse_time_limit;
-	inputs.ask_about_files = caller.kind != cmd::origin_kind::ui;
+	inputs.ask_about_files = !person;
 	inputs.limits = m_options.file_limits;
 	inputs.layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	inputs.top = m_options.resources_path ? m_options.resources_path() : fs::path{};
+	inputs.agent = !person;
+	inputs.volumes = volumes();
 	inputs.plan = std::move(plan);
 	std::string label = "Import " + inputs.plan.name;
 	m_job = m_jobs.start_with_result(ds::lane::compute, { std::move(label), "import" }, m_lifetime,
-		[inputs = std::move(inputs)](ds::task_context& ctx) -> json::value { return run_import(inputs, ctx); });
+		[inputs = std::move(inputs)](ds::task_context& ctx) -> json::value { return run_import_for(inputs, ctx); });
 	return { m_job, {}, {} };
 }

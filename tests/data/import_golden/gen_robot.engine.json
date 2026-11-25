@@ -47,7 +47,7 @@
 												"__parent": "res://base_material.desc",
 												"name": "Material_0",
 												"samplers": [
-													"memory://models/gen_robot/gen_robot__embedded_txm/Image_0.txm.desc"
+													"memory://models/gen_robot/gen_robot__embedded_txm/gen_robot.texture_0.txm.desc"
 												],
 												"uniforms": {
 													"albedo": [
@@ -3042,16 +3042,16 @@
 			}
 		}
 	},
-	"memory://models/gen_robot/gen_robot__embedded_txm/Image_0.pct": {
+	"memory://models/gen_robot/gen_robot__embedded_txm/gen_robot.texture_0.pct": {
 		"size": 1456888,
 		"sha256": "3e887d5daa9bb189cc054cf6d1dc79e24fbcf21566e65a4d098f1d7a83b30c84"
 	},
-	"memory://models/gen_robot/gen_robot__embedded_txm/Image_0.txm.desc": {
+	"memory://models/gen_robot/gen_robot__embedded_txm/gen_robot.texture_0.txm.desc": {
 		"json": {
 			"__type": "texture_2d_desc",
 			"__parent": "res://base_texture.desc",
-			"name": "Image_0",
-			"data": "memory://models/gen_robot/gen_robot__embedded_txm/Image_0.pct"
+			"name": "texture_0",
+			"data": "memory://models/gen_robot/gen_robot__embedded_txm/gen_robot.texture_0.pct"
 		}
 	}
 }

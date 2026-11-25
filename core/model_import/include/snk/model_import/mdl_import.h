@@ -3,11 +3,13 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/model_codec/res_desc_binary_codec.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/resource/res_image_format.h>
 #include <boost/json/object.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +37,31 @@ namespace mdl
 	inline constexpr std::uint64_t k_max_scene_indices = 48ull * 1024 * 1024;
 	static_assert(k_max_scene_indices * sizeof(std::uint32_t) <= res::desc_binary::max_file_bytes);
 	static_assert(k_max_scene_vertices * 3 * sizeof(float) <= res::desc_binary::max_file_bytes);
+
+	// Embedded textures (#1206) are named by their place in the model, "<embedded_folder><stem>.texture_<index>" (the
+	// stem of geometry_tag's name), and stored as inline pixels, a .raw or a .pct. The import stores only those of an index
+	// below k_max_embedded_textures, and at most k_max_embedded_total_bytes of them in all (pixels as stored, a picture
+	// file as it is); a texture past either, or one it cannot read, is skipped and listed in missing_textures as
+	// "<name as the material names it>: <why>".
+	inline constexpr std::size_t k_max_embedded_textures = res::image_format::max_embedded_textures;
+	inline constexpr std::uint64_t k_max_embedded_total_bytes = 256ull * 1024 * 1024;
+	// An uncompressed embedded texture this small goes into its desc as inline pixels (rnd::texture_2d_desc's limits), a
+	// bigger one into a .raw file.
+	inline constexpr std::size_t k_max_inline_texture_bytes = res::image_format::max_inline_pixel_bytes;
+	inline constexpr std::uint32_t k_max_inline_texture_side = res::image_format::max_inline_pixel_side;
+
+	// An uncompressed embedded texture as the import stores it: `pixels` (texture_2d_desc's inline pixels, RGBA8, top row
+	// first) when it fits k_max_inline_texture_*, else `raw` (a .raw file: its header and RGBA rows, bottom row first, as
+	// raw_image_adapter reads them).
+	struct stored_texels
+	{
+		boost::json::object pixels;
+		std::vector<std::byte> raw;
+	};
+
+	// `bgra`: width * height texels of b, g, r, a (assimp's aiTexel), top row first; both sides 1..16384. Anything else
+	// gives both empty.
+	SNK_MODEL_IMPORT_API stored_texels store_texels(std::span<const std::byte> bgra, std::uint32_t width, std::uint32_t height);
 
 	// A parsed scene as the limits above count it.
 	struct scene_size
@@ -147,8 +174,9 @@ namespace mdl
 		std::vector<res::tag> tags;
 		// result[vertex] = [bone indices..., weights as uint32...] (what skin_weights_desc holds).
 		std::vector<std::vector<std::uint32_t>> skin_weights;
-		// External textures as the model names them that were not loaded: the material has no sampler for them. At most
-		// k_max_missing_textures, each cut to k_max_missing_texture_name_bytes; the rest only counted.
+		// Textures as the model names them that were not loaded (external ones missing, embedded ones past a limit or
+		// unreadable): the material has no sampler for them. At most k_max_missing_textures, each cut to
+		// k_max_missing_texture_name_bytes; the rest only counted.
 		std::vector<std::string> missing_textures;
 		std::size_t missing_textures_not_listed = 0;
 		failure failed = failure::none;

@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/platform/plt_beneath.h>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -38,6 +39,9 @@ namespace edt
 	// The picture file `relative` below `root` as a thumbnail: read below the root without following a link (at most
 	// k_thumbnail_max_file_bytes), its header checked against the limits above, then decoded. Safe on a worker thread.
 	thumbnail_decoded decode_thumbnail_file(const std::filesystem::path& root, const std::filesystem::path& relative);
+	// The same; `read_stamp` gets the stamp of the file as the read saw it (unchanged while it was read), for a cache key.
+	thumbnail_decoded decode_thumbnail_file(const std::filesystem::path& root, const std::filesystem::path& relative,
+		std::optional<platform::beneath::file_stamp>& read_stamp);
 
 	// Whether the picture decoder reads the file by its name (png, jpg, jpeg, bmp, tga, hdr), without case.
 	bool thumbnail_decodable(std::string_view path);

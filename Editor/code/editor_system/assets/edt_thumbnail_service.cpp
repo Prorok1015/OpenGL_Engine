@@ -160,6 +160,9 @@ void edt::thumbnail_service::finish(const std::string& key, std::uint64_t reques
 void edt::thumbnail_service::tick()
 {
 	++m_tick;
+	if (m_ports.frame) {
+		m_ports.frame();
+	}
 	flush_graveyard();
 
 	int uploads = m_limits.uploads_per_frame;

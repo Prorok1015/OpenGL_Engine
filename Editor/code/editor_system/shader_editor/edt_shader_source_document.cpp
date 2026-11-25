@@ -314,6 +314,14 @@ edt::save_result edt::shader_source_document::save()
 	return save_result::ok();
 }
 
+void edt::shader_source_document::raise_conflict()
+{
+	if (m_open && !m_changed_on_disk) {
+		m_changed_on_disk = true;
+		announce();
+	}
+}
+
 std::string edt::shader_source_document::revert()
 {
 	if (!m_open) {
