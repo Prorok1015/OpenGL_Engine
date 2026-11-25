@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -89,18 +90,14 @@ struct memory_sink final : mdl::import_sink
 	}
 };
 
-// One triangle drawn once per used image (every image when `used` is empty), each with a material whose base colour is
-// that image (a data URI, as glTF embeds).
-std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images, std::vector<std::size_t> used = {})
+// One triangle drawn once per image, each with a material whose base colour is that image (a data URI, as glTF embeds).
+std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images)
 {
-	if (used.empty()) {
-		for (std::size_t i = 0; i < images.size(); ++i) used.push_back(i);
-	}
 	std::string primitives, materials, textures, list;
-	for (std::size_t m = 0; m < used.size(); ++m) {
+	for (std::size_t m = 0; m < images.size(); ++m) {
 		const std::string comma = m == 0 ? "" : ",";
 		primitives += std::format(R"json({}{{"attributes":{{"POSITION":0}},"material":{}}})json", comma, m);
-		materials += std::format(R"json({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})json", comma, used[m]);
+		materials += std::format(R"json({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})json", comma, m);
 	}
 	for (std::size_t i = 0; i < images.size(); ++i) {
 		const std::string comma = i == 0 ? "" : ",";
@@ -413,6 +410,19 @@ BOOST_AUTO_TEST_CASE(TexelsOfAnotherSizeOrSide_GiveNothing)
 	}
 	BOOST_TEST(!mdl::store_texels(four, 2, 2).pixels.empty());
 	BOOST_TEST(mdl::store_texels({}, 65535, 65535).raw.empty());
+}
+
+// Sides within the limit, a span of exactly w*h*4 bytes, pixels past the decoded size: only the cap refuses it.
+BOOST_AUTO_TEST_CASE(TexelsPastTheDecodedSize_AreRefusedByTheCap_BeforeAnythingIsRead)
+{
+	constexpr std::uint32_t side = 16384;
+	constexpr std::uint64_t claimed = std::uint64_t{ side } * side * 4;
+	static_assert(claimed > res::image_format::max_picture_decoded_bytes);
+	// store_texels must refuse before it reads: the span claims 1 GiB over a few bytes, and nothing may touch past them.
+	static const std::byte few[16] = {};
+	const std::span<const std::byte> claimed_texels(few, static_cast<std::size_t>(claimed));
+	const mdl::stored_texels huge = mdl::store_texels(claimed_texels, side, side);
+	BOOST_TEST((huge.raw.empty() && huge.pixels.empty()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

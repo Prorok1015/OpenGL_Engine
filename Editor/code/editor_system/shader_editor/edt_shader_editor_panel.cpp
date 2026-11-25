@@ -28,7 +28,7 @@ namespace edt
 		flush_pending(true);
 		if (m_ctx) m_ctx->set_edit_source({}, {});
 		m_ctx = shown;
-		if (m_ctx) m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); });
+		if (m_ctx) m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); }, [this] { return m_view.text(); });
 		m_error.clear();
 		m_check_status.clear();
 		m_unplaced.clear();

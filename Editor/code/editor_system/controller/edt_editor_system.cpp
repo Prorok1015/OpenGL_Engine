@@ -254,7 +254,7 @@ edt::editor_system::~editor_system()
 		context->jobs().cancel_all_and_wait();
 		// A clean exit: no autosave is left to recover. Before the documents go, after the writes stopped.
 		if (m_autosave) m_autosave->shutdown();
-		if (m_asset_open) m_asset_open->data_documents().shutdown();
+		if (m_asset_open) m_asset_open->shutdown_windows();
 		context->documents().shutdown();
 	}
 	// Its "prefab" listener of document_closed reaches the problems component, which is declared before it and goes after it.
@@ -473,6 +473,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	m_asset_open->data_documents().set_shown_mesh([this] { return m_modeller ? m_modeller->shown_id() : document_id{}; });
 	m_asset_open->data_documents().set_input_router(m_input_router);
+	m_asset_open->texture_viewers().set_input_router(m_input_router);
 	m_asset_open->data_documents().set_shown_shader_source([this] { return m_shader_editor ? m_shader_editor->shown_id() : document_id{}; });
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },
@@ -524,11 +525,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.stop_play = [this] { if (m_play && m_play->active()) m_play->stop(play_reason::user); },
 		.meshes_before = [this] {
 			m_modeller->park_for_layer_change();
-			m_asset_open->data_documents().release_previews();
+			m_asset_open->release_previews();
 		},
 		.meshes_after = [this] {
 			m_modeller->restore_after_layer_change();
-			m_asset_open->data_documents().rebuild_previews();
+			m_asset_open->rebuild_previews();
 		} });
 
 	m_file_menu = std::make_unique<file_menu_component>(file_menu_component::ports{ .context = *m_context, .resources = m_res, .state = m_state,
@@ -883,6 +884,13 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 		}
 		const std::string error = restore_mesh_bytes(*mesh, *request.bytes);
 		done(error.empty() ? autosave_recovery::restore_outcome{ {}, mesh->id(), mesh->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
+	};
+	ports.restore_shader_source = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		const shader_restore_result restored = restore_shader_source(m_context->documents(),
+			[this](const res::tag& tag) { return m_shader_editor && m_shader_editor->open(tag, 0, true); },
+			request.source, *request.bytes, request.source_changed);
+		done(restored.error.empty() ? autosave_recovery::restore_outcome{ {}, restored.document, restored.generation }
+			: autosave_recovery::restore_outcome{ restored.error, {}, 0 });
 	};
 	ports.restore_data = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
 		m_asset_open->data_documents().open(request.source, true);

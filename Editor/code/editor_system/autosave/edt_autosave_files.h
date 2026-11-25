@@ -22,8 +22,9 @@ namespace edt
 	inline constexpr std::string_view k_autosave_kind_prefab = "prefab";
 	inline constexpr std::string_view k_autosave_kind_data = "data";
 	inline constexpr std::string_view k_autosave_kind_mesh = "mesh";
-	inline constexpr std::array<std::string_view, 4> k_autosave_kinds{ k_autosave_kind_scene, k_autosave_kind_prefab,
-		k_autosave_kind_data, k_autosave_kind_mesh };
+	inline constexpr std::string_view k_autosave_kind_shader_source = "shader_source";
+	inline constexpr std::array<std::string_view, 5> k_autosave_kinds{ k_autosave_kind_scene, k_autosave_kind_prefab,
+		k_autosave_kind_data, k_autosave_kind_mesh, k_autosave_kind_shader_source };
 	bool is_autosave_kind(std::string_view kind);
 	// A session folder's name: exactly 32 lowercase hex digits.
 	bool is_autosave_session_name(std::string_view name);

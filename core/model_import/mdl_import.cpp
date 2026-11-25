@@ -927,6 +927,7 @@ mdl::stored_texels mdl::store_texels(std::span<const std::byte> bgra, std::uint3
 	constexpr auto max_side = static_cast<std::uint32_t>(res::image_format::max_picture_side);
 	if (width < 1 || height < 1 || width > max_side || height > max_side) return {};
 	// Both sides at most 16384: no product below overflows.
+	if (std::uint64_t{ width } * height * 4 > res::image_format::max_picture_decoded_bytes) return {};
 	const std::size_t row_bytes = std::size_t{ width } * 4;
 	const std::size_t pixel_bytes = row_bytes * height;
 	if (bgra.size() != pixel_bytes) return {};

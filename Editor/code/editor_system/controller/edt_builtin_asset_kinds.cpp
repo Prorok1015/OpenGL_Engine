@@ -1,5 +1,7 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_prefab_document.h"
+#include <format>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -7,7 +9,7 @@
 std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks)
 {
 	std::vector<registration> out;
-	out.reserve(4);
+	out.reserve(5 + std::size(k_picture_suffixes));
 	out.push_back(registry.add({
 		.id = "prefab",
 		.suffix = ".prefab.desc",
@@ -33,6 +35,25 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 			.icon = "[S]",
 			.open = [open = std::move(hooks.open_desc)](editor_context&, const res::tag& tag) { open(tag); },
 		}));
+	}
+	// The id is the document type: Create Document names its files by this suffix (#1263).
+	if (hooks.open_texture) {
+		out.push_back(registry.add({
+			.id = "texture_2d_desc",
+			.suffix = ".txm.desc",
+			.icon = "[T]",
+			.open = [open = std::move(hooks.open_texture)](editor_context&, const res::tag& tag) { open(tag); },
+		}));
+	}
+	if (hooks.open_picture) {
+		for (const std::string_view suffix : k_picture_suffixes) {
+			out.push_back(registry.add({
+				.id = std::format("picture{}", suffix),
+				.suffix = std::string(suffix),
+				.icon = "[I]",
+				.open = [open = hooks.open_picture](editor_context&, const res::tag& tag) { open(tag); },
+			}));
+		}
 	}
 	// Empty suffix: every dropped asset is added through its desc, as before the registry existed.
 	out.push_back(registry.add({
