@@ -3,6 +3,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_path_sanitize.h>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <format>
@@ -20,13 +21,6 @@ namespace {
 // What the editor accepts of a decoder's answer, apart from the decoder's own build: 2 = embedded textures named by their
 // index (#1206). A cached answer of another format is never reused.
 constexpr std::string_view k_answer_format = "answer-2";
-
-std::string cache_key(const std::string& decoder_version, const std::vector<std::byte>& model, const edt::import_source& source)
-{
-	return std::format("{}|{}|{}|{}/{}/{}|{}|{}|{}", k_answer_format, decoder_version, edt::digest_to_hex(edt::digest_of(model)),
-		source.limits.max_total_bytes, source.limits.max_file_bytes, source.limits.max_files, source.on_disk ? 1 : 0,
-		fs_paths::generic_utf8_of(source.boundary), fs_paths::generic_utf8_of(source.path));
-}
 
 // The whole file, when it has exactly `size` bytes.
 std::optional<std::vector<std::byte>> read_exactly(const fs::path& path, std::uintmax_t size)
@@ -51,6 +45,7 @@ edt::decode_request import_request(const edt::import_source& source)
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
+	request.settings = source.settings;
 	return request;
 }
 
@@ -61,6 +56,16 @@ edt::decoded_model_adapter::decoded_model_adapter(desc::desc_system& descs, res:
 	, m_resources(resources)
 	, m_decoder(std::move(decoder))
 {
+}
+
+std::string edt::decoded_model_adapter::cache_key(const std::string& decoder_version,
+	const std::vector<std::byte>& model, const import_source& source)
+{
+	const std::string settings = boost::json::serialize(model_settings_json(source.settings));
+	return std::format("{}|{}|{}|{}/{}/{}|{}|{}|{}|{}", k_answer_format, decoder_version,
+		edt::digest_to_hex(edt::digest_of(model)), source.limits.max_total_bytes, source.limits.max_file_bytes,
+		source.limits.max_files, source.on_disk ? 1 : 0, settings, fs_paths::generic_utf8_of(source.boundary),
+		fs_paths::generic_utf8_of(source.path));
 }
 
 edt::decoded_model_adapter::decoder_steps edt::decoded_model_adapter::steps_of(std::shared_ptr<const process_decoder> decoder)

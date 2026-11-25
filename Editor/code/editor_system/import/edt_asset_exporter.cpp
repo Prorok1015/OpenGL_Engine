@@ -2,7 +2,9 @@
 #include "edt_process_decoder.h"
 #include "edt_file_menu.h"
 #include "edt_mesh_io.h"
+#include "edt_model_import_meta.h"
 #include "edt_version_notice.h"
+#include <snk/common/fs_paths.h>
 #include <snk/desc/desc_pretty_json.h>
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_desc_binary.h>
@@ -10,6 +12,7 @@
 #include <cstring>
 #include <format>
 #include <map>
+#include <optional>
 #include <string_view>
 
 namespace json = boost::json;
@@ -278,7 +281,9 @@ bool edt::asset_exporter::export_to_project(
 	ds::task_context* ctx,
 	std::vector<res::tag>* written,
 	bool wait_for_writes,
-	const std::function<void(int, int)>& on_file) const
+	const std::function<void(int, int)>& on_file,
+	const std::filesystem::path& meta_top,
+	bool may_replace_meta) const
 {
 	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
 	// root_tag is already known from import_result — no filename guessing needed.
@@ -306,6 +311,19 @@ bool edt::asset_exporter::export_to_project(
 		}
 		return false;
 	};
+
+	// The prefab's `.resource` (#1195) is checked before any file is written: a refusal leaves the project as it was.
+	std::optional<model_meta_plan> meta;
+	const std::filesystem::path top = meta_top.empty() ? m_res.get_resources_path() : meta_top;
+	if (!result.source_sha256.empty() && result.root_tag.is_valid()) {
+		const auto root = remap.find(result.root_tag);
+		if (root == remap.end()) {
+			return fail(std::format("'{}' has no place in the project", result.root_tag.view()));
+		}
+		const model_source_record source{ fs_paths::utf8_of(result.source_path.filename()), result.source_sha256 };
+		meta = plan_model_meta(top, root->second, result.settings, source, may_replace_meta);
+		if (!meta->ok()) return fail(meta->error);
+	}
 
 	int files_done = 0;
 	int files_written = 0;
@@ -390,13 +408,30 @@ bool edt::asset_exporter::export_to_project(
 			output_bytes = bytes;
 		}
 
+		// Before the prefab: the asset database, seeing it, finds its ID and makes none.
+		const bool with_meta = meta && mem_tag == result.root_tag;
+		if (with_meta) {
+			if (std::string error = write_model_meta(top, *meta); !error.empty()) return fail(std::move(error));
+			if (written) written->push_back(meta->tag);
+		}
+		const auto prefab_failed = [&](std::string why) {
+			if (with_meta) {
+				if (std::string left = take_back_model_meta(top, *meta); !left.empty()) {
+					why += "; " + left;
+				} else if (written && !written->empty() && written->back() == meta->tag) {
+					written->pop_back();
+				}
+			}
+			return fail(std::move(why));
+		};
+
 		if (unchanged_on_disk(res_tag, output_bytes)) {
 			egLOG_INFO("edt/export", "Unchanged: {}", res_tag.view());
 		} else {
 			// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
 			if (wait_for_writes) {
 				if (!m_res.store_sync(res_tag, output_bytes)) {
-					return fail(std::format("'{}' could not be written (see the log)", res_tag.view()));
+					return prefab_failed(std::format("'{}' could not be written (see the log)", res_tag.view()));
 				}
 			} else {
 				m_res.store(res_tag, output_bytes);
