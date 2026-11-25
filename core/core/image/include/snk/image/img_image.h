@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <cstddef>
 #include <vector>
 
@@ -14,7 +15,7 @@ namespace img {
 	};
 
 	// Pixels stb decoded from memory; project files reach it only through the resource system, never by a path.
-	class image
+	class SNK_API image
 	{
 	public:
 		image() = default;

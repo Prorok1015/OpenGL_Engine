@@ -87,6 +87,9 @@ namespace edt
 		std::size_t m_reads = 0;
 	};
 
+	// The stamp of root/relative as it is (read below the root without following a link), nothing read; nullopt: no regular file.
+	std::optional<desc_type_cache::stamp> stat_asset_file(const std::filesystem::path& root, const std::filesystem::path& relative);
+
 	// What the "Kinds" list offers: the fixed kinds, then the registry's kinds that are none of them.
 	std::vector<asset_filter_kind> asset_filter_kinds(const asset_kind_registry* kinds);
 

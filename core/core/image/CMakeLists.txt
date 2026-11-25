@@ -8,4 +8,4 @@ snk_component_headers(${PROJECT_NAME})
 
 add_subdirectory(${THIRD_PARTY_PATH}/stb_image stb_image)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE stb_image PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::common PRIVATE stb_image PRIVATE snk::engine_logger)

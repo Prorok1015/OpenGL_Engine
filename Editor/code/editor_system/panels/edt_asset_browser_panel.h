@@ -15,6 +15,7 @@
 namespace edt
 {
 	class asset_kind_registry;
+	class thumbnail_service;
 	class code_section;
 	class document_creator;
 	class document_create_form;
@@ -41,6 +42,9 @@ namespace edt
 		// window to pick a document type and a name; `on_created` gets the tag of the new file. Without a creator the menu has no
 		// such item.
 		void set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created);
+
+		// The thumbnails of the picture rows (#1192); null: none, a picture row looks as any other. Not owned.
+		void set_thumbnails(thumbnail_service* thumbnails) { m_thumbnails = thumbnails; }
 
 		// "Import Image..." in the same menus (#1193): `pick_file` shows the native file picker and calls back with the
 		// picked file, then a window takes wrap, filter, mips and the file name. `importer` outlives the panel. Null: no
@@ -87,6 +91,8 @@ namespace edt
 	private:
 		// Non-recursive merged scan of m_current_rel into m_entries.
 		void refresh_entries();
+		// A picture row's thumbnail and name over the selectable just drawn at screen position (x, y); `failure` gets why there is none.
+		void draw_picture_row(const layer_entry& src, const std::string& label, float x, float y, float height, std::string& failure);
 		// Recursive directory tree for the left panel; rel_dir is relative to res://.
 		void draw_dir_tree(const std::filesystem::path& rel_dir, int depth = 0);
 		// Navigate the right panel to rel_dir (relative to res://).
@@ -115,6 +121,7 @@ namespace edt
 		asset_filter m_filter;
 		desc_type_cache m_desc_types;
 		const asset_kind_registry* m_kinds = nullptr;
+		thumbnail_service* m_thumbnails = nullptr;
 
 		struct entry {
 			layer_entry src;

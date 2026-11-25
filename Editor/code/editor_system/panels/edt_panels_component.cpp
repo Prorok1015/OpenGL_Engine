@@ -17,6 +17,7 @@
 #include "edt_scene_editor.h"
 #include "edt_scene_hierarchy_panel.h"
 #include "edt_shape_request.h"
+#include "edt_thumbnail_service.h"
 #include "edt_ui_probe.h"
 #include "edt_viewport_panel.h"
 #include <snk/editor/edt_selection_service.h>
@@ -38,6 +39,8 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world.h>
 #include <glm/vec3.hpp>
+#include <chrono>
+#include <imgui.h>
 #include <format>
 #include <span>
 #include <utility>
@@ -63,6 +66,8 @@ edt::panels_component::panels_component(ports from)
 	m_asset_browser = std::make_shared<asset_browser_panel>();
 	m_asset_browser->set_layers(m_ports.resources.get_resource_layers());
 	m_asset_browser->set_asset_kinds(&m_ports.context.asset_kinds());
+	m_thumbnails = make_thumbnail_service();
+	m_asset_browser->set_thumbnails(m_thumbnails.get());
 	m_asset_browser->set_ui_probe(m_ui_probe);
 	if (const auto code_roots = m_ports.resources.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_ports.resources, code_tree_model{ code_roots.back() },
@@ -108,7 +113,52 @@ edt::panels_component::panels_component(ports from)
 	wire_scene_callbacks();
 }
 
-edt::panels_component::~panels_component() = default;
+edt::panels_component::~panels_component()
+{
+	if (m_asset_browser)
+		m_asset_browser->set_thumbnails(nullptr);
+}
+
+std::unique_ptr<edt::thumbnail_service> edt::panels_component::make_thumbnail_service()
+{
+	thumbnail_service::ports ports;
+	ports.dispatch = [this](std::function<thumbnail_decoded()> work, std::function<void(thumbnail_decoded)> done) {
+		m_ports.context.jobs().start(ds::lane::compute, { "Thumbnail", "thumbnail", false }, m_thumbnail_jobs,
+			[work = std::move(work)](ds::task_context&) -> thumbnail_decoded { return work(); },
+			[done = std::move(done)](ds::task_result<thumbnail_decoded>& result) {
+				if (result.ok())
+					done(std::move(*result.value));
+				else
+					done(thumbnail_decoded{ std::nullopt, result.error });
+			});
+	};
+	ports.stat = &stat_asset_file;
+	ports.decode = &decode_thumbnail_file;
+	ports.upload = [this](const std::string& key, const thumbnail_pixels& pixels) -> std::uint64_t {
+		auto* backend = m_ports.gui.get_backend_interface();
+		if (!backend)
+			return 0;
+		auto& textures = m_ports.rnd.get_texture_manager();
+		const res::tag tag{ key };
+		const auto id = textures.generate(tag, { pixels.width, pixels.height }, rnd::driver::texture_header::TYPE::RGBA8, pixels.rgba);
+		if (!id.is_valid())
+			return 0;
+		const auto handle = textures.binding(id).handle;
+		if (!handle) {
+			textures.remove(tag);
+			return 0;
+		}
+		const ImTextureID imgui_id = backend->to_imgui(handle);
+		if (imgui_id == 0)
+			textures.remove(tag);
+		return imgui_id;
+	};
+	ports.release = [this](const std::string& key) {
+		m_ports.rnd.get_texture_manager().remove(res::tag{ key });
+	};
+	ports.now = [] { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+	return std::make_unique<thumbnail_service>(std::move(ports));
+}
 
 void edt::panels_component::wire_scene_callbacks()
 {

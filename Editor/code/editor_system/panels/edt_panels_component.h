@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/logger/engine_log_sinks.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_registration.h>
 #include <filesystem>
 #include <functional>
@@ -17,6 +18,7 @@ namespace rnd { class render_system; class capture_service; }
 namespace edt
 {
 	class asset_browser_panel;
+	class thumbnail_service;
 	class blackboard_panel;
 	class build_settings_panel;
 	class console_panel;
@@ -106,6 +108,7 @@ namespace edt
 
 	private:
 		void wire_scene_callbacks();
+		std::unique_ptr<thumbnail_service> make_thumbnail_service();
 
 		ports m_ports;
 		// The console's feed from the engine log; removed with the panels.
@@ -123,5 +126,8 @@ namespace edt
 		std::shared_ptr<git_panel> m_git;
 		std::shared_ptr<world_systems_panel> m_world_systems;
 		std::shared_ptr<asset_browser_panel> m_asset_browser;
+		// The asset browser's thumbnails (#1192); the lifetime is declared after it so it stops the decodes first.
+		std::unique_ptr<thumbnail_service> m_thumbnails;
+		ds::lifetime m_thumbnail_jobs{ ds::lifetime_option::cancel_on_destroy };
 	};
 }

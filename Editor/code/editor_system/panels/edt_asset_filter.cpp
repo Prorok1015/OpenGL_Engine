@@ -178,6 +178,11 @@ namespace {
 
 }
 
+std::optional<edt::desc_type_cache::stamp> edt::stat_asset_file(const std::filesystem::path& root, const std::filesystem::path& relative)
+{
+	return stat_beneath(root, relative);
+}
+
 edt::desc_type_cache::desc_type_cache()
 	: m_ports{ &stat_beneath, &read_head_beneath }
 {
