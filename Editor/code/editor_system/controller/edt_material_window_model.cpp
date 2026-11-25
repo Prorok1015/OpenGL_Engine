@@ -100,11 +100,34 @@ std::vector<std::string> define_entries(const json::value& shown)
 	return out;
 }
 
-// The names `source` tests (#ifdef, #ifndef, defined) and the ones it #defines, each once, in order.
-void scan_names(std::string_view source, std::vector<std::string>& tested, std::vector<std::string>& defined)
+// X of an #if whose whole condition is "!defined(X)" or "!defined X"; empty otherwise.
+std::string_view not_defined_name(std::string_view condition)
+{
+	condition = skip_blanks(condition);
+	if (!condition.starts_with('!')) return {};
+	condition = skip_blanks(condition.substr(1));
+	if (take_name(condition) != "defined") return {};
+	condition = skip_blanks(condition);
+	const bool parenthesis = condition.starts_with('(');
+	if (parenthesis) condition = skip_blanks(condition.substr(1));
+	const std::string_view name = take_name(condition);
+	condition = skip_blanks(condition);
+	if (parenthesis) {
+		if (!condition.starts_with(')')) return {};
+		condition = skip_blanks(condition.substr(1));
+	}
+	return condition.empty() ? name : std::string_view{};
+}
+
+// The names `source` tests (#ifdef, #ifndef, defined), the ones it #defines and, of those, the ones it #defines
+// whatever is set before it (`fixed`: not a default under its own #ifndef), each once, in order.
+void scan_names(std::string_view source, std::vector<std::string>& tested, std::vector<std::string>& defined,
+	std::vector<std::string>* fixed = nullptr)
 {
 	// Comments blanked as the shader compiler reads them: a /* */ block may span lines.
 	const std::string code = rnd::blank_comments(std::string{ source });
+	// The open conditionals: the name an #ifndef X / #if !defined(X) guards, empty for any other.
+	std::vector<std::string_view> guards;
 	for (std::string_view text = code; !text.empty();) {
 		const std::size_t end = text.find('\n');
 		std::string_view line = text.substr(0, end);
@@ -115,15 +138,34 @@ void scan_names(std::string_view source, std::vector<std::string>& tested, std::
 		const std::string_view directive = take_name(line);
 		if (directive == "define") {
 			line = skip_blanks(line);
-			if (const std::string_view name = take_name(line); !name.empty()) add_unique(defined, name);
+			if (const std::string_view name = take_name(line); !name.empty()) {
+				add_unique(defined, name);
+				if (fixed && (guards.empty() || guards.back() != name)) add_unique(*fixed, name);
+			}
+			continue;
+		}
+		if (directive == "endif") {
+			if (!guards.empty()) guards.pop_back();
+			continue;
+		}
+		if (directive == "else") {
+			if (!guards.empty()) guards.back() = {};
 			continue;
 		}
 		if (directive == "ifdef" || directive == "ifndef") {
 			line = skip_blanks(line);
-			if (const std::string_view name = take_name(line); !name.empty()) add_unique(tested, name);
+			const std::string_view name = take_name(line);
+			if (!name.empty()) add_unique(tested, name);
+			guards.push_back(directive == "ifndef" ? name : std::string_view{});
 			continue;
 		}
-		if (directive != "if" && directive != "elif") continue;
+		if (directive == "if") {
+			guards.push_back(not_defined_name(line));
+		} else if (directive == "elif") {
+			if (!guards.empty()) guards.back() = {};
+		} else {
+			continue;
+		}
 		for (std::size_t at = line.find("defined"); at != std::string_view::npos; at = line.find("defined", at + 1)) {
 			if (at > 0 && is_name_char(line[at - 1])) continue;
 			std::string_view rest = line.substr(at + 7);
@@ -163,6 +205,19 @@ void merge_row(std::vector<edt::compile_row>& rows, edt::compile_row row)
 	if (!row.define_set.empty() && same->define_set.find(row.define_set) == std::string::npos) {
 		same->define_set += same->define_set.empty() ? row.define_set : "; " + row.define_set;
 	}
+}
+
+// The program title names the stage files of `shader` (shader_config::load: their file names, " + " between, in
+// vertex, fragment, geometry order): a shared include's row of another shader's program is not this material's.
+bool names_stages_of(std::string_view program, const edt::material_shader& shader)
+{
+	std::string stages;
+	for (const res::tag* stage : { &shader.vertex, &shader.fragment, &shader.geometry }) {
+		if (!stage->is_valid()) continue;
+		if (!stages.empty()) stages += " + ";
+		stages += stage->name();
+	}
+	return !stages.empty() && rnd::program_title_stages(program) == stages;
 }
 
 json::array defines_of(const json::value& shown)
@@ -417,10 +472,11 @@ void edt::material_window_model::scan()
 			if (!problems.empty()) fail(std::move(problems));
 			std::vector<std::string> tested;
 			std::vector<std::string> defined;
-			scan_names(source, tested, defined);
+			std::vector<std::string> fixed;
+			scan_names(source, tested, defined, &fixed);
 			std::erase_if(tested, [&](const std::string& name) { return holds(defined, name); });
 			for (const std::string& name : tested) add_unique(m_shader_names, name);
-			for (const std::string& name : defined) add_unique(m_source_defines, name);
+			for (const std::string& name : fixed) add_unique(m_source_defines, name);
 		}
 	}
 	// Watched also when a read failed: the file that appears or is fixed is read again.
@@ -501,7 +557,7 @@ edt::compile_errors edt::material_window_model::compile_rows(const std::vector<r
 		// The pass and skinning defines the compiler adds on its own; the material's set is the rest.
 		if (!holds(expected, "OPAQUE")) take_one(set, "OPAQUE");
 		const bool skinned = !holds(expected, "USE_ANIMATION") && take_one(set, "USE_ANIMATION");
-		if (set == expected) {
+		if (set == expected && names_stages_of(problem.program, m_shader)) {
 			row.skinned = skinned;
 			merge_row(out.material, std::move(row));
 		} else {
@@ -542,17 +598,22 @@ const std::vector<std::string>& edt::material_window_model::pre_check()
 	m_pre_check_scan = m_scan_serial;
 	std::vector<std::string>& out = m_pre_check;
 	out.clear();
+	const auto is_space = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
+	const auto trim = [&](std::string_view text) {
+		while (!text.empty() && is_space(text.front())) text.remove_prefix(1);
+		while (!text.empty() && is_space(text.back())) text.remove_suffix(1);
+		return text;
+	};
 	for (const std::string& entry : define_entries(m_document.shown())) {
-		std::string_view rest = skip_blanks(entry);
+		std::string_view rest = trim(entry);
 		const std::string_view name = take_name(rest);
-		if (name.empty() || (!rest.empty() && rest.front() != ' ' && rest.front() != '\t')) {
+		if (!name.empty() && rest.starts_with('=')) {
+			out.push_back(std::format("'{}': use 'NAME VALUE', not 'NAME=VALUE'", entry));
+		} else if (name.empty() || (!rest.empty() && !is_space(rest.front()))) {
 			out.push_back(std::format("'{}' does not start with a define name: write NAME or NAME VALUE", entry));
 			continue;
-		}
-		std::string_view value = skip_blanks(rest);
-		while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.remove_suffix(1);
-		if (value.find_first_of(" \t") != std::string_view::npos) {
-			out.push_back(std::format("'{}': a define takes one value token, '{}' is more than one", entry, value));
+		} else if (std::ranges::any_of(trim(rest), is_space)) {
+			out.push_back(std::format("'{}': unsupported by the program title format: one value token only", entry));
 		}
 		if (rnd::is_engine_define(name)) {
 			out.push_back(std::format("{} is defined by the engine before the shader's source: the shader does not build", name));
@@ -575,17 +636,24 @@ const std::vector<std::string>& edt::material_window_model::pre_check()
 
 bool edt::material_window_model::preprocess(std::chrono::steady_clock::time_point now, const rnd::driver::binding_table& bindings)
 {
-	const std::vector<std::string>& expected = expected_defines();
-	std::string key{ m_shader.shader.view() };
-	key += '\n' + std::to_string(m_scan_serial);
-	for (const std::string& entry : expected) key += '\n' + entry;
-	if (!m_preprocess_seen || key != m_preprocess_key) {
+	const std::uint64_t generation = m_document.generation();
+	// The same document and scan: the same shader and define set (expected_defines depends on nothing else).
+	const bool same_input = m_preprocess_seen && m_preprocess_generation == generation && m_preprocess_scan == m_scan_serial;
+	if (!same_input) {
+		const std::vector<std::string>& expected = expected_defines();
+		const bool changed = !m_preprocess_seen || m_preprocess_scan != m_scan_serial || m_preprocess_shader != m_shader.shader
+			|| m_preprocess_defines != expected;
 		m_preprocess_seen = true;
-		m_preprocess_key = std::move(key);
-		m_preprocessed.clear();
-		m_preprocess_pending = true;
-		m_preprocess_due = now + preprocess_delay;
-		return false;
+		m_preprocess_generation = generation;
+		m_preprocess_scan = m_scan_serial;
+		if (changed) {
+			m_preprocess_shader = m_shader.shader;
+			m_preprocess_defines = expected;
+			m_preprocessed.clear();
+			m_preprocess_pending = true;
+			m_preprocess_due = now + preprocess_delay;
+			return false;
+		}
 	}
 	if (!m_preprocess_pending || now < m_preprocess_due) return false;
 	m_preprocess_pending = false;

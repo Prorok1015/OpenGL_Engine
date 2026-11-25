@@ -567,6 +567,30 @@ BOOST_AUTO_TEST_CASE(CompileRows_ThisMaterialsSetAndTags_AreItsOwn_OtherSetsAreO
 	}
 }
 
+BOOST_AUTO_TEST_CASE(CompileRows_ASharedIncludesRowOfAnotherShadersProgram_IsOthers_EvenWithTheSameDefineSet)
+{
+	put("shaders/lib/lights.glsl", "float light() { return 1.0; }\n");
+	put("shaders/a.vert", "#version 450\n");
+	put("shaders/a.frag", "#version 450\n#include \"lib/lights.glsl\"\n");
+	put("shaders/b.vert", "#version 450\n");
+	put("shaders/b.frag", "#version 450\n#include \"lib/lights.glsl\"\n");
+	put("shaders/a.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag"})");
+	put("shaders/b.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/b.vert","fragment":"res://shaders/b.frag"})");
+	edt::data_document& data = open(put("a.desc", R"({"__type":"material_desc","__version":2,"shader":"res://shaders/a.shader.desc"})"));
+	edt::material_window_model model(data, services);
+	model.scan();
+
+	const edt::compile_errors errors = model.compile_rows({
+		problem_at("res://shaders/lib/lights.glsl", 1, "a.vert + a.frag"),
+		problem_at("res://shaders/lib/lights.glsl", 2, "b.vert + b.frag"),
+	}, res::tag{});
+	BOOST_REQUIRE(errors.material.size() == 1u);
+	BOOST_TEST(errors.material[0].problem.line == 1);
+	BOOST_REQUIRE(errors.others.size() == 1u);
+	BOOST_TEST(errors.others[0].problem.line == 2);
+	BOOST_TEST(errors.others[0].define_set == "no defines");
+}
+
 BOOST_AUTO_TEST_CASE(CompileRows_ThePreviewsLoadRowAlone_IsThisMaterials)
 {
 	put("shaders/m.vert", "#version 450\n");
@@ -614,23 +638,29 @@ BOOST_AUTO_TEST_CASE(Errors_AreMadeAgain_OnlyWhenTheGenerationOrTheDefinesChange
 BOOST_AUTO_TEST_CASE(PreCheck_WarnsOfBadEntries_AndOfNamesTheEngineOrTheShaderDefine)
 {
 	put("shaders/m.vert", "#version 450\n");
-	put("shaders/m.frag", "#version 450\n#define SOURCE_MACRO 1\n");
+	// Defaults under their own guard are the material's to set; an unguarded #define is not.
+	put("shaders/m.frag", "#version 450\n#define SOURCE_MACRO 1\n#ifndef GUARDED\n#define GUARDED 1\n#endif\n"
+		"#if !defined(PAREN_GUARDED)\n#define PAREN_GUARDED 2\n#endif\n#if !defined BARE_GUARDED\n#define BARE_GUARDED 3\n#endif\n");
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc",
 		R"({"__type":"material_desc","__version":2,"shader":"res://shaders/m.shader.desc","defines":)"
-		R"(["BAD-NAME","LEVEL 1 2","MAX_LIGHT_COUNT 4","SNK_FRAGMENT_SHADER","SHADER_LEVEL 2","SOURCE_MACRO","FINE 3"]})"));
+		R"(["BAD-NAME","LEVEL 1 2","MAX_LIGHT_COUNT 4","SNK_FRAGMENT_SHADER","SHADER_LEVEL 2","SOURCE_MACRO","FINE 3",)"
+		R"("EQUALS=1","SPLIT 1\n#error","GUARDED 4","PAREN_GUARDED","BARE_GUARDED 5"]})"));
 	edt::material_window_model model(data, services);
 	model.scan();
 
 	const std::vector<std::string> warnings = model.pre_check();
 	BOOST_TEST(any_holds(warnings, "'BAD-NAME' does not start with a define name"));
-	BOOST_TEST(any_holds(warnings, "'LEVEL 1 2': a define takes one value token"));
+	BOOST_TEST(any_holds(warnings, "'LEVEL 1 2': unsupported by the program title format: one value token only"));
+	BOOST_TEST(any_holds(warnings, "'SPLIT 1\n#error': unsupported by the program title format: one value token only"));
+	BOOST_TEST(any_holds(warnings, "'EQUALS=1': use 'NAME VALUE', not 'NAME=VALUE'"));
+	BOOST_TEST(!any_holds(warnings, "GUARDED"));
 	BOOST_TEST(any_holds(warnings, "MAX_LIGHT_COUNT is defined by the engine"));
 	BOOST_TEST(any_holds(warnings, "SNK_FRAGMENT_SHADER is defined by the engine"));
 	BOOST_TEST(any_holds(warnings, "'SHADER_LEVEL 2' replaces the shader's define 'SHADER_LEVEL 1'"));
 	BOOST_TEST(any_holds(warnings, "SOURCE_MACRO is #defined by the shader's source"));
 	BOOST_TEST(!any_holds(warnings, "FINE"));
-	BOOST_TEST(warnings.size() == 6u);
+	BOOST_TEST(warnings.size() == 8u);
 }
 
 BOOST_AUTO_TEST_CASE(Preprocess_WaitsForTheDelay_RunsOnce_AndAnEditRestartsTheWait)

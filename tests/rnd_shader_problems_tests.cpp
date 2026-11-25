@@ -556,6 +556,34 @@ BOOST_AUTO_TEST_CASE(AProgramTitleParsesBackToTheDefinesItWasFormattedFrom)
 	BOOST_TEST((parsed == expected));
 }
 
+BOOST_AUTO_TEST_CASE(AHostileProgramTitle_GivesTheLastPairsDefines_AndTheTextBeforeIt)
+{
+	using entries = std::vector<std::string>;
+	// "{ }": the " }" overlaps the "{ ", there is no pair.
+	BOOST_TEST(parse_program_defines("{ }").empty());
+	BOOST_TEST(program_title_stages("{ }") == "{ }");
+	// "{  }": a pair with nothing between.
+	BOOST_TEST(parse_program_defines("{  }").empty());
+	BOOST_TEST(program_title_stages("{  }") == "");
+	BOOST_TEST(parse_program_defines("{ A").empty());
+	BOOST_TEST(program_title_stages("{ A") == "{ A");
+	BOOST_TEST(parse_program_defines("A }").empty());
+	BOOST_TEST(program_title_stages("A }") == "A }");
+	// The last " }" and the last "{ " before it: the inner "{ " opens, the entry runs to the outer " }".
+	BOOST_TEST((parse_program_defines("{ { A } }") == entries{ "A }" }));
+	BOOST_TEST(program_title_stages("{ { A } }") == "{");
+
+	std::string flood;
+	flood.reserve(100 * 1024);
+	while (flood.size() < 100 * 1024) flood += "{ ";
+	BOOST_TEST(parse_program_defines(flood).empty());
+	BOOST_TEST(program_title_stages(flood).size() == flood.size() - 1);
+
+	const std::string_view odd_path = "res://we{ ird/a.vert + res://b.frag { X | Y }";
+	BOOST_TEST((parse_program_defines(odd_path) == entries{ "X", "Y" }));
+	BOOST_TEST(program_title_stages(odd_path) == "res://we{ ird/a.vert + res://b.frag");
+}
+
 BOOST_AUTO_TEST_CASE(TheEngineDefinesOfAStageAreTheNamedConstants)
 {
 	const auto result = load(program_of(put("engine.vert", "#version 450 core\nvoid main() {}\n"), put("engine.frag", good_fragment)));

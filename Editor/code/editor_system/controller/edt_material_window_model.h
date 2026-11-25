@@ -121,7 +121,8 @@ namespace edt
 		void scan();
 
 		// The renderer's problems of this material and its shader (#1196 PR 3): load rows whose program is the document or
-		// `preview_tag` and rows of the shader's files whose define set is the material's are `material`, the other
+		// `preview_tag` and rows of the shader's files whose program title names the shader's stages with the material's
+		// define set are `material`, the other
 		// rows of those files `others`; the last preprocess() run's problems join `material`. Sets compare in any order.
 		compile_errors compile_rows(const std::vector<rnd::shader_problem>& problems, const res::tag& preview_tag);
 		// compile_rows, made again only when `generation` (render_system::shader_problems_generation), the document, the
@@ -153,7 +154,7 @@ namespace edt
 		std::shared_ptr<const rnd::shader_desc> m_program;
 		// The stages and the files they include (not the shader desc).
 		std::vector<res::tag> m_shader_files;
-		// The names the stage sources #define themselves.
+		// The names the stage sources #define themselves, without a default under its own #ifndef (the material may set it).
 		std::vector<std::string> m_source_defines;
 		std::uint64_t m_scan_serial = 0;
 		std::vector<std::string> m_shader_names;
@@ -179,7 +180,11 @@ namespace edt
 		std::uint64_t m_pre_check_scan = 0;
 		bool m_has_pre_check = false;
 
-		std::string m_preprocess_key;
+		// What the last preprocess wait started for: the document and scan it checked, the shader and define set.
+		std::uint64_t m_preprocess_generation = 0;
+		std::uint64_t m_preprocess_scan = 0;
+		res::tag m_preprocess_shader;
+		std::vector<std::string> m_preprocess_defines;
 		bool m_preprocess_seen = false;
 		bool m_preprocess_pending = false;
 		std::chrono::steady_clock::time_point m_preprocess_due{};
