@@ -821,7 +821,9 @@ BOOST_AUTO_TEST_CASE(Start_RefusesAnotherFileAtTheSamePathSizeAndTime)
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
-BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
+// Same size and the write time set back: the change time of the handle's stamp (#1412) refuses the second call
+// before any job, where only the content hash used to see it.
+BOOST_AUTO_TEST_CASE(TheSecondCall_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
 {
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
@@ -835,12 +837,10 @@ BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWer
 	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
 
 	const auto started = service->start(second, agent);
-	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	BOOST_CHECK(!started.ok());
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK_MESSAGE(started.error.find("changed") != std::string::npos, started.error);
 	run_jobs();
-	const auto info = jobs.info(started.job);
-	BOOST_REQUIRE(info.has_value());
-	BOOST_CHECK(info->status == edt::job_status::failed);
-	BOOST_CHECK(info->error.find("content") != std::string::npos);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
