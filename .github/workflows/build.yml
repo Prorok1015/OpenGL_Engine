@@ -1386,16 +1386,16 @@ jobs:
           sha=$(git rev-parse HEAD:projects/sandbox/res/samples)
           echo "samples pinned at $sha"
           samples=projects/sandbox/res/samples
-          git -C "$samples" init -q &&
-            git -C "$samples" remote add origin https://github.com/Prorok1015/OpenGL_Engine_samples.git
+          git -C "$samples" init -q
+          git -C "$samples" remote add origin https://github.com/Prorok1015/OpenGL_Engine_samples.git
           fetched=0
           for attempt in 1 2 3; do
             if git -C "$samples" fetch -q --depth 1 --filter=blob:none origin "$sha"; then fetched=1; break; fi
-            echo "fetch attempt $attempt failed"; sleep $((attempt * 10))
+            echo "fetch attempt $attempt failed"; [ "$attempt" = 3 ] || sleep $((attempt * 10))
           done
           [ "$fetched" = 1 ] || { echo "::error::could not fetch the samples at $sha"; exit 1; }
-          git -C "$samples" sparse-checkout set card &&
-            git -C "$samples" checkout -q FETCH_HEAD
+          git -C "$samples" sparse-checkout set card
+          git -C "$samples" checkout -q FETCH_HEAD
           test -f projects/sandbox/res/samples/card/card_demo.desc || { echo "::error::samples submodule (card/) missing"; exit 1; }
 
       # #1197: the card material in the Scene view, captured in-process like "Capture run (viewport.capture)". The level

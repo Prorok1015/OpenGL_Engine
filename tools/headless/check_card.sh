@@ -20,8 +20,8 @@
 #   (b) BEHIND is green-dominant (green exceeds red and blue by SNK_CARD_MIN_GREEN, default 40), HOLE matches BEHIND
 #       within SNK_CARD_MAX_HOLE_DIFF (default 30) and BAND differs from BEHIND by more than SNK_CARD_MIN_DIFF: the
 #       frame is drawn, and its transparent centre shows the backdrop behind it;
-# The image's aspect must be within SNK_CARD_ASPECT (default 1.70,1.90): the regions assume that layout.
 #   (c) BACK has the back texture's dominant blue: blue exceeds red and green by SNK_CARD_MIN_BLUE (default 40).
+# The image's aspect must be within SNK_CARD_ASPECT (default 1.70,1.90): the regions assume that layout.
 # A failed check prints an ::error:: line; the crops are written next to the shot (<shot>.<region>.png) for the
 # artifact. Needs ImageMagick (convert, identify).
 set -euo pipefail
@@ -36,7 +36,9 @@ min_red="${SNK_CARD_MIN_RED:-40}"
 min_green="${SNK_CARD_MIN_GREEN:-40}"
 fail=0
 
-read -r width height < <(identify -format '%w %h\n' "$shot" | head -1)
+size=$(identify -format '%w %h\n' "$shot" 2>/dev/null | head -1) || true
+[[ -n "$size" ]] || { echo "::error::card check: not a readable image: $shot"; exit 1; }
+read -r width height <<<"$size"
 echo "card check: $shot is ${width}x${height}"
 aspect=$(awk -v w="$width" -v h="$height" 'BEGIN { printf "%.3f", w / h }')
 IFS=, read -r aspect_min aspect_max <<<"${SNK_CARD_ASPECT:-1.70,1.90}"
