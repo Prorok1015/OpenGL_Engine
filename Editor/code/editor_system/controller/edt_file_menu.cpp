@@ -546,7 +546,7 @@ void edt::file_menu::register_image_import()
 			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Absolute path of the picture (.png, .jpg, .jpeg); a regular file, not a link. "
 					"Copied into the project as it is. An agent's import asks a person first, and its source must lie "
-					"on a local fixed or removable disk (no share, network drive or mount, no '.' or '..')." } } },
+					"on a local fixed or removable disk (no share, network drive or mount, no '..')." } } },
 			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Folder below res:// (default: textures). Nothing is ever overwritten." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
@@ -722,7 +722,9 @@ void edt::file_menu::register_actions()
 			const json::value* value = args.if_contains(key);
 			return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string{};
 		};
-		return agent_import_request{ text_of("path"), text_of("name"), text_of("folder"), text_of("files_token") };
+		agent_import_request out{ text_of("path"), text_of("name"), text_of("folder"), text_of("files_token") };
+		if (const json::value* settings = args.if_contains("settings")) out.settings = *settings;
+		return out;
 	};
 	const auto import_available = [this] {
 		return static_cast<bool>(m_hooks.import_model) || (m_hooks.agent_import != nullptr && m_hooks.agent_import->available());
@@ -739,7 +741,7 @@ void edt::file_menu::register_actions()
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
-			&& !args.contains("folder");
+			&& !args.contains("folder") && !args.contains("settings");
 		if (dialog) {
 			// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
 			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
@@ -759,7 +761,7 @@ void edt::file_menu::register_actions()
 			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Absolute path of the model file (.glb, .gltf, .obj, .fbx); a regular file, not a "
 					"link. An agent's import asks a person first, and its source must lie on a local fixed or "
-					"removable disk (no share, network drive or mount, no '.' or '..')." } } },
+					"removable disk (no share, network drive or mount, no '..')." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, "
 					"imports without the dialog." } } },
@@ -769,7 +771,17 @@ void edt::file_menu::register_actions()
 			{ "files_token", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Only for the second call: when the job of the first call ends with "
 					"needs_files_approval (the model refers to other files), call again with the same arguments "
-					"and this token; a person is shown those files and decides." } } } } },
+					"and this token; a person is shown those files and decides." } } },
+			{ "settings", json::object{ { "type", "object" },
+				{ "description", "How the meshes are made; recorded in the .resource of the prefab. A missing key "
+					"takes its default; unknown keys are refused. A files_token holds for the same settings only." },
+				{ "properties", json::object{
+					{ "normals", json::object{ { "type", "string" }, { "enum", json::array{ "smooth", "flat" } },
+						{ "description", "smooth: averaged over the faces that share a vertex (default); flat: "
+							"each face's own normal." } } },
+					{ "tangents", json::object{ { "type", "boolean" },
+						{ "description", "Compute tangents for normal maps (default true)." } } } } },
+				{ "additionalProperties", false } } } } },
 		{ "required", json::array{ "path" } },
 		{ "additionalProperties", false } };
 	import_command.result_schema = json::object{

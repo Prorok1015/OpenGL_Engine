@@ -3,6 +3,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_model_import.h"
+#include "edt_decode_codec.h"
 #include "edt_file_menu.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
@@ -11,6 +12,7 @@
 #include <snk/common/text_escape.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/command/cmd_policy.h>
+#include <snk/resource/res_asset_meta.h>
 #include <boost/json/parse.hpp>
 #include <cctype>
 #include <chrono>
@@ -19,6 +21,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -94,6 +97,13 @@ struct import_fixture : test_util::scene_env
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.now = [this] { return clock; };
 		result.max_source_bytes = 4096;
+		result.read_below = [this](const platform::beneath::read_request& request,
+			const platform::beneath::read_limits& limits, std::vector<std::byte>& out) {
+			const platform::beneath::read_result read = platform::beneath::read_beneath(request, limits, out);
+			// The handle's stamp stays, the bytes differ: what only the content hash sees.
+			if (flip_read_bytes && !request.stamp_only && !out.empty()) out.back() ^= std::byte{ 1 };
+			return read;
+		};
 		result.drive_type = [this](char letter) {
 			++drive_type_calls;
 			return std::toupper(static_cast<unsigned char>(letter)) == remote_drive ? 4u : edt::k_drive_fixed;
@@ -123,6 +133,7 @@ struct import_fixture : test_util::scene_env
 		const fs::path& model = source.path;
 		++imports;
 		import_sandbox = source.sandbox;
+		seen_settings = source.settings;
 		if (source.allowed) seen_allowed = *source.allowed;
 		if (source.preloaded) seen_bytes.assign(reinterpret_cast<const char*>(source.preloaded->data()), source.preloaded->size());
 		if (during_import) during_import();
@@ -212,6 +223,8 @@ struct import_fixture : test_util::scene_env
 	bool deadline_was_set = false;
 	edt::sandbox_mode scan_sandbox = edt::sandbox_mode::required;
 	edt::sandbox_mode import_sandbox = edt::sandbox_mode::required;
+	// What the import was told of the meshes (#1195).
+	edt::model_import_settings seen_settings{};
 	std::string scan_error;
 	std::vector<edt::referenced_file> listed_files;
 	bool scan_leaves_unhashed = false;
@@ -221,6 +234,7 @@ struct import_fixture : test_util::scene_env
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
+	bool flip_read_bytes = false;
 	// What the fake decoder says of its OS sandbox (#1076), and what the editor expects before a run.
 	edt::decoder_sandbox_status scan_reports{};
 	edt::decoder_sandbox_status import_reports{};
@@ -745,6 +759,90 @@ BOOST_AUTO_TEST_CASE(Start_AfterTheApproval_ImportsExportsAndCleansMemory)
 	BOOST_CHECK(!service->running());
 }
 
+// #1195: the settings an agent asks for are shown to the person, reach the import and are recorded in the
+// .resource of the prefab with the source's name and hash, never its path.
+BOOST_AUTO_TEST_CASE(TheSettings_AreShown_ReachTheImport_AndAreRecordedInThePrefabsSidecar)
+{
+	edt::agent_import_request wanted = request("hero", "models");
+	wanted.settings = json::parse(R"({"normals":"flat","tangents":false})");
+	const std::optional<std::string> text = service->describe(wanted, agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK_MESSAGE(text->find("normals flat, tangents off") != std::string::npos, *text);
+	const auto started = service->start(wanted, agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK(seen_settings.normals == edt::model_normals::flat);
+	BOOST_CHECK(!seen_settings.tangents);
+
+	const std::string sidecar = read_file(res_root / "models" / "hero.prefab.desc.resource");
+	const res::asset_meta_result meta = res::read_asset_meta(sidecar);
+	BOOST_REQUIRE(meta.meta.has_value());
+	BOOST_CHECK_EQUAL(meta.meta->importer, "model");
+	const edt::model_settings_parse settings = edt::parse_model_settings(meta.meta->settings);
+	BOOST_REQUIRE_MESSAGE(settings.ok(), settings.error);
+	BOOST_CHECK(settings.settings == seen_settings);
+	BOOST_REQUIRE(settings.source.has_value());
+	BOOST_CHECK_EQUAL(settings.source->name, "robot.glb");
+	const std::string bytes = "glb bytes of the robot";
+	const edt::content_digest digest = edt::digest_of(std::as_bytes(std::span(bytes)));
+	BOOST_CHECK_EQUAL(settings.source->sha256, edt::digest_to_hex(digest));
+	BOOST_CHECK(sidecar.find(dir.path().filename().string()) == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(WithoutSettings_TheImportIsAsBefore_AndTheSidecarHoldsTheDefaults)
+{
+	const auto started = approved_start(request("hero", "models"), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK(seen_settings == edt::model_import_settings{});
+	const fs::path sidecar = res_root / "models" / "hero.prefab.desc.resource";
+	const res::asset_meta_result meta = res::read_asset_meta(read_file(sidecar));
+	BOOST_REQUIRE(meta.meta.has_value());
+	BOOST_CHECK(edt::parse_model_settings(meta.meta->settings).settings == edt::model_import_settings{});
+}
+
+BOOST_AUTO_TEST_CASE(BadSettings_AreRefusedBeforeAnythingIsLookedAt)
+{
+	const std::string with_source = R"({"source":{"name":"x.glb","sha256":")" + std::string(64, 'a') + R"("}})";
+	for (const std::string& bad : { std::string(R"({"normals":"round"})"), std::string(R"({"scale":2})"),
+			std::string(R"({"version":2})"), with_source }) {
+		BOOST_TEST_CONTEXT(bad) {
+			edt::agent_import_request wanted = request("hero", "models");
+			wanted.settings = json::parse(bad);
+			BOOST_CHECK(service->describe(wanted, agent)->rfind("This request will be refused", 0) == 0u);
+			BOOST_CHECK_EQUAL(service->resolve(wanted, false).code, cmd::codes::invalid_args);
+		}
+	}
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+BOOST_AUTO_TEST_CASE(AFilesToken_HoldsForTheSettingsItWasMadeWith_Only)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	edt::agent_import_request first = request("hero", "models");
+	first.settings = json::parse(R"({"normals":"flat"})");
+	const json::object listed = finished(approved_start(first, agent).job);
+	const std::string token(listed.at("files_token").as_string());
+
+	edt::agent_import_request other = request("hero", "models");
+	other.files_token = token;
+	BOOST_CHECK(service->describe(other, agent)->rfind("This request will be refused", 0) == 0u);
+	BOOST_CHECK_EQUAL(service->start(other, agent).code, cmd::codes::denied);
+
+	// The same settings, spelled with a default added, are the same settings.
+	edt::agent_import_request same = request("hero", "models");
+	same.settings = json::parse(R"({"normals":"flat","tangents":true})");
+	same.files_token = token;
+	const std::optional<std::string> text = service->describe(same, agent);
+	BOOST_REQUIRE(text.has_value());
+	BOOST_CHECK_MESSAGE(text->rfind("This request will be refused", 0) != 0u, *text);
+	const auto started = service->start(same, agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	finished(started.job);
+	BOOST_CHECK(seen_settings.normals == edt::model_normals::flat);
+}
+
 BOOST_AUTO_TEST_CASE(Start_IsNotFreeForAnAgent_ItNeedsTheShownApproval)
 {
 	// Never shown: nothing starts.
@@ -821,7 +919,9 @@ BOOST_AUTO_TEST_CASE(Start_RefusesAnotherFileAtTheSamePathSizeAndTime)
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
-BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
+// Same size and the write time set back: the change time of the handle's stamp (#1412) refuses the second call
+// before any job, where only the content hash used to see it.
+BOOST_AUTO_TEST_CASE(TheSecondCall_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
 {
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
@@ -835,12 +935,32 @@ BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWer
 	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
 
 	const auto started = service->start(second, agent);
+	BOOST_CHECK(!started.ok());
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK_MESSAGE(started.error.find("changed") != std::string::npos, started.error);
+	run_jobs();
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+// The content hash of the second job, for bytes no stamp tells apart: a reader that gives other bytes from the same
+// handle.
+BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesBytesOtherThanTheListedOnes_WhenTheStampIsTheSame)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+
+	flip_read_bytes = true;
+	const auto started = service->start(second, agent);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	run_jobs();
 	const auto info = jobs.info(started.job);
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::failed);
-	BOOST_CHECK(info->error.find("content") != std::string::npos);
+	BOOST_CHECK_MESSAGE(info->error.find("content") != std::string::npos, info->error);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
@@ -860,6 +980,40 @@ BOOST_AUTO_TEST_CASE(Job_RefusesAFileThatChangesWhileItIsImported_AndLeavesNothi
 	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
+}
+
+// #1412: the same bytes' size written in place, the write time set back: the change time of the handle tells.
+BOOST_AUTO_TEST_CASE(Job_RefusesASameSizeRewriteWithItsTimeSetBack)
+{
+	const auto started = approved_start(request(), agent);
+	BOOST_REQUIRE(started.ok());
+	during_import = [this] {
+		const fs::file_time_type written = fs::last_write_time(source);
+		dir.write("outside/robot.glb", "glb bytes of the r0bot");
+		fs::last_write_time(source, written);
+	};
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed") != std::string::npos, info->error);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
+}
+
+// #1412: an agent's plan holds a stamp and no time or id: a plan with a stamp on one side only is another file.
+BOOST_AUTO_TEST_CASE(SameFileAs_WithAStampOnOneSideOnly_IsAnotherFile)
+{
+	const edt::agent_import_plan plan = service->resolve(request(), false);
+	BOOST_REQUIRE_MESSAGE(plan.ok(), plan.error);
+	BOOST_REQUIRE(plan.stamp.has_value());
+	BOOST_CHECK(plan.same_file_as(plan));
+	edt::agent_import_plan bare = plan;
+	bare.stamp.reset();
+	BOOST_CHECK(!plan.same_file_as(bare));
+	BOOST_CHECK(!bare.same_file_as(plan));
+	edt::agent_import_plan touched = plan;
+	touched.stamp->change_time_ns += 1;
+	BOOST_CHECK(!plan.same_file_as(touched));
 }
 
 BOOST_AUTO_TEST_CASE(Job_ABrokenModelFailsAndLeavesNothing)
@@ -1273,6 +1427,28 @@ BOOST_AUTO_TEST_CASE(AnAgent_GetsTheBackgroundImport_NeverTheDialog)
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::done);
 	BOOST_CHECK(fs::exists(res_root / "assets" / "robot" / "robot.prefab.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(SettingsWithAKeyTheSchemaDoesNotName_AreRefused)
+{
+	json::object args{ { "path", source.string() }, { "settings", json::object{ { "scale", 2 } } } };
+	const cmd::result result = call(cmd::origin::ui(), json::serialize(args));
+	BOOST_CHECK(!result.ok);
+	BOOST_CHECK_EQUAL(result.code, cmd::codes::invalid_args);
+	BOOST_CHECK(dialog_imports.empty());
+	const json::object& properties = actions.commands().find("file.import_model")->args_schema.as_object()
+		.at("properties").as_object();
+	BOOST_CHECK(!properties.at("settings").as_object().at("additionalProperties").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(APerson_WithSettings_GetsTheBackgroundImport_NotTheDialog)
+{
+	json::object args{ { "path", source.string() }, { "settings", json::object{ { "normals", "flat" } } } };
+	const cmd::result result = call(cmd::origin::ui(), json::serialize(args));
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_CHECK(dialog_imports.empty());
+	run_jobs_until_settled(static_cast<std::uint64_t>(result.value.as_object().at("job").as_int64()));
+	BOOST_CHECK(seen_settings.normals == edt::model_normals::flat);
 }
 
 BOOST_AUTO_TEST_CASE(AnAgentCall_WithoutDescribe_IsRefused)

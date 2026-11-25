@@ -22,6 +22,10 @@ namespace edt {
 		res::tag                          root_tag;     // memory://name/name.prefab.desc
 		std::vector<res::tag>             all_tags;     // all memory:// tags created
 		std::filesystem::path             source_path;  // original file on disk
+		// What the `.resource` of the exported prefab records (#1195): the settings and the SHA-256 (lowercase hex) of
+		// the model file. An empty sha256: the export writes no `.resource` for the prefab.
+		model_import_settings             settings{};
+		std::string                       source_sha256{};
 	};
 
 	class model_importer {

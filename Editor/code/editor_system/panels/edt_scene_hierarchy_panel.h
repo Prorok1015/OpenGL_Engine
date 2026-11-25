@@ -2,6 +2,7 @@
 #include <snk/editor/edt_panel_base.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_shape_menu.h"
+#include "edt_viewport_click.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -62,6 +63,15 @@ namespace edt
 		// then `target`, its ids below the instance) as a click would, the node-selected callback included. False when
 		// the shown world has no such node.
 		bool select_path(const std::vector<uint64_t>& path, const std::vector<uint64_t>& target);
+		// The nodes of the shown world at `paths` (a box in the viewport, #1327), changed in the selection as `op` says: replace makes them
+		// the selection (none: clears it), add joins them to it, remove takes them out of it. A path that reaches into a prefab instance
+		// stands for the instance node it passes through (its own ids first, the rest is the instance's inside); a path that names no node
+		// of the world is skipped. The last node added is the primary one (the Inspector's); the node-selected callback runs once, when
+		// something changed.
+		void select_paths(const std::vector<std::vector<uint64_t>>& paths, pick_op op);
+		// The ids of the selected nodes of the shown world, ascending: the several of a multi-selection, else the one node (none for a
+		// node inside an instance, which is not a node of the desc).
+		std::vector<uint64_t> selected_node_ids() const;
 		void set_on_create_world(std::function<void(const std::string&)> cb) { m_on_create_world = std::move(cb); }
 
 	protected:
@@ -76,6 +86,7 @@ namespace edt
 		bool find_path(const std::vector<scn::prefab_desc::prefab_node>& nodes, const scn::prefab_desc::prefab_node* wanted, std::vector<uint64_t>& path) const;
 		void notify_selected();
 		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
+		bool may_hold_instance(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
 		void draw_new_world_popup();
 		bool locked() const { return m_edits_locked && m_edits_locked(); }

@@ -614,6 +614,59 @@ BOOST_AUTO_TEST_CASE(AnAgentsFileChangedAfterTheStart_FailsTheJob)
 	BOOST_CHECK(nothing_written());
 }
 
+// #1412: a plain file of the same size and content swapped in after the start is another file: the stamp of the handle
+// the job reads from tells, not a look by the path.
+BOOST_AUTO_TEST_CASE(AnAgentsFileSwappedForAnotherOfTheSameSize_FailsTheJob)
+{
+	BOOST_REQUIRE(importer->describe(request(), agent).has_value());
+	const edt::image_importer::started started = importer->start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	std::string bytes;
+	{
+		std::ifstream in(source, std::ios::binary);
+		bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	}
+	const fs::path other = source.parent_path() / "other.png";
+	{
+		std::ofstream out(other, std::ios::binary);
+		out << bytes;
+	}
+	fs::rename(other, source);
+	test_util::pump(tasks);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed since it was shown") != std::string::npos, info->error);
+	BOOST_CHECK(nothing_written());
+}
+
+// #1412: the same size written in place with the write time set back: the change time of the handle tells.
+BOOST_AUTO_TEST_CASE(AnAgentsFileRewrittenWithItsTimeSetBack_FailsTheJob)
+{
+	BOOST_REQUIRE(importer->describe(request(), agent).has_value());
+	const edt::image_importer::started started = importer->start(request(), agent);
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	std::string bytes;
+	{
+		std::ifstream in(source, std::ios::binary);
+		bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	}
+	BOOST_REQUIRE(!bytes.empty());
+	bytes.back() = static_cast<char>(bytes.back() ^ 1);
+	const fs::file_time_type written = fs::last_write_time(source);
+	{
+		std::ofstream out(source, std::ios::binary | std::ios::trunc);
+		out << bytes;
+	}
+	fs::last_write_time(source, written);
+	test_util::pump(tasks);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed since it was shown") != std::string::npos, info->error);
+	BOOST_CHECK(nothing_written());
+}
+
 BOOST_AUTO_TEST_CASE(AnAgentsNetworkSource_IsRefusedBeforeAnyDiskAccess)
 {
 	for (const std::string& path : { std::string("\\\\server\\share\\x.png"), std::string("//server/share/x.png"),

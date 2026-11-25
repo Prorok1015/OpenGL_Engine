@@ -541,25 +541,86 @@ BOOST_AUTO_TEST_CASE(ADotDotAfterALink_IsRefusedForAnAgent_WhateverIsBehindIt)
 	test_util::make_folder_link(models / "dangling", fs::weakly_canonical(dir.path() / "gone"));
 	fs::remove(dir.path() / "gone");
 	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule());
-	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png", "./skin.png",
+	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png",
 		"tex/../skin.png" }) {
 		BOOST_TEST_CONTEXT(reference)
 		{
 			const auto refused = agent.resolve(reference, edt::model_file_kind::texture);
 			BOOST_CHECK(!refused.found());
 			BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
-			BOOST_CHECK_MESSAGE(refused.error.find("'.' or '..'") != std::string::npos, refused.error);
+			BOOST_CHECK_MESSAGE(refused.error.find("a '..'") != std::string::npos, refused.error);
 			BOOST_CHECK(!agent.read(refused).has_value());
 		}
 	}
 	BOOST_CHECK_EQUAL(walked, 0);
 	BOOST_CHECK(agent.files().empty());
 
+	// #1412 (a): a lone '.' (glTF's "./tex.png") passes no link; it is read as the name without it.
+	const auto dotted = agent.resolve("./skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(dotted.found(), dotted.error);
+	BOOST_CHECK(dotted.path.filename() == "skin.png");
+	BOOST_CHECK(agent.resolve("./tex/./normal.png", edt::model_file_kind::texture).found());
+
 	// A person's import reads such names as before.
 	auto person = make();
 	BOOST_CHECK(person.resolve("tex/../skin.png", edt::model_file_kind::texture).found());
 	const auto through = person.resolve("linked/../skin.png", edt::model_file_kind::texture);
-	BOOST_CHECK_MESSAGE(through.error.find("'.' or '..'") == std::string::npos, through.error);
+	BOOST_CHECK_MESSAGE(through.error.find("a '..'") == std::string::npos, through.error);
+}
+
+// #1412: an agent's side file is looked at and read by the reader it was given (through the handle a walk opens), never
+// by the path: what resolve() lists is the reader's stamp, and the read gets that stamp to hold the file to.
+BOOST_AUTO_TEST_CASE(AnAgentsSideFile_IsLookedAtAndReadByItsReader)
+{
+	std::vector<fs::path> stamped;
+	std::vector<fs::path> read;
+	platform::beneath::file_stamp stamp;
+	stamp.size = png_bytes.size();
+	stamp.file_id = 7;
+	edt::model_file_reader reader;
+	reader.stamp = [&](const fs::path& path) -> std::optional<platform::beneath::file_stamp> {
+		stamped.push_back(path);
+		if (path.filename() == "none.png") return std::nullopt;
+		return stamp;
+	};
+	reader.read = [&](const edt::resolved_reference& file) {
+		read.push_back(file.path);
+		BOOST_CHECK(file.stamp == stamp);
+		return std::vector<std::byte>(reinterpret_cast<const std::byte*>(png_bytes.data()),
+			reinterpret_cast<const std::byte*>(png_bytes.data()) + png_bytes.size());
+	};
+	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule(), reader);
+	const auto found = agent.resolve("./skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(found.found(), found.error);
+	BOOST_CHECK(found.stamp == stamp);
+	BOOST_CHECK(agent.read(found).has_value());
+	BOOST_REQUIRE_EQUAL(read.size(), 1u);
+	BOOST_CHECK(read.front() == found.path);
+	BOOST_REQUIRE_EQUAL(stamped.size(), 1u);
+	BOOST_CHECK(stamped.front() == found.path);
+	BOOST_REQUIRE_EQUAL(agent.files().size(), 1u);
+	BOOST_CHECK(agent.files().front().stamp == stamp);
+	BOOST_CHECK(!agent.resolve("none.png", edt::model_file_kind::texture).found());
+
+	// A refusal of the reader is the file's, by the look or by the read.
+	edt::model_file_reader refusing = reader;
+	refusing.stamp = [](const fs::path&) -> std::optional<platform::beneath::file_stamp> {
+		throw std::runtime_error("an offline file");
+	};
+	edt::model_file_access looked(root, {}, nullptr, {}, true, agent_rule(), refusing);
+	const auto offline = looked.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!offline.found());
+	BOOST_CHECK_MESSAGE(offline.error.find("offline") != std::string::npos, offline.error);
+	refusing = reader;
+	refusing.read = [](const edt::resolved_reference&) -> std::vector<std::byte> {
+		throw std::runtime_error("another file now");
+	};
+	edt::model_file_access reading(root, {}, nullptr, {}, true, agent_rule(), refusing);
+	const auto listed = reading.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(listed.found());
+	BOOST_CHECK_EXCEPTION(reading.read(listed), std::runtime_error, [](const std::runtime_error& error) {
+		return std::string(error.what()).find("another file") != std::string::npos;
+	});
 }
 
 #if !defined(_WIN32)

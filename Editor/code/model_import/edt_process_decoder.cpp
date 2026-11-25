@@ -134,7 +134,8 @@ edt::model_file_scan edt::broker_scan(const import_source& source, const std::fu
 	const std::string too_long = time_limit_refusal("reading the model", source.time_limit);
 
 	// One access for every round: what the model may read, and how much, is counted over the whole scan.
-	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk, source.may_read);
+	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk, source.may_read,
+		source.read_file);
 	std::vector<provided_file> provided;
 	std::set<std::pair<std::string, model_file_kind>> asked;
 	// One shared_ptr per side file: each name of it carries the same bytes, so the request holds them once.
@@ -1028,6 +1029,7 @@ edt::model_file_scan edt::process_decoder::scan(const import_source& source, ds:
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
+	request.settings = source.settings;
 
 	decoder_sandbox_status sandbox;
 	model_file_scan scanned = broker_scan(source, [&](const std::vector<provided_file>& provided) {
@@ -1057,11 +1059,12 @@ edt::import_intermediate edt::process_decoder::import(const import_source& sourc
 	request.boundary = source.boundary;
 	request.memory_folder = source.memory_folder;
 	request.on_disk = source.on_disk;
+	request.settings = source.settings;
 
 	// Exactly the listed files, read again and checked against what the person was shown, under every name the model
 	// used for them in the scan.
 	model_file_access access(source.path, source.limits, source.allowed, source.boundary, source.on_disk,
-		source.may_read);
+		source.may_read, source.read_file);
 	std::vector<provided_file> provided;
 	for (const referenced_file& file : *source.allowed) {
 		const std::string name = shown_name(file.path);

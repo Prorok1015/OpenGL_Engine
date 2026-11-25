@@ -1,13 +1,16 @@
 #include "edt_agent_model_import.h"
+#include "edt_decode_codec.h"
 #include "edt_file_menu.h"
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_free_name.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
+#include <boost/json/serialize.hpp>
 #include <cctype>
 #include <format>
 #include <fstream>
@@ -121,9 +124,8 @@ namespace {
 	// (an agent's import): no link on the way to it either, looked at before anything follows one.
 	std::string identity_problem(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		if (agent) {
-			if (std::string why = edt::agent_source_links_problem(plan.source, *agent); !why.empty()) return why;
-		}
+		// An agent's file is judged by the handle a read opens, never by the path.
+		if (agent) return edt::agent_file_changed(plan.source, plan.stamp, *agent);
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -139,6 +141,15 @@ namespace {
 	std::vector<std::byte> read_checked_source(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
 		if (const std::string why = identity_problem(plan, agent); !why.empty()) throw std::runtime_error(why);
+		if (agent) {
+			// From the handle that was checked: nothing is opened again by the path once the walk is done (#1412).
+			edt::agent_file_read read = edt::read_agent_file(plan.source, plan.size, *agent);
+			if (!read.problem.empty()) throw std::runtime_error(read.problem);
+			if (!plan.stamp || read.bytes.size() != plan.size || !edt::same_file_stamp(*read.stamp, *plan.stamp)) {
+				throw std::runtime_error("the file changed since it was shown: another file, or other content");
+			}
+			return std::move(read.bytes);
+		}
 		std::ifstream in(plan.source, std::ios::binary);
 		if (!in) throw std::runtime_error("the file cannot be opened");
 		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));
@@ -150,6 +161,29 @@ namespace {
 			throw std::runtime_error("the file changed while it was read: " + why);
 		}
 		return bytes;
+	}
+
+	// A side file of an agent's import, from the handle that was checked (#1412).
+	std::vector<std::byte> read_side_file(const edt::resolved_reference& file, const edt::source_volume_ports& volumes)
+	{
+		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(file.path.filename()), 256);
+		edt::agent_file_read read = edt::read_agent_file(file.path.lexically_normal(), file.size, volumes);
+		if (!read.problem.empty()) throw std::runtime_error(std::format("'{}': {}", name, read.problem));
+		if (!file.stamp || read.bytes.size() != file.size || !edt::same_file_stamp(*read.stamp, *file.stamp)) {
+			throw std::runtime_error(
+				std::format("'{}' changed since it was listed: another file, or other content", name));
+		}
+		return std::move(read.bytes);
+	}
+
+	// The stamp of a side file of an agent's import, from the handle the same walk opens (#1412).
+	std::optional<platform::beneath::file_stamp> stamp_side_file(const fs::path& path,
+		const edt::source_volume_ports& volumes)
+	{
+		const edt::agent_file_read stamped = edt::read_agent_file(path.lexically_normal(), UINTMAX_MAX, volumes, true);
+		if (stamped.missing) return std::nullopt;
+		if (!stamped.problem.empty()) throw std::runtime_error(stamped.problem);
+		return stamped.stamp;
 	}
 
 	// Takes back the files a failed or cancelled export wrote: only those, only plain files, newest first. A staged binary
@@ -271,12 +305,19 @@ namespace {
 		source.path = in.plan.source;
 		source.preloaded = &source_bytes;
 		source.limits = in.limits;
+		source.settings = in.plan.settings;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 		source.time_limit = in.time_limit;
 		if (in.agent) {
 			// Every side file passes the rule by the name the model gives it, before the disk is asked about it.
 			source.may_read = [volumes = in.volumes, folder = in.plan.source.parent_path()](const fs::path& candidate) {
 				return edt::agent_side_file_problem(candidate, folder, volumes);
+			};
+			source.read_file.stamp = [volumes = in.volumes](const fs::path& path) {
+				return stamp_side_file(path, volumes);
+			};
+			source.read_file.read = [volumes = in.volumes](const edt::resolved_reference& file) {
+				return read_side_file(file, volumes);
 			};
 		}
 		std::vector<edt::referenced_file> files = in.plan.files;
@@ -314,6 +355,8 @@ namespace {
 			result.root_tag = imported.prefab_tag;
 			result.all_tags = imported.all_tags;
 			result.source_path = in.plan.source;
+			result.settings = in.plan.settings;
+			result.source_sha256 = edt::digest_to_hex(digest);
 			remap = in.exporter->build_remap(result, in.plan.name, in.plan.folder);
 			if (const std::string why = edt::asset_exporter::remap_problem(remap, in.plan.name, in.plan.folder); !why.empty()) {
 				throw std::runtime_error("the import cannot be exported: " + why);
@@ -343,10 +386,11 @@ namespace {
 			}
 
 			ctx.set_progress(0.5f, "Writing the assets");
+			// Never over a file: an agent's `.resource` of the prefab is new too.
 			const bool exported = in.exporter->export_to_project(result, remap, nullptr, &ctx, &written, true,
 				[&ctx](int done, int total) {
 					ctx.set_progress(0.5f + 0.5f * static_cast<float>(done) / static_cast<float>(std::max(total, 1)), "Writing the assets");
-				});
+				}, in.top, false);
 			if (!exported) throw std::runtime_error("the assets could not be written");
 		} catch (...) {
 			take_back(written, in.top);
@@ -386,12 +430,15 @@ namespace {
 
 bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 {
-	return source == other.source && size == other.size && modified == other.modified && id.same_as(other.id) && name == other.name && folder == other.folder;
+	// An agent's plan holds the stamp of the handle in place of the time and the id a look by the path takes.
+	const bool same_file = stamp || other.stamp ? stamp && other.stamp && same_file_stamp(*stamp, *other.stamp)
+		: modified == other.modified && id.same_as(other.id);
+	return source == other.source && size == other.size && same_file && name == other.name && folder == other.folder;
 }
 
 bool edt::agent_import_plan::same_targets(const agent_import_plan& other) const
 {
-	return name == other.name && folder == other.folder && prefab == other.prefab;
+	return name == other.name && folder == other.folder && prefab == other.prefab && settings == other.settings;
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
@@ -416,13 +463,19 @@ edt::source_volume_ports edt::agent_model_import::volumes() const
 	source_volume_ports ports;
 	ports.drive_type = m_options.drive_type;
 	ports.mount_table = m_options.mount_table;
+	if (m_options.read_below) ports.read_below = m_options.read_below;
 	return ports;
 }
 
 std::string edt::agent_model_import::scan_key(const agent_import_request& request, const cmd::origin& caller) const
 {
-	return std::format("{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(), request.path,
-		request.name.size(), request.name, request.folder.size(), request.folder);
+	// The settings as they are read, so a list of files is bound to the settings it was made with (#1195).
+	const model_settings_parse parsed = parse_model_settings(request.settings);
+	const std::string settings = parsed.ok() ? boost::json::serialize(model_settings_json(parsed.settings))
+		: boost::json::serialize(request.settings);
+	return std::format("{}:{}|{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(),
+		request.path, request.name.size(), request.name, request.folder.size(), request.folder, settings.size(),
+		settings);
 }
 
 std::string edt::agent_model_import::call_key(const agent_import_request& request, const cmd::origin& caller) const
@@ -486,9 +539,10 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
 	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
 	if (!person) {
-		if (std::string why = agent_source_links_problem(given, volumes()); !why.empty()) {
-			return refuse(cmd::codes::invalid_args, std::move(why));
-		}
+		std::string why;
+		const fs::path spelled = agent_source_spelled(given, volumes(), why);
+		if (!why.empty()) return refuse(cmd::codes::invalid_args, std::move(why));
+		return resolve_for_agent(request, spelled, plan);
 	}
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
@@ -530,6 +584,37 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 
 	// An agent's asset is named after the path the person was shown (text_plan), a person's after the file.
 	plan_targets(request, to_utf8((person ? resolved : given).stem()), plan);
+	return plan;
+}
+
+edt::agent_import_plan edt::agent_model_import::resolve_for_agent(const agent_import_request& request,
+	const fs::path& given, agent_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	const std::string extension = lowered(to_utf8(given.extension()));
+	const auto known = [&](std::string_view model) { return model == extension; };
+	if (std::none_of(std::begin(k_model_extensions), std::end(k_model_extensions), known)) {
+		return refuse(cmd::codes::invalid_args, "the source is not a model file (.glb, .gltf, .obj or .fbx)");
+	}
+	// Judged by the handle the walk opens (#1412): nothing is looked at by the path, which a swap could redirect.
+	const fs::path source = given.lexically_normal();
+	const agent_file_read stamped = read_agent_file(source, UINTMAX_MAX, volumes(), true);
+	if (stamped.missing) return refuse(cmd::codes::not_found, "no such file: " + shown(to_utf8(given.filename())));
+	if (!stamped.problem.empty()) return refuse(cmd::codes::invalid_args, stamped.problem);
+	plan.source = source;
+	plan.on_disk = true;
+	plan.size = stamped.stamp->size;
+	plan.stamp = stamped.stamp;
+	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
+	if (plan.size > m_options.max_source_bytes) {
+		return refuse(cmd::codes::invalid_args, std::format("the model file of {} exceeds {} for an agent's import ({})",
+			size_text(plan.size), limit_text(m_options.max_source_bytes), k_step_source));
+	}
+	plan_targets(request, to_utf8(given.stem()), plan);
 	return plan;
 }
 
@@ -580,6 +665,12 @@ void edt::agent_model_import::plan_targets(const agent_import_request& request, 
 		}
 	}
 	plan.name = name.path;
+	const model_settings_parse settings = parse_model_settings(request.settings);
+	if (!settings.ok()) return refuse(cmd::codes::invalid_args, shown_message(settings.error));
+	if (settings.source) {
+		return refuse(cmd::codes::invalid_args, "settings.source is written by the import, not asked for");
+	}
+	plan.settings = settings.settings;
 	const agent_level_path folder = check_agent_folder(request.folder.empty() ? "assets/" + plan.name : request.folder);
 	if (!folder.ok()) return refuse(cmd::codes::invalid_args, "the folder: " + folder.error);
 	plan.folder = folder.path;
@@ -614,8 +705,10 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 	if (!plan.ok()) return "This request will be refused: " + shown_message(plan.error);
 	const std::string size = plan.on_disk ? size_text(plan.size) : std::string{ "(its size is read once approved)" };
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\n"
-		"Its geometry, materials and textures are written next to the prefab.\n",
-		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab));
+		"  settings: {}\n"
+		"Its geometry, materials and textures are written next to the prefab, and the settings in its .resource.\n",
+		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab),
+		model_settings_text(plan.settings));
 	edt::decoder_sandbox_status sandbox = m_options.sandbox_status ? m_options.sandbox_status() : decoder_sandbox_status{};
 	if (request.files_token.empty()) {
 		text += "Allowing this reads the model and, to list the files it refers to, reads and hashes every file of "
@@ -695,7 +788,8 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 		if (!listed || !listed->same_file_as(plan)) return { 0, cmd::codes::denied, "no list of files belongs to this token, or the model changed since it was made: ask again without files_token" };
 		const auto same_list = [](const std::vector<referenced_file>& a, const std::vector<referenced_file>& b) {
 			return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const referenced_file& x, const referenced_file& y) {
-				return x.path == y.path && x.size == y.size && x.modified == y.modified && x.id == y.id;
+				return x.path == y.path && x.size == y.size && x.modified == y.modified && x.id == y.id
+					&& x.stamp == y.stamp;
 			});
 		};
 		if (shown && !same_list(shown->files, listed->files)) return { 0, cmd::codes::denied, "the files changed since a person was shown them: ask again" };

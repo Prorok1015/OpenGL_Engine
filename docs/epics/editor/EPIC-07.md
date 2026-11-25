@@ -92,6 +92,21 @@
 
 Создание нового `material_desc` из редактора: шейдер, родитель, место в проекте.
 
+Работа разбита на три PR:
+
+- **PR 1 (сделано):** пункт **New Material...** в контекстном меню папки браузера ассетов (рядом с Create Document).
+  Окно с полем имени: подставлено свободное имя (`Material`, при занятом — `Material-2`, через `res::free_name`),
+  показан итоговый файл и причина отказа. Материал создаётся в той папке, на которой открыто меню, только в верхнем
+  слое проекта; занятое имя (в любом слое) отклоняется, как в Create Document, и проверяется ещё раз при создании.
+  Файл — `<имя>.mat.desc`: `{"__type":"material_desc","__version":…,"__parent":"res://base_material.desc"}`, то есть
+  шейдер `res://shaders/scene.shader.desc` наследуется от базового материала и материал сразу рисуется. После создания
+  открывается окно материала. Добавлен вид ассета `material_desc` (суффикс `.mat.desc`): Create Document тоже даёт
+  материалу этот суффикс и тот же `__parent`, фильтр Kinds показывает «Material», `asset.query` — вид `material_desc`.
+  Логика без ImGui — `material_creator` / `material_create_form` (`controller/edt_material_creator.h`) поверх
+  `document_creator`; опции `shader` (пишет `shader`) и `parent` (заменяет `__parent`) — для PR 2 и PR 3.
+- **PR 2:** «Create Material» на строке `.shader.desc` (шейдер подставлен) и «Create Material Variant» на материале.
+- **PR 3:** команда агента через тот же `material_creator`.
+
 ---
 
 ## #1370: Материалы движка и пакетов только для чтения

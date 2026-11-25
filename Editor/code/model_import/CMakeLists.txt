@@ -9,7 +9,8 @@ add_library(snk::model_import ALIAS ${PROJECT_NAME})
 
 # What the decoder process runs (#1077): the bundle and its JSON, the guards of what a model reads and the import into an
 # mdl::import_sink, nothing that needs a desc or resource system.
-set(SE_MODEL_DECODER_SIDE_SOURCES edt_decoder_sandbox.cpp edt_decode_bundle.cpp edt_decode_codec.cpp edt_model_file_access.cpp)
+set(SE_MODEL_DECODER_SIDE_SOURCES edt_decoder_sandbox.cpp edt_decode_bundle.cpp edt_decode_codec.cpp edt_model_file_access.cpp
+	edt_model_import_settings.cpp)
 if(SNK_WITH_ASSIMP)
 	list(APPEND SE_MODEL_DECODER_SIDE_SOURCES edt_model_file_source.cpp edt_model_import_core.cpp)
 endif()
