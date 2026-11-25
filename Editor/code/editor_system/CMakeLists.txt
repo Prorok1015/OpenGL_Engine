@@ -71,6 +71,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/file_menu"
 	"${CMAKE_CURRENT_SOURCE_DIR}/startup"
 	"${CMAKE_CURRENT_SOURCE_DIR}/game_layer"
+	"${CMAKE_CURRENT_SOURCE_DIR}/preview"
 	"${CMAKE_CURRENT_SOURCE_DIR}/shader_editor"
 )
 

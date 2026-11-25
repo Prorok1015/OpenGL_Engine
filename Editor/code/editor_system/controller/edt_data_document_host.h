@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace inp { class input_router; }
+
 namespace edt
 {
 	class data_document;
@@ -85,6 +87,12 @@ namespace edt
 		void set_shown_mesh(std::function<document_id()> shown_mesh) { m_shown_mesh = std::move(shown_mesh); }
 		// The same for the prefab editor's window: its shown prefab, not the active preview (a mesh may be the active one). Without it the window gives the scene.
 		void set_shown_prefab(std::function<document_id()> shown_prefab) { m_shown_prefab = std::move(shown_prefab); }
+		// Where the material windows' preview cameras take the mouse from (#1196); null: no orbit. For the windows opened after.
+		void set_input_router(inp::input_router* router) { m_input_router = router; }
+		// The game layer goes / came: the material windows' preview stages (sets of its context manager) are dropped and made
+		// again, as the modeller's (modeller_component::park_for_layer_change).
+		void release_previews();
+		void rebuild_previews();
 
 	private:
 		std::function<const picker::catalog*()> m_asset_source;
@@ -119,6 +127,7 @@ namespace edt
 		std::function<void(document&)> m_focus_other;
 		std::function<document_id()> m_shown_mesh;
 		std::function<document_id()> m_shown_prefab;
+		inp::input_router* m_input_router = nullptr;
 		std::unordered_map<document_id, window> m_windows;
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		connection m_closed;

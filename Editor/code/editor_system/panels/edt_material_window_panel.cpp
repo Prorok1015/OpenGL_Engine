@@ -2,14 +2,67 @@
 #include "edt_ui_metrics.h"
 #include <snk/gui/gui_theme.h>
 #include <imgui.h>
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
 
-edt::material_window_panel::material_window_panel(data_document& document, editor_services& services, document_id id, bool quiet)
+namespace
+{
+	constexpr std::array<edt::preview_shape, 3> k_shapes{ edt::preview_shape::sphere, edt::preview_shape::cube, edt::preview_shape::plane };
+}
+
+edt::material_window_panel::material_window_panel(data_document& document, editor_services& services, document_id id, bool quiet,
+	preview_view view)
 	: data_document_panel(document, services, id, quiet)
 	, m_model(document, services)
+	, m_content(document, m_model, services)
+	, m_stage(services, m_content, view)
 {
+}
+
+void edt::material_window_panel::on_hidden()
+{
+	m_stage.park();
+	data_document_panel::on_hidden();
+}
+
+void edt::material_window_panel::draw_before_fields()
+{
+	m_stage.update();
+	if (m_content.sky_material()) {
+		ImGui::TextDisabled("Sky material: no preview.");
+		ImGui::Separator();
+		return;
+	}
+	ImGui::SetNextItemWidth(em(110.f));
+	if (ImGui::BeginCombo("Shape", std::string{ preview_shape_label(m_content.shape()) }.c_str())) {
+		for (const preview_shape shape : k_shapes) {
+			const bool selected = shape == m_content.shape();
+			if (ImGui::Selectable(std::string{ preview_shape_label(shape) }.c_str(), selected) && !selected) {
+				m_content.set_shape(shape);
+				m_stage.sync();
+			}
+			if (selected) ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	bool sky = m_stage.sky();
+	if (ImGui::Checkbox("Sky", &sky)) {
+		m_stage.set_sky(sky);
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("The sky behind the shape, or the camera's plain clear.");
+	}
+	// Resizable from its bottom edge; the fields scroll under it.
+	if (ImGui::BeginChild("##preview", ImVec2(0.f, em(220.f)), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		m_stage.draw_image();
+	} else {
+		m_stage.park();
+	}
+	ImGui::EndChild();
 }
 
 void edt::material_window_panel::draw_after_fields()
