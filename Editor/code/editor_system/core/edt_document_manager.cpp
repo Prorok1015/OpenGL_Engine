@@ -612,9 +612,19 @@ void edt::document_manager::forget_closed_links()
 	state.sweeping = true;
 	for (;;) {
 		const link_tables& tables = links_view(this);
-		const auto stale = std::ranges::find_if(tables.links, [this](const link_record& r) { return !find_open(r.id); });
-		if (stale == tables.links.end()) break;
-		const document_id id = stale->id;
+		// A stale link is a document that is gone, or a parent that is gone (a preview that closed itself and was never linked itself).
+		document_id id = 0;
+		for (const link_record& record : tables.links) {
+			if (!find_open(record.id)) {
+				id = record.id;
+				break;
+			}
+			if (record.kind == link_kind::instance && !find_open(record.parent)) {
+				id = record.parent;
+				break;
+			}
+		}
+		if (id == 0) break;
 		close_or_release_descendants(id);
 		document_closed_link(id);
 	}
