@@ -43,6 +43,8 @@
 // #147 (EPIC-25 US-25-2): the prefab document keeps a working copy that edit() changes, Apply (save()) writes over the
 // file and revert() takes from the file again.
 
+BOOST_TEST_DONT_PRINT_LOG_VALUE(cmd::origin_kind)
+
 namespace {
 
 namespace fs = std::filesystem;
