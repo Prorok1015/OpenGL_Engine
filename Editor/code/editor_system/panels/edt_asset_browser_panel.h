@@ -20,6 +20,8 @@ namespace edt
 	class document_creator;
 	class document_create_form;
 	class image_import_form;
+	class material_creator;
+	class material_create_form;
 	class image_importer;
 	class prefab_variant_creator;
 	class prefab_variant_form;
@@ -40,7 +42,7 @@ namespace edt
 
 		// "Create Document..." in the context menu of a folder (a row, the blank of the open folder, a node of the tree): opens a
 		// window to pick a document type and a name; `on_created` gets the tag of the new file. Without a creator the menu has no
-		// such item.
+		// such item. The same creator makes "New Material..." (#1198): a window with a free name, then `on_created` too.
 		void set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created);
 
 		// The thumbnails of the picture rows (#1192); null: none, a picture row looks as any other. Not owned.
@@ -144,6 +146,7 @@ namespace edt
 		// The menu item of one folder (`folder` is relative to res://): asks for the window to open at the end of the frame.
 		void draw_create_menu_item(const std::filesystem::path& folder);
 		void draw_create_window();
+		void draw_material_window();
 		void draw_variant_window();
 		void draw_image_window();
 		bool has_folder_menu() const { return m_create_form || m_image_form; }
@@ -152,6 +155,9 @@ namespace edt
 		std::unique_ptr<document_create_form> m_create_form;
 		std::function<void(const res::tag&)> m_on_document_created;
 		bool m_create_requested = false;
+		std::unique_ptr<material_creator> m_material_creator;
+		std::unique_ptr<material_create_form> m_material_form;
+		bool m_material_requested = false;
 
 		std::unique_ptr<image_import_form> m_image_form;
 		image_picker m_pick_image;

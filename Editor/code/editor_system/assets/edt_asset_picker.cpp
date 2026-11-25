@@ -1,4 +1,5 @@
 #include "edt_asset_picker.h"
+#include "edt_texture_window_model.h"
 #include <snk/model_codec/res_asset_id.h>
 #include <algorithm>
 #include <cctype>
@@ -13,6 +14,8 @@ namespace
 		std::ranges::transform(out, out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		return out;
 	}
+
+	constexpr std::string_view k_create_texture_first = "Create Texture first";
 
 	edt::picker::verdict rejected(std::string reason)
 	{
@@ -36,6 +39,11 @@ edt::picker::filter edt::picker::filter_of(const desc::field_schema& field)
 	}
 	out.extensions = field.filter;
 	return out;
+}
+
+edt::picker::filter edt::picker::texture_filter()
+{
+	return { .kind = desc::field_kind::desc_ref, .ref_type = std::string(k_texture_desc_type), .extensions = {} };
 }
 
 bool edt::picker::extension_matches(std::string_view path, std::string_view extensions)
@@ -82,6 +90,9 @@ edt::picker::verdict edt::picker::judge(const filter& wanted, const asset_record
 		return {};
 	}
 	if (record.type != "desc") {
+		if (wanted.ref_type == k_texture_desc_type && extension_matches(record.path.relative(), k_picture_extensions)) {
+			return rejected(std::string(k_create_texture_first));
+		}
 		return rejected("is not a desc file");
 	}
 	if (wanted.ref_type.empty()) {
@@ -202,4 +213,31 @@ edt::picker::verdict edt::picker::judge_drop(const filter& wanted, std::string_v
 		return { verdict::result::unknown, "is not in the asset list yet" };
 	}
 	return judge(wanted, *record);
+}
+
+edt::picker::texture_choice edt::picker::choose_texture(std::string_view path, const catalog* source, const picture_texture_lookup& texture_of)
+{
+	const filter wanted = texture_filter();
+	res::tag texture = res::tag::make(path);
+	if (extension_matches(path, k_picture_extensions)) {
+		texture = texture_of ? texture_of(texture) : res::tag{};
+		if (!texture.is_valid()) {
+			return { rejected(std::string(k_create_texture_first)), {} };
+		}
+	} else if (!extension_matches(path, "desc")) {
+		return { rejected("is not a desc file"), {} };
+	} else if (const verdict answer = judge_drop(wanted, path, source); answer.outcome != verdict::result::fits) {
+		return { answer, answer.outcome == verdict::result::rejected ? boost::json::value{} : boost::json::value(boost::json::string(texture.string())) };
+	}
+	const asset_record* record = source && source->ready() ? source->find(texture) : nullptr;
+	return { {}, record ? reference_value(*record) : boost::json::value(boost::json::string(texture.string())) };
+}
+
+edt::picker::reference_state edt::picker::judge_texture_text(std::string_view text, const catalog& source)
+{
+	reference_state out = judge_text(texture_filter(), text, source);
+	if (out.severity == reference_state::level::error && extension_matches(text, k_picture_extensions) && source.find(res::tag{ text })) {
+		return { reference_state::level::note, "a picture, not a texture desc; works, Create Texture to edit its settings" };
+	}
+	return out;
 }

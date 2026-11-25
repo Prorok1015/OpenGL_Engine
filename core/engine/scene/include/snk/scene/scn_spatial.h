@@ -23,6 +23,8 @@
 //  - a transform is seen once the transform system has run it (it tells the world which entities it moved): a matrix
 //    written after that system, or by anything but a transform_updated event, is seen by the next frame's queries at best;
 //  - hits are per entity for raycast_all (the nearest of each), per triangle inside an entity for the closest and any.
+//  - the frustum query (#1327) tests the entities' world bounds only (the mesh's box through its matrix), not their triangles: an object whose
+//    box touches the frustum is in.
 namespace scn {
 
 	// The index (0..31) of a layer an entity can be on and a query can ask for. Project names for the layers are a later story.
@@ -144,6 +146,14 @@ namespace scn {
 		// and nothing of the batch lives in the frame allocator. The result is read with handle.get() once handle.status() is ready.
 		ds::task_handle<ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
 			std::uint64_t frame);
+		// The entities whose world bounds meet the frustum of `view_projection` (OpenGL clip space, as glm::perspective builds it;
+		// a screen rectangle's frustum comes from screen_rect_view_projection), appended to `out` in entity order. Only the bounds
+		// are tested (the mesh's box through the entity's world matrix): an object whose box touches the frustum is in, even when its
+		// triangles do not. The test is the usual conservative one (the box's corner furthest along each plane's normal): it may also
+		// report a box that lies just outside an edge or a corner of the frustum, never miss one that touches it. The filter's mask,
+		// include_hidden and exclude apply as for a ray; max_distance, triangles and cull_back_faces do not. A matrix that gives no
+		// frustum (not finite, or one whose four side planes have no normal, such as the all-zero matrix) answers nothing.
+		void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
@@ -161,6 +171,16 @@ namespace scn {
 
 	SNK_API ds::task_handle<ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
 		std::uint64_t frame);
+
+	// The entities whose world bounds meet the frustum of `view_projection` (#1327; see spatial_world::overlap_frustum), in entity order.
+	SNK_API void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
+	// The view-projection of the part of an image inside a pixel rectangle: what `overlap_frustum` takes for a box on the screen.
+	// `view` and `projection` are the camera's, `corner_a` and `corner_b` two opposite corners in pixels (origin top left, y down, any
+	// order), `image_size` the image's size. The corners are not clamped to the image (a rectangle that reaches past it asks for a
+	// wider frustum; the editor clamps its own). A rectangle with no area, or an empty image, gives the all-zero matrix, which
+	// overlap_frustum answers with nothing.
+	SNK_API glm::mat4 screen_rect_view_projection(const glm::mat4& view, const glm::mat4& projection, glm::vec2 corner_a, glm::vec2 corner_b,
+		glm::vec2 image_size);
 
 	// The ray through a point of an image. `point` is in pixels, origin top left, y down; `image_size` the image's size.
 	// With a camera entity of `world` (camera_component + world_transform); nothing when it has none or the size is empty.

@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/ds/ds_intersect.hpp>
 #include <snk/scene/scn_spatial.h>
 #include <entt/fwd.hpp>
 #include <memory>
@@ -19,6 +20,8 @@ namespace scn::detail {
 		virtual void raycast_all(entt::registry& world, const ray& line, const ray_filter& filter, std::vector<ray_hit>& out) = 0;
 		virtual ds::task_handle<ray_batch> raycast_batch(ds::task_system& tasks, entt::registry& world, std::vector<ray_request> requests,
 			std::uint64_t frame) = 0;
+		// The entities whose world bounds meet the frustum and pass the filter's flags, appended to `out` in entity order.
+		virtual void overlap_frustum(entt::registry& world, const ds::frustum& view, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
 		// The transform system moved these entities (and their descendants): their world matrices are new.
 		virtual void entities_moved(entt::registry& world, std::span<const entt::entity> moved) = 0;
 		// A mesh or geometry component was made, changed or destroyed: what the backend built may be wrong.

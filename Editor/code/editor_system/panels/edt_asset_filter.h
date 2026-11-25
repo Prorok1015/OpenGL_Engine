@@ -21,6 +21,7 @@ namespace edt
 	inline constexpr std::string_view k_asset_kind_mesh = "mesh";
 	inline constexpr std::string_view k_asset_kind_prefab = "prefab";
 	inline constexpr std::string_view k_asset_kind_shader_desc = "shader_desc";
+	inline constexpr std::string_view k_asset_kind_material = "material_desc";
 	inline constexpr std::string_view k_asset_kind_data = "data";
 
 	struct asset_filter_kind

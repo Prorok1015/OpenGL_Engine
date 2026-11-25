@@ -200,18 +200,25 @@ namespace {
 	// How a query wants the answer.
 	enum class mode { closest, any };
 
+	// Whether an entry is looked at at all by a query with this filter: something to hit, not excluded, visible when hidden ones are not
+	// wanted, on a layer of the mask.
+	bool passes_filter(const entry& mesh, bool renderable, scn::spatial_mask layers, const scn::ray_filter& filter)
+	{
+		if (mesh.degenerate || !mesh.tree || excluded(filter.exclude, mesh.entity)) {
+			return false;
+		}
+		if (!filter.include_hidden && !renderable) {
+			return false;
+		}
+		return layers.any_of(filter.mask);
+	}
+
 	// The nearest hit inside one entity, after the filters. `renderable` and `layers` are what the entity has now (the sync
 	// queries read them from the registry) or had when the snapshot was taken (the async ones).
 	std::optional<scn::ray_hit> test_mesh(const entry& mesh, bool renderable, scn::spatial_mask layers, const ds::ray3& ray,
 		const scn::ray_filter& filter, float t_max, mode how)
 	{
-		if (mesh.degenerate || !mesh.tree || excluded(filter.exclude, mesh.entity)) {
-			return std::nullopt;
-		}
-		if (!filter.include_hidden && !renderable) {
-			return std::nullopt;
-		}
-		if (!layers.any_of(filter.mask)) {
+		if (!passes_filter(mesh, renderable, layers, filter)) {
 			return std::nullopt;
 		}
 		const glm::vec3 local_origin = glm::vec3(mesh.inverse * glm::vec4(ray.origin, 1.f));
@@ -406,6 +413,25 @@ namespace {
 				[](const scn::ray_hit& a, const scn::ray_hit& b) {
 					return a.distance != b.distance ? a.distance < b.distance : a.entity < b.entity;
 				});
+		}
+
+		void overlap_frustum(entt::registry& world, const ds::frustum& view, const scn::ray_filter& filter, std::vector<entt::entity>& out) override
+		{
+			ensure_current(world);
+			const std::size_t first = out.size();
+			m_world.query_frustum(view, [&](std::uint32_t, const std::uint32_t& index, bool) {
+				const entry& mesh = m_entries[index];
+				if (!world.valid(mesh.entity)) {
+					return true;
+				}
+				const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
+				if (passes_filter(mesh, world.all_of<scn::renderable>(mesh.entity),
+					layers ? layers->mask : scn::spatial_mask{ scn::k_default_spatial_layer }, filter)) {
+					out.push_back(mesh.entity);
+				}
+				return true;
+			});
+			std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end());
 		}
 
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved) override
