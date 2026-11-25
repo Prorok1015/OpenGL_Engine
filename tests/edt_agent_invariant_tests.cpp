@@ -2211,6 +2211,8 @@ struct shader_documents_fixture : agent_editor_fixture
 	{
 		project.write("res/shaders/scene.frag", "#version 450 core\nvoid main() {}\n");
 		project.write("res/shaders/other.vert", "#version 450 core\nvoid main() {}\n");
+		BOOST_REQUIRE_MESSAGE(storage.require<res::resource_system>().remount(res::tag::default_protocol(), { project.path() / "res" }),
+			"res:// is not mounted");
 	}
 
 	static res::tag tag(std::string_view name) { return res::tag::make(std::string("shaders/") + std::string(name)); }

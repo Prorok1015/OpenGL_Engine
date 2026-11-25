@@ -312,7 +312,7 @@ BOOST_AUTO_TEST_CASE(TypedText_GoesToTheDocumentAfterAPause_NotAtOnce)
 	panel.insert_text("// x\n");
 	draw();
 	BOOST_TEST(panel.has_pending_edits());
-	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->text() == k_frag);
 
 	ImGui::GetIO().DeltaTime = 0.5f;
 	draw();
@@ -402,7 +402,7 @@ BOOST_AUTO_TEST_CASE(AnOutsideChangeWhileTyping_DoesNotPartTheWidgetFromTheDocum
 	panel.insert_text("// typed\n");
 	draw();
 	BOOST_REQUIRE(panel.has_pending_edits());
-	BOOST_REQUIRE(!document->is_dirty());
+	BOOST_REQUIRE(document->text() == k_frag);
 
 	std::ofstream(res_root / "shaders/scene.frag", std::ios::binary | std::ios::trunc) << "// from disk\n";
 	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
@@ -436,7 +436,7 @@ BOOST_AUTO_TEST_CASE(TypingThatCannotBeHandedOver_StaysInTheWidget_AndGoesInWhen
 	draw();
 	BOOST_TEST(panel.has_pending_edits());
 	BOOST_TEST(panel.edits_held_back());
-	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->text() == k_frag);
 	BOOST_TEST(panel.is_dirty());
 
 	locked = false;
