@@ -1326,46 +1326,104 @@ BOOST_AUTO_TEST_CASE(ATagInsideAMapOfTags_FollowsTheStrictRuleToo)
 
 namespace {
 
-// Structures in a list, in a map, alone and inside one another, each holding a tag (#1445).
+struct tag_slot
+{
+	res::tag texture;
+};
+BOOST_DESCRIBE_STRUCT(tag_slot, (), (texture))
+
+// Structures in a list, in a map and alone (#1445); a map needs a C++ type. `lost` names a schema nobody registered,
+// `unnamed` names none at all (a described struct without .ref()).
+class slot_table_desc : public desc::schema_desc<slot_table_desc>
+{
+public:
+	static constexpr std::string_view __type = "test.slot_table";
+
+	std::vector<tag_slot> list;
+	std::map<std::string, tag_slot> map;
+	tag_slot one;
+	res::tag tag;
+	std::vector<tag_slot> lost;
+	std::vector<tag_slot> unnamed;
+
+	BOOST_DESCRIBE_CLASS(slot_table_desc, (), (list, map, one, tag, lost, unnamed), (), ())
+};
+
+}
+
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<slot_table_desc> = attrs(f("list").ref("test.slot"), f("map").ref("test.slot"), f("one").ref("test.slot"),
+		f("lost").ref("test.missing"));
+}
+
+namespace {
+
+// test.slot holds a tag, a structure, a list of structures and two custom fields; test.slot_inner holds a tag and a list
+// of test.slot, so a structure, a list and a structure again nest in any order.
 void register_slot_schemas(desc::desc_system& descs)
 {
 	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot_inner", "kind": "struct",
-		"fields": [ { "name": "image", "kind": "res_tag", "default": "" } ] })").as_object())));
+		"fields": [ { "name": "image", "kind": "res_tag", "default": "" },
+			{ "name": "slots", "kind": "array", "element": "structure", "ref_type": "test.slot" } ] })").as_object(), &descs.schemas())));
 	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot", "kind": "struct",
 		"fields": [ { "name": "texture", "kind": "res_tag", "default": "" },
-			{ "name": "inner", "kind": "structure", "ref_type": "test.slot_inner" } ] })").as_object(), &descs.schemas())));
-	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot_table",
-		"fields": [ { "name": "list", "kind": "array", "element": "structure", "ref_type": "test.slot" },
-			{ "name": "map", "kind": "map", "element": "structure", "ref_type": "test.slot" },
-			{ "name": "one", "kind": "structure", "ref_type": "test.slot" },
-			{ "name": "tag", "kind": "res_tag", "default": "" } ] })").as_object(), &descs.schemas())));
+			{ "name": "inner", "kind": "structure", "ref_type": "test.slot_inner" },
+			{ "name": "parts", "kind": "array", "element": "structure", "ref_type": "test.slot_inner" },
+			{ "name": "extra", "kind": "custom" },
+			{ "name": "actions", "kind": "custom" } ] })").as_object(), &descs.schemas())));
+	descs.register_desc<slot_table_desc>("test.slot_table");
+	BOOST_REQUIRE(descs.find_schema("test.slot_table"));
 }
 
-std::vector<std::string> slot_errors(const desc::desc_system& descs, const std::string& text, edt::reference_rule rule)
+std::vector<std::string> slot_errors(const desc::desc_system& descs, const json::value& content, edt::reference_rule rule)
 {
 	std::vector<std::string> out;
-	for (const res::diagnostic& item : edt::validate_desc_tree(descs, json::parse(text), "res://tables/t.desc", nullptr, rule).problems) {
+	for (const res::diagnostic& item : edt::validate_desc_tree(descs, content, "res://tables/t.desc", nullptr, rule).problems) {
 		if (item.severity == res::diagnostic_severity::error) out.push_back(item.json_path + ": " + item.reason);
 	}
 	return out;
 }
 
+std::vector<std::string> slot_errors(const desc::desc_system& descs, const std::string& text, edt::reference_rule rule)
+{
+	return slot_errors(descs, json::parse(text), rule);
 }
 
-// #1445: a tag inside a structure (in a list, in a map, alone, inside another structure) follows the strict rule of a tag
-// at the top: a bare path is refused, and so is a {guid, path} holding one, on a person's save as on an agent's.
+const edt::reference_rule k_both_rules[] = { edt::reference_rule::person, edt::reference_rule::agent };
+
+std::string who_of(edt::reference_rule rule)
+{
+	return rule == edt::reference_rule::agent ? " (agent)" : " (person)";
+}
+
+const std::string k_slot_guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+
+}
+
+// #1445: a tag inside a structure (in a list, in a map, alone, inside another structure, in a custom field of one) follows
+// the strict rule of a tag at the top: a bare path is refused, and so is a {guid, path} holding one, on a person's save as
+// on an agent's.
 BOOST_AUTO_TEST_CASE(ATagInsideNestedStructures_FollowsTheStrictRule_ForAPersonAndAnAgent)
 {
 	register_slot_schemas(*descs);
-	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
-	const std::string bad_ref = "{" + guid + R"(,"path":"shaders/x.vert"})";
-	const std::string good_ref = "{" + guid + R"(,"path":"res://shaders/x.vert"})";
+	const std::string bad_ref = "{" + k_slot_guid + R"(,"path":"shaders/x.vert"})";
+	const std::string good_ref = "{" + k_slot_guid + R"(,"path":"res://shaders/x.vert"})";
 	const std::vector<std::pair<std::string, std::string>> refused{
 		{ R"({"__type":"test.slot_table","list":[{"texture":"res://a.png"},{"texture":"shaders/x.vert"}]})", "/list/1/texture" },
 		{ R"({"__type":"test.slot_table","map":{"k":{"texture":"shaders/x.vert"}}})", "/map/k/texture" },
 		{ R"({"__type":"test.slot_table","map":{"a/b~c":{"texture":"shaders/x.vert"}}})", "/map/a~1b~0c/texture" },
 		{ R"({"__type":"test.slot_table","one":{"inner":{"image":"shaders/x.vert"}}})", "/one/inner/image" },
 		{ R"({"__type":"test.slot_table","list":[{"inner":{"image":"shaders/x.vert"}}]})", "/list/0/inner/image" },
+		// structure -> list -> structure, map -> structure -> list, and deeper.
+		{ R"({"__type":"test.slot_table","one":{"parts":[{"image":"res://a.png"},{"image":"shaders/x.vert"}]}})", "/one/parts/1/image" },
+		{ R"({"__type":"test.slot_table","map":{"k":{"parts":[{"image":"shaders/x.vert"}]}}})", "/map/k/parts/0/image" },
+		{ R"({"__type":"test.slot_table","map":{"k":{"parts":[{"slots":[{"texture":"shaders/x.vert"}]}]}}})", "/map/k/parts/0/slots/0/texture" },
+		// A custom field in a structure is read as tags; the plain-text exceptions are asked with the structure's name.
+		{ R"({"__type":"test.slot_table","one":{"extra":"shaders/x.vert"}})", "/one/extra" },
+		{ R"({"__type":"test.slot_table","list":[{"extra":{"a":"shaders/x.vert"}}]})", "/list/0/extra/a" },
+		{ R"({"__type":"test.slot_table","one":{"actions":"shaders/x.vert"}})", "/one/actions" },
 		{ R"({"__type":"test.slot_table","list":[{"texture":)" + bad_ref + "}]}", "/list/0/texture/path" },
 		{ R"({"__type":"test.slot_table","map":{"k":{"texture":)" + bad_ref + "}}}", "/map/k/texture/path" },
 		{ R"({"__type":"test.slot_table","tag":"shaders/x.vert"})", "/tag" } };
@@ -1373,11 +1431,11 @@ BOOST_AUTO_TEST_CASE(ATagInsideNestedStructures_FollowsTheStrictRule_ForAPersonA
 		R"({"__type":"test.slot_table","list":[{"texture":"res://a.png","inner":{"image":"res://b.png"}},{"texture":""}]})",
 		R"({"__type":"test.slot_table","map":{"k":{"texture":"res://a.png"},"a/b":{"inner":{"image":"res://b.png"}}}})",
 		R"({"__type":"test.slot_table","list":[{"texture":)" + good_ref + R"(}],"map":{"k":{"texture":)" + good_ref + "}}}",
-		R"({"__type":"test.slot_table","one":{"texture":)" + good_ref + R"(,"inner":{"image":"res://b.png"}},"tag":"res://c.png"})" };
-	for (const edt::reference_rule rule : { edt::reference_rule::person, edt::reference_rule::agent }) {
-		const std::string who = rule == edt::reference_rule::agent ? " (agent)" : " (person)";
+		R"({"__type":"test.slot_table","one":{"texture":)" + good_ref + R"(,"inner":{"image":"res://b.png"}},"tag":"res://c.png"})",
+		R"({"__type":"test.slot_table","map":{"k":{"parts":[{"image":"res://a.png","slots":[{"extra":"res://b.png"}]}]}}})" };
+	for (const edt::reference_rule rule : k_both_rules) {
 		for (const auto& [content, pointer] : refused) {
-			BOOST_TEST_CONTEXT(content << who) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
 				const std::vector<std::string> errors = slot_errors(*descs, content, rule);
 				BOOST_TEST(errors.size() == 1u);
 				if (!errors.empty()) {
@@ -1387,12 +1445,102 @@ BOOST_AUTO_TEST_CASE(ATagInsideNestedStructures_FollowsTheStrictRule_ForAPersonA
 			}
 		}
 		for (const std::string& content : accepted) {
-			BOOST_TEST_CONTEXT(content << who) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
 				const std::vector<std::string> errors = slot_errors(*descs, content, rule);
 				BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
 			}
 		}
 	}
+}
+
+// #1445: a list of structures whose items are no objects is the schema check's to refuse; the tag check passes over them.
+BOOST_AUTO_TEST_CASE(ItemsThatAreNoObjects_InAListOfStructures_AreRefusedByTheSchemaCheckAlone)
+{
+	register_slot_schemas(*descs);
+	for (const edt::reference_rule rule : k_both_rules) {
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs,
+				std::string(R"({"__type":"test.slot_table","list":["shaders/x.vert",5,{"texture":"res://a.png"}]})"), rule);
+			BOOST_REQUIRE_EQUAL(errors.size(), 1u);
+			BOOST_TEST(errors[0].starts_with("/list/0: the value does not fit"), errors[0]);
+		}
+	}
+}
+
+// #1445: a structure whose type has no schema cannot say where its tags are: one problem per type refuses the file, and a
+// {guid, path} under it is still checked by its shape. Its plain strings get the loose walk only, as everywhere outside a schema.
+BOOST_AUTO_TEST_CASE(AStructureWithoutASchema_IsRefusedOncePerType_AndItsReferencesAreChecked)
+{
+	register_slot_schemas(*descs);
+	const std::string bad_ref = "{" + k_slot_guid + R"(,"path":"shaders/x.vert"})";
+	for (const edt::reference_rule rule : k_both_rules) {
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> lost = slot_errors(*descs,
+				std::string(R"({"__type":"test.slot_table","lost":[{"texture":"shaders/x.vert"},{"texture":"shaders/y.vert"}]})"), rule);
+			BOOST_REQUIRE_EQUAL(lost.size(), 1u);
+			BOOST_TEST(lost[0] == "/lost: 'test.missing' has no schema: the tags in its structures are not checked", lost[0]);
+
+			const std::vector<std::string> unnamed = slot_errors(*descs,
+				std::string(R"({"__type":"test.slot_table","unnamed":[{"texture":"res://a.png"}]})"), rule);
+			BOOST_REQUIRE_EQUAL(unnamed.size(), 1u);
+			BOOST_TEST(unnamed[0].starts_with("/unnamed: field 'unnamed' of 'test.slot_table' names no schema"), unnamed[0]);
+
+			const std::vector<std::string> referenced = slot_errors(*descs,
+				R"({"__type":"test.slot_table","lost":[{"texture":)" + bad_ref + "}]}", rule);
+			BOOST_REQUIRE_EQUAL(referenced.size(), 2u);
+			BOOST_TEST(referenced[0].starts_with("/lost: "), referenced[0]);
+			BOOST_TEST(referenced[1].starts_with("/lost/0/texture/path: a tag must be written as res://"), referenced[1]);
+		}
+	}
+}
+
+// #1445: a schema may nest itself through a list; past 32 structures the check stops and says so, which refuses the file.
+BOOST_AUTO_TEST_CASE(StructuresNestedDeeperThan32_AreRefused_NotPassedUnchecked)
+{
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.tree_node", "kind": "struct",
+		"fields": [ { "name": "image", "kind": "res_tag", "default": "" },
+			{ "name": "children", "kind": "array", "element": "structure", "ref_type": "test.tree_node" } ] })").as_object(), &descs->schemas())));
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.tree",
+		"fields": [ { "name": "children", "kind": "array", "element": "structure", "ref_type": "test.tree_node" } ] })").as_object(), &descs->schemas())));
+	const auto tree_of = [](int levels) {
+		json::object node{ { "image", "res://leaf.png" } };
+		for (int i = 0; i < levels; ++i) {
+			json::object parent;
+			parent["children"] = json::array{ json::value(std::move(node)) };
+			node = std::move(parent);
+		}
+		node["__type"] = "test.tree";
+		return json::value(std::move(node));
+	};
+	std::string deepest;
+	for (int i = 0; i < 33; ++i) deepest += "/children/0";
+	for (const edt::reference_rule rule : k_both_rules) {
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> shallow = slot_errors(*descs, tree_of(32), rule);
+			BOOST_TEST(shallow.empty(), (shallow.empty() ? std::string{} : shallow.front()));
+			const std::vector<std::string> deep = slot_errors(*descs, tree_of(40), rule);
+			BOOST_REQUIRE_EQUAL(deep.size(), 1u);
+			BOOST_TEST(deep[0] == deepest + ": nested deeper than 32: not checked", deep[0]);
+		}
+	}
+}
+
+// #1445: the agent's desc.write refuses a bare tag in a structure of a list before a byte is written.
+BOOST_AUTO_TEST_CASE(DescWrite_RefusesABareTagInAListOfStructures_AndTheFileStays)
+{
+	register_slot_schemas(*descs);
+	const auto made = call("desc.create", desc_args("materials/slots.desc", R"({"__type":"test.slot_table","list":[{"texture":"res://a.png"}]})"));
+	BOOST_REQUIRE_MESSAGE(made.ok, made.error);
+	const std::string before = read_file(res_root / "materials" / "slots.desc");
+
+	const auto refused = call("desc.write", write_args("materials/slots.desc", version_of("materials/slots.desc"),
+		R"({"__type":"test.slot_table","list":[{"texture":"res://a.png"},{"texture":"shaders/x.vert"}]})"));
+	BOOST_TEST(refused.code == cmd::codes::invalid_args);
+	BOOST_REQUIRE(refused.value.is_object());
+	const json::value& error = refused.value.at("errors").as_array()[0];
+	BOOST_TEST(std::string(error.at("json_path").as_string()) == std::string("/list/1/texture"));
+	BOOST_TEST(std::string(error.at("reason").as_string()).find("must be written as res://") != std::string::npos);
+	BOOST_TEST(read_file(res_root / "materials" / "slots.desc") == before);
 }
 
 // #1203: the stages of a .shader.desc's per-backend override are res::tag fields of the structure shader_stage_sources,
@@ -1401,16 +1549,16 @@ BOOST_AUTO_TEST_CASE(AStageOfABackendOverride_FollowsTheStrictRuleOfATag)
 {
 	const render_descs_while_running with_render(*descs);
 	BOOST_REQUIRE(descs->find_schema("shader_stage_sources") != nullptr);
-	for (const edt::reference_rule rule : { edt::reference_rule::person, edt::reference_rule::agent }) {
-		BOOST_TEST_CONTEXT((rule == edt::reference_rule::agent ? "agent" : "person")) {
-			const std::vector<std::string> bare = slot_errors(*descs, R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
-				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"shaders/x.vert"}}})", rule);
+	for (const edt::reference_rule rule : k_both_rules) {
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> bare = slot_errors(*descs, std::string(R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
+				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"shaders/x.vert"}}})"), rule);
 			BOOST_REQUIRE_EQUAL(bare.size(), 1u);
 			BOOST_TEST(bare[0].starts_with("/backends/vulkan/fragment: "), bare[0]);
 			BOOST_TEST(bare[0].find("must be written as res://") != std::string::npos, bare[0]);
 
-			const std::vector<std::string> fine = slot_errors(*descs, R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
-				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"res://shaders/vk.frag"},"metal":{"vertex":"res://shaders/m.vert"}}})", rule);
+			const std::vector<std::string> fine = slot_errors(*descs, std::string(R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
+				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"res://shaders/vk.frag"},"metal":{"vertex":"res://shaders/m.vert"}}})"), rule);
 			BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
 		}
 	}
