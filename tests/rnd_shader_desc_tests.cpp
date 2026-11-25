@@ -185,6 +185,7 @@ BOOST_AUTO_TEST_CASE(ShippedProgramsLoadAndSaveToTheirOwnBytes)
 			BOOST_TEST(shader->fragment.extension() == "frag");
 			BOOST_TEST(!shader->geometry.is_valid());
 			BOOST_TEST(shader->defines.empty());
+			BOOST_TEST(shader->backends.empty());
 
 			const std::vector<std::byte> saved = adapter.serialize(tag, shader);
 			const std::vector<std::byte>& file = ram_res.files.at(tag);
@@ -355,6 +356,126 @@ BOOST_AUTO_TEST_CASE(TheShaderOfAMaterial_IsAReferenceOnly_InTheSchemaAndItsChec
 	BOOST_TEST((check(R"({"shader":{"guid":"77f4fc60-9a12-4df0-8471-9a57d3e400db","path":"res://shaders/scene.shader.desc"}})") == desc::override_status::valid));
 	BOOST_TEST((check(R"({"shader":{"__type":"shader_desc","vertex":"res://shaders/scene.vert","fragment":"res://shaders/scene.frag"}})")
 		== desc::override_status::bad_value));
+}
+
+// #1203: a file with per-backend overrides saves to its own bytes: the backends by name, in each only the stages it names.
+BOOST_AUTO_TEST_CASE(BackendOverridesSaveToTheBytesOfTheirFile)
+{
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	auto& ram_res = rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+	const std::string text =
+		"{\n"
+		"    \"__type\" : \"shader_desc\",\n"
+		"    \"__version\" : 1,\n"
+		"    \"vertex\" : \"res://shaders/scene.vert\",\n"
+		"    \"fragment\" : \"res://shaders/scene.frag\",\n"
+		"    \"defines\" : [],\n"
+		"    \"backends\" : {\n"
+		"        \"metal\" : {\n"
+		"            \"vertex\" : \"res://shaders/metal/scene.vert\",\n"
+		"            \"fragment\" : \"res://shaders/metal/scene.frag\"\n"
+		"        },\n"
+		"        \"vulkan\" : {\n"
+		"            \"fragment\" : \"res://shaders/vulkan/scene.frag\"\n"
+		"        }\n"
+		"    }\n"
+		"}\n";
+	const res::tag tag = res::tag::make("shaders/over.shader.desc");
+	ram_res.files[tag] = test_util::to_bytes(text);
+
+	const auto shader = load<rnd::shader_desc>(tag);
+	BOOST_REQUIRE(shader);
+	BOOST_REQUIRE_EQUAL(shader->backends.size(), 2u);
+	BOOST_TEST(shader->backends.at("metal").vertex.string() == "res://shaders/metal/scene.vert");
+	BOOST_TEST(!shader->backends.at("metal").geometry.is_valid());
+	BOOST_TEST(!shader->backends.at("vulkan").vertex.is_valid());
+	BOOST_TEST(shader->backends.at("vulkan").fragment.string() == "res://shaders/vulkan/scene.frag");
+
+	const std::vector<std::byte> saved = adapter.serialize(tag, shader);
+	BOOST_CHECK_MESSAGE(saved == ram_res.files.at(tag), "the file with backends did not save to its own bytes");
+}
+
+BOOST_AUTO_TEST_CASE(StagesFor_PutsTheStagesABackendNamesOverTheSharedOnes)
+{
+	rnd::shader_desc shader;
+	shader.vertex = res::tag{ "res://shaders/scene.vert" };
+	shader.fragment = res::tag{ "res://shaders/scene.frag" };
+	shader.backends["vulkan"] = rnd::shader_stage_sources{ .vertex = res::tag{}, .fragment = res::tag{ "res://shaders/vk.frag" }, .geometry = res::tag{} };
+	shader.backends["metal"] = rnd::shader_stage_sources{ .vertex = res::tag{ "res://shaders/mtl.vert" },
+		.fragment = res::tag{ "res://shaders/mtl.frag" }, .geometry = res::tag{ "res://shaders/mtl.geom" } };
+	shader.backends["webgpu"] = rnd::shader_stage_sources{ .vertex = res::tag{ "res://shaders/w.vert" }, .fragment = res::tag{}, .geometry = res::tag{} };
+
+	const rnd::shader_stage_sources shared = shader.stages_for("opengl");
+	BOOST_TEST(shared.vertex == shader.vertex);
+	BOOST_TEST(shared.fragment == shader.fragment);
+	BOOST_TEST(!shared.geometry.is_valid());
+
+	const rnd::shader_stage_sources partial = shader.stages_for("vulkan");
+	BOOST_TEST(partial.vertex == shader.vertex);
+	BOOST_TEST(partial.fragment.string() == "res://shaders/vk.frag");
+	BOOST_TEST(!partial.geometry.is_valid());
+
+	const rnd::shader_stage_sources full = shader.stages_for("metal");
+	BOOST_TEST(full.vertex.string() == "res://shaders/mtl.vert");
+	BOOST_TEST(full.fragment.string() == "res://shaders/mtl.frag");
+	BOOST_TEST(full.geometry.string() == "res://shaders/mtl.geom");
+
+	// A name outside the known list is still an override; a name no entry has is the shared stages.
+	BOOST_TEST(shader.stages_for("webgpu").vertex.string() == "res://shaders/w.vert");
+	const rnd::shader_stage_sources unknown = shader.stages_for("d3d12");
+	BOOST_TEST(unknown.vertex == shader.vertex);
+	BOOST_TEST(unknown.fragment == shader.fragment);
+	BOOST_TEST(!unknown.geometry.is_valid());
+
+	// The runtime reads the shared stages only (#1029).
+	BOOST_TEST(shader.config().cdata.program.get_fragment_shader() == shader.fragment);
+}
+
+BOOST_AUTO_TEST_CASE(ABackendOverride_IsCheckedLikeTheSharedStages_AndAnUnknownOrEmptyOneIsAWarning)
+{
+	put("over.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag",
+		"backends":{"vulkan":{"fragment":"res://shaders/a.vert"},"webgpu":{"vertex":"res://shaders/w.vert"},"metal":{}}})");
+	const auto items = diagnostics_of(tag_of("over.shader.desc"));
+	const res::diagnostic* wrong = at(items, "/backends/vulkan/fragment");
+	BOOST_REQUIRE_MESSAGE(wrong, "no diagnostic at /backends/vulkan/fragment");
+	BOOST_TEST((wrong->severity == res::diagnostic_severity::warning));
+	BOOST_TEST(wrong->kind == res::diagnostic_kind::schema);
+	BOOST_TEST(wrong->reason.find(".frag") != std::string::npos);
+	const res::diagnostic* unknown = at(items, "/backends/webgpu");
+	BOOST_REQUIRE_MESSAGE(unknown, "no diagnostic at /backends/webgpu");
+	BOOST_TEST(unknown->reason.find("unknown backend 'webgpu'") != std::string::npos);
+	BOOST_TEST(!at(items, "/backends/webgpu/vertex"));
+	const res::diagnostic* empty = at(items, "/backends/metal");
+	BOOST_REQUIRE_MESSAGE(empty, "no diagnostic at /backends/metal");
+	BOOST_TEST(empty->reason.find("names no stage") != std::string::npos);
+	BOOST_TEST(!at(items, "/vertex"));
+	BOOST_TEST(!at(items, "/fragment"));
+	BOOST_TEST(items.size() == 3u);
+	// The values stay as written.
+	const auto shader = load<rnd::shader_desc>(tag_of("over.shader.desc"));
+	BOOST_REQUIRE(shader);
+	BOOST_TEST(shader->backends.at("webgpu").vertex.string() == "res://shaders/w.vert");
+	BOOST_TEST(shader->backends.at("vulkan").fragment.string() == "res://shaders/a.vert");
+
+	put("fine_over.shader.desc", R"({"__type":"shader_desc","vertex":"res://shaders/a.vert","fragment":"res://shaders/a.frag",
+		"backends":{"opengl":{"geometry":"res://shaders/a.geom"},"d3d12":{"vertex":"res://shaders/d.vert","fragment":"res://shaders/d.frag"}}})");
+	BOOST_TEST(diagnostics_of(tag_of("fine_over.shader.desc")).empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheOverridesAreAMapOfARegisteredStructure)
+{
+	const desc::type_schema* schema = descs->find_schema("shader_desc");
+	BOOST_REQUIRE(schema);
+	BOOST_TEST(schema->is_document);
+	const desc::field_schema* backends = schema->find_field("/backends");
+	BOOST_REQUIRE(backends);
+	BOOST_TEST((backends->kind == desc::field_kind::map));
+	BOOST_TEST((backends->element == desc::field_kind::structure));
+	BOOST_TEST(backends->ref_type == "shader_stage_sources");
+	const desc::type_schema* stages = descs->find_schema("shader_stage_sources");
+	BOOST_REQUIRE(stages);
+	BOOST_TEST((stages->kind == desc::schema_kind::structure));
+	BOOST_TEST(stages->fields.size() == 3u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

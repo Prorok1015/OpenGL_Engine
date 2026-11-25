@@ -262,6 +262,41 @@ else
 
 ---
 
+### US-26-E — переопределения исходников по бэкенду
+
+**Issue:** [#1203](https://github.com/Prorok1015/OpenGL_Engine/issues/1203)
+
+**Решения 2026-11-25:**
+- Только формат: в `shader_desc` последним полем добавлено `backends` — объект «имя бэкенда → стадии» (`rnd::shader_stage_sources { vertex, fragment, geometry }`, схема-структура `shader_stage_sources`). Пишется только непустым; стадия внутри переопределения пишется, только если задана. Файлы без `backends` читаются и сохраняются байт в байт как раньше: `__version` не меняется, миграции нет.
+
+```json
+{
+    "__type" : "shader_desc",
+    "__version" : 1,
+    "vertex" : "res://shaders/scene.vert",
+    "fragment" : "res://shaders/scene.frag",
+    "defines" : [],
+    "backends" : {
+        "metal" : {
+            "vertex" : "res://shaders/metal/scene.vert",
+            "fragment" : "res://shaders/metal/scene.frag"
+        },
+        "vulkan" : {
+            "fragment" : "res://shaders/vulkan/scene.frag"
+        }
+    }
+}
+```
+
+- Правило слияния: переопределение заменяет только те стадии, которые называет; остальные берутся из общих. `shader_desc::stages_for(backend)` возвращает общие стадии с заданными стадиями бэкенда поверх; для неизвестного или отсутствующего бэкенда — общие стадии.
+- Известные имена — `opengl`, `vulkan`, `d3d12`, `metal` (один список `rnd::k_shader_backends`). Другое имя сохраняется как написано, при загрузке — предупреждение «unknown backend '<имя>'» по пути `/backends/<имя>`. Переопределение без единой стадии — предупреждение «the override names no stage». Стадия переопределения проверяется на расширение так же, как общая (`/backends/<имя>/<стадия>`), ни одна не обязательна.
+- Пути в переопределениях — `res::tag`, поэтому проверка сохранения в редакторе (`validate_desc_tree`, строгое правило тега внутри структур, #1445) и записи ссылок `{guid, path}` работают для них так же, как для общих стадий.
+- Рантайм бэкенд пока не выбирает (#1029): `config()` и ShaderManager используют общие стадии, `stages_for` рантаймом не вызывается.
+- Отдельных defines для бэкенда пока нет.
+- ABI: `shader_desc` и `shader_stage_sources` вошли в ключ раскладки модуля (`layout_revision` 28, `docs/abi/changes/1203.md`).
+
+---
+
 ## Новые файлы
 
 ```
@@ -292,7 +327,8 @@ US-26-1 (shader_desc ресурс)
   │     └── US-26-3 (рефакторинг ShaderManager)
   │     └── US-26-4 (конвертация существующих файлов)
   │     └── US-26-6 (импорт моделей)
-  └── US-26-5 (Inspector UI)
+  ├── US-26-5 (Inspector UI)
+  └── US-26-E (переопределения исходников по бэкенду; выбор бэкенда в рантайме — #1029)
 
 EPIC-07 (Material Editor) — после EPIC-26
   Полноценный visual material editor опирается на shader_desc для UI генерации.

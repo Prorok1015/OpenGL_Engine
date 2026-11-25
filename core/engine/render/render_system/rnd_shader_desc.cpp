@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <format>
+#include <iterator>
+#include <string>
 #include <string_view>
 
 namespace
@@ -19,9 +21,8 @@ namespace
 		return entry.substr(0, entry.find_first_of(" \t"));
 	}
 
-	void check_stage(const res::tag& stage, std::string_view key, std::string_view extension, bool required)
+	void check_stage(const res::tag& stage, const std::string& pointer, std::string_view key, std::string_view extension, bool required)
 	{
-		const std::string pointer = std::format("/{}", key);
 		if (!stage.is_valid()) {
 			if (required) {
 				res::report_load_warning(res::diagnostic_kind::schema, pointer, std::format("the {} stage is missing", key));
@@ -68,7 +69,40 @@ rnd::shader_config rnd::shader_desc::config(const std::vector<std::string>& extr
 void rnd::shader_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	desc::schema_desc<shader_desc, desc::schema_kind::desc>::deserialize(desc_system, data);
-	check_stage(vertex, "vertex", "vert", true);
-	check_stage(fragment, "fragment", "frag", true);
-	check_stage(geometry, "geometry", "geom", false);
+	check_stage(vertex, "/vertex", "vertex", "vert", true);
+	check_stage(fragment, "/fragment", "fragment", "frag", true);
+	check_stage(geometry, "/geometry", "geometry", "geom", false);
+	for (const auto& [name, stages] : backends) {
+		const std::string pointer = "/backends/" + res::json_pointer_token(name);
+		if (std::ranges::find(k_shader_backends, std::string_view{ name }) == std::end(k_shader_backends)) {
+			res::report_load_warning(res::diagnostic_kind::schema, pointer, std::format("unknown backend '{}'", name));
+		}
+		if (!stages.vertex.is_valid() && !stages.fragment.is_valid() && !stages.geometry.is_valid()) {
+			res::report_load_warning(res::diagnostic_kind::schema, pointer, "the override names no stage");
+			continue;
+		}
+		check_stage(stages.vertex, pointer + "/vertex", "vertex", "vert", false);
+		check_stage(stages.fragment, pointer + "/fragment", "fragment", "frag", false);
+		check_stage(stages.geometry, pointer + "/geometry", "geometry", "geom", false);
+	}
+}
+
+rnd::shader_stage_sources rnd::shader_desc::stages_for(std::string_view backend) const
+{
+	shader_stage_sources out{ .vertex = vertex, .fragment = fragment, .geometry = geometry };
+	const auto found = backends.find(std::string{ backend });
+	if (found == backends.end()) {
+		return out;
+	}
+	const shader_stage_sources& over = found->second;
+	if (over.vertex.is_valid()) {
+		out.vertex = over.vertex;
+	}
+	if (over.fragment.is_valid()) {
+		out.fragment = over.fragment;
+	}
+	if (over.geometry.is_valid()) {
+		out.geometry = over.geometry;
+	}
+	return out;
 }

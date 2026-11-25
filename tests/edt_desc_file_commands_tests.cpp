@@ -1395,6 +1395,27 @@ BOOST_AUTO_TEST_CASE(ATagInsideNestedStructures_FollowsTheStrictRule_ForAPersonA
 	}
 }
 
+// #1203: the stages of a .shader.desc's per-backend override are res::tag fields of the structure shader_stage_sources,
+// so a save checks them by the strict rule of a tag, as it checks the shared stages.
+BOOST_AUTO_TEST_CASE(AStageOfABackendOverride_FollowsTheStrictRuleOfATag)
+{
+	const render_descs_while_running with_render(*descs);
+	BOOST_REQUIRE(descs->find_schema("shader_stage_sources") != nullptr);
+	for (const edt::reference_rule rule : { edt::reference_rule::person, edt::reference_rule::agent }) {
+		BOOST_TEST_CONTEXT((rule == edt::reference_rule::agent ? "agent" : "person")) {
+			const std::vector<std::string> bare = slot_errors(*descs, R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
+				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"shaders/x.vert"}}})", rule);
+			BOOST_REQUIRE_EQUAL(bare.size(), 1u);
+			BOOST_TEST(bare[0].starts_with("/backends/vulkan/fragment: "), bare[0]);
+			BOOST_TEST(bare[0].find("must be written as res://") != std::string::npos, bare[0]);
+
+			const std::vector<std::string> fine = slot_errors(*descs, R"({"__type":"shader_desc","vertex":"res://shaders/a.vert",
+				"fragment":"res://shaders/a.frag","backends":{"vulkan":{"fragment":"res://shaders/vk.frag"},"metal":{"vertex":"res://shaders/m.vert"}}})", rule);
+			BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
+		}
+	}
+}
+
 namespace {
 
 // An asset index that knows where some IDs are and keys no tag by an ID, so no cache entry moves.
