@@ -1,12 +1,16 @@
 #include "edt_data_document_host.h"
 #include "edt_data_document.h"
 #include "edt_data_document_panel.h"
+#include "edt_material_window_panel.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_panel_registry.h>
+#include <snk/editor/edt_editor_services.h>
+#include <snk/render/rnd_material_desc.h>
+#include <boost/json/parse.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -100,7 +104,31 @@ void edt::data_document_host::follow_focus()
 	manager.set_active(manager.scene().id());
 }
 
-void edt::data_document_host::open(const res::tag& tag, bool quiet)
+namespace {
+
+bool has_window_of_its_own(std::string_view type)
+{
+	return type == rnd::material_desc::__type;
+}
+
+}
+
+bool edt::data_document_host::has_own_window(const res::tag& tag) const
+{
+	res::resource_system* resources = m_services.resources();
+	const desc::desc_system* descs = m_services.descs();
+	if (!resources || !descs) return false;
+	const desc_file_read read = read_desc_file(*resources, *descs, m_layout(), tag);
+	if (!read.error.empty()) return false;
+	boost::system::error_code ec;
+	const std::string_view text(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size());
+	const boost::json::value parsed = boost::json::parse(text, ec);
+	if (ec || !parsed.is_object()) return false;
+	const boost::json::value* type = parsed.as_object().if_contains("__type");
+	return type && type->is_string() && has_window_of_its_own(std::string_view(type->as_string()));
+}
+
+void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_kind kind)
 {
 	document_manager& documents = m_context.documents();
 	if (document* open = documents.find_by_source(tag)) {
@@ -120,7 +148,12 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet)
 	data_document& data = *created;
 	const document_id id = documents.adopt(std::move(created)).id();
 	if (!quiet) documents.set_active(id);
-	auto panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
+	std::shared_ptr<data_document_panel> panel;
+	if (kind == data_window_kind::by_type && has_window_of_its_own(data.type())) {
+		panel = std::make_shared<material_window_panel>(data, m_services, id, quiet);
+	} else {
+		panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
+	}
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_has_project_migration([this] { return m_context.actions().contains("project.migrate"); });
