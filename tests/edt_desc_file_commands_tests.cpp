@@ -1326,6 +1326,77 @@ BOOST_AUTO_TEST_CASE(ATagInsideAMapOfTags_FollowsTheStrictRuleToo)
 
 namespace {
 
+// Structures in a list, in a map, alone and inside one another, each holding a tag (#1445).
+void register_slot_schemas(desc::desc_system& descs)
+{
+	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot_inner", "kind": "struct",
+		"fields": [ { "name": "image", "kind": "res_tag", "default": "" } ] })").as_object())));
+	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot", "kind": "struct",
+		"fields": [ { "name": "texture", "kind": "res_tag", "default": "" },
+			{ "name": "inner", "kind": "structure", "ref_type": "test.slot_inner" } ] })").as_object(), &descs.schemas())));
+	BOOST_REQUIRE(descs.register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.slot_table",
+		"fields": [ { "name": "list", "kind": "array", "element": "structure", "ref_type": "test.slot" },
+			{ "name": "map", "kind": "map", "element": "structure", "ref_type": "test.slot" },
+			{ "name": "one", "kind": "structure", "ref_type": "test.slot" },
+			{ "name": "tag", "kind": "res_tag", "default": "" } ] })").as_object(), &descs.schemas())));
+}
+
+std::vector<std::string> slot_errors(const desc::desc_system& descs, const std::string& text, edt::reference_rule rule)
+{
+	std::vector<std::string> out;
+	for (const res::diagnostic& item : edt::validate_desc_tree(descs, json::parse(text), "res://tables/t.desc", nullptr, rule).problems) {
+		if (item.severity == res::diagnostic_severity::error) out.push_back(item.json_path + ": " + item.reason);
+	}
+	return out;
+}
+
+}
+
+// #1445: a tag inside a structure (in a list, in a map, alone, inside another structure) follows the strict rule of a tag
+// at the top: a bare path is refused, and so is a {guid, path} holding one, on a person's save as on an agent's.
+BOOST_AUTO_TEST_CASE(ATagInsideNestedStructures_FollowsTheStrictRule_ForAPersonAndAnAgent)
+{
+	register_slot_schemas(*descs);
+	const std::string guid = R"("guid":"3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f")";
+	const std::string bad_ref = "{" + guid + R"(,"path":"shaders/x.vert"})";
+	const std::string good_ref = "{" + guid + R"(,"path":"res://shaders/x.vert"})";
+	const std::vector<std::pair<std::string, std::string>> refused{
+		{ R"({"__type":"test.slot_table","list":[{"texture":"res://a.png"},{"texture":"shaders/x.vert"}]})", "/list/1/texture" },
+		{ R"({"__type":"test.slot_table","map":{"k":{"texture":"shaders/x.vert"}}})", "/map/k/texture" },
+		{ R"({"__type":"test.slot_table","map":{"a/b~c":{"texture":"shaders/x.vert"}}})", "/map/a~1b~0c/texture" },
+		{ R"({"__type":"test.slot_table","one":{"inner":{"image":"shaders/x.vert"}}})", "/one/inner/image" },
+		{ R"({"__type":"test.slot_table","list":[{"inner":{"image":"shaders/x.vert"}}]})", "/list/0/inner/image" },
+		{ R"({"__type":"test.slot_table","list":[{"texture":)" + bad_ref + "}]}", "/list/0/texture/path" },
+		{ R"({"__type":"test.slot_table","map":{"k":{"texture":)" + bad_ref + "}}}", "/map/k/texture/path" },
+		{ R"({"__type":"test.slot_table","tag":"shaders/x.vert"})", "/tag" } };
+	const std::vector<std::string> accepted{
+		R"({"__type":"test.slot_table","list":[{"texture":"res://a.png","inner":{"image":"res://b.png"}},{"texture":""}]})",
+		R"({"__type":"test.slot_table","map":{"k":{"texture":"res://a.png"},"a/b":{"inner":{"image":"res://b.png"}}}})",
+		R"({"__type":"test.slot_table","list":[{"texture":)" + good_ref + R"(}],"map":{"k":{"texture":)" + good_ref + "}}}",
+		R"({"__type":"test.slot_table","one":{"texture":)" + good_ref + R"(,"inner":{"image":"res://b.png"}},"tag":"res://c.png"})" };
+	for (const edt::reference_rule rule : { edt::reference_rule::person, edt::reference_rule::agent }) {
+		const std::string who = rule == edt::reference_rule::agent ? " (agent)" : " (person)";
+		for (const auto& [content, pointer] : refused) {
+			BOOST_TEST_CONTEXT(content << who) {
+				const std::vector<std::string> errors = slot_errors(*descs, content, rule);
+				BOOST_TEST(errors.size() == 1u);
+				if (!errors.empty()) {
+					BOOST_TEST(errors[0].starts_with(pointer + ": "), errors[0]);
+					BOOST_TEST(errors[0].find("must be written as res://") != std::string::npos, errors[0]);
+				}
+			}
+		}
+		for (const std::string& content : accepted) {
+			BOOST_TEST_CONTEXT(content << who) {
+				const std::vector<std::string> errors = slot_errors(*descs, content, rule);
+				BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
+			}
+		}
+	}
+}
+
+namespace {
+
 // An asset index that knows where some IDs are and keys no tag by an ID, so no cache entry moves.
 struct paths_index final : res::asset_index
 {
