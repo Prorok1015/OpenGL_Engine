@@ -232,6 +232,11 @@ namespace edt
 			m_synced_generation = m_ctx->generation();
 			return;
 		}
+		// A save or an undo of ours moves the generation without changing the text: loading it again would drop the widget's history.
+		if (m_loaded && m_view.text() == m_ctx->text()) {
+			m_synced_generation = m_ctx->generation();
+			return;
+		}
 		m_view.load(m_ctx->text());
 		m_synced_generation = m_ctx->generation();
 		m_loaded = true;

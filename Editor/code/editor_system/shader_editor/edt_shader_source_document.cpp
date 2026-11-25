@@ -324,6 +324,7 @@ edt::save_result edt::shader_source_document::save()
 	if (!now.error.empty()) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
+	m_missing_on_disk = false;
 	if (code_version_of(now.bytes) != m_disk_version) {
 		if (!m_changed_on_disk) {
 			m_changed_on_disk = true;
@@ -425,15 +426,18 @@ edt::save_result edt::shader_source_document::overwrite()
 	if (!m_top_layer) {
 		return save_result::failure(read_only_reason());
 	}
+	if (locate(m_tag).missing) {
+		if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+			return save_result::failure(*why);
+		}
+		return recreate();
+	}
 	if (!m_dirty) {
 		const std::string error = revert();
 		return error.empty() ? save_result::ok() : save_result::failure(error);
 	}
 	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
 		return save_result::failure(*why);
-	}
-	if (const located where = locate(m_tag); where.missing) {
-		return recreate();
 	}
 	const disk_read now = read_disk();
 	if (!now.error.empty()) {
@@ -491,10 +495,14 @@ void edt::shader_source_document::on_source_changed(const res::tag& changed)
 		}
 		return;
 	}
+	if (m_missing_on_disk) {
+		// The file is back: the banner is about its content now (a different one is the usual conflict).
+		m_missing_on_disk = false;
+		announce();
+	}
 	if (code_version_of(now.bytes) == m_disk_version) {
 		if (m_changed_on_disk) {
 			m_changed_on_disk = false;
-			m_missing_on_disk = false;
 			announce();
 		}
 		return;
