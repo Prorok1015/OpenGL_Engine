@@ -71,27 +71,38 @@ namespace
 	constexpr std::array<std::string_view, 14> k_local_mount_types = { "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs",
 		"f2fs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "tmpfs", "overlay" };
 
-	std::string posix_volume_problem(std::span<const std::string_view> parts, const edt::source_volume_ports& ports)
+	std::string posix_text_of(std::span<const std::string_view> parts)
 	{
 		std::string normal;
 		for (const std::string_view part : parts) normal += "/" + std::string(part);
 		if (normal.empty()) normal = "/";
+		return normal;
+	}
+
+	// The longest mount point on component boundaries holds the path; a later line over the same point wins.
+	std::optional<edt::agent_log_mount> holding_mount(const std::string& normal, const std::string& table)
+	{
+		std::optional<edt::agent_log_mount> holder;
+		for (const edt::agent_log_mount& mount : edt::agent_log_mounts(table)) {
+			const std::string& point = mount.point;
+			const bool under = point == "/" || normal == point
+				|| (normal.size() > point.size() && normal.starts_with(point) && normal[point.size()] == '/');
+			if (under && (!holder || point.size() >= holder->point.size())) holder = mount;
+		}
+		return holder;
+	}
+
+	std::string posix_volume_problem(std::span<const std::string_view> parts, const edt::source_volume_ports& ports)
+	{
+		const std::string normal = posix_text_of(parts);
 		// /proc/self/root/... and the like reach any file of the system through the proc mount.
 		if (normal == "/proc" || normal.starts_with("/proc/")) {
 			return "the source is under /proc: an agent may import only from a local disk";
 		}
 		const std::optional<std::string> table = ports.mount_table ? ports.mount_table() : std::nullopt;
 		if (!table) return "the mount table cannot be read: an agent's source cannot be told to be on a local disk";
-		// The longest mount point on component boundaries holds the path; a later line over the same point wins.
-		const edt::agent_log_mount* holder = nullptr;
-		const std::vector<edt::agent_log_mount> mounts = edt::agent_log_mounts(*table);
-		for (const edt::agent_log_mount& mount : mounts) {
-			const std::string& point = mount.point;
-			const bool under = point == "/" || normal == point
-				|| (normal.size() > point.size() && normal.starts_with(point) && normal[point.size()] == '/');
-			if (under && (holder == nullptr || point.size() >= holder->point.size())) holder = &mount;
-		}
-		if (holder == nullptr) return "no mount of the mount table holds the source";
+		const std::optional<edt::agent_log_mount> holder = holding_mount(normal, *table);
+		if (!holder) return "no mount of the mount table holds the source";
 		if (std::ranges::find(k_local_mount_types, holder->type) == k_local_mount_types.end()) {
 			return std::format("the source is on a '{}' file system, which is no local disk one (a network, automount, "
 				"FUSE or system file system): an agent may import only from a local disk",
@@ -163,11 +174,17 @@ std::optional<std::string> edt::system_mount_table()
 std::optional<std::uint32_t> edt::system_file_attributes(const fs::path& path)
 {
 #if defined(_WIN32)
-	// By name, no handle of ours: Windows reports the entry itself (a link's own attributes) and reads no data, so a
-	// placeholder is not fetched.
-	const DWORD attributes = GetFileAttributesW(platform::beneath::long_path(path).c_str());
-	if (attributes == INVALID_FILE_ATTRIBUTES) return std::nullopt;
-	return static_cast<std::uint32_t>(attributes);
+	// From the folder's listing: GetFileAttributesW may open the entry, and RECALL_ON_OPEN is reported by a listing.
+	// A name with a wildcard never reaches here (Windows refuses `*` and `?` in names; agent_source_path_problem
+	// passed it).
+	const std::wstring name = path.filename().native();
+	if (name.empty() || name.find_first_of(L"*?") != std::wstring::npos) return std::nullopt;
+	WIN32_FIND_DATAW found{};
+	const HANDLE search = FindFirstFileExW(platform::beneath::long_path(path).c_str(), FindExInfoBasic, &found,
+		FindExSearchNameMatch, nullptr, 0);
+	if (search == INVALID_HANDLE_VALUE) return std::nullopt;
+	FindClose(search);
+	return static_cast<std::uint32_t>(found.dwFileAttributes);
 #else
 	static_cast<void>(path);
 	return std::nullopt;
@@ -212,12 +229,18 @@ std::string edt::agent_source_links_problem(const fs::path& path, const source_v
 		}
 	}
 	for (; part != end; ++part) {
-		if (part->empty()) continue;
-		if (*part == "." || *part == "..") {
-			return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
-		}
+		if (part->empty() || *part == ".") continue;
+		if (*part == "..") return "the source path holds a '..' component: name the file by its plain absolute path";
 		at /= *part;
 		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(*part), 256);
+		// The listing first: entry_of opens the entry, which a projected file system answers by fetching it.
+		const bool listed = ports.windows && ports.file_attributes;
+		const std::optional<std::uint32_t> attributes = listed ? ports.file_attributes(at) : std::nullopt;
+		if (attributes) {
+			if (std::string why = cloud_attributes_problem(*attributes); !why.empty()) {
+				return std::format("'{}' on the way to the source: {}", name, why);
+			}
+		}
 		std::error_code ec;
 		const std::optional<platform::beneath::link_entry> entry = ports.entry_of(at, ec);
 		if (ec) return std::format("'{}' on the way to the source cannot be inspected", name);
@@ -227,13 +250,7 @@ std::string edt::agent_source_links_problem(const fs::path& path, const source_v
 			return std::format("'{}' on the way to the source is a link (a symlink, a junction, a mount point or "
 				"another reparse point): an agent's import never follows one; name the file by its real path", name);
 		}
-		if (ports.windows && ports.file_attributes) {
-			const std::optional<std::uint32_t> attributes = ports.file_attributes(at);
-			if (!attributes) return std::format("'{}' on the way to the source cannot be inspected", name);
-			if (std::string why = cloud_attributes_problem(*attributes); !why.empty()) {
-				return std::format("'{}' on the way to the source: {}", name, why);
-			}
-		}
+		if (listed && !attributes) return std::format("'{}' on the way to the source cannot be inspected", name);
 	}
 	return {};
 }
@@ -250,6 +267,155 @@ std::string edt::agent_side_file_problem(const fs::path& candidate, const fs::pa
 	return {};
 }
 
+platform::beneath::read_result edt::read_below_root(const platform::beneath::read_request& request,
+	const platform::beneath::read_limits& limits, std::vector<std::byte>& out)
+{
+	return platform::beneath::read_beneath(request, limits, out);
+}
+
+std::optional<edt::agent_read_route> edt::agent_read_route_of(const fs::path& path, bool windows,
+	const std::optional<std::string>& mount_table)
+{
+	agent_read_route route;
+	if (windows) {
+		if (!path.has_root_name() || !path.has_root_directory()) return std::nullopt;
+		const fs::path below = path.lexically_normal().relative_path();
+		if (!below.has_filename()) return std::nullopt;
+		route.root = path.root_path();
+		route.folder = below.parent_path();
+		route.leaf = below.filename();
+		return route;
+	}
+	const std::string text = fs_paths::generic_utf8_of(path);
+	if (!text.starts_with('/') || !mount_table) return std::nullopt;
+	std::vector<std::string_view> parts = components_of(text, false);
+	std::erase(parts, std::string_view("."));
+	if (parts.empty() || std::ranges::find(parts, std::string_view("..")) != parts.end()) return std::nullopt;
+	route.root = "/";
+	route.leaf = fs_paths::path_from_utf8(parts.back());
+	parts.pop_back();
+	std::string folder_text;
+	for (const std::string_view part : parts) folder_text += (folder_text.empty() ? "" : "/") + std::string(part);
+	route.folder = fs_paths::path_from_utf8(folder_text);
+	// A mount point is a folder of the path whose whole text is a point of the table: the device changes there.
+	const std::vector<agent_log_mount> mounts = agent_log_mounts(*mount_table);
+	std::string at;
+	for (std::size_t index = 0; index < parts.size(); ++index) {
+		at += "/" + std::string(parts[index]);
+		const auto mounted = [&at](const agent_log_mount& mount) { return mount.point == at; };
+		if (std::ranges::any_of(mounts, mounted)) route.mount_points.push_back(index);
+	}
+	return route;
+}
+
+edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t max_bytes,
+	const source_volume_ports& ports, bool stamp_only)
+{
+	agent_file_read out;
+	const auto refuse = [&out](std::string why) {
+		out.bytes.clear();
+		out.stamp.reset();
+		out.problem = std::move(why);
+		return std::move(out);
+	};
+	const std::optional<std::string> mounts = ports.read_mounts ? ports.read_mounts() : std::nullopt;
+	const std::optional<agent_read_route> route = agent_read_route_of(path, ports.windows, mounts);
+	if (!route) return refuse("the volume that holds the file cannot be told");
+	if (!ports.read_below) return refuse("the file cannot be read");
+	platform::beneath::read_request request;
+	request.root = route->root;
+	request.folder = route->folder;
+	request.leaf = route->leaf;
+	request.max_bytes = max_bytes;
+	request.stamp_only = stamp_only;
+	platform::beneath::read_limits limits;
+	limits.same_device = true;
+	limits.refuse_recall = true;
+	limits.mount_points = route->mount_points;
+	const platform::beneath::read_result read = ports.read_below(request, limits, out.bytes);
+	using platform::beneath::read_status;
+	switch (read.status) {
+	case read_status::ok:
+		if (!read.stamp) return refuse("the file changed while it was read");
+		// A zero id would make two files with the same size and times look like one.
+		if (read.stamp->file_id == 0) return refuse("the identity of the file on the disk cannot be read");
+		out.stamp = read.stamp;
+		return out;
+	case read_status::missing:
+		out.missing = true;
+		return refuse("the file or a folder on the way to it is gone");
+	case read_status::not_regular:
+		return refuse("the file is no plain file (a link, a junction, a folder or a device)");
+	case read_status::too_large:
+		return refuse("the file is larger than when it was shown");
+	case read_status::failed:
+		break;
+	}
+	if (read.error.find(platform::beneath::k_would_recall) != std::string::npos) {
+		return refuse(cloud_attributes_problem(k_file_attribute_offline));
+	}
+	if (read.error.find(platform::beneath::k_other_device) != std::string::npos) {
+		return refuse("a folder on the way to the file is a mount of another file system: an agent's import never "
+			"crosses one; name the file by its real path");
+	}
+	// The error names absolute paths: an agent reads none.
+	return refuse("the file cannot be read from the root of its volume without following a link (a link, a "
+		"junction or no folder on the way)");
+}
+
+fs::path edt::long_spelling(const fs::path& path)
+{
+#if defined(_WIN32)
+	const auto spelled = [](const fs::path& text) -> std::optional<fs::path> {
+		const std::wstring native = platform::beneath::long_path(text).native();
+		const DWORD length = GetLongPathNameW(native.c_str(), nullptr, 0);
+		if (length == 0) return std::nullopt;
+		std::wstring out(length, L'\0');
+		const DWORD written = GetLongPathNameW(native.c_str(), out.data(), length);
+		if (written == 0 || written >= length) return std::nullopt;
+		out.resize(written);
+		if (out.starts_with(L"\\\\?\\") && !out.starts_with(L"\\\\?\\UNC\\")) out.erase(0, 4);
+		return fs::path(out);
+	};
+	if (const std::optional<fs::path> whole = spelled(path)) return *whole;
+	if (const std::optional<fs::path> folder = spelled(path.parent_path())) return *folder / path.filename();
+	return path;
+#else
+	return path;
+#endif
+}
+
+fs::path edt::agent_source_spelled(const fs::path& given, const source_volume_ports& ports, std::string& why)
+{
+	why = agent_source_links_problem(given, ports);
+	if (!why.empty()) return {};
+	const fs::path spelled = ports.long_name ? ports.long_name(given) : given;
+	if (spelled != given) {
+		why = agent_source_links_problem(spelled, ports);
+		if (!why.empty()) return {};
+	}
+	return spelled;
+}
+
+std::string edt::agent_file_changed(const fs::path& path, const std::optional<platform::beneath::file_stamp>& shown,
+	const source_volume_ports& ports)
+{
+	if (std::string why = agent_source_links_problem(path, ports); !why.empty()) return why;
+	const agent_file_read stamped = read_agent_file(path, UINTMAX_MAX, ports, true);
+	if (!stamped.problem.empty()) return stamped.problem;
+	if (!shown || !same_file_stamp(*stamped.stamp, *shown)) {
+		return "the file changed since it was shown: another file, or other content";
+	}
+	return {};
+}
+
+bool edt::same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b)
+{
+	// The change time too: a tool can set the write time back, never the change time.
+	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.change_time_ns == b.change_time_ns
+		&& a.file_id == b.file_id && a.device == b.device;
+}
+
 std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)
 {
 	if (path.empty()) return "the source path is empty";
@@ -257,9 +423,10 @@ std::string edt::agent_source_path_problem(std::string_view path, const source_v
 	if (path.starts_with("\\??\\") || doubled) {
 		return "the source is a network share or a device path: an agent may import only from a local disk";
 	}
-	const std::vector<std::string_view> parts = components_of(path, ports.windows);
-	if (std::ranges::any_of(parts, [](std::string_view part) { return part == "." || part == ".."; })) {
-		return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
+	std::vector<std::string_view> parts = components_of(path, ports.windows);
+	std::erase(parts, std::string_view("."));
+	if (std::ranges::find(parts, std::string_view("..")) != parts.end()) {
+		return "the source path holds a '..' component: name the file by its plain absolute path";
 	}
 	if (ports.windows) return windows_volume_problem(path, parts, ports);
 	if (path.front() != '/') return "the source must be an absolute path";

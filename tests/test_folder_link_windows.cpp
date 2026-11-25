@@ -20,7 +20,11 @@ namespace test_util {
 	// privilege. The layout is REPARSE_DATA_BUFFER's MountPointReparseBuffer (ntifs.h, not in windows.h).
 	bool make_junction(const std::filesystem::path& target, const std::filesystem::path& link)
 	{
-		const std::wstring print = std::filesystem::absolute(target).lexically_normal().make_preferred().wstring();
+		std::wstring print = std::filesystem::absolute(target).lexically_normal().make_preferred().wstring();
+		// The substitute name is `\??\` + a drive path: a target already in the `\\?\` form is not prefixed twice,
+		// and a UNC one makes no junction.
+		if (print.starts_with(L"\\\\?\\UNC\\")) return false;
+		if (print.starts_with(L"\\\\?\\")) print.erase(0, 4);
 		const std::wstring substitute = L"\\??\\" + print;
 		constexpr std::size_t header = 8;	// ReparseTag, ReparseDataLength, Reserved
 		constexpr std::size_t names_header = 8;	// the offsets and lengths of the two names

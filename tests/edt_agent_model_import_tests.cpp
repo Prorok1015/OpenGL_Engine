@@ -94,6 +94,13 @@ struct import_fixture : test_util::scene_env
 		result.blocker = [this]() -> std::optional<std::string> { return blocked; };
 		result.now = [this] { return clock; };
 		result.max_source_bytes = 4096;
+		result.read_below = [this](const platform::beneath::read_request& request,
+			const platform::beneath::read_limits& limits, std::vector<std::byte>& out) {
+			const platform::beneath::read_result read = platform::beneath::read_beneath(request, limits, out);
+			// The handle's stamp stays, the bytes differ: what only the content hash sees.
+			if (flip_read_bytes && !request.stamp_only && !out.empty()) out.back() ^= std::byte{ 1 };
+			return read;
+		};
 		result.drive_type = [this](char letter) {
 			++drive_type_calls;
 			return std::toupper(static_cast<unsigned char>(letter)) == remote_drive ? 4u : edt::k_drive_fixed;
@@ -221,6 +228,7 @@ struct import_fixture : test_util::scene_env
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
+	bool flip_read_bytes = false;
 	// What the fake decoder says of its OS sandbox (#1076), and what the editor expects before a run.
 	edt::decoder_sandbox_status scan_reports{};
 	edt::decoder_sandbox_status import_reports{};
@@ -821,7 +829,9 @@ BOOST_AUTO_TEST_CASE(Start_RefusesAnotherFileAtTheSamePathSizeAndTime)
 	BOOST_CHECK_EQUAL(imports, 0);
 }
 
-BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
+// Same size and the write time set back: the change time of the handle's stamp (#1412) refuses the second call
+// before any job, where only the content hash used to see it.
+BOOST_AUTO_TEST_CASE(TheSecondCall_RefusesAModelWhoseBytesChangedSinceItsFilesWereListed)
 {
 	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
 	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
@@ -835,12 +845,32 @@ BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesAModelWhoseBytesChangedSinceItsFilesWer
 	BOOST_REQUIRE_EQUAL(fs::file_size(source), std::string("glb bytes of the robot").size());
 
 	const auto started = service->start(second, agent);
+	BOOST_CHECK(!started.ok());
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::denied);
+	BOOST_CHECK_MESSAGE(started.error.find("changed") != std::string::npos, started.error);
+	run_jobs();
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+}
+
+// The content hash of the second job, for bytes no stamp tells apart: a reader that gives other bytes from the same
+// handle.
+BOOST_AUTO_TEST_CASE(TheSecondJob_RefusesBytesOtherThanTheListedOnes_WhenTheStampIsTheSame)
+{
+	listed_files = { { dir.path() / "outside" / "skin.png", 1000 } };
+	const json::object first = finished(approved_start(request("hero", "models"), agent).job);
+	edt::agent_import_request second = request("hero", "models");
+	second.files_token = std::string(first.at("files_token").as_string());
+	BOOST_REQUIRE(service->describe(second, agent).has_value());
+
+	flip_read_bytes = true;
+	const auto started = service->start(second, agent);
 	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
 	run_jobs();
 	const auto info = jobs.info(started.job);
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::failed);
-	BOOST_CHECK(info->error.find("content") != std::string::npos);
+	BOOST_CHECK_MESSAGE(info->error.find("content") != std::string::npos, info->error);
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
@@ -860,6 +890,40 @@ BOOST_AUTO_TEST_CASE(Job_RefusesAFileThatChangesWhileItIsImported_AndLeavesNothi
 	for (const char* tag : { "memory://robot/textures/albedo.png", "memory://robot/robot.geom.desc", "memory://robot/robot.prefab.desc" }) {
 		BOOST_TEST_CONTEXT(tag) { BOOST_CHECK(!in_memory(tag)); }
 	}
+}
+
+// #1412: the same bytes' size written in place, the write time set back: the change time of the handle tells.
+BOOST_AUTO_TEST_CASE(Job_RefusesASameSizeRewriteWithItsTimeSetBack)
+{
+	const auto started = approved_start(request(), agent);
+	BOOST_REQUIRE(started.ok());
+	during_import = [this] {
+		const fs::file_time_type written = fs::last_write_time(source);
+		dir.write("outside/robot.glb", "glb bytes of the r0bot");
+		fs::last_write_time(source, written);
+	};
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed") != std::string::npos, info->error);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
+}
+
+// #1412: an agent's plan holds a stamp and no time or id: a plan with a stamp on one side only is another file.
+BOOST_AUTO_TEST_CASE(SameFileAs_WithAStampOnOneSideOnly_IsAnotherFile)
+{
+	const edt::agent_import_plan plan = service->resolve(request(), false);
+	BOOST_REQUIRE_MESSAGE(plan.ok(), plan.error);
+	BOOST_REQUIRE(plan.stamp.has_value());
+	BOOST_CHECK(plan.same_file_as(plan));
+	edt::agent_import_plan bare = plan;
+	bare.stamp.reset();
+	BOOST_CHECK(!plan.same_file_as(bare));
+	BOOST_CHECK(!bare.same_file_as(plan));
+	edt::agent_import_plan touched = plan;
+	touched.stamp->change_time_ns += 1;
+	BOOST_CHECK(!plan.same_file_as(touched));
 }
 
 BOOST_AUTO_TEST_CASE(Job_ABrokenModelFailsAndLeavesNothing)
