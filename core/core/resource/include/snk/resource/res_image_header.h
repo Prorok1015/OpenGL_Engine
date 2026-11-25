@@ -97,6 +97,11 @@ namespace res::image_header
 			const bool mapped = type == 1 || type == 9;
 			const bool known_type = mapped || type == 2 || type == 3 || type == 10 || type == 11;
 			if (!known_type || mapped != (colour_map == 1)) return std::nullopt;
+			// The size of a colour map entry, in bits.
+			if (mapped) {
+				const std::uint32_t entry = byte_at(b, 7);
+				if (entry != 8 && entry != 15 && entry != 16 && entry != 24 && entry != 32) return std::nullopt;
+			}
 			// The depth stb_image decodes for each kind: colour-map indices and grey of 8 or 16 bits, true colour of 15 to 32.
 			const bool grey = type == 3 || type == 11;
 			const bool depth_known = (mapped || grey) ? depth == 8 || depth == 16 : depth == 15 || depth == 16 || depth == 24 || depth == 32;

@@ -49,6 +49,8 @@ namespace edt
 		virtual void draw_before_fields() {}
 		// Under the fields, in their scrolling child; nothing here. Not called while the type has no schema.
 		virtual void draw_after_fields() {}
+		// The files the pickers choose from this frame; null: none.
+		const picker::catalog* asset_catalog() const { return m_asset_source ? m_asset_source() : nullptr; }
 
 	private:
 		data_document& m_document;

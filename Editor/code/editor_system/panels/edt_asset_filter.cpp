@@ -25,13 +25,14 @@ namespace {
 		std::string_view kind;
 	};
 
-	constexpr std::array<suffix_kind, 6> k_suffix_kinds{ {
+	constexpr std::array<suffix_kind, 7> k_suffix_kinds{ {
 		{ ".level.desc", edt::k_asset_kind_level },
 		{ ".world.desc", edt::k_asset_kind_world },
 		{ ".geom.desc", edt::k_asset_kind_mesh },
 		{ ".poly.desc", edt::k_asset_kind_mesh },
 		{ ".prefab.desc", edt::k_asset_kind_prefab },
 		{ ".shader.desc", edt::k_asset_kind_shader_desc },
+		{ ".txm.desc", "texture" },
 	} };
 
 	std::string_view kind_of_desc_type(std::string_view type)
@@ -40,6 +41,13 @@ namespace {
 		if (type == "world_desc") return edt::k_asset_kind_world;
 		if (type == "prefab_desc") return edt::k_asset_kind_prefab;
 		return {};
+	}
+
+	// The kind of the browser's filter for a kind of the registry: the modeller's poly is a mesh here, the rest as agents see it.
+	std::string_view filter_kind_of_registered(std::string_view id)
+	{
+		if (id == "poly") return edt::k_asset_kind_mesh;
+		return edt::outward_kind_name(id);
 	}
 
 	std::string_view label_of(std::string_view id)
@@ -70,9 +78,7 @@ std::string edt::asset_kind_of(const asset_kind_registry* kinds, std::string_vie
 	if (kinds) {
 		if (const asset_kind_desc* registered = kinds->kind_for_open(path)) {
 			if (!registered->id.empty()) {
-				if (registered->id == "poly") return std::string{ k_asset_kind_mesh };
-				// The GLSL editor's kinds, one per suffix, are the one kind of the shader sources (#1202).
-				return std::string{ outward_kind_name(registered->id) };
+				return std::string{ filter_kind_of_registered(registered->id) };
 			}
 		}
 	}
@@ -227,7 +233,8 @@ std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_reg
 		for (const std::string& id : kinds->ids()) {
 			const asset_kind_desc* registered = kinds->find(id);
 			const bool opens = registered && registered->open;
-			const bool known = id == "poly" || id == "desc" || id.starts_with(k_shader_source_kind_prefix) || std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
+			const bool known = filter_kind_of_registered(id) != id || id == "desc"
+				|| std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
 			if (opens && !known) {
 				out.push_back({ id, id });
 			}
