@@ -139,6 +139,12 @@ edt::model_meta_plan edt::plan_model_meta(const fs::path& top, const res::tag& p
 				plan.error = std::format("{}: {}; it is not rewritten, nothing was written", named, shown(why));
 				return plan;
 			}
+			// Read back as a `.resource` is read: the keys of a newer editor that were kept are ignored there.
+			const model_settings_parse check = parse_model_settings(kept, unknown_settings_keys::ignore);
+			if (!check.ok()) {
+				plan.error = std::format("{}: {}; it is not rewritten, nothing was written", named, shown(check.error));
+				return plan;
+			}
 			meta.settings = std::move(kept);
 		} else {
 			// Another importer's settings mean nothing to a model.

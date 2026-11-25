@@ -35,7 +35,8 @@ namespace edt {
 		const model_import_settings& settings, const model_source_record& source, bool may_replace);
 
 	// Writes the plan: a new file only if nothing is there; a replacement only while the file still holds `before`
-	// (temp + rename). Never through a link. Empty on success, else why not.
+	// (temp + rename; checked right before the rename, not atomically with it). Never through a link. Empty on success,
+	// else why not.
 	std::string write_model_meta(const std::filesystem::path& top, const model_meta_plan& plan);
 
 	// Takes a written plan back once the prefab was not written: a new file is removed, a replaced one gets `before`.

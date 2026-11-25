@@ -53,9 +53,17 @@ constexpr std::string_view k_bent_obj =
 	"vt 0 0\nvt 1 0\nvt 0 1\n"
 	"f 1/1 2/2 3/3\nf 1/1 4/3 2/2\n";
 
-std::map<std::string, std::vector<std::byte>> imported(const mdl::mesh_processing* processing)
+// The same two triangles with the model's own normals, one for all four vertices: smooth keeps them.
+constexpr std::string_view k_bent_obj_with_normals =
+	"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\n"
+	"vt 0 0\nvt 1 0\nvt 0 1\n"
+	"vn 0.577 0.577 0.577\n"
+	"f 1/1/1 2/2/1 3/3/1\nf 1/1/1 4/3/1 2/2/1\n";
+
+std::map<std::string, std::vector<std::byte>> imported(const mdl::mesh_processing* processing,
+	std::string_view text = k_bent_obj)
 {
-	memory_files files("bent.obj", k_bent_obj);
+	memory_files files("bent.obj", text);
 	memory_sink sink;
 	mdl::import_options options;
 	options.display_name = "bent.obj";
@@ -95,6 +103,17 @@ BOOST_AUTO_TEST_CASE(FlatNormals_AreNotTheSmoothOnes)
 	const auto smooth_import = imported(&smooth);
 	const auto flat_import = imported(&flat);
 	BOOST_CHECK(smooth_import != flat_import);
+}
+
+// GenNormals alone keeps normals a model has: flat must make its own for a model that brings them.
+BOOST_AUTO_TEST_CASE(FlatNormals_ReplaceTheModelsOwn)
+{
+	const mdl::mesh_processing smooth{};
+	mdl::mesh_processing flat;
+	flat.normals = mdl::normals_mode::flat;
+	BOOST_CHECK(imported(&flat, k_bent_obj_with_normals) != imported(&smooth, k_bent_obj_with_normals));
+	// The model's own normals are gone: flat gives what it gives a model without them.
+	BOOST_CHECK(imported(&flat, k_bent_obj_with_normals) == imported(&flat, k_bent_obj));
 }
 
 BOOST_AUTO_TEST_CASE(WithoutTangents_TheVerticesAreSmaller)

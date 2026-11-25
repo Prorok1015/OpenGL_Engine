@@ -320,7 +320,8 @@ bool edt::asset_exporter::export_to_project(
 		if (root == remap.end()) {
 			return fail(std::format("'{}' has no place in the project", result.root_tag.view()));
 		}
-		const model_source_record source{ fs_paths::utf8_of(result.source_path.filename()), result.source_sha256 };
+		const model_source_record source =
+			model_source_of(fs_paths::utf8_of(result.source_path.filename()), result.source_sha256);
 		meta = plan_model_meta(top, root->second, result.settings, source, may_replace_meta);
 		if (!meta->ok()) return fail(meta->error);
 	}

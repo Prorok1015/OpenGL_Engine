@@ -46,10 +46,20 @@ namespace edt {
 		bool ok() const { return error.empty(); }
 	};
 
-	// Strict: an object; a key it does not know, a wrong type or value is an error naming the key; a missing key takes
-	// its default; `version`, when given, must be 1 (a higher one was written by a newer editor). A null value is all
-	// defaults.
-	model_settings_parse parse_model_settings(const boost::json::value& value);
+	// What parse_model_settings does with a top-level key it does not know: an agent's arguments and the decoder's
+	// request refuse it; a `.resource` read back ignores it (a newer editor of version 1 may have written it, and
+	// rewrite_model_settings keeps it).
+	enum class unknown_settings_keys : std::uint8_t { refuse, ignore };
+
+	// An object; a wrong type or value is an error naming the key, a key of `source` it does not know too; a missing key
+	// takes its default; `version`, when given, must be 1 (a higher one was written by a newer editor). A null value is
+	// all defaults.
+	model_settings_parse parse_model_settings(const boost::json::value& value,
+		unknown_settings_keys unknown = unknown_settings_keys::refuse);
+	// The record of a source file named `file_name`: the name as parse_model_settings takes it, every '/', '\\', ':',
+	// control character and DEL made '_', cut to k_max_model_source_name_bytes on a UTF-8 boundary, "model" for an
+	// empty, "." or ".." name. A model's file name may hold any of them ("scan:v2.glb" on Linux).
+	model_source_record model_source_of(std::string_view file_name, std::string sha256);
 	// What the `.resource` holds: {"version", "source"?, "normals", "tangents"}.
 	boost::json::object model_settings_json(const model_import_settings& settings,
 		const std::optional<model_source_record>& source = std::nullopt);

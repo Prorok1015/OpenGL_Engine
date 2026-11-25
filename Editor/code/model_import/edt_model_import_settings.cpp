@@ -78,7 +78,7 @@ std::string_view edt::model_normals_name(model_normals normals)
 	return k_normals_names[static_cast<std::size_t>(normals)];
 }
 
-edt::model_settings_parse edt::parse_model_settings(const json::value& value)
+edt::model_settings_parse edt::parse_model_settings(const json::value& value, unknown_settings_keys unknown)
 {
 	model_settings_parse out;
 	if (value.is_null()) return out;
@@ -109,7 +109,7 @@ edt::model_settings_parse edt::parse_model_settings(const json::value& value)
 			} else {
 				out.error = "settings.tangents must be true or false";
 			}
-		} else {
+		} else if (unknown == unknown_settings_keys::refuse) {
 			out.error = std::format("settings.{} is not a setting of a model (version, source, normals, tangents)",
 				shown(key));
 		}
@@ -144,6 +144,23 @@ std::string edt::rewrite_model_settings(const json::value& existing, const model
 	for (const json::key_value_pair& entry : written) kept[entry.key()] = entry.value();
 	out = std::move(kept);
 	return {};
+}
+
+edt::model_source_record edt::model_source_of(std::string_view file_name, std::string sha256)
+{
+	std::string name;
+	name.reserve(file_name.size());
+	for (const char c : file_name) {
+		const bool refused = c == '/' || c == '\\' || c == ':' || static_cast<unsigned char>(c) < 0x20 || c == 0x7F;
+		name.push_back(refused ? '_' : c);
+	}
+	if (name.size() > k_max_model_source_name_bytes) {
+		std::size_t cut = k_max_model_source_name_bytes;
+		while (cut > 0 && (static_cast<unsigned char>(name[cut]) & 0xC0u) == 0x80u) --cut;
+		name.resize(cut);
+	}
+	if (name.empty() || name == "." || name == "..") name = "model";
+	return { std::move(name), std::move(sha256) };
 }
 
 std::string edt::model_settings_text(const model_import_settings& settings)

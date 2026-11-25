@@ -66,11 +66,13 @@ private:
 	std::chrono::steady_clock::time_point m_deadline;
 };
 
-// Triangulate always: the geometry holds triangles, lines and points only.
+// Triangulate always: the geometry holds triangles, lines and points only. GenNormals only fills normals a mesh lacks:
+// flat drops the model's own first.
 unsigned int post_process_flags(const mdl::mesh_processing& processing)
 {
 	unsigned int flags = aiProcess_Triangulate;
-	flags |= processing.normals == mdl::normals_mode::flat ? aiProcess_GenNormals : aiProcess_GenSmoothNormals;
+	flags |= processing.normals == mdl::normals_mode::flat ? aiProcess_DropNormals | aiProcess_GenNormals
+		: aiProcess_GenSmoothNormals;
 	if (processing.tangents) flags |= aiProcess_CalcTangentSpace;
 	return flags;
 }

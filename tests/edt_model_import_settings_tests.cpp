@@ -120,11 +120,51 @@ BOOST_AUTO_TEST_CASE(ARewrite_KeepsKeysThisEditorDoesNotKnow_AndReplacesItsOwn)
 	BOOST_CHECK(out.at("tangents").as_bool());
 	BOOST_CHECK(out.at("source").as_object().at("name").as_string() == "rock.glb");
 	BOOST_CHECK_EQUAL(out.at("version").as_int64(), 1);
+	// The rewritten settings read back as a `.resource` is read; an agent's arguments with those keys are refused.
+	const edt::model_settings_parse back = edt::parse_model_settings(out, edt::unknown_settings_keys::ignore);
+	BOOST_REQUIRE_MESSAGE(back.ok(), back.error);
+	BOOST_CHECK(back.settings == edt::model_import_settings{});
+	BOOST_REQUIRE(back.source.has_value());
+	BOOST_CHECK(*back.source == source);
+	BOOST_CHECK(!edt::parse_model_settings(out).ok());
+	const edt::model_settings_parse source_key = edt::parse_model_settings(
+		parsed(R"({"source":{"name":"a.glb","sha256":")" + std::string(k_sha) + R"(","path":"x"}})"),
+		edt::unknown_settings_keys::ignore);
+	BOOST_CHECK(!source_key.ok());
 
 	// None there yet: what a new one holds.
 	json::object fresh;
 	BOOST_REQUIRE(edt::rewrite_model_settings(json::value{}, {}, source, fresh).empty());
 	BOOST_CHECK(fresh == edt::model_settings_json({}, source));
+}
+
+// A model's file name may hold what a recorded name may not: it is made one, never refused (an export must not fail
+// on "scan:v2.glb").
+BOOST_AUTO_TEST_CASE(ASourcesFileName_IsMadeAName_TheReaderTakes)
+{
+	const std::string sha(k_sha);
+	const auto reads_back = [&](const edt::model_source_record& source) {
+		const edt::model_settings_parse back = edt::parse_model_settings(edt::model_settings_json({}, source));
+		BOOST_CHECK_MESSAGE(back.ok(), back.error);
+		return back.ok() && back.source && *back.source == source;
+	};
+	BOOST_CHECK_EQUAL(edt::model_source_of("scan:v2.glb", sha).name, "scan_v2.glb");
+	BOOST_CHECK_EQUAL(edt::model_source_of("a\\b/c.glb", sha).name, "a_b_c.glb");
+	BOOST_CHECK_EQUAL(edt::model_source_of(std::string("t\x01" "ab\x7f" ".obj"), sha).name, "t_ab_.obj");
+	BOOST_CHECK_EQUAL(edt::model_source_of("", sha).name, "model");
+	BOOST_CHECK_EQUAL(edt::model_source_of("..", sha).name, "model");
+	BOOST_CHECK_EQUAL(edt::model_source_of("rock.glb", sha).name, "rock.glb");
+	// Cut on a UTF-8 boundary: a two-byte letter at the limit is not split.
+	const std::string longer = std::string(254, 'a') + "\xc3\xa9" + ".glb";
+	const edt::model_source_record cut = edt::model_source_of(longer, sha);
+	BOOST_CHECK_EQUAL(cut.name.size(), 254u);
+	for (const std::string& name : { std::string("scan:v2.glb"), std::string("a\\b/c.glb"), longer,
+		std::string("t\x01" "ab.obj"), std::string("."), std::string(300, 'x') }) {
+		BOOST_TEST_CONTEXT(name.substr(0, 20))
+		{
+			BOOST_CHECK(reads_back(edt::model_source_of(name, sha)));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ARewriteOfAHigherVersion_IsRefused_AndLeavesTheOutputAlone)
