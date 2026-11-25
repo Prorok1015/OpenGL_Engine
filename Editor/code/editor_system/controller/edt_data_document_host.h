@@ -19,6 +19,14 @@ namespace edt
 	namespace picker { class catalog; }
 	struct editor_services;
 
+	// Which window a data document opens in (#1196): the one of its type (a material_desc has the material window), or the
+	// generic data window ("Open as data" of the asset browser, for diagnostics).
+	enum class data_window_kind
+	{
+		by_type,
+		generic,
+	};
+
 	// The data documents that are open (EPIC-56, #793): each is owned by the document_manager (adopt) and shown in a
 	// window of its own, which the panel registry holds through the registration here; the window goes first, it holds
 	// the document. Opening what is open already moves the focus; closing one with unsaved changes asks first.
@@ -34,7 +42,11 @@ namespace edt
 
 		// Opens `tag` as a data document, or focuses the document that has it. A file that is no data document is a
 		// message window, or with `quiet` (a problem, a link: not a double click) a line in the log.
-		void open(const res::tag& tag, bool quiet);
+		// A document that is open already keeps the window it has, whatever `kind` asks.
+		void open(const res::tag& tag, bool quiet, data_window_kind kind = data_window_kind::by_type);
+		// Whether "Open as data" is offered for `tag`: a file whose own `__type` has a window of its own (a material). Reads the
+		// file (read_desc_file); false when it cannot be read.
+		bool has_own_window(const res::tag& tag) const;
 		// The window's close button: closes at once when clean, else asks to save, discard or keep.
 		void request_close(document_id id);
 		void close(document_id id);

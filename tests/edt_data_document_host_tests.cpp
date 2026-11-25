@@ -7,6 +7,7 @@
 #include "edt_data_document_host.h"
 #include "edt_document_creator.h"
 #include "edt_data_document_panel.h"
+#include "edt_material_window_panel.h"
 #include "edt_save_all.h"
 #include "edt_data_document_view.h"
 #include "edt_scene_document.h"
@@ -1215,6 +1216,83 @@ BOOST_AUTO_TEST_CASE(ClosingADirtyDocumentThroughItsTab_Save_WritesItThenCloses)
 
 	BOOST_TEST(!host->owns(id));
 	BOOST_TEST(read_text("config.desc").find("5") != std::string::npos);
+}
+
+// #1196: a material opens in the material window, every other document in the generic one; "Open as data" of the asset
+// browser takes a material to the generic window.
+BOOST_AUTO_TEST_CASE(AMaterial_OpensInTheMaterialWindow_AnotherDocumentInTheGenericOne)
+{
+	const res::tag material = put("lit.desc", R"({"__type":"material_desc","__version":2,"defines":["USE_FOG"]})");
+	host->open(material, false);
+	edt::document* opened = context->documents().find_by_source(material);
+	BOOST_REQUIRE(opened != nullptr);
+	BOOST_REQUIRE(host->owns(opened->id()));
+	edt::panel_base* window = context->panels().find(edt::data_document_panel_id(opened->id()));
+	BOOST_REQUIRE(window != nullptr);
+	auto* material_window = dynamic_cast<edt::material_window_panel*>(window);
+	BOOST_REQUIRE(material_window != nullptr);
+	BOOST_TEST(material_window->model().rows().size() == 1u);
+
+	const edt::document& config = open_config();
+	edt::panel_base* generic = context->panels().find(edt::data_document_panel_id(config.id()));
+	BOOST_REQUIRE(generic != nullptr);
+	BOOST_TEST(dynamic_cast<edt::data_document_panel*>(generic) != nullptr);
+	BOOST_TEST(dynamic_cast<edt::material_window_panel*>(generic) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(OpenAsData_IsOfferedForAMaterial_AndOpensItInTheGenericWindow)
+{
+	const res::tag material = put("lit.desc", R"({"__type":"material_desc","__version":2})");
+	const res::tag config = put("config.desc", R"({"__type":"test.config","speed":2.0})");
+	BOOST_TEST(host->has_own_window(material));
+	BOOST_TEST(!host->has_own_window(config));
+	BOOST_TEST(!host->has_own_window(res::tag{ "res://nothing.desc" }));
+
+	host->open(material, false, edt::data_window_kind::generic);
+	edt::document* opened = context->documents().find_by_source(material);
+	BOOST_REQUIRE(opened != nullptr);
+	edt::panel_base* window = context->panels().find(edt::data_document_panel_id(opened->id()));
+	BOOST_REQUIRE(window != nullptr);
+	BOOST_TEST(dynamic_cast<edt::data_document_panel*>(window) != nullptr);
+	BOOST_TEST(dynamic_cast<edt::material_window_panel*>(window) == nullptr);
+
+	// Open again by type: the document is open, it keeps its window and gets the focus.
+	host->open(material, false);
+	BOOST_TEST(open_documents() == 2u);
+	BOOST_TEST(dynamic_cast<edt::material_window_panel*>(context->panels().find(edt::data_document_panel_id(opened->id()))) == nullptr);
+}
+
+// An engine or package material (a lower layer) is refused as before: no window, and the reason is the document's (#1370 is
+// its read-only view).
+BOOST_AUTO_TEST_CASE(AMaterialOfALowerLayer_IsRefusedAsBefore)
+{
+	const fs::path lower = dir.path() / "lower";
+	fs::create_directories(lower);
+	{
+		std::ofstream out(lower / "engine_material.desc", std::ios::binary);
+		out << R"({"__type":"material_desc","__version":2})";
+	}
+	auto& resources = storage.require<res::resource_system>();
+	resources.unregistrate_resolver(res::tag::default_protocol());
+	resources.registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_write, res::write_policy::allow_all());
+	edt::desc_file_layout layout;
+	layout.top_layer = [this] { return res_root; };
+	layout.layers = [lower, top = res_root] { return std::vector<fs::path>{ lower, top }; };
+	layout.open_level_files = [] { return std::vector<std::string>{}; };
+	const res::tag engine_material{ "res://engine_material.desc" };
+
+	edt::data_document probe(services, layout);
+	const edt::open_result refused = probe.open(engine_material);
+	BOOST_TEST(!refused.opened);
+	BOOST_TEST(refused.error.find("lower layer") != std::string::npos);
+
+	edt::data_document_host lowered(*context, services, [layout] { return layout; }, {});
+	BOOST_TEST(lowered.has_own_window(engine_material));
+	lowered.open(engine_material, false);
+	lowered.open(engine_material, false, edt::data_window_kind::generic);
+	BOOST_TEST(context->documents().find_by_source(engine_material) == nullptr);
+	BOOST_TEST(open_documents() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

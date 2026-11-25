@@ -1,5 +1,12 @@
 #include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
 #include <boost/json.hpp>
+#include <snk/desc/desc_describe.h>
+#include <snk/desc/desc_schema.h>
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/render/rnd_state_helper.h>
 #include <snk/model_codec/res_tag_json.h>
@@ -120,6 +127,25 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_QueueValues_RoundTrip)
 		dst.deserialize(shared_desc_system(), data);
 		BOOST_TEST((dst.queue == q));
 	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// #1196: the material is a data document (the editor's material window); its positional `samplers` is described by its codec.
+BOOST_FIXTURE_TEST_SUITE(ScnMaterialDescDocumentTests, test_util::scene_env)
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_IsADataDocumentType_ThroughTheCodecOfItsSamplers)
+{
+	const desc::type_schema* schema = descs->find_schema("material_desc");
+	BOOST_REQUIRE(schema);
+	BOOST_TEST(schema->is_document);
+	const std::vector<std::string> types = descs->document_types();
+	BOOST_TEST((std::ranges::find(types, "material_desc") != types.end()));
+
+	const std::vector<std::string_view> codecs = desc::schema_generator<scn::material_desc>::codec_fields();
+	BOOST_TEST((codecs == std::vector<std::string_view>{ "samplers_textures" }));
+	BOOST_TEST(desc::document_problem(*schema, descs->schemas(), codecs).empty());
+	BOOST_TEST(!desc::document_problem(*schema, descs->schemas()).empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
