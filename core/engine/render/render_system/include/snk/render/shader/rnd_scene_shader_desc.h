@@ -185,6 +185,73 @@ namespace rnd
 		constant_data cdata;
 		runtime_data rdata;
 	};
+
+	// The defines the engine puts in front of every stage. Module code inlines everything below, so a change of
+	// the program title's format must keep parse_program_defines reading the titles the old format wrote.
+	inline constexpr std::string_view max_light_count_define = "MAX_LIGHT_COUNT";
+	inline constexpr std::string_view vertex_stage_define = "SNK_VERTEX_SHADER";
+	inline constexpr std::string_view fragment_stage_define = "SNK_FRAGMENT_SHADER";
+	inline constexpr std::string_view geometry_stage_define = "SNK_GEOMETRY_SHADER";
+
+	inline constexpr bool is_engine_define(std::string_view name) noexcept
+	{
+		return name == max_light_count_define || name == vertex_stage_define
+			|| name == fragment_stage_define || name == geometry_stage_define;
+	}
+
+	// The names a program title lists: the constants' names first, then the defines as written.
+	inline std::vector<std::string> program_define_entries(const shader_config::constant_data& cdata)
+	{
+		std::vector<std::string> entries;
+		entries.reserve(cdata.constants.size() + cdata.defines.size());
+		for (const auto& [name, value] : cdata.constants) {
+			entries.push_back(name);
+		}
+		entries.insert(entries.end(), cdata.defines.begin(), cdata.defines.end());
+		return entries;
+	}
+
+	// "{ A | B }", or empty for no entries.
+	inline std::string format_program_defines(const std::vector<std::string>& entries)
+	{
+		if (entries.empty()) {
+			return {};
+		}
+		std::string text = "{ ";
+		for (std::size_t i = 0; i < entries.size(); ++i) {
+			if (i != 0) {
+				text += " | ";
+			}
+			text += entries[i];
+		}
+		text += " }";
+		return text;
+	}
+
+	// The entries of the "{ ... }" that ends a program title (or a stage title before its extension); empty when
+	// the title has none.
+	inline std::vector<std::string> parse_program_defines(std::string_view title)
+	{
+		std::vector<std::string> entries;
+		const std::size_t open = title.find("{ ");
+		if (open == std::string_view::npos) {
+			return entries;
+		}
+		const std::size_t close = title.find(" }", open + 2);
+		if (close == std::string_view::npos) {
+			return entries;
+		}
+		std::string_view body = title.substr(open + 2, close - open - 2);
+		while (!body.empty()) {
+			const std::size_t bar = body.find(" | ");
+			entries.emplace_back(body.substr(0, bar));
+			if (bar == std::string_view::npos) {
+				break;
+			}
+			body.remove_prefix(bar + 3);
+		}
+		return entries;
+	}
 }
 
 namespace std {
