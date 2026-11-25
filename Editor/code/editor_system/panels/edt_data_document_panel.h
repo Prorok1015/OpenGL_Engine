@@ -6,6 +6,8 @@
 #include <functional>
 #include <string>
 
+namespace gui { struct theme_semantic_colors; }
+
 namespace edt
 {
 	class data_document;
@@ -34,6 +36,8 @@ namespace edt
 		void set_asset_source(std::function<const picker::catalog*()> source) { m_asset_source = std::move(source); }
 		// The message under the Save button (what the last save said); empty clears it.
 		void set_error(std::string error) { m_error = std::move(error); }
+		// What the window draws above its content: the crumbs of the window host (EPIC-82, #1402). Unset: nothing.
+		void set_header(std::function<void(const gui::theme_semantic_colors&)> header) { m_header = std::move(header); }
 		// The window comes to the front at its next frame.
 		void request_focus() { m_focus = true; }
 		document_id id() const { return m_id; }
@@ -56,6 +60,7 @@ namespace edt
 		data_document& m_document;
 		editor_services& m_services;
 		document_id m_id;
+		std::function<void(const gui::theme_semantic_colors&)> m_header;
 		std::function<void()> m_on_close;
 		std::function<bool()> m_has_project_migration;
 		std::function<const picker::catalog*()> m_asset_source;

@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_desc_file_commands.h"
+#include "edt_window_host.h"
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
@@ -60,6 +61,8 @@ namespace edt
 		// The banner's buttons: Reload asks first when there are unsaved edits (they are lost), Overwrite always asks.
 		void request_reload(document_id id);
 		void request_overwrite(document_id id);
+		// A crumb was clicked: brings the window of the document to the front (the data window, or the level's / prefab's through `focus_other`).
+		void show_link(document_id id);
 		bool owns(document_id id) const { return m_windows.contains(id); }
 		// The files a reference field of any window may point at, asked for at each frame (null: no picker). Set once, also
 		// for the windows already open.
@@ -104,10 +107,13 @@ namespace edt
 		{
 			std::shared_ptr<data_document_panel> panel;
 			data_document* data = nullptr;
+			std::shared_ptr<window_host> host;
 			registration registered;
 		};
 
 		void focus(document& open);
+		// Closes the document and everything opened from it after one Save / Discard / Cancel question.
+		void close_chain(document_id id);
 		void commit_pending_except(std::string_view focused_window);
 		bool reload_now(document_id id);
 		// Writes the document over a file that changed on disk; `done(true)` once it is written (after the version question
