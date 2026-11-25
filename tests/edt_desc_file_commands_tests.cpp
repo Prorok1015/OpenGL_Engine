@@ -178,6 +178,41 @@ struct desc_fixture : test_util::scene_env
 
 }
 
+namespace slot_test {
+
+struct tag_slot
+{
+	res::tag texture;
+};
+BOOST_DESCRIBE_STRUCT(tag_slot, (), (texture))
+
+// Structures in a list, in a map and alone (#1445); a map needs a C++ type. `lost` names a schema nobody registered,
+// `unnamed` names none at all (a described struct without .ref()). Outside the test suite: field_attrs is specialized
+// in ::desc, which the suite's namespace would shadow.
+class slot_table_desc : public desc::schema_desc<slot_table_desc>
+{
+public:
+	static constexpr std::string_view __type = "test.slot_table";
+
+	std::vector<tag_slot> list;
+	std::map<std::string, tag_slot> map;
+	tag_slot one;
+	res::tag tag;
+	std::vector<tag_slot> lost;
+	std::vector<tag_slot> unnamed;
+
+	BOOST_DESCRIBE_CLASS(slot_table_desc, (), (list, map, one, tag, lost, unnamed), (), ())
+};
+
+}
+
+namespace desc
+{
+	template<>
+	inline constexpr auto field_attrs<slot_test::slot_table_desc> = attrs(f("list").ref("test.slot"), f("map").ref("test.slot"),
+		f("one").ref("test.slot"), f("lost").ref("test.missing"));
+}
+
 BOOST_FIXTURE_TEST_SUITE(EdtDescFileCommands, desc_fixture)
 
 BOOST_AUTO_TEST_CASE(TheCommands_HaveTheirCategoriesAndOnlyAWriteAsksAPerson)
@@ -1326,40 +1361,6 @@ BOOST_AUTO_TEST_CASE(ATagInsideAMapOfTags_FollowsTheStrictRuleToo)
 
 namespace {
 
-struct tag_slot
-{
-	res::tag texture;
-};
-BOOST_DESCRIBE_STRUCT(tag_slot, (), (texture))
-
-// Structures in a list, in a map and alone (#1445); a map needs a C++ type. `lost` names a schema nobody registered,
-// `unnamed` names none at all (a described struct without .ref()).
-class slot_table_desc : public desc::schema_desc<slot_table_desc>
-{
-public:
-	static constexpr std::string_view __type = "test.slot_table";
-
-	std::vector<tag_slot> list;
-	std::map<std::string, tag_slot> map;
-	tag_slot one;
-	res::tag tag;
-	std::vector<tag_slot> lost;
-	std::vector<tag_slot> unnamed;
-
-	BOOST_DESCRIBE_CLASS(slot_table_desc, (), (list, map, one, tag, lost, unnamed), (), ())
-};
-
-}
-
-namespace desc
-{
-	template<>
-	inline constexpr auto field_attrs<slot_table_desc> = attrs(f("list").ref("test.slot"), f("map").ref("test.slot"), f("one").ref("test.slot"),
-		f("lost").ref("test.missing"));
-}
-
-namespace {
-
 // test.slot holds a tag, a structure, a list of structures and two custom fields; test.slot_inner holds a tag and a list
 // of test.slot, so a structure, a list and a structure again nest in any order.
 void register_slot_schemas(desc::desc_system& descs)
@@ -1373,7 +1374,7 @@ void register_slot_schemas(desc::desc_system& descs)
 			{ "name": "parts", "kind": "array", "element": "structure", "ref_type": "test.slot_inner" },
 			{ "name": "extra", "kind": "custom" },
 			{ "name": "actions", "kind": "custom" } ] })").as_object(), &descs.schemas())));
-	descs.register_desc<slot_table_desc>("test.slot_table");
+	descs.register_desc<slot_test::slot_table_desc>("test.slot_table");
 	BOOST_REQUIRE(descs.find_schema("test.slot_table"));
 }
 
