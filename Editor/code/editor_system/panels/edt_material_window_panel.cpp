@@ -77,6 +77,12 @@ void edt::material_window_panel::draw_before_fields()
 
 void edt::material_window_panel::draw_after_fields()
 {
+	draw_defines();
+	draw_compile_errors();
+}
+
+void edt::material_window_panel::draw_defines()
+{
 	ImGui::Spacing();
 	ImGui::SeparatorText("Defines");
 	ImGui::BeginDisabled(!m_model.can_reset_to_inherited());
@@ -136,7 +142,6 @@ void edt::material_window_panel::draw_after_fields()
 		m_model.toggle(*toggled);
 	}
 	draw_add_define();
-	draw_compile_errors();
 }
 
 void edt::material_window_panel::draw_compile_errors()

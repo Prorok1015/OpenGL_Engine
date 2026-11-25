@@ -30,6 +30,7 @@ namespace edt
 		void draw_after_fields() override;
 
 	private:
+		void draw_defines();
 		void draw_add_define();
 		void draw_compile_errors();
 		void draw_compile_row(const compile_row& row, int index);
