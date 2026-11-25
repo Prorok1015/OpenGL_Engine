@@ -5,13 +5,15 @@
 #include "edt_preview_stage.h"
 #include <string>
 
+namespace rnd { class render_system; }
+
 namespace edt
 {
 	// The window of a material_desc data document (#1196): the fields, Save, banners and status of data_document_panel,
 	// above them the live preview (a preview_stage showing a material_preview_content: a shape, the sky or not, an orbit
 	// camera), and under them the Defines section: a checkbox per define of material_window_model, with where it comes
-	// from, and a name typed in to add one.
-	// The shader's errors come later (#1196 PR 3).
+	// from, and a name typed in to add one; then the Compile errors section: the renderer's problems of this material's
+	// define set (open) and of the shader's other variants (collapsed) with Go to, and the define pre-check (#1196 PR 3).
 	class material_window_panel final : public data_document_panel
 	{
 	public:
@@ -29,7 +31,13 @@ namespace edt
 
 	private:
 		void draw_add_define();
+		void draw_compile_errors();
+		void draw_compile_row(const compile_row& row, int index);
 
+		// The renderer the preview draws with: its problems are the window's compile errors; null: none (tests).
+		rnd::render_system* m_render = nullptr;
+		// The base panel's is private: Go to finds the file on the disk through it.
+		editor_services& m_editor_services;
 		material_window_model m_model;
 		material_preview_content m_content;
 		// After the content: it is closed (and gives the content's copy up) before the content goes.

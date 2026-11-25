@@ -26,7 +26,7 @@
 | [EPIC-04](editor/EPIC-04.md) | Scene Save/Load — сохранение и управление сценами | done |
 | [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | done |
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
-| [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor (#35) | planned |
+| [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor (#35) | in progress |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo (#29) | done |
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |

@@ -1,13 +1,22 @@
 #pragma once
 #include <snk/model_codec/res_tag.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <boost/json/array.hpp>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace res { class resource_system; }
+namespace rnd
+{
+	class shader_desc;
+	namespace driver { class binding_table; }
+}
 
 namespace edt
 {
@@ -41,6 +50,28 @@ namespace edt
 		res::tag geometry;
 		// Why the shader or one of its stages could not be read; empty: none.
 		std::string error;
+	};
+
+	// A shader problem as the material window shows it (#1196 PR 3).
+	struct compile_row
+	{
+		rnd::shader_problem problem;
+		// The program had USE_ANIMATION: the skinned variant, which only a level's skinned mesh draws.
+		bool skinned = false;
+		// Found by the window's own preprocessing of the current define set (no GPU), not by a frame's build.
+		bool preprocess = false;
+		// The defines of the program(s) as their titles list them ("{ A | B }", "; " between variants); empty: none.
+		std::string define_set;
+	};
+
+	struct compile_errors
+	{
+		// This material: its own load rows and the rows of its define set (base, opaque, skinned).
+		std::vector<compile_row> material;
+		// The same shader's files built with other define sets (other materials).
+		std::vector<compile_row> others;
+		// A sky material: there is no preview, the rows are those of the last frame the level drew.
+		bool sky = false;
 	};
 
 	// The defines the material compiler sets on its own: a toggle of them would do nothing.
@@ -85,7 +116,29 @@ namespace edt
 		// Reads the shader and its stages again at the next call.
 		void refresh_shader() { m_scanned = false; }
 
+		// The renderer's problems of this material and its shader (#1196 PR 3): load rows whose program is the document or
+		// `preview_tag` and rows of the shader's files whose define set is the material's are `material`, the other
+		// rows of those files `others`; the last preprocess() run's problems join `material`. Sets compare in any order.
+		compile_errors compile_rows(const std::vector<rnd::shader_problem>& problems, const res::tag& preview_tag);
+		// compile_rows, made again only when `generation` (render_system::shader_problems_generation), the document, the
+		// shader files, a preprocess run or `preview_tag` changed; `snapshot` is asked only then.
+		const compile_errors& errors(std::uint64_t generation, const std::function<std::vector<rnd::shader_problem>()>& snapshot,
+			const res::tag& preview_tag);
+
+		// What is likely wrong with the material's defines before anything compiles: an entry that is no identifier with
+		// at most one value token, or a name the engine, the material compiler, the shader desc or the shader's source
+		// defines itself. One message each.
+		std::vector<std::string> pre_check();
+
+		static constexpr std::chrono::milliseconds preprocess_delay{ 300 };
+		// Preprocesses the shader for the current define set (shader_config::load: includes, binding macros, no GPU)
+		// once the set has stayed the same for preprocess_delay; a change restarts the wait. Call each frame with the
+		// time. True when it ran.
+		bool preprocess(std::chrono::steady_clock::time_point now, const rnd::driver::binding_table& bindings);
+
 	private:
+		// The entries of the shown `defines`, as the compiler gets them (with the shader's), sorted.
+		const std::vector<std::string>& expected_defines();
 		bool write_defines(const std::function<void(boost::json::array& defines)>& change);
 		void scan();
 		void sync_watches(const std::vector<res::tag>& wanted);
@@ -94,6 +147,12 @@ namespace edt
 		data_document& m_document;
 		editor_services& m_services;
 		material_shader m_shader;
+		std::shared_ptr<const rnd::shader_desc> m_program;
+		// The stages and the files they include (not the shader desc).
+		std::vector<res::tag> m_shader_files;
+		// The names the stage sources #define themselves.
+		std::vector<std::string> m_source_defines;
+		std::uint64_t m_scan_serial = 0;
 		std::vector<std::string> m_shader_names;
 		std::vector<std::string> m_added;
 		// The full entry ("NAME VALUE") of a define turned off here, by name.
@@ -103,5 +162,25 @@ namespace edt
 		// The resource system the watchers are on (the base one, which outlives the window) and what is watched.
 		res::resource_system* m_watching = nullptr;
 		std::vector<res::tag> m_watched;
+
+		std::vector<std::string> m_expected;
+		std::uint64_t m_expected_generation = 0;
+		std::uint64_t m_expected_scan = 0;
+		bool m_has_expected = false;
+
+		std::string m_preprocess_key;
+		bool m_preprocess_seen = false;
+		bool m_preprocess_pending = false;
+		std::chrono::steady_clock::time_point m_preprocess_due{};
+		std::vector<rnd::shader_problem> m_preprocessed;
+		std::uint64_t m_preprocess_runs = 0;
+
+		compile_errors m_errors;
+		bool m_has_errors = false;
+		std::uint64_t m_errors_generation = 0;
+		std::uint64_t m_errors_document = 0;
+		std::uint64_t m_errors_scan = 0;
+		std::uint64_t m_errors_runs = 0;
+		res::tag m_errors_preview;
 	};
 }

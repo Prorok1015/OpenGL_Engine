@@ -1,8 +1,16 @@
 #include "edt_material_window_panel.h"
+#include "edt_shader_problems.h"
 #include "edt_ui_metrics.h"
+#include <snk/editor/edt_editor_services.h>
 #include <snk/gui/gui_theme.h>
+#include <snk/platform/plt_shell_open.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/resource/res_system.h>
 #include <imgui.h>
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <format>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +23,8 @@ namespace
 edt::material_window_panel::material_window_panel(data_document& document, editor_services& services, document_id id, bool quiet,
 	preview_view view)
 	: data_document_panel(document, services, id, quiet)
+	, m_render(view.render)
+	, m_editor_services(services)
 	, m_model(document, services)
 	, m_content(document, m_model, services)
 	, m_stage(services, m_content, view)
@@ -126,6 +136,81 @@ void edt::material_window_panel::draw_after_fields()
 		m_model.toggle(*toggled);
 	}
 	draw_add_define();
+	draw_compile_errors();
+}
+
+void edt::material_window_panel::draw_compile_errors()
+{
+	ImGui::Spacing();
+	ImGui::SeparatorText("Compile errors");
+	rnd::render_system* render = m_render;
+	if (render && render->get_driver()) {
+		m_model.preprocess(std::chrono::steady_clock::now(), render->get_driver()->bindings());
+	}
+	const compile_errors& errors = m_model.errors(render ? render->shader_problems_generation() : 0,
+		[render] { return render ? render->shader_problems() : std::vector<rnd::shader_problem>{}; }, m_content.material_tag());
+
+	for (const std::string& warning : m_model.pre_check()) {
+		ImGui::TextColored(colors().warning, "%s", warning.c_str());
+	}
+	if (errors.sky) {
+		ImGui::TextDisabled("From the last frame the level drew; no preview for sky materials.");
+	}
+	if (errors.material.empty()) {
+		ImGui::TextDisabled("This material's variants: no errors.");
+	} else {
+		ImGui::TextUnformatted("This material");
+		for (std::size_t i = 0; i < errors.material.size(); ++i) {
+			draw_compile_row(errors.material[i], static_cast<int>(i));
+		}
+	}
+	if (!errors.others.empty()) {
+		const std::string header = std::format("Other variants of this shader ({})###other_variants", errors.others.size());
+		if (ImGui::CollapsingHeader(header.c_str())) {
+			for (std::size_t i = 0; i < errors.others.size(); ++i) {
+				draw_compile_row(errors.others[i], static_cast<int>(errors.material.size() + i));
+			}
+		}
+	}
+}
+
+void edt::material_window_panel::draw_compile_row(const compile_row& row, int index)
+{
+	ImGui::PushID(index);
+	const rnd::shader_problem& item = row.problem;
+	if (ImGui::SmallButton("Go to")) {
+		const std::vector<problem> rows = shader_problem_publisher::to_problems({ item });
+		res::resource_system* resources = m_editor_services.resources();
+		const auto disk_path = [resources](const res::tag& file) -> std::optional<std::filesystem::path> {
+			if (!resources) return std::nullopt;
+			const std::optional<res::disk_file> on_disk = resources->disk_file_of(file);
+			return on_disk ? std::optional<std::filesystem::path>{ on_disk->file } : std::nullopt;
+		};
+		if (!rows.empty()) {
+			open_shader_problem_file(rows.front(), disk_path, [](const std::filesystem::path& file) { return platform::open_in_shell(file); });
+		}
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("Open the file in the system's app for it.");
+	}
+	ImGui::SameLine();
+	std::string place = item.file.is_valid() ? std::string{ item.file.view() } : std::string{ "(no file)" };
+	if (item.line > 0) place += std::format(":{}", item.line);
+	ImGui::TextColored(colors().error, "%s", place.c_str());
+	std::string labels;
+	if (row.skinned) labels += " [skinned]";
+	if (row.preprocess) labels += " [preprocess]";
+	if (!labels.empty()) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", labels.c_str());
+	}
+	ImGui::Indent();
+	ImGui::TextWrapped("%s", item.message.c_str());
+	if (!row.define_set.empty()) {
+		ImGui::TextDisabled("defines: %s", row.define_set.c_str());
+	}
+	ImGui::Unindent();
+	ImGui::PopID();
 }
 
 void edt::material_window_panel::draw_add_define()

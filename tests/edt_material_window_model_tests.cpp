@@ -4,12 +4,15 @@
 #include "edt_data_document.h"
 #include "edt_material_window_model.h"
 #include <snk/desc/desc_system.h>
+#include <snk/driver/rnd_bind_group.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -481,6 +484,208 @@ BOOST_AUTO_TEST_CASE(ADefineOnAndOffAgain_SavesTheFileByteForByte)
 			}
 		}
 	}
+}
+
+namespace {
+
+constexpr const char* k_defined_shader = R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/m.vert","fragment":"res://shaders/m.frag","defines":["SHADER_LEVEL 1"]})";
+constexpr const char* k_fog_material = R"({"__type":"material_desc","__version":2,"shader":"res://shaders/m.shader.desc","defines":["USE_FOG"]})";
+
+rnd::shader_problem problem_at(std::string_view file, int line, std::string_view program, std::string_view code = "shader/compile")
+{
+	rnd::shader_problem out;
+	out.file = res::tag{ std::string{ file } };
+	out.line = line;
+	out.code = std::string{ code };
+	out.message = std::format("error at {}", line);
+	out.program = std::string{ program };
+	return out;
+}
+
+const edt::compile_row* row_at(const std::vector<edt::compile_row>& rows, int line)
+{
+	const auto found = std::ranges::find_if(rows, [line](const edt::compile_row& row) { return row.problem.line == line; });
+	return found == rows.end() ? nullptr : &*found;
+}
+
+bool any_holds(const std::vector<std::string>& messages, std::string_view text)
+{
+	return std::ranges::any_of(messages, [text](const std::string& message) { return message.find(text) != std::string::npos; });
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(CompileRows_ThisMaterialsSetAndTags_AreItsOwn_OtherSetsAreOthers_UnrelatedFilesAreLeftOut)
+{
+	put("shaders/lib/common.glsl", "float shade() { return 1.0; }\n");
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n#include \"lib/common.glsl\"\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	const res::tag preview{ "memory://editor/material/77.desc" };
+
+	const std::vector<rnd::shader_problem> problems{
+		// The material's set in another order (constants come from a hash map), then its opaque variant: one row.
+		problem_at("res://shaders/m.frag", 3, "m.vert + m.frag { USE_FOG | SHADER_LEVEL 1 }"),
+		problem_at("res://shaders/m.frag", 3, "m.vert + m.frag { SHADER_LEVEL 1 | USE_FOG | OPAQUE }"),
+		problem_at("res://shaders/m.frag", 4, "m.vert + m.frag { SHADER_LEVEL 1 | USE_FOG | USE_ANIMATION | OPAQUE }"),
+		problem_at("res://shaders/m.frag", 9, "m.vert + m.frag { SHADER_LEVEL 1 }"),
+		problem_at("res://shaders/lib/common.glsl", 1, "m.vert + m.frag { SHADER_LEVEL 1 | OTHER }"),
+		problem_at("res://shaders/x.frag", 5, "x.vert + x.frag { SHADER_LEVEL 1 | USE_FOG }"),
+		problem_at("res://shaders/m.shader.desc", 0, "res://lit.desc", "shader/load"),
+		problem_at("res://shaders/m.shader.desc", 0, "memory://editor/material/77.desc", "shader/load"),
+		problem_at("res://shaders/m.shader.desc", 0, "res://other.desc", "shader/load"),
+	};
+	const edt::compile_errors errors = model.compile_rows(problems, preview);
+
+	BOOST_TEST(!errors.sky);
+	BOOST_REQUIRE(errors.material.size() == 3u);
+	const edt::compile_row* base = row_at(errors.material, 3);
+	BOOST_REQUIRE(base);
+	BOOST_TEST(!base->skinned);
+	BOOST_TEST(!base->preprocess);
+	const edt::compile_row* skinned = row_at(errors.material, 4);
+	BOOST_REQUIRE(skinned);
+	BOOST_TEST(skinned->skinned);
+	// The document's load row and the preview's, merged: the same place and message.
+	const edt::compile_row* load = row_at(errors.material, 0);
+	BOOST_REQUIRE(load);
+	BOOST_TEST(load->problem.code == "shader/load");
+
+	BOOST_REQUIRE(errors.others.size() == 2u);
+	const edt::compile_row* other = row_at(errors.others, 9);
+	BOOST_REQUIRE(other);
+	BOOST_TEST(other->define_set == "{ SHADER_LEVEL 1 }");
+	const edt::compile_row* included = row_at(errors.others, 1);
+	BOOST_REQUIRE(included);
+	BOOST_TEST(included->problem.file.string() == "res://shaders/lib/common.glsl");
+	BOOST_TEST(included->define_set == "{ SHADER_LEVEL 1 | OTHER }");
+	for (const edt::compile_row& row : errors.others) {
+		BOOST_TEST(row.problem.file.string() != "res://shaders/x.frag");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(CompileRows_ThePreviewsLoadRowAlone_IsThisMaterials)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	const res::tag preview{ "memory://editor/material/78.desc" };
+
+	const edt::compile_errors errors = model.compile_rows(
+		{ problem_at("res://shaders/m.shader.desc", 0, "memory://editor/material/78.desc", "shader/load") }, preview);
+	BOOST_TEST(errors.material.size() == 1u);
+	BOOST_TEST(errors.others.empty());
+	BOOST_TEST(model.compile_rows({ problem_at("res://shaders/m.shader.desc", 0, "memory://editor/material/78.desc", "shader/load") }, res::tag{}).material.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Errors_AreMadeAgain_OnlyWhenTheGenerationOrTheDefinesChange)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	int asked = 0;
+	const auto snapshot = [&asked] {
+		++asked;
+		return std::vector<rnd::shader_problem>{ problem_at("res://shaders/m.frag", 2, "m.vert + m.frag { SHADER_LEVEL 1 | USE_FOG }") };
+	};
+	BOOST_TEST(model.errors(1, snapshot, res::tag{}).material.size() == 1u);
+	BOOST_TEST(model.errors(1, snapshot, res::tag{}).material.size() == 1u);
+	BOOST_TEST(asked == 1);
+	// USE_FOG off: the same row is another variant now.
+	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	const edt::compile_errors& after = model.errors(1, snapshot, res::tag{});
+	BOOST_TEST(asked == 2);
+	BOOST_TEST(after.material.empty());
+	BOOST_TEST(after.others.size() == 1u);
+	model.errors(2, snapshot, res::tag{});
+	BOOST_TEST(asked == 3);
+}
+
+BOOST_AUTO_TEST_CASE(PreCheck_WarnsOfBadEntries_AndOfNamesTheEngineOrTheShaderDefine)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n#define SOURCE_MACRO 1\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc",
+		R"({"__type":"material_desc","__version":2,"shader":"res://shaders/m.shader.desc","defines":)"
+		R"(["BAD-NAME","LEVEL 1 2","MAX_LIGHT_COUNT 4","SNK_FRAGMENT_SHADER","SHADER_LEVEL 2","SOURCE_MACRO","FINE 3"]})"));
+	edt::material_window_model model(data, services);
+
+	const std::vector<std::string> warnings = model.pre_check();
+	BOOST_TEST(any_holds(warnings, "'BAD-NAME' does not start with a define name"));
+	BOOST_TEST(any_holds(warnings, "'LEVEL 1 2': a define takes one value token"));
+	BOOST_TEST(any_holds(warnings, "MAX_LIGHT_COUNT is defined by the engine"));
+	BOOST_TEST(any_holds(warnings, "SNK_FRAGMENT_SHADER is defined by the engine"));
+	BOOST_TEST(any_holds(warnings, "'SHADER_LEVEL 2' replaces the shader's define 'SHADER_LEVEL 1'"));
+	BOOST_TEST(any_holds(warnings, "SOURCE_MACRO is #defined by the shader's source"));
+	BOOST_TEST(!any_holds(warnings, "FINE"));
+	BOOST_TEST(warnings.size() == 6u);
+}
+
+BOOST_AUTO_TEST_CASE(Preprocess_WaitsForTheDelay_RunsOnce_AndAnEditRestartsTheWait)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	const auto& bindings = rnd::driver::per_type_binding_table;
+	using std::chrono::milliseconds;
+	const std::chrono::steady_clock::time_point t0{};
+
+	BOOST_TEST(!model.preprocess(t0, bindings));
+	BOOST_TEST(!model.preprocess(t0 + milliseconds(299), bindings));
+	BOOST_TEST(model.preprocess(t0 + milliseconds(300), bindings));
+	BOOST_TEST(!model.preprocess(t0 + milliseconds(1000), bindings));
+
+	// An edit, then another before the delay is over: the wait starts again from the second.
+	const auto t1 = t0 + milliseconds(2000);
+	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	BOOST_TEST(!model.preprocess(t1, bindings));
+	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	BOOST_TEST(!model.preprocess(t1 + milliseconds(200), bindings));
+	BOOST_TEST(!model.preprocess(t1 + milliseconds(300), bindings));
+	BOOST_TEST(!model.preprocess(t1 + milliseconds(499), bindings));
+	BOOST_TEST(model.preprocess(t1 + milliseconds(500), bindings));
+}
+
+BOOST_AUTO_TEST_CASE(PreprocessProblems_AreThisMaterials_MarkedPreprocess)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "void main() {}\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	BOOST_TEST(model.compile_rows({}, res::tag{}).material.empty());
+
+	const std::chrono::steady_clock::time_point t0{};
+	model.preprocess(t0, rnd::driver::per_type_binding_table);
+	BOOST_REQUIRE(model.preprocess(t0 + edt::material_window_model::preprocess_delay, rnd::driver::per_type_binding_table));
+	const edt::compile_errors errors = model.compile_rows({}, res::tag{});
+	BOOST_REQUIRE(errors.material.size() == 1u);
+	BOOST_TEST(errors.material[0].preprocess);
+	BOOST_TEST(errors.material[0].problem.file.string() == "res://shaders/m.frag");
+	BOOST_TEST(errors.material[0].problem.code == "shader/load");
+	BOOST_TEST(errors.material[0].define_set == "{ SHADER_LEVEL 1 | USE_FOG }");
+	BOOST_TEST(errors.others.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASkyMaterial_GetsTheLastFrameNote)
+{
+	put("shaders/sky.vert", "#version 450\n");
+	put("shaders/sky.frag", "#version 450\n");
+	put("shaders/sky.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/sky.vert","fragment":"res://shaders/sky.frag"})");
+	edt::data_document& data = open(put("sky.desc", R"({"__type":"material_desc","__version":2,"shader":"res://shaders/sky.shader.desc"})"));
+	edt::material_window_model model(data, services);
+	const edt::compile_errors errors = model.compile_rows({ problem_at("res://shaders/sky.frag", 2, "sky.vert + sky.frag") }, res::tag{});
+	BOOST_TEST(errors.sky);
+	BOOST_TEST(errors.material.size() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

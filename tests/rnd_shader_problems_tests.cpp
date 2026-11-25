@@ -4,6 +4,7 @@
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <format>
@@ -531,6 +532,44 @@ BOOST_AUTO_TEST_CASE(ALineCutInsideAMultibyteCharacterStaysValidUtf8)
 	BOOST_REQUIRE(problems[0].message.ends_with(ellipsis));
 	const std::string_view kept = std::string_view{ problems[0].message }.substr(0, problems[0].message.size() - ellipsis.size());
 	BOOST_TEST(kept.ends_with('x'));
+}
+
+BOOST_AUTO_TEST_CASE(AProgramTitleParsesBackToTheDefinesItWasFormattedFrom)
+{
+	const std::vector<std::string> entries{ "USE_FOG", "LEVEL 2", "OPAQUE" };
+	const std::string title = "m.vert + m.frag " + format_program_defines(entries);
+	BOOST_TEST(title == "m.vert + m.frag { USE_FOG | LEVEL 2 | OPAQUE }");
+	BOOST_TEST((parse_program_defines(title) == entries));
+	BOOST_TEST(format_program_defines({}).empty());
+	BOOST_TEST(parse_program_defines("m.vert + m.frag").empty());
+
+	// The title load() gives a problem names the constants and the defines it was built from (constants in any order).
+	shader_config::constant_data cdata = program_of(put("titled.vert", "void main() {}\n"), put("titled.frag", good_fragment));
+	cdata.constants = { { "K_ONE", "1" }, { "K_TWO", "2" } };
+	cdata.defines = { "USE_FOG", "LEVEL 2" };
+	const auto result = load(cdata);
+	BOOST_REQUIRE(!result.problems.empty());
+	std::vector<std::string> parsed = parse_program_defines(result.problems.front().program);
+	std::vector<std::string> expected = program_define_entries(cdata);
+	std::ranges::sort(parsed);
+	std::ranges::sort(expected);
+	BOOST_TEST((parsed == expected));
+}
+
+BOOST_AUTO_TEST_CASE(TheEngineDefinesOfAStageAreTheNamedConstants)
+{
+	const auto result = load(program_of(put("engine.vert", "#version 450 core\nvoid main() {}\n"), put("engine.frag", good_fragment)));
+	BOOST_REQUIRE(result.ok());
+	BOOST_REQUIRE(result.headers.size() == 2u);
+	const std::string light = std::format("#define {} ", max_light_count_define);
+	BOOST_TEST(result.headers[0].body.find(light) != std::string::npos);
+	BOOST_TEST(result.headers[0].body.find(std::format("#define {}\n", vertex_stage_define)) != std::string::npos);
+	BOOST_TEST(result.headers[1].body.find(light) != std::string::npos);
+	BOOST_TEST(result.headers[1].body.find(std::format("#define {}\n", fragment_stage_define)) != std::string::npos);
+	for (const std::string_view name : { max_light_count_define, vertex_stage_define, fragment_stage_define, geometry_stage_define }) {
+		BOOST_TEST(is_engine_define(name));
+	}
+	BOOST_TEST(!is_engine_define("USE_FOG"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
