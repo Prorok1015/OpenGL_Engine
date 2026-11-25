@@ -4,6 +4,7 @@
 #include "edt_asset_filter.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
+#include "edt_image_import.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
 #include <snk/gui/gui_ui_font.h>
@@ -81,21 +82,112 @@ namespace edt
 		m_on_document_created = std::move(on_created);
 	}
 
+	void asset_browser_panel::set_image_importer(image_importer* importer, image_picker pick_file)
+	{
+		m_image_form = importer && pick_file ? std::make_unique<image_import_form>(*importer) : nullptr;
+		m_pick_image = std::move(pick_file);
+	}
+
 	void asset_browser_panel::draw_create_menu_item(const std::filesystem::path& folder)
 	{
-		if (!m_create_form) {
+		if (m_create_form) {
+			const bool no_types = m_creator->types().empty();
+			ImGui::BeginDisabled(no_types);
+			if (ImGui::MenuItem("Create Document...")) {
+				m_create_form->open(fs_paths::generic_utf8_of(folder));
+				m_create_requested = true;
+			}
+			ImGui::EndDisabled();
+			if (no_types && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+				ImGui::SetTooltip("no desc type is registered as a document");
+			}
+		}
+		if (m_image_form && ImGui::MenuItem("Import Image...")) {
+			const std::string target = fs_paths::generic_utf8_of(folder);
+			m_pick_image([this, alive = std::weak_ptr<int>(m_alive), target](const std::filesystem::path& picked) {
+				if (!alive.lock()) {
+					return;
+				}
+				m_image_form->open(target, picked);
+				m_image_requested = true;
+			});
+		}
+	}
+
+	void asset_browser_panel::draw_image_window()
+	{
+		if (!m_image_form) {
 			return;
 		}
-		const bool no_types = m_creator->types().empty();
-		ImGui::BeginDisabled(no_types);
-		if (ImGui::MenuItem("Create Document...")) {
-			m_create_form->open(fs_paths::generic_utf8_of(folder));
-			m_create_requested = true;
+		constexpr const char* title = "Import Image";
+		if (m_image_requested) {
+			ImGui::OpenPopup(title);
+			m_image_requested = false;
 		}
+		if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			return;
+		}
+		image_import_form& form = *m_image_form;
+		const image_import_settings settings = form.settings();
+		ImGui::TextDisabled("Source: %s", fs_paths::utf8_of(form.source()).c_str());
+		ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
+		const std::string wrap_preview{ image_wrap_name(settings.wrap) };
+		if (ImGui::BeginCombo("Wrap", wrap_preview.c_str())) {
+			for (const image_wrap wrap : { image_wrap::clamp_to_edge, image_wrap::repeat, image_wrap::repeat_mirror,
+					image_wrap::clamp_to_border }) {
+				const std::string label{ image_wrap_name(wrap) };
+				if (ImGui::Selectable(label.c_str(), wrap == settings.wrap)) {
+					form.set_wrap(wrap);
+				}
+			}
+			ImGui::EndCombo();
+		}
+		const std::string filter_preview{ image_filter_name(settings.filter) };
+		if (ImGui::BeginCombo("Filter", filter_preview.c_str())) {
+			for (const image_filter filter : { image_filter::nearest, image_filter::linear }) {
+				const std::string label{ image_filter_name(filter) };
+				if (ImGui::Selectable(label.c_str(), filter == settings.filter)) {
+					form.set_filter(filter);
+				}
+			}
+			ImGui::EndCombo();
+		}
+		bool mips = settings.mips;
+		if (ImGui::Checkbox("Mipmaps", &mips)) {
+			form.set_mips(mips);
+		}
+		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
+		std::copy(form.name().begin(), form.name().end(), buffer.begin());
+		if (ImGui::IsWindowAppearing()) {
+			ImGui::SetKeyboardFocusHere();
+		}
+		const bool entered =
+			ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (buffer.data() != form.name()) {
+			form.set_name(buffer.data());
+		}
+		ImGui::TextDisabled("Files written:");
+		for (const std::string& file : form.final_names()) {
+			ImGui::BulletText("%s", file.c_str());
+		}
+		for (const std::string* message : { &form.problem(), &form.error() }) {
+			if (!message->empty()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
+				ImGui::TextWrapped("%s", message->c_str());
+				ImGui::PopStyleColor();
+			}
+		}
+		ImGui::BeginDisabled(!form.can_submit());
+		const bool clicked = ImGui::Button("Import");
 		ImGui::EndDisabled();
-		if (no_types && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-			ImGui::SetTooltip("no desc type is registered as a document");
+		if ((clicked || entered) && form.can_submit() && form.submit()) {
+			ImGui::CloseCurrentPopup();
 		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel")) {
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
 	}
 
 	void asset_browser_panel::draw_create_window()
@@ -311,7 +403,7 @@ namespace edt
 
 			if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
 				navigate_to(sub.relative);
-			if (m_create_form && ImGui::BeginPopupContextItem()) {
+			if (has_folder_menu() && ImGui::BeginPopupContextItem()) {
 				draw_create_menu_item(sub.relative);
 				ImGui::EndPopup();
 			}
@@ -449,7 +541,7 @@ namespace edt
 					// Navigate into folder on click
 					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 						navigate_to(e.src.relative);
-					if (m_create_form && ImGui::BeginPopupContextItem()) {
+					if (has_folder_menu() && ImGui::BeginPopupContextItem()) {
 						draw_create_menu_item(e.src.relative);
 						ImGui::EndPopup();
 					}
@@ -506,7 +598,8 @@ namespace edt
 				ImGui::TextDisabled("(empty)");
 
 			// The blank of the open folder.
-			if (m_create_form && ImGui::BeginPopupContextWindow("##asset_browser_blank", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+			if (has_folder_menu() && ImGui::BeginPopupContextWindow("##asset_browser_blank",
+					ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
 				draw_create_menu_item(m_current_rel);
 				ImGui::EndPopup();
 			}
@@ -518,6 +611,7 @@ namespace edt
 		ImGui::Columns(1);
 
 		draw_create_window();
+		draw_image_window();
 		draw_variant_window();
 		draw_operation_window();
 	}

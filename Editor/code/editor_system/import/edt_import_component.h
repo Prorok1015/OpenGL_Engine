@@ -23,6 +23,7 @@ namespace edt
 	class decoder_sandbox_notice;
 	class editor_context;
 	class editor_layer;
+	class image_importer;
 	class model_importer;
 	class play_session;
 	class process_decoder;
@@ -47,6 +48,12 @@ namespace edt
 			std::function<void(const res::tag&)> exported = {};
 			// Tests only: the decoder steps every import runs; set, no decoder process is made (empty in the product).
 			std::function<decoder_steps()> decoder = {};
+			// Why the project's files may not be written now (a migration runs): no image import starts. Null: none.
+			std::function<std::optional<std::string>()> write_blocker = {};
+			// An image import wrote these files (main thread): the asset database is told. Null: nobody is.
+			std::function<void(const std::vector<res::tag>&)> assets_written = {};
+			// Whether a project is open: without one no image import starts. Null: none is.
+			std::function<bool()> project_open = {};
 		};
 
 		explicit import_component(ports from);
@@ -60,6 +67,8 @@ namespace edt
 		void shutdown();
 
 		agent_model_import* agent_import() { return m_agent_import.get(); }
+		// The import of a picture (#1193): file.import_image and the asset browser's "Import Image...".
+		image_importer* image_import() { return m_image_import.get(); }
 		// The export dialog is open (an import waits in it).
 		bool dialog_open() const { return m_dialog_open; }
 		// The person's import runs (the job, or its result waiting for the main thread).
@@ -101,6 +110,7 @@ namespace edt
 		std::unique_ptr<asset_export_dialog> m_export_dialog;
 		// After the exporter it uses, before the context's job service goes.
 		std::unique_ptr<agent_model_import> m_agent_import;
+		std::unique_ptr<image_importer> m_image_import;
 #if SNK_HAS_ASSIMP
 		// The import in flight (m_importing); the job's on_done fills m_result or m_failure on the main thread.
 		bool m_importing = false;
