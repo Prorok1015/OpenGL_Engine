@@ -109,6 +109,9 @@ constexpr const char* k_imported = R"json({"__type":"texture_2d_desc","__version
 // One red texel held in the file (#1204).
 constexpr const char* k_inline = R"json({"__type":"texture_2d_desc","__version":1,"__parent":"res://base_texture.desc",
 	"name":"red","pixels":{"width":1,"height":1,"format":"RGBA8","base64":"/wAA/w=="}})json";
+// Base64 that begins like a mounted protocol: data, never a tag.
+constexpr const char* k_inline_like_a_path = R"json({"__type":"texture_2d_desc","__version":1,"__parent":"res://base_texture.desc",
+	"pixels":{"width":2,"height":2,"format":"RGBA8","base64":"res/AAAAAAAAAAAAAAAAAA=="}})json";
 
 }
 
@@ -150,6 +153,13 @@ BOOST_AUTO_TEST_CASE(TheBaseTexture_AnImportedOne_AndInlinePixels_OpenAsDocument
 			BOOST_TEST(read(tag.relative()) == before);
 		}
 	}
+}
+
+BOOST_AUTO_TEST_CASE(InlinePixelsWhoseBase64BeginsLikeAPath_AreSavable)
+{
+	edt::data_document& data = open(put("pathlike.txm.desc", k_inline_like_a_path));
+	const edt::data_document::save_form form = data.save_bytes();
+	BOOST_TEST(form.error.empty(), form.error);
 }
 
 BOOST_AUTO_TEST_CASE(TheEffectiveHeader_IsTheOwnOverTheParentsOverTheDefaults)
