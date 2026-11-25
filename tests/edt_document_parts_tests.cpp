@@ -1,6 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include "test_temp_dir.hpp"
 #include "edt_document_parts.h"
+#include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <filesystem>
+#include <fstream>
+#include <optional>
 #include <snk/resource/res_system.h>
 #include <string>
 #include <vector>
@@ -215,6 +220,99 @@ BOOST_AUTO_TEST_CASE(SourceWatch_WithoutResources_WatchesNothing)
 	watch.watch(nullptr, res::tag::make("a/b.desc"), &owner, [](const res::tag&) {});
 	watch.unwatch();
 	BOOST_TEST(true);
+}
+
+struct gate_env : test_util::scene_env
+{
+	gate_env()
+	{
+		std::filesystem::create_directories(res_root / "a");
+		std::filesystem::create_directories(lower / "a");
+		rs->unregistrate_resolver(res::tag::default_protocol());
+		rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<std::filesystem::path>{ lower, res_root },
+			res::mount_access::read_write, res::write_policy::allow_all());
+		layout.top_layer = [this] { return res_root; };
+		layout.layers = [this] { return std::vector<std::filesystem::path>{ lower, res_root }; };
+		layout.open_level_files = [] { return std::vector<std::string>{}; };
+	}
+
+	~gate_env() { rs->unregistrate_resolver(res::tag::default_protocol()); }
+
+	static void write(const std::filesystem::path& root, std::string_view name, std::string_view content)
+	{
+		std::ofstream out(root / std::string(name), std::ios::binary);
+		out << content;
+	}
+
+	edt::file_write_check check(const res::tag& tag, std::string_view version, edt::disk_state& state, int& announced)
+	{
+		return edt::write_gate::check(*rs, *descs, layout, tag, version, state, [&announced] { ++announced; });
+	}
+
+	test_util::temp_dir dir{ "edt_write_gate" };
+	const std::filesystem::path res_root = dir.path() / "res";
+	const std::filesystem::path lower = dir.path() / "lower";
+	edt::desc_file_layout layout;
+};
+
+BOOST_AUTO_TEST_CASE(WriteGate_Blocker_IsThePortsAnswer_AndNothingWithoutAPort)
+{
+	edt::desc_file_layout layout;
+	BOOST_TEST(!edt::write_gate::blocker(layout).has_value());
+	layout.write_blocker = [] { return std::optional<std::string>{}; };
+	BOOST_TEST(!edt::write_gate::blocker(layout).has_value());
+	layout.write_blocker = [] { return std::optional<std::string>{ "a migration runs" }; };
+	BOOST_TEST(edt::write_gate::blocker(layout).value_or("") == "a migration runs");
+}
+
+BOOST_FIXTURE_TEST_CASE(WriteGate_Check_OfTheVersionTheDocumentRead_AllowsAndFlagsNothing, gate_env)
+{
+	write(res_root, "a/x.desc", R"({"__type":"prefab_desc","__version":5})");
+	const res::tag tag = res::tag::make("a/x.desc");
+	edt::disk_state state;
+	int announced = 0;
+	const std::string read_version = check(tag, "", state, announced).version;
+	state.set_changed(false);
+	announced = 0;
+
+	const edt::file_write_check allowed = check(tag, read_version, state, announced);
+	BOOST_TEST(allowed.error.empty());
+	BOOST_TEST(!allowed.changed_on_disk);
+	BOOST_TEST(!state.changed());
+	BOOST_TEST(announced == 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(WriteGate_Check_OfAFileThatChanged_RefusesFlagsAndAnnouncesOnce, gate_env)
+{
+	write(res_root, "a/x.desc", R"({"__type":"prefab_desc","__version":5})");
+	const res::tag tag = res::tag::make("a/x.desc");
+	edt::disk_state state;
+	int announced = 0;
+	const std::string read_version = check(tag, "", state, announced).version;
+	state.set_changed(false);
+	announced = 0;
+	write(res_root, "a/x.desc", R"({"__type":"prefab_desc","__version":5,"name":"outside"})");
+
+	const edt::file_write_check refused = check(tag, read_version, state, announced);
+	BOOST_TEST(refused.changed_on_disk);
+	BOOST_TEST(refused.error.find("changed on disk") != std::string::npos);
+	BOOST_TEST(state.changed());
+	BOOST_TEST(announced == 1);
+
+	check(tag, read_version, state, announced);
+	BOOST_TEST(announced == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(WriteGate_Check_OfALowerLayerFile_RefusesWithoutTouchingTheFlag, gate_env)
+{
+	write(lower, "a/low.desc", R"({"__type":"prefab_desc","__version":5})");
+	edt::disk_state state;
+	int announced = 0;
+
+	const edt::file_write_check refused = check(res::tag::make("a/low.desc"), "", state, announced);
+	BOOST_TEST(refused.error.find("lower layer") != std::string::npos);
+	BOOST_TEST(!state.changed());
+	BOOST_TEST(announced == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

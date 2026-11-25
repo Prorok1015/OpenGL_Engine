@@ -35,6 +35,8 @@ namespace edt
 		// Revert asks first where the component wants it (it then calls `request_revert`); without one the button reverts at once.
 		void set_on_revert(std::function<void()> cb) { m_on_revert = std::move(cb); }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
+		// Check builds the program the shown file belongs to (#1386); the button is absent without it. The text it returns is shown under the toolbar.
+		void set_on_check(std::function<std::string()> cb) { m_on_check = std::move(cb); }
 		void press_close();
 		// What the buttons do: Revert and Reload take the file's text (the typing not handed over goes with it, only when that worked);
 		// Overwrite hands the typing over first.
@@ -80,6 +82,8 @@ namespace edt
 		const problem_list* m_problems = nullptr;
 		std::function<void()> m_on_save;
 		std::function<void()> m_on_revert;
+		std::function<std::string()> m_on_check;
+		std::string m_check_status;
 		std::function<void()> m_on_close;
 		std::string m_error;
 		std::vector<std::string> m_unplaced;

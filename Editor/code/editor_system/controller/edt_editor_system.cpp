@@ -22,6 +22,7 @@
 #include <snk/common/text_escape.h>
 #include "edt_selection_wiring.h"
 #include "edt_modeller_component.h"
+#include "edt_shader_check.h"
 #include "edt_shader_editor_component.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
@@ -125,6 +126,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_router.h>
@@ -440,7 +442,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.context = *m_context,
 		.desc_layout = [this] { return m_asset_open->desc_layout(); },
 		.edits_locked = [this] { return m_play && m_play->active(); },
-		.open_is_quiet = [this] { return m_asset_open && m_asset_open->open_is_quiet(); } });
+		.open_is_quiet = [this] { return m_asset_open && m_asset_open->open_is_quiet(); },
+		.check_source = [this](const res::tag& source) { return check_shader_source_now(source); } });
 
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
@@ -1130,3 +1133,23 @@ bool edt::editor_system::person_is_editing() const
 		|| (m_panels && m_panels->viewport() && m_panels->viewport()->is_dragging_gizmo());
 }
 
+std::string edt::editor_system::check_shader_source_now(const res::tag& source)
+{
+	const desc_file_layout files = m_asset_open->desc_layout();
+	std::vector<std::filesystem::path> layers = files.layers ? files.layers() : std::vector<std::filesystem::path>{};
+	if (layers.empty() && files.top_layer) layers.push_back(files.top_layer());
+	const shader_check_ports ports{
+		.files_of = [this](const res::tag& desc) {
+			auto handle = m_context->resources().require_sync<rnd::shader_desc>(desc);
+			const std::shared_ptr<rnd::shader_desc> read = handle.is_ready() ? handle.get_sync() : nullptr;
+			rnd::driver::driver_interface* driver = m_context->render().get_driver();
+			if (!read || !driver) return std::vector<res::tag>{};
+			return rnd::shader_config::load(read->config().cdata, m_context->resources(), driver->bindings(), rnd::shader_config::load_options{ true }).files;
+		},
+		.check = [this](const res::tag& desc, std::string* program) {
+			return m_context->render().check_shader_program(desc, nullptr, program);
+		} };
+	const shader_check_report report = check_shader_source(source, shader_descs_in(layers), ports);
+	m_problems->show_shader_check(report.problems);
+	return report.summary;
+}

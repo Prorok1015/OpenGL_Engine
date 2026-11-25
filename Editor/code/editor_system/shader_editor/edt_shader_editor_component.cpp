@@ -22,6 +22,14 @@ edt::shader_editor_component::shader_editor_component(ports from)
 	});
 	m_panel->set_on_save([this] { save_shown(); });
 	m_panel->set_on_revert([this] { request_revert_shown(); });
+	if (m_ports.check_source) {
+		m_panel->set_on_check([this]() -> std::string {
+			const shader_source_document* shader = shader_source_by_id(m_ports.context.documents(), m_shown);
+			if (!shader) return {};
+			const std::string report = m_ports.check_source(shader->source());
+			return shader->is_dirty() ? "The saved file is checked, not the unsaved edits. " + report : report;
+		});
+	}
 }
 
 edt::shader_editor_component::~shader_editor_component() = default;

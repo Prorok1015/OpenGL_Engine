@@ -40,6 +40,7 @@ namespace edt
 				[this] { step_history(false); }, [this] { step_history(true); } });
 		}
 		m_error.clear();
+		m_check_status.clear();
 		m_unplaced.clear();
 		m_loaded = false;
 		m_markers_ready = false;
@@ -178,6 +179,13 @@ namespace edt
 			}
 		}
 		ImGui::EndDisabled();
+		if (m_on_check) {
+			ImGui::SameLine();
+			if (ImGui::Button("Check")) {
+				flush_pending(true);
+				m_check_status = m_on_check();
+			}
+		}
 		ImGui::SameLine();
 		if (ImGui::Button("Close")) press_close();
 		const std::string reason = m_ctx->read_only_reason();
@@ -203,6 +211,9 @@ namespace edt
 		}
 		if (m_ctx->mixed_endings()) {
 			ImGui::TextColored(colors().info, "The file mixes line endings; Save writes the commonest one everywhere.");
+		}
+		if (!m_check_status.empty()) {
+			ImGui::TextColored(colors().info, "%s", m_check_status.c_str());
 		}
 		for (const std::string& row : m_unplaced) {
 			ImGui::TextColored(colors().error, "%s", row.c_str());

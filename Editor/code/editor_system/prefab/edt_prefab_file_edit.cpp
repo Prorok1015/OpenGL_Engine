@@ -45,7 +45,7 @@ std::string edt::edit_prefab_file(editor_services& services, const desc_file_lay
 	if (!descs || !reader || !writer || !files.top_layer) {
 		return "the project files are not known: nothing was written";
 	}
-	if (const std::optional<std::string> why = files.write_blocker ? files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(files)) {
 		return *why;
 	}
 	const desc_file_read on_disk = read_desc_file(*reader, *descs, files, tag);

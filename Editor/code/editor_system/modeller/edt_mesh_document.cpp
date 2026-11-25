@@ -437,7 +437,7 @@ edt::save_result edt::mesh_document::save_impl(bool replace_foreign_geometry)
 	if (!is_dirty() && !(replace_foreign_geometry && m_geometry_mismatch)) {
 		return save_result::ok();
 	}
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) {
 		return save_result::failure(*why);
 	}
 	if (!m_preview_problem.empty()) {
@@ -456,11 +456,7 @@ edt::save_result edt::mesh_document::save_impl(bool replace_foreign_geometry)
 	}
 	bool source_written = false;
 	if (m_dirty) {
-		const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_poly_tag, m_disk_version);
-		if (allowed.changed_on_disk && !m_disk.changed()) {
-			m_disk.set_changed(true);
-			announce();
-		}
+		const file_write_check allowed = write_gate::check(*reader, *descs, m_files, m_poly_tag, m_disk_version, m_disk, [this] { announce(); });
 		if (!allowed.error.empty()) {
 			return save_result::failure(allowed.error);
 		}
