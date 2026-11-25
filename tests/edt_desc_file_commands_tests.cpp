@@ -1467,29 +1467,39 @@ BOOST_AUTO_TEST_CASE(ItemsThatAreNoObjects_InAListOfStructures_AreRefusedByTheSc
 	}
 }
 
-// #1445: a structure whose type has no schema cannot say where its tags are: one problem per type refuses the file, and a
-// {guid, path} under it is still checked by its shape. Its plain strings get the loose walk only, as everywhere outside a schema.
-BOOST_AUTO_TEST_CASE(AStructureWithoutASchema_IsRefusedOncePerType_AndItsReferencesAreChecked)
+// #1445: a structure whose type has no schema cannot say where its tags are: one warning per type (a module's type may nest a
+// struct without .ref(), and such a file stays savable), and a {guid, path} under it is still checked by its shape. Its plain
+// strings get the loose walk only, as everywhere outside a schema.
+BOOST_AUTO_TEST_CASE(AStructureWithoutASchema_IsWarnedOncePerType_AndItsReferencesAreChecked)
 {
 	register_slot_schemas(*descs);
+	const auto warnings_of = [&](const std::string& text, edt::reference_rule rule) {
+		std::vector<std::string> out;
+		for (const res::diagnostic& item : edt::validate_desc_tree(*descs, json::parse(text), "res://tables/t.desc", nullptr, rule).problems) {
+			if (item.severity == res::diagnostic_severity::warning) out.push_back(item.json_path + ": " + item.reason);
+		}
+		return out;
+	};
 	const std::string bad_ref = "{" + k_slot_guid + R"(,"path":"shaders/x.vert"})";
 	for (const edt::reference_rule rule : k_both_rules) {
 		BOOST_TEST_CONTEXT(who_of(rule)) {
-			const std::vector<std::string> lost = slot_errors(*descs,
-				std::string(R"({"__type":"test.slot_table","lost":[{"texture":"shaders/x.vert"},{"texture":"shaders/y.vert"}]})"), rule);
+			const std::string lost_text = R"({"__type":"test.slot_table","lost":[{"texture":"shaders/x.vert"},{"texture":"shaders/y.vert"}]})";
+			const std::vector<std::string> lost_errors = slot_errors(*descs, lost_text, rule);
+			BOOST_TEST(lost_errors.empty(), (lost_errors.empty() ? std::string{} : lost_errors.front()));
+			const std::vector<std::string> lost = warnings_of(lost_text, rule);
 			BOOST_REQUIRE_EQUAL(lost.size(), 1u);
 			BOOST_TEST(lost[0] == "/lost: 'test.missing' has no schema: the tags in its structures are not checked", lost[0]);
 
-			const std::vector<std::string> unnamed = slot_errors(*descs,
-				std::string(R"({"__type":"test.slot_table","unnamed":[{"texture":"res://a.png"}]})"), rule);
+			const std::string unnamed_text = R"({"__type":"test.slot_table","unnamed":[{"texture":"res://a.png"}]})";
+			BOOST_TEST(slot_errors(*descs, unnamed_text, rule).empty());
+			const std::vector<std::string> unnamed = warnings_of(unnamed_text, rule);
 			BOOST_REQUIRE_EQUAL(unnamed.size(), 1u);
 			BOOST_TEST(unnamed[0].starts_with("/unnamed: field 'unnamed' of 'test.slot_table' names no schema"), unnamed[0]);
 
 			const std::vector<std::string> referenced = slot_errors(*descs,
 				R"({"__type":"test.slot_table","lost":[{"texture":)" + bad_ref + "}]}", rule);
-			BOOST_REQUIRE_EQUAL(referenced.size(), 2u);
-			BOOST_TEST(referenced[0].starts_with("/lost: "), referenced[0]);
-			BOOST_TEST(referenced[1].starts_with("/lost/0/texture/path: a tag must be written as res://"), referenced[1]);
+			BOOST_REQUIRE_EQUAL(referenced.size(), 1u);
+			BOOST_TEST(referenced[0].starts_with("/lost/0/texture/path: a tag must be written as res://"), referenced[0]);
 		}
 	}
 }
