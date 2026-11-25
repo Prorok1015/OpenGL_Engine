@@ -6,6 +6,7 @@
 #include "edt_thumbnail_service.h"
 #include "edt_document_creator.h"
 #include "edt_image_import.h"
+#include "edt_material_creator.h"
 #include "edt_ui_probe_imgui.h"
 #include "edt_ui_metrics.h"
 #include <snk/gui/gui_ui_font.h>
@@ -83,8 +84,14 @@ namespace edt
 
 	void asset_browser_panel::set_document_creator(std::shared_ptr<document_creator> creator, std::function<void(const res::tag&)> on_created)
 	{
+		m_material_form.reset();
+		m_material_creator.reset();
 		m_creator = std::move(creator);
 		m_create_form = m_creator ? std::make_unique<document_create_form>(*m_creator) : nullptr;
+		if (m_creator) {
+			m_material_creator = std::make_unique<material_creator>(*m_creator);
+			m_material_form = std::make_unique<material_create_form>(*m_material_creator);
+		}
 		m_on_document_created = std::move(on_created);
 	}
 
@@ -107,6 +114,10 @@ namespace edt
 			if (no_types && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 				ImGui::SetTooltip("no desc type is registered as a document");
 			}
+		}
+		if (m_material_form && ImGui::MenuItem("New Material...")) {
+			m_material_form->open(fs_paths::generic_utf8_of(folder));
+			m_material_requested = true;
 		}
 		if (m_image_form && ImGui::MenuItem("Import Image...")) {
 			const std::string target = fs_paths::generic_utf8_of(folder);
@@ -253,6 +264,62 @@ namespace edt
 		const bool clicked = ImGui::Button("Create");
 		ImGui::EndDisabled();
 		if ((clicked || (entered && form.can_submit())) && form.can_submit()) {
+			if (const std::optional<res::tag> made = form.submit()) {
+				ImGui::CloseCurrentPopup();
+				if (m_on_document_created) {
+					m_on_document_created(*made);
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel")) {
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+
+	void asset_browser_panel::draw_material_window()
+	{
+		if (!m_material_form) {
+			return;
+		}
+		constexpr const char* title = "New Material";
+		if (m_material_requested) {
+			ImGui::OpenPopup(title);
+			m_material_requested = false;
+		}
+		if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			return;
+		}
+		material_create_form& form = *m_material_form;
+		ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
+		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
+		std::copy(form.name().begin(), form.name().end(), buffer.begin());
+		if (ImGui::IsWindowAppearing()) {
+			ImGui::SetKeyboardFocusHere();
+		}
+		ImGui::SetNextItemWidth(em(240.f));
+		const bool entered = ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+		if (buffer.data() != form.name()) {
+			form.set_name(buffer.data());
+		}
+		if (!form.file_name().empty()) {
+			const std::string target = form.folder().empty() ? form.file_name() : form.folder() + "/" + form.file_name();
+			ImGui::TextDisabled("Creates res://%s", target.c_str());
+		} else {
+			const std::string base{ k_base_material };
+			ImGui::TextDisabled("Give it a name; it is a child of %s", base.c_str());
+		}
+		for (const std::string* text : { &form.problem(), &form.error() }) {
+			if (text->empty()) continue;
+			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
+			ImGui::TextWrapped("%s", text->c_str());
+			ImGui::PopStyleColor();
+		}
+		ImGui::BeginDisabled(!form.can_submit());
+		const bool clicked = ImGui::Button("Create");
+		ImGui::EndDisabled();
+		if ((clicked || entered) && form.can_submit()) {
 			if (const std::optional<res::tag> made = form.submit()) {
 				ImGui::CloseCurrentPopup();
 				if (m_on_document_created) {
@@ -664,6 +731,7 @@ namespace edt
 		ImGui::Columns(1);
 
 		draw_create_window();
+		draw_material_window();
 		draw_image_window();
 		draw_variant_window();
 		draw_operation_window();

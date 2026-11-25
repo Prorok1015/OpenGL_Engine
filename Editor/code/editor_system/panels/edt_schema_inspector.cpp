@@ -609,62 +609,6 @@ namespace
 		return changed;
 	}
 
-	constexpr std::size_t k_picker_rows = 200;
-
-	// The list a "..." button opens: the files the field accepts, searched by name, the project's first. True when a file was
-	// picked (the value is then its reference).
-	bool draw_picker_popup(const desc::field_schema& field, const std::string& pointer, const edt::picker::catalog& catalog,
-		edt::schema_ui::map_edit_state& state, ImGuiID field_id, json::value& value, const context& ctx)
-	{
-		if (!ImGui::BeginPopup("##asset_picker")) {
-			return false;
-		}
-		std::string& query = state.picker_queries[field_id];
-		std::shared_ptr<edt::picker::page_cache>& cache = state.picker_pages[field_id];
-		if (!cache) {
-			cache = std::make_shared<edt::picker::page_cache>();
-		}
-		bool picked = false;
-		if (ImGui::IsWindowAppearing()) {
-			query.clear();
-			ImGui::SetKeyboardFocusHere();
-		}
-		std::vector<char> buffer(std::max<std::size_t>(query.size() + 64, 256), '\0');
-		std::copy(query.begin(), query.end(), buffer.begin());
-		ImGui::SetNextItemWidth(edt::em(360.0f));
-		if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
-			query = buffer.data();
-		}
-		const edt::picker::filter wanted = edt::picker::filter_of(field);
-		const edt::picker::candidates_page& page = edt::picker::cached_candidates(*cache, catalog, wanted, query, k_picker_rows);
-		if (page.unread > 0) {
-			ImGui::TextDisabled("%zu files, %zu descs not read yet", page.total, page.unread);
-		} else {
-			ImGui::TextDisabled("%zu files", page.total);
-		}
-		if (ImGui::BeginChild("##list", ImVec2(edt::em(420.0f), edt::em(260.0f)))) {
-			for (std::size_t i = 0; i < page.items.size(); ++i) {
-				const edt::asset_record& record = *page.items[i].record;
-				const std::string what = record.desc_type ? *record.desc_type : record.type;
-				const std::string row = std::format("{}   [{}] {}", record.path.relative(), what, page.items[i].layer_label);
-				ImGui::PushID(static_cast<int>(i));
-				if (ImGui::Selectable(row.c_str())) {
-					value = edt::picker::reference_value(record);
-					picked = true;
-					ImGui::CloseCurrentPopup();
-				}
-				report_target(ctx, pointer + "#pick/" + std::string(record.path.relative()));
-				ImGui::PopID();
-			}
-			if (page.total > page.items.size()) {
-				ImGui::TextDisabled("... %zu more: type to narrow the list", page.total - page.items.size());
-			}
-		}
-		ImGui::EndChild();
-		ImGui::EndPopup();
-		return picked;
-	}
-
 	void draw_red(const std::string& text, const context& ctx)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, colors_of(ctx).error);
@@ -683,19 +627,20 @@ namespace
 		if (catalog) {
 			ImGui::BeginDisabled(!catalog->ready());
 			if (ImGui::SmallButton("...")) {
-				ImGui::OpenPopup("##asset_picker");
+				ImGui::OpenPopup(edt::schema_ui::k_picker_popup);
 			}
 			report_target(ctx, pointer + "#pick");
 			ImGui::EndDisabled();
 			if (!catalog->ready() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
 				ImGui::SetTooltip("the asset list is not ready");
 			}
-			if (draw_picker_popup(field, pointer, *catalog, state, field_id, value, ctx)) {
+			const auto report_row = [&](std::string_view path) { report_target(ctx, pointer + "#pick/" + std::string(path)); };
+			if (edt::schema_ui::draw_picker_popup(edt::picker::filter_of(field), *catalog, state, field_id, value, report_row)) {
 				state.drop_refusals.erase(field_id);
 				state.drop_notes.erase(field_id);
 				changed = true;
 			}
-			if (!ImGui::IsPopupOpen("##asset_picker")) {
+			if (!ImGui::IsPopupOpen(edt::schema_ui::k_picker_popup)) {
 				state.picker_pages.erase(field_id);
 				state.picker_queries.erase(field_id);
 			}
@@ -1173,6 +1118,60 @@ edt::schema_ui::drop_outcome edt::schema_ui::resolve_drop(const desc::field_sche
 		out.note = std::format("'{}' {}", path, answer.reason);
 	}
 	return out;
+}
+
+bool edt::schema_ui::draw_picker_popup(const edt::picker::filter& wanted, const edt::picker::catalog& catalog, map_edit_state& state,
+	std::uint32_t field_id, json::value& value, const std::function<void(std::string_view path)>& on_row)
+{
+	constexpr std::size_t k_picker_rows = 200;
+	if (!ImGui::BeginPopup(k_picker_popup)) {
+		return false;
+	}
+	std::string& query = state.picker_queries[field_id];
+	std::shared_ptr<edt::picker::page_cache>& cache = state.picker_pages[field_id];
+	if (!cache) {
+		cache = std::make_shared<edt::picker::page_cache>();
+	}
+	bool picked = false;
+	if (ImGui::IsWindowAppearing()) {
+		query.clear();
+		ImGui::SetKeyboardFocusHere();
+	}
+	std::vector<char> buffer(std::max<std::size_t>(query.size() + 64, 256), '\0');
+	std::copy(query.begin(), query.end(), buffer.begin());
+	ImGui::SetNextItemWidth(edt::em(360.0f));
+	if (ImGui::InputTextWithHint("##query", "search", buffer.data(), buffer.size())) {
+		query = buffer.data();
+	}
+	const edt::picker::candidates_page& page = edt::picker::cached_candidates(*cache, catalog, wanted, query, k_picker_rows);
+	if (page.unread > 0) {
+		ImGui::TextDisabled("%zu files, %zu descs not read yet", page.total, page.unread);
+	} else {
+		ImGui::TextDisabled("%zu files", page.total);
+	}
+	if (ImGui::BeginChild("##list", ImVec2(edt::em(420.0f), edt::em(260.0f)))) {
+		for (std::size_t i = 0; i < page.items.size(); ++i) {
+			const edt::asset_record& record = *page.items[i].record;
+			const std::string what = record.desc_type ? *record.desc_type : record.type;
+			const std::string row = std::format("{}   [{}] {}", record.path.relative(), what, page.items[i].layer_label);
+			ImGui::PushID(static_cast<int>(i));
+			if (ImGui::Selectable(row.c_str())) {
+				value = edt::picker::reference_value(record);
+				picked = true;
+				ImGui::CloseCurrentPopup();
+			}
+			if (on_row) {
+				on_row(record.path.relative());
+			}
+			ImGui::PopID();
+		}
+		if (page.total > page.items.size()) {
+			ImGui::TextDisabled("... %zu more: type to narrow the list", page.total - page.items.size());
+		}
+	}
+	ImGui::EndChild();
+	ImGui::EndPopup();
+	return picked;
 }
 
 std::string edt::schema_ui::display_label(const desc::field_schema& field)

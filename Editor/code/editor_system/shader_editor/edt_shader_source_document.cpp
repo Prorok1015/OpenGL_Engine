@@ -179,7 +179,7 @@ void edt::shader_source_document::open(const res::tag& source)
 	const std::size_t slash = path.rfind('/');
 	m_title = std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
 	m_open = true;
-	watch();
+	m_watch.watch(m_services.writable_resources(), m_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
 	egLOG("Editor/Shader", "Opened shader source '{}' for editing", m_tag.view());
 }
 
@@ -201,14 +201,14 @@ bool edt::shader_source_document::load(const res::tag& tag, const fs::path& path
 	m_saved_text = m_text;
 	m_disk_version = code_version_of(read.bytes);
 	m_dirty = false;
-	m_changed_on_disk = false;
 	m_missing_on_disk = false;
+	m_disk.set_changed(false);
 	return true;
 }
 
 void edt::shader_source_document::close()
 {
-	unwatch();
+	m_watch.unwatch();
 	m_open = false;
 	m_file = {};
 	m_tag = res::tag{};
@@ -216,8 +216,8 @@ void edt::shader_source_document::close()
 	m_text.clear();
 	m_saved_text.clear();
 	m_dirty = false;
-	m_changed_on_disk = false;
 	m_missing_on_disk = false;
+	m_disk.set_changed(false);
 }
 
 void edt::shader_source_document::announce()
@@ -229,10 +229,9 @@ void edt::shader_source_document::announce()
 
 void edt::shader_source_document::mark_missing()
 {
-	if (m_missing_on_disk && m_changed_on_disk) return;
+	if (m_missing_on_disk && m_disk.changed()) return;
 	m_missing_on_disk = true;
-	m_changed_on_disk = true;
-	announce();
+	if (!m_disk.raise([this] { announce(); })) announce();
 }
 
 bool edt::shader_source_document::step_history(bool redo)
@@ -327,11 +326,8 @@ edt::save_result edt::shader_source_document::save()
 	}
 	m_missing_on_disk = false;
 	// A conflict the window raised (restored autosave, typing over a reload) stands though the file is as it was read.
-	if (m_changed_on_disk || code_version_of(now.bytes) != m_disk_version) {
-		if (!m_changed_on_disk) {
-			m_changed_on_disk = true;
-			announce();
-		}
+	if (m_disk.changed() || code_version_of(now.bytes) != m_disk_version) {
+		m_disk.raise([this] { announce(); });
 		return save_result::failure(std::format("{} changed on disk since it was opened: Reload takes the file, Overwrite replaces it", m_tag.view()));
 	}
 	shader_text_file out = m_file;
@@ -341,10 +337,11 @@ edt::save_result edt::shader_source_document::save()
 		return save_result::failure("the text is larger than 4 MiB: nothing was written");
 	}
 	const std::string previous_version = std::exchange(m_disk_version, code_version_of(bytes));
-	const bool previous_changed = std::exchange(m_changed_on_disk, false);
+	const bool previous_changed = m_disk.changed();
+	m_disk.set_changed(false);
 	if (!writer->store_sync(m_tag, bytes)) {
 		m_disk_version = previous_version;
-		m_changed_on_disk = previous_changed;
+		m_disk.set_changed(previous_changed);
 		return save_result::failure(std::format("{} could not be written", m_tag.view()));
 	}
 	m_saved_text = m_text;
@@ -357,9 +354,8 @@ edt::save_result edt::shader_source_document::save()
 
 void edt::shader_source_document::raise_conflict()
 {
-	if (m_open && !m_changed_on_disk) {
-		m_changed_on_disk = true;
-		announce();
+	if (m_open) {
+		m_disk.raise([this] { announce(); });
 	}
 }
 
@@ -409,7 +405,7 @@ edt::save_result edt::shader_source_document::recreate()
 	m_disk_version = code_version_of(bytes);
 	m_saved_text = m_text;
 	m_dirty = false;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	m_missing_on_disk = false;
 	writer->signal_changed(m_tag);
 	++m_generation;
@@ -445,14 +441,8 @@ edt::save_result edt::shader_source_document::overwrite()
 	if (!now.error.empty()) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
-	const std::string previous_version = std::exchange(m_disk_version, code_version_of(now.bytes));
-	const bool previous_changed = std::exchange(m_changed_on_disk, false);
-	const save_result saved = save();
-	if (!saved.saved) {
-		m_disk_version = previous_version;
-		m_changed_on_disk = previous_changed;
-	}
-	return saved;
+	return m_disk.overwrite(m_disk_version, code_version_of(now.bytes), [this] { return save(); },
+		[](const save_result& saved) { return !saved.saved; }, disk_state::overwrite_flag::restore_on_failure);
 }
 
 edt::autosave_snapshot edt::shader_source_document::autosave_capture() const
@@ -467,23 +457,6 @@ edt::autosave_snapshot edt::shader_source_document::autosave_capture() const
 	file.text = typing_waits ? fold_line_breaks(m_peek_edits()) : m_text;
 	out.bytes = bytes_of(write_shader_text(file));
 	return out;
-}
-
-void edt::shader_source_document::watch()
-{
-	unwatch();
-	m_watching = m_services.writable_resources();
-	if (m_watching) {
-		m_watching->watch(m_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
-	}
-}
-
-void edt::shader_source_document::unwatch()
-{
-	if (m_watching) {
-		m_watching->unwatch(m_tag, this);
-		m_watching = nullptr;
-	}
 }
 
 void edt::shader_source_document::on_source_changed(const res::tag& changed)
@@ -503,22 +476,14 @@ void edt::shader_source_document::on_source_changed(const res::tag& changed)
 		m_missing_on_disk = false;
 		announce();
 	}
-	if (code_version_of(now.bytes) == m_disk_version) {
-		if (m_changed_on_disk) {
-			m_changed_on_disk = false;
-			announce();
-		}
-		return;
-	}
-	if (!m_dirty && !edits_locked()) {
-		if (const std::string error = revert(); error.empty()) {
-			return;
-		} else {
-			egLOG_WARN("Editor/Shader", "{}", error);
-		}
-	}
-	if (!m_changed_on_disk) {
-		m_changed_on_disk = true;
-		announce();
-	}
+	m_disk.on_source_changed(code_version_of(now.bytes), m_disk_version, m_dirty, [this] { return edits_locked(); },
+		[this] {
+			if (const std::string error = revert(); error.empty()) {
+				return true;
+			} else {
+				egLOG_WARN("Editor/Shader", "{}", error);
+				return false;
+			}
+		},
+		[this] { announce(); });
 }

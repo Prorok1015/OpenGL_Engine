@@ -1,6 +1,7 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
+#include "edt_document_parts.h"
 #include "edt_shader_text.h"
 #include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
@@ -69,7 +70,7 @@ namespace edt
 		bool mixed_endings() const { return m_open && m_file.mixed_endings; }
 
 		// Somebody changed the file on disk since it was read, and the document has edits.
-		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		bool changed_on_disk() const { return m_open && m_disk.changed(); }
 		// The file is gone from every layer (deleted or renamed outside): `changed_on_disk()` too. Save refuses; Overwrite writes it again.
 		bool missing_on_disk() const { return m_open && m_missing_on_disk; }
 		// The window's typing met a change made behind its back (a reload of the file, another edit): the person gets the Reload / Overwrite
@@ -134,8 +135,6 @@ namespace edt
 		void mark_missing();
 		// Overwrite of a file no layer holds: writes the text as a new file of the top layer.
 		save_result recreate();
-		void watch();
-		void unwatch();
 		void on_source_changed(const res::tag& changed);
 
 		editor_services& m_services;
@@ -146,7 +145,7 @@ namespace edt
 		std::function<void()> m_flush_edits;
 		history_source m_history;
 		std::function<std::string()> m_peek_edits;
-		res::resource_system* m_watching = nullptr;
+		source_watch m_watch;
 
 		bool m_open = false;
 		std::string m_error;
@@ -159,8 +158,8 @@ namespace edt
 		std::string m_saved_text;
 		std::string m_disk_version;
 		bool m_dirty = false;
-		bool m_changed_on_disk = false;
 		bool m_missing_on_disk = false;
+		disk_state m_disk;
 		std::uint64_t m_generation = 0;
 	};
 }

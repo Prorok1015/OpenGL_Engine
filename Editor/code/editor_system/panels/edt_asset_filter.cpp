@@ -25,13 +25,14 @@ namespace {
 		std::string_view kind;
 	};
 
-	constexpr std::array<suffix_kind, 7> k_suffix_kinds{ {
+	constexpr std::array<suffix_kind, 8> k_suffix_kinds{ {
 		{ ".level.desc", edt::k_asset_kind_level },
 		{ ".world.desc", edt::k_asset_kind_world },
 		{ ".geom.desc", edt::k_asset_kind_mesh },
 		{ ".poly.desc", edt::k_asset_kind_mesh },
 		{ ".prefab.desc", edt::k_asset_kind_prefab },
 		{ ".shader.desc", edt::k_asset_kind_shader_desc },
+		{ ".mat.desc", edt::k_asset_kind_material },
 		{ ".txm.desc", "texture" },
 	} };
 
@@ -57,6 +58,7 @@ namespace {
 		if (id == edt::k_asset_kind_mesh) return "Mesh";
 		if (id == edt::k_asset_kind_prefab) return "Prefab";
 		if (id == edt::k_asset_kind_shader_desc) return "Shader desc";
+		if (id == edt::k_asset_kind_material) return "Material";
 		if (id == edt::k_asset_kind_data) return "Data";
 		if (id == "texture") return "Texture";
 		if (id == "model") return "Model";
@@ -225,7 +227,7 @@ std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_reg
 {
 	std::vector<asset_filter_kind> out;
 	for (const std::string_view id : { k_asset_kind_prefab, k_asset_kind_level, k_asset_kind_world, k_asset_kind_mesh,
-			k_asset_kind_data, k_asset_kind_shader_desc, std::string_view{ "texture" }, std::string_view{ "model" },
+			k_asset_kind_data, k_asset_kind_shader_desc, k_asset_kind_material, std::string_view{ "texture" }, std::string_view{ "model" },
 			std::string_view{ "shader" }, std::string_view{ "file" } }) {
 		out.push_back({ std::string{ id }, std::string{ label_of(id) } });
 	}

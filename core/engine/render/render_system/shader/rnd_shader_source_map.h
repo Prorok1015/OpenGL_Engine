@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/rnd_shader_problem.h>
@@ -49,10 +50,17 @@ namespace rnd
 	// the same line).
 	source_location locate_line(std::string_view text, std::size_t line);
 
+	// How many lines the engine's own defines take at the top of the block shader_config::load puts after #version.
+	inline constexpr std::size_t engine_define_lines = 2;
+
 	// The problems a driver's build log tells, at their files: a stage's lines in the NVIDIA (`<k>(<line>) : error ...`),
 	// Mesa (`<k>:<line>(<column>): error: ...`) or AMD/ANGLE (`ERROR: <k>:<line>: ...`) form name file k of that stage's
 	// `sources` (headers[i] has sources[i]); any other line is a problem of the stage file with no line. Warnings are left
 	// out when the log has an error. The link log is one problem of the vertex stage's file (the first stage's without one).
-	std::vector<shader_problem> problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
-		const std::vector<std::vector<res::tag>>& sources, const std::string& program);
+	// Number sources[i].size() is the block of defines after #version when the body has `#line 1 <that number>` right
+	// after the #version line: a problem of the stage file with no line that names the define (the engine's
+	// engine_define_lines first, then `constant_count` constants, then the defines).
+	// Exported for the unit tests: a body and a log no shader_config::load gives (#1387).
+	SNK_API std::vector<shader_problem> problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
+		const std::vector<std::vector<res::tag>>& sources, const std::string& program, std::size_t constant_count);
 }

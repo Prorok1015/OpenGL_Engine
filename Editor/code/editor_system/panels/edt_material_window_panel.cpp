@@ -2,10 +2,15 @@
 #include "edt_shader_problems.h"
 #include "edt_ui_metrics.h"
 #include <snk/editor/edt_editor_services.h>
+#include <snk/gui/gui_backend_interface.h>
+#include <snk/gui/gui_system.h>
 #include <snk/gui/gui_theme.h>
 #include <snk/platform/plt_shell_open.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/resource/res_system.h>
+#include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
 #include <imgui.h>
 #include <array>
 #include <chrono>
@@ -13,7 +18,10 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
+namespace json = boost::json;
 
 namespace
 {
@@ -24,8 +32,10 @@ edt::material_window_panel::material_window_panel(data_document& document, edito
 	preview_view view)
 	: data_document_panel(document, services, id, quiet)
 	, m_render(view.render)
+	, m_gui(view.gui)
 	, m_editor_services(services)
 	, m_model(document, services)
+	, m_slots(document)
 	, m_content(document, m_model, services)
 	, m_stage(services, m_content, view)
 {
@@ -77,8 +87,149 @@ void edt::material_window_panel::draw_before_fields()
 
 void edt::material_window_panel::draw_after_fields()
 {
+	draw_textures();
 	draw_defines();
 	draw_compile_errors();
+}
+
+void edt::material_window_panel::draw_textures()
+{
+	ImGui::Spacing();
+	ImGui::SeparatorText("Textures");
+	const picker::catalog* catalog = asset_catalog();
+	for (const texture_slot& slot : material_texture_slots()) {
+		ImGui::PushID(static_cast<int>(slot.index));
+		draw_texture_slot(slot, catalog);
+		ImGui::PopID();
+	}
+}
+
+void edt::material_window_panel::draw_texture_slot(const texture_slot& slot, const picker::catalog* catalog)
+{
+	schema_ui::map_edit_state& state = map_state();
+	const ImGuiID slot_id = ImGui::GetID("##slot");
+	const texture_slot_state current = m_slots.state(slot);
+	const bool can_pick = catalog && catalog->ready();
+	const picker::reference_state verdict = can_pick && !current.text.empty() ? picker::judge_texture_text(current.text, *catalog)
+		: picker::reference_state{};
+
+	draw_slot_thumbnail(slot, current.text, verdict.severity != picker::reference_state::level::error,
+		catalog ? catalog->revision() : 0);
+	ImGui::SameLine();
+	ImGui::BeginGroup();
+	ImGui::TextUnformatted(std::string(slot.name).c_str());
+	if (current.inherited) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("(inherited)");
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("Set by a parent material; a change here writes this material's own list.");
+		}
+	}
+
+	ImGui::BeginDisabled(!can_pick);
+	if (ImGui::SmallButton("...")) {
+		ImGui::OpenPopup(schema_ui::k_picker_popup);
+	}
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+		ImGui::SetTooltip("%s", can_pick ? "Pick a texture (a .txm.desc)." : "The asset list is not ready.");
+	}
+	ImGui::SameLine();
+	// The reference is the drop target; a click opens the picker as "..." does.
+	const std::string shown = current.text.empty() ? std::string{ "(none)" } : current.text;
+	if (ImGui::Button((shown + "###reference").c_str()) && can_pick) {
+		ImGui::OpenPopup(schema_ui::k_picker_popup);
+	}
+	if (const json::object* reference = current.value.if_object(); reference && ImGui::IsItemHovered()) {
+		if (const json::value* guid = reference->if_contains("guid"); guid && guid->is_string()) {
+			ImGui::SetTooltip("ID %s", std::string(guid->as_string()).c_str());
+		}
+	}
+	// Only a ready catalog tells a texture desc's type from another desc's.
+	if (can_pick && ImGui::BeginDragDropTarget()) {
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
+			// The browser sends the path below res:// with its terminating zero.
+			if (payload->DataSize > 0) {
+				const std::string path(static_cast<const char*>(payload->Data), static_cast<std::size_t>(payload->DataSize) - 1);
+				const picker::texture_choice choice = picker::choose_texture(path, catalog, m_picture_texture);
+				state.drop_notes.erase(slot_id);
+				if (choice.answer.outcome == picker::verdict::result::rejected) {
+					state.drop_refusals[slot_id] = std::format("'{}': {}", path, choice.answer.reason);
+				} else {
+					state.drop_refusals.erase(slot_id);
+					if (choice.answer.outcome == picker::verdict::result::unknown) {
+						state.drop_notes[slot_id] = std::format("'{}' {}", path, choice.answer.reason);
+					}
+					m_slots.set(slot, choice.value);
+				}
+			}
+		}
+		ImGui::EndDragDropTarget();
+	}
+	ImGui::SameLine();
+	ImGui::BeginDisabled(current.value.is_null());
+	if (ImGui::SmallButton("Clear")) {
+		state.drop_refusals.erase(slot_id);
+		state.drop_notes.erase(slot_id);
+		m_slots.clear(slot);
+	}
+	ImGui::EndDisabled();
+
+	boost::json::value picked;
+	if (catalog && schema_ui::draw_picker_popup(picker::texture_filter(), *catalog, state, slot_id, picked)) {
+		state.drop_refusals.erase(slot_id);
+		state.drop_notes.erase(slot_id);
+		m_slots.set(slot, std::move(picked));
+	}
+	if (!ImGui::IsPopupOpen(schema_ui::k_picker_popup)) {
+		state.picker_pages.erase(slot_id);
+		state.picker_queries.erase(slot_id);
+	}
+	if (const auto refused = state.drop_refusals.find(slot_id); refused != state.drop_refusals.end()) {
+		ImGui::TextColored(colors().error, "%s", refused->second.c_str());
+	}
+	if (const auto noted = state.drop_notes.find(slot_id); noted != state.drop_notes.end()) {
+		ImGui::TextDisabled("%s", noted->second.c_str());
+	}
+	if (verdict.severity == picker::reference_state::level::error) {
+		ImGui::TextColored(colors().error, "%s", verdict.text.c_str());
+	} else if (verdict.severity == picker::reference_state::level::note) {
+		ImGui::TextDisabled("%s", verdict.text.c_str());
+	}
+	ImGui::EndGroup();
+}
+
+void edt::material_window_panel::draw_slot_thumbnail(const texture_slot& slot, const std::string& texture, bool loadable,
+	std::uint64_t revision)
+{
+	const ImVec2 size(em(48.f), em(48.f));
+	gui::imgui_backend_interface* backend = m_gui ? m_gui->get_backend_interface() : nullptr;
+	res::resource_system* resources = m_editor_services.writable_resources();
+	if (!m_render || !backend || !resources || texture.empty() || !loadable || !m_thumbnail_attempts.may_try(slot.index, texture, revision)) {
+		m_thumbnails.erase(slot.index);
+		ImGui::Dummy(size);
+		return;
+	}
+	thumbnail_load& load = m_thumbnails[slot.index];
+	if (load.tag != texture) {
+		load.tag = texture;
+		load.desc = resources->require<rnd::texture_desc>(res::tag{ texture });
+	}
+	if (load.desc.has_error()) {
+		m_thumbnail_attempts.fail(slot.index, texture, revision);
+		m_thumbnails.erase(slot.index);
+	} else if (load.desc.is_ready()) {
+		rnd::texture_manager& textures = m_render->get_texture_manager();
+		const rnd::texture_id id = textures.require(res::tag{ texture });
+		if (textures.is_ready(id)) {
+			if (const auto handle = textures.binding(id).handle) {
+				// Loaded pictures are bottom-up, as the GL textures are.
+				ImGui::Image(backend->to_imgui(handle), size, ImVec2(0, 1), ImVec2(1, 0));
+				return;
+			}
+		}
+	}
+	ImGui::Dummy(size);
 }
 
 void edt::material_window_panel::draw_defines()
