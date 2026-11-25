@@ -14,6 +14,7 @@ namespace edt
 	inline constexpr std::string_view k_material_type = "material_desc";
 	inline constexpr std::string_view k_base_material = "res://base_material.desc";
 	inline constexpr std::string_view k_material_name = "Material";
+	inline constexpr std::string_view k_material_suffix = ".mat.desc";
 
 	struct material_options
 	{
@@ -40,12 +41,17 @@ namespace edt
 		// when none is (an unreadable folder, all numbers taken). Walks the folder: asked when the window opens.
 		std::string suggested_name(std::string_view folder) const;
 		// Why `name` cannot be a new material in `folder` (document_creator::check of the material type); empty when it can.
+		// Refused while no asset kind gives the material type k_material_suffix.
 		std::string check(std::string_view folder, std::string_view name) const;
 		// Writes `{"__type", "__version"}` and material_fields(options) as `<folder>/<name><suffix>`. Refused as Create
-		// Document refuses: while the project may not be written, for a name taken in any layer.
+		// Document refuses: while the project may not be written, for a name taken in any layer, and as check() refuses
+		// without the material kind.
 		document_creation create(std::string_view folder, std::string_view name, const material_options& options = {}) const;
 
 	private:
+		// Why no material can be made now: the kind is not registered, a file would be a plain .desc. Empty when it is.
+		std::string kind_problem() const;
+
 		const document_creator& m_names;
 	};
 

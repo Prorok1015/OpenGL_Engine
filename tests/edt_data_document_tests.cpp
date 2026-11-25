@@ -19,6 +19,9 @@
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/model_codec/res_asset_id.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/render/rnd_shader_desc.h>
+#include <snk/scene/scn_material_desc.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
@@ -2137,6 +2140,17 @@ namespace {
 		hooks.open_desc = [](const res::tag&) {};
 		return hooks;
 	}
+
+	// shader_desc is a render desc, which the scene environment does not register.
+	struct render_descs
+	{
+		explicit render_descs(desc::desc_system& system) : descs(system) { engine::render::register_render_descs(descs); }
+		~render_descs() { engine::render::unregister_render_descs(descs); }
+		render_descs(const render_descs&) = delete;
+		render_descs& operator=(const render_descs&) = delete;
+
+		desc::desc_system& descs;
+	};
 }
 
 // The editor's wiring (asset_open_component): the built-in kinds name the files, the creator's blocker refuses.
@@ -2218,6 +2232,7 @@ BOOST_AUTO_TEST_CASE(NewMaterial_ResolvesTheBaseMaterialsSceneShader)
 	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "base_material.desc", lower / "base_material.desc", fs::copy_options::overwrite_existing);
 	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "shaders" / "scene.shader.desc", lower / "shaders" / "scene.shader.desc",
 		fs::copy_options::overwrite_existing);
+	const render_descs shaders{ *descs };
 	const material_wiring wiring{ *this };
 	const edt::document_creation made = wiring.creator.create("materials", "Fresh");
 	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
@@ -2225,16 +2240,38 @@ BOOST_AUTO_TEST_CASE(NewMaterial_ResolvesTheBaseMaterialsSceneShader)
 	const auto material = require_loaded<scn::material_desc>(made.tag);
 	BOOST_REQUIRE(material.is_ready());
 	BOOST_REQUIRE(!material.has_error());
-	BOOST_TEST(material.get()->shader.get_tag().view() == "res://shaders/scene.shader.desc");
+	const auto& shader = material.get()->shader;
+	BOOST_TEST(shader.get_tag().view() == "res://shaders/scene.shader.desc");
 	// The shader's own load runs on the resolver's io thread.
-	for (int tries = 0; tries < 500 && !material.get()->shader.is_ready() && !material.get()->shader.has_error(); ++tries) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!shader.is_ready() && !shader.has_error() && std::chrono::steady_clock::now() < deadline) {
 		pump();
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
-	BOOST_REQUIRE(material.get()->shader.is_ready());
-	BOOST_TEST(!material.get()->shader.has_error());
-	BOOST_TEST(material.get()->shader.get()->vertex.string() == "res://shaders/scene.vert");
+	BOOST_REQUIRE_MESSAGE(shader.is_ready(), "the scene shader was still loading after 5 s");
+	BOOST_TEST(!shader.has_error());
+	BOOST_TEST(shader.get()->vertex.string() == "res://shaders/scene.vert");
 	BOOST_TEST((material.get()->queue == scn::pass_queue::OPAQUE));
+}
+
+// Without the material kind a new file would be a plain Material.desc: refused, nothing is written.
+BOOST_AUTO_TEST_CASE(NewMaterial_WithoutTheMaterialKind_IsRefused_AndWritesNothing)
+{
+	edt::document_creator::ports ports{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	ports.desc_kinds = [] { return std::vector<std::pair<std::string, std::string>>{ { "shader_desc", ".shader.desc" } }; };
+	ports.initial_fields = [](std::string_view type) { return edt::initial_document_fields(type); };
+	const edt::document_creator names(ports);
+	const edt::material_creator creator(names);
+	BOOST_TEST(creator.suffix() != ".mat.desc");
+
+	const std::string expected = "no asset kind names material_desc files '.mat.desc': materials cannot be created";
+	BOOST_TEST(creator.check("", "Rock") == expected);
+	const edt::document_creation refused = creator.create("", "Rock");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == expected);
+	BOOST_TEST(creator.suggested_name("").empty());
+	BOOST_TEST(fs::is_empty(res_root));
 }
 
 BOOST_AUTO_TEST_CASE(NewMaterial_SuggestsMaterial_ThenMaterial2_AndRefusesATakenName)

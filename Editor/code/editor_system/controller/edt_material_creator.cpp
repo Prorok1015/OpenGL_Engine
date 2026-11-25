@@ -20,6 +20,9 @@ json::object edt::material_fields(const material_options& options)
 
 std::string edt::material_creator::suggested_name(std::string_view folder) const
 {
+	if (!kind_problem().empty()) {
+		return {};
+	}
 	const std::string own_suffix = suffix();
 	// A candidate the editor's own name rules refuse is passed over for the next number, as the layers' taken names are.
 	const auto refused = [this, folder](std::string_view relative) {
@@ -33,14 +36,28 @@ std::string edt::material_creator::suggested_name(std::string_view folder) const
 	return found.name.substr(0, found.name.size() - own_suffix.size());
 }
 
+std::string edt::material_creator::kind_problem() const
+{
+	if (suffix() == k_material_suffix) {
+		return {};
+	}
+	return std::format("no asset kind names {} files '{}': materials cannot be created", k_material_type, k_material_suffix);
+}
+
 std::string edt::material_creator::check(std::string_view folder, std::string_view name) const
 {
+	if (std::string problem = kind_problem(); !problem.empty()) {
+		return problem;
+	}
 	return m_names.check(folder, k_material_type, name);
 }
 
 edt::document_creation edt::material_creator::create(std::string_view folder, std::string_view name,
 	const material_options& options) const
 {
+	if (std::string problem = kind_problem(); !problem.empty()) {
+		return document_creation{ .tag = {}, .error = std::move(problem) };
+	}
 	return m_names.create(folder, k_material_type, name, material_fields(options));
 }
 
