@@ -79,7 +79,15 @@ bool edt::thumbnail_decodable(std::string_view path)
 
 edt::thumbnail_decoded edt::decode_thumbnail_file(const std::filesystem::path& root, const std::filesystem::path& relative)
 {
+	std::optional<platform::beneath::file_stamp> ignored;
+	return decode_thumbnail_file(root, relative, ignored);
+}
+
+edt::thumbnail_decoded edt::decode_thumbnail_file(const std::filesystem::path& root, const std::filesystem::path& relative,
+	std::optional<platform::beneath::file_stamp>& read_stamp)
+{
 	thumbnail_decoded out;
+	read_stamp.reset();
 	platform::beneath::read_request request;
 	request.root = root;
 	request.folder = relative.parent_path();
@@ -103,6 +111,7 @@ edt::thumbnail_decoded edt::decode_thumbnail_file(const std::filesystem::path& r
 		return out;
 	}
 
+	read_stamp = read.stamp;
 	const auto* encoded = reinterpret_cast<const unsigned char*>(bytes.data());
 	const int length = static_cast<int>((std::min)(bytes.size(), static_cast<std::size_t>(std::numeric_limits<int>::max())));
 	int width = 0;

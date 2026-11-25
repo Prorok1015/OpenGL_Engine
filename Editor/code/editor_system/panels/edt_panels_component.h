@@ -2,6 +2,7 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_registration.h>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -18,7 +19,8 @@ namespace rnd { class render_system; class capture_service; }
 namespace edt
 {
 	class asset_browser_panel;
-	class thumbnail_service;
+	class thumbnail_disk_cache;
+		class thumbnail_service;
 	class blackboard_panel;
 	class build_settings_panel;
 	class console_panel;
@@ -69,6 +71,10 @@ namespace edt
 			std::function<const picker::catalog*()> asset_catalog;
 			// Null without a project.
 			std::function<std::optional<std::filesystem::path>()> project_root;
+			// The project's cache folder (prj::project_context::cache_dir()) where the thumbnails are kept between runs, and
+			// whether the project is trusted (project_trust_service::trusted): on an untrusted or no project they stay in memory.
+			std::function<std::optional<std::filesystem::path>()> project_cache_dir;
+			std::function<bool()> project_trusted;
 			std::function<gs::input_actions*()> input_actions;
 			// "debuggame" or "release": the Build Settings window's default.
 			std::string default_configuration;
@@ -109,6 +115,7 @@ namespace edt
 	private:
 		void wire_scene_callbacks();
 		std::unique_ptr<thumbnail_service> make_thumbnail_service();
+		void refresh_thumbnail_cache();
 
 		ports m_ports;
 		// The console's feed from the engine log; removed with the panels.
@@ -126,8 +133,13 @@ namespace edt
 		std::shared_ptr<git_panel> m_git;
 		std::shared_ptr<world_systems_panel> m_world_systems;
 		std::shared_ptr<asset_browser_panel> m_asset_browser;
-		// The asset browser's thumbnails (#1192); the lifetime is declared after it so it stops the decodes first.
+		// The asset browser's thumbnails (#1192); the lifetime is declared after it and after the cache state so it stops the decodes first.
 		std::unique_ptr<thumbnail_service> m_thumbnails;
+		// Set on the main thread before each decode is handed out, read by the workers; null: no disk cache for now.
+		std::atomic<std::shared_ptr<thumbnail_disk_cache>> m_thumbnail_cache;
+		std::shared_ptr<thumbnail_disk_cache> m_thumbnail_cache_made;
+		std::filesystem::path m_thumbnail_cache_root;
+		bool m_thumbnail_prune_queued = false;
 		ds::lifetime m_thumbnail_jobs{ ds::lifetime_option::cancel_on_destroy };
 	};
 }
