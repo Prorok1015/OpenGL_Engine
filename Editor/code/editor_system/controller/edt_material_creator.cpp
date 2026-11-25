@@ -73,7 +73,7 @@ void edt::material_create_form::open(std::string folder, material_options option
 void edt::material_create_form::recheck()
 {
 	m_file = m_name.empty() ? std::string{} : m_creator.file_name(m_name);
-	m_problem = m_name.empty() ? std::string{} : m_creator.check(m_folder, m_name);
+	m_problem = m_name.empty() ? m_creator.kind_problem() : m_creator.check(m_folder, m_name);
 	m_error.clear();
 }
 

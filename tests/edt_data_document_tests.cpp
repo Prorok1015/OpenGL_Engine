@@ -2274,6 +2274,14 @@ BOOST_AUTO_TEST_CASE(NewMaterial_WithoutTheMaterialKind_IsRefused_AndWritesNothi
 	BOOST_TEST(!refused.ok());
 	BOOST_TEST(refused.error == expected);
 	BOOST_TEST(creator.suggested_name("").empty());
+
+	// The window opens without a name and says why Create is off.
+	edt::material_create_form form(creator);
+	form.open("");
+	BOOST_TEST(form.name().empty());
+	BOOST_TEST(form.problem() == expected);
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(!form.submit().has_value());
 	BOOST_TEST(fs::is_empty(res_root));
 }
 
@@ -2343,6 +2351,78 @@ BOOST_AUTO_TEST_CASE(NewMaterial_IsRefusedWhileTheProjectMayNotBeWritten_AndOver
 	BOOST_TEST(!fs::exists(res_root / "Stone.mat.desc"));
 	write(lower, "Material.mat.desc", R"({"__type":"material_desc"})");
 	BOOST_TEST(wiring.creator.suggested_name("") == "Material-2");
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_ANameThatIsAPath_IsRefusedByCheckCreateAndTheForm_AndWritesNothing)
+{
+	const material_wiring wiring{ *this };
+	edt::material_create_form form(wiring.creator);
+	form.open("materials");
+	const std::pair<std::string_view, std::string_view> refusals[] = {
+		{ "../x", "a name is one path segment, without '/'" },
+		{ "a/b", "a name is one path segment, without '/'" },
+		{ "a\\b", "the path must use '/' as the separator" },
+	};
+	for (const auto& [name, expected] : refusals) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		{
+			BOOST_TEST(wiring.creator.check("materials", name) == expected);
+			const edt::document_creation made = wiring.creator.create("materials", name);
+			BOOST_TEST(!made.ok());
+			BOOST_TEST(made.error == expected);
+			form.set_name(std::string(name));
+			BOOST_TEST(form.problem() == expected);
+			BOOST_TEST(!form.can_submit());
+			BOOST_TEST(!form.submit().has_value());
+		}
+	}
+	BOOST_TEST(fs::is_empty(res_root));
+	BOOST_TEST(fs::is_empty(lower));
+}
+
+// As Create Document (#1263): a typed material suffix, a bare ".mat", ".desc" or another kind's suffix is replaced, never doubled.
+BOOST_AUTO_TEST_CASE(NewMaterial_ATypedSuffix_IsReplacedByTheMaterials_NotDoubled)
+{
+	const material_wiring wiring{ *this };
+	for (const std::string_view name : { "foo", "foo.mat.desc", "foo.mat", "foo.desc", "foo.MAT.DESC", "foo.shader.desc" }) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		BOOST_TEST(wiring.creator.file_name(name) == "foo.mat.desc");
+	}
+	edt::material_create_form form(wiring.creator);
+	form.open("");
+	form.set_name("foo.mat.desc");
+	BOOST_TEST(form.file_name() == "foo.mat.desc");
+	BOOST_TEST(form.problem().empty());
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://foo.mat.desc");
+	BOOST_TEST(fs::exists(res_root / "foo.mat.desc"));
+	BOOST_TEST(!fs::exists(res_root / "foo.mat.desc.mat.desc"));
+	BOOST_TEST(wiring.creator.check("", "foo.mat") == "'foo.mat.desc' already exists in the project layer");
+}
+
+// Create Document has no port for the open level: its file is refused as any file that exists (name_taken), as in
+// DocumentCreator_Create_NeverOverAFile_OfTheTopLayerOrOfALowerOne. The level's own name gets the material's suffix.
+BOOST_AUTO_TEST_CASE(NewMaterial_TheOpenLevelsFile_IsNeverWrittenOver)
+{
+	const material_wiring wiring{ *this };
+	put("Level.desc", R"({"__type":"test.config"})");
+	open_level = { "Level.desc" };
+	const std::string level_before = text_of("Level.desc");
+	BOOST_TEST(wiring.creator.file_name("Level.desc") == "Level.mat.desc");
+	const edt::document_creation beside = wiring.creator.create("", "Level.desc");
+	BOOST_REQUIRE_MESSAGE(beside.ok(), beside.error);
+	BOOST_TEST(beside.tag.string() == "res://Level.mat.desc");
+	BOOST_TEST(text_of("Level.desc") == level_before);
+
+	put("Scene.mat.desc", R"({"__type":"test.config"})");
+	open_level = { "Scene.mat.desc" };
+	const std::string scene_before = text_of("Scene.mat.desc");
+	BOOST_TEST(wiring.creator.check("", "Scene") == "'Scene.mat.desc' already exists in the project layer");
+	const edt::document_creation over = wiring.creator.create("", "Scene.mat.desc");
+	BOOST_TEST(!over.ok());
+	BOOST_TEST(over.error == "'Scene.mat.desc' already exists in the project layer");
+	BOOST_TEST(text_of("Scene.mat.desc") == scene_before);
 }
 
 // #773: a save writes a reference as {guid, path} when its target has an ID, and the document holds what the file does; the

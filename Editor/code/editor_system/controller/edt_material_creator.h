@@ -47,11 +47,10 @@ namespace edt
 		// Document refuses: while the project may not be written, for a name taken in any layer, and as check() refuses
 		// without the material kind.
 		document_creation create(std::string_view folder, std::string_view name, const material_options& options = {}) const;
-
-	private:
 		// Why no material can be made now: the kind is not registered, a file would be a plain .desc. Empty when it is.
 		std::string kind_problem() const;
 
+	private:
 		const document_creator& m_names;
 	};
 
@@ -72,7 +71,8 @@ namespace edt
 		// The file the material gets; empty while no name is typed.
 		const std::string& file_name() const { return m_file; }
 
-		// What is wrong with the name as of its last change (the folders are walked then, not at every frame).
+		// What is wrong with the name as of its last change (the folders are walked then, not at every frame). With no name:
+		// why no material can be made at all (kind_problem), so the window says why Create is off.
 		const std::string& problem() const { return m_problem; }
 		bool can_submit() const { return !m_name.empty() && m_problem.empty(); }
 		// What the last submit said when it failed.
