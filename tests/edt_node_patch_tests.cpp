@@ -11,6 +11,8 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_screen_anchor.h>
+#include <boost/json/array.hpp>
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
@@ -257,6 +259,76 @@ BOOST_AUTO_TEST_CASE(APatcherThatThrows_IsFollowedByARebuild)
 	scene.commit("Edit node");
 	BOOST_TEST(patches == 1);
 	BOOST_TEST(pushes == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AScreenAnchorField_GivesWhatARebuildGives)
+{
+	scn::prefab_desc::prefab_comp_node anchor;
+	anchor.type_name = "screen_anchor_desc";
+	anchor.overrides["target_context"] = "w0";
+	node(BOX_ID).components["marker"] = anchor;
+	entt::registry marked;
+	const auto marked_root = marked.create();
+	scn::spawn_world(*assembler, marked, marked_root, scene.world_descs[0], "w0", res::tag{});
+	const entt::entity box = live(marked, BOX_ID);
+	BOOST_REQUIRE(marked.all_of<scn::screen_anchor_component>(box));
+
+	node(BOX_ID).components["marker"].overrides["target_context"] = "other";
+	node(BOX_ID).components["marker"].overrides["offset"] = boost::json::array{ 1.0, 2.0, 3.0 };
+	const edt::scene_node_edit edit{ 0, BOX_ID, false, false, { "marker" } };
+	BOOST_REQUIRE(edt::patch_live_nodes(scene.world_descs[0], marked, *assembler, std::span(&edit, 1)));
+
+	entt::registry rebuilt;
+	const auto rebuilt_root = rebuilt.create();
+	scn::spawn_world(*assembler, rebuilt, rebuilt_root, scene.world_descs[0], "w0", res::tag{});
+	const auto& patched = marked.get<scn::screen_anchor_component>(box);
+	const auto& fresh = rebuilt.get<scn::screen_anchor_component>(live(rebuilt, BOX_ID));
+	BOOST_TEST((patched.offset == fresh.offset));
+	BOOST_TEST((patched.offset == glm::vec3{ 1.f, 2.f, 3.f }));
+	BOOST_TEST((patched.target == fresh.target));
+}
+
+BOOST_AUTO_TEST_CASE(ASkyboxAnObjectAndAnAnchor_GiveWhatARebuildGives)
+{
+	for (const char* type : { "skybox_desc", "object_desc", "anchor_desc" }) {
+		scn::prefab_desc::prefab_comp_node comp;
+		comp.type_name = type;
+		node(BOX_ID).components["thing"] = comp;
+		entt::registry patched;
+		const auto patched_root = patched.create();
+		scn::spawn_world(*assembler, patched, patched_root, scene.world_descs[0], "w0", res::tag{});
+		const entt::entity box = live(patched, BOX_ID);
+		patched.clear<scn::object_component>();
+		patched.clear<scn::scene_anchor_component>();
+		patched.clear<scn::sky_component>();
+		const edt::scene_node_edit edit{ 0, BOX_ID, false, false, { "thing" } };
+		BOOST_REQUIRE(edt::patch_live_nodes(scene.world_descs[0], patched, *assembler, std::span(&edit, 1)));
+
+		entt::registry rebuilt;
+		const auto rebuilt_root = rebuilt.create();
+		scn::spawn_world(*assembler, rebuilt, rebuilt_root, scene.world_descs[0], "w0", res::tag{});
+		const entt::entity fresh = live(rebuilt, BOX_ID);
+		BOOST_TEST(patched.all_of<scn::object_component>(box) == rebuilt.all_of<scn::object_component>(fresh));
+		BOOST_TEST(patched.all_of<scn::scene_anchor_component>(box) == rebuilt.all_of<scn::scene_anchor_component>(fresh));
+		BOOST_TEST(patched.all_of<scn::sky_component>(box) == rebuilt.all_of<scn::sky_component>(fresh));
+		BOOST_TEST(patched.all_of<scn::renderable>(box) == rebuilt.all_of<scn::renderable>(fresh));
+		node(BOX_ID).components.erase("thing");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ATypeThatReadsOtherNodesOrKeepsStaleStateIsStillRebuilt)
+{
+	const entt::entity box = live(reg, BOX_ID);
+	for (const char* type : { "mesh_node_desc", "skinning_desc", "skin_weights_desc", "bone_desc", "animation_controller_desc",
+			"animated_node_desc", "animation_collection_desc" }) {
+		scn::prefab_desc::prefab_comp_node comp;
+		comp.type_name = type;
+		node(BOX_ID).components["thing"] = comp;
+		const edt::scene_node_edit edit{ 0, BOX_ID, false, false, { "thing" } };
+		BOOST_TEST(!edt::patch_live_nodes(scene.world_descs[0], reg, *assembler, std::span(&edit, 1)));
+		node(BOX_ID).components.erase("thing");
+	}
+	BOOST_TEST(reg.valid(box));
 }
 
 BOOST_AUTO_TEST_CASE(AnEditOfANodeThatIsNotLive_TouchesNothing_AndIsRefused)

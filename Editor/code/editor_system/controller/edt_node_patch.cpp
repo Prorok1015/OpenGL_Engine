@@ -34,10 +34,16 @@ namespace {
 		}
 	}
 
-	// The engine types whose spawner replaces its components from the desc alone and reads nothing else. A schema component
-	// (a module's) registers a patcher, which is the same promise. Everything else (a mesh node, skinning, animation...) can
-	// leave stale components behind when a field is cleared, or reads other nodes: it is rebuilt until it is added here on purpose.
-	constexpr std::array<std::string_view, 2> k_patchable_engine_types{ "camera_desc", "directional_light_desc" };
+	// The engine types whose spawner (scn_*_desc.cpp, `assemble_*`) does `emplace_or_replace` of components built from the
+	// desc alone: nothing is read from a sibling or another node, and no field can be cleared into a component the spawner
+	// then leaves behind. A schema component (a module's) registers a patcher, which is the same promise.
+	// Left out on purpose, each rebuilds the world:
+	//   mesh_node_desc: a cleared geometry or material leaves its geometry_component / material_desc_component (and the
+	//     geometry hold) on the entity, which a rebuild would not have;
+	//   skinning_desc, skin_weights_desc, bone_desc, animation_*_desc, animated_node_desc: they read the skeleton and the
+	//     nodes around them and register in managers keyed by the entity.
+	constexpr std::array<std::string_view, 6> k_patchable_engine_types{
+		"camera_desc", "directional_light_desc", "screen_anchor_desc", "skybox_desc", "object_desc", "anchor_desc" };
 
 	bool patchable_type(const scn::ecs_assembler& assembler, std::string_view type)
 	{

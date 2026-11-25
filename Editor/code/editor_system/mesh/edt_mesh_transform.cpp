@@ -36,6 +36,22 @@ namespace edt::mesh
 		}
 	}
 
+	std::uint64_t selection_stamp(const mesh_selection& selection)
+	{
+		std::uint64_t stamp = 14695981039346656037ull;
+		const auto fold = [&stamp](std::uint64_t value) { stamp = (stamp ^ value) * 1099511628211ull; };
+		fold(static_cast<std::uint64_t>(selection.mode()));
+		for (vertex_id id : selection.vertices()) fold(id);
+		fold(0x9e3779b97f4a7c15ull);
+		for (const edge_key& key : selection.edges()) {
+			fold(key.a);
+			fold(key.b);
+		}
+		fold(0x7f4a7c159e3779b9ull);
+		for (face_id id : selection.faces()) fold(id);
+		return stamp;
+	}
+
 	std::set<vertex_id> selected_vertices(const poly_mesh& mesh, const mesh_selection& selection)
 	{
 		std::set<vertex_id> result = selection.touched_vertices(mesh);

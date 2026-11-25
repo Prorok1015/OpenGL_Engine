@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "edt_mesh_adjacency.h"
 #include "edt_mesh_diff.h"
 #include "edt_mesh_shapes.h"
 #include "edt_mesh_transform.h"
@@ -23,7 +24,7 @@ struct cube_fixture
 		}
 	}
 
-	static bool near(const glm::vec3& a, const glm::vec3& b) { return glm::length(a - b) < 1e-4f; }
+	static bool close_to(const glm::vec3& a, const glm::vec3& b) { return glm::length(a - b) < 1e-4f; }
 
 	poly_mesh mesh;
 	mesh_selection selection;
@@ -42,7 +43,7 @@ BOOST_AUTO_TEST_CASE(SelectionFrame_OfTheWholeCube_IsCentredAtTheMiddle)
 {
 	const auto frame = selection_frame(mesh, selection, pivot_mode::median, gizmo_orientation::world);
 	BOOST_REQUIRE(frame.has_value());
-	BOOST_TEST(near(frame->origin, glm::vec3(0.f)));
+	BOOST_TEST(close_to(frame->origin, glm::vec3(0.f)));
 }
 
 BOOST_AUTO_TEST_CASE(Translate_ThenBackToZero_ReturnsTheSnapshotPositions)
@@ -51,11 +52,11 @@ BOOST_AUTO_TEST_CASE(Translate_ThenBackToZero_ReturnsTheSnapshotPositions)
 	const std::size_t count = apply_transform(mesh, snapshot, translation_matrix(glm::vec3(1.f, 2.f, 3.f)));
 	BOOST_TEST(count == snapshot.positions.size());
 	for (const auto& [id, position] : snapshot.positions) {
-		BOOST_TEST(near(mesh.vertices().at(id).position, position + glm::vec3(1.f, 2.f, 3.f)));
+		BOOST_TEST(close_to(mesh.vertices().at(id).position, position + glm::vec3(1.f, 2.f, 3.f)));
 	}
 	apply_transform(mesh, snapshot, translation_matrix(glm::vec3(0.f)));
 	for (const auto& [id, position] : snapshot.positions) {
-		BOOST_TEST(near(mesh.vertices().at(id).position, position));
+		BOOST_TEST(close_to(mesh.vertices().at(id).position, position));
 	}
 }
 
@@ -65,15 +66,15 @@ BOOST_AUTO_TEST_CASE(Rotate_FourQuarterTurns_IsTheIdentity)
 	const glm::mat4 quarter = rotation_matrix(pivot, glm::vec3(0.f, 1.f, 0.f), std::numbers::pi_v<float> / 2.f);
 	const glm::mat4 full = quarter * quarter * quarter * quarter;
 	const glm::vec3 point(1.f, 2.f, 3.f);
-	BOOST_TEST(near(glm::vec3(full * glm::vec4(point, 1.f)), point));
+	BOOST_TEST(close_to(glm::vec3(full * glm::vec4(point, 1.f)), point));
 }
 
 BOOST_AUTO_TEST_CASE(Rotate_AboutZ_TurnsXTowardsY_AndKeepsThePivot)
 {
 	const glm::mat4 turn = rotation_matrix(glm::vec3(1.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f), std::numbers::pi_v<float> / 2.f);
-	BOOST_TEST(near(glm::vec3(turn * glm::vec4(2.f, 0.f, 0.f, 1.f)), glm::vec3(1.f, 1.f, 0.f)));
-	BOOST_TEST(near(glm::vec3(turn * glm::vec4(1.f, 0.f, 0.f, 1.f)), glm::vec3(1.f, 0.f, 0.f)));
-	BOOST_TEST(near(glm::vec3(rotation_matrix(glm::vec3(0.f), glm::vec3(0.f), 1.f) * glm::vec4(1.f, 2.f, 3.f, 1.f)), glm::vec3(1.f, 2.f, 3.f)));
+	BOOST_TEST(close_to(glm::vec3(turn * glm::vec4(2.f, 0.f, 0.f, 1.f)), glm::vec3(1.f, 1.f, 0.f)));
+	BOOST_TEST(close_to(glm::vec3(turn * glm::vec4(1.f, 0.f, 0.f, 1.f)), glm::vec3(1.f, 0.f, 0.f)));
+	BOOST_TEST(close_to(glm::vec3(rotation_matrix(glm::vec3(0.f), glm::vec3(0.f), 1.f) * glm::vec4(1.f, 2.f, 3.f, 1.f)), glm::vec3(1.f, 2.f, 3.f)));
 }
 
 BOOST_AUTO_TEST_CASE(Scale_KeepsThePivotAndScalesAlongTheFramesAxes)
@@ -81,8 +82,8 @@ BOOST_AUTO_TEST_CASE(Scale_KeepsThePivotAndScalesAlongTheFramesAxes)
 	pivot_frame frame;
 	frame.origin = glm::vec3(1.f, 0.f, 0.f);
 	const glm::mat4 scale = scale_matrix(frame, glm::vec3(2.f, 1.f, 1.f));
-	BOOST_TEST(near(glm::vec3(scale * glm::vec4(frame.origin, 1.f)), frame.origin));
-	BOOST_TEST(near(glm::vec3(scale * glm::vec4(2.f, 1.f, 0.f, 1.f)), glm::vec3(3.f, 1.f, 0.f)));
+	BOOST_TEST(close_to(glm::vec3(scale * glm::vec4(frame.origin, 1.f)), frame.origin));
+	BOOST_TEST(close_to(glm::vec3(scale * glm::vec4(2.f, 1.f, 0.f, 1.f)), glm::vec3(3.f, 1.f, 0.f)));
 }
 
 BOOST_AUTO_TEST_CASE(ApplyTransform_ANonFiniteResult_LeavesTheVertexWhereItWas)
@@ -92,7 +93,7 @@ BOOST_AUTO_TEST_CASE(ApplyTransform_ANonFiniteResult_LeavesTheVertexWhereItWas)
 	const std::size_t count = apply_transform(mesh, snapshot, translation_matrix(glm::vec3(inf, 0.f, 0.f)));
 	BOOST_TEST(count == 0u);
 	for (const auto& [id, position] : snapshot.positions) {
-		BOOST_TEST(near(mesh.vertices().at(id).position, position));
+		BOOST_TEST(close_to(mesh.vertices().at(id).position, position));
 	}
 }
 
@@ -103,7 +104,7 @@ BOOST_AUTO_TEST_CASE(SnapToStep_RoundsToTheNearestMultiple_AndIgnoresABadStep)
 	BOOST_TEST(snap_to_step(0.26f, 0.f) == 0.26f);
 	BOOST_TEST(snap_to_step(0.26f, -1.f) == 0.26f);
 	BOOST_TEST(snap_to_step(0.26f, std::numeric_limits<float>::quiet_NaN()) == 0.26f);
-	BOOST_TEST(near(snap_to_step(glm::vec3(0.26f, 0.04f, 1.f), 0.1f), glm::vec3(0.3f, 0.f, 1.f)));
+	BOOST_TEST(close_to(snap_to_step(glm::vec3(0.26f, 0.04f, 1.f), 0.1f), glm::vec3(0.3f, 0.f, 1.f)));
 }
 
 BOOST_AUTO_TEST_CASE(MovesBetween_OnlyMovedVertices_ListsThemInOrder)
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE(MovesBetween_OnlyMovedVertices_ListsThemInOrder)
 	BOOST_REQUIRE(moves.has_value());
 	BOOST_REQUIRE(moves->size() == 1u);
 	BOOST_TEST((*moves)[0].id == first);
-	BOOST_TEST(near((*moves)[0].after, glm::vec3(5.f)));
+	BOOST_TEST(close_to((*moves)[0].after, glm::vec3(5.f)));
 	BOOST_TEST(moves_between(mesh, mesh).value().empty());
 }
 
@@ -174,7 +175,7 @@ BOOST_AUTO_TEST_CASE(ApplyTransform_OnlyTheNonFiniteVertexIsSkipped)
 	const glm::vec3 untouched = mesh.vertices().at(snapshot.positions[0].first).position;
 	const std::size_t count = apply_transform(mesh, snapshot, glm::mat4(1.f));
 	BOOST_TEST(count == snapshot.positions.size() - 1);
-	BOOST_TEST(near(mesh.vertices().at(snapshot.positions[0].first).position, untouched));
+	BOOST_TEST(close_to(mesh.vertices().at(snapshot.positions[0].first).position, untouched));
 }
 
 BOOST_AUTO_TEST_CASE(Scale_ByZero_CollapsesToThePivot_AndBackByOneReturns)
@@ -184,11 +185,11 @@ BOOST_AUTO_TEST_CASE(Scale_ByZero_CollapsesToThePivot_AndBackByOneReturns)
 	frame.origin = glm::vec3(0.5f, 0.f, 0.f);
 	BOOST_TEST(apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(0.f))) == snapshot.positions.size());
 	for (const auto& entry : mesh.vertices()) {
-		BOOST_TEST(near(entry.second.position, frame.origin));
+		BOOST_TEST(close_to(entry.second.position, frame.origin));
 	}
 	apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(1.f)));
 	for (const auto& [id, position] : snapshot.positions) {
-		BOOST_TEST(near(mesh.vertices().at(id).position, position));
+		BOOST_TEST(close_to(mesh.vertices().at(id).position, position));
 	}
 }
 
@@ -200,7 +201,38 @@ BOOST_AUTO_TEST_CASE(Scale_AboutAVertex_KeepsThatVertex)
 	frame.origin = pivot;
 	const auto snapshot = capture_vertices(mesh, selected_vertices(mesh, selection));
 	apply_transform(mesh, snapshot, scale_matrix(frame, glm::vec3(3.f, 2.f, 0.5f)));
-	BOOST_TEST(near(mesh.vertices().at(id).position, pivot));
+	BOOST_TEST(close_to(mesh.vertices().at(id).position, pivot));
+}
+
+BOOST_AUTO_TEST_CASE(SelectionFrame_NormalOrientation_PutsZOnTheFacesNormal_AndKeepsTheAxesOrthonormal)
+{
+	mesh_selection faces;
+	const auto adjacency = mesh_adjacency(mesh);
+	faces.set_mode(select_mode::face, mesh, adjacency);
+	const face_id first = mesh.faces().begin()->first;
+	faces.apply_face(first, select_op::replace);
+	const auto frame = selection_frame(mesh, faces, pivot_mode::median, gizmo_orientation::normal);
+	BOOST_REQUIRE(frame.has_value());
+	glm::vec3 normal(0.f);
+	const auto& corners = mesh.faces().at(first).corners;
+	const glm::vec3 a = mesh.vertices().at(corners[0].vertex).position;
+	const glm::vec3 b = mesh.vertices().at(corners[1].vertex).position;
+	const glm::vec3 c = mesh.vertices().at(corners[2].vertex).position;
+	normal = glm::normalize(glm::cross(b - a, c - a));
+	BOOST_TEST(std::abs(glm::dot(frame->z, normal)) > 0.999f);
+	BOOST_TEST(std::abs(glm::dot(frame->x, frame->y)) < 1e-4f);
+	BOOST_TEST(std::abs(glm::dot(frame->x, frame->z)) < 1e-4f);
+	BOOST_TEST(glm::length(frame->x) == 1.f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(SelectionStamp_ChangesWithTheSelection_AndOnlyThen)
+{
+	const std::uint64_t all = selection_stamp(selection);
+	BOOST_TEST(selection_stamp(selection) == all);
+	mesh_selection one;
+	one.apply_vertex(mesh.vertices().begin()->first, select_op::replace);
+	BOOST_TEST(selection_stamp(one) != all);
+	BOOST_TEST(selection_stamp(one) != selection_stamp(mesh_selection{}));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
