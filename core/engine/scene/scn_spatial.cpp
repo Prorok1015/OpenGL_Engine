@@ -7,6 +7,7 @@
 #include <snk/scene/scn_model.h>
 #include <entt/entity/registry.hpp>
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 scn::spatial_world::spatial_world() = default;
@@ -77,6 +78,26 @@ ds::task_handle<scn::ray_batch> scn::spatial_world::raycast_batch(ds::task_syste
 	return m_backend->raycast_batch(tasks, world, std::move(requests), frame);
 }
 
+void scn::spatial_world::overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter,
+	std::vector<entt::entity>& out)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	const ds::frustum view = ds::frustum_from(view_projection);
+	// A plane with no normal is no plane, but not always a broken matrix: with a far plane at infinity or a tiny near plane the near or
+	// far one comes out as (0, 0, 0, w) in float, and w >= 0 means everything is on its inner side (ds::test_frustum takes it so). The
+	// four sides must be real planes: they are what the all-zero matrix of an empty rectangle lacks.
+	for (std::size_t i = 0; i < view.planes.size(); ++i) {
+		const glm::vec4& plane = view.planes[i];
+		const glm::vec3 normal{ plane };
+		const bool has_normal = glm::dot(normal, normal) > 0.f;
+		if (!std::isfinite(plane.x) || !std::isfinite(plane.y) || !std::isfinite(plane.z) || !std::isfinite(plane.w)
+			|| (!has_normal && (i < 4 || plane.w < 0.f))) {
+			return;
+		}
+	}
+	m_backend->overlap_frustum(world, view, filter, out);
+}
+
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "entities_moved runs on the main thread");
@@ -87,6 +108,32 @@ ds::task_handle<scn::ray_batch> scn::raycast_batch(ds::task_system& tasks, entt:
 	std::uint64_t frame)
 {
 	return spatial_world::attach(world).raycast_batch(tasks, world, std::move(requests), frame);
+}
+
+void scn::overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out)
+{
+	spatial_world::attach(world).overlap_frustum(world, view_projection, filter, out);
+}
+
+glm::mat4 scn::screen_rect_view_projection(const glm::mat4& view, const glm::mat4& projection, glm::vec2 corner_a, glm::vec2 corner_b,
+	glm::vec2 image_size)
+{
+	const glm::vec2 low = glm::min(corner_a, corner_b);
+	const glm::vec2 high = glm::max(corner_a, corner_b);
+	if (!(image_size.x > 0.f) || !(image_size.y > 0.f) || !(high.x > low.x) || !(high.y > low.y)) {
+		return glm::mat4{ 0.f };
+	}
+	// The rectangle in clip space (y up), mapped back onto the whole clip square.
+	const float left = 2.f * low.x / image_size.x - 1.f;
+	const float right = 2.f * high.x / image_size.x - 1.f;
+	const float bottom = 1.f - 2.f * high.y / image_size.y;
+	const float top = 1.f - 2.f * low.y / image_size.y;
+	glm::mat4 crop{ 1.f };
+	crop[0][0] = 2.f / (right - left);
+	crop[3][0] = -(right + left) / (right - left);
+	crop[1][1] = 2.f / (top - bottom);
+	crop[3][1] = -(top + bottom) / (top - bottom);
+	return crop * projection * view;
 }
 
 std::optional<scn::ray_hit> scn::raycast_closest(entt::registry& world, const ray& line, const ray_filter& filter)
