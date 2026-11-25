@@ -20,7 +20,7 @@ namespace edt
 {
 	class asset_browser_panel;
 	class thumbnail_disk_cache;
-		class thumbnail_service;
+	class thumbnail_service;
 	class blackboard_panel;
 	class build_settings_panel;
 	class console_panel;

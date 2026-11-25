@@ -152,6 +152,19 @@ namespace {
 		return levels;
 	}
 
+	// The file says how the texture is sampled; what it is made of comes from the pixels alone. A type, a depth or a layer
+	// count from the file would make the driver read that many pictures out of the one buffer (#926).
+	rnd::driver::texture_owner upload_2d(rnd::driver::driver_interface& drv, rnd::driver::texture_header header, const upload_pixels& pixels)
+	{
+		header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_2D;
+		header.usage = rnd::driver::texture_usage::sampled; // the desc file may say none or a render target: a loaded texture is only sampled
+		header.data.extent = rnd::driver::texture_header::texture_extent{ .width = pixels.width, .height = pixels.height };
+		header.data.format = pixels.format;
+		header.data.mip_levels = std::clamp<uint32_t>(header.data.mip_levels, 1, full_mip_chain(pixels.width, pixels.height));
+		header.data.initial_data = pixels.data;
+		return rnd::driver::make_texture(drv, header);
+	}
+
 	void warn_once(std::unordered_set<std::string>& told, const res::tag& texture, std::string_view why)
 	{
 		if (!told.emplace(texture.view()).second) return;
@@ -175,6 +188,22 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	const auto told = std::make_shared<std::unordered_set<std::string>>();
 	texture_manager.register_loader("texture_2d_desc", [told](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
+		if (const auto& own = tex_2d_desc.get_inline_pixels()) {
+			// Checked when the desc was read: the bytes are exactly width x height pixels of the format (#1204). The file
+			// holds its top row first, as a PNG does; a decoded picture (pct_adapter) is uploaded bottom row first.
+			upload_pixels pixels;
+			pixels.format = own->format;
+			pixels.width = own->width;
+			pixels.height = own->height;
+			const std::size_t row = own->bytes.size() / own->height;
+			pixels.converted.reserve(own->bytes.size());
+			for (uint32_t y = own->height; y-- > 0;) {
+				const auto first = own->bytes.begin() + static_cast<std::ptrdiff_t>(y * row);
+				pixels.converted.insert(pixels.converted.end(), first, first + static_cast<std::ptrdiff_t>(row));
+			}
+			pixels.data = pixels.converted.data();
+			return upload_2d(*drv, desc.get_header(), pixels);
+		}
 		auto picture_handle = tex_2d_desc.get_picture_handle();
 		if (!picture_handle.is_ready()) {
 			// Still loading in the background: the texture manager asks again next frame.
@@ -189,17 +218,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			warn_once(*told, desc.get_tag(), "its picture has no pixels the driver takes (1 to 4 channels, a size above zero)");
 			return {};
 		}
-		// The file says how the texture is sampled; what it is made of comes from the picture alone. A type, a depth or a
-		// layer count from the file would make the driver read that many pictures out of the one buffer (#926).
-		rnd::driver::texture_header header = desc.get_header();
-		header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_2D;
-		header.usage = rnd::driver::texture_usage::sampled; // the desc file may say none or a render target: a loaded picture is only sampled
-		header.data.extent = rnd::driver::texture_header::texture_extent{ .width = pixels->width, .height = pixels->height };
-		header.data.format = pixels->format;
-		header.data.mip_levels = std::clamp<uint32_t>(header.data.mip_levels, 1, full_mip_chain(pixels->width, pixels->height));
-		header.data.initial_data = pixels->data;
-		return rnd::driver::make_texture(*drv, header);
-
+		return upload_2d(*drv, desc.get_header(), *pixels);
 	});
 
 	rnd::get_gpu_profiler().init(*drv.get());
