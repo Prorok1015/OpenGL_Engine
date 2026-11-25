@@ -345,7 +345,7 @@ find_link(parent_id, anchor) -> optional<document_id>
 
 ## 15. Шаги
 
-Истории пока не созданы; после ревью каждый шаг становится историей в этом эпике.
+Истории: (a) [#1400](https://github.com/Prorok1015/OpenGL_Engine/issues/1400), (a2) [#1401](https://github.com/Prorok1015/OpenGL_Engine/issues/1401), (b) [#1402](https://github.com/Prorok1015/OpenGL_Engine/issues/1402), (c) [#1403](https://github.com/Prorok1015/OpenGL_Engine/issues/1403), (d) [#1404](https://github.com/Prorok1015/OpenGL_Engine/issues/1404), (e) [#1405](https://github.com/Prorok1015/OpenGL_Engine/issues/1405).
 
 **(a) Единый контракт документа — рефакторинг.**
 - Выделить `disk_state`, `write_gate` (11.1); перевести scene/prefab/data/mesh на них без смены поведения.
