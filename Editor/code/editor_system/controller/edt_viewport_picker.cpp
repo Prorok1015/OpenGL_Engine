@@ -3,6 +3,7 @@
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/scn_model.h>
 #include <entt/entity/registry.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -80,4 +81,43 @@ std::optional<edt::picked_node> edt::pick_node(entt::registry& world, const pick
 		}
 	}
 	return std::nullopt;
+}
+
+std::vector<edt::picked_node> edt::pick_nodes_in_box(entt::registry& world, const pick_box& box)
+{
+	if (!finite(box.view) || !finite(box.projection) || !finite(box.corner_a) || !finite(box.corner_b) || !finite(box.image_size)) {
+		return {};
+	}
+	if (!(box.image_size.x > 0.f) || !(box.image_size.y > 0.f)) {
+		return {};
+	}
+	const float determinant = glm::determinant(box.projection * box.view);
+	if (!std::isfinite(determinant) || !(std::abs(determinant) > 0.f)) {
+		return {};
+	}
+	const glm::vec2 low = glm::clamp(glm::min(box.corner_a, box.corner_b), glm::vec2{ 0.f }, box.image_size);
+	const glm::vec2 high = glm::clamp(glm::max(box.corner_a, box.corner_b), glm::vec2{ 0.f }, box.image_size);
+	if (!(high.x > low.x) || !(high.y > low.y)) {
+		return {};
+	}
+	scn::ray_filter filter;
+	filter.mask = ~scn::spatial_mask{ k_editor_helper_layer };
+	std::vector<entt::entity> found;
+	scn::overlap_frustum(world, scn::screen_rect_view_projection(box.view, box.projection, low, high, box.image_size), filter, found);
+	std::vector<entt::entity> owners;
+	owners.reserve(found.size());
+	for (const entt::entity entity : found) {
+		const entt::entity owner = node_owner(world, entity);
+		if (owner != entt::null) {
+			owners.push_back(owner);
+		}
+	}
+	std::sort(owners.begin(), owners.end());
+	owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+	std::vector<picked_node> out;
+	out.reserve(owners.size());
+	for (const entt::entity owner : owners) {
+		out.push_back(picked_node{ owner, world.get<scn::node_id_component>(owner).path });
+	}
+	return out;
 }

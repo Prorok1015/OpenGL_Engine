@@ -269,13 +269,19 @@ void edt::panels_component::wire_scene_callbacks()
 		m_ports.scene.reparent_entity(node_id, new_parent_id, insert_index);
 	});
 
-	m_viewport->set_on_pick([this](std::optional<std::vector<uint64_t>> path) {
-		if (!path) {
-			m_ports.context.selection().clear();
+	m_viewport->set_on_pick([this](const viewport_pick& pick) {
+		if (pick.box || pick.op != pick_op::replace || pick.paths.size() != 1) {
+			// A box, or a click with Shift or Ctrl: the nodes of the desc (a node inside an instance stands for the instance).
+			if (pick.op == pick_op::replace && pick.paths.empty()) {
+				m_ports.context.selection().clear();
+				return;
+			}
+			m_hierarchy->select_paths(pick.paths, pick.op);
 			return;
 		}
+		const std::vector<uint64_t>& path = pick.paths.front();
 		// Ids below a prefab instance are not nodes of the desc: the hierarchy takes them as the target tail.
-		const bool selected = select_longest_own_prefix(*path, [this](const std::vector<uint64_t>& full, const std::vector<uint64_t>& target) {
+		const bool selected = select_longest_own_prefix(path, [this](const std::vector<uint64_t>& full, const std::vector<uint64_t>& target) {
 			return m_hierarchy->select_path(full, target);
 		});
 		if (!selected)

@@ -17,6 +17,7 @@
 #include "edt_ui_metrics.h"
 #include "edt_viewport_picker.h"
 #include <imgui.h>
+#include <algorithm>
 #include <format>
 #include <optional>
 #include <string>
@@ -197,6 +198,7 @@ namespace edt
 			run_click(*reg, takes_input && !locked, have_camera && same_world, locked, cam_view, cam_proj);
 		else if (m_click)
 			m_click->cancel();
+		draw_box_selection();
 		reg = m_get_registry ? m_get_registry() : nullptr;
 		if (reg)
 			set_editor_camera_input(*reg, takes_input && (!m_click || m_click->camera_input()));
@@ -227,13 +229,39 @@ namespace edt
 			.pixel = pixel,
 			.modifiers = { io.KeyShift, io.KeyCtrl, io.KeyAlt },
 		});
-		if (result.kind != mesh::gesture_end::click || !m_on_pick)
+		if (!m_on_pick)
 			return;
-		const auto picked = pick_node(reg, { cam_view, cam_proj, result.point, m_viewport_size });
-		if (picked)
-			m_on_pick(picked->path);
-		else
-			m_on_pick(std::nullopt);
+		viewport_pick pick;
+		pick.op = pick_op_of(result.op);
+		if (result.kind == mesh::gesture_end::click) {
+			if (const auto picked = pick_node(reg, { cam_view, cam_proj, result.point, m_viewport_size }))
+				pick.paths.push_back(picked->path);
+		} else if (result.kind == mesh::gesture_end::box) {
+			pick.box = true;
+			const pick_box box{ cam_view, cam_proj, result.rect.min, result.rect.max, m_viewport_size };
+			for (const picked_node& node : pick_nodes_in_box(reg, box))
+				pick.paths.push_back(node.path);
+		} else {
+			return;
+		}
+		m_on_pick(pick);
+	}
+
+	void viewport_panel::draw_box_selection()
+	{
+		if (!m_click || !m_click->gesture().dragging_box())
+			return;
+		const mesh::pixel_rect box = m_click->gesture().box();
+		const ImVec2 origin(m_image_pos.x, m_image_pos.y);
+		ImDrawList* draw = ImGui::GetWindowDrawList();
+		draw->PushClipRect(origin, ImVec2(origin.x + m_viewport_size.x, origin.y + m_viewport_size.y), true);
+		const ImVec2 low(origin.x + box.min.x, origin.y + box.min.y);
+		const ImVec2 high(origin.x + box.max.x, origin.y + box.max.y);
+		ImVec4 fill = colors().info;
+		fill.w *= 0.15f;
+		draw->AddRectFilled(low, high, ImGui::ColorConvertFloat4ToU32(fill));
+		draw->AddRect(low, high, ImGui::ColorConvertFloat4ToU32(colors().info), 0.f, 0, std::max(1.f, dpi_px(1.f)));
+		draw->PopClipRect();
 	}
 
 	void viewport_panel::render_toolbar()

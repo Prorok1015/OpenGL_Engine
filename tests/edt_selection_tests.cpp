@@ -10,6 +10,7 @@
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <string>
 #include <vector>
 
@@ -267,6 +268,70 @@ BOOST_AUTO_TEST_CASE(Connections_StopRoutingWhenDropped)
 	service.select(at({ 1 }));
 	state.notify_changed();
 	BOOST_TEST(viewport.empty());
+}
+
+BOOST_AUTO_TEST_CASE(SelectPaths_ReplaceAddRemove_FollowTheViewportBoxRules)
+{
+	const auto add_node = [this](std::vector<scn::prefab_desc::prefab_node>& into, std::uint64_t id) -> scn::prefab_desc::prefab_node& {
+		scn::prefab_desc::prefab_node node;
+		node.node_id = id;
+		node.name = "n" + std::to_string(id);
+		into.push_back(node);
+		return into.back();
+	};
+	auto& children = state.world_descs[0].get_root().children;
+	children.reserve(4);
+	add_node(children, 1);
+	add_node(children, 2);
+	add_node(children, 3);
+	add_node(children[1].children, 20);
+	using paths = std::vector<std::vector<uint64_t>>;
+	const auto ids = [this] { return hierarchy.selected_node_ids(); };
+
+	hierarchy.select_paths(paths{ { 1 } }, edt::pick_op::replace);
+	BOOST_TEST((ids() == std::vector<uint64_t>{ 1 }));
+	BOOST_TEST(service.current().path == std::vector<uint64_t>{ 1 });
+
+	hierarchy.select_paths(paths{ { 2 }, { 3 } }, edt::pick_op::add);
+	BOOST_TEST((ids() == std::vector<uint64_t>{ 1, 2, 3 }));
+	BOOST_TEST(hierarchy.get_selected_node()->node_id == 3u);
+
+	hierarchy.select_paths(paths{ { 2 } }, edt::pick_op::remove);
+	BOOST_TEST((ids() == std::vector<uint64_t>{ 1, 3 }));
+
+	int announced = 0;
+	auto count = events.selection_changed.subscribe([&announced](const edt::selection&) { ++announced; });
+	hierarchy.select_paths(paths{ { 2 } }, edt::pick_op::remove);
+	hierarchy.select_paths(paths{}, edt::pick_op::add);
+	BOOST_TEST(announced == 0);
+
+	hierarchy.select_paths(paths{ { 3 } }, edt::pick_op::remove);
+	BOOST_TEST((ids() == std::vector<uint64_t>{ 1 }));
+	hierarchy.select_paths(paths{ { 1 } }, edt::pick_op::remove);
+	BOOST_TEST(ids().empty());
+	BOOST_TEST(service.current().empty());
+
+	hierarchy.select_paths(paths{ { 1 }, { 2 } }, edt::pick_op::replace);
+	BOOST_TEST((ids() == std::vector<uint64_t>{ 1, 2 }));
+	hierarchy.select_paths(paths{}, edt::pick_op::replace);
+	BOOST_TEST(ids().empty());
+	BOOST_TEST(service.current().empty());
+}
+
+BOOST_AUTO_TEST_CASE(SelectPaths_AnIdInsideAnInstance_StandsForTheNodeItPassesThrough_AndAnUnknownPathIsSkipped)
+{
+	auto& children = state.world_descs[0].get_root().children;
+	children.reserve(2);
+	scn::prefab_desc::prefab_node node;
+	node.node_id = 5;
+	node.name = "instance";
+	children.push_back(node);
+	using paths = std::vector<std::vector<uint64_t>>;
+
+	hierarchy.select_paths(paths{ { 5, 77, 78 }, { 99 }, { 5 } }, edt::pick_op::replace);
+	BOOST_TEST((hierarchy.selected_node_ids() == std::vector<uint64_t>{ 5 }));
+	hierarchy.select_paths(paths{ { 99 } }, edt::pick_op::replace);
+	BOOST_TEST(hierarchy.selected_node_ids().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

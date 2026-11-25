@@ -58,6 +58,12 @@ struct picker_env : test_util::scene_env
 		return point;
 	}
 
+	edt::pick_box box_of(glm::vec2 a, glm::vec2 b) const
+	{
+		const edt::pick_point camera = at_pixel({ 0.f, 0.f });
+		return { camera.view, camera.projection, a, b, camera.image_size };
+	}
+
 	entt::registry reg;
 	res::res_handle<rnd::geometry_desc> geometry;
 };
@@ -251,6 +257,81 @@ BOOST_AUTO_TEST_CASE(ANonFinitePixelImageOrMatrix_AndAPixelOutsideTheImage_PickN
 	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 100.f, 25.f })).has_value());
 	BOOST_TEST(!edt::pick_node(reg, at_pixel({ 50.f, 50.f })).has_value());
 	BOOST_TEST(edt::pick_node(reg, at_pixel({ 50.f, 25.f })).has_value());
+}
+
+// The box of #1327: the camera sees x in [-11.5, 11.5] at the plane z = 0, so a mesh at x = -6 is in the left half of the 100 x 50 image and one at
+// x = +6 in the right half.
+BOOST_AUTO_TEST_CASE(ABox_PicksTheNodesItTouches_InEntityOrder_AndOnlyThose)
+{
+	const auto left = node_mesh_at({ -6.f, 0.f, 0.f }, 1);
+	const auto right = node_mesh_at({ 6.f, 0.f, 0.f }, 2);
+	const auto in_box = [this](glm::vec2 a, glm::vec2 b) { return edt::pick_nodes_in_box(reg, box_of(a, b)); };
+
+	const auto left_half = in_box({ 0.f, 0.f }, { 50.f, 50.f });
+	BOOST_REQUIRE(left_half.size() == 1u);
+	BOOST_TEST((left_half[0].entity == left));
+	BOOST_TEST(left_half[0].path == std::vector<std::uint64_t>{ 1 });
+
+	const auto both = in_box({ 0.f, 0.f }, { 100.f, 50.f });
+	BOOST_REQUIRE(both.size() == 2u);
+	BOOST_TEST((both[0].entity == left));
+	BOOST_TEST((both[1].entity == right));
+
+	BOOST_TEST(in_box({ 50.f, 0.f }, { 0.f, 50.f }).size() == 1u);
+	BOOST_TEST(in_box({ 40.f, 0.f }, { 60.f, 50.f }).empty());
+}
+
+BOOST_AUTO_TEST_CASE(ABoxPartlyOutsideTheImage_IsClampedToIt)
+{
+	const auto left = node_mesh_at({ -6.f, 0.f, 0.f }, 1);
+	node_mesh_at({ 6.f, 0.f, 0.f }, 2);
+	const auto picked = edt::pick_nodes_in_box(reg, box_of({ -30.f, -30.f }, { 40.f, 90.f }));
+	BOOST_REQUIRE(picked.size() == 1u);
+	BOOST_TEST((picked[0].entity == left));
+	BOOST_TEST(edt::pick_nodes_in_box(reg, box_of({ 200.f, 0.f }, { 300.f, 50.f })).empty());
+}
+
+BOOST_AUTO_TEST_CASE(ABox_SkipsAHiddenMesh_AndAHelperMesh)
+{
+	const auto shown = node_mesh_at({ -6.f, 0.f, 0.f }, 1);
+	const auto hidden = node_mesh_at({ -6.f, 0.f, 1.f }, 2);
+	reg.remove<scn::renderable>(hidden);
+	const auto icon = node_mesh_at({ -6.f, 0.f, 2.f }, 3);
+	reg.emplace<scn::spatial_layers>(icon, scn::spatial_layers{ scn::spatial_mask{ edt::k_editor_helper_layer } });
+	const auto picked = edt::pick_nodes_in_box(reg, box_of({ 0.f, 0.f }, { 50.f, 50.f }));
+	BOOST_REQUIRE(picked.size() == 1u);
+	BOOST_TEST((picked[0].entity == shown));
+}
+
+BOOST_AUTO_TEST_CASE(TwoPartsOfOneNode_AreOneNode_AndAMeshWithoutANodeAbove_IsLeftOut)
+{
+	const auto root = reg.create();
+	reg.emplace<scn::node_id_component>(root, scn::node_id_component{ { 4, 9 } });
+	for (const float x : { -7.f, -5.f }) {
+		const auto part = mesh_at({ x, 0.f, 0.f });
+		reg.emplace<scn::parent_component>(part, scn::parent_component{ root });
+	}
+	mesh_at({ 6.f, 0.f, 0.f });
+	const auto picked = edt::pick_nodes_in_box(reg, box_of({ 0.f, 0.f }, { 100.f, 50.f }));
+	BOOST_REQUIRE(picked.size() == 1u);
+	BOOST_TEST((picked[0].entity == root));
+	BOOST_TEST((picked[0].path == std::vector<std::uint64_t>{ 4, 9 }));
+}
+
+BOOST_AUTO_TEST_CASE(ABoxWithNoAreaANonFiniteValueOrNoImage_PicksNothing)
+{
+	node_mesh_at({ -6.f, 0.f, 0.f }, 1);
+	BOOST_TEST(edt::pick_nodes_in_box(reg, box_of({ 10.f, 10.f }, { 10.f, 40.f })).empty());
+	BOOST_TEST(edt::pick_nodes_in_box(reg, box_of({ 10.f, 10.f }, { 40.f, 10.f })).empty());
+	BOOST_TEST(edt::pick_nodes_in_box(reg, box_of({ std::nanf(""), 0.f }, { 50.f, 50.f })).empty());
+	edt::pick_box no_image = box_of({ 0.f, 0.f }, { 50.f, 50.f });
+	no_image.image_size = { 0.f, 0.f };
+	BOOST_TEST(edt::pick_nodes_in_box(reg, no_image).empty());
+	edt::pick_box singular = box_of({ 0.f, 0.f }, { 50.f, 50.f });
+	singular.projection = glm::mat4{ 0.f };
+	BOOST_TEST(edt::pick_nodes_in_box(reg, singular).empty());
+	entt::registry nothing;
+	BOOST_TEST(edt::pick_nodes_in_box(nothing, box_of({ 0.f, 0.f }, { 50.f, 50.f })).empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

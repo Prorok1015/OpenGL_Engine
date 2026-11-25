@@ -117,6 +117,73 @@ namespace edt
 		return true;
 	}
 
+	void scene_hierarchy_panel::select_paths(const std::vector<std::vector<uint64_t>>& paths, pick_op op)
+	{
+		if (!m_world_desc) return;
+		std::vector<scn::prefab_desc::prefab_node*> found;
+		for (const std::vector<uint64_t>& path : paths) {
+			scn::prefab_desc::prefab_node* node = nullptr;
+			auto* children = &m_world_desc->get_root().children;
+			for (const uint64_t id : path) {
+				const auto it = std::ranges::find(*children, id, &scn::prefab_desc::prefab_node::node_id);
+				if (it == children->end()) break;
+				node = &*it;
+				children = &node->children;
+			}
+			if (node && std::ranges::find(found, node) == found.end()) found.push_back(node);
+		}
+		std::vector<scn::prefab_desc::prefab_node*> now;
+		if (m_multi_selected.size() > 1) {
+			now.assign(m_multi_selected.begin(), m_multi_selected.end());
+		} else if (m_selected_node && !m_selected_readonly) {
+			now.push_back(m_selected_node);
+		}
+		std::vector<scn::prefab_desc::prefab_node*> result;
+		switch (op) {
+		case pick_op::replace:
+			result = found;
+			break;
+		case pick_op::add:
+			result = now;
+			for (auto* node : found) {
+				if (std::ranges::find(result, node) == result.end()) result.push_back(node);
+			}
+			break;
+		case pick_op::remove:
+			for (auto* node : now) {
+				if (std::ranges::find(found, node) == found.end()) result.push_back(node);
+			}
+			break;
+		}
+		if (op != pick_op::replace && result == now) return;
+		m_last_clicked_flat_idx = -1;
+		m_multi_selected.clear();
+		m_selected_readonly = false;
+		if (result.empty()) {
+			m_selected_node = nullptr;
+		} else {
+			auto* primary = result.front();
+			for (auto* node : found) {
+				if (std::ranges::find(result, node) != result.end()) primary = node;
+			}
+			m_selected_node = primary;
+			if (result.size() > 1) m_multi_selected.insert(result.begin(), result.end());
+		}
+		notify_selected();
+	}
+
+	std::vector<uint64_t> scene_hierarchy_panel::selected_node_ids() const
+	{
+		std::vector<uint64_t> out;
+		if (m_multi_selected.size() > 1) {
+			for (const auto* node : m_multi_selected) out.push_back(node->node_id);
+		} else if (m_selected_node && !m_selected_readonly) {
+			out.push_back(m_selected_node->node_id);
+		}
+		std::ranges::sort(out);
+		return out;
+	}
+
 	void scene_hierarchy_panel::set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb)
 	{
 		m_on_node_selected = std::move(cb);
