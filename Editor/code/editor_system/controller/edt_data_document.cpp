@@ -737,7 +737,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 	if (!over && !is_dirty() && !migrated()) {
 		return save_result::ok();
 	}
-	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+	if (const std::optional<std::string> why = write_gate::blocker(m_files)) {
 		return save_result::failure(*why);
 	}
 	if (!over && m_disk.changed()) {
