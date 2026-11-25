@@ -93,6 +93,9 @@ endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC snk_editor_api PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_boost_json} PRIVATE snk::mcp_server)
 # EPIC-58 S7 (#759): project.migration_plan / project.migrate run the migration library in the editor.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::project_migration)
+# The thumbnails (#1192) decode pictures with img::image: exported by snk_engine, headers only here (snk_check_engine_copies).
+snk_usage_only(_edt_image_headers snk::image)
+target_link_libraries(${PROJECT_NAME} PRIVATE ${_edt_image_headers})
 # forge/curl: the owner-only access list of the request files (Windows security API).
 if(WIN32)
 	target_link_libraries(${PROJECT_NAME} PRIVATE advapi32)

@@ -197,6 +197,9 @@ target_link_libraries(unit_tests PRIVATE snk::mcp_server PRIVATE Boost::asio)
 # The tests create the null and validation backends: their public headers (snk/driver_null, snk/driver_validation).
 snk_usage_only(_snk_test_drivers snk::drv_null snk::drv_validation)
 target_link_libraries(unit_tests PRIVATE ${_snk_test_drivers})
+# The thumbnail tests (#1192) make pictures with img::image: exported by snk_engine, headers only.
+snk_usage_only(_snk_test_image snk::image)
+target_link_libraries(unit_tests PRIVATE ${_snk_test_image})
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
 # linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass,
