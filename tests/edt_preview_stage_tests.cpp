@@ -231,9 +231,9 @@ BOOST_AUTO_TEST_CASE(TheContentsFraming_PlacesTheCamera_AndSyncAppliesItAgain)
 	BOOST_TEST(orbit()->distance == 7.f);
 }
 
-BOOST_AUTO_TEST_CASE(AFailedOpen_IsTriedAgainAfterClose)
+BOOST_AUTO_TEST_CASE(AFailedOpen_IsTriedAgainAfterABackoff_WithoutAClose)
 {
-	// No context manager: the world cannot be made.
+	// No context manager on the first frame: the world cannot be made.
 	services.ctx_manager.reset();
 	edt::preview_stage& shown = open();
 	BOOST_TEST(!shown.has_world());
@@ -241,9 +241,28 @@ BOOST_AUTO_TEST_CASE(AFailedOpen_IsTriedAgainAfterClose)
 	shown.update();
 	BOOST_TEST(!shown.has_world());
 
-	shown.close();
+	int updates = 1;
+	while (!shown.has_world() && updates < edt::preview_stage::open_retry_frames) {
+		shown.update();
+		++updates;
+	}
+	BOOST_REQUIRE(shown.has_world());
+	BOOST_TEST(updates <= edt::preview_stage::open_retry_frames);
+	BOOST_TEST(mgr->find_set(shown.set_name()) != nullptr);
+	BOOST_TEST(content.builds == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ASync_RetriesAFailedOpen_AtTheNextUpdate)
+{
+	services.ctx_manager.reset();
+	edt::preview_stage& shown = open();
+	BOOST_TEST(!shown.has_world());
+	services.ctx_manager = mgr;
+
+	shown.sync();
 	shown.update();
-	BOOST_TEST(shown.has_world());
+	BOOST_REQUIRE(shown.has_world());
+	BOOST_TEST(mgr->find_set(shown.set_name()) != nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ACloseDuringALayerChange_OpensNothingInTheOldLayer)

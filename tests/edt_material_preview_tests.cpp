@@ -95,6 +95,11 @@ BOOST_AUTO_TEST_CASE(AnEdit_RewritesTheMemoryMaterial_WhichTheShapeDrawsWith)
 	BOOST_TEST(before->at("__type").as_string() == "material_desc");
 	BOOST_TEST(!before->contains("__parent"));
 
+	// The material as the engine resolves it: cached now, so the edit is seen only through signal_changed and a reload.
+	const auto resolved_before = rs->require_sync<scn::material_desc>(content->material_tag());
+	BOOST_REQUIRE(resolved_before.is_ready());
+	BOOST_TEST((resolved_before->albedo == ds::color(1.0f)));
+
 	const json::array albedo{ 0.5, 0.25, 0.125, 1.0 };
 	BOOST_REQUIRE(document->edit([&](json::value& value) {
 		json::value& uniforms = value.as_object()["uniforms"];
@@ -108,6 +113,9 @@ BOOST_AUTO_TEST_CASE(AnEdit_RewritesTheMemoryMaterial_WhichTheShapeDrawsWith)
 	const std::optional<json::object> after = stored_material();
 	BOOST_REQUIRE(after.has_value());
 	BOOST_TEST((after->at("uniforms").as_object().at("albedo") == json::value(albedo)));
+	const auto resolved_after = rs->require_sync<scn::material_desc>(content->material_tag());
+	BOOST_REQUIRE(resolved_after.is_ready());
+	BOOST_TEST((resolved_after->albedo == ds::color(0.5f, 0.25f, 0.125f, 1.0f)));
 	entt::registry& reg = *shown.registry();
 	const entt::entity shape = shape_entity(shown);
 	BOOST_REQUIRE(shape != entt::null);
@@ -116,6 +124,34 @@ BOOST_AUTO_TEST_CASE(AnEdit_RewritesTheMemoryMaterial_WhichTheShapeDrawsWith)
 	BOOST_TEST(material->mlt_desc.get_tag().view() == content->material_tag().view());
 	// The file is not written by the preview.
 	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(ManyEdits_KeepOneMemoryMaterialForTheDocument)
+{
+	edt::preview_stage& shown = open(k_plain_material);
+	BOOST_REQUIRE(shown.has_world());
+	const res::tag material = content->material_tag();
+
+	for (int edit = 1; edit <= 10; ++edit) {
+		BOOST_REQUIRE(document->edit([edit](json::value& value) {
+			json::value& uniforms = value.as_object()["uniforms"];
+			if (!uniforms.is_object()) uniforms = json::object{};
+			uniforms.as_object()["shininess"] = 4.0 * edit;
+			return true;
+		}));
+		shown.update();
+	}
+
+	std::vector<res::tag> copies;
+	for (const auto& file : ram->files) {
+		if (file.first.view().starts_with("memory://editor/material/")) copies.push_back(file.first);
+	}
+	BOOST_REQUIRE(copies.size() == 1u);
+	BOOST_TEST(copies.front().view() == material.view());
+	BOOST_TEST(content->material_tag().view() == material.view());
+	const auto resolved = rs->require_sync<scn::material_desc>(material);
+	BOOST_REQUIRE(resolved.is_ready());
+	BOOST_TEST(resolved->shininess == 40.0f);
 }
 
 BOOST_AUTO_TEST_CASE(TheShapeChoice_SwapsTheGeometry)

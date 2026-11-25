@@ -97,8 +97,12 @@ namespace edt
 		void release_world();
 		void rebuild_world();
 		// Gives up the world, the render targets, the world template and the content's resources (also done by the destructor).
-		// A failed open is tried again at the next update; a layer change in progress stays (rebuild_world ends it).
+		// A layer change in progress stays (rebuild_world ends it).
 		void close();
+
+		// A failed open (the template not loaded yet, no context manager) is tried again after this many update() calls;
+		// sync(), rebuild_world() and close() try at the next chance.
+		static constexpr int open_retry_frames = 30;
 
 		// The render targets are the renderer's: this gives their tags up when the stage closes. Set from the view's renderer.
 		using targets_release = std::function<void(const std::vector<res::tag>&)>;
@@ -114,7 +118,9 @@ namespace edt
 		const res::tag& world_template() const { return m_world_tag; }
 
 	private:
-		void open_world();
+		// Empty when the world is made, else why it is not.
+		std::string_view open_world();
+		void try_open_world();
 		void reconcile();
 		void apply_framing(entt::registry& reg);
 		void drop_world();
@@ -128,8 +134,10 @@ namespace edt
 
 		std::uint64_t m_serial = 0;
 		bool m_sky = true;
-		// The world could not be made (no context manager, no template): not tried again until rebuild_world or close.
-		bool m_failed = false;
+		// update() calls left before a failed open is tried again; zero: try at the next one.
+		int m_retry_frames = 0;
+		// The failure was logged: retries stay quiet until a world is made or the stage closes.
+		bool m_failure_logged = false;
 		// Between release_world and rebuild_world (a game layer change).
 		bool m_layer_parked = false;
 		bool m_has_world = false;

@@ -41,6 +41,7 @@ edt::preview_stage::preview_stage(editor_services& services, preview_content& co
 	static std::atomic<std::uint64_t> s_stages{ 0 };
 	m_serial = ++s_stages;
 	m_key = std::format("memory://editor/__preview_stage/{}.desc", m_serial);
+	m_working_tag = std::format("memory://editor/__preview_working/{}", m_serial);
 	if (rnd::render_system* render = m_view.render) {
 		m_release_targets = [render](const std::vector<res::tag>& tags) {
 			auto& textures = render->get_texture_manager();
@@ -63,9 +64,9 @@ void edt::preview_stage::update()
 	}
 	if (state == preview_content::state::waiting) return;
 	m_content_live = true;
-	if (!m_has_world && !m_layer_parked && !m_failed) {
-		open_world();
-		if (!m_has_world) m_failed = true;
+	if (!m_has_world && !m_layer_parked) {
+		if (m_retry_frames > 0 && --m_retry_frames > 0) return;
+		try_open_world();
 		return;
 	}
 	// An edit keeps the orbit the user chose: only sync() frames the camera again.
@@ -74,6 +75,8 @@ void edt::preview_stage::update()
 
 void edt::preview_stage::sync()
 {
+	// A user action: a failed open is tried at the next update, not after the backoff.
+	m_retry_frames = 0;
 	reconcile();
 	if (entt::registry* reg = registry()) apply_framing(*reg);
 }
@@ -174,36 +177,44 @@ void edt::preview_stage::draw_image()
 	}
 }
 
-void edt::preview_stage::open_world()
+void edt::preview_stage::try_open_world()
+{
+	const std::string_view failure = open_world();
+	if (m_has_world) {
+		m_retry_frames = 0;
+		m_failure_logged = false;
+		return;
+	}
+	m_retry_frames = open_retry_frames;
+	if (m_failure_logged) return;
+	m_failure_logged = true;
+	egLOG_ERROR("Editor/Preview", "No preview: {} (tried again every {} frames)", failure, open_retry_frames);
+}
+
+std::string_view edt::preview_stage::open_world()
 {
 	m_has_world = false;
 	auto ctx_mgr = m_services.ctx_manager.lock();
-	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return;
-	if (!m_services.resources() || !m_services.writable_resources() || !m_services.descs()) return;
+	if (!ctx_mgr) return "no context manager";
+	if (!m_services.sfactory() || !m_services.assembler()) return "no system factory or assembler";
+	if (!m_services.resources() || !m_services.writable_resources() || !m_services.descs()) return "the project resources are not available";
 
 	const auto template_text = m_services.resources()->require_sync<res::text_resource>(k_template_tag);
-	if (!template_text.is_ready()) {
-		egLOG_ERROR("Editor/Preview", "No preview: the preview template could not be loaded");
-		return;
-	}
+	if (!template_text.is_ready()) return "the preview template could not be loaded";
 	json::object world_json;
 	try {
 		json::parse_options options;
 		options.max_depth = 128;
 		world_json = json::parse(template_text->str(), {}, options).as_object();
 	} catch (const std::exception&) {
-		egLOG_ERROR("Editor/Preview", "No preview: the preview template is not JSON");
-		return;
+		return "the preview template is not JSON";
 	}
 	const res::tag world_tag{ m_key };
 	m_world_tag = world_tag;
 	m_services.writable_resources()->store(world_tag, m_services.descs()->serialize_to_bytes(json::value(std::move(world_json))));
 	m_services.resources()->signal_changed(world_tag);
 	const auto world_res = m_services.resources()->require_sync<scn::world_desc>(world_tag);
-	if (!world_res.is_ready()) {
-		egLOG_ERROR("Editor/Preview", "No preview: the preview world could not be made");
-		return;
-	}
+	if (!world_res.is_ready()) return "the preview world could not be made";
 
 	scn::world_context& preview = ctx_mgr->create_preview(m_key, context_name(), world_res->get_systems());
 	m_set_name = scn::context_manager::preview_set_name(m_key);
@@ -237,8 +248,6 @@ void edt::preview_stage::open_world()
 	reg.emplace<scn::name_component>(cam, "Preview Camera");
 	reg.emplace<scn::depth_level>(cam);
 
-	static std::atomic<std::uint64_t> s_worlds{ 0 };
-	m_working_tag = std::format("memory://editor/__preview_working/{}", ++s_worlds);
 	m_prefab = std::make_unique<scn::prefab_desc>();
 	m_prefab->get_root().name = "preview";
 	m_content.build(m_prefab->get_root());
@@ -246,6 +255,7 @@ void edt::preview_stage::open_world()
 	scn::assemble_prefab(*m_services.assembler(), reg, m_root, *m_prefab, m_prefab->get_root().name, res::tag{ m_working_tag });
 	m_has_world = true;
 	apply_sky();
+	return {};
 }
 
 void edt::preview_stage::apply_sky()
@@ -278,11 +288,10 @@ void edt::preview_stage::release_world()
 void edt::preview_stage::rebuild_world()
 {
 	m_layer_parked = false;
-	m_failed = false;
+	m_retry_frames = 0;
 	// A stage that showed nothing yet (or whose content has nothing to show) waits for update(), which asks the content.
 	if (m_has_world || !m_content_live) return;
-	open_world();
-	if (!m_has_world) m_failed = true;
+	try_open_world();
 }
 
 void edt::preview_stage::release_resources()
@@ -310,5 +319,6 @@ void edt::preview_stage::close()
 	release_resources();
 	m_content.release();
 	m_content_live = false;
-	m_failed = false;
+	m_retry_frames = 0;
+	m_failure_logged = false;
 }
