@@ -105,12 +105,24 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 		result.sources.push_back(std::move(expanded.sources));
 	}
 
+	// One injected define per line: a line break would shift the kinds the build log names, or start a #line that
+	// closes the block early. Such entries are not injected and fail the load.
+	const auto has_line_break = [](std::string_view text) { return text.find_first_of("\r\n") != std::string_view::npos; };
+	std::vector<std::string> broken_defines;
 	std::ostringstream addition_defines;
 	for (const auto& [name, value] : cdata.constants) {
+		if (has_line_break(name) || has_line_break(value)) {
+			broken_defines.push_back(name);
+			continue;
+		}
 		addition_defines << std::format("#define {} {}\n", name, value);
 	}
 
 	for (const auto& def : cdata.defines) {
+		if (has_line_break(def)) {
+			broken_defines.push_back(def);
+			continue;
+		}
 		addition_defines << std::format("#define {}\n", def);
 	}
 
@@ -142,6 +154,11 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 		if (!rnd::insert_after_version(header.body, inserted)) {
 			problems += std::format("'{}': the source has to begin with a #version directive\n", header.title);
 			result.problems.push_back(make_problem(tags[index], 0, "shader/load", "the source has to begin with a #version directive"));
+		}
+		for (const std::string& name : broken_defines) {
+			std::string message = std::format("define \"{}\" has a line break in its value; injected defines are one line each", name);
+			problems += std::format("'{}': {}\n", header.title, message);
+			result.problems.push_back(make_problem(tags[index], 0, "shader/load", std::move(message)));
 		}
 	}
 	for (rnd::shader_problem& problem : result.problems) {

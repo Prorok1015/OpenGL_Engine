@@ -347,7 +347,7 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 			const bool known = stage.stage < sources.size() && parsed->source < sources[stage.stage].size();
 			const bool injected = !known && !block.empty() && parsed->source == sources[stage.stage].size();
 			if (injected) {
-				message = injected_prefix(block, parsed->line, constant_count) + message;
+				message = bounded(injected_prefix(block, parsed->line, constant_count) + message, false);
 			}
 			auto problem = known
 				? make_problem(sources[stage.stage][parsed->source], parsed->line, parsed->column, std::move(message), program)

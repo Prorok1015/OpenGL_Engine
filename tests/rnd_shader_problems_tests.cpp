@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include "rnd_null_driver.h"
 #include "shader/rnd_shader_manager.h"
+#include "shader/rnd_shader_source_map.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
 #include <snk/resource/res_asset_index.h>
@@ -747,6 +748,81 @@ BOOST_AUTO_TEST_CASE(AConstantsLineIsTheDefineAndTheStageLineAfterTheDefinesKeep
 	BOOST_TEST(problems[1].file == vertex);
 	BOOST_TEST(problems[1].line == 2);
 	BOOST_TEST(problems[1].message == "error: after");
+}
+
+// An empty constant value is the line "#define NAME ": still one line, so the lines after it keep their kinds.
+BOOST_AUTO_TEST_CASE(AnEmptyConstantValueKeepsTheNumberAndKindOfEveryInjectedDefine)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const auto vertex = put("empty_constant.vert", "#version 450 core\nvoid main() {}\n");
+	auto cdata = program_of(vertex, put("empty_constant.frag", good_fragment));
+	cdata.constants = { { "K_EMPTY", "" } };
+	cdata.defines = { "USE_FOG" };
+	const auto variant = shaders.variants().intern(cdata);
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>&) -> std::optional<driver::shader_build_log> {
+		return stage_log(0, "1:3(1): error: empty\n1:4(1): error: fog\n");
+	});
+	BOOST_TEST(shaders.program(variant) == nullptr);
+	const auto problems = shaders.problems();
+	BOOST_REQUIRE(problems.size() == 2u);
+	BOOST_TEST(problems[0].message == "injected define #3 \"#define K_EMPTY \" (constant): error: empty");
+	BOOST_TEST(problems[1].message == "injected define #4 \"#define USE_FOG\" (define): error: fog");
+}
+
+// Without the `#line 1 N` block after #version, number N is no source: the stage file with no line, as before #1387.
+BOOST_AUTO_TEST_CASE(SourceNumberNWithoutTheBlockOfDefinesIsTheStageWithoutALine)
+{
+	const res::tag vertex{ "res://no_block.vert" };
+	const std::vector<driver::shader_header> headers{
+		{ .title = "no_block.vert", .body = "#version 450 core\nvoid main() {}\n", .type = driver::shader_header::shader_type::VERTEX } };
+	const std::vector<std::vector<res::tag>> sources{ { vertex } };
+	const auto problems = problems_of_build_log(stage_log(0, "1(2) : error C0000: no block\n"), headers, sources, "no_block", 0);
+	BOOST_REQUIRE(problems.size() == 1u);
+	BOOST_TEST(problems[0].file == vertex);
+	BOOST_TEST(problems[0].line == 0);
+	BOOST_TEST(problems[0].message == "error C0000: no block");
+	BOOST_TEST(problems[0].message.find("injected") == std::string::npos);
+}
+
+// A stage body with CRLF line ends: the block is found and its lines keep their numbers and kinds.
+BOOST_AUTO_TEST_CASE(TheBlockOfDefinesIsFoundInACrlfBody)
+{
+	const res::tag vertex{ "res://crlf.vert" };
+	const std::vector<driver::shader_header> headers{ { .title = "crlf.vert",
+		.body = "#version 450 core\r\n#line 1 1\r\n#define MAX_LIGHT_COUNT 8\r\n#define SNK_VERTEX_SHADER\r\n"
+			"#define K_ONE 1\r\n#define USE_FOG\r\n#line 2 0\r\nvoid main() {}\r\n",
+		.type = driver::shader_header::shader_type::VERTEX } };
+	const std::vector<std::vector<res::tag>> sources{ { vertex } };
+	const auto problems = problems_of_build_log(stage_log(0, "1:1(1): error: engine\r\n1:3(1): error: constant\r\n1:4(1): error: define\r\n"),
+		headers, sources, "crlf", 1);
+	BOOST_REQUIRE(problems.size() == 3u);
+	for (const shader_problem& problem : problems) {
+		BOOST_TEST(problem.file == vertex);
+		BOOST_TEST(problem.line == 0);
+	}
+	BOOST_TEST(problems[0].message == "injected define #1 \"#define MAX_LIGHT_COUNT 8\" (engine): error: engine");
+	BOOST_TEST(problems[1].message == "injected define #3 \"#define K_ONE 1\" (constant): error: constant");
+	BOOST_TEST(problems[2].message == "injected define #4 \"#define USE_FOG\" (define): error: define");
+}
+
+// A line break in an injected define would start another line (here a #line that ends the block): the load refuses it.
+BOOST_AUTO_TEST_CASE(AnInjectedDefineWithALineBreakIsALoadProblem)
+{
+	const auto vertex = put("line_break.vert", "#version 450 core\nvoid main() {}\n");
+	auto cdata = program_of(vertex, put("line_break.frag", good_fragment));
+	cdata.constants = { { "K_BAD", "1\n#line 5 0" } };
+	cdata.defines = { "USE_FOG\r" };
+	const auto result = load(cdata);
+	BOOST_TEST(!result.ok());
+	BOOST_TEST(!result.error.empty());
+	const auto has_problem = [&](const std::string& message) {
+		return std::ranges::any_of(result.problems, [&](const shader_problem& problem) {
+			return problem.file == vertex && problem.line == 0 && problem.code == "shader/load" && problem.message == message;
+		});
+	};
+	BOOST_TEST(has_problem("define \"K_BAD\" has a line break in its value; injected defines are one line each"));
+	BOOST_TEST(has_problem("define \"USE_FOG\r\" has a line break in its value; injected defines are one line each"));
 }
 
 BOOST_AUTO_TEST_CASE(AnErrorInANestedIncludeIsALineOfTheInnermostFile)

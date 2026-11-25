@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/rnd_shader_problem.h>
@@ -59,6 +60,7 @@ namespace rnd
 	// Number sources[i].size() is the block of defines after #version when the body has `#line 1 <that number>` right
 	// after the #version line: a problem of the stage file with no line that names the define (the engine's
 	// engine_define_lines first, then `constant_count` constants, then the defines).
-	std::vector<shader_problem> problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
+	// Exported for the unit tests: a body and a log no shader_config::load gives (#1387).
+	SNK_API std::vector<shader_problem> problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
 		const std::vector<std::vector<res::tag>>& sources, const std::string& program, std::size_t constant_count);
 }
