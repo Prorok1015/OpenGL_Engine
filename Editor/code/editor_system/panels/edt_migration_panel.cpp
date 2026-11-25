@@ -123,7 +123,8 @@ void edt::migration_panel::draw_rollback_question()
 			ImGui::TextUnformatted(question->text.c_str(), question->text.c_str() + question->text.size());
 		}
 		ImGui::EndChild();
-		ImGui::TextUnformatted("A file changed since the migration wrote it refuses the whole rollback; nothing is written then.");
+		ImGui::TextUnformatted("A file it put back that changed since the migration wrote it refuses the whole rollback; nothing is written then.");
+		ImGui::TextUnformatted("A file it created that changed since is kept, with a warning.");
 		ImGui::TextUnformatted("Open documents are closed and the level is opened again from disk.");
 	}
 	ImGui::BeginDisabled(!m_model.can_confirm_roll_back());

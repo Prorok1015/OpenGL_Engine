@@ -264,6 +264,58 @@ BOOST_AUTO_TEST_CASE(Read_AFolderSwappedForALinkAfterTheChecks_IsRefusedLikeAMis
 	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
 }
 
+// #1359: code/ itself replaced by a folder link (a junction on Windows) to a copy outside the project, while the
+// commands are registered or right before a read walks: the read and the write open code/ without following a link
+// and refuse, the copy is neither returned nor changed, and the answer is that of a missing file.
+BOOST_AUTO_TEST_CASE(ACodeFolderSwappedForALinkDuringTheSession_IsRefusedToReadAndWrite)
+{
+	const std::string version = version_of("src/game.cpp");
+	dir.write("outside_code/src/game.cpp", "secret");
+	const fs::path copy = dir.path() / "outside_code";
+	const fs::path moved = project / "code_moved";
+	const auto swap = [&] {
+		fs::rename(code, moved);
+		test_util::make_folder_link(code, copy);
+	};
+	const auto restore = [&] {
+		std::error_code ec;
+		fs::remove(code, ec);
+		fs::rename(moved, code, ec);
+	};
+	const auto refused_like_a_missing_file = [&](const cmd::result& result) {
+		BOOST_TEST(result.code == cmd::codes::failed);
+		BOOST_TEST(result.error == "no file 'src/game.cpp' in code/", result.error);
+		BOOST_TEST(json::serialize(result.value).find("secret") == std::string::npos);
+	};
+
+	swap();
+	refused_like_a_missing_file(call("code.read", json::object{ { "path", "src/game.cpp" } }));
+	const std::string copy_version = edt::code_version_of(bytes_of("secret"));
+	refused_like_a_missing_file(call("code.write",
+		json::object{ { "path", "src/game.cpp" }, { "version", copy_version }, { "text", "x" } }));
+	refused_like_a_missing_file(call("code.write",
+		json::object{ { "path", "src/game.cpp" }, { "version", version }, { "text", "x" } }));
+	BOOST_TEST(call("code.create", json::object{ { "path", "src/planted.cpp" }, { "text", "x" } }).code
+		== cmd::codes::failed);
+	restore();
+	BOOST_TEST(read_file(copy / "src" / "game.cpp") == "secret");
+	BOOST_TEST(!fs::exists(copy / "src" / "planted.cpp"));
+
+	bool swapped = false;
+	read_hook = [&](platform::beneath::read_stage stage) {
+		if (stage != platform::beneath::read_stage::before_walk || swapped) return;
+		swapped = true;
+		swap();
+	};
+	const auto read = call("code.read", json::object{ { "path", "src/game.cpp" } });
+	read_hook = nullptr;
+	BOOST_REQUIRE(swapped);
+	restore();
+	refused_like_a_missing_file(read);
+	BOOST_TEST(read_file(copy / "src" / "game.cpp") == "secret");
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
+}
+
 BOOST_AUTO_TEST_CASE(Create_NeverOverwrites_AndMakesTheFolders)
 {
 	const auto made = call("code.create", json::object{ { "path", "src/sub/new.h" }, { "text", "#pragma once\n" } });

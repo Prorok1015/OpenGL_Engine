@@ -19,6 +19,7 @@
 #include "edt_shape_request.h"
 #include "edt_ui_probe.h"
 #include "edt_viewport_panel.h"
+#include <snk/editor/edt_selection_service.h>
 #include "edt_world_controller.h"
 #include "edt_world_systems_panel.h"
 #include <snk/common/logger/engine_log.h>
@@ -61,6 +62,7 @@ edt::panels_component::panels_component(ports from)
 	m_console = std::make_shared<console_panel>();
 	m_asset_browser = std::make_shared<asset_browser_panel>();
 	m_asset_browser->set_layers(m_ports.resources.get_resource_layers());
+	m_asset_browser->set_asset_kinds(&m_ports.context.asset_kinds());
 	m_asset_browser->set_ui_probe(m_ui_probe);
 	if (const auto code_roots = m_ports.resources.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
 		code_actions actions{ m_ports.resources, code_tree_model{ code_roots.back() },
@@ -148,6 +150,18 @@ void edt::panels_component::wire_scene_callbacks()
 		m_ports.scene.reparent_entity(node_id, new_parent_id, insert_index);
 	});
 
+	m_viewport->set_on_pick([this](std::optional<std::vector<uint64_t>> path) {
+		if (!path) {
+			m_ports.context.selection().clear();
+			return;
+		}
+		// Ids below a prefab instance are not nodes of the desc: the hierarchy takes them as the target tail.
+		const bool selected = select_longest_own_prefix(*path, [this](const std::vector<uint64_t>& full, const std::vector<uint64_t>& target) {
+			return m_hierarchy->select_path(full, target);
+		});
+		if (!selected)
+			egLOG_WARN("editor", "viewport pick: the hierarchy does not know the picked node, the selection is kept");
+	});
 	m_viewport->set_on_transform_committed(
 		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
 			m_ports.scene.on_transform_committed(path, pos, rot, scale);

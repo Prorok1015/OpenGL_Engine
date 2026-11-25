@@ -54,6 +54,7 @@ void edt::editor_settings_panel::on_render()
 		}
 	}
 	draw_autosave();
+	draw_modeller();
 }
 
 void edt::editor_settings_panel::draw_autosave()
@@ -88,6 +89,35 @@ void edt::editor_settings_panel::draw_autosave()
 	}
 	if (!m_autosave_message.empty()) {
 		ImGui::TextWrapped("%s", m_autosave_message.c_str());
+	}
+}
+
+void edt::editor_settings_panel::draw_modeller()
+{
+	if (!m_modeller.get || !m_modeller.set) {
+		return;
+	}
+	bold_separator_text("Modeller");
+	modeller_settings current = m_modeller.get();
+	bool changed = false;
+	const auto step_field = [&](const char* label, float& value, float low, float high, const char* format) {
+		ImGui::SetNextItemWidth(em(120.f));
+		float edited = value;
+		ImGui::InputFloat(label, &edited, 0.f, 0.f, format);
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			value = std::clamp(edited, low, high);
+			changed = true;
+		}
+	};
+	step_field("Move step##modeller", current.move_step, k_modeller_min_step, k_modeller_max_step, "%.4f");
+	step_field("Rotate step (degrees)##modeller", current.rotate_step_degrees, k_modeller_min_step, k_modeller_max_rotate_step, "%.2f");
+	step_field("Scale step##modeller", current.scale_step, k_modeller_min_step, k_modeller_max_step, "%.4f");
+	ImGui::TextDisabled("Hold Ctrl while dragging the gizmo in the mesh modeller to snap to these steps.");
+	if (changed) {
+		m_modeller_message = m_modeller.set(current);
+	}
+	if (!m_modeller_message.empty()) {
+		ImGui::TextWrapped("%s", m_modeller_message.c_str());
 	}
 }
 

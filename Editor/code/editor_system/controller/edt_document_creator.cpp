@@ -6,6 +6,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_asset_walk.h>
 #include <snk/resource/res_free_name.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <algorithm>
 #include <cctype>
@@ -20,25 +21,85 @@ std::vector<std::string> edt::document_creator::types() const
 	return descs ? descs->document_types() : std::vector<std::string>{};
 }
 
-std::string edt::document_creator::file_name(std::string_view name)
-{
-	constexpr std::string_view extension = ".desc";
-	std::string lower{ name };
-	std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-	if (lower.ends_with(extension)) {
-		return std::string{ name.substr(0, name.size() - extension.size()) } + std::string{ extension };
+namespace {
+	std::string lowered(std::string_view text)
+	{
+		std::string lower{ text };
+		std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return lower;
 	}
-	return std::string{ name } + std::string{ extension };
+
+	constexpr std::string_view k_desc_extension = ".desc";
+}
+
+std::string edt::document_creator::file_name(std::string_view name, std::string_view suffix,
+	std::span<const std::string> tails)
+{
+	const std::string lower = lowered(name);
+	std::size_t cut = 0;
+	const auto consider = [&](std::string_view tail) {
+		if (tail.size() > cut && lower.ends_with(lowered(tail))) {
+			cut = tail.size();
+		}
+	};
+	consider(k_desc_extension);
+	consider(suffix);
+	if (suffix.size() > k_desc_extension.size() && suffix.ends_with(k_desc_extension)) {
+		consider(suffix.substr(0, suffix.size() - k_desc_extension.size()));
+	}
+	for (const std::string& tail : tails) {
+		consider(tail);
+	}
+	return std::string{ name.substr(0, name.size() - cut) } + std::string{ suffix };
+}
+
+std::vector<std::string> edt::document_creator::desc_suffixes() const
+{
+	std::vector<std::string> suffixes;
+	if (m_ports.desc_kinds) {
+		for (auto& kind : m_ports.desc_kinds()) {
+			suffixes.push_back(std::move(kind.second));
+		}
+	}
+	return suffixes;
+}
+
+std::string edt::document_creator::suffix_of(std::string_view type) const
+{
+	if (m_ports.desc_kinds) {
+		for (const auto& [id, suffix] : m_ports.desc_kinds()) {
+			if (id == type && suffix.size() > k_desc_extension.size() && suffix.ends_with(k_desc_extension)) {
+				return suffix;
+			}
+		}
+	}
+	return std::string{ k_desc_extension };
+}
+
+std::string edt::document_creator::file_name_of(std::string_view type, std::string_view name) const
+{
+	return file_name(name, suffix_of(type), desc_suffixes());
 }
 
 std::string edt::document_creator::check(std::string_view folder, std::string_view name) const
 {
-	if (name.empty()) {
+	return check_file(folder, name, file_name(name), k_desc_extension);
+}
+
+std::string edt::document_creator::check(std::string_view folder, std::string_view type, std::string_view name) const
+{
+	return check_file(folder, name, file_name_of(type, name), suffix_of(type));
+}
+
+std::string edt::document_creator::check_file(std::string_view folder, std::string_view name, const std::string& file,
+	std::string_view suffix) const
+{
+	if (name.empty() || file.size() <= suffix.size()) {
 		return "give the document a name";
 	}
-	const std::string file = file_name(name);
-	if (file.size() <= std::string_view{ ".desc" }.size()) {
-		return "give the document a name";
+	if (file.size() > res::max_sanitized_part_length) {
+		return std::format("the name is too long: '{}...' has {} bytes, a file name has at most {}", file.substr(0, 32),
+			file.size(), res::max_sanitized_part_length);
 	}
 	if (name.back() == '.' || name.back() == ' ') {
 		return "a name does not end with '.' or ' '";
@@ -82,7 +143,7 @@ edt::document_creation edt::document_creator::create(std::string_view folder, st
 	if (const std::optional<std::string> why = m_ports.blocker ? m_ports.blocker() : std::nullopt) {
 		return { {}, *why };
 	}
-	if (std::string problem = check(folder, name); !problem.empty()) {
+	if (std::string problem = check(folder, type, name); !problem.empty()) {
 		return { {}, std::move(problem) };
 	}
 	const std::vector<std::string> known = types();
@@ -94,7 +155,7 @@ edt::document_creation edt::document_creator::create(std::string_view folder, st
 	if (!descs || !resources) {
 		return { {}, "the editor has no project open" };
 	}
-	const std::string file = file_name(name);
+	const std::string file = file_name_of(type, name);
 	const std::string relative = folder.empty() ? file : std::format("{}/{}", folder, file);
 	const json::value content = json::object{ { "__type", std::string(type) }, { "__version", descs->current_version(type) } };
 	const res::tag tag = res::tag::make(relative);
@@ -110,7 +171,33 @@ void edt::document_create_form::open(std::string folder)
 	m_types = m_creator.types();
 	m_type_index = 0;
 	m_name.clear();
+	m_file.clear();
 	m_problem.clear();
+	m_error.clear();
+}
+
+void edt::document_create_form::set_type_index(std::size_t index)
+{
+	if (index >= m_types.size() || index == m_type_index) {
+		return;
+	}
+	m_type_index = index;
+	recheck();
+}
+
+void edt::document_create_form::recheck()
+{
+	const bool named = !m_name.empty() && !m_types.empty();
+	m_file = named ? m_creator.file_name_of(m_types[m_type_index], m_name) : std::string{};
+	m_problem = named ? m_creator.check(m_folder, m_types[m_type_index], m_name) : std::string{};
+	m_replaced = false;
+	if (named) {
+		const std::string suffix = lowered(m_creator.suffix_of(m_types[m_type_index]));
+		const std::size_t stem = m_file.size() - suffix.size();
+		const std::string removed = lowered(std::string_view{ m_name }.substr(std::min(stem, m_name.size())));
+		const std::string own_stem = suffix.substr(0, suffix.size() - k_desc_extension.size());
+		m_replaced = !removed.empty() && removed != suffix && removed != own_stem;
+	}
 	m_error.clear();
 }
 
@@ -120,13 +207,18 @@ void edt::document_create_form::set_name(std::string name)
 		return;
 	}
 	m_name = std::move(name);
-	m_problem = m_name.empty() ? std::string{} : m_creator.check(m_folder, m_name);
-	m_error.clear();
+	recheck();
 }
 
 std::optional<res::tag> edt::document_create_form::submit()
 {
 	if (!can_submit()) {
+		return std::nullopt;
+	}
+	if (const std::string shown = m_file; m_creator.file_name_of(m_types[m_type_index], m_name) != shown) {
+		recheck();
+		m_error = std::format(
+			"the file would now be '{}', not '{}' (the asset kinds changed): check it and create again", m_file, shown);
 		return std::nullopt;
 	}
 	const document_creation made = m_creator.create(m_folder, m_types[m_type_index], m_name);

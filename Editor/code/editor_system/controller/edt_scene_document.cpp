@@ -22,7 +22,9 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 	switch (record_edit(label)) {
 	case scene_history_index::diff_result::changed:
 		// The worlds the edit changed, the active one or not; the others stay as they are.
-		reload_touched();
+		if (!patch_touched()) {
+			reload_touched();
+		}
 		break;
 	case scene_history_index::diff_result::unchanged:
 		// Nothing to record, but the active world is still rebuilt from its desc: an edit that came back to the desc's
@@ -249,6 +251,30 @@ void edt::scene_document::refresh_systems_cache()
 	}
 }
 
+bool edt::scene_document::patch_touched()
+{
+	const auto& touched = m_index.touched();
+	if (!m_node_patcher || m_edits_locked || !m_index.last_diff_is_field_edits() || touched.size() != 1
+		|| static_cast<int>(touched.front()) != active_world_idx) {
+		return false;
+	}
+	const auto& edits = m_index.last_field_edits();
+	if (edits.empty()) {
+		return false;
+	}
+	try {
+		if (!m_node_patcher(edits)) {
+			return false;
+		}
+	} catch (const std::exception& error) {
+		egLOG_WARN("Editor/Patch", "a node patch threw, the world is rebuilt: {}", error.what());
+		return false;
+	}
+	m_index.take_touched();
+	notify_changed();
+	return true;
+}
+
 void edt::scene_document::reload_touched()
 {
 	// An edit or an undo can change a world that is not the active one: its context is rebuilt as well, or it would
@@ -276,13 +302,16 @@ void edt::scene_document::notify_changed()
 edt::save_result edt::scene_document::save()
 {
 	if (!can_save()) return save_result::failure("no level is loaded");
-	return m_save() ? save_result::ok() : save_result::failure("the level could not be written");
+	if (m_save()) return save_result::ok();
+	return save_result::failure(m_changed_on_disk ? "the level file changed on disk: reload it or overwrite it" : "the level could not be written");
 }
 
 edt::save_result edt::scene_document::save_as(const res::tag& target)
 {
 	if (!can_save() || !m_save_as) return save_result::failure("no level is loaded");
-	return m_save_as(target) ? save_result::ok() : save_result::failure("the level could not be written");
+	if (m_save_as(target)) return save_result::ok();
+	return save_result::failure(m_changed_on_disk && target == level_tag ? "the level file changed on disk: reload it or overwrite it"
+		: "the level could not be written");
 }
 
 edt::autosave_snapshot edt::scene_document::autosave_capture() const

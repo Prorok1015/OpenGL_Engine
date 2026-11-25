@@ -297,15 +297,35 @@ namespace {
 	// The listing of a rollback, every path on its own line: past this it is not shown, and the rollback is refused.
 	constexpr std::size_t k_max_listing_bytes = std::size_t{ 64 } * 1024;
 
-	std::string listing_of(std::string_view id, const pmg::journal_paths& paths)
+	// A created file a rollback would keep as it is now: something other than a regular file at its name, or a size other
+	// than the journal's. Only a stat, as this runs on the main thread (a question's describe, the window): a file of the
+	// journal's size is compared by its hash in the rollback itself, on the job's thread (#1346).
+	bool kept_by_rollback(const fs::path& root, const std::string& path, const pmg::created_check& check)
+	{
+		if (check.hash.empty()) return false;
+		const fs::path file = root / fs_paths::path_from_utf8(path);
+		std::error_code ec;
+		const fs::file_status status = fs::symlink_status(file, ec);
+		if (status.type() == fs::file_type::not_found) return false;
+		if (ec || !fs::is_regular_file(status)) return true;
+		const std::uintmax_t size = fs::file_size(file, ec);
+		return ec || size != check.size;
+	}
+
+	std::string listing_of(const fs::path& root, std::string_view id, const pmg::journal_paths& paths)
 	{
 		std::string out = std::format("  Migration {}: .snk/migrations/{}/\n", id, id);
 		out += std::format("  Backup: {}\n", pmg::journal_path_text(paths.backup));
 		out += std::format("  Puts back from its backup ({}):\n", paths.files.size());
 		for (const std::string& path : paths.files) out += "    " + pmg::journal_path_text(path) + "\n";
 		if (!paths.created.empty()) {
-			out += std::format("  Deletes the files it created ({}):\n", paths.created.size());
-			for (const std::string& path : paths.created) out += "    " + pmg::journal_path_text(path) + "\n";
+			out += std::format("  Deletes the files it created, each only if it is still what the migration wrote ({}):\n", paths.created.size());
+			for (std::size_t i = 0; i < paths.created.size(); ++i) {
+				const std::string& path = paths.created[i];
+				out += "    " + pmg::journal_path_text(path);
+				if (kept_by_rollback(root, path, paths.created_checks[i])) out += "  (kept: changed after the migration)";
+				out += "\n";
+			}
 		}
 		return out;
 	}
@@ -330,28 +350,18 @@ namespace {
 			out.error = std::format("the journal of migration {} cannot be read", id);
 			return out;
 		}
-		const json::object& object = journal.as_object();
+		// The same reading and check rollback_migration makes before its first write: what is shown is what may run.
 		pmg::journal_paths paths;
-		if (const json::value* backup = object.if_contains("backup"); backup && backup->is_string()) paths.backup = std::string(backup->as_string());
-		if (const json::value* files = object.if_contains("files"); files && files->is_array()) {
-			for (const json::value& file : files->as_array()) {
-				if (!file.is_object()) continue;
-				const json::value* path = file.as_object().if_contains("path");
-				paths.files.push_back(path && path->is_string() ? std::string(path->as_string()) : std::string{});
-			}
+		if (auto refused = pmg::parse_journal_paths(journal.as_object(), paths)) {
+			out.error = std::format("migration {} cannot be rolled back: its journal: {}", id, *refused);
+			return out;
 		}
-		if (const json::value* created = object.if_contains("created_files"); created && created->is_array()) {
-			for (const json::value& path : created->as_array()) {
-				if (path.is_string()) paths.created.emplace_back(path.as_string());
-			}
-		}
-		// The same check rollback_migration makes before its first write: what is shown is what may run.
 		if (auto refused = pmg::check_journal_paths(root, id, paths)) {
 			out.error = std::format("migration {} cannot be rolled back: {}", id, *refused);
 			return out;
 		}
 		// A journal that cannot be shown whole is not rolled back: describe and the run both read it here.
-		std::string listing = listing_of(id, paths);
+		std::string listing = listing_of(root, id, paths);
 		if (listing.size() > k_max_listing_bytes) {
 			// The command line shows nothing and has no such limit: the way out is named.
 			out.error = std::format("the journal lists too many files to show; roll it back from the command line: editor --migrate-rollback {}", id);
@@ -409,6 +419,8 @@ namespace {
 		bool not_run = false;
 		// rollback_context::wrote: the rollback wrote something (its journal first).
 		bool rollback_wrote = false;
+		// rollback_context::warnings: the created files the rollback kept because they changed after the migration.
+		std::vector<std::string> rollback_warnings;
 	};
 
 	// Where the job's io work and the main thread meet (#761): the main thread hands the apply over once, the io work runs
@@ -810,8 +822,8 @@ namespace {
 				return text;
 			}
 			text += journal.listing;
-			text += "A file changed since the migration wrote it refuses the whole rollback; nothing is written then. "
-				"Open documents are closed, and the level is closed and opened again from disk.";
+			text += "A file it put back that changed since the migration wrote it refuses the whole rollback; nothing is written then. "
+				"A file it created that changed since is kept, with a warning. Open documents are closed, and the level is closed and opened again from disk.";
 			return text;
 		}
 
@@ -1194,6 +1206,7 @@ namespace {
 				try {
 					pmg::rollback_context context{};
 					context.wrote = &result.rollback_wrote;
+					context.warnings = &result.rollback_warnings;
 					context.journal_hash = checked;
 					result.rollback_error = rollback ? rollback(root, id, context) : pmg::rollback_migration(root, id, context);
 				} catch (const std::exception& e) {
@@ -1236,12 +1249,18 @@ namespace {
 				else refused = *result.rollback_error;
 			}
 			if (code != pmg::k_exit_done) text = std::format("rollback of {}: {}", run.id, error ? *error : *refused);
-			const std::string status = pmg::journal_status(run.root, run.id);
-			run.answer = json::object{ { "code", code }, { "status", status }, { "id", run.id }, { "text", text } };
-			if (refused) run.answer["refused"] = *refused;
-			if (error) run.answer["error"] = *error;
 			if (code == pmg::k_exit_done) egLOG_INFO("project/migrate", "{}", text);
 			else egLOG_WARN("project/migrate", "{}", text);
+			// A kept file does not fail the rollback, but the person has to decide about it.
+			for (const std::string& warning : result.rollback_warnings) {
+				egLOG_WARN("project/migrate", "rollback of {}: {}", run.id, warning);
+				text += "\n" + warning;
+			}
+			const std::string status = pmg::journal_status(run.root, run.id);
+			run.answer = json::object{ { "code", code }, { "status", status }, { "id", run.id }, { "text", text } };
+			run.answer["warnings"] = strings_of(result.rollback_warnings);
+			if (refused) run.answer["refused"] = *refused;
+			if (error) run.answer["error"] = *error;
 
 			// A refused rollback wrote nothing (rollback_migration refuses before its first write).
 			const bool written = !refused.has_value();
@@ -1440,7 +1459,8 @@ std::vector<edt::registration> edt::register_migration_commands(cmd::command_reg
 	rollback.summary = "Roll back a migration of the open project from its journal and backup in .snk/migrations/<id> (as editor "
 		"--migrate-rollback <id>) after a person approved it. Refused while Play runs, a level loads or a build runs (`busy`; it does "
 		"not wait for the asset index) and with unsaved changes (`needs_input`). Open documents are closed and the level is opened again; the job's result is "
-		"{code, status, id, text}: code 0 rolled back, 2 refused (nothing written), 6 put back only in part";
+		"{code, status, id, text, warnings}: code 0 rolled back, 2 refused (nothing written), 6 put back only in part; warnings names each "
+		"file it created that changed since and was kept (the rollback still succeeds)";
 	rollback.args_schema = parse_schema(k_rollback_args_schema);
 	rollback.result_schema = parse_schema(k_job_result_schema);
 	rollback.category = cmd::agent_category::project_migrate;

@@ -77,6 +77,13 @@ namespace edt
 		// Why the level may not be written now (a level is loading: the document does not belong to its file yet):
 		// file.save and file.save_as answer `busy` with it, whoever calls. Null or nullopt: they run.
 		std::function<std::optional<std::string>()> level_write_blocker;
+		// Why the level's own file must not be written now: it changed on disk (#1188; read again on every call, so a missed
+		// signal is found). file.save, and file.save_as onto that file, answer needs_input with it, whoever calls; the menu
+		// asks a person first (ask_level_disk_conflict). Null or nullopt: they write.
+		std::function<std::optional<std::string>()> level_disk_conflict;
+		// Reload / Overwrite / Cancel for a person's save of a level whose file changed on disk; `resolved(true)` once the
+		// level and its file agree again. Null: the save reports the conflict instead.
+		std::function<void(std::function<void(bool resolved)>)> ask_level_disk_conflict;
 		// The import of a model an agent asks for, without a dialog (#548). Null: model import is not built in.
 		agent_model_import* agent_import = nullptr;
 		// Why the level may not be replaced now (the start level of --game is loading, #518): file.new and file.open
@@ -156,6 +163,9 @@ namespace edt
 		void show_save_all_result(const save_all_report& report);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
+		// The level file changed on disk and a person saves: asks Reload / Overwrite / Cancel and runs `then` once it was
+		// settled. False: no conflict (or nobody to ask), the save goes on as usual.
+		bool ask_level_disk_conflict(std::function<void()> then);
 
 		dialog_service& m_dialogs;
 		action_registry& m_actions;

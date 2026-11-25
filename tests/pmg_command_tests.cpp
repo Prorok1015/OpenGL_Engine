@@ -236,6 +236,25 @@ BOOST_AUTO_TEST_CASE(ARollback_OfAFileChangedSince_IsRefused_NamingIt)
 	BOOST_TEST((snapshot(copy.root()) == changed));
 }
 
+// #1346: a file the migration created and someone changed since is kept: the rollback succeeds (code 0) and the
+// warning, naming the file, goes to the error output.
+BOOST_AUTO_TEST_CASE(ARollback_KeepsACreatedFileChangedSince_WarnsAndExitsZero)
+{
+	leave_only_what_migrates();
+	BOOST_REQUIRE(migrate(false, false) == pmg::k_exit_done);
+	write_text(copy.res() / "kept.bin", "changed by a person");
+	const fs::path journal_path = copy.root() / ".snk/migrations/test-migration/report.json";
+	boost::json::value journal = boost::json::parse(read_text(journal_path));
+	journal.as_object()["created_files"].as_array().push_back(boost::json::object{ { "path", "res/kept.bin" },
+		{ "hash_after", pmg::journal_hash("as migrated") }, { "size_after", 11 } });
+	write_text(journal_path, boost::json::serialize(journal));
+	printed.clear();
+	BOOST_TEST(pmg::run_migrate_rollback("test-migration", context()) == pmg::k_exit_done, printed);
+	BOOST_TEST(printed.find("rollback of test-migration: res/kept.bin was changed after the migration and was kept") != std::string::npos, printed);
+	BOOST_TEST(printed.find("migration test-migration rolled back") != std::string::npos, printed);
+	BOOST_TEST(read_text(copy.res() / "kept.bin") == "changed by a person");
+}
+
 BOOST_AUTO_TEST_CASE(ARollbackOfAnUnknownId_IsRefused)
 {
 	BOOST_TEST(pmg::run_migrate_rollback("no-such-migration", context()) == pmg::k_exit_refused);

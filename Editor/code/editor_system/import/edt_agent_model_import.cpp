@@ -4,6 +4,7 @@
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_desc_binary.h>
+#include <snk/resource/res_free_name.h>
 #include <algorithm>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -93,6 +94,24 @@ namespace {
 			}
 		}
 		return found ? edt::level_file_state::file : edt::level_file_state::missing;
+	}
+
+	// Why a target no file holds may still not be written (#1361): a .resource a deleted file left (the new file would
+	// take that asset's ID), a geometry desc's .bin, a name differing only in case, or a folder that cannot be read.
+	// Empty: free.
+	std::string name_held_problem(const std::vector<fs::path>& layers, const std::string& relative)
+	{
+		const std::optional<res::name_refusal> taken = res::name_taken(layers, relative);
+		if (!taken) return {};
+		if (!taken->error.empty()) return std::format("'res://{}' cannot be checked: {}", relative, taken->error);
+		const std::string held = fs_paths::utf8_of(taken->existing.filename());
+		if (taken->meta_left) {
+			return std::format("'res://{}' was the name of a deleted asset: its '{}' is still there and would give "
+				"the new file that asset's ID; choose another name or folder, or a person removes that file",
+				relative, held);
+		}
+		return std::format("'res://{}' is held by '{}' in a layer of res://: choose another name or folder", relative,
+			held);
 	}
 
 	// Empty when `plan.source` still is the file that was shown: a plain file, the same place, size and time.
@@ -269,7 +288,11 @@ namespace {
 			for (const res::tag& target : targets) {
 				const std::string relative(target.relative());
 				switch (state_in_layers(in.layers, relative)) {
-				case edt::level_file_state::missing: break;
+				case edt::level_file_state::missing:
+					if (std::string held = name_held_problem(in.layers, relative); !held.empty()) {
+						throw std::runtime_error(held + ": nothing was written");
+					}
+					break;
 				case edt::level_file_state::file:
 					throw std::runtime_error(std::format("'{}' exists: nothing was written", target.view()));
 				case edt::level_file_state::unsafe:
@@ -430,7 +453,12 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 
 	const std::vector<fs::path> layers = m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
 	switch (state_in_layers(layers, plan.folder + "/" + plan.name + ".prefab.desc")) {
-	case level_file_state::missing: break;
+	case level_file_state::missing:
+		if (std::string held = name_held_problem(layers, plan.folder + "/" + plan.name + ".prefab.desc");
+			!held.empty()) {
+			return refuse("needs_input", std::move(held));
+		}
+		break;
 	case level_file_state::file:
 		return refuse("needs_input", std::format("'{}' exists: choose another name or folder, or ask a person to overwrite it in the editor", shown(plan.prefab)));
 	case level_file_state::unsafe:

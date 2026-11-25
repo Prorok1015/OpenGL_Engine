@@ -2,7 +2,9 @@
 #include "edt_desc_file_commands.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <functional>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace edt
@@ -31,4 +33,8 @@ namespace edt
 	// asset preview with the same id), "shader_desc" (.shader.desc: double-click opens it as a data document) and "desc" (any
 	// asset dropped onto the viewport is added to the scene). The kinds stay registered while the returned handles live.
 	[[nodiscard]] std::vector<registration> register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks);
+
+	// The kinds whose suffix ends with ".desc", as {id, suffix}: what Create Document names a type's files by when the
+	// kind's id is the desc type ("shader_desc" -> ".shader.desc", #1263; document_creator::ports::desc_kinds).
+	std::vector<std::pair<std::string, std::string>> desc_kind_suffixes(const asset_kind_registry& registry);
 }

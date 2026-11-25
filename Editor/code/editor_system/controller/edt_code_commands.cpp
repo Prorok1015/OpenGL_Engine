@@ -158,12 +158,12 @@ namespace {
 		bool ok() const { return error.empty(); }
 	};
 
-	// The bytes on disk now, through the resolver (its safe path), never the resource cache. A file over the limit is
-	// refused before it is read into memory.
-	// The bytes on disk now, never the resource cache: type, size and bytes from one read through read_beneath relative
-	// to code/ (#1349), every folder and the file opened without following a link, a file over the limit never read.
-	// Nothing is asked of a path by name after the checks, so a component swapped for a link meanwhile is refused, and
-	// every refusal reads like a missing file: nothing about what lies outside code/ comes back.
+	// The file's bytes on disk now, never from the resource cache (#1349). After res.exists and the pre-checks, which
+	// keep their own messages (link_on_the_way: a link or an unsupported entry; on_disk_problem: out of code/), type,
+	// size and bytes come from one read_beneath relative to code/: code/ itself, every folder below it and the file are
+	// opened without following a link, and a file over the limit is never read. A refusal of that read answers like a
+	// missing file, and "too large" names the limit, not the size: nothing of what a link swapped in meanwhile leads to
+	// comes back (#1359).
 	file_read read_fresh(res::resource_system& res, const fs::path& root, const res::tag& tag,
 		const std::function<void(platform::beneath::read_stage)>* hook)
 	{

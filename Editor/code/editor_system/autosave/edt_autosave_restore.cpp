@@ -69,7 +69,7 @@ std::string edt::restore_mesh_bytes(mesh_document& mesh, std::span<const std::by
 	if (!mesh.edit([&read](mesh::poly_mesh& working) {
 			working = std::move(read.mesh);
 			return true;
-		})) {
+		}, "Restore autosave")) {
 		return "the mesh cannot be edited now";
 	}
 	return {};

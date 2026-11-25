@@ -1,4 +1,5 @@
 #include "edt_level_load_component.h"
+#include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
 #include "edt_desc_location.h"
 #include "edt_editor_layer.h"
@@ -77,13 +78,17 @@ bool edt::level_load_component::begin(const res::tag& original_tag, std::optiona
 {
 	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
 	auto& game_resources = *m_ports.services.resources();
+	const bool recovered = bytes.has_value();
 	std::optional<std::vector<std::byte>> level_bytes = std::move(bytes);
-	if (!level_bytes) {
+	// What the file holds, whatever the working copy gets: the version the level controller tells an outside change by (#1188).
+	std::optional<std::vector<std::byte>> file_bytes;
+	if (original_tag.is_valid() && (!recovered || game_resources.exists(original_tag))) {
 		if (const auto raw = game_resources.fetch_data(original_tag)) {
 			raw->wait();
-			if (raw->is_ready()) level_bytes = raw->data;
+			if (raw->is_ready()) file_bytes = raw->data;
 		}
 	}
+	if (!level_bytes) level_bytes = file_bytes;
 	if (level_bytes && names_another_desc_type(*level_bytes)) {
 		egLOG_ERROR("Editor/Load", "'{}' is not a level file (its __type is not '{}')", original_tag.view(), scn::level_desc::__type);
 		return false;
@@ -101,6 +106,7 @@ bool edt::level_load_component::begin(const res::tag& original_tag, std::optiona
 	m_editor_tag = res::tag{ "memory://editor/loading/" + std::to_string(++m_serial) + "/" + stem + ".desc" };
 	m_tag = original_tag;
 	m_file_version = level_bytes ? desc_root_version(*level_bytes) : 0;
+	m_disk_version = file_bytes ? code_version_of(*file_bytes) : std::string{};
 
 	if (level_bytes) m_ports.services.writable_resources()->store(m_editor_tag, *level_bytes);
 
@@ -212,7 +218,7 @@ bool edt::level_load_component::poll(bool* loaded_out)
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	m_ports.stop_play();
 	const res::tag editor_tag_before = m_ports.state.editor_tag;
-	const bool loaded = m_ports.level_ctrl.take_loaded_level(m_handle, m_tag, m_editor_tag, m_file_version);
+	const bool loaded = m_ports.level_ctrl.take_loaded_level(m_handle, m_tag, m_editor_tag, m_file_version, m_disk_version);
 	if (loaded_out) *loaded_out = loaded;
 	// Warnings of a level that loaded too (an unknown component); none: the scope goes.
 	m_ports.desc_problems.report(m_ports.context.problems(), "level", diagnostics_of(m_handle), m_editor_tag, m_tag,

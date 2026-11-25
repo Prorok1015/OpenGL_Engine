@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -122,6 +123,9 @@ namespace edt
 
 		// Set by scene_editor, which knows how to reload a world from its desc. Returns false when it did nothing.
 		void set_pusher(std::function<bool()> pusher) { m_pusher = std::move(pusher); }
+		// Applies the field edits of the last commit (edit of a node's transform, name or component data) to the live entities of
+		// the active world instead of rebuilding it; false: nothing was changed, the world is rebuilt as before. All or nothing.
+		void set_node_patcher(std::function<bool(std::span<const scene_node_edit>)> patcher) { m_node_patcher = std::move(patcher); }
 		// Reloads world `index` (not the active one) from its desc after undo/redo changed it; set by scene_editor.
 		void set_world_reloader(std::function<bool(std::size_t index)> reloader) { m_world_reloader = std::move(reloader); }
 		// Where document_changed goes; set by document_manager.
@@ -141,6 +145,18 @@ namespace edt
 		bool can_save() const override { return editor_tag.is_valid() && m_save != nullptr; }
 		save_result save() override;
 		save_result save_as(const res::tag& target) override;
+		// The level file was changed by someone else while the level had unsaved edits or Play ran (#1188): the level
+		// controller set it, Save asks (a person) or refuses (an agent) until a Reload or an Overwrite clears it.
+		bool changed_on_disk() const { return m_changed_on_disk; }
+		// Grows with each outside version of the file flagged: a banner the person put off comes back for the next one.
+		std::uint64_t disk_change_serial() const { return m_disk_changes; }
+		void flag_changed_on_disk()
+		{
+			m_changed_on_disk = true;
+			++m_disk_changes;
+		}
+		void clear_changed_on_disk() { m_changed_on_disk = false; }
+
 		// What the level controller would write for the level as it is (#1186); empty with an error until the editor sets it.
 		void set_autosave_capture(std::function<autosave_snapshot()> capture) { m_autosave_capture = std::move(capture); }
 		autosave_snapshot autosave_capture() const override;
@@ -154,12 +170,16 @@ namespace edt
 		void finish_apply();
 		// Rebuilds the contexts of the worlds changed since the last call; document_changed if any was rebuilt.
 		void reload_touched();
+		// The active world's field edits applied in place; false: nothing was applied, the caller rebuilds.
+		bool patch_touched();
 		// worlds_systems_list follows the systems of the world descs, which an edit or an undo changes.
 		void refresh_systems_cache();
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
 		bool m_unrecorded = false;
 		bool m_edits_locked = false;
+		bool m_changed_on_disk = false;
+		std::uint64_t m_disk_changes = 0;
 		document_history m_history;
 		scene_history_index m_index;
 		scene_commit_stats m_last_stats;
@@ -167,6 +187,7 @@ namespace edt
 		std::function<void()> m_before_apply;
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
+		std::function<bool(std::span<const scene_node_edit>)> m_node_patcher;
 		std::function<bool(std::size_t)> m_world_reloader;
 		std::function<autosave_snapshot()> m_autosave_capture;
 

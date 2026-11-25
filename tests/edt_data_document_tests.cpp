@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include "edt_builtin_asset_kinds.h"
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
 #include "edt_migration_startup.h"
@@ -13,14 +14,17 @@
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <imgui.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -1688,6 +1692,183 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_MakesTheExtensionDotDesc)
 	BOOST_TEST(edt::document_creator::file_name("a.desc") == "a.desc");
 	BOOST_TEST(edt::document_creator::file_name("A.DESC") == "A.desc");
 	BOOST_TEST(edt::document_creator::file_name("a.b") == "a.b.desc");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_ReplacesAnyKindsTail_WithTheTypesSuffix)
+{
+	const std::vector<std::string> tails{ ".prefab.desc", ".shader.desc" };
+	for (const std::string_view name :
+		{ "a", "a.desc", "a.shader", "a.SHADER.DESC", "a.prefab.desc", "a.Prefab.Desc" }) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		BOOST_TEST(edt::document_creator::file_name(name, ".shader.desc", tails) == "a.shader.desc");
+	}
+	BOOST_TEST(edt::document_creator::file_name("a.shader.desc", ".desc", tails) == "a.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.b", ".shader.desc", tails) == "a.b.shader.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.prefab", ".shader.desc", tails) == "a.prefab.shader.desc");
+}
+
+namespace {
+	// The editor's wiring (asset_open_component).
+	std::function<std::vector<std::pair<std::string, std::string>>()> kinds_of(const edt::asset_kind_registry& kinds)
+	{
+		return [&kinds] { return edt::desc_kind_suffixes(kinds); };
+	}
+
+	edt::asset_kind_desc kind_with_suffix(std::string id, std::string suffix)
+	{
+		edt::asset_kind_desc kind;
+		kind.id = std::move(id);
+		kind.suffix = std::move(suffix);
+		kind.open = [](edt::editor_context&, const res::tag&) {};
+		return kind;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_FileName_OfANestedKind_TakesTheLongestTail)
+{
+	const std::vector<std::string> tails{ ".prefab.desc", ".ui.prefab.desc" };
+	BOOST_TEST(edt::document_creator::file_name("a.ui.prefab.desc", ".prefab.desc", tails) == "a.prefab.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.prefab.desc", ".ui.prefab.desc", tails) == "a.ui.prefab.desc");
+	BOOST_TEST(edt::document_creator::file_name("a.ui.prefab.desc", ".ui.prefab.desc", tails) == "a.ui.prefab.desc");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_TheBuiltInKinds_GiveAShaderDescItsSuffix)
+{
+	edt::asset_kind_registry kinds;
+	edt::asset_kind_hooks hooks;
+	hooks.open_prefab = [](const res::tag&) {};
+	hooks.add_desc_to_scene = [](const res::tag&) {};
+	hooks.open_desc = [](const res::tag&) {};
+	const std::vector<edt::registration> builtin = edt::register_builtin_asset_kinds(kinds, std::move(hooks));
+	const std::vector<std::pair<std::string, std::string>> suffixes = edt::desc_kind_suffixes(kinds);
+	BOOST_TEST((std::ranges::find(suffixes, std::pair<std::string, std::string>{ "shader_desc", ".shader.desc" })
+		!= suffixes.end()));
+	BOOST_TEST((std::ranges::find(suffixes, std::pair<std::string, std::string>{ "prefab", ".prefab.desc" })
+		!= suffixes.end()));
+	BOOST_TEST(std::ranges::none_of(suffixes, [](const auto& kind) { return kind.first == "desc"; }));
+
+	edt::document_creator::ports wired{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	wired.desc_kinds = kinds_of(kinds);
+	const edt::document_creator creator{ std::move(wired) };
+	BOOST_TEST(creator.suffix_of("shader_desc") == ".shader.desc");
+	BOOST_TEST(creator.file_name_of("shader_desc", "lit.prefab.desc") == "lit.shader.desc");
+	BOOST_TEST(creator.file_name_of("test.config", "lit.shader.desc") == "lit.desc");
+	const edt::asset_kind_desc* opens = kinds.kind_for_open(creator.file_name_of("shader_desc", "lit"));
+	BOOST_REQUIRE(opens != nullptr);
+	BOOST_TEST(opens->id == "shader_desc");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_TypedCheck_RefusesASuffixAlone_ATrailingDotOrSpace_AndAnOverlongName)
+{
+	edt::asset_kind_registry kinds;
+	const edt::registration config_kind = kinds.add(kind_with_suffix("test.config", ".config.desc"));
+	edt::document_creator::ports wired{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	wired.desc_kinds = kinds_of(kinds);
+	const edt::document_creator creator{ std::move(wired) };
+	for (const std::string_view name : { ".config.desc", ".CONFIG", ".desc" }) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		BOOST_TEST(creator.check("", "test.config", name) == "give the document a name");
+	}
+	BOOST_TEST(creator.check("", "test.config", "a.") == "a name does not end with '.' or ' '");
+	BOOST_TEST(creator.check("", "test.config", "a ") == "a name does not end with '.' or ' '");
+
+	// 250 bytes fit as a plain .desc (255) but not with .config.desc (262)
+	const std::string long_name(250, 'n');
+	BOOST_TEST(creator.check("", "test.tagged", long_name).empty());
+	const std::string refused = creator.check("", "test.config", long_name);
+	BOOST_TEST(refused.find("262 bytes") != std::string::npos, refused);
+	const edt::document_creation made = creator.create("", "test.config", long_name);
+	BOOST_TEST(!made.ok());
+	BOOST_TEST(made.error == refused);
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_ADocumentOfATypeWithAnAssetKind_TakesTheKindsSuffix_AndOpensAsThatKind)
+{
+	edt::asset_kind_registry kinds;
+	const edt::registration config_kind = kinds.add(kind_with_suffix("test.config", ".config.desc"));
+	const edt::registration prefab_kind = kinds.add(kind_with_suffix("prefab", ".prefab.desc"));
+	edt::document_creator::ports wired{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	wired.desc_kinds = kinds_of(kinds);
+	const edt::document_creator creator{ std::move(wired) };
+	BOOST_TEST(creator.suffix_of("test.config") == ".config.desc");
+	BOOST_TEST(creator.suffix_of("test.tagged") == ".desc");
+
+	const edt::document_creation made = creator.create("", "test.config", "made");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(made.tag.string() == "res://made.config.desc");
+	BOOST_TEST(std::string(parsed("made.config.desc").at("__type").as_string()) == "test.config");
+	const edt::asset_kind_desc* opens = kinds.kind_for_open("made.config.desc");
+	BOOST_REQUIRE(opens != nullptr);
+	BOOST_TEST(opens->id == "test.config");
+
+	// a name carrying another kind's suffix gets the type's own
+	const edt::document_creation renamed = creator.create("", "test.config", "other.prefab.desc");
+	BOOST_REQUIRE_MESSAGE(renamed.ok(), renamed.error);
+	BOOST_TEST(renamed.tag.string() == "res://other.config.desc");
+	BOOST_TEST(!fs::exists(res_root / "other.prefab.desc"));
+
+	// a type without a kind keeps .desc, and that name is not the typed one's
+	const edt::document_creation plain = creator.create("", "test.tagged", "made");
+	BOOST_REQUIRE_MESSAGE(plain.ok(), plain.error);
+	BOOST_TEST(plain.tag.string() == "res://made.desc");
+	BOOST_TEST(creator.check("", "test.config", "made") == "'made.config.desc' already exists in the project layer");
+}
+
+BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_ChecksTheNameAgainWhenTheTypeChanges_AndShowsAReplacedSuffix)
+{
+	edt::asset_kind_registry kinds;
+	const edt::registration config_kind = kinds.add(kind_with_suffix("test.config", ".config.desc"));
+	const edt::registration prefab_kind = kinds.add(kind_with_suffix("prefab", ".prefab.desc"));
+	edt::document_creator::ports wired{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	wired.desc_kinds = kinds_of(kinds);
+	const edt::document_creator creator{ std::move(wired) };
+	put("game.desc", R"({"__type":"test.tagged"})");
+
+	edt::document_create_form form(creator);
+	form.open("");
+	BOOST_REQUIRE((form.types() == std::vector<std::string>{ "test.config", "test.linked", "test.tagged" }));
+	BOOST_TEST(form.file_name().empty());
+	form.set_type_index(2);
+	form.set_name("game");
+	BOOST_TEST(form.file_name() == "game.desc");
+	BOOST_TEST(form.problem() == "'game.desc' already exists in the project layer");
+	BOOST_TEST(!form.suffix_replaced());
+
+	form.set_type_index(0);
+	BOOST_TEST(form.file_name() == "game.config.desc");
+	BOOST_TEST(form.problem().empty());
+	BOOST_TEST(form.can_submit());
+	BOOST_TEST(!form.suffix_replaced());
+
+	form.set_name("game.prefab.desc");
+	BOOST_TEST(form.file_name() == "game.config.desc");
+	BOOST_TEST(form.suffix_replaced());
+	form.set_name("game.desc");
+	BOOST_TEST(form.suffix_replaced());
+	form.set_name("game.config");
+	BOOST_TEST(!form.suffix_replaced());
+
+	form.set_name("game.config");
+	BOOST_TEST(!form.suffix_replaced());
+	form.set_name("Game.Config.Desc");
+	BOOST_TEST(form.file_name() == "Game.config.desc");
+	BOOST_TEST(!form.suffix_replaced());
+
+	// a plain .desc type given another kind's tail: replaced, and shown as such
+	form.set_type_index(2);
+	form.set_name("other.config.desc");
+	BOOST_TEST(form.file_name() == "other.desc");
+	BOOST_TEST(form.suffix_replaced());
+
+	form.set_type_index(0);
+	form.set_name("game.prefab.desc");
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE(made.has_value());
+	BOOST_TEST(made->string() == "res://game.config.desc");
 }
 
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypeAndTheVersionOnly_AndTheFileOpensAsADocument)

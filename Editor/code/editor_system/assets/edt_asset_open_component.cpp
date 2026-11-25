@@ -17,7 +17,9 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <format>
+#include <string>
 #include <utility>
+#include <vector>
 
 edt::asset_open_component::asset_open_component(ports from)
 	: m_ports(std::move(from))
@@ -45,7 +47,8 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 			[this] { return m_ports.services.descs(); },
 			[this] { return m_ports.services.writable_resources(); },
 			[this] { return m_ports.resources.get_resource_layers(); },
-			[this] { return m_ports.write_blocker(); } }),
+			[this] { return m_ports.write_blocker(); },
+			[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); } }),
 		[this](const res::tag& tag) { open(tag, false); });
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);

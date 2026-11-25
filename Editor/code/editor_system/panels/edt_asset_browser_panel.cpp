@@ -1,6 +1,7 @@
 #include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
 #include "edt_prefab_variant_creator.h"
+#include "edt_asset_filter.h"
 #include "edt_code_section.h"
 #include "edt_document_creator.h"
 #include "edt_ui_probe_imgui.h"
@@ -60,13 +61,14 @@ namespace edt
 
 	void asset_browser_panel::on_hidden()
 	{
-		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search"});
+		const ui_probe::scoped_pass probe_pass(m_ui_probe.get(), {"asset_browser", "asset_browser_search", "asset_browser_kinds"});
 	}
 
 	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
 	{
 		m_layers = std::move(layers);
 		m_current_rel.clear();
+		m_desc_types.clear();
 		m_needs_refresh = true;
 	}
 
@@ -129,7 +131,16 @@ namespace edt
 		if (buffer.data() != form.name()) {
 			form.set_name(buffer.data());
 		}
-		ImGui::TextDisabled(".desc is added when the name has no extension");
+		if (!form.file_name().empty()) {
+			const std::string target = form.folder().empty() ? form.file_name() : form.folder() + "/" + form.file_name();
+			if (form.suffix_replaced()) {
+				ImGui::TextColored(colors().warning, "'%s' is created as res://%s", form.name().c_str(), target.c_str());
+			} else {
+				ImGui::TextDisabled("Creates res://%s", target.c_str());
+			}
+		} else {
+			ImGui::TextDisabled("The type adds its extension (.desc, or its asset kind's such as .shader.desc)");
+		}
 		if (const std::string problem = form.problem(); !problem.empty()) {
 			ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
 			ImGui::TextWrapped("%s", problem.c_str());
@@ -233,12 +244,33 @@ namespace edt
 		m_needs_refresh = false;
 		m_labels_have_icons = gui::ui_font_has_icons();
 
-		const std::string search_lower = to_lower(m_search);
+		m_filter.set_name(m_search);
+		m_filter.keep_only(asset_filter_kinds(m_kinds));
+
+		// A desc's `__type` is read for a few files per pass; the rest of a big folder appears over the next frames.
+		constexpr int k_type_reads_per_pass = 32;
+		int type_reads_left = k_type_reads_per_pass;
+		bool types_pending = false;
 
 		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
-			// Search filter (dirs always pass)
-			if (!search_lower.empty() && !src.is_dir) {
-				if (to_lower(src.name).find(search_lower) == std::string::npos)
+			if (!src.is_dir) {
+				if (!m_filter.accepts_name(src.name))
+					continue;
+				std::string kind;
+				if (m_filter.needs_kind()) {
+					const std::string relative = fs_paths::utf8_of(src.relative);
+					std::string desc_type;
+					if (asset_kind_needs_desc_type(m_kinds, relative) && src.layer < m_layers.size()) {
+						const auto known = m_desc_types.type_of(m_layers[src.layer], src.relative, type_reads_left);
+						if (!known) {
+							types_pending = true;
+							continue;
+						}
+						desc_type = *known;
+					}
+					kind = asset_kind_of(m_kinds, relative, desc_type);
+				}
+				if (!m_filter.accepts(false, src.name, kind))
 					continue;
 			}
 			std::string label = src.is_dir
@@ -246,6 +278,8 @@ namespace edt
 				: std::string(get_file_icon(src.path)) + " " + src.name;
 			m_entries.push_back({std::move(src), std::move(label)});
 		}
+		if (types_pending)
+			m_needs_refresh = true;
 	}
 
 	// ─── left panel: directory tree ───────────────────────────────────────────
@@ -293,7 +327,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
-		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search"});
+		const ui_probe::scoped_pass search_pass(m_ui_probe.get(), {"asset_browser_search", "asset_browser_kinds"});
 		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;
@@ -320,10 +354,29 @@ namespace edt
 		}
 
 		// ── search ───────────────────────────────────────────────────────────
-		ImGui::SetNextItemWidth(-1.f);
+		ImGui::SetNextItemWidth(-em(10.f));
 		if (ImGui::InputTextWithHint("##search", "Search files...", m_search, sizeof(m_search)))
 			m_needs_refresh = true;
 		edt::probe_last_item(m_ui_probe.get(), "asset_browser_search", "search");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(-1.f);
+		if (ImGui::BeginCombo("##kinds", m_filter.summary().c_str())) {
+			if (ImGui::Selectable("All", !m_filter.needs_kind(), ImGuiSelectableFlags_NoAutoClosePopups)) {
+				m_filter.clear_kinds();
+				m_needs_refresh = true;
+			}
+			ImGui::Separator();
+			for (const asset_filter_kind& kind : asset_filter_kinds(m_kinds)) {
+				const bool picked = m_filter.kind_picked(kind.id);
+				const std::string label = kind.label + "###kind_" + kind.id;
+				if (ImGui::Selectable(label.c_str(), picked, ImGuiSelectableFlags_NoAutoClosePopups)) {
+					m_filter.set_kind(kind.id, !picked);
+					m_needs_refresh = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		edt::probe_last_item(m_ui_probe.get(), "asset_browser_kinds", "kinds");
 
 		ImGui::Separator();
 

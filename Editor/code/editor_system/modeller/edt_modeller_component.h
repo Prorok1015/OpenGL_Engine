@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_modeller_settings.h"
 #include "edt_desc_file_commands.h"
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_editor_events.h>
@@ -65,6 +66,8 @@ namespace edt
 		// The game layer changes: the meshes drop their preview worlds (the working copies and their edits stay) and make them again in the new one.
 		void park_for_layer_change();
 		void restore_after_layer_change();
+		// Where the window reads its snap steps from (Editor Settings); read while a drag runs.
+		void set_settings_source(std::function<modeller_settings()> source);
 		// The mesh the window shows; none: no document.
 		document_id shown_id() const { return m_shown; }
 

@@ -498,6 +498,17 @@ BOOST_AUTO_TEST_CASE(Choice_RejectsAnIndexOutOfRangeAndMixedAnswers)
 	BOOST_TEST(service.is_pending(id));
 }
 
+BOOST_AUTO_TEST_CASE(Choice_TakesAnUnsignedIndex)
+{
+	std::vector<std::optional<std::size_t>> got;
+	const auto id = service.choose("Pick", "Which one?", { "A", "B" }, [&](std::optional<std::size_t> picked) { got.push_back(picked); });
+
+	BOOST_TEST(!service.answer(id, boost::json::object{ { "index", std::uint64_t{ 2 } } }).ok);
+	BOOST_TEST(service.answer(id, boost::json::object{ { "index", std::uint64_t{ 1 } } }).ok);
+	BOOST_REQUIRE(got.size() == 1u);
+	BOOST_TEST((got[0] == std::optional<std::size_t>{ 1 }));
+}
+
 BOOST_AUTO_TEST_CASE(Choice_CancelAllAutoAnswerReportsNoOption)
 {
 	edt::dialog_auto_answer answer;
