@@ -193,7 +193,7 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 	record.due.reset();
 	record.written_generation = generation;
 	const auto* source = dynamic_cast<const autosave_source*>(&doc);
-	if (!source) {
+	if (!source || !is_autosave_kind(doc.kind())) {
 		return;
 	}
 	write_order order;

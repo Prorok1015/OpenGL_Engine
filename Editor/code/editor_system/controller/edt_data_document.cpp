@@ -367,8 +367,7 @@ void edt::data_document::apply(const res::tag& file, loaded&& state)
 	m_version_confirmed = false;
 	m_parent_layers = std::move(state.layers);
 	m_chain_problem.clear();
-	m_changed_on_disk = false;
-	m_flagged_version.clear();
+	m_disk.clear();
 	++m_generation;
 	watch_files();
 }
@@ -403,15 +402,6 @@ edt::open_result edt::data_document::reload()
 edt::save_result edt::data_document::save_over()
 {
 	return write(true);
-}
-
-void edt::data_document::flag_changed(const std::string& disk_version)
-{
-	m_changed_on_disk = true;
-	if (disk_version != m_flagged_version) {
-		m_flagged_version = disk_version;
-		++m_disk_changes;
-	}
 }
 
 edt::data_document::~data_document()
@@ -483,7 +473,7 @@ void edt::data_document::on_changed(const res::tag& tag)
 		desc_file_read seen;
 		const open_result read = read_file(m_source, on_disk, version, &seen);
 		if (read.opened && version == m_version) {
-			m_changed_on_disk = false;
+			m_disk.set_changed(false);
 			return;
 		}
 		// What the outside change is called when the file does not parse: its bytes, or "missing" when it is gone.
@@ -496,7 +486,7 @@ void edt::data_document::on_changed(const res::tag& tag)
 				return;
 			}
 		}
-		flag_changed(version);
+		m_disk.flag(version);
 		announce();
 		return;
 	}
@@ -750,7 +740,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
 		return save_result::failure(*why);
 	}
-	if (!over && m_changed_on_disk) {
+	if (!over && m_disk.changed()) {
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 	desc::desc_system* descs = m_services.descs();
@@ -778,7 +768,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 	}
 	if (!over && disk_version != m_version) {
 		// The watcher may not have said so yet (its signal waits for the main thread): the file is known to differ now.
-		flag_changed(disk_version);
+		m_disk.flag(disk_version);
 		return save_result::failure(std::format("{} changed on disk since it was opened: nothing was written", where(m_source)));
 	}
 
@@ -809,8 +799,7 @@ edt::save_result edt::data_document::write_checked(bool over)
 	m_committed_own = m_own;
 	m_history.mark_saved();
 	m_version = code_version_of(bytes);
-	m_changed_on_disk = false;
-	m_flagged_version.clear();
+	m_disk.clear();
 	m_file_version = m_current_version;
 	m_nested_outdated = false;
 	m_migration_notes.clear();

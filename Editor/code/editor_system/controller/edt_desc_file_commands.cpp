@@ -704,6 +704,7 @@ namespace {
 	bool holds_plain_text(std::string_view type, std::string_view field_key)
 	{
 		if (type == "geometry_desc") return field_key == "/layout" || field_key == "/bounds";
+		if (type == "texture_2d_desc") return field_key == "/header" || field_key == "/pixels";
 		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
 	}
 
@@ -981,9 +982,14 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 		} else if (pointer.empty()) {
 			add(std::string(res::diagnostic_kind::unknown_type), "/__type", "the file must be an object with a `__type`");
 		}
+		// Inline pixels (#1204) are numbers, a format name and base64, which may begin like a mounted protocol ("res/..."):
+		// never a tag, and texture_2d_desc reads them strictly itself.
+		const json::value* object_type = object.if_contains("__type");
+		const bool texture = object_type && object_type->is_string() && view_of(object_type->as_string()) == "texture_2d_desc";
 		for (const auto& member : object) {
 			const std::string_view key(member.key().data(), member.key().size());
 			if (key.starts_with("__") || std::ranges::find(blob_keys, key) != blob_keys.end()) continue;
+			if (texture && key == "pixels") continue;
 			self(self, member.value(), pointer + "/" + res::json_pointer_token(key));
 		}
 	};

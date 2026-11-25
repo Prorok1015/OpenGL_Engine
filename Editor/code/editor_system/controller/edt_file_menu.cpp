@@ -447,6 +447,7 @@ void edt::file_menu::open_project()
 
 void edt::file_menu::quick_save()
 {
+	if (m_hooks.save_focused_document && m_hooks.save_focused_document()) return;
 	if (!m_hooks.has_scene()) return;
 	if (!m_hooks.level_path().empty()) {
 		if (ask_level_disk_conflict({})) return;

@@ -738,6 +738,25 @@ BOOST_AUTO_TEST_CASE(AssetQuery_FiltersByGlobKindAndDirectory)
 	}
 }
 
+// #1205: the editor's texture kinds (a texture desc, a picture) are the kind "texture" to an agent, as in the browser's filter.
+BOOST_AUTO_TEST_CASE(AssetQuery_ATextureDescAndAPicture_AreTextures)
+{
+	const auto opens = [](edt::editor_context&, const res::tag&) {};
+	const edt::registration texture_kind = kinds.add({ .id = "texture_2d_desc", .suffix = ".txm.desc", .icon = "", .open = opens,
+		.drop_into_scene = {} });
+	const edt::registration picture_kind = kinds.add({ .id = "picture.png", .suffix = ".png", .icon = "", .open = opens,
+		.drop_into_scene = {} });
+	temp_layers::put(disk.layers[1] / "textures" / "rock.txm.desc", "{}");
+	temp_layers::put(disk.layers[1] / "textures" / "rock.png", "x");
+
+	const std::string by_kind = R"json({"kind":"texture"})json";
+	const cmd::result textures = call("asset.query", by_kind);
+	BOOST_REQUIRE_MESSAGE(textures.ok, textures.error);
+	BOOST_TEST((names_of_tags(textures) == std::vector<std::string>{ "res://textures/rock.png", "res://textures/rock.txm.desc" }));
+	BOOST_TEST(at(textures, "/items/0/kind").as_string() == "texture");
+	BOOST_TEST(at(textures, "/items/1/kind").as_string() == "texture");
+}
+
 BOOST_AUTO_TEST_CASE(AssetQuery_DirectoryAndPatternsCannotReachOutsideTheLayers)
 {
 	// An embedded NUL ends the path at the OS call: "..\0x" would be ".." there.

@@ -3,6 +3,9 @@
 #include "edt_mesh_document.h"
 #include "edt_mesh_io.h"
 #include "edt_prefab_document.h"
+#include "edt_shader_source_document.h"
+#include "edt_shader_text.h"
+#include <snk/editor/edt_document_manager.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
@@ -83,4 +86,32 @@ std::string edt::restore_data_bytes(data_document& data, std::span<const std::by
 	if (!object) return error;
 	if (!data.restore_own(std::move(*object))) return "the autosave is of another __type or __parent than the file";
 	return {};
+}
+
+std::string edt::restore_shader_source_bytes(shader_source_document& shader, std::span<const std::byte> bytes, bool source_changed)
+{
+	if (!shader.is_open()) return "the shader is not open";
+	if (std::string reason = shader.read_only_reason(); !reason.empty()) return reason;
+	std::string error;
+	const std::optional<shader_text_file> read = read_shader_text(bytes, error);
+	if (!read) return error;
+	if (shader.is_dirty()) return "the shader has unsaved changes of its own";
+	// set_text is false for the text the shader already has: nothing to restore, and the record is then discarded as done.
+	if (!shader.set_text(read->text) && shader.text() != read->text) return "the shader cannot be edited now";
+	if (source_changed) shader.raise_conflict();
+	return {};
+}
+
+edt::shader_restore_result edt::restore_shader_source(document_manager& documents, const std::function<bool(const res::tag&)>& open,
+	const res::tag& source, std::span<const std::byte> bytes, bool source_changed)
+{
+	if (!open || !open(source)) return { "the shader did not open", {}, 0 };
+	shader_source_document* shader = nullptr;
+	documents.for_each([&shader, &source](document& candidate) {
+		auto* found = dynamic_cast<shader_source_document*>(&candidate);
+		if (found && found->is_open() && found->source() == source) shader = found;
+	});
+	if (!shader) return { "the shader did not open", {}, 0 };
+	if (std::string error = restore_shader_source_bytes(*shader, bytes, source_changed); !error.empty()) return { std::move(error), {}, 0 };
+	return { {}, shader->id(), shader->generation() };
 }

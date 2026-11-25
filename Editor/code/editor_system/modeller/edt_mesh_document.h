@@ -1,6 +1,7 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
+#include "edt_document_parts.h"
 #include "edt_mesh_bake.h"
 #include "edt_mesh_history.h"
 #include "edt_mesh_io.h"
@@ -94,7 +95,7 @@ namespace edt
 		// Also writes the geometry alone when only the file is out of date.
 		save_result overwrite_geometry();
 
-		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		bool changed_on_disk() const { return m_open && m_disk.changed(); }
 		// Takes the source as the file holds it now and drops the edits. The error text, empty when it worked.
 		std::string revert();
 		std::string reload() { return revert(); }
@@ -188,8 +189,6 @@ namespace edt
 		void rebake();
 		std::string working_text() const;
 		void announce();
-		void watch_source();
-		void unwatch_source();
 		void on_source_changed(const res::tag& changed);
 		std::string geometry_file_problem(bool replace_foreign_geometry) const;
 
@@ -224,11 +223,11 @@ namespace edt
 		std::string m_disk_version;
 		std::string m_stale_message;
 		std::uint64_t m_generation = 0;
-		res::resource_system* m_watching = nullptr;
+		source_watch m_watch;
 		bool m_open = false;
 		bool m_dirty = false;
 		bool m_geometry_stale = false;
-		bool m_changed_on_disk = false;
+		disk_state m_disk;
 		bool m_geometry_mismatch = false;
 		std::string m_mismatch_message;
 

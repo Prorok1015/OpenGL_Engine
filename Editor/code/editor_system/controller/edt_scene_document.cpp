@@ -303,14 +303,14 @@ edt::save_result edt::scene_document::save()
 {
 	if (!can_save()) return save_result::failure("no level is loaded");
 	if (m_save()) return save_result::ok();
-	return save_result::failure(m_changed_on_disk ? "the level file changed on disk: reload it or overwrite it" : "the level could not be written");
+	return save_result::failure(m_disk.changed() ? "the level file changed on disk: reload it or overwrite it" : "the level could not be written");
 }
 
 edt::save_result edt::scene_document::save_as(const res::tag& target)
 {
 	if (!can_save() || !m_save_as) return save_result::failure("no level is loaded");
 	if (m_save_as(target)) return save_result::ok();
-	return save_result::failure(m_changed_on_disk && target == level_tag ? "the level file changed on disk: reload it or overwrite it"
+	return save_result::failure(m_disk.changed() && target == level_tag ? "the level file changed on disk: reload it or overwrite it"
 		: "the level could not be written");
 }
 

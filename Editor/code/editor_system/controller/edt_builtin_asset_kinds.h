@@ -23,14 +23,23 @@ namespace edt
 		std::function<bool()> edits_locked = {};
 		// Opens a desc file as a data document (the schema inspector). Null: the "shader_desc" kind is not registered.
 		std::function<void(const res::tag&)> open_desc = {};
+		// A texture desc (.txm.desc): the texture window, or the read-only viewer for one of a lower layer (#1205). Null: the
+		// "texture_2d_desc" kind is not registered.
+		std::function<void(const res::tag&)> open_texture = {};
+		// A picture file: the read-only viewer with Create Texture (#1205). Null: the "picture.*" kinds are not registered.
+		std::function<void(const res::tag&)> open_picture = {};
 	};
+
+	// The picture files a double click shows (#1205): the kind "picture.<ext>" for each suffix ".<ext>".
+	inline constexpr std::string_view k_picture_suffixes[] = { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".pct", ".raw" };
 
 	// The id of the preview that makes the prefab_document (open_prefab names it, so a module's preview with a longer suffix
 	// cannot take its place).
 	inline constexpr std::string_view k_prefab_preview_id = "prefab";
 
 	// "prefab" (.prefab.desc: double-click opens the prefab editor; its preview is the prefab_document, registered as an
-	// asset preview with the same id), "shader_desc" (.shader.desc: double-click opens it as a data document) and "desc" (any
+	// asset preview with the same id), "shader_desc" (.shader.desc: double-click opens it as a data document),
+	// "texture_2d_desc" (.txm.desc) and "picture.png" ... (k_picture_suffixes) when their hooks are set, and "desc" (any
 	// asset dropped onto the viewport is added to the scene). The kinds stay registered while the returned handles live.
 	[[nodiscard]] std::vector<registration> register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks);
 

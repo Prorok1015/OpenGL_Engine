@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_asset_filter.h"
+#include "edt_asset_kind_names.h"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <algorithm>
@@ -231,6 +232,26 @@ BOOST_AUTO_TEST_CASE(AKindOfAModule_IsTheKindOfItsFiles_ThePolyKindIsTheMeshKind
 	BOOST_TEST(std::ranges::count(offered, "mesh") == 1);
 }
 
+// #1205: a texture desc and a picture are textures, whichever kind of the registry opens them.
+BOOST_AUTO_TEST_CASE(ATextureDescAndAPicture_AreTextures_TheirKindsAreNotOfferedApart)
+{
+	edt::asset_kind_registry kinds;
+	const auto open = [](edt::editor_context&, const res::tag&) {};
+	const auto texture = kinds.add({ .id = "texture_2d_desc", .suffix = ".txm.desc", .open = open });
+	const auto png = kinds.add({ .id = "picture.png", .suffix = ".png", .open = open });
+	const auto pct = kinds.add({ .id = "picture.pct", .suffix = ".pct", .open = open });
+	BOOST_TEST(edt::asset_kind_of(&kinds, "t/rock.txm.desc") == "texture");
+	BOOST_TEST(edt::asset_kind_of(nullptr, "t/rock.txm.desc") == "texture");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "t/rock.png") == "texture");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "m/m.texture_0.pct") == "texture");
+	BOOST_TEST(!edt::asset_kind_needs_desc_type(&kinds, "t/rock.txm.desc"));
+	const auto offered = ids_of(edt::asset_filter_kinds(&kinds));
+	BOOST_TEST(std::ranges::count(offered, "texture") == 1);
+	BOOST_TEST(std::ranges::count(offered, "texture_2d_desc") == 0);
+	BOOST_TEST(std::ranges::count(offered, "picture.png") == 0);
+	BOOST_TEST(std::ranges::count(offered, "picture.pct") == 0);
+}
+
 BOOST_AUTO_TEST_CASE(OnlyAKindThatOpensIsOffered)
 {
 	edt::asset_kind_registry kinds;
@@ -278,6 +299,28 @@ BOOST_AUTO_TEST_CASE(TheNameIsCheckedBeforeAnythingElse)
 	BOOST_TEST(filter.accepts_name("Rock.png"));
 	BOOST_TEST(!filter.accepts_name("sand.png"));
 	BOOST_TEST(edt::asset_filter{}.accepts_name("anything"));
+}
+
+BOOST_AUTO_TEST_CASE(OutwardKindName_FoldsTheGlslEditorsKinds_AndLeavesTheOthers)
+{
+	BOOST_TEST(edt::outward_kind_name("shader_source.frag") == "shader");
+	BOOST_TEST(edt::outward_kind_name("shader_source.glsl") == "shader");
+	BOOST_TEST(edt::outward_kind_name("shader_desc") == "shader_desc");
+	BOOST_TEST(edt::outward_kind_name("poly") == "poly");
+	BOOST_TEST(edt::outward_kind_name("prefab") == "prefab");
+}
+
+BOOST_AUTO_TEST_CASE(TheGlslEditorsKinds_AreTheKindShader_AndAreNotOfferedAgain)
+{
+	edt::asset_kind_registry kinds;
+	const auto frag = kinds.add({ .id = "shader_source.frag", .suffix = ".frag", .open = [](edt::editor_context&, const res::tag&) {} });
+	const auto vert = kinds.add({ .id = "shader_source.vert", .suffix = ".vert", .open = [](edt::editor_context&, const res::tag&) {} });
+
+	BOOST_TEST(edt::asset_kind_of(&kinds, "a/b.frag") == "shader");
+	BOOST_TEST(edt::asset_kind_of(&kinds, "a/b.vert") == "shader");
+	const auto offered = ids_of(edt::asset_filter_kinds(&kinds));
+	BOOST_TEST(std::ranges::count(offered, std::string{ "shader" }) == 1);
+	BOOST_TEST(std::ranges::count(offered, std::string{ "shader_source.frag" }) == 0);
 }
 
 BOOST_AUTO_TEST_CASE(TheFixedKindsAreOfferedOnceEach)
