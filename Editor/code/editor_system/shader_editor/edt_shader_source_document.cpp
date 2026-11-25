@@ -289,7 +289,8 @@ edt::save_result edt::shader_source_document::save()
 	if (!now.error.empty()) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
-	if (code_version_of(now.bytes) != m_disk_version) {
+	// A conflict the window raised (restored autosave, typing over a reload) stands though the file is as it was read.
+	if (m_changed_on_disk || code_version_of(now.bytes) != m_disk_version) {
 		if (!m_changed_on_disk) {
 			m_changed_on_disk = true;
 			announce();
@@ -371,7 +372,7 @@ edt::save_result edt::shader_source_document::overwrite()
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
 	const std::string previous_version = std::exchange(m_disk_version, code_version_of(now.bytes));
-	const bool previous_changed = m_changed_on_disk;
+	const bool previous_changed = std::exchange(m_changed_on_disk, false);
 	const save_result saved = save();
 	if (!saved.saved) {
 		m_disk_version = previous_version;

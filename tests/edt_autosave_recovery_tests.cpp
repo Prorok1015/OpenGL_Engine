@@ -260,6 +260,7 @@ struct recovery_fixture : test_util::scene_env
 		options.own_session = autosave->session();
 		options.host = edt::this_host_name();
 		options.res_roots = { content };
+		if (!lower_layer.empty()) options.res_roots.insert(options.res_roots.begin(), lower_layer);
 		return options;
 	}
 
@@ -267,7 +268,12 @@ struct recovery_fixture : test_util::scene_env
 	{
 		edt::autosave_recovery::ports ports;
 		ports.cache_root = [this] { return cache; };
-		ports.res_roots = [this] { return std::vector<fs::path>{ content }; };
+		ports.res_roots = [this] {
+			std::vector<fs::path> roots;
+			if (!lower_layer.empty()) roots.push_back(lower_layer);
+			roots.push_back(content);
+			return roots;
+		};
 		ports.own_session = [this] { return autosave->session(); };
 		ports.ensure_own_session = [this] { return autosave->ensure_session(); };
 		ports.adopt = [this](edt::document_id id, std::uint64_t generation) { autosave->adopt(id, generation); };
