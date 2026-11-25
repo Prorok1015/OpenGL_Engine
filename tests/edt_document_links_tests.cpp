@@ -376,6 +376,84 @@ BOOST_AUTO_TEST_CASE(AnInstanceUnderAPreviewParent_ClosesWithThePreview)
 	BOOST_TEST(documents.descendants_of(preview_id).empty());
 }
 
+struct preview_fixture : links_fixture
+{
+	preview_fixture()
+	{
+		documents.set_preview_kinds(kinds, services);
+		edt::asset_preview_desc desc;
+		desc.id = "stub";
+		desc.suffix = ".stub";
+		desc.multiple = true;
+		desc.make_preview = [](edt::editor_services&) { return std::make_unique<stub_preview>(); };
+		registered = kinds.add_preview(desc);
+	}
+
+	edt::previewable_document* open(const char* name) { return documents.open_preview(res::tag::make(name)); }
+
+	edt::asset_kind_registry kinds;
+	edt::editor_services services;
+	edt::registration registered;
+};
+
+BOOST_FIXTURE_TEST_CASE(ASelfClosedPreview_KeepsADirtyDescendantAsARoot_AndClosesTheCleanOnes, preview_fixture)
+{
+	edt::previewable_document* preview = open("a.stub");
+	BOOST_REQUIRE(preview != nullptr);
+	const edt::document_id preview_id = preview->id();
+	const edt::document_id dirty = link("Dirty", preview_id, "field:a");
+	const edt::document_id clean = link("Clean", preview_id, "field:b");
+	const edt::document_id under_dirty = link("Below", dirty, "field:c");
+	static_cast<stub_document*>(documents.find(dirty))->m_dirty = true;
+
+	preview->close();
+	open("b.stub");
+
+	BOOST_TEST(documents.find(clean) == nullptr);
+	BOOST_REQUIRE(documents.find(dirty) != nullptr);
+	BOOST_TEST(documents.find(under_dirty) != nullptr);
+	BOOST_TEST(!documents.has_link(dirty));
+	BOOST_TEST(documents.link_parent(under_dirty) == dirty);
+	BOOST_TEST(static_cast<stub_document*>(documents.find(dirty))->m_dirty);
+}
+
+BOOST_FIXTURE_TEST_CASE(ARemovedPreview_KeepsADirtyDescendantToo, preview_fixture)
+{
+	edt::previewable_document* preview = open("a.stub");
+	BOOST_REQUIRE(preview != nullptr);
+	const edt::document_id dirty = link("Dirty", preview->id(), "field:a");
+	static_cast<stub_document*>(documents.find(dirty))->m_dirty = true;
+
+	registered = edt::registration{};
+
+	BOOST_REQUIRE(documents.find(dirty) != nullptr);
+	BOOST_TEST(!documents.has_link(dirty));
+}
+
+BOOST_FIXTURE_TEST_CASE(TheSweep_AlsoRunsThroughClose, preview_fixture)
+{
+	edt::previewable_document* preview = open("a.stub");
+	BOOST_REQUIRE(preview != nullptr);
+	const edt::document_id preview_id = preview->id();
+	const edt::document_id child = link("Child", preview_id, "field:a");
+	const edt::host_id host = documents.open_host(child);
+	const edt::document_id other = link("Other", level(), "node:1");
+
+	preview->close();
+	documents.close(other);
+
+	BOOST_TEST(documents.find(child) == nullptr);
+	BOOST_TEST(!documents.has_link(preview_id));
+	BOOST_TEST(!documents.host_link(host).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(OpenInstance_WhenAListenerClosesTheDocumentWhileItIsAnnounced_ReturnsNoDeadId)
+{
+	const auto connection = events.document_opened.subscribe([this](edt::document_id id) { documents.close(id); });
+	BOOST_TEST(link("Card#3", level(), "node:3") == 0);
+	BOOST_TEST(documents.unhosted_links().empty());
+}
+
 BOOST_AUTO_TEST_CASE(LinksRevision_MovesWithEveryChange)
 {
 	const std::uint64_t start = documents.links_revision();
