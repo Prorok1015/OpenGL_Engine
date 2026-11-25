@@ -149,8 +149,10 @@ namespace scn {
 		// The entities whose world bounds meet the frustum of `view_projection` (OpenGL clip space, as glm::perspective builds it;
 		// a screen rectangle's frustum comes from screen_rect_view_projection), appended to `out` in entity order. Only the bounds
 		// are tested (the mesh's box through the entity's world matrix): an object whose box touches the frustum is in, even when its
-		// triangles do not. The filter's mask, include_hidden and exclude apply as for a ray; max_distance, triangles and
-		// cull_back_faces do not. A matrix that gives no frustum (not finite, singular) answers nothing.
+		// triangles do not. The test is the usual conservative one (the box's corner furthest along each plane's normal): it may also
+		// report a box that lies just outside an edge or a corner of the frustum, never miss one that touches it. The filter's mask,
+		// include_hidden and exclude apply as for a ray; max_distance, triangles and cull_back_faces do not. A matrix that gives no
+		// frustum (not finite, or one whose four side planes have no normal, such as the all-zero matrix) answers nothing.
 		void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
@@ -174,7 +176,9 @@ namespace scn {
 	SNK_API void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
 	// The view-projection of the part of an image inside a pixel rectangle: what `overlap_frustum` takes for a box on the screen.
 	// `view` and `projection` are the camera's, `corner_a` and `corner_b` two opposite corners in pixels (origin top left, y down, any
-	// order), `image_size` the image's size. A rectangle with no area, or an empty image, gives a matrix that is not a frustum (all zero).
+	// order), `image_size` the image's size. The corners are not clamped to the image (a rectangle that reaches past it asks for a
+	// wider frustum; the editor clamps its own). A rectangle with no area, or an empty image, gives the all-zero matrix, which
+	// overlap_frustum answers with nothing.
 	SNK_API glm::mat4 screen_rect_view_projection(const glm::mat4& view, const glm::mat4& projection, glm::vec2 corner_a, glm::vec2 corner_b,
 		glm::vec2 image_size);
 

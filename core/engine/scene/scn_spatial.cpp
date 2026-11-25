@@ -83,10 +83,15 @@ void scn::spatial_world::overlap_frustum(entt::registry& world, const glm::mat4&
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
 	const ds::frustum view = ds::frustum_from(view_projection);
-	for (const glm::vec4& plane : view.planes) {
+	// A plane with no normal is no plane, but not always a broken matrix: with a far plane at infinity or a tiny near plane the near or
+	// far one comes out as (0, 0, 0, w) in float, and w >= 0 means everything is on its inner side (ds::test_frustum takes it so). The
+	// four sides must be real planes: they are what the all-zero matrix of an empty rectangle lacks.
+	for (std::size_t i = 0; i < view.planes.size(); ++i) {
+		const glm::vec4& plane = view.planes[i];
 		const glm::vec3 normal{ plane };
+		const bool has_normal = glm::dot(normal, normal) > 0.f;
 		if (!std::isfinite(plane.x) || !std::isfinite(plane.y) || !std::isfinite(plane.z) || !std::isfinite(plane.w)
-			|| !(glm::dot(normal, normal) > 0.f)) {
+			|| (!has_normal && (i < 4 || plane.w < 0.f))) {
 			return;
 		}
 	}

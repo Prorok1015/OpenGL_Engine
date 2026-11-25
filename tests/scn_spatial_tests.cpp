@@ -527,6 +527,28 @@ glm::mat4 camera_view_projection(glm::vec3 eye, glm::vec3 target, float aspect =
 	return glm::perspective(glm::radians(60.f), aspect, 0.1f, 100.f) * glm::lookAt(eye, target, glm::vec3{ 0.f, 1.f, 0.f });
 }
 
+// Whether a box is wholly outside one of the clip planes (-w <= x, y, z <= w), from its eight corners in clip space: written out without
+// ds::frustum_from or ds::test_frustum, so the test does not check the code under test with itself. It is the same conservative test the
+// query documents (a box just outside an edge or a corner of the frustum is outside no single plane, so it counts as touching).
+bool clip_space_outside(const glm::mat4& view_projection, const ds::aabb3& box)
+{
+	glm::vec4 corners[8];
+	for (int i = 0; i < 8; ++i) {
+		const glm::vec3 point{ (i & 1) ? box.max.x : box.min.x, (i & 2) ? box.max.y : box.min.y, (i & 4) ? box.max.z : box.min.z };
+		corners[i] = view_projection * glm::vec4(point, 1.f);
+	}
+	for (int axis = 0; axis < 3; ++axis) {
+		bool all_below = true;
+		bool all_above = true;
+		for (const glm::vec4& clip : corners) {
+			all_below = all_below && clip[axis] < -clip.w;
+			all_above = all_above && clip[axis] > clip.w;
+		}
+		if (all_below || all_above) return true;
+	}
+	return false;
+}
+
 ds::aabb3 quad_box(const glm::mat4& matrix, float half = 0.5f)
 {
 	return ds::transformed(ds::aabb3{ glm::vec3{ -half, -half, 0.f }, glm::vec3{ half, half, 0.f } }, matrix);
@@ -556,10 +578,9 @@ BOOST_AUTO_TEST_CASE(AFrustumQuery_AnswersAsABruteForceTestOfTheBoxesDoes)
 		const glm::vec3 target{ position(random), position(random), position(random) };
 		if (glm::length(target - eye) < 1.f) continue;
 		const glm::mat4 view_projection = camera_view_projection(eye, target);
-		const ds::frustum view = ds::frustum_from(view_projection);
 		std::vector<entt::entity> expected;
 		for (const auto& [entity, matrix] : quads) {
-			if (ds::test_frustum(view, quad_box(matrix)) != ds::frustum_test::outside) expected.push_back(entity);
+			if (!clip_space_outside(view_projection, quad_box(matrix))) expected.push_back(entity);
 		}
 		std::sort(expected.begin(), expected.end());
 		std::vector<entt::entity> found;
@@ -647,6 +668,44 @@ BOOST_AUTO_TEST_CASE(AScreenRectangle_GivesTheFrustumOfThatPartOfTheImage)
 	BOOST_TEST(query({ 50.f, 50.f }, { 50.f, 90.f }).empty());
 	BOOST_TEST(query({ 0.f, 0.f }, { 0.f, 0.f }).empty());
 	BOOST_TEST((scn::screen_rect_view_projection(view, projection, { 0.f, 0.f }, { 10.f, 10.f }, { 0.f, 0.f }) == glm::mat4{ 0.f }));
+}
+
+BOOST_AUTO_TEST_CASE(AScreenRectangle_PinsTheYDirection_TopOfTheImageIsUp)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto top = add_quad(reg, at({ 0.f, 1.5f, -5.f }));
+	const auto bottom = add_quad(reg, at({ 0.f, -1.5f, -5.f }));
+	const glm::mat4 view = glm::lookAt(glm::vec3{ 0.f }, glm::vec3{ 0.f, 0.f, -1.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const glm::mat4 projection = glm::perspective(glm::radians(60.f), 2.f, 0.1f, 100.f);
+	const auto query = [&](glm::vec2 a, glm::vec2 b) {
+		std::vector<entt::entity> found;
+		scn::overlap_frustum(reg, scn::screen_rect_view_projection(view, projection, a, b, { 200.f, 100.f }), {}, found);
+		return found;
+	};
+	BOOST_TEST((query({ 0.f, 0.f }, { 200.f, 50.f }) == std::vector<entt::entity>{ top }));
+	BOOST_TEST((query({ 0.f, 50.f }, { 200.f, 100.f }) == std::vector<entt::entity>{ bottom }));
+}
+
+BOOST_AUTO_TEST_CASE(ACameraWithATinyNearPlaneAndAFarOne_StillFindsWhatItSees)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, -5.f }));
+	const glm::mat4 view = glm::lookAt(glm::vec3{ 0.f }, glm::vec3{ 0.f, 0.f, -1.f }, glm::vec3{ 0.f, 1.f, 0.f });
+	const glm::mat4 projections[] = {
+		glm::perspective(glm::radians(60.f), 2.f, 0.0001f, 5000.f),
+		glm::perspective(glm::radians(60.f), 2.f, 0.0001f, 100000.f),
+		glm::infinitePerspective(glm::radians(60.f), 2.f, 0.1f),
+	};
+	for (const glm::mat4& projection : projections) {
+		std::vector<entt::entity> found;
+		scn::overlap_frustum(reg, projection * view, {}, found);
+		BOOST_TEST((found == std::vector<entt::entity>{ quad }));
+		found.clear();
+		scn::overlap_frustum(reg, scn::screen_rect_view_projection(view, projection, { 0.f, 0.f }, { 100.f, 100.f }, { 200.f, 100.f }), {}, found);
+		BOOST_TEST((found == std::vector<entt::entity>{ quad }));
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AMatrixThatIsNoFrustum_AnswersNothing)
