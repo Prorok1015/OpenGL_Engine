@@ -1,4 +1,5 @@
 #include "edt_texture_viewer_host.h"
+#include "edt_material_creator.h"
 #include "edt_texture_viewer_panel.h"
 #include "edt_texture_window_model.h"
 #include <snk/common/fs_paths.h>
@@ -38,6 +39,7 @@ edt::picture_texture edt::picture_texture_of(const res::tag& picture)
 json::object edt::initial_document_fields(std::string_view type)
 {
 	if (type == k_texture_type) return json::object{ { "__parent", k_base_texture } };
+	if (type == k_material_type) return material_fields();
 	return {};
 }
 

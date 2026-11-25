@@ -32,6 +32,7 @@ BOOST_AUTO_TEST_CASE(AFileHasOneKind_ByItsSuffix)
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.world.desc") == "world");
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.level.desc") == "level");
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.shader.desc") == "shader_desc");
+	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.mat.desc") == "material_desc");
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.desc") == "data");
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.png") == "texture");
 	BOOST_TEST(edt::asset_kind_of(nullptr, "a/b.glb") == "model");
@@ -252,6 +253,22 @@ BOOST_AUTO_TEST_CASE(ATextureDescAndAPicture_AreTextures_TheirKindsAreNotOffered
 	BOOST_TEST(std::ranges::count(offered, "picture.pct") == 0);
 }
 
+// #1198: a material desc is the kind of the built-in "material_desc", offered once as "Material".
+BOOST_AUTO_TEST_CASE(AMatDesc_IsAMaterial_ItsKindIsOfferedOnce)
+{
+	edt::asset_kind_registry kinds;
+	const auto material = kinds.add({ .id = "material_desc", .suffix = ".mat.desc", .open = [](edt::editor_context&, const res::tag&) {} });
+	BOOST_TEST(edt::asset_kind_of(&kinds, "materials/x.mat.desc") == "material_desc");
+	BOOST_TEST(edt::asset_kind_of(nullptr, "materials/X.MAT.DESC") == "material_desc");
+	BOOST_TEST(!edt::asset_kind_needs_desc_type(&kinds, "materials/x.mat.desc"));
+	const auto filter_kinds = edt::asset_filter_kinds(&kinds);
+	const auto offered = ids_of(filter_kinds);
+	BOOST_TEST(std::ranges::count(offered, "material_desc") == 1);
+	const auto found = std::ranges::find_if(filter_kinds, [](const edt::asset_filter_kind& kind) { return kind.id == "material_desc"; });
+	BOOST_REQUIRE(found != filter_kinds.end());
+	BOOST_TEST(found->label == "Material");
+}
+
 BOOST_AUTO_TEST_CASE(OnlyAKindThatOpensIsOffered)
 {
 	edt::asset_kind_registry kinds;
@@ -306,6 +323,7 @@ BOOST_AUTO_TEST_CASE(OutwardKindName_FoldsTheGlslEditorsKinds_AndLeavesTheOthers
 	BOOST_TEST(edt::outward_kind_name("shader_source.frag") == "shader");
 	BOOST_TEST(edt::outward_kind_name("shader_source.glsl") == "shader");
 	BOOST_TEST(edt::outward_kind_name("shader_desc") == "shader_desc");
+	BOOST_TEST(edt::outward_kind_name("material_desc") == "material_desc");
 	BOOST_TEST(edt::outward_kind_name("poly") == "poly");
 	BOOST_TEST(edt::outward_kind_name("prefab") == "prefab");
 }
@@ -326,7 +344,8 @@ BOOST_AUTO_TEST_CASE(TheGlslEditorsKinds_AreTheKindShader_AndAreNotOfferedAgain)
 BOOST_AUTO_TEST_CASE(TheFixedKindsAreOfferedOnceEach)
 {
 	const auto offered = ids_of(edt::asset_filter_kinds(nullptr));
-	for (const std::string id : { "prefab", "level", "world", "mesh", "data", "shader_desc", "texture", "model", "shader", "file" }) {
+	for (const std::string id : { "prefab", "level", "world", "mesh", "data", "shader_desc", "material_desc", "texture", "model", "shader",
+			"file" }) {
 		BOOST_TEST(std::ranges::count(offered, id) == 1);
 	}
 }

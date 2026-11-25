@@ -437,7 +437,7 @@ struct builtin_kinds_fixture : context_fixture
 BOOST_FIXTURE_TEST_CASE(Builtin_PrefabSuffixOpensThePrefabDocument, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "shader_desc", "desc" }));
+	BOOST_CHECK((kinds.ids() == std::vector<std::string>{ "prefab", "shader_desc", "material_desc", "desc" }));
 	BOOST_CHECK(kinds.open(*context, res::tag::make("prefabs/tree.prefab.desc")));
 	BOOST_CHECK((log == std::vector<std::string>{ "prefab:prefabs/tree.prefab.desc" }));
 }
@@ -457,10 +457,25 @@ BOOST_FIXTURE_TEST_CASE(Builtin_ShaderSuffixIsTheShaderKind_AndOpensAsADataDocum
 	BOOST_CHECK(kinds.kind_for_open("shaders/x.shader") == nullptr);
 }
 
+// #1198: a material opens as a data document too (the material window, by its `__type`); Create Document names it by the kind.
+BOOST_FIXTURE_TEST_CASE(Builtin_MatDescSuffixIsTheMaterialKind_AndOpensAsADataDocument, builtin_kinds_fixture)
+{
+	auto& kinds = context->asset_kinds();
+	const auto* kind = kinds.kind_for_open("materials/red.mat.desc");
+	BOOST_REQUIRE(kind != nullptr);
+	BOOST_CHECK(kind->id == "material_desc");
+	BOOST_CHECK(kinds.open(*context, res::tag::make("materials/red.mat.desc")));
+	BOOST_CHECK((log == std::vector<std::string>{ "desc:materials/red.mat.desc" }));
+	BOOST_REQUIRE(kinds.kind_for_drop("materials/red.mat.desc") != nullptr);
+	BOOST_CHECK(kinds.kind_for_drop("materials/red.mat.desc")->id == "desc");
+	const auto suffixes = edt::desc_kind_suffixes(kinds);
+	BOOST_CHECK((std::ranges::find(suffixes, std::pair<std::string, std::string>{ "material_desc", ".mat.desc" }) != suffixes.end()));
+}
+
 BOOST_FIXTURE_TEST_CASE(Builtin_OtherDescFilesHaveNoKindToOpen_SoAModulesDescKindIsNotBeaten, builtin_kinds_fixture)
 {
 	auto& kinds = context->asset_kinds();
-	for (const char* path : { "levels/a.desc", "materials/red.mat.desc" }) {
+	for (const char* path : { "levels/a.desc", "materials/red.desc" }) {
 		BOOST_CHECK(kinds.kind_for_open(path) == nullptr);
 		BOOST_REQUIRE(kinds.kind_for_drop(path) != nullptr);
 		BOOST_CHECK(kinds.kind_for_drop(path)->id == "desc");

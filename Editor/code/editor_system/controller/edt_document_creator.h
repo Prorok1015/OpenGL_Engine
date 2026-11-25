@@ -56,6 +56,11 @@ namespace edt
 		std::vector<std::string> types() const;
 		// Why nothing may be written now (ports::blocker); nullopt: create() may write.
 		std::optional<std::string> blocker() const { return m_ports.blocker ? m_ports.blocker() : std::nullopt; }
+		// The folders behind res:// (ports::layers), lowest layer first; empty without the port.
+		std::vector<std::filesystem::path> layers() const
+		{
+			return m_ports.layers ? m_ports.layers() : std::vector<std::filesystem::path>{};
+		}
 
 		// `name` ending with `suffix`: the longest of `suffix`, ".desc", one of `tails` or `suffix` without its
 		// ".desc" that ends the name (in any letter case) is replaced. "a" -> "a.desc", "A.DESC" -> "A.desc"; with
