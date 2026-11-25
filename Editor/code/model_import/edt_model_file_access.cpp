@@ -234,8 +234,17 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		if (std::string why = m_may_read(candidate); !why.empty()) return refuse(refusal_kind::rule, std::move(why));
 		judged = fs_paths::generic_utf8_of(candidate);
 	}
-	const auto inside = m_may_read ? res::path_within_dir_from(m_boundary, m_dir, judged, true)
-		: res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	const auto within = [&]() -> std::optional<fs::path> {
+		if (m_may_read && m_read_file) {
+			// An agent's reader looks at nothing by the path: the name the rule judged is the file.
+			const fs::path judged_path = fs_paths::path_from_utf8(judged).lexically_normal();
+			if (!lexically_under(judged_path, m_boundary)) return std::nullopt;
+			return judged_path;
+		}
+		if (m_may_read) return res::path_within_dir_from(m_boundary, m_dir, judged, true);
+		return res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	};
+	const std::optional<fs::path> inside = within();
 	if (!inside) return refuse(refusal_kind::rule, outside);
 	std::error_code ec;
 	const fs::path relative = inside->lexically_relative(m_boundary);
@@ -250,15 +259,30 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		if (!allowed_side) return refuse(refusal_kind::rule, "a file this kind of model may not read");
 	}
 
-	// Only stat-like calls here: the file is opened by read(), below the boundary and without blocking (a FIFO, a device).
-	if (!fs::exists(*inside, ec)) return out;
-	if (fs::symlink_status(*inside, ec).type() != fs::file_type::regular) return refuse(refusal_kind::other, "not a plain file");
-	out.size = fs::file_size(*inside, ec);
-	if (ec) return refuse(refusal_kind::other, "its size cannot be read");
-	out.modified = fs::last_write_time(*inside, ec);
-	if (ec) return refuse(refusal_kind::other, "its time cannot be read");
-	out.id = file_id_of(*inside);
-	if (!out.id.valid) return refuse(refusal_kind::other, "its identity on the disk cannot be read");
+	if (m_may_read && m_read_file) {
+		std::optional<platform::beneath::file_stamp> stamp;
+		try {
+			stamp = m_read_file.stamp(*inside);
+		} catch (const std::runtime_error& error) {
+			return refuse(refusal_kind::other, error.what());
+		}
+		if (!stamp) return out;
+		out.size = stamp->size;
+		out.stamp = stamp;
+	} else {
+		// Only stat-like calls here: the file is opened by read(), below the boundary and without blocking (a FIFO, a
+		// device).
+		if (!fs::exists(*inside, ec)) return out;
+		if (fs::symlink_status(*inside, ec).type() != fs::file_type::regular) {
+			return refuse(refusal_kind::other, "not a plain file");
+		}
+		out.size = fs::file_size(*inside, ec);
+		if (ec) return refuse(refusal_kind::other, "its size cannot be read");
+		out.modified = fs::last_write_time(*inside, ec);
+		if (ec) return refuse(refusal_kind::other, "its time cannot be read");
+		out.id = file_id_of(*inside);
+		if (!out.id.valid) return refuse(refusal_kind::other, "its identity on the disk cannot be read");
+	}
 	if (out.size > m_limits.max_file_bytes) {
 		return refuse(refusal_kind::limit, std::format("a side file of {} bytes exceeds {} per file ({})", out.size, limit_text(m_limits.max_file_bytes), k_step_side_files));
 	}
@@ -266,7 +290,9 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	if (m_allowed) {
 		const auto listed = std::find_if(m_allowed->begin(), m_allowed->end(), [&](const referenced_file& file) { return file.path == *inside; });
 		if (listed == m_allowed->end()) return refuse(refusal_kind::rule, "not among the files the person was shown");
-		if (listed->size != out.size || listed->modified != out.modified || !listed->id.same_as(out.id)) {
+		const bool same = out.stamp ? listed->stamp == out.stamp
+			: listed->size == out.size && listed->modified == out.modified && listed->id.same_as(out.id);
+		if (!same) {
 			return refuse(refusal_kind::other, "the file changed since the person was shown it");
 		}
 	} else if (m_seen.insert(key_of(*inside)).second) {
@@ -279,7 +305,7 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 			return refuse(refusal_kind::limit, std::format("the side files exceed {} in total ({})", limit_text(m_limits.max_total_bytes), k_step_side_files));
 		}
 		m_listed_bytes += out.size;
-		referenced_file listed{ *inside, out.size, out.modified, out.id };
+		referenced_file listed{ *inside, out.size, out.modified, out.id, out.stamp };
 		listed.names.emplace_back(reference);
 		listed.kind = kind;
 		m_files.push_back(std::move(listed));
@@ -317,7 +343,7 @@ std::optional<std::vector<std::byte>> edt::model_file_access::read(const resolve
 	}
 	std::optional<std::vector<std::byte>> bytes(std::in_place);
 	if (m_read_file) {
-		*bytes = m_read_file(file);
+		*bytes = m_read_file.read(file);
 	} else {
 		// Opened below the boundary without following a link: a folder or the file swapped for one since resolve() is
 		// not read.

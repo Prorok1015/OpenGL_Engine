@@ -8,7 +8,6 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
-#include "edt_file_identity.h"
 #include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_link_check.h>
 
@@ -35,12 +34,20 @@ namespace edt
 	platform::beneath::read_result read_below_root(const platform::beneath::read_request& request,
 		const platform::beneath::read_limits& limits, std::vector<std::byte>& out);
 
-	// The root an agent's read of `path` (absolute, past agent_source_path_problem) starts from: with `windows` its
-	// drive ("C:\"), else its longest mount point in `mount_table`. nullopt when there is none.
-	std::optional<std::filesystem::path> agent_read_root(const std::filesystem::path& path, bool windows,
+	// How an agent's read of a file reaches it: from `root` through `folder` to `leaf`, the device changing only at
+	// the components of `folder` named in `mount_points` (read_limits::mount_points).
+	struct agent_read_route {
+		std::filesystem::path root;
+		std::filesystem::path folder;
+		std::filesystem::path leaf;
+		std::vector<std::size_t> mount_points;
+	};
+
+	// The route of `path` (absolute, past agent_source_path_problem): with `windows` from its drive ("C:\"), no mount
+	// point; else from "/", every mount point of `mount_table` on the way named, so no folder of the path is opened by
+	// its path. nullopt when there is none.
+	std::optional<agent_read_route> agent_read_route_of(const std::filesystem::path& path, bool windows,
 		const std::optional<std::string>& mount_table);
-	// agent_read_root of this system (its own mount table): the default of source_volume_ports::read_root.
-	std::optional<std::filesystem::path> system_read_root(const std::filesystem::path& path);
 
 	// How agent_source_path_problem tells a local volume from another one, without touching the path.
 	struct source_volume_ports
@@ -61,9 +68,9 @@ namespace edt
 		// opens it; null: not asked.
 		std::function<std::optional<std::uint32_t>(const std::filesystem::path&)> file_attributes =
 			system_file_attributes;
-		// read_agent_file: where its read starts. Not from mount_table above: that one judges what may be read, this one
-		// is where the disk really holds it.
-		std::function<std::optional<std::filesystem::path>(const std::filesystem::path&)> read_root = system_read_root;
+		// read_agent_file: the mount points its read may cross (agent_read_route_of). Not mount_table above: that one
+		// judges what may be read, this one is where the disk really holds it.
+		std::function<std::optional<std::string>()> read_mounts = system_mount_table;
 		// read_agent_file: the read below the volume's root (platform::beneath::read_beneath with read_limits).
 		std::function<platform::beneath::read_result(const platform::beneath::read_request&,
 			const platform::beneath::read_limits&, std::vector<std::byte>&)> read_below = read_below_root;
@@ -104,7 +111,11 @@ namespace edt
 	std::string agent_side_file_problem(const std::filesystem::path& candidate,
 		const std::filesystem::path& model_folder, const source_volume_ports& ports);
 
->>>
+	// `path` with each short (8.3) name of it spelled long (Windows: GetLongPathNameW, which reads folder listings and
+	// opens no entry; a missing file keeps its own name after its folder's long spelling); `path` itself elsewhere. An
+	// agent's read reaches a file by its long names only: a short one is refused where the handle's final path is
+	// compared with the names.
+	std::filesystem::path long_spelling(const std::filesystem::path& path);
 
 	// The bytes of a file an agent's import reads, with the stamp of the handle they came from. `problem` is empty when
 	// the read went through, else why (no path in it: an agent reads it).
@@ -112,20 +123,21 @@ namespace edt
 		std::vector<std::byte> bytes;
 		std::optional<platform::beneath::file_stamp> stamp;
 		std::string problem;
+		// With `problem`: the file or a folder on the way to it is not there.
+		bool missing = false;
 	};
 
 	// Reads `path` (absolute, lexically normal) for an agent from the handle that was checked (#1412): every folder
-	// from ports.read_root down opened from the one above it without following a link, none on another device, the
-	// file opened as itself, refused when its attributes say a read would fetch it, at most `max_bytes`. Nothing is
-	// opened again by its path afterwards.
+	// from the root of its route down opened from the one above it without following a link, the device changing
+	// only at a mount point, each entry judged by its folder's listing before it is opened, the file opened as itself
+	// and refused when its attributes say a read would fetch it, at most `max_bytes`. Nothing is opened again by its
+	// path afterwards. `stamp_only`: the checks and the stamp, no byte read.
 	agent_file_read read_agent_file(const std::filesystem::path& path, std::uint64_t max_bytes,
-		const source_volume_ports& ports);
+		const source_volume_ports& ports, bool stamp_only = false);
 
-	// Whether the handle `stamp` was taken from is the file `id` names. ReFS ids are 128 bits and a stamp holds 64:
-	// there only the volume is compared.
-	bool stamp_is_file(const platform::beneath::file_stamp& stamp, const file_id& id);
->>>
-
+	// Whether two stamps of an agent's read are of one file holding the same content: size, write time, file id and
+	// device.
+	bool same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b);
 
 	// What stands in for the folder of the source in an error an agent reads.
 	inline constexpr std::string_view k_source_folder_text = "<source folder>";

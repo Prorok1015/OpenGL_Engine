@@ -122,9 +122,8 @@ namespace {
 	// (an agent's import): no link on the way to it either, looked at before anything follows one.
 	std::string identity_problem(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		if (agent) {
-			if (std::string why = edt::agent_source_links_problem(plan.source, *agent); !why.empty()) return why;
-		}
+		// An agent's file is judged by the handle its read opens (read_checked_source), never by the path.
+		if (agent) return edt::agent_source_links_problem(plan.source, *agent);
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -144,10 +143,9 @@ namespace {
 			// From the handle that was checked: nothing is opened again by the path once the walk is done (#1412).
 			edt::agent_file_read read = edt::read_agent_file(plan.source, plan.size, *agent);
 			if (!read.problem.empty()) throw std::runtime_error(read.problem);
-			if (read.bytes.size() != plan.size || read.stamp->size != plan.size) {
-				throw std::runtime_error("the size of the file changed while it was read");
+			if (!plan.stamp || read.bytes.size() != plan.size || !edt::same_file_stamp(*read.stamp, *plan.stamp)) {
+				throw std::runtime_error("the file changed since it was shown: another file, or other content");
 			}
-			if (!edt::stamp_is_file(*read.stamp, plan.id)) throw std::runtime_error("the path reaches another file now");
 			return std::move(read.bytes);
 		}
 		std::ifstream in(plan.source, std::ios::binary);
@@ -169,12 +167,21 @@ namespace {
 		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(file.path.filename()), 256);
 		edt::agent_file_read read = edt::read_agent_file(file.path.lexically_normal(), file.size, volumes);
 		if (!read.problem.empty()) throw std::runtime_error(std::format("'{}': {}", name, read.problem));
-		const bool same = read.bytes.size() == file.size && read.stamp->size == file.size
-			&& edt::stamp_is_file(*read.stamp, file.id);
-		if (!same) {
-			throw std::runtime_error(std::format("'{}' changed while it was read", name));
+		if (!file.stamp || read.bytes.size() != file.size || !edt::same_file_stamp(*read.stamp, *file.stamp)) {
+			throw std::runtime_error(
+				std::format("'{}' changed since it was listed: another file, or other content", name));
 		}
 		return std::move(read.bytes);
+	}
+
+	// The stamp of a side file of an agent's import, from the handle the same walk opens (#1412).
+	std::optional<platform::beneath::file_stamp> stamp_side_file(const fs::path& path,
+		const edt::source_volume_ports& volumes)
+	{
+		const edt::agent_file_read stamped = edt::read_agent_file(path.lexically_normal(), UINTMAX_MAX, volumes, true);
+		if (stamped.missing) return std::nullopt;
+		if (!stamped.problem.empty()) throw std::runtime_error(stamped.problem);
+		return stamped.stamp;
 	}
 
 	// Takes back the files a failed or cancelled export wrote: only those, only plain files, newest first. A staged binary
@@ -303,7 +310,10 @@ namespace {
 			source.may_read = [volumes = in.volumes, folder = in.plan.source.parent_path()](const fs::path& candidate) {
 				return edt::agent_side_file_problem(candidate, folder, volumes);
 			};
-			source.read_file = [volumes = in.volumes](const edt::resolved_reference& file) {
+			source.read_file.stamp = [volumes = in.volumes](const fs::path& path) {
+				return stamp_side_file(path, volumes);
+			};
+			source.read_file.read = [volumes = in.volumes](const edt::resolved_reference& file) {
 				return read_side_file(file, volumes);
 			};
 		}
@@ -514,9 +524,11 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
 	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
 	if (!person) {
-		if (std::string why = agent_source_links_problem(given, volumes()); !why.empty()) {
+		const fs::path spelled = long_spelling(given);
+		if (std::string why = agent_source_links_problem(spelled, volumes()); !why.empty()) {
 			return refuse(cmd::codes::invalid_args, std::move(why));
 		}
+		return resolve_for_agent(request, spelled, plan);
 	}
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
@@ -558,6 +570,37 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 
 	// An agent's asset is named after the path the person was shown (text_plan), a person's after the file.
 	plan_targets(request, to_utf8((person ? resolved : given).stem()), plan);
+	return plan;
+}
+
+edt::agent_import_plan edt::agent_model_import::resolve_for_agent(const agent_import_request& request,
+	const fs::path& given, agent_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	const std::string extension = lowered(to_utf8(given.extension()));
+	const auto known = [&](std::string_view model) { return model == extension; };
+	if (std::none_of(std::begin(k_model_extensions), std::end(k_model_extensions), known)) {
+		return refuse(cmd::codes::invalid_args, "the source is not a model file (.glb, .gltf, .obj or .fbx)");
+	}
+	// Judged by the handle the walk opens (#1412): nothing is looked at by the path, which a swap could redirect.
+	const fs::path source = given.lexically_normal();
+	const agent_file_read stamped = read_agent_file(source, UINTMAX_MAX, volumes(), true);
+	if (stamped.missing) return refuse(cmd::codes::not_found, "no such file: " + shown(to_utf8(given.filename())));
+	if (!stamped.problem.empty()) return refuse(cmd::codes::invalid_args, stamped.problem);
+	plan.source = source;
+	plan.on_disk = true;
+	plan.size = stamped.stamp->size;
+	plan.stamp = stamped.stamp;
+	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
+	if (plan.size > m_options.max_source_bytes) {
+		return refuse(cmd::codes::invalid_args, std::format("the model file of {} exceeds {} for an agent's import ({})",
+			size_text(plan.size), limit_text(m_options.max_source_bytes), k_step_source));
+	}
+	plan_targets(request, to_utf8(given.stem()), plan);
 	return plan;
 }
 

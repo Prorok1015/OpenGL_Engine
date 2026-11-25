@@ -2,6 +2,7 @@
 #include "edt_decoder_sandbox.h"
 #include "edt_file_identity.h"
 #include "edt_model_import_limits.h"
+#include <snk/platform/plt_beneath.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +24,8 @@ namespace edt {
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
+		std::optional<platform::beneath::file_stamp> stamp;
 		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
@@ -88,16 +91,24 @@ namespace edt {
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
+		std::optional<platform::beneath::file_stamp> stamp;
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		refusal_kind refusal = refusal_kind::none;
 		bool found() const { return !path.empty() && error.empty(); }
 	};
 
-	// An agent's read of a resolved side file (#1412): its bytes from the handle that was checked, which must be the
-	// file `id` names and hold `size` bytes; nothing is opened again by the path after it. Throws std::runtime_error
-	// with the reason when the file may not be read.
-	using model_file_reader = std::function<std::vector<std::byte>(const resolved_reference& file)>;
+	// An agent's look at a side file and read of it (#1412): both through the handle a no-follow walk opens, never by
+	// the path. Each throws std::runtime_error with the reason when the file may not be read.
+	struct model_file_reader {
+		// The stamp of the file at a path (absolute, lexically normal); nullopt when it is not there.
+		std::function<std::optional<platform::beneath::file_stamp>(const std::filesystem::path&)> stamp;
+		// The bytes of a resolved file, which must still have its stamp.
+		std::function<std::vector<std::byte>(const resolved_reference& file)> read;
+
+		explicit operator bool() const { return stamp && read; }
+	};
 
 	// What a model file may make the editor read from the disk for an agent's import: its own folder and the folders
 	// below it that are not hidden; images (checked by their first bytes) for textures, a .bin beside a .gltf and a .mtl

@@ -63,7 +63,7 @@ Editor/
     │   ├── edt_asset_exporter.cpp/h
     │   ├── edt_asset_export_dialog.cpp/h
     │   ├── edt_agent_model_import.cpp/h
-    │   └── edt_agent_source_rule.cpp/h # the one rule of where an agent's import may read (#1378/#1380): `agent_source_path_problem`, `source_volume_ports`, `system_drive_type`/`system_mount_table`, `without_paths`; the no-follow walk `agent_source_links_problem`, `cloud_attributes_problem`, `agent_side_file_problem` (#1408); `read_agent_file` (#1412): the source and the side files read from the handle the walk checked (`read_beneath` + `read_limits` from `source_volume_ports::read_root`, no mount crossed, no recall), `stamp_is_file`; the image and the model import use it
+    │   └── edt_agent_source_rule.cpp/h # the one rule of where an agent's import may read (#1378/#1380): `agent_source_path_problem`, `source_volume_ports`, `system_drive_type`/`system_mount_table`, `without_paths`; the no-follow walk `agent_source_links_problem`, `cloud_attributes_problem`, `agent_side_file_problem` (#1408); `read_agent_file` (#1412): the source and the side files looked at and read only through the handle a no-follow walk opens (`read_beneath` + `read_limits` on the route of `agent_read_route_of`: from `/` with the mount points named, or the drive; no recall), `same_file_stamp` against the plan's stamp; the image and the model import use it
     │
     ├── gizmo/                        # Transform gizmo
     │   ├── edt_transform_gizmo.hpp

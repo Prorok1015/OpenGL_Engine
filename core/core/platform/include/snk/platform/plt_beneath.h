@@ -229,11 +229,16 @@ namespace platform::beneath {
 		// Every folder below the root and the file lie on the root's device (POSIX st_dev, Windows volume serial
 		// number): a mount met on the way is `failed` with k_other_device in the error.
 		bool same_device = false;
-		// Windows: a file whose attributes say a read would fetch it (RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS, OFFLINE:
-		// an online-only cloud file, an offline one) is `failed` with k_would_recall in the error. The file's bits are
-		// read from its folder's listing before the file is opened and from its handle before a byte is read; every
-		// folder's from its handle. Nothing elsewhere.
+		// Windows: an entry whose attributes say opening or reading it would fetch it (RECALL_ON_OPEN,
+		// RECALL_ON_DATA_ACCESS, OFFLINE: an online-only cloud file, an offline one) is `failed` with k_would_recall in
+		// the error. Each folder below the root and the file are judged by their parent's listing before they are
+		// opened (fails closed: a name the listing does not hold as written is not opened) and by their handle; the
+		// file before a byte is read. Nothing elsewhere.
 		bool refuse_recall = false;
+		// POSIX, with same_device: the indexes of the components of `folder` (0: its first) that are mount points. The
+		// device may change there, and only there: the folders below one and the file lie on its device. A walk from
+		// "/" to a file on a mounted volume names the mount points on its way.
+		std::vector<std::size_t> mount_points;
 	};
 
 	inline constexpr std::string_view k_other_device = "lies on another device than the root";

@@ -425,17 +425,31 @@ BOOST_AUTO_TEST_CASE(OnWindows_TheAttributesComeFromTheListing_BeforeTheEntryIsO
 	BOOST_CHECK_EQUAL(disk.order[2], "list " + absolute_path("vfs/robot.glb").generic_string());
 }
 
-BOOST_AUTO_TEST_CASE(TheReadRoot_IsTheDriveOrTheLongestMountPoint)
+// #1412: a read starts at "/" (POSIX) and names every mount point on its way, so no folder of the path is opened by
+// its path; on Windows at the drive.
+BOOST_AUTO_TEST_CASE(TheReadRoute_StartsAtTheTop_AndNamesTheMountPointsOnTheWay)
 {
-	const std::optional<std::string> table = std::string("/dev/sda1 / ext4 rw 0 0\n/dev/sdb1 /mnt/data ext4 rw 0 0\n");
-	BOOST_CHECK(edt::agent_read_root(fs::path("/mnt/data/models/robot.glb"), false, table) == fs::path("/mnt/data"));
-	BOOST_CHECK(edt::agent_read_root(fs::path("/mnt/./data/robot.glb"), false, table) == fs::path("/mnt/data"));
-	BOOST_CHECK(edt::agent_read_root(fs::path("/mnt/database/robot.glb"), false, table) == fs::path("/"));
-	BOOST_CHECK(!edt::agent_read_root(fs::path("/home/robot.glb"), false, std::nullopt));
-	BOOST_CHECK(!edt::agent_read_root(fs::path("robot.glb"), false, table));
+	const std::optional<std::string> table = std::string("/dev/sda1 / ext4 rw 0 0\n/dev/sdb1 /mnt/data ext4 rw 0 0\n"
+		"/dev/sdc1 /mnt/data/usb vfat rw 0 0\n");
+	const auto route = edt::agent_read_route_of(fs::path("/mnt/data/usb/models/robot.glb"), false, table);
+	BOOST_REQUIRE(route.has_value());
+	BOOST_CHECK(route->root == fs::path("/"));
+	BOOST_CHECK_EQUAL(route->folder.generic_string(), "mnt/data/usb/models");
+	BOOST_CHECK(route->leaf == fs::path("robot.glb"));
+	BOOST_CHECK((route->mount_points == std::vector<std::size_t>{ 1, 2 }));
+	const auto dotted = edt::agent_read_route_of(fs::path("/mnt/./database/robot.glb"), false, table);
+	BOOST_REQUIRE(dotted.has_value());
+	BOOST_CHECK_EQUAL(dotted->folder.generic_string(), "mnt/database");
+	BOOST_CHECK(dotted->mount_points.empty());
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("/home/robot.glb"), false, std::nullopt));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("robot.glb"), false, table));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("/home/../robot.glb"), false, table));
 #if defined(_WIN32)
-	BOOST_CHECK(edt::agent_read_root(fs::path("D:\\models\\robot.glb"), true, std::nullopt) == fs::path("D:\\"));
-	BOOST_CHECK(!edt::agent_read_root(fs::path("models\\robot.glb"), true, std::nullopt));
+	const auto drive = edt::agent_read_route_of(fs::path("D:\\models\\robot.glb"), true, std::nullopt);
+	BOOST_REQUIRE(drive.has_value());
+	BOOST_CHECK(drive->root == fs::path("D:\\"));
+	BOOST_CHECK(drive->folder == fs::path("models"));
+	BOOST_CHECK(!edt::agent_read_route_of(fs::path("models\\robot.glb"), true, std::nullopt));
 #endif
 }
 
@@ -475,15 +489,20 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ComesFromTheHandleThatWasChecked)
 	BOOST_REQUIRE_MESSAGE(read.problem.empty(), read.problem);
 	BOOST_CHECK_EQUAL(text_of(read.bytes), "glTF-bytes");
 	BOOST_REQUIRE(read.stamp);
-	BOOST_CHECK(edt::stamp_is_file(*read.stamp, edt::file_id_of(file)));
-	BOOST_CHECK(!edt::stamp_is_file(*read.stamp, edt::file_id_of(base / "real" / "other.glb")));
-	BOOST_CHECK(!edt::stamp_is_file(*read.stamp, edt::file_id{}));
+	const edt::agent_file_read stamped = edt::read_agent_file(file, 64, edt::source_volume_ports{}, true);
+	BOOST_REQUIRE_MESSAGE(stamped.problem.empty(), stamped.problem);
+	BOOST_CHECK(stamped.bytes.empty());
+	BOOST_CHECK(edt::same_file_stamp(*read.stamp, *stamped.stamp));
+	const edt::agent_file_read other = edt::read_agent_file(base / "real" / "other.glb", 64, edt::source_volume_ports{});
+	BOOST_REQUIRE_MESSAGE(other.problem.empty(), other.problem);
+	BOOST_CHECK(!edt::same_file_stamp(*read.stamp, *other.stamp));
 
 	const edt::agent_file_read grown = edt::read_agent_file(file, 4, edt::source_volume_ports{});
 	BOOST_CHECK_MESSAGE(grown.problem.find("larger") != std::string::npos, grown.problem);
 	BOOST_CHECK(grown.bytes.empty());
 	const edt::agent_file_read gone = edt::read_agent_file(base / "real" / "none.glb", 64, edt::source_volume_ports{});
 	BOOST_CHECK(!gone.problem.empty());
+	BOOST_CHECK(gone.missing);
 }
 
 // #1412: a folder swapped for a link after the walk checked it is not followed by the read.

@@ -105,9 +105,8 @@ namespace
 	// `agent` (an agent's import): no link on the way to the file either, looked at before anything follows one.
 	std::string identity_problem(const edt::image_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		if (agent) {
-			if (std::string why = edt::agent_source_links_problem(plan.source, *agent); !why.empty()) return why;
-		}
+		// An agent's file is judged by the handle its read opens (read_checked_source), never by the path.
+		if (agent) return edt::agent_source_links_problem(plan.source, *agent);
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -127,10 +126,9 @@ namespace
 			// From the handle that was checked: nothing is opened again by the path once the walk is done (#1412).
 			edt::agent_file_read read = edt::read_agent_file(plan.source, plan.size, *agent);
 			if (!read.problem.empty()) throw std::runtime_error(read.problem);
-			if (read.bytes.size() != plan.size || read.stamp->size != plan.size) {
-				throw std::runtime_error("the size of the file changed while it was read");
+			if (!plan.stamp || read.bytes.size() != plan.size || !edt::same_file_stamp(*read.stamp, *plan.stamp)) {
+				throw std::runtime_error("the file changed since it was shown: another file, or other content");
 			}
-			if (!edt::stamp_is_file(*read.stamp, plan.id)) throw std::runtime_error("the path reaches another file now");
 			return std::move(read.bytes);
 		}
 		std::ifstream in(plan.source, std::ios::binary);
@@ -391,9 +389,11 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	}
 	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
 	if (!person) {
-		if (std::string why = agent_source_links_problem(given, volumes()); !why.empty()) {
+		const fs::path spelled = long_spelling(given);
+		if (std::string why = agent_source_links_problem(spelled, volumes()); !why.empty()) {
 			return refuse(cmd::codes::invalid_args, std::move(why));
 		}
+		return resolve_for_agent(request, spelled, plan);
 	}
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
@@ -434,6 +434,35 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	plan.id = file_id_of(resolved);
 	if (!plan.id.valid) return refuse(cmd::codes::invalid_args, "the identity of the source on the disk cannot be read");
 	plan_targets(request, fs_paths::utf8_of(resolved.filename()), plan);
+	return plan;
+}
+
+edt::image_import_plan edt::image_importer::resolve_for_agent(const image_import_request& request,
+	const fs::path& given, image_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	if (!known_extension(extension_of(fs_paths::utf8_of(given.filename())))) {
+		return refuse(cmd::codes::invalid_args, "the source is not a picture this import takes (.png, .jpg or .jpeg)");
+	}
+	// Judged by the handle the walk opens (#1412): nothing is looked at by the path, which a swap could redirect.
+	const fs::path source = given.lexically_normal();
+	const agent_file_read stamped = read_agent_file(source, UINTMAX_MAX, volumes(), true);
+	if (stamped.missing) return refuse(cmd::codes::not_found, "no such file: " + shown(request.path));
+	if (!stamped.problem.empty()) return refuse(cmd::codes::invalid_args, stamped.problem);
+	plan.source = source;
+	plan.on_disk = true;
+	plan.size = stamped.stamp->size;
+	plan.stamp = stamped.stamp;
+	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
+	if (plan.size > m_options.max_agent_bytes) {
+		return refuse(cmd::codes::invalid_args, std::format("the picture of {} exceeds {} for an agent's import ({})",
+			size_text(plan.size), limit_text(m_options.max_agent_bytes), k_step_source));
+	}
+	plan_targets(request, fs_paths::utf8_of(source.filename()), plan);
 	return plan;
 }
 

@@ -273,33 +273,43 @@ platform::beneath::read_result edt::read_below_root(const platform::beneath::rea
 	return platform::beneath::read_beneath(request, limits, out);
 }
 
-std::optional<fs::path> edt::agent_read_root(const fs::path& path, bool windows,
+std::optional<edt::agent_read_route> edt::agent_read_route_of(const fs::path& path, bool windows,
 	const std::optional<std::string>& mount_table)
 {
+	agent_read_route route;
 	if (windows) {
 		if (!path.has_root_name() || !path.has_root_directory()) return std::nullopt;
-		return path.root_path();
+		const fs::path below = path.lexically_normal().relative_path();
+		if (!below.has_filename()) return std::nullopt;
+		route.root = path.root_path();
+		route.folder = below.parent_path();
+		route.leaf = below.filename();
+		return route;
 	}
 	const std::string text = fs_paths::generic_utf8_of(path);
 	if (!text.starts_with('/') || !mount_table) return std::nullopt;
 	std::vector<std::string_view> parts = components_of(text, false);
 	std::erase(parts, std::string_view("."));
-	const std::optional<agent_log_mount> holder = holding_mount(posix_text_of(parts), *mount_table);
-	if (!holder) return std::nullopt;
-	return fs_paths::path_from_utf8(holder->point);
-}
-
-std::optional<fs::path> edt::system_read_root(const fs::path& path)
-{
-#if defined(_WIN32)
-	return agent_read_root(path, true, std::nullopt);
-#else
-	return agent_read_root(path, false, system_mount_table());
-#endif
+	if (parts.empty() || std::ranges::find(parts, std::string_view("..")) != parts.end()) return std::nullopt;
+	route.root = "/";
+	route.leaf = fs_paths::path_from_utf8(parts.back());
+	parts.pop_back();
+	std::string folder_text;
+	for (const std::string_view part : parts) folder_text += (folder_text.empty() ? "" : "/") + std::string(part);
+	route.folder = fs_paths::path_from_utf8(folder_text);
+	// A mount point is a folder of the path whose whole text is a point of the table: the device changes there.
+	const std::vector<agent_log_mount> mounts = agent_log_mounts(*mount_table);
+	std::string at;
+	for (std::size_t index = 0; index < parts.size(); ++index) {
+		at += "/" + std::string(parts[index]);
+		const auto mounted = [&at](const agent_log_mount& mount) { return mount.point == at; };
+		if (std::ranges::any_of(mounts, mounted)) route.mount_points.push_back(index);
+	}
+	return route;
 }
 
 edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t max_bytes,
-	const source_volume_ports& ports)
+	const source_volume_ports& ports, bool stamp_only)
 {
 	agent_file_read out;
 	const auto refuse = [&out](std::string why) {
@@ -308,21 +318,20 @@ edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t ma
 		out.problem = std::move(why);
 		return std::move(out);
 	};
-	const std::optional<fs::path> root = ports.read_root ? ports.read_root(path) : std::nullopt;
-	if (!root) return refuse("the volume that holds the file cannot be told");
-	const fs::path below = path.lexically_normal().lexically_relative(*root);
-	if (below.empty() || *below.begin() == ".." || !below.has_filename()) {
-		return refuse("the file does not lie below the root of its volume");
-	}
+	const std::optional<std::string> mounts = ports.read_mounts ? ports.read_mounts() : std::nullopt;
+	const std::optional<agent_read_route> route = agent_read_route_of(path, ports.windows, mounts);
+	if (!route) return refuse("the volume that holds the file cannot be told");
 	if (!ports.read_below) return refuse("the file cannot be read");
 	platform::beneath::read_request request;
-	request.root = *root;
-	request.folder = below.parent_path();
-	request.leaf = below.filename();
+	request.root = route->root;
+	request.folder = route->folder;
+	request.leaf = route->leaf;
 	request.max_bytes = max_bytes;
+	request.stamp_only = stamp_only;
 	platform::beneath::read_limits limits;
 	limits.same_device = true;
 	limits.refuse_recall = true;
+	limits.mount_points = route->mount_points;
 	const platform::beneath::read_result read = ports.read_below(request, limits, out.bytes);
 	using platform::beneath::read_status;
 	switch (read.status) {
@@ -331,9 +340,10 @@ edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t ma
 		out.stamp = read.stamp;
 		return out;
 	case read_status::missing:
+		out.missing = true;
 		return refuse("the file or a folder on the way to it is gone");
 	case read_status::not_regular:
-		return refuse("the file is no plain file any more (a link, a junction, a folder or a device)");
+		return refuse("the file is no plain file (a link, a junction, a folder or a device)");
 	case read_status::too_large:
 		return refuse("the file is larger than when it was shown");
 	case read_status::failed:
@@ -347,21 +357,35 @@ edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t ma
 			"crosses one; name the file by its real path");
 	}
 	// The error names absolute paths: an agent reads none.
-	return refuse("the file cannot be read below the root of its volume without following a link (a link, a "
+	return refuse("the file cannot be read from the root of its volume without following a link (a link, a "
 		"junction or no folder on the way)");
 }
 
-bool edt::stamp_is_file(const platform::beneath::file_stamp& stamp, const file_id& id)
+fs::path edt::long_spelling(const fs::path& path)
 {
-	if (!id.valid) return false;
 #if defined(_WIN32)
-	// A stamp holds the 32-bit serial of BY_HANDLE_FILE_INFORMATION; an id the 64-bit one of FILE_ID_INFO, whose low
-	// half it is.
-	if (stamp.device != (id.volume & 0xffffffffu)) return false;
-	return id.index_high != 0 || stamp.file_id == id.index;
+	const auto spelled = [](const fs::path& text) -> std::optional<fs::path> {
+		const std::wstring native = platform::beneath::long_path(text).native();
+		const DWORD length = GetLongPathNameW(native.c_str(), nullptr, 0);
+		if (length == 0) return std::nullopt;
+		std::wstring out(length, L'\0');
+		const DWORD written = GetLongPathNameW(native.c_str(), out.data(), length);
+		if (written == 0 || written >= length) return std::nullopt;
+		out.resize(written);
+		if (out.starts_with(L"\\\\?\\") && !out.starts_with(L"\\\\?\\UNC\\")) out.erase(0, 4);
+		return fs::path(out);
+	};
+	if (const std::optional<fs::path> whole = spelled(path)) return *whole;
+	if (const std::optional<fs::path> folder = spelled(path.parent_path())) return *folder / path.filename();
+	return path;
 #else
-	return stamp.device == id.volume && stamp.file_id == id.index;
+	return path;
 #endif
+}
+
+bool edt::same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b)
+{
+	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.file_id == b.file_id && a.device == b.device;
 }
 
 std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)

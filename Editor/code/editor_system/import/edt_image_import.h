@@ -88,6 +88,9 @@ namespace edt
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
+		// An agent's plan: the stamp of the handle its walk opened (#1412), in place of `modified` and `id`, which a
+		// look by the path would take.
+		std::optional<platform::beneath::file_stamp> stamp;
 		std::string folder;	// below res://, no protocol; empty: the root
 		std::string name;	// file name of the picture in the project
 		res::tag image;
@@ -156,6 +159,9 @@ namespace edt
 		// else agent_source_path_problem first, on the path given and on the path resolved. It looks at the source on
 		// the disk: for an agent's call only once a person approved it (start).
 		image_import_plan resolve(const image_import_request& request, bool person) const;
+		// resolve() of an agent's source past its walk: the stamp of the handle, nothing looked at by the path.
+		image_import_plan resolve_for_agent(const image_import_request& request, const std::filesystem::path& given,
+			image_import_plan& plan) const;
 
 		// What the person is asked for an agent's call: the source as given, the four files and the settings; or why
 		// the call will be refused. Never looks at the source on the disk (only the project's layers). Remembers the
