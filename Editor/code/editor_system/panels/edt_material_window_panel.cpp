@@ -143,6 +143,7 @@ void edt::material_window_panel::draw_compile_errors()
 {
 	ImGui::Spacing();
 	ImGui::SeparatorText("Compile errors");
+	m_model.scan();
 	rnd::render_system* render = m_render;
 	if (render && render->get_driver()) {
 		m_model.preprocess(std::chrono::steady_clock::now(), render->get_driver()->bindings());
@@ -172,6 +173,9 @@ void edt::material_window_panel::draw_compile_errors()
 			}
 		}
 	}
+	if (!m_go_to_error.empty()) {
+		ImGui::TextColored(colors().error, "%s", m_go_to_error.c_str());
+	}
 }
 
 void edt::material_window_panel::draw_compile_row(const compile_row& row, int index)
@@ -186,8 +190,18 @@ void edt::material_window_panel::draw_compile_row(const compile_row& row, int in
 			const std::optional<res::disk_file> on_disk = resources->disk_file_of(file);
 			return on_disk ? std::optional<std::filesystem::path>{ on_disk->file } : std::nullopt;
 		};
-		if (!rows.empty()) {
-			open_shader_problem_file(rows.front(), disk_path, [](const std::filesystem::path& file) { return platform::open_in_shell(file); });
+		std::string open_error;
+		const shader_file_open opened = rows.empty() ? shader_file_open::not_a_shader_source
+			: open_shader_problem_file(rows.front(), disk_path, [&open_error](const std::filesystem::path& file) {
+				open_error = platform::open_in_shell(file);
+				return open_error;
+			});
+		const std::string file = rows.empty() ? std::string{} : rows.front().file;
+		switch (opened) {
+		case shader_file_open::opened: m_go_to_error.clear(); break;
+		case shader_file_open::not_a_shader_source: m_go_to_error = std::format("Not opened: '{}' is not a shader source.", file); break;
+		case shader_file_open::not_on_disk: m_go_to_error = std::format("Not opened: '{}' is not a file on the disk.", file); break;
+		case shader_file_open::failed: m_go_to_error = std::format("Cannot open '{}': {}", file, open_error); break;
 		}
 	}
 	if (ImGui::IsItemHovered()) {

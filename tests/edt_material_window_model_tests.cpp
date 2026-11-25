@@ -523,6 +523,7 @@ BOOST_AUTO_TEST_CASE(CompileRows_ThisMaterialsSetAndTags_AreItsOwn_OtherSetsAreO
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc", k_fog_material));
 	edt::material_window_model model(data, services);
+	model.scan();
 	const res::tag preview{ "memory://editor/material/77.desc" };
 
 	const std::vector<rnd::shader_problem> problems{
@@ -573,6 +574,7 @@ BOOST_AUTO_TEST_CASE(CompileRows_ThePreviewsLoadRowAlone_IsThisMaterials)
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc", k_fog_material));
 	edt::material_window_model model(data, services);
+	model.scan();
 	const res::tag preview{ "memory://editor/material/78.desc" };
 
 	const edt::compile_errors errors = model.compile_rows(
@@ -589,6 +591,7 @@ BOOST_AUTO_TEST_CASE(Errors_AreMadeAgain_OnlyWhenTheGenerationOrTheDefinesChange
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc", k_fog_material));
 	edt::material_window_model model(data, services);
+	model.scan();
 	int asked = 0;
 	const auto snapshot = [&asked] {
 		++asked;
@@ -599,6 +602,7 @@ BOOST_AUTO_TEST_CASE(Errors_AreMadeAgain_OnlyWhenTheGenerationOrTheDefinesChange
 	BOOST_TEST(asked == 1);
 	// USE_FOG off: the same row is another variant now.
 	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	model.scan();
 	const edt::compile_errors& after = model.errors(1, snapshot, res::tag{});
 	BOOST_TEST(asked == 2);
 	BOOST_TEST(after.material.empty());
@@ -616,6 +620,7 @@ BOOST_AUTO_TEST_CASE(PreCheck_WarnsOfBadEntries_AndOfNamesTheEngineOrTheShaderDe
 		R"({"__type":"material_desc","__version":2,"shader":"res://shaders/m.shader.desc","defines":)"
 		R"(["BAD-NAME","LEVEL 1 2","MAX_LIGHT_COUNT 4","SNK_FRAGMENT_SHADER","SHADER_LEVEL 2","SOURCE_MACRO","FINE 3"]})"));
 	edt::material_window_model model(data, services);
+	model.scan();
 
 	const std::vector<std::string> warnings = model.pre_check();
 	BOOST_TEST(any_holds(warnings, "'BAD-NAME' does not start with a define name"));
@@ -631,10 +636,12 @@ BOOST_AUTO_TEST_CASE(PreCheck_WarnsOfBadEntries_AndOfNamesTheEngineOrTheShaderDe
 BOOST_AUTO_TEST_CASE(Preprocess_WaitsForTheDelay_RunsOnce_AndAnEditRestartsTheWait)
 {
 	put("shaders/m.vert", "#version 450\n");
-	put("shaders/m.frag", "#version 450\n");
+	// No #version: each run finds one problem, so the rows of a run can be told from none.
+	put("shaders/m.frag", "void main() {}\n");
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc", k_fog_material));
 	edt::material_window_model model(data, services);
+	model.scan();
 	const auto& bindings = rnd::driver::per_type_binding_table;
 	using std::chrono::milliseconds;
 	const std::chrono::steady_clock::time_point t0{};
@@ -642,17 +649,24 @@ BOOST_AUTO_TEST_CASE(Preprocess_WaitsForTheDelay_RunsOnce_AndAnEditRestartsTheWa
 	BOOST_TEST(!model.preprocess(t0, bindings));
 	BOOST_TEST(!model.preprocess(t0 + milliseconds(299), bindings));
 	BOOST_TEST(model.preprocess(t0 + milliseconds(300), bindings));
+	BOOST_TEST(model.compile_rows({}, res::tag{}).material.size() == 1u);
 	BOOST_TEST(!model.preprocess(t0 + milliseconds(1000), bindings));
 
 	// An edit, then another before the delay is over: the wait starts again from the second.
 	const auto t1 = t0 + milliseconds(2000);
 	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	model.scan();
 	BOOST_TEST(!model.preprocess(t1, bindings));
+	// The old define set's rows are gone at once, not when the new run comes.
+	BOOST_TEST(model.compile_rows({}, res::tag{}).material.empty());
 	BOOST_REQUIRE(model.toggle("USE_FOG"));
+	model.scan();
 	BOOST_TEST(!model.preprocess(t1 + milliseconds(200), bindings));
 	BOOST_TEST(!model.preprocess(t1 + milliseconds(300), bindings));
 	BOOST_TEST(!model.preprocess(t1 + milliseconds(499), bindings));
+	BOOST_TEST(model.compile_rows({}, res::tag{}).material.empty());
 	BOOST_TEST(model.preprocess(t1 + milliseconds(500), bindings));
+	BOOST_TEST(model.compile_rows({}, res::tag{}).material.size() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(PreprocessProblems_AreThisMaterials_MarkedPreprocess)
@@ -662,6 +676,7 @@ BOOST_AUTO_TEST_CASE(PreprocessProblems_AreThisMaterials_MarkedPreprocess)
 	put("shaders/m.shader.desc", k_defined_shader);
 	edt::data_document& data = open(put("lit.desc", k_fog_material));
 	edt::material_window_model model(data, services);
+	model.scan();
 	BOOST_TEST(model.compile_rows({}, res::tag{}).material.empty());
 
 	const std::chrono::steady_clock::time_point t0{};
@@ -683,6 +698,7 @@ BOOST_AUTO_TEST_CASE(ASkyMaterial_GetsTheLastFrameNote)
 	put("shaders/sky.shader.desc", R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/sky.vert","fragment":"res://shaders/sky.frag"})");
 	edt::data_document& data = open(put("sky.desc", R"({"__type":"material_desc","__version":2,"shader":"res://shaders/sky.shader.desc"})"));
 	edt::material_window_model model(data, services);
+	model.scan();
 	const edt::compile_errors errors = model.compile_rows({ problem_at("res://shaders/sky.frag", 2, "sky.vert + sky.frag") }, res::tag{});
 	BOOST_TEST(errors.sky);
 	BOOST_TEST(errors.material.size() == 1u);

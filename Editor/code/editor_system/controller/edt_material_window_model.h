@@ -115,6 +115,10 @@ namespace edt
 		const material_shader& shader();
 		// Reads the shader and its stages again at the next call.
 		void refresh_shader() { m_scanned = false; }
+		// Reads the document's shader field and, when it or one of the files read changed, the shader and its stages. Free
+		// when the document's generation is the same and no edit was pending: the shown document is not copied. Call it once
+		// a frame before expected_defines, compile_rows, errors, pre_check and preprocess, which use what it read last.
+		void scan();
 
 		// The renderer's problems of this material and its shader (#1196 PR 3): load rows whose program is the document or
 		// `preview_tag` and rows of the shader's files whose define set is the material's are `material`, the other
@@ -127,8 +131,8 @@ namespace edt
 
 		// What is likely wrong with the material's defines before anything compiles: an entry that is no identifier with
 		// at most one value token, or a name the engine, the material compiler, the shader desc or the shader's source
-		// defines itself. One message each.
-		std::vector<std::string> pre_check();
+		// defines itself. One message each. Made again when the document or the scan changed.
+		const std::vector<std::string>& pre_check();
 
 		static constexpr std::chrono::milliseconds preprocess_delay{ 300 };
 		// Preprocesses the shader for the current define set (shader_config::load: includes, binding macros, no GPU)
@@ -140,7 +144,6 @@ namespace edt
 		// The entries of the shown `defines`, as the compiler gets them (with the shader's), sorted.
 		const std::vector<std::string>& expected_defines();
 		bool write_defines(const std::function<void(boost::json::array& defines)>& change);
-		void scan();
 		void sync_watches(const std::vector<res::tag>& wanted);
 		void unwatch_files();
 
@@ -159,6 +162,9 @@ namespace edt
 		std::map<std::string, std::string, std::less<>> m_values;
 		bool m_scanned = false;
 		bool m_has_scan = false;
+		// The document as the last scan read it: the same generation without a pending edit has the same shader field.
+		std::uint64_t m_scan_generation = 0;
+		bool m_scan_pending = false;
 		// The resource system the watchers are on (the base one, which outlives the window) and what is watched.
 		res::resource_system* m_watching = nullptr;
 		std::vector<res::tag> m_watched;
@@ -167,6 +173,11 @@ namespace edt
 		std::uint64_t m_expected_generation = 0;
 		std::uint64_t m_expected_scan = 0;
 		bool m_has_expected = false;
+
+		std::vector<std::string> m_pre_check;
+		std::uint64_t m_pre_check_generation = 0;
+		std::uint64_t m_pre_check_scan = 0;
+		bool m_has_pre_check = false;
 
 		std::string m_preprocess_key;
 		bool m_preprocess_seen = false;

@@ -346,9 +346,13 @@ const edt::material_shader& edt::material_window_model::shader()
 
 void edt::material_window_model::scan()
 {
+	const std::uint64_t generation = m_document.generation();
+	if (m_scanned && !m_scan_pending && m_scan_generation == generation) return;
 	// A shader typed in is a sync load per value: the field is read again once its edit is committed.
+	m_scan_pending = m_document.has_pending_edit();
+	m_scan_generation = generation;
 	res::tag tag = m_shader.shader;
-	if (!m_has_scan || !m_document.has_pending_edit()) {
+	if (!m_has_scan || !m_scan_pending) {
 		const json::value shown = m_document.shown();
 		tag = res::tag{};
 		if (const json::value* field = shown.is_object() ? shown.as_object().if_contains("shader") : nullptr) {
@@ -459,7 +463,6 @@ void edt::material_window_model::unwatch_files()
 
 const std::vector<std::string>& edt::material_window_model::expected_defines()
 {
-	scan();
 	if (m_has_expected && m_expected_generation == m_document.generation() && m_expected_scan == m_scan_serial) return m_expected;
 	m_has_expected = true;
 	m_expected_generation = m_document.generation();
@@ -472,7 +475,6 @@ const std::vector<std::string>& edt::material_window_model::expected_defines()
 
 edt::compile_errors edt::material_window_model::compile_rows(const std::vector<rnd::shader_problem>& problems, const res::tag& preview_tag)
 {
-	scan();
 	compile_errors out;
 	out.sky = is_sky_material(m_shader);
 	const std::vector<std::string>& expected = expected_defines();
@@ -518,7 +520,6 @@ edt::compile_errors edt::material_window_model::compile_rows(const std::vector<r
 const edt::compile_errors& edt::material_window_model::errors(std::uint64_t generation,
 	const std::function<std::vector<rnd::shader_problem>()>& snapshot, const res::tag& preview_tag)
 {
-	scan();
 	if (m_has_errors && m_errors_generation == generation && m_errors_document == m_document.generation()
 		&& m_errors_scan == m_scan_serial && m_errors_runs == m_preprocess_runs && m_errors_preview == preview_tag) {
 		return m_errors;
@@ -533,10 +534,14 @@ const edt::compile_errors& edt::material_window_model::errors(std::uint64_t gene
 	return m_errors;
 }
 
-std::vector<std::string> edt::material_window_model::pre_check()
+const std::vector<std::string>& edt::material_window_model::pre_check()
 {
-	scan();
-	std::vector<std::string> out;
+	if (m_has_pre_check && m_pre_check_generation == m_document.generation() && m_pre_check_scan == m_scan_serial) return m_pre_check;
+	m_has_pre_check = true;
+	m_pre_check_generation = m_document.generation();
+	m_pre_check_scan = m_scan_serial;
+	std::vector<std::string>& out = m_pre_check;
+	out.clear();
 	for (const std::string& entry : define_entries(m_document.shown())) {
 		std::string_view rest = skip_blanks(entry);
 		const std::string_view name = take_name(rest);
@@ -577,6 +582,7 @@ bool edt::material_window_model::preprocess(std::chrono::steady_clock::time_poin
 	if (!m_preprocess_seen || key != m_preprocess_key) {
 		m_preprocess_seen = true;
 		m_preprocess_key = std::move(key);
+		m_preprocessed.clear();
 		m_preprocess_pending = true;
 		m_preprocess_due = now + preprocess_delay;
 		return false;

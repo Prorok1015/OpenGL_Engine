@@ -229,7 +229,7 @@ namespace rnd
 	}
 
 	// The entries of the "{ ... }" that ends a program title (or a stage title before its extension); empty when
-	// the title has none.
+	// the title has none. An entry that itself contains " | " or " }" does not come back whole.
 	inline std::vector<std::string> parse_program_defines(std::string_view title)
 	{
 		std::vector<std::string> entries;

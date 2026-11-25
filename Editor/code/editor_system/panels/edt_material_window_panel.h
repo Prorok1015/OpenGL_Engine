@@ -45,5 +45,7 @@ namespace edt
 		char m_new_define[128] = {};
 		// Why the last name typed in was not added; empty: none.
 		std::string m_add_error;
+		// Why the last Go to opened nothing; empty: none.
+		std::string m_go_to_error;
 	};
 }
