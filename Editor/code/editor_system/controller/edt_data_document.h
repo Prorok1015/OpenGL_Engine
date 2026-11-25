@@ -1,6 +1,7 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
+#include "edt_document_parts.h"
 #include <snk/editor/edt_document.h>
 #include "edt_document_history.h"
 #include <snk/model_codec/res_tag.h>
@@ -82,7 +83,7 @@ namespace edt
 		// The file was changed by someone else (an agent through desc.write, an editor, a VCS) and the document holds
 		// unsaved edits, or the file is gone: save() refuses until the document is opened again. A clean document
 		// reads the new file by itself.
-		bool changed_on_disk() const { return m_changed_on_disk; }
+		bool changed_on_disk() const { return m_disk.changed(); }
 		// Reads the file again and drops the unsaved edits (the person's choice: the file changed on disk and they take
 		// its version). A failure (the file is gone, no longer a data document...) names the file and leaves the document as
 		// it was.
@@ -93,7 +94,7 @@ namespace edt
 		save_result save_over();
 		// Moves when a version of the file other than the ones seen before is found on disk: a banner the person put off
 		// ("Later") comes back for the next outside change, not for the same one signalled again.
-		std::uint64_t disk_change_serial() const { return m_disk_changes; }
+		std::uint64_t disk_change_serial() const { return m_disk.serial(); }
 		// Why the parents could not be read again after one of them changed (the last good ones stay shown); empty: none.
 		const std::string& chain_problem() const { return m_chain_problem; }
 
@@ -182,7 +183,6 @@ namespace edt
 		void announce() const;
 		save_result write(bool over);
 		save_result write_checked(bool over);
-		void flag_changed(const std::string& disk_version);
 		open_result read_file(const res::tag& file, boost::json::object& out, std::string& version, desc_file_read* checks = nullptr,
 			loaded* migration = nullptr) const;
 
@@ -201,9 +201,7 @@ namespace edt
 		std::string m_version;
 		std::uint64_t m_generation = 0;
 		bool m_open = false;
-		bool m_changed_on_disk = false;
-		std::string m_flagged_version;
-		std::uint64_t m_disk_changes = 0;
+		disk_state m_disk{ disk_serial::per_version };
 		std::string m_chain_problem;
 		std::vector<res::tag> m_parents;
 		bool m_nested_outdated = false;
