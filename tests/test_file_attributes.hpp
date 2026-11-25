@@ -8,6 +8,8 @@ namespace test_util {
 	// and the one attribute of read_limits::refuse_recall a test can set. Defined in test_file_attributes_windows.cpp,
 	// so <windows.h> stays out of the tests.
 	bool set_offline(const std::filesystem::path& path, bool offline);
+	// GetShortPathNameW of `path`: its 8.3 spelling; empty when it cannot be had.
+	std::filesystem::path short_path(const std::filesystem::path& path);
 #endif
 
 }

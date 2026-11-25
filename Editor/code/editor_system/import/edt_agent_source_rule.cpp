@@ -383,6 +383,18 @@ fs::path edt::long_spelling(const fs::path& path)
 #endif
 }
 
+fs::path edt::agent_source_spelled(const fs::path& given, const source_volume_ports& ports, std::string& why)
+{
+	why = agent_source_links_problem(given, ports);
+	if (!why.empty()) return {};
+	const fs::path spelled = ports.long_name ? ports.long_name(given) : given;
+	if (spelled != given) {
+		why = agent_source_links_problem(spelled, ports);
+		if (!why.empty()) return {};
+	}
+	return spelled;
+}
+
 bool edt::same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b)
 {
 	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.file_id == b.file_id && a.device == b.device;

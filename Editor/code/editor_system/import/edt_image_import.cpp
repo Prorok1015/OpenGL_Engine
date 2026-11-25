@@ -389,10 +389,9 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	}
 	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
 	if (!person) {
-		const fs::path spelled = long_spelling(given);
-		if (std::string why = agent_source_links_problem(spelled, volumes()); !why.empty()) {
-			return refuse(cmd::codes::invalid_args, std::move(why));
-		}
+		std::string why;
+		const fs::path spelled = agent_source_spelled(given, volumes(), why);
+		if (!why.empty()) return refuse(cmd::codes::invalid_args, std::move(why));
 		return resolve_for_agent(request, spelled, plan);
 	}
 	std::error_code ec;

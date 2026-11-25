@@ -30,6 +30,11 @@ namespace edt
 	// which asks its provider on open, is fetched. nullopt when it is not listed or cannot be read, and always off
 	// Windows.
 	std::optional<std::uint32_t> system_file_attributes(const std::filesystem::path& path);
+	// `path` with each short (8.3) name of it spelled long (Windows: GetLongPathNameW, which lists the folder of each
+	// component by its path, so it is asked only about a path agent_source_links_problem passed; a missing file keeps
+	// its own name after its folder's long spelling); `path` itself elsewhere. An agent's read reaches a file by its
+	// long names only: a short one is refused where the handle's final path is compared with the names.
+	std::filesystem::path long_spelling(const std::filesystem::path& path);
 	// platform::beneath::read_beneath with limits: the default of source_volume_ports::read_below.
 	platform::beneath::read_result read_below_root(const platform::beneath::read_request& request,
 		const platform::beneath::read_limits& limits, std::vector<std::byte>& out);
@@ -71,6 +76,8 @@ namespace edt
 		// read_agent_file: the mount points its read may cross (agent_read_route_of). Not mount_table above: that one
 		// judges what may be read, this one is where the disk really holds it.
 		std::function<std::optional<std::string>()> read_mounts = system_mount_table;
+		// agent_source_spelled: the long spelling of a path its walk passed (long_spelling).
+		std::function<std::filesystem::path(const std::filesystem::path&)> long_name = long_spelling;
 		// read_agent_file: the read below the volume's root (platform::beneath::read_beneath with read_limits).
 		std::function<platform::beneath::read_result(const platform::beneath::read_request&,
 			const platform::beneath::read_limits&, std::vector<std::byte>&)> read_below = read_below_root;
@@ -111,11 +118,11 @@ namespace edt
 	std::string agent_side_file_problem(const std::filesystem::path& candidate,
 		const std::filesystem::path& model_folder, const source_volume_ports& ports);
 
-	// `path` with each short (8.3) name of it spelled long (Windows: GetLongPathNameW, which reads folder listings and
-	// opens no entry; a missing file keeps its own name after its folder's long spelling); `path` itself elsewhere. An
-	// agent's read reaches a file by its long names only: a short one is refused where the handle's final path is
-	// compared with the names.
-	std::filesystem::path long_spelling(const std::filesystem::path& path);
+	// The path an agent's read reaches `given` (absolute) by, or empty with `why`: agent_source_links_problem on
+	// `given` as written first, so nothing on its way is followed or opened through, then its long spelling
+	// (ports.long_name) and the walk again on that.
+	std::filesystem::path agent_source_spelled(const std::filesystem::path& given, const source_volume_ports& ports,
+		std::string& why);
 
 	// The bytes of a file an agent's import reads, with the stamp of the handle they came from. `problem` is empty when
 	// the read went through, else why (no path in it: an agent reads it).

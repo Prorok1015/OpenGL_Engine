@@ -132,12 +132,14 @@ edt::model_file_access::model_file_access(fs::path root_file, model_file_limits 
 		m_dir = m_boundary = m_root_file.parent_path();
 		return;
 	}
+	// An agent's reader looks at nothing by the path: its source was spelled and walked already.
+	const bool lexical = m_may_read && m_read_file;
 	std::error_code ec;
-	m_dir = fs::weakly_canonical(m_root_file.parent_path(), ec);
+	m_dir = lexical ? m_root_file.parent_path().lexically_normal() : fs::weakly_canonical(m_root_file.parent_path(), ec);
 	if (ec) m_dir = m_root_file.parent_path();
 	m_boundary = m_dir;
 	if (!boundary.empty()) {
-		fs::path wide = fs::weakly_canonical(boundary, ec);
+		fs::path wide = lexical ? boundary.lexically_normal() : fs::weakly_canonical(boundary, ec);
 		if (ec) wide = boundary.lexically_normal();
 		const fs::path below = m_dir.lexically_relative(wide);
 		if (!below.empty() && *below.begin() != "..") m_boundary = wide;

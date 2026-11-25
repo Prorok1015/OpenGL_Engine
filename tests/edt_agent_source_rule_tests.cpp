@@ -425,6 +425,70 @@ BOOST_AUTO_TEST_CASE(OnWindows_TheAttributesComeFromTheListing_BeforeTheEntryIsO
 	BOOST_CHECK_EQUAL(disk.order[2], "list " + absolute_path("vfs/robot.glb").generic_string());
 }
 
+// #1412 (review): the long spelling of a path is asked for only once the path as written passed the walk: it lists
+// each folder by its path, which would go through a link.
+BOOST_AUTO_TEST_CASE(TheLongSpelling_IsAskedForOnlyAfterTheWalkPassed)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("a"), link_entry::plain }, { absolute_path("a/b"), link_entry::link },
+		{ absolute_path("a/b/x.glb"), link_entry::plain } };
+	edt::source_volume_ports ports = disk.ports();
+	std::vector<fs::path> spelled;
+	ports.long_name = [&](const fs::path& path) {
+		spelled.push_back(path);
+		return path;
+	};
+	std::string why;
+	BOOST_CHECK(edt::agent_source_spelled(absolute_path("a/b/x.glb"), ports, why).empty());
+	BOOST_CHECK_MESSAGE(why.find("'b' on the way to the source is a link") != std::string::npos, why);
+	BOOST_CHECK(spelled.empty());
+
+	// A plain path is spelled long and walked again by that spelling.
+	disk.entries[1].second = link_entry::plain;
+	disk.asked.clear();
+	ports = disk.ports();
+	ports.long_name = [&](const fs::path& path) {
+		spelled.push_back(path);
+		return absolute_path("a/b/x.glb");
+	};
+	const fs::path got = edt::agent_source_spelled(absolute_path("a/B/x.glb"), ports, why);
+	BOOST_CHECK_MESSAGE(why.empty(), why);
+	BOOST_CHECK(got == absolute_path("a/b/x.glb"));
+	BOOST_REQUIRE_EQUAL(spelled.size(), 1u);
+	BOOST_CHECK(spelled.front() == absolute_path("a/B/x.glb"));
+}
+
+#if defined(_WIN32)
+// #1412 (review): a junction met under its 8.3 spelling is refused by the walk, and nothing beyond it is looked at.
+BOOST_AUTO_TEST_CASE(OnWindows_AJunctionUnderItsShortName_IsRefused_AndNothingBeyondItIsTouched)
+{
+	const test_util::temp_dir dir{ "agent_short_junction" };
+	dir.write("target/robot.glb", "glTF");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	test_util::make_folder_link(base / "a_long_junction_name", base / "target");
+	const fs::path short_link = test_util::short_path(base / "a_long_junction_name");
+	BOOST_REQUIRE_MESSAGE(!short_link.empty() && short_link.filename() != "a_long_junction_name",
+		"no 8.3 name for " << (base / "a_long_junction_name").string());
+	edt::source_volume_ports ports;
+	std::vector<fs::path> asked;
+	ports.entry_of = [&](const fs::path& path, std::error_code& ec) {
+		asked.push_back(path);
+		return platform::beneath::link_entry_at(path, ec);
+	};
+	bool spelled = false;
+	ports.long_name = [&](const fs::path& path) {
+		spelled = true;
+		return path;
+	};
+	std::string why;
+	BOOST_CHECK(edt::agent_source_spelled(short_link / "robot.glb", ports, why).empty());
+	BOOST_CHECK_MESSAGE(why.find("is a link") != std::string::npos, why);
+	BOOST_CHECK(!spelled);
+	BOOST_REQUIRE(!asked.empty());
+	BOOST_CHECK(asked.back() == short_link);
+}
+#endif
+
 // #1412: a read starts at "/" (POSIX) and names every mount point on its way, so no folder of the path is opened by
 // its path; on Windows at the drive.
 BOOST_AUTO_TEST_CASE(TheReadRoute_StartsAtTheTop_AndNamesTheMountPointsOnTheWay)

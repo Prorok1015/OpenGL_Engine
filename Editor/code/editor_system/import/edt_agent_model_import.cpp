@@ -524,10 +524,9 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
 	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
 	if (!person) {
-		const fs::path spelled = long_spelling(given);
-		if (std::string why = agent_source_links_problem(spelled, volumes()); !why.empty()) {
-			return refuse(cmd::codes::invalid_args, std::move(why));
-		}
+		std::string why;
+		const fs::path spelled = agent_source_spelled(given, volumes(), why);
+		if (!why.empty()) return refuse(cmd::codes::invalid_args, std::move(why));
 		return resolve_for_agent(request, spelled, plan);
 	}
 	std::error_code ec;
