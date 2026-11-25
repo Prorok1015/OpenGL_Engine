@@ -1881,7 +1881,8 @@ BOOST_AUTO_TEST_CASE(History_UndoBackToTheAppliedState_IsClean_AndApplyIsASavePo
 {
 	document->open(tag);
 	BOOST_REQUIRE(rename_arm("one"));
-	BOOST_REQUIRE(document->save().ok);
+	const edt::save_result applied = document->save();
+	BOOST_REQUIRE_MESSAGE(applied.saved, applied.error);
 	BOOST_TEST(!document->is_dirty());
 	BOOST_REQUIRE(rename_arm("two"));
 	BOOST_TEST(document->is_dirty());
