@@ -90,7 +90,7 @@ namespace edt
 		file_id id{};
 		// An agent's plan: the stamp of the handle its walk opened (#1412), in place of `modified` and `id`, which a
 		// look by the path would take.
-		std::optional<platform::beneath::file_stamp> stamp;
+		std::optional<platform::beneath::file_stamp> stamp{};
 		std::string folder;	// below res://, no protocol; empty: the root
 		std::string name;	// file name of the picture in the project
 		res::tag image;

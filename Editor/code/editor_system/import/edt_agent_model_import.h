@@ -49,7 +49,7 @@ namespace edt {
 		file_id id{};
 		// An agent's plan: the stamp of the handle its walk opened (#1412), in place of `modified` and `id`, which a
 		// look by the path would take.
-		std::optional<platform::beneath::file_stamp> stamp;
+		std::optional<platform::beneath::file_stamp> stamp{};
 		// What the job that listed the files read: the job that imports them must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;

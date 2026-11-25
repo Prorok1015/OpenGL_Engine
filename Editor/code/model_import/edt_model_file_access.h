@@ -25,7 +25,7 @@ namespace edt {
 		std::filesystem::file_time_type modified{};
 		file_id id{};
 		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
-		std::optional<platform::beneath::file_stamp> stamp;
+		std::optional<platform::beneath::file_stamp> stamp{};
 		// Set by the scan from the bytes it read; the import that follows must read the same bytes.
 		content_digest digest{};
 		bool hashed = false;
@@ -92,7 +92,7 @@ namespace edt {
 		std::filesystem::file_time_type modified{};
 		file_id id{};
 		// An agent's import (model_file_reader): the stamp of the handle, in place of `modified` and `id`.
-		std::optional<platform::beneath::file_stamp> stamp;
+		std::optional<platform::beneath::file_stamp> stamp{};
 		model_file_kind kind = model_file_kind::texture;
 		std::string error;	// set: refused, and why
 		refusal_kind refusal = refusal_kind::none;

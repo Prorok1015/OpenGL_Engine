@@ -128,7 +128,7 @@ namespace edt
 	// the read went through, else why (no path in it: an agent reads it).
 	struct agent_file_read {
 		std::vector<std::byte> bytes;
-		std::optional<platform::beneath::file_stamp> stamp;
+		std::optional<platform::beneath::file_stamp> stamp{};
 		std::string problem;
 		// With `problem`: the file or a folder on the way to it is not there.
 		bool missing = false;
