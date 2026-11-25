@@ -68,7 +68,7 @@ rnd::ShaderManager::built_program rnd::ShaderManager::build_program(const shader
 		driver::shader_build_log log;
 		out.program = drv->create_shader(source.headers, &log);
 		if (!out.program) {
-			out.problems = problems_of_build_log(log, source.headers, source.sources, source.program);
+			out.problems = problems_of_build_log(log, source.headers, source.sources, source.program, cdata.constants.size());
 			if (out.problems.empty()) {
 				shader_problem unknown;
 				unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
@@ -165,7 +165,8 @@ void rnd::ShaderManager::track_files(variant_id variant, const std::vector<res::
 	for (const res::tag& file : files) {
 		auto [it, added] = m_users.try_emplace(file);
 		if (added) {
-			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this](const res::tag& changed) { on_file_changed(changed); });
+			// The users are keyed by the tag watched: after a rename the resource system tells the file's new path (#1387).
+			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this, file](const res::tag&) { on_file_changed(file); });
 		}
 		if (std::ranges::find(it->second, variant.value) == it->second.end()) {
 			it->second.push_back(variant.value);
