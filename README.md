@@ -35,12 +35,14 @@ The project supports two development environments:
 
 ```bash
 git clone --recursive https://github.com/Prorok1015/OpenGL_Engine.git
-# Optional: test 3D models for the editor (~650 MB, separate repo, not fetched by default)
+# Optional: test 3D models for the editor (~650 MB, separate repo, not fetched by default; CI fetches only its card/ folder)
 git submodule update --init --checkout projects/sandbox/res/samples
 ```
 
 The repository history is large; it is going to be cleaned up (#57). `projects/sandbox/res/objects/robot/gen_robot.glb`
 (a small glb) is in the repo for a quick check; larger test models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
+CI uses only the samples' `card/` folder (#1197): the job "Editor visual smoke (Linux)" sparse-fetches it at the pinned SHA,
+captures `samples/card/card_demo.desc` and checks it with `tools/headless/check_card.sh`.
 
 ### Building
 
