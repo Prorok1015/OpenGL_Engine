@@ -9,11 +9,29 @@
 #include <boost/json.hpp>
 #include <cstring>
 #include <format>
+#include <map>
 #include <string_view>
 
 namespace json = boost::json;
 
 namespace {
+
+// Every string of `value` that names a file of an embedded texture, by its JSON pointer.
+void embedded_texture_slots(const json::value& value, const std::string& pointer, std::map<std::string, std::string>& out, int depth = 0)
+{
+	if (depth > 64) return;
+	if (value.is_string()) {
+		const std::string_view text(value.as_string().data(), value.as_string().size());
+		if (text.find("/__embedded_txm/") != std::string_view::npos) out.emplace(pointer, std::string(text));
+	} else if (value.is_object()) {
+		for (const auto& member : value.as_object()) {
+			embedded_texture_slots(member.value(), pointer + "/" + std::string(member.key()), out, depth + 1);
+		}
+	} else if (value.is_array()) {
+		const json::array& array = value.as_array();
+		for (std::size_t i = 0; i < array.size(); ++i) embedded_texture_slots(array[i], pointer + "/" + std::to_string(i), out, depth + 1);
+	}
+}
 	// Written with its binary file (EPIC-79), the desc on one line (#559).
 	bool is_geometry_desc(std::string_view path)
 	{
@@ -202,6 +220,33 @@ bool edt::asset_exporter::unchanged_on_disk(const res::tag& tag, const std::vect
 	return !current->has_error() && on_disk == bytes;
 }
 
+std::vector<std::string> edt::asset_exporter::replaced_embedded_textures(const res::tag& to, const json::value& desc) const
+{
+	if (!to.relative().ends_with(".mat.desc") || !m_res.exists(to)) return {};
+	const auto current = m_res.fetch_data(to);
+	if (!current || current->has_error()) return {};
+	const std::vector<std::byte>& bytes = current->get();
+	json::value old;
+	try {
+		json::parse_options opts;
+		opts.max_depth = 128;
+		old = json::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {}, opts);
+	} catch (const std::exception&) {
+		return {};
+	}
+	std::map<std::string, std::string> before;
+	std::map<std::string, std::string> after;
+	embedded_texture_slots(old, "", before);
+	embedded_texture_slots(desc, "", after);
+	std::vector<std::string> out;
+	for (const auto& [slot, name] : before) {
+		const auto now = after.find(slot);
+		if (now != after.end() && now->second == name) continue;
+		out.push_back(std::format("{} {}: {} -> {}", to.view(), slot, name, now == after.end() ? std::string("(none)") : now->second));
+	}
+	return out;
+}
+
 void edt::asset_exporter::remap_json_strings(
 	json::value& val,
 	const std::unordered_map<res::tag, res::tag>& remap)
@@ -332,6 +377,11 @@ bool edt::asset_exporter::export_to_project(
 				json::value val = json::parse(json_str, {}, opts);
 				remap_json_strings(val, remap);
 				output_bytes = desc::pretty_json_bytes(val);
+				for (std::string& line : replaced_embedded_textures(res_tag, val)) {
+					egLOG_WARN("edt/export", "the material slot {} now names another embedded texture; the old file stays in the "
+						"project (point other references at the new one, then remove the old with asset.delete)", line);
+					if (progress) progress->replaced_textures.push_back(std::move(line));
+				}
 			} catch (const std::exception& e) {
 				// Written as they are, its memory:// references would point at nothing once the editor closes.
 				return fail(std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what()));

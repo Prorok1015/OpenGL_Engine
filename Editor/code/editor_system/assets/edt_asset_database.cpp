@@ -214,7 +214,7 @@ std::string edt::asset_type_of(std::string_view path)
 	if (has(".desc")) {
 		return "desc";
 	}
-	for (const std::string_view suffix : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".ktx", ".ktx2", ".dds" }) {
+	for (const std::string_view suffix : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".ktx", ".ktx2", ".dds", ".pct", ".raw" }) {
 		if (has(suffix)) {
 			return "texture";
 		}

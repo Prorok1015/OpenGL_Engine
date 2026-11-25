@@ -41,9 +41,8 @@ namespace res
 	public:
 		static constexpr auto EXTENSIONS = image_format::picture_extensions;
 		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "pct" }, std::string{ "png" }, std::string{ "jpeg" }, std::string{ "jpg" }} );
-		// What one picture may decode to: no side longer than a GPU takes, and no more pixel bytes than this.
-		static constexpr int max_side = 16384;
-		static constexpr std::size_t max_decoded_bytes = std::size_t{ 512 } * 1024 * 1024;
+		static constexpr int max_side = image_format::max_picture_side;
+		static constexpr std::size_t max_decoded_bytes = image_format::max_picture_decoded_bytes;
 
 		pct_adapter();
 

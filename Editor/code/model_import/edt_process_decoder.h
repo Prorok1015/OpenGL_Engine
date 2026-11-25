@@ -46,7 +46,7 @@ namespace edt {
 		rnd::geometry_files* geometry = nullptr, const desc::desc_system* descs = nullptr);
 
 	// Whether `relative` (below the folder of an import named `stem`) is a name an import gives a resource: <stem>.prefab.desc,
-	// <stem>.geom.desc, materials/*.mat.desc, textures/*.txm.desc and images, __embedded_txm/* descs and images. Never a model
+	// <stem>.geom.desc, materials/*.mat.desc, textures/*.txm.desc and images, __embedded_txm/<stem>.texture_<index>.(txm.desc|pct|raw). Never a model
 	// file. The exporter checks the names it is about to write with it.
 	bool is_import_resource_name(std::string_view relative, std::string_view stem);
 

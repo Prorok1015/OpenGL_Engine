@@ -72,11 +72,11 @@ BOOST_AUTO_TEST_CASE(BuildRemap_ReplacesTheStemOnlyAtTheStartOfTheFileName_SoNoE
 	edt::import_result raw;
 	raw.source_path = "models/raw.obj";
 	raw.root_tag = res::tag{ res::tag::memory, "raw/raw.prefab.desc" };
-	const res::tag embedded{ res::tag::memory, "raw/__embedded_txm/x.raw" };
+	const res::tag embedded{ res::tag::memory, "raw/__embedded_txm/raw.texture_0.raw" };
 	raw.all_tags = { raw.root_tag, embedded };
 	const auto remap = exporter.build_remap(raw, "obj", "assets/obj");
 	BOOST_TEST(remap.at(raw.root_tag).string() == "res://assets/obj/obj.prefab.desc");
-	BOOST_TEST(remap.at(embedded).string() == "res://assets/obj/__embedded_txm/x.raw");
+	BOOST_TEST(remap.at(embedded).string() == "res://assets/obj/__embedded_txm/obj.texture_0.raw");
 	BOOST_TEST(edt::asset_exporter::remap_problem(remap, "obj", "assets/obj").empty());
 
 	edt::import_result tga;
@@ -103,7 +103,12 @@ BOOST_AUTO_TEST_CASE(RemapProblem_RefusesANameAnImportDoesNotGive_AndAChangedExt
 
 	// A name an import does give, but not to this resource: the extension changed.
 	std::unordered_map<res::tag, res::tag> changed;
-	changed[res::tag{ res::tag::memory, "m/__embedded_txm/x.raw" }] = tag("assets/x/__embedded_txm/x.png");
+	changed[res::tag{ res::tag::memory, "m/__embedded_txm/m.texture_0.raw" }] = tag("assets/x/__embedded_txm/x.texture_0.pct");
+
+	// An embedded texture is named by its index alone (#1206): a name from the model is none an import gives.
+	std::unordered_map<res::tag, res::tag> model_named;
+	model_named[res::tag{ res::tag::memory, "m/__embedded_txm/Image_0.pct" }] = tag("assets/x/__embedded_txm/Image_0.pct");
+	BOOST_TEST(!edt::asset_exporter::remap_problem(model_named, "x", "assets/x").empty());
 	BOOST_TEST(!edt::asset_exporter::remap_problem(changed, "x", "assets/x").empty());
 
 	std::unordered_map<res::tag, res::tag> outside;
@@ -267,6 +272,44 @@ BOOST_AUTO_TEST_CASE(ExportToProject_ALeafTheImportNeverStored_IsLeftOutAndNamed
 	BOOST_REQUIRE(progress.skipped.size() == 1u);
 	BOOST_TEST(progress.skipped.front().string() == remap.at(absent).string());
 	BOOST_TEST(written.size() == 1u);
+
+	std::error_code ignored;
+	std::filesystem::remove_all(std::filesystem::path{ "res" } / folder, ignored);
+}
+
+// #1206 renamed embedded textures: a material exported again over its earlier export names the slots that changed, and the
+// old files stay where they are.
+BOOST_AUTO_TEST_CASE(ExportToProject_AMaterialOverAnEarlierExport_NamesTheEmbeddedTexturesItNoLongerUses)
+{
+	const std::string folder = std::format("tests/export_1206_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+	const std::string old_texture = "res://" + folder + "/__embedded_txm/Image_0.txm.desc";
+	BOOST_REQUIRE(rs->store_sync(res::tag::make(folder + "/materials/mat.mat.desc"),
+		test_util::to_bytes(std::format(R"json({{"__type":"material_desc","textures":["{}"]}})json", old_texture))));
+
+	edt::asset_exporter exporter(*rs);
+	edt::import_result imported;
+	imported.source_path = "models/box.obj";
+	imported.root_tag = res::tag{ res::tag::memory, "box/box.prefab.desc" };
+	const res::tag texture{ res::tag::memory, "box/__embedded_txm/box.texture_0.txm.desc" };
+	const res::tag material{ res::tag::memory, "box/materials/mat.mat.desc" };
+	BOOST_REQUIRE(rs->store_sync(texture, test_util::to_bytes(R"json({"__type":"texture_2d_desc"})json")));
+	BOOST_REQUIRE(rs->store_sync(material,
+		test_util::to_bytes(R"json({"__type":"material_desc","textures":["memory://box/__embedded_txm/box.texture_0.txm.desc"]})json")));
+	BOOST_REQUIRE(rs->store_sync(imported.root_tag, test_util::to_bytes("{}")));
+	imported.all_tags = { texture, material, imported.root_tag };
+	const auto remap = exporter.build_remap(imported, "box", folder);
+
+	edt::export_progress progress;
+	BOOST_TEST(exporter.export_to_project(imported, remap, &progress, nullptr, nullptr, true));
+	BOOST_REQUIRE(progress.replaced_textures.size() == 1u);
+	const std::string& line = progress.replaced_textures.front();
+	BOOST_TEST(line.find("/textures/0") != std::string::npos, line);
+	BOOST_TEST(line.find(old_texture + " -> res://" + folder + "/__embedded_txm/box.texture_0.txm.desc") != std::string::npos, line);
+
+	// Exported again: nothing changed this time.
+	edt::export_progress again;
+	BOOST_TEST(exporter.export_to_project(imported, remap, &again, nullptr, nullptr, true));
+	BOOST_TEST(again.replaced_textures.empty());
 
 	std::error_code ignored;
 	std::filesystem::remove_all(std::filesystem::path{ "res" } / folder, ignored);

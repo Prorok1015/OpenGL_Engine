@@ -25,6 +25,10 @@ namespace edt {
 		// Resources the import lists but never stored (an external texture it did not find): not written, the export goes on.
 		// Written before `finished` is set.
 		std::vector<res::tag> skipped;
+		// A material written over one of an earlier export whose slot named another embedded texture (#1206 renamed them):
+		// "<material> <slot>: <old> -> <new>", each also a warning in the log. The old file stays in the project. Written
+		// before `finished` is set.
+		std::vector<std::string> replaced_textures;
 	};
 
 	class asset_exporter {
@@ -88,6 +92,9 @@ namespace edt {
 		// says which), else why not; triangles the loader would refuse are not written.
 		std::string export_geometry(const res::tag& from, const res::tag& to, const boost::json::object& desc,
 			std::vector<res::tag>* written, bool& wrote) const;
+
+		// The slots of the material file at `to` (an earlier export) that named an embedded texture other than `desc` names.
+		std::vector<std::string> replaced_embedded_textures(const res::tag& to, const boost::json::value& desc) const;
 
 		// Remap all string values in a JSON tree that match memory:// tags
 		static void remap_json_strings(

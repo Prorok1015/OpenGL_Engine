@@ -2,6 +2,7 @@
 #include "mdl_assimp_io.h"
 
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/ProgressHandler.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
@@ -13,6 +14,7 @@
 #include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_image_format.h>
+#include <snk/resource/res_image_header.h>
 #include <snk/resource/res_model_reference.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/model_codec/res_tag_json.h>
@@ -25,9 +27,11 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <cstring>
 #include <format>
 #include <iterator>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -70,6 +74,9 @@ const aiScene* read_scene(Assimp::Importer& importer, std::string_view model_nam
 		importer.SetProgressHandler(new stop_progress_handler(options.task, options.deadline));
 	}
 	importer.SetIOHandler(new mdl::detail::source_io(files, options.display_name));
+	// FBX names its embedded textures by the file name they had, so two of the same name ("a/tex.png", "b/tex.png") would
+	// be one texture to GetEmbeddedTexture; the legacy names are "*<index>" (#1206).
+	importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_EMBEDDED_TEXTURES_LEGACY_NAMING, true);
 	return importer.ReadFile(std::string{ model_name }, flags);
 }
 
@@ -158,6 +165,41 @@ struct texture_kind { aiTextureType type; std::string_view name; };
 constexpr texture_kind k_logged_types[] = { { aiTextureType_DIFFUSE, "diffuse" }, { aiTextureType_SPECULAR, "specular" },
 	{ aiTextureType_HEIGHT, "height" }, { aiTextureType_NORMALS, "normals" }, { aiTextureType_BASE_COLOR, "base color" } };
 
+// Standard padded base64 (RFC 4648), what texture_2d_desc's inline pixels hold; the decoder links no cmd::base64.
+std::string base64_of(std::span<const std::byte> bytes)
+{
+	constexpr std::string_view alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string out;
+	out.reserve((bytes.size() + 2) / 3 * 4);
+	std::size_t i = 0;
+	for (; i + 3 <= bytes.size(); i += 3) {
+		const std::uint32_t v = (std::to_integer<std::uint32_t>(bytes[i]) << 16) | (std::to_integer<std::uint32_t>(bytes[i + 1]) << 8)
+			| std::to_integer<std::uint32_t>(bytes[i + 2]);
+		out += alphabet[(v >> 18) & 63];
+		out += alphabet[(v >> 12) & 63];
+		out += alphabet[(v >> 6) & 63];
+		out += alphabet[v & 63];
+	}
+	if (const std::size_t rest = bytes.size() - i; rest > 0) {
+		std::uint32_t v = std::to_integer<std::uint32_t>(bytes[i]) << 16;
+		if (rest == 2) v |= std::to_integer<std::uint32_t>(bytes[i + 1]) << 8;
+		out += alphabet[(v >> 18) & 63];
+		out += alphabet[(v >> 12) & 63];
+		out += rest == 2 ? alphabet[(v >> 6) & 63] : '=';
+		out += '=';
+	}
+	return out;
+}
+
+// What the import names its embedded textures after: the geometry's "<stem>.geom.desc", whatever the model calls them.
+std::string texture_stem_of(const res::tag& geometry_tag)
+{
+	constexpr std::string_view suffix = ".geom.desc";
+	const std::string_view name = geometry_tag.name();
+	if (name.size() > suffix.size() && name.ends_with(suffix)) return std::string(name.substr(0, name.size() - suffix.size()));
+	return "model";
+}
+
 std::vector<std::byte> json_bytes(const json::object& object)
 {
 	const std::string text = json::serialize(object);
@@ -182,7 +224,7 @@ class scene_import
 {
 public:
 	scene_import(const aiScene* scene, mdl::import_sink& sink, mdl::file_source& files, const mdl::import_options& options, mdl::import_result& out)
-		: m_scene(scene), m_sink(sink), m_files(files), m_options(options), m_out(out)
+		: m_scene(scene), m_sink(sink), m_files(files), m_options(options), m_out(out), m_texture_stem(texture_stem_of(options.geometry_tag))
 	{
 	}
 
@@ -348,44 +390,104 @@ private:
 		return std::string(text.substr(0, cut));
 	}
 
-	json::value embedded_texture(const aiTexture& texture)
+	// The embedded texture `index` (its place in aiScene::mTextures), once per import whichever materials name it; null when
+	// it was skipped. `name` is how the material names it, for the list of textures not loaded.
+	json::value embedded_texture(const aiTexture& texture, unsigned int index, std::string_view name)
 	{
-		// Model files are untrusted: keep the name from leaving the folder of the embedded textures.
-		const std::string file = res::sanitize_relative_path(texture.mFilename.C_Str());
-		const res::tag data_tag{ res::tag::memory, std::format("{}{}.{}", m_options.embedded_folder, file,
-			texture.mHeight != 0 ? res::image_format::raw_extension : res::image_format::picture_extensions[0]) };
+		if (const auto done = m_embedded.find(index); done != m_embedded.end()) return done->second;
+		json::value desc_tag = store_embedded(texture, index, name);
+		m_embedded.emplace(index, desc_tag);
+		return desc_tag;
+	}
 
-		if (!m_sink.exists(data_tag)) {
-			std::vector<std::byte> bytes;
-			if (texture.mHeight != 0) {
-				const glm::ivec2 size(texture.mWidth, texture.mHeight);
-				const int channels = 4;
-				res::image_format::raw_header header;
-				header.size = size;
-				header.channels = channels;
-				bytes.resize(res::image_format::raw_header_size);
-				std::memcpy(bytes.data(), &header, res::image_format::raw_header_size);
-				const auto* pixels = reinterpret_cast<const std::byte*>(texture.pcData);
-				std::copy(pixels, pixels + static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y) * channels, std::back_inserter(bytes));
-			} else {
-				const auto* data = reinterpret_cast<const std::byte*>(texture.pcData);
-				bytes.assign(data, data + texture.mWidth);
+	json::value store_embedded(const aiTexture& texture, unsigned int index, std::string_view name)
+	{
+		if (m_embedded.size() >= mdl::k_max_embedded_textures) {
+			missing_texture(name, std::format("is past the {} embedded textures an import stores", mdl::k_max_embedded_textures));
+			return {};
+		}
+		if (texture.pcData == nullptr || texture.mWidth == 0) {
+			missing_texture(name, "is an embedded texture without data");
+			return {};
+		}
+		const std::string base = std::format("{}{}.texture_{}", m_options.embedded_folder, m_texture_stem, index);
+		const res::tag desc_tag{ res::tag::memory, base + ".txm.desc" };
+		json::object desc;
+		desc["__type"] = "texture_2d_desc";
+		desc["__parent"] = "res://base_texture.desc";
+		desc["name"] = std::format("texture_{}", index);
+
+		std::vector<std::byte> bytes;
+		std::string extension;
+		if (texture.mHeight != 0) {
+			const std::uint64_t width = texture.mWidth;
+			const std::uint64_t height = texture.mHeight;
+			constexpr std::uint64_t max_side = res::image_format::max_picture_side;
+			if (width > max_side || height > max_side) {
+				missing_texture(name, std::format("is {}x{}: a side is past {}", width, height, max_side));
+				return {};
 			}
-			m_sink.store(data_tag, bytes);
+			// Both sides at most 16384: the product fits, and so does every index below.
+			const std::uint64_t pixel_bytes = width * height * 4;
+			if (pixel_bytes > res::image_format::max_picture_decoded_bytes) {
+				missing_texture(name, std::format("is {}x{}: past {} bytes of pixels", width, height, res::image_format::max_picture_decoded_bytes));
+				return {};
+			}
+			if (!take_embedded_bytes(pixel_bytes, name)) return {};
+			// The texels go as bytes b, g, r, a: the fields of aiTexel, whatever achFormatHint says.
+			static_assert(sizeof(aiTexel) == 4 && offsetof(aiTexel, b) == 0 && offsetof(aiTexel, g) == 1 && offsetof(aiTexel, r) == 2
+				&& offsetof(aiTexel, a) == 3);
+			mdl::stored_texels stored = mdl::store_texels(std::span(reinterpret_cast<const std::byte*>(texture.pcData),
+				static_cast<std::size_t>(pixel_bytes)), static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+			if (stored.raw.empty()) {
+				desc["pixels"] = std::move(stored.pixels);
+				store_embedded_desc(desc_tag, desc);
+				return json::value_from(desc_tag);
+			}
+			bytes = std::move(stored.raw);
+			extension = res::image_format::raw_extension;
+		} else {
+			const std::span<const std::byte> file(reinterpret_cast<const std::byte*>(texture.pcData), texture.mWidth);
+			const std::optional<res::image_header::picture_size> size = res::image_header::read_picture_size(file);
+			if (!size) {
+				missing_texture(name, "is an embedded picture that is no PNG, JPEG, BMP or TGA");
+				return {};
+			}
+			const std::uint64_t max_side = res::image_format::max_picture_side;
+			if (size->width > max_side || size->height > max_side
+				|| std::uint64_t{ size->width } * size->height * 4 > res::image_format::max_picture_decoded_bytes) {
+				missing_texture(name, std::format("is an embedded picture of {}x{}: past {} a side or {} bytes of pixels", size->width,
+					size->height, max_side, res::image_format::max_picture_decoded_bytes));
+				return {};
+			}
+			if (!take_embedded_bytes(file.size(), name)) return {};
+			bytes.assign(file.begin(), file.end());
+			// Whatever the picture is, the pct adapter decodes it by its content; no other extension is ever written.
+			extension = res::image_format::picture_extensions[0];
 		}
-		refer(data_tag);
 
-		const res::tag desc_tag{ res::tag::memory, std::format("{}{}.txm.desc", data_tag.path(), data_tag.pure_name()) };
-		if (!m_sink.exists(desc_tag)) {
-			json::object desc;
-			desc["__type"] = "texture_2d_desc";
-			desc["__parent"] = "res://base_texture.desc";
-			desc["name"] = data_tag.pure_name();
-			desc["data"] = json::value_from(data_tag);
-			store_desc(desc_tag, desc);
-		}
-		refer(desc_tag);
+		const res::tag data_tag{ res::tag::memory, std::format("{}.{}", base, extension) };
+		if (!m_sink.exists(data_tag)) m_sink.store(data_tag, bytes);
+		refer(data_tag);
+		desc["data"] = json::value_from(data_tag);
+		store_embedded_desc(desc_tag, desc);
 		return json::value_from(desc_tag);
+	}
+
+	bool take_embedded_bytes(std::uint64_t bytes, std::string_view name)
+	{
+		if (bytes > mdl::k_max_embedded_total_bytes - m_embedded_bytes) {
+			missing_texture(name, std::format("would pass the {} bytes of embedded textures an import stores", mdl::k_max_embedded_total_bytes));
+			return false;
+		}
+		m_embedded_bytes += bytes;
+		return true;
+	}
+
+	void store_embedded_desc(const res::tag& desc_tag, const json::object& desc)
+	{
+		if (!m_sink.exists(desc_tag)) store_desc(desc_tag, desc);
+		refer(desc_tag);
 	}
 
 	// A texture desc naming the file beside the model (the engine's adapter).
@@ -445,8 +547,8 @@ private:
 		aiString str;
 		material->GetTexture(type, 0, &str);
 		const std::string_view name = str.C_Str();
-		if (const aiTexture* embedded = m_scene->GetEmbeddedTexture(str.C_Str())) {
-			return embedded_texture(*embedded);
+		if (const auto [embedded, index] = m_scene->GetEmbeddedTextureAndIndex(str.C_Str()); embedded != nullptr && index >= 0) {
+			return embedded_texture(*embedded, static_cast<unsigned int>(index), name);
 		}
 		return m_options.textures == mdl::texture_mode::copy ? copied_texture(name) : referenced_texture(name);
 	}
@@ -773,6 +875,9 @@ private:
 	std::unordered_set<std::string> m_animated;
 	std::unordered_set<res::tag> m_referred;
 	std::unordered_set<std::string> m_missing_seen;
+	const std::string m_texture_stem;
+	std::unordered_map<unsigned int, json::value> m_embedded;
+	std::uint64_t m_embedded_bytes = 0;
 };
 
 // The size of `scene` without recursion: a model file chooses how deep its tree is.
@@ -815,6 +920,44 @@ std::string mdl::scene_size_problem(const scene_size& size)
 	}
 	if (size.indices > k_max_scene_indices) return std::format("too many indices: {} (limit {})", size.indices, k_max_scene_indices);
 	return {};
+}
+
+mdl::stored_texels mdl::store_texels(std::span<const std::byte> bgra, std::uint32_t width, std::uint32_t height)
+{
+	constexpr auto max_side = static_cast<std::uint32_t>(res::image_format::max_picture_side);
+	ASSERT_MSG(width >= 1 && height >= 1 && width <= max_side && height <= max_side, "the caller checks the sides");
+	const std::size_t row_bytes = std::size_t{ width } * 4;
+	const std::size_t pixel_bytes = row_bytes * height;
+	ASSERT_MSG(bgra.size() == pixel_bytes, "one texel of four bytes per pixel");
+	const bool inline_pixels = pixel_bytes <= k_max_inline_texture_bytes && width <= k_max_inline_texture_side && height <= k_max_inline_texture_side;
+	const std::size_t offset = inline_pixels ? 0 : res::image_format::raw_header_size;
+
+	std::vector<std::byte> out(offset + pixel_bytes);
+	for (std::size_t row = 0; row < height; ++row) {
+		// Inline pixels run top row first, as assimp's; a .raw file is read bottom row first.
+		const std::size_t to_row = inline_pixels ? row : height - 1 - row;
+		const std::byte* from = bgra.data() + row * row_bytes;
+		std::byte* to = out.data() + offset + to_row * row_bytes;
+		for (std::size_t x = 0; x < row_bytes; x += 4) {
+			to[x + 0] = from[x + 2];
+			to[x + 1] = from[x + 1];
+			to[x + 2] = from[x + 0];
+			to[x + 3] = from[x + 3];
+		}
+	}
+
+	stored_texels stored;
+	if (inline_pixels) {
+		stored.pixels = json::object{ { "width", std::int64_t{ width } }, { "height", std::int64_t{ height } }, { "format", "RGBA8" },
+			{ "base64", base64_of(out) } };
+		return stored;
+	}
+	res::image_format::raw_header header;
+	header.size = glm::ivec2(static_cast<int>(width), static_cast<int>(height));
+	header.channels = 4;
+	std::memcpy(out.data(), &header, res::image_format::raw_header_size);
+	stored.raw = std::move(out);
+	return stored;
 }
 
 mdl::import_result mdl::import_model(std::string_view model_name, file_source& files, import_sink& sink, const import_options& options)
