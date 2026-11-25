@@ -43,6 +43,8 @@ namespace edt {
 		sandbox_mode sandbox = sandbox_mode::off;
 		// Set for an agent's import (#1408): every side file read from the disk passes it first (model_file_access).
 		model_read_rule may_read;
+		// Set for an agent's import (#1412): reads a side file from the handle that was checked (model_file_access).
+		model_file_reader read_file;
 	};
 
 	// The files a model would read (needs `source.preloaded`): parses it, stores nothing. `error` says why the model

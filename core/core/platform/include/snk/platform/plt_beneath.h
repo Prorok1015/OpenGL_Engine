@@ -222,6 +222,33 @@ namespace platform::beneath {
 	// the name is `not_regular`.
 	SNK_API read_result read_beneath(const read_request& request, std::vector<std::byte>& out);
 
+	// What the read_beneath taking them refuses besides what read_beneath refuses (#1412). A struct of its own, never a
+	// field added to read_request: a caller built against an older header passes the shorter struct by reference
+	// (docs/abi/changes/1412.md).
+	struct read_limits {
+		// Every folder below the root and the file lie on the root's device (POSIX st_dev, Windows volume serial
+		// number): a mount met on the way is `failed` with k_other_device in the error.
+		bool same_device = false;
+		// Windows: an entry whose attributes say opening or reading it would fetch it (RECALL_ON_OPEN,
+		// RECALL_ON_DATA_ACCESS, OFFLINE: an online-only cloud file, an offline one) is `failed` with k_would_recall in
+		// the error. Each folder below the root and the file are judged by their parent's listing before they are
+		// opened (fails closed: a name the listing does not hold as written is not opened) and by their handle; the
+		// file before a byte is read. Nothing elsewhere.
+		bool refuse_recall = false;
+		// POSIX, with same_device: the indexes of the components of `folder` (0: its first) that are mount points. The
+		// device may change there, and only there: the folders below one and the file lie on its device. A walk from
+		// "/" to a file on a mounted volume names the mount points on its way.
+		std::vector<std::size_t> mount_points;
+	};
+
+	inline constexpr std::string_view k_other_device = "lies on another device than the root";
+	inline constexpr std::string_view k_would_recall =
+		"would be fetched from the network (an online-only or offline file)";
+
+	// read_beneath with `limits` checked on the way and on the file's own handle.
+	SNK_API read_result read_beneath(const read_request& request, const read_limits& limits,
+		std::vector<std::byte>& out);
+
 	// read_beneath without holding the whole file: the same checks, then `sink` gets the file in chunks, in order, and
 	// stops the read by returning false (the result is ok then). A file that grows past `max_bytes` while it is read is
 	// `too_large` too. The folders are let go once the file is open; the open file is what is read. For a hash of any size.

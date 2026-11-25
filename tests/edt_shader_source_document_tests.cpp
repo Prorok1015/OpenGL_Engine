@@ -422,4 +422,83 @@ BOOST_AUTO_TEST_CASE(AClosedDocument_ForgetsItsFile)
 	BOOST_TEST(document->source().view().empty());
 }
 
+BOOST_AUTO_TEST_CASE(DiskFlag_FromTheWatcher_IsAnnouncedOnce_NotAgainForTheSameOutsideVersion_AndWhenCleared)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	changed.clear();
+
+	write(res_root, "shaders/scene.frag", "somebody else\n");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	write(res_root, "shaders/scene.frag", k_frag);
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(changed.size() == 2u);
+	BOOST_TEST(document->text() == "mine\n");
+}
+
+BOOST_AUTO_TEST_CASE(DiskFlag_FromARefusedSave_IsAnnouncedOnce)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	write(res_root, "shaders/scene.frag", "somebody else\n");
+	changed.clear();
+
+	BOOST_TEST(!document->save().saved);
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	BOOST_TEST(!document->save().saved);
+	BOOST_TEST(changed.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(RaiseConflict_FlagsAndAnnouncesOnce_AndNothingForAClosedDocument)
+{
+	document->raise_conflict();
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(changed.empty());
+
+	open_frag();
+	changed.clear();
+	document->raise_conflict();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(changed.size() == 1u);
+
+	document->raise_conflict();
+	BOOST_TEST(changed.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_WhoseWriteFails_PutsTheFlagBackAsItWas_NotRaised)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	write(res_root, "shaders/scene.frag", "somebody else\n");
+	BOOST_REQUIRE(!document->changed_on_disk());
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_write, res::write_policy::read_only());
+
+	const edt::save_result failed = document->overwrite();
+
+	BOOST_TEST(!failed.saved);
+	BOOST_TEST(failed.error.find("could not be written") != std::string::npos);
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(document->text() == "mine\n");
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "somebody else\n");
+
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_write, res::write_policy::allow_all());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -9,7 +9,7 @@
 std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_registry& registry, asset_kind_hooks hooks)
 {
 	std::vector<registration> out;
-	out.reserve(5 + std::size(k_picture_suffixes));
+	out.reserve(6 + std::size(k_picture_suffixes));
 	out.push_back(registry.add({
 		.id = "prefab",
 		.suffix = ".prefab.desc",
@@ -33,6 +33,14 @@ std::vector<edt::registration> edt::register_builtin_asset_kinds(asset_kind_regi
 			.id = "shader_desc",
 			.suffix = ".shader.desc",
 			.icon = "[S]",
+			.open = [open = hooks.open_desc](editor_context&, const res::tag& tag) { open(tag); },
+		}));
+		// The id is the document type: Create Document and New Material name its files by this suffix (#1198). It opens as
+		// any desc does: the data document host picks the material window by `__type`.
+		out.push_back(registry.add({
+			.id = "material_desc",
+			.suffix = ".mat.desc",
+			.icon = "[M]",
 			.open = [open = std::move(hooks.open_desc)](editor_context&, const res::tag& tag) { open(tag); },
 		}));
 	}

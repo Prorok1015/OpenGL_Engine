@@ -14,7 +14,7 @@
 
 #include <memory>
 
-namespace edt::picker { class catalog; struct page_cache; }
+namespace edt::picker { class catalog; struct filter; struct page_cache; }
 namespace gui { struct theme_semantic_colors; }
 
 // The inspector UI generated from a desc::type_schema (DESC_SCHEMA.md 2.5): every field gets the widget its kind and
@@ -159,6 +159,16 @@ namespace edt::schema_ui
 			list_pages.clear();
 		}
 	};
+
+	// The ID of the popup draw_picker_popup draws: the caller opens it (ImGui::OpenPopup) from the same ID stack.
+	inline constexpr const char* k_picker_popup = "##asset_picker";
+
+	// The list of a reference picker in the popup k_picker_popup: the files `wanted` accepts, searched by name, the project's
+	// first. What the popup keeps between frames is in `state` under `field_id`. True when a file was picked (`value` is then
+	// its picker::reference_value). `on_row`, when set, is called after each row with the file's path below res:// (tests).
+	// Needs an ImGui frame.
+	bool draw_picker_popup(const edt::picker::filter& wanted, const edt::picker::catalog& catalog, map_edit_state& state,
+		std::uint32_t field_id, boost::json::value& value, const std::function<void(std::string_view path)>& on_row = {});
 
 	// What the person asked for at the marks of the fields in one frame (the "set here" mark's menu). An unset is applied to
 	// the shown value by draw_fields (the edit then goes through apply_edit like any other); a reset removes the record from

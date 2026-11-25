@@ -30,7 +30,8 @@ namespace edt
 	picture_texture picture_texture_of(const res::tag& picture);
 
 	// The first own fields of a new document of `type` made by Create Document (document_creator::ports::initial_fields): a
-	// texture is a child of the engine's base texture, as Create Texture makes it; any other type gets none.
+	// texture is a child of the engine's base texture, as Create Texture makes it, a material of the base material, as New
+	// Material makes it (#1198); any other type gets none.
 	boost::json::object initial_document_fields(std::string_view type);
 
 	// Why "Create Texture" is refused for `picture`: the picture is not the project's own (`in_top_layer`), the project may
@@ -41,6 +42,10 @@ namespace edt
 	res::tag picture_texture_tag(const document_creator& creator, const res::tag& picture);
 	// Writes the desc through the creator (never over a file).
 	document_creation create_picture_texture(const document_creator& creator, const res::tag& picture);
+	// The texture desc Create Texture made (or would make) for `picture` when it is there, is a texture_2d_desc and its `data`
+	// names this picture; empty: none. Read fresh from the disk (read_desc_file), any layer.
+	res::tag existing_picture_texture(const document_creator& creator, res::resource_system& resources, const desc::desc_system& descs,
+		const desc_file_layout& layout, const res::tag& picture);
 
 	// The read-only texture viewers (#1205), one per source, each a floating window registered with the editor's panels
 	// while it is open: a picture double-clicked in the Asset Browser, and a texture desc of a lower layer, which is no data

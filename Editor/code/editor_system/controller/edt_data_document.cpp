@@ -596,11 +596,22 @@ void edt::data_document::commit_pending()
 	m_committed_own = m_own;
 }
 
-void edt::data_document::record_change(const json::object& before, const json::object& after)
+void edt::data_document::commit_pending(std::string label)
+{
+	if (!has_pending_edit()) {
+		return;
+	}
+	record_change(m_committed_own, m_own, std::move(label));
+	m_committed_own = m_own;
+}
+
+void edt::data_document::record_change(const json::object& before, const json::object& after, std::string label)
 {
 	std::vector<std::string> pointers;
 	collect_changes({}, before, after, pointers);
-	std::string label = edit_label(pointers);
+	if (label.empty()) {
+		label = edit_label(pointers);
+	}
 	m_history.record(std::move(label), cmd::origin::ui(), std::make_unique<data_change>(*this, before, after, std::move(pointers)));
 }
 
