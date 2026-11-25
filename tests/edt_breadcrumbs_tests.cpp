@@ -237,14 +237,21 @@ BOOST_FIXTURE_TEST_CASE(CloseChain_ThePlanIsTheOneOfTheAnswer_SaveWritesWhatWasE
 	doc(card3).m_dirty = true;
 	std::function<void(edt::chain_answer)> later;
 	ports.ask = [&](const std::vector<std::string>&, std::function<void(edt::chain_answer)> answer) { ++questions; later = std::move(answer); };
+	// The documents are gone after the answer closed them: what was saved is recorded on the way.
+	std::vector<edt::document_id> saved_ids;
+	ports.save = [&](edt::document_id id) {
+		saved_ids.push_back(id);
+		doc(id).m_dirty = false;
+		return std::string{};
+	};
 	BOOST_TEST(!edt::request_close_link(documents, card3, ports));
 	doc(material).m_dirty = true;
 
 	later(edt::chain_answer::save);
 
-	BOOST_TEST(doc(material).m_saves == 1);
-	BOOST_TEST(doc(card3).m_saves == 1);
+	BOOST_TEST((saved_ids == std::vector<edt::document_id>{ material, card3 }), boost::test_tools::per_element());
 	BOOST_TEST(documents.find(card3) == nullptr);
+	BOOST_TEST(documents.find(material) == nullptr);
 	BOOST_TEST(questions == 1);
 }
 
