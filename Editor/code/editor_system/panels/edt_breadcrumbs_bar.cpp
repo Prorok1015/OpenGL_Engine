@@ -12,10 +12,11 @@ namespace
 	// The dock host window of edt_dockspace.cpp: a crumb let go over it (and over nothing else) is let go on empty space.
 	constexpr const char* k_dockspace_host_name = "##dockspace_host";
 
+	// Only the dock host counts: a release outside the application window (no hovered window) cancels the drag.
 	bool over_empty_space()
 	{
 		const ImGuiWindow* hovered = ImGui::GetCurrentContext()->HoveredWindow;
-		return !hovered || std::strcmp(hovered->Name, k_dockspace_host_name) == 0;
+		return hovered && std::strcmp(hovered->Name, k_dockspace_host_name) == 0;
 	}
 }
 
@@ -50,20 +51,20 @@ void edt::breadcrumbs_bar::draw(const std::vector<breadcrumb>& rows, host_id hos
 		}
 	}
 
-	const ImRect bar(origin, ImVec2(origin.x + width, origin.y + row_height));
-	if (ImGui::BeginDragDropTargetCustom(bar, ImGui::GetID("##crumb_bar"))) {
-		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(k_payload_type)) {
-			document_id link = 0;
-			std::memcpy(&link, payload->Data, sizeof(link));
-			m_accepted = true;
-			if (on.dropped) on.dropped(link, { drop_kind::breadcrumb_bar, host });
+	if (allow_move) {
+		const ImRect bar(origin, ImVec2(origin.x + width, origin.y + row_height));
+		if (ImGui::BeginDragDropTargetCustom(bar, ImGui::GetID("##crumb_bar"))) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(k_payload_type); payload && payload->DataSize == static_cast<int>(sizeof(document_id))) {
+				document_id link = 0;
+				std::memcpy(&link, payload->Data, sizeof(link));
+				if (on.dropped) on.dropped(link, { drop_kind::breadcrumb_bar, host });
+			}
+			ImGui::EndDragDropTarget();
 		}
-		ImGui::EndDragDropTarget();
 	}
 
 	if (m_dragged != 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-		if (!m_accepted && over_empty_space() && on.dropped) on.dropped(m_dragged, { drop_kind::empty_space, 0 });
+		if (over_empty_space() && on.dropped) on.dropped(m_dragged, { drop_kind::empty_space, 0 });
 		m_dragged = 0;
-		m_accepted = false;
 	}
 }

@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -139,6 +140,8 @@ namespace edt
 		std::function<document_id()> m_shown_prefab;
 		inp::input_router* m_input_router = nullptr;
 		std::unordered_map<document_id, window> m_windows;
+		// The documents a chain question is open for: a second close click asks nothing more.
+		std::set<document_id> m_chain_questions;
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		connection m_closed;
 	};

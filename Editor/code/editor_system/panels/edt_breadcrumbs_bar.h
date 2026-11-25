@@ -26,7 +26,7 @@ namespace edt
 		void draw(const std::vector<breadcrumb>& rows, host_id host, bool allow_move, const gui::theme_semantic_colors& colors, const actions& on);
 
 	private:
+		// The crumb this bar's window started to drag; a release over the dock host window is a tear-off, over a bar a dock-back, anywhere else a cancel.
 		document_id m_dragged = 0;
-		bool m_accepted = false;
 	};
 }

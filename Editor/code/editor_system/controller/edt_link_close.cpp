@@ -1,4 +1,5 @@
 #include "edt_link_close.h"
+#include <algorithm>
 #include <format>
 #include <memory>
 
@@ -37,35 +38,66 @@ namespace edt
 		}
 	}
 
+	namespace
+	{
+		struct pending_chain
+		{
+			document_manager& documents;
+			document_id id;
+			chain_close_ports ports;
+			std::function<void(const std::string&)> failed;
+			bool closed = false;
+		};
+
+		std::vector<std::string> titles_of(document_manager& documents, const std::vector<document_id>& dirty)
+		{
+			std::vector<std::string> titles;
+			for (const document_id member : dirty) {
+				if (const document* open = documents.find(member)) titles.push_back(open->title());
+			}
+			return titles;
+		}
+
+		void ask_about(const std::shared_ptr<pending_chain>& chain, const std::vector<document_id>& asked)
+		{
+			chain->ports.ask(titles_of(chain->documents, asked), [chain, asked](chain_answer answer) {
+				if (answer == chain_answer::cancel) return;
+				// The plan of the moment the answer comes: what was edited while the question was open counts.
+				const chain_close_plan now = plan_chain_close(chain->documents, chain->id);
+				if (now.order.empty()) return;
+				if (answer == chain_answer::save) {
+					for (const document_id member : now.dirty) {
+						const document* open = chain->documents.find(member);
+						if (!open || !open->is_dirty()) continue;
+						if (const std::string why = save_one(chain->documents, member, chain->ports); !why.empty()) {
+							if (chain->failed) chain->failed(std::format("'{}' was not saved and stays open: {}", open->title(), why));
+							return;
+						}
+					}
+				} else {
+					const bool grew = std::ranges::any_of(now.dirty, [&asked](document_id member) { return std::ranges::find(asked, member) == asked.end(); });
+					if (grew) {
+						ask_about(chain, now.dirty);
+						return;
+					}
+				}
+				close_all(chain->documents, plan_chain_close(chain->documents, chain->id), chain->ports);
+				chain->closed = true;
+			});
+		}
+	}
+
 	bool request_close_link(document_manager& documents, document_id id, const chain_close_ports& ports, const std::function<void(const std::string&)>& failed)
 	{
 		const chain_close_plan plan = plan_chain_close(documents, id);
 		if (plan.order.empty()) return false;
-		if (plan.dirty.empty() || !ports.ask) {
-			if (!plan.dirty.empty()) return false;
+		if (plan.dirty.empty()) {
 			close_all(documents, plan, ports);
 			return true;
 		}
-		std::vector<std::string> titles;
-		for (const document_id member : plan.dirty) {
-			if (const document* open = documents.find(member)) titles.push_back(open->title());
-		}
-		auto closed = std::make_shared<bool>(false);
-		ports.ask(titles, [&documents, plan, ports, failed, closed](chain_answer answer) {
-			if (answer == chain_answer::cancel) return;
-			if (answer == chain_answer::save) {
-				for (const document_id member : plan.dirty) {
-					const document* open = documents.find(member);
-					if (!open || !open->is_dirty()) continue;
-					if (const std::string why = save_one(documents, member, ports); !why.empty()) {
-						if (failed) failed(std::format("'{}' was not saved and stays open: {}", open->title(), why));
-						return;
-					}
-				}
-			}
-			close_all(documents, plan, ports);
-			*closed = true;
-		});
-		return *closed;
+		if (!ports.ask) return false;
+		auto chain = std::make_shared<pending_chain>(pending_chain{ documents, id, ports, failed });
+		ask_about(chain, plan.dirty);
+		return chain->closed;
 	}
 }

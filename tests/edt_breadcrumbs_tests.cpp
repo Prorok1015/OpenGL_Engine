@@ -55,13 +55,14 @@ struct crumbs_fixture
 
 BOOST_FIXTURE_TEST_SUITE(EdtBreadcrumbs, crumbs_fixture)
 
-BOOST_AUTO_TEST_CASE(AnAssetWindow_NamesTheAssetBrowserThenItself)
+BOOST_AUTO_TEST_CASE(AnAssetWindow_NamesTheAssetThenItself)
 {
 	edt::document& opened = documents.adopt(std::make_unique<crumb_document>("Face"));
 	documents.link_asset(opened.id());
 	const std::vector<edt::breadcrumb> rows = edt::breadcrumbs_of(documents, opened.id());
 	BOOST_REQUIRE(rows.size() == 2);
 	BOOST_TEST(rows[0].label == edt::k_asset_origin_label);
+	BOOST_TEST(std::string(edt::k_asset_origin_label) == "Asset");
 	BOOST_TEST(rows[0].id == 0);
 	BOOST_TEST(!rows[0].draggable);
 	BOOST_TEST(rows[1].label == "Face");
@@ -213,6 +214,59 @@ BOOST_FIXTURE_TEST_CASE(CloseChain_ASaveThatFails_ClosesNothing_AndSaysWhy, clos
 	BOOST_TEST(said.find("Face") != std::string::npos);
 	BOOST_TEST(documents.find(card3) != nullptr);
 	BOOST_TEST(documents.find(material) != nullptr);
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseChain_AFailureAfterTheFirstSave_ClosesNothing_ButKeepsWhatWasSaved, close_fixture)
+{
+	doc(card3).m_dirty = true;
+	doc(material).m_dirty = true;
+	doc(card3).m_refuse = true;
+	reply = edt::chain_answer::save;
+	std::string said;
+	BOOST_TEST(!edt::request_close_link(documents, card3, ports, [&said](const std::string& why) { said = why; }));
+	BOOST_TEST(doc(material).m_saves == 1);
+	BOOST_TEST(!doc(material).m_dirty);
+	BOOST_TEST(doc(card3).m_dirty);
+	BOOST_TEST(said.find("Card#3") != std::string::npos);
+	BOOST_TEST(documents.find(material) != nullptr);
+	BOOST_TEST(documents.find(card3) != nullptr);
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseChain_ThePlanIsTheOneOfTheAnswer_SaveWritesWhatWasEditedMeanwhile, close_fixture)
+{
+	doc(card3).m_dirty = true;
+	std::function<void(edt::chain_answer)> later;
+	ports.ask = [&](const std::vector<std::string>&, std::function<void(edt::chain_answer)> answer) { ++questions; later = std::move(answer); };
+	BOOST_TEST(!edt::request_close_link(documents, card3, ports));
+	doc(material).m_dirty = true;
+
+	later(edt::chain_answer::save);
+
+	BOOST_TEST(doc(material).m_saves == 1);
+	BOOST_TEST(doc(card3).m_saves == 1);
+	BOOST_TEST(documents.find(card3) == nullptr);
+	BOOST_TEST(questions == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseChain_DiscardAsksAgainWhenMoreIsUnsavedThanWasAskedAbout, close_fixture)
+{
+	doc(card3).m_dirty = true;
+	std::function<void(edt::chain_answer)> later;
+	std::vector<std::vector<std::string>> asked_titles;
+	ports.ask = [&](const std::vector<std::string>& titles, std::function<void(edt::chain_answer)> answer) { ++questions; asked_titles.push_back(titles); later = std::move(answer); };
+	edt::request_close_link(documents, card3, ports);
+	doc(material).m_dirty = true;
+
+	later(edt::chain_answer::discard);
+
+	BOOST_TEST(questions == 2);
+	BOOST_TEST(documents.find(card3) != nullptr);
+	BOOST_REQUIRE(asked_titles.size() == 2);
+	BOOST_TEST(asked_titles[1].size() == 2);
+
+	later(edt::chain_answer::discard);
+	BOOST_TEST(documents.find(card3) == nullptr);
+	BOOST_TEST(documents.find(material) == nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(ClosingAHost_AsksNothing_AndKeepsTheUnsavedChange, close_fixture)

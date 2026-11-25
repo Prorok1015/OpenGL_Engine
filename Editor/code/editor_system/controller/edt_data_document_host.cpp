@@ -263,17 +263,37 @@ void edt::data_document_host::request_close(document_id id)
 
 void edt::data_document_host::close_chain(document_id id)
 {
+	// A second close click while the question is open asks nothing more.
+	if (!m_chain_questions.insert(id).second) return;
 	chain_close_ports ports;
-	ports.ask = [this, alive = std::weak_ptr<int>(m_alive)](const std::vector<std::string>&, std::function<void(chain_answer)> answer) {
-		m_context.dialogs().confirm_unsaved([alive, answer = std::move(answer)](unsaved_choice choice) {
+	auto asked = std::make_shared<bool>(false);
+	ports.ask = [this, id, asked, alive = std::weak_ptr<int>(m_alive)](const std::vector<std::string>&, std::function<void(chain_answer)> answer) {
+		*asked = true;
+		m_chain_questions.insert(id);
+		m_context.dialogs().confirm_unsaved([this, id, alive, answer = std::move(answer)](unsaved_choice choice) {
 			if (!alive.lock()) return;
+			m_chain_questions.erase(id);
 			answer(choice == unsaved_choice::save ? chain_answer::save : choice == unsaved_choice::discard ? chain_answer::discard : chain_answer::cancel);
 		});
+	};
+	// The window's own save flow asks its questions (a file changed on disk, a migrated file's version) in its window: a chain save does not
+	// ask them for several documents at once, it leaves such a document unsaved and open.
+	ports.save = [this](document_id member) -> std::string {
+		document* open = m_context.documents().find(member);
+		if (!open) return {};
+		if (in_conflict(member)) return "the file changed on disk: save it from its own window (Reload / Overwrite)";
+		if (const auto window = m_windows.find(member); window != m_windows.end() && window->second.data->needs_version_confirmation()) {
+			return "the file is in an older version: save it from its own window to confirm the new one";
+		}
+		const save_result saved = open->save();
+		return saved.saved ? std::string{} : (saved.error.empty() ? std::string("not saved") : saved.error);
 	};
 	request_close_link(m_context.documents(), id, ports, [this](const std::string& why) {
 		egLOG_WARN("editor", "{}", why);
 		m_context.dialogs().message(message_level::error, why);
 	});
+	// No question was asked (nothing unsaved, or nothing to close): nothing is pending.
+	if (!*asked) m_chain_questions.erase(id);
 }
 
 void edt::data_document_host::show_error(document_id id, const std::string& text)

@@ -46,6 +46,17 @@
 
 namespace {
 
+struct child_document final : edt::document
+{
+	std::string_view kind() const override { return "child"; }
+	const std::string& title() const override { return m_title; }
+	const res::tag& source() const override { return res::tag::null; }
+	bool is_dirty() const override { return m_dirty; }
+	std::uint64_t generation() const override { return 0; }
+	std::string m_title = "Child";
+	bool m_dirty = false;
+};
+
 namespace fs = std::filesystem;
 namespace json = boost::json;
 
@@ -261,6 +272,46 @@ BOOST_AUTO_TEST_CASE(Close_OfADirtyDocument_Save_WritesItThenCloses_AChangedFile
 	BOOST_TEST(open_documents() == 2u);
 	BOOST_TEST(host->owns(id));
 	BOOST_TEST(open.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(CloseChain_OfADocumentWithADirtyChild_AsksOnce_ASecondClickAsksNothingMore_CancelKeepsBoth_DiscardClosesBoth)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	auto child = std::make_unique<child_document>();
+	child->m_dirty = true;
+	const edt::document_id child_id = context->documents().open_instance(std::move(child), id, "field:a");
+	BOOST_REQUIRE(child_id != 0);
+
+	host->request_close(id);
+	host->request_close(id);
+	BOOST_TEST(context->dialogs().pending() == 1u);
+	answer_unsaved("cancel");
+	BOOST_TEST(context->documents().find(id) != nullptr);
+	BOOST_TEST(context->documents().find(child_id) != nullptr);
+
+	host->request_close(id);
+	BOOST_TEST(context->dialogs().pending() == 1u);
+	answer_unsaved("discard");
+	BOOST_TEST(context->documents().find(id) == nullptr);
+	BOOST_TEST(context->documents().find(child_id) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ShowLink_BringsTheWindowOfTheDocumentForward_AndHandsOtherDocumentsToTheOwner)
+{
+	edt::document& open = open_config();
+	const edt::document_id id = open.id();
+	auto child = std::make_unique<child_document>();
+	const edt::document_id child_id = context->documents().open_instance(std::move(child), id, "field:a");
+	context->documents().set_active(context->documents().scene().id());
+
+	host->show_link(id);
+	BOOST_TEST(context->documents().active()->id() == id);
+	BOOST_TEST(focused_elsewhere == 0);
+
+	host->show_link(child_id);
+	BOOST_TEST(focused_elsewhere == 1);
+	BOOST_TEST(context->documents().active()->id() == child_id);
 }
 
 BOOST_AUTO_TEST_CASE(DirtyAndSaveAll_CoverEveryOpenDataDocument)

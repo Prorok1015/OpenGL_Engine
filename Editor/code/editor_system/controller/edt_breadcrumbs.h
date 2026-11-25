@@ -6,7 +6,7 @@
 
 namespace edt
 {
-	// The breadcrumbs of a window (EPIC-82 6, #1402), no ImGui: `Level > Card#3 > Material "Face"`, or `Asset Browser > Material "Face"`
+	// The breadcrumbs of a window (EPIC-82 6, #1402), no ImGui: `Level > Card#3 > Material "Face"`, or `Asset > Material "Face"`
 	// for a window opened from the asset browser. panels/edt_breadcrumbs_bar.h draws these rows.
 	struct breadcrumb
 	{
@@ -16,11 +16,11 @@ namespace edt
 		bool dirty = false;
 		// The last crumb: the link the window shows. Not a button.
 		bool current = false;
-		// A crumb a person can drag out of the window or onto another: a link, not the root document of a chain and not the label.
+		// A crumb a person can drag out of the window or onto another: any link (an asset window too), not the root document of a chain (the level) and not the label.
 		bool draggable = false;
 	};
 
-	inline constexpr const char* k_asset_origin_label = "Asset Browser";
+	inline constexpr const char* k_asset_origin_label = "Asset";
 
 	// The crumbs of the chain `link` ends. Two open links with one title under one parent say their anchor (`Card (node:3)`).
 	std::vector<breadcrumb> breadcrumbs_of(document_manager& documents, document_id link);
