@@ -234,6 +234,8 @@ BOOST_AUTO_TEST_CASE(InlinePixels_ThatAreWrong_FailTheLoad_AndNameTheField)
 			"unknown key 'colour' in inline pixels" },
 		{ "float_width", inline_texture(R"({"width":1.0,"height":1,"format":"R8","base64":"/w=="})"), "/pixels/width", "not a whole number" },
 		{ "string_width", inline_texture(R"({"width":"1","height":1,"format":"R8","base64":"/w=="})"), "/pixels/width", "not a whole number" },
+		{ "huge_width", inline_texture(R"({"width":18446744073709551615,"height":1,"format":"R8","base64":"/w=="})"), "/pixels/width",
+			"'width' is 18446744073709551615: 1 to 4096" },
 		{ "negative_height", inline_texture(R"({"width":1,"height":-1,"format":"R8","base64":"/w=="})"), "/pixels/height", "'height' is -1: 1 to 4096" },
 		// The text's length is checked first: no width, but a text longer than any inline texture.
 		{ "long_text", inline_texture(R"({"base64":")" + std::string(87388, 'A') + R"("})"), "/pixels/base64",

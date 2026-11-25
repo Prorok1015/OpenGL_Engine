@@ -63,12 +63,16 @@ namespace
 	{
 		const json::value& value = field(pixels, key);
 		const std::string path = std::format("/pixels/{}", key);
-		// Integers only: 1.0 and "1" are refused, a value past int64 is out of range.
+		// Integers only: 1.0 and "1" are refused. A parsed file gives int64; a value built in memory (the forms a save
+		// over a `__parent` tries) may be uint64.
 		if (!value.is_int64() && !value.is_uint64()) refuse(path, std::format("'{}' is not a whole number", key));
-		if (value.is_uint64() || value.as_int64() < 1 || value.as_int64() > rnd::texture_2d_desc::k_max_inline_side) {
+		const bool in_range = value.is_int64()
+			? value.as_int64() >= 1 && value.as_int64() <= rnd::texture_2d_desc::k_max_inline_side
+			: value.as_uint64() >= 1 && value.as_uint64() <= rnd::texture_2d_desc::k_max_inline_side;
+		if (!in_range) {
 			refuse(path, std::format("'{}' is {}: 1 to {}", key, json::serialize(value), rnd::texture_2d_desc::k_max_inline_side));
 		}
-		return static_cast<uint32_t>(value.as_int64());
+		return static_cast<uint32_t>(value.is_int64() ? value.as_int64() : static_cast<std::int64_t>(value.as_uint64()));
 	}
 
 	// Checked in the order that does the least work for bad input: the text's length, the shape, the size the shape
@@ -132,8 +136,8 @@ namespace
 	{
 		const auto bytes = std::as_bytes(std::span{ pixels.bytes });
 		return json::object{
-			{ "width", pixels.width },
-			{ "height", pixels.height },
+			{ "width", static_cast<std::int64_t>(pixels.width) },
+			{ "height", static_cast<std::int64_t>(pixels.height) },
 			{ "format", format_of(pixels.format).name },
 			{ "base64", cmd::base64::encode(bytes) },
 		};
