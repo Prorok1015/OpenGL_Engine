@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -7,6 +8,8 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#include "edt_file_identity.h"
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_link_check.h>
 
 // Where an agent's import may read its source from (#1378, #1380, docs/epics/editor/EPIC-62.md): one rule for the
@@ -23,9 +26,21 @@ namespace edt
 	unsigned system_drive_type(char letter);
 	// The text of /proc/self/mounts; nullopt when it cannot be read (and on Windows).
 	std::optional<std::string> system_mount_table();
-	// GetFileAttributesW of `path`: the entry itself (a link's own attributes), no data read, so nothing is fetched
-	// from a cloud; nullopt when it cannot be read, and always off Windows.
+	// The FILE_ATTRIBUTE_* bits of `path` as the listing of its folder gives them (FindFirstFileExW on the exact name):
+	// the entry itself is never opened, so neither a cloud file nor an entry of a projected file system (VFS for Git),
+	// which asks its provider on open, is fetched. nullopt when it is not listed or cannot be read, and always off
+	// Windows.
 	std::optional<std::uint32_t> system_file_attributes(const std::filesystem::path& path);
+	// platform::beneath::read_beneath with limits: the default of source_volume_ports::read_below.
+	platform::beneath::read_result read_below_root(const platform::beneath::read_request& request,
+		const platform::beneath::read_limits& limits, std::vector<std::byte>& out);
+
+	// The root an agent's read of `path` (absolute, past agent_source_path_problem) starts from: with `windows` its
+	// drive ("C:\"), else its longest mount point in `mount_table`. nullopt when there is none.
+	std::optional<std::filesystem::path> agent_read_root(const std::filesystem::path& path, bool windows,
+		const std::optional<std::string>& mount_table);
+	// agent_read_root of this system (its own mount table): the default of source_volume_ports::read_root.
+	std::optional<std::filesystem::path> system_read_root(const std::filesystem::path& path);
 
 	// How agent_source_path_problem tells a local volume from another one, without touching the path.
 	struct source_volume_ports
@@ -42,9 +57,16 @@ namespace edt
 		// agent_source_links_problem: an entry opened as itself, never followed (platform::beneath::link_entry_at).
 		std::function<std::optional<platform::beneath::link_entry>(const std::filesystem::path&, std::error_code&)>
 			entry_of = platform::beneath::link_entry_at;
-		// agent_source_links_problem, Windows rules: the FILE_ATTRIBUTE_* bits of an entry; null: not asked.
+		// agent_source_links_problem, Windows rules: the FILE_ATTRIBUTE_* bits of an entry, read before entry_of
+		// opens it; null: not asked.
 		std::function<std::optional<std::uint32_t>(const std::filesystem::path&)> file_attributes =
 			system_file_attributes;
+		// read_agent_file: where its read starts. Not from mount_table above: that one judges what may be read, this one
+		// is where the disk really holds it.
+		std::function<std::optional<std::filesystem::path>(const std::filesystem::path&)> read_root = system_read_root;
+		// read_agent_file: the read below the volume's root (platform::beneath::read_beneath with read_limits).
+		std::function<platform::beneath::read_result(const platform::beneath::read_request&,
+			const platform::beneath::read_limits&, std::vector<std::byte>&)> read_below = read_below_root;
 	};
 
 	// The allowed source roots of an agent's import: only local fixed or removable volumes. Why `path` (as an agent
@@ -53,7 +75,7 @@ namespace edt
 	// separators, `\??\`), a `.` or `..` component; Windows: no drive letter, a drive that is not
 	// DRIVE_FIXED/DRIVE_REMOVABLE; POSIX: a path under /proc, or whose longest mount point (agent_log_mounts) has a
 	// type outside the allow-list of local file systems (ext2/3/4, xfs, btrfs, zfs, f2fs, vfat, exfat, ntfs, ntfs3,
-	// fuseblk, tmpfs, overlay).
+	// fuseblk, tmpfs, overlay). A lone `.` component is no component (`./tex.png`); `..` is refused.
 	std::string agent_source_path_problem(std::string_view path, const source_volume_ports& ports);
 	std::string agent_source_path_problem(std::string_view path);
 
@@ -81,6 +103,29 @@ namespace edt
 	// lies in `model_folder`: agent_source_path_problem, then agent_source_links_problem below the model's folder.
 	std::string agent_side_file_problem(const std::filesystem::path& candidate,
 		const std::filesystem::path& model_folder, const source_volume_ports& ports);
+
+>>>
+
+	// The bytes of a file an agent's import reads, with the stamp of the handle they came from. `problem` is empty when
+	// the read went through, else why (no path in it: an agent reads it).
+	struct agent_file_read {
+		std::vector<std::byte> bytes;
+		std::optional<platform::beneath::file_stamp> stamp;
+		std::string problem;
+	};
+
+	// Reads `path` (absolute, lexically normal) for an agent from the handle that was checked (#1412): every folder
+	// from ports.read_root down opened from the one above it without following a link, none on another device, the
+	// file opened as itself, refused when its attributes say a read would fetch it, at most `max_bytes`. Nothing is
+	// opened again by its path afterwards.
+	agent_file_read read_agent_file(const std::filesystem::path& path, std::uint64_t max_bytes,
+		const source_volume_ports& ports);
+
+	// Whether the handle `stamp` was taken from is the file `id` names. ReFS ids are 128 bits and a stamp holds 64:
+	// there only the volume is compared.
+	bool stamp_is_file(const platform::beneath::file_stamp& stamp, const file_id& id);
+>>>
+
 
 	// What stands in for the folder of the source in an error an agent reads.
 	inline constexpr std::string_view k_source_folder_text = "<source folder>";

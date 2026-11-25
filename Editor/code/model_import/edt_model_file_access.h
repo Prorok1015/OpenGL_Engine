@@ -94,6 +94,11 @@ namespace edt {
 		bool found() const { return !path.empty() && error.empty(); }
 	};
 
+	// An agent's read of a resolved side file (#1412): its bytes from the handle that was checked, which must be the
+	// file `id` names and hold `size` bytes; nothing is opened again by the path after it. Throws std::runtime_error
+	// with the reason when the file may not be read.
+	using model_file_reader = std::function<std::vector<std::byte>(const resolved_reference& file)>;
+
 	// What a model file may make the editor read from the disk for an agent's import: its own folder and the folders
 	// below it that are not hidden; images (checked by their first bytes) for textures, a .bin beside a .gltf and a .mtl
 	// beside an .obj; a bounded number of files and bytes. Without `allowed` it only collects what the model refers to
@@ -112,9 +117,11 @@ namespace edt {
 
 		// `on_disk` false: the model was only given as bytes (served from memory or a pack, #925). It has no folder, so every
 		// file it refers to is refused and nothing is read from the disk. `may_read` (an agent's import, #1408): a
-		// non-empty answer refuses the file by the rule before the disk is asked about it.
+		// non-empty answer refuses the file by the rule before the disk is asked about it. `read_file` (an agent's
+		// import, #1412): reads a file in place of the read below the boundary.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
-			const std::filesystem::path& boundary = {}, bool on_disk = true, model_read_rule may_read = {});
+			const std::filesystem::path& boundary = {}, bool on_disk = true, model_read_rule may_read = {},
+			model_file_reader read_file = {});
 		// `provided` must outlive the access.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<provided_file>* provided, provided_mode mode);
 
@@ -149,6 +156,7 @@ namespace edt {
 		const std::vector<referenced_file>* m_allowed = nullptr;
 		const std::vector<provided_file>* m_provided = nullptr;
 		model_read_rule m_may_read;
+		model_file_reader m_read_file;
 		provided_mode m_mode = provided_mode::strict;
 		std::vector<requested_file> m_requested;
 		bool m_on_disk = true;

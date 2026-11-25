@@ -541,25 +541,58 @@ BOOST_AUTO_TEST_CASE(ADotDotAfterALink_IsRefusedForAnAgent_WhateverIsBehindIt)
 	test_util::make_folder_link(models / "dangling", fs::weakly_canonical(dir.path() / "gone"));
 	fs::remove(dir.path() / "gone");
 	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule());
-	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png", "./skin.png",
+	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png",
 		"tex/../skin.png" }) {
 		BOOST_TEST_CONTEXT(reference)
 		{
 			const auto refused = agent.resolve(reference, edt::model_file_kind::texture);
 			BOOST_CHECK(!refused.found());
 			BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
-			BOOST_CHECK_MESSAGE(refused.error.find("'.' or '..'") != std::string::npos, refused.error);
+			BOOST_CHECK_MESSAGE(refused.error.find("a '..'") != std::string::npos, refused.error);
 			BOOST_CHECK(!agent.read(refused).has_value());
 		}
 	}
 	BOOST_CHECK_EQUAL(walked, 0);
 	BOOST_CHECK(agent.files().empty());
 
+	// #1412 (a): a lone '.' (glTF's "./tex.png") passes no link; it is read as the name without it.
+	const auto dotted = agent.resolve("./skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(dotted.found(), dotted.error);
+	BOOST_CHECK(dotted.path.filename() == "skin.png");
+	BOOST_CHECK(agent.resolve("./tex/./normal.png", edt::model_file_kind::texture).found());
+
 	// A person's import reads such names as before.
 	auto person = make();
 	BOOST_CHECK(person.resolve("tex/../skin.png", edt::model_file_kind::texture).found());
 	const auto through = person.resolve("linked/../skin.png", edt::model_file_kind::texture);
-	BOOST_CHECK_MESSAGE(through.error.find("'.' or '..'") == std::string::npos, through.error);
+	BOOST_CHECK_MESSAGE(through.error.find("a '..'") == std::string::npos, through.error);
+}
+
+// #1412: an agent's side file is read by the reader it was given (from the handle that was checked), not below the
+// boundary, and the path is not opened again after it.
+BOOST_AUTO_TEST_CASE(AnAgentsSideFile_IsReadByItsReader)
+{
+	std::vector<fs::path> asked;
+	edt::model_file_reader reader = [&](const edt::resolved_reference& file) {
+		asked.push_back(file.path);
+		return std::vector<std::byte>(reinterpret_cast<const std::byte*>(png_bytes.data()),
+			reinterpret_cast<const std::byte*>(png_bytes.data()) + png_bytes.size());
+	};
+	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule(), reader);
+	const auto found = agent.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(found.found(), found.error);
+	BOOST_CHECK(agent.read(found).has_value());
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_CHECK(asked.front() == found.path);
+
+	// A reader's refusal is the read's.
+	edt::model_file_access refusing(root, {}, nullptr, {}, true, agent_rule(),
+		[](const edt::resolved_reference&) -> std::vector<std::byte> { throw std::runtime_error("an offline file"); });
+	const auto offline = refusing.resolve("skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE(offline.found());
+	BOOST_CHECK_EXCEPTION(refusing.read(offline), std::runtime_error, [](const std::runtime_error& error) {
+		return std::string(error.what()).find("offline") != std::string::npos;
+	});
 }
 
 #if !defined(_WIN32)

@@ -123,6 +123,16 @@ namespace
 	std::vector<std::byte> read_checked_source(const edt::image_import_plan& plan, const edt::source_volume_ports* agent)
 	{
 		if (const std::string why = identity_problem(plan, agent); !why.empty()) throw std::runtime_error(why);
+		if (agent) {
+			// From the handle that was checked: nothing is opened again by the path once the walk is done (#1412).
+			edt::agent_file_read read = edt::read_agent_file(plan.source, plan.size, *agent);
+			if (!read.problem.empty()) throw std::runtime_error(read.problem);
+			if (read.bytes.size() != plan.size || read.stamp->size != plan.size) {
+				throw std::runtime_error("the size of the file changed while it was read");
+			}
+			if (!edt::stamp_is_file(*read.stamp, plan.id)) throw std::runtime_error("the path reaches another file now");
+			return std::move(read.bytes);
+		}
 		std::ifstream in(plan.source, std::ios::binary);
 		if (!in) throw std::runtime_error("the file cannot be opened");
 		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));

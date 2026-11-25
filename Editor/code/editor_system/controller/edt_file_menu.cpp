@@ -545,7 +545,7 @@ void edt::file_menu::register_image_import()
 			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Absolute path of the picture (.png, .jpg, .jpeg); a regular file, not a link. "
 					"Copied into the project as it is. An agent's import asks a person first, and its source must lie "
-					"on a local fixed or removable disk (no share, network drive or mount, no '.' or '..')." } } },
+					"on a local fixed or removable disk (no share, network drive or mount, no '..')." } } },
 			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Folder below res:// (default: textures). Nothing is ever overwritten." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
@@ -758,7 +758,7 @@ void edt::file_menu::register_actions()
 			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Absolute path of the model file (.glb, .gltf, .obj, .fbx); a regular file, not a "
 					"link. An agent's import asks a person first, and its source must lie on a local fixed or "
-					"removable disk (no share, network drive or mount, no '.' or '..')." } } },
+					"removable disk (no share, network drive or mount, no '..')." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, "
 					"imports without the dialog." } } },

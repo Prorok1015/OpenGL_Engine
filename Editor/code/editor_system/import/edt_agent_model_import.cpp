@@ -3,6 +3,7 @@
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/text_escape.h>
 #include <snk/resource/res_desc_binary.h>
 #include <snk/resource/res_free_name.h>
 #include <algorithm>
@@ -139,6 +140,16 @@ namespace {
 	std::vector<std::byte> read_checked_source(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
 		if (const std::string why = identity_problem(plan, agent); !why.empty()) throw std::runtime_error(why);
+		if (agent) {
+			// From the handle that was checked: nothing is opened again by the path once the walk is done (#1412).
+			edt::agent_file_read read = edt::read_agent_file(plan.source, plan.size, *agent);
+			if (!read.problem.empty()) throw std::runtime_error(read.problem);
+			if (read.bytes.size() != plan.size || read.stamp->size != plan.size) {
+				throw std::runtime_error("the size of the file changed while it was read");
+			}
+			if (!edt::stamp_is_file(*read.stamp, plan.id)) throw std::runtime_error("the path reaches another file now");
+			return std::move(read.bytes);
+		}
 		std::ifstream in(plan.source, std::ios::binary);
 		if (!in) throw std::runtime_error("the file cannot be opened");
 		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));
@@ -150,6 +161,20 @@ namespace {
 			throw std::runtime_error("the file changed while it was read: " + why);
 		}
 		return bytes;
+	}
+
+	// A side file of an agent's import, from the handle that was checked (#1412).
+	std::vector<std::byte> read_side_file(const edt::resolved_reference& file, const edt::source_volume_ports& volumes)
+	{
+		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(file.path.filename()), 256);
+		edt::agent_file_read read = edt::read_agent_file(file.path.lexically_normal(), file.size, volumes);
+		if (!read.problem.empty()) throw std::runtime_error(std::format("'{}': {}", name, read.problem));
+		const bool same = read.bytes.size() == file.size && read.stamp->size == file.size
+			&& edt::stamp_is_file(*read.stamp, file.id);
+		if (!same) {
+			throw std::runtime_error(std::format("'{}' changed while it was read", name));
+		}
+		return std::move(read.bytes);
 	}
 
 	// Takes back the files a failed or cancelled export wrote: only those, only plain files, newest first. A staged binary
@@ -277,6 +302,9 @@ namespace {
 			// Every side file passes the rule by the name the model gives it, before the disk is asked about it.
 			source.may_read = [volumes = in.volumes, folder = in.plan.source.parent_path()](const fs::path& candidate) {
 				return edt::agent_side_file_problem(candidate, folder, volumes);
+			};
+			source.read_file = [volumes = in.volumes](const edt::resolved_reference& file) {
+				return read_side_file(file, volumes);
 			};
 		}
 		std::vector<edt::referenced_file> files = in.plan.files;
