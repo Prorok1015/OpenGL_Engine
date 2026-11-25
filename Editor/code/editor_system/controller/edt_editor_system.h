@@ -216,6 +216,8 @@ namespace edt {
 		modeller_settings m_modeller_settings;
 		// The GLSL editor (#1202): its window, the asset kinds of the shader sources and the close question; the documents belong to the document_manager.
 		std::unique_ptr<shader_editor_component> m_shader_editor;
+		// The Check button of the shader window (#1386): the line it shows.
+		std::string check_shader_source_now(const res::tag& source);
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;

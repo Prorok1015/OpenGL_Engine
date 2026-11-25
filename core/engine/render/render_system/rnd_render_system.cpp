@@ -342,6 +342,11 @@ std::vector<rnd::shader_problem> rnd::render_system::shader_problems() const
 	return problems;
 }
 
+std::vector<rnd::shader_problem> rnd::render_system::check_shader_program(const res::tag& desc, std::vector<res::tag>* files, std::string* program) const
+{
+	return m_shaders->check(desc, files, program);
+}
+
 const rnd::texture_manager& rnd::render_system::get_texture_manager() const
 {
 	return *m_textures;
