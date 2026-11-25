@@ -2,9 +2,9 @@
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_registration.h>
-#include <atomic>
 #include <filesystem>
 #include <functional>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -115,7 +115,8 @@ namespace edt
 	private:
 		void wire_scene_callbacks();
 		std::unique_ptr<thumbnail_service> make_thumbnail_service();
-		void refresh_thumbnail_cache();
+		// The cache the thumbnails use now (null: none), made, kept or closed after the project and its trust as they are.
+		std::shared_ptr<thumbnail_disk_cache> refresh_thumbnail_cache();
 
 		ports m_ports;
 		// The console's feed from the engine log; removed with the panels.
@@ -135,11 +136,13 @@ namespace edt
 		std::shared_ptr<asset_browser_panel> m_asset_browser;
 		// The asset browser's thumbnails (#1192); the lifetime is declared after it and after the cache state so it stops the decodes first.
 		std::unique_ptr<thumbnail_service> m_thumbnails;
-		// Set on the main thread before each decode is handed out, read by the workers; null: no disk cache for now.
-		std::atomic<std::shared_ptr<thumbnail_disk_cache>> m_thumbnail_cache;
-		std::shared_ptr<thumbnail_disk_cache> m_thumbnail_cache_made;
+		// Main thread only. A job takes the cache it is started with (never this member), so what it does after the project
+		// closed or the trust was taken back goes to a closed cache and is dropped.
+		std::shared_ptr<thumbnail_disk_cache> m_thumbnail_cache;
 		std::filesystem::path m_thumbnail_cache_root;
-		bool m_thumbnail_prune_queued = false;
+		// A prune job runs: set by the job itself when it ends (a cancelled job never reports back), so it also lapses by time.
+		std::shared_ptr<std::atomic<bool>> m_thumbnail_prune_running;
+		double m_thumbnail_prune_started = 0;
 		ds::lifetime m_thumbnail_jobs{ ds::lifetime_option::cancel_on_destroy };
 	};
 }

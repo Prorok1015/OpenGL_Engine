@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <random>
 #include <format>
 #include <utility>
 
@@ -12,13 +13,12 @@ namespace {
 namespace beneath = platform::beneath;
 
 constexpr std::string_view k_magic = "SNKT";
-constexpr std::uint32_t k_format_version = 1;
+constexpr std::uint32_t k_format_version = 2;
 constexpr std::size_t k_key_length = 64;
-constexpr std::size_t k_header_bytes = 4 + 4 + k_key_length + 4 + 4;
 constexpr std::string_view k_folder = "thumbnails";
 constexpr std::string_view k_suffix = ".thumb";
 constexpr std::int64_t k_stale_tmp_seconds = 3600;
-constexpr std::size_t k_list_limit = 16384;
+constexpr int k_prune_rounds = 16;
 
 void put_u32(std::vector<std::byte>& out, std::uint32_t value)
 {
@@ -46,6 +46,11 @@ bool is_tmp_name(const std::string& name)
 	return name.ends_with(".tmp") && name.size() > k_key_length && is_hex_key(std::string_view(name).substr(0, k_key_length));
 }
 
+std::string pixels_digest(std::span<const std::byte> pixels)
+{
+	return cmn::sha256_hex(pixels);
+}
+
 std::int64_t now_ns()
 {
 	return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -61,6 +66,8 @@ edt::thumbnail_disk_cache::thumbnail_disk_cache(std::filesystem::path cache_root
 edt::thumbnail_disk_cache::thumbnail_disk_cache(std::filesystem::path cache_root, limits with)
 	: m_limits(with)
 {
+	std::random_device random;
+	m_tmp_prefix = std::format("{:08x}{:08x}", random(), random());
 	std::error_code ec;
 	m_root = std::filesystem::weakly_canonical(cache_root, ec);
 	if (ec) {
@@ -90,7 +97,14 @@ std::vector<std::byte> edt::thumbnail_disk_cache::encode_entry(const std::string
 	for (const char c : key) out.push_back(static_cast<std::byte>(c));
 	put_u32(out, static_cast<std::uint32_t>(pixels.width));
 	put_u32(out, static_cast<std::uint32_t>(pixels.height));
-	for (const unsigned char c : pixels.rgba) out.push_back(static_cast<std::byte>(c));
+	const std::vector<std::byte> body = [&] {
+		std::vector<std::byte> bytes;
+		bytes.reserve(pixels.rgba.size());
+		for (const unsigned char c : pixels.rgba) bytes.push_back(static_cast<std::byte>(c));
+		return bytes;
+	}();
+	for (const char c : pixels_digest(body)) out.push_back(static_cast<std::byte>(c));
+	out.insert(out.end(), body.begin(), body.end());
 	return out;
 }
 
@@ -107,6 +121,9 @@ std::optional<edt::thumbnail_pixels> edt::thumbnail_disk_cache::decode_entry(con
 	}
 	const std::size_t pixel_bytes = static_cast<std::size_t>(width) * height * 4;
 	if (bytes.size() != k_header_bytes + pixel_bytes) return std::nullopt;
+	const std::span<const std::byte> body = bytes.subspan(k_header_bytes, pixel_bytes);
+	const std::string digest = pixels_digest(body);
+	if (std::memcmp(bytes.data() + 16 + k_key_length, digest.data(), k_key_length) != 0) return std::nullopt;
 	thumbnail_pixels pixels;
 	pixels.width = static_cast<int>(width);
 	pixels.height = static_cast<int>(height);
@@ -123,12 +140,14 @@ std::optional<edt::thumbnail_pixels> edt::thumbnail_disk_cache::read_entry(const
 	request.leaf = std::filesystem::path(key + std::string(k_suffix));
 	request.max_bytes = k_max_entry_bytes;
 	std::vector<std::byte> bytes;
+	if (!m_open) return std::nullopt;
 	if (beneath::read_beneath(request, bytes).status != beneath::read_status::ok) return std::nullopt;
 	return decode_entry(key, bytes);
 }
 
 void edt::thumbnail_disk_cache::write_entry(const std::string& key, const thumbnail_pixels& pixels) const
 {
+	if (!m_open) return;
 	const std::vector<std::byte> bytes = encode_entry(key, pixels);
 	beneath::pinned_root root(m_root);
 	const std::filesystem::path folder(k_folder);
@@ -139,11 +158,12 @@ void edt::thumbnail_disk_cache::write_entry(const std::string& key, const thumbn
 	beneath::write_request request;
 	request.folder = folder;
 	request.leaf = std::filesystem::path(key + std::string(k_suffix));
-	request.tmp_leaf = std::filesystem::path(std::format("{}.{}.tmp", key, ++m_tmp_serial));
+	request.tmp_leaf = std::filesystem::path(std::format("{}.{}_{}.tmp", key, m_tmp_prefix, ++m_tmp_serial));
 	request.data = bytes;
 	request.durable = false;
 	request.replace = true;
 	request.tmp_path = root.path() / folder / request.tmp_leaf;
+	if (!m_open) return;
 	if (const std::string failure = beneath::write_beneath(root, request); !failure.empty()) {
 		egLOG_DEBUG("thumbnail", "cache entry not written: {}", failure);
 		return;
@@ -164,6 +184,10 @@ edt::thumbnail_decoded edt::thumbnail_disk_cache::load_or_decode(const std::file
 	std::vector<std::byte> nothing;
 	const beneath::read_result seen = beneath::read_beneath(look, nothing);
 	std::string key;
+	if (!m_open) {
+		std::optional<beneath::file_stamp> ignored;
+		return decode(root, relative, ignored);
+	}
 	if (seen.status == beneath::read_status::ok && seen.stamp) {
 		key = key_of(relative, *seen.stamp);
 		if (auto pixels = read_entry(key)) {
@@ -174,7 +198,7 @@ edt::thumbnail_decoded edt::thumbnail_disk_cache::load_or_decode(const std::file
 
 	std::optional<beneath::file_stamp> read_stamp;
 	thumbnail_decoded decoded = decode(root, relative, read_stamp);
-	if (decoded.pixels && !key.empty() && read_stamp && *read_stamp == *seen.stamp) {
+	if (decoded.pixels && !key.empty() && m_open && read_stamp && *read_stamp == *seen.stamp) {
 		write_entry(key, *decoded.pixels);
 	}
 	return decoded;
@@ -189,50 +213,59 @@ std::size_t edt::thumbnail_disk_cache::prune() const
 {
 	m_pruned_once = true;
 	m_writes_since_prune = 0;
+	if (!m_open) return 0;
 	beneath::pinned_root root(m_root);
 	const std::filesystem::path folder(k_folder);
-	const beneath::list_result listing = beneath::list_beneath(root, folder, k_list_limit);
-	if (listing.missing || !listing.error.empty()) return 0;
+	std::size_t removed_total = 0;
 
-	struct kept { std::string name; std::int64_t written; std::uint64_t size; };
-	std::vector<kept> entries;
-	std::size_t removed = 0;
-	const auto remove = [&](const std::string& name) {
-		if (beneath::remove_beneath(root, folder, std::filesystem::path(name), true).empty()) ++removed;
-	};
-	const std::int64_t stale_before = now_ns() - k_stale_tmp_seconds * 1'000'000'000;
-	for (const beneath::listed_entry& entry : listing.entries) {
-		if (entry.kind != beneath::entry_kind::file) continue;
-		const std::string name = entry.name.generic_string();
-		const bool is_entry = is_entry_name(name);
-		if (!is_entry && !is_tmp_name(name)) continue;
-		beneath::read_request look;
-		look.root = m_root;
-		look.folder = folder;
-		look.leaf = entry.name;
-		look.max_bytes = k_max_entry_bytes;
-		look.stamp_only = true;
-		std::vector<std::byte> nothing;
-		const beneath::read_result seen = beneath::read_beneath(look, nothing);
-		if (seen.status == beneath::read_status::too_large || (seen.status == beneath::read_status::ok && !seen.stamp)) {
-			if (is_entry) remove(name);
-			continue;
-		}
-		if (seen.status != beneath::read_status::ok) continue;
-		if (!is_entry) {
-			if (seen.stamp->write_time_ns < stale_before) remove(name);
-			continue;
-		}
-		entries.push_back({ name, seen.stamp->write_time_ns, seen.stamp->size });
-	}
+	// A listing holds at most list_limit names: while the folder holds more, the surplus of what was listed goes and the folder is
+	// listed again, so a flooded folder is brought under its budget in rounds (and a round that removes nothing ends it).
+	for (int round = 0; round < k_prune_rounds && m_open; ++round) {
+		const beneath::list_result listing = beneath::list_beneath(root, folder, m_limits.list_limit);
+		if (listing.missing || !listing.error.empty()) break;
 
-	std::ranges::sort(entries, [](const kept& a, const kept& b) { return a.written > b.written; });
-	std::uint64_t total = 0;
-	for (std::size_t i = 0; i < entries.size(); ++i) {
-		total += entries[i].size;
-		if (i >= m_limits.max_entries || total > m_limits.max_bytes) {
-			remove(entries[i].name);
+		struct kept { std::string name; std::int64_t written; std::uint64_t size; };
+		std::vector<kept> entries;
+		std::size_t removed = 0;
+		const auto remove = [&](const std::string& name) {
+			if (beneath::remove_beneath(root, folder, std::filesystem::path(name), true).empty()) ++removed;
+		};
+		const std::int64_t stale_before = now_ns() - k_stale_tmp_seconds * 1'000'000'000;
+		for (const beneath::listed_entry& entry : listing.entries) {
+			if (entry.kind != beneath::entry_kind::file) continue;
+			const std::string name = entry.name.generic_string();
+			const bool is_entry = is_entry_name(name);
+			if (!is_entry && !is_tmp_name(name)) continue;
+			beneath::read_request look;
+			look.root = m_root;
+			look.folder = folder;
+			look.leaf = entry.name;
+			look.max_bytes = k_max_entry_bytes;
+			look.stamp_only = true;
+			std::vector<std::byte> nothing;
+			const beneath::read_result seen = beneath::read_beneath(look, nothing);
+			if (seen.status == beneath::read_status::too_large || (seen.status == beneath::read_status::ok && !seen.stamp)) {
+				if (is_entry) remove(name);
+				continue;
+			}
+			if (seen.status != beneath::read_status::ok) continue;
+			if (!is_entry) {
+				if (seen.stamp->write_time_ns < stale_before) remove(name);
+				continue;
+			}
+			entries.push_back({ name, seen.stamp->write_time_ns, seen.stamp->size });
 		}
+
+		std::ranges::sort(entries, [](const kept& a, const kept& b) { return a.written > b.written; });
+		std::uint64_t total = 0;
+		for (std::size_t i = 0; i < entries.size(); ++i) {
+			total += entries[i].size;
+			if (i >= m_limits.max_entries || total > m_limits.max_bytes) {
+				remove(entries[i].name);
+			}
+		}
+		removed_total += removed;
+		if (!listing.truncated || removed == 0) break;
 	}
-	return removed;
+	return removed_total;
 }

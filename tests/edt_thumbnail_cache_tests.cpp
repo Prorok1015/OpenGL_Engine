@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <optional>
 #include <span>
@@ -307,6 +308,112 @@ BOOST_AUTO_TEST_CASE(Pruning_KeepsTheNewest_RemovesStaleLeftovers_AndTouchesNoth
 	BOOST_TEST(fs::exists(env.thumbs() / "notes.txt"));
 	BOOST_TEST(fs::exists(env.thumbs() / (tmp_name + ".2.tmp")));
 	BOOST_TEST(!fs::exists(env.thumbs() / (tmp_name + ".1.tmp")));
+}
+
+BOOST_AUTO_TEST_CASE(AHalfWrittenBody_WithAValidHeader_IsAMiss)
+{
+	const std::string key = edt::thumbnail_disk_cache::key_of("a.png", stamp_of(1));
+	std::vector<std::byte> bytes = edt::thumbnail_disk_cache::encode_entry(key, sample_pixels());
+	BOOST_REQUIRE(edt::thumbnail_disk_cache::decode_entry(key, bytes).has_value());
+	std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(edt::thumbnail_disk_cache::k_header_bytes), bytes.end(), std::byte{ 0 });
+	BOOST_TEST(!edt::thumbnail_disk_cache::decode_entry(key, bytes).has_value());
+	bytes = edt::thumbnail_disk_cache::encode_entry(key, sample_pixels());
+	bytes.back() = static_cast<std::byte>(std::to_integer<int>(bytes.back()) ^ 0x5A);
+	BOOST_TEST(!edt::thumbnail_disk_cache::decode_entry(key, bytes).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AZeroFilledBodyOnDisk_IsAMiss_AndIsReplaced)
+{
+	cache_env env("thumbcache_zero");
+	env.layer.write("a.png", png_bytes(32, 32, 77));
+	const edt::thumbnail_disk_cache cache(env.cache_root());
+	BOOST_REQUIRE(cache.load_or_decode(env.layer_root(), "a.png", env.counting_decoder()).pixels.has_value());
+	const auto entries = env.entries();
+	BOOST_REQUIRE(entries.size() == 1u);
+	const auto size = fs::file_size(entries[0]);
+	{
+		std::fstream file(entries[0], std::ios::in | std::ios::out | std::ios::binary);
+		file.seekp(static_cast<std::streamoff>(edt::thumbnail_disk_cache::k_header_bytes));
+		const std::string zeros(static_cast<std::size_t>(size) - edt::thumbnail_disk_cache::k_header_bytes, '\0');
+		file.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+	}
+	const auto again = cache.load_or_decode(env.layer_root(), "a.png", env.counting_decoder());
+	BOOST_REQUIRE(again.pixels.has_value());
+	BOOST_TEST(env.decodes == 2);
+	BOOST_TEST(again.pixels->rgba[0] == 77);
+}
+
+BOOST_AUTO_TEST_CASE(AClosedCache_ReadsAndWritesNothing)
+{
+	cache_env env("thumbcache_closed");
+	env.layer.write("a.png", png_bytes(32, 32, 5));
+	const edt::thumbnail_disk_cache cache(env.cache_root());
+	BOOST_REQUIRE(cache.load_or_decode(env.layer_root(), "a.png", env.counting_decoder()).pixels.has_value());
+	env.layer.write("b.png", png_bytes(32, 32, 6));
+	cache.close();
+	BOOST_TEST(!cache.is_open());
+	BOOST_TEST(cache.load_or_decode(env.layer_root(), "a.png", env.counting_decoder()).pixels.has_value());
+	BOOST_TEST(env.decodes == 2);
+	BOOST_TEST(cache.hits() == 0u);
+	BOOST_TEST(cache.load_or_decode(env.layer_root(), "b.png", env.counting_decoder()).pixels.has_value());
+	BOOST_TEST(env.entries().size() == 1u);
+	BOOST_TEST(cache.prune() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TrustTakenBackWhileAJobDecodes_NothingIsWritten)
+{
+	cache_env env("thumbcache_revoked");
+	env.layer.write("a.png", png_bytes(32, 32, 5));
+	const edt::thumbnail_disk_cache cache(env.cache_root());
+	const edt::thumbnail_decode_fn revoking = [&](const fs::path& root, const fs::path& relative, std::optional<platform::beneath::file_stamp>& stamp) {
+		cache.close();
+		return edt::decode_thumbnail_file(root, relative, stamp);
+	};
+	BOOST_TEST(cache.load_or_decode(env.layer_root(), "a.png", revoking).pixels.has_value());
+	BOOST_TEST(cache.writes() == 0u);
+	BOOST_TEST(env.entries().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AJobOfTheOldProject_WritesNothingIntoEitherProjectsCache)
+{
+	cache_env old_project("thumbcache_old");
+	cache_env new_project("thumbcache_new");
+	old_project.layer.write("a.png", png_bytes(32, 32, 5));
+	const edt::thumbnail_disk_cache old_cache(old_project.cache_root());
+	const edt::thumbnail_disk_cache new_cache(new_project.cache_root());
+	// The job holds the cache it was started with; the project switch closes it before the job gets to write.
+	old_cache.close();
+	BOOST_TEST(old_cache.load_or_decode(old_project.layer_root(), "a.png", old_project.counting_decoder()).pixels.has_value());
+	BOOST_TEST(old_project.entries().empty());
+	BOOST_TEST(new_project.entries().empty());
+	BOOST_TEST(new_cache.writes() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TwoCaches_OfOneFolder_MakeDifferentTemporaryNames)
+{
+	cache_env env("thumbcache_tmp");
+	const edt::thumbnail_disk_cache first(env.cache_root());
+	const edt::thumbnail_disk_cache second(env.cache_root());
+	BOOST_TEST(!first.tmp_prefix().empty());
+	BOOST_TEST(first.tmp_prefix() != second.tmp_prefix());
+}
+
+BOOST_AUTO_TEST_CASE(AFolderFloodedPastOneListing_IsBroughtUnderItsBudgetInRounds)
+{
+	cache_env env("thumbcache_flood");
+	edt::thumbnail_disk_cache::limits limits;
+	limits.max_entries = 5;
+	limits.list_limit = 8;
+	const edt::thumbnail_disk_cache cache(env.cache_root(), limits);
+	const auto now = fs::file_time_type::clock::now();
+	for (int i = 0; i < 30; ++i) {
+		const std::string key = edt::thumbnail_disk_cache::key_of(std::format("f{}.png", i), stamp_of(static_cast<std::uint64_t>(i)));
+		env.cache_dir.write("thumbnails/" + key + ".thumb", "x");
+		fs::last_write_time(env.thumbs() / (key + ".thumb"), now - std::chrono::minutes(i));
+	}
+	BOOST_REQUIRE(env.entries().size() == 30u);
+	cache.prune();
+	BOOST_TEST(env.entries().size() <= 5u);
 }
 
 BOOST_AUTO_TEST_CASE(NoCacheFolderYet_PruningIsHarmless)
