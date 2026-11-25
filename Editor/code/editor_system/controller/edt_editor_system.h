@@ -5,6 +5,7 @@
 #include "edt_desc_file_commands.h"
 #include "edt_version_notice.h"
 #include "edt_project_trust_service.h"
+#include "../modeller/edt_modeller_settings.h"
 #include <snk/command/cmd_log_commands.h>
 #include <snk/command/cmd_types.h>
 #include <chrono>
@@ -210,6 +211,7 @@ namespace edt {
 
 		// The mesh modeller (EPIC-77, #1011): its window, its asset kinds and close question; the mesh documents belong to the document_manager.
 		std::unique_ptr<modeller_component> m_modeller;
+		modeller_settings m_modeller_settings;
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;
