@@ -23,6 +23,7 @@
 #include "edt_selection_wiring.h"
 #include "edt_modeller_component.h"
 #include "edt_shader_editor_component.h"
+#include "edt_shader_source_documents.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_prefab_file_edit.h"
@@ -880,6 +881,22 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 		}
 		const std::string error = restore_mesh_bytes(*mesh, *request.bytes);
 		done(error.empty() ? autosave_recovery::restore_outcome{ {}, mesh->id(), mesh->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
+	};
+	ports.restore_shader_source = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		if (!m_shader_editor || !m_shader_editor->open(request.source, 0, true)) {
+			done({ "the shader did not open", {}, 0 });
+			return;
+		}
+		shader_source_document* shader = nullptr;
+		for (shader_source_document* open : shader_sources_of(m_context->documents())) {
+			if (open->source() == request.source) shader = open;
+		}
+		if (!shader) {
+			done({ "the shader did not open", {}, 0 });
+			return;
+		}
+		const std::string error = restore_shader_source_bytes(*shader, *request.bytes, request.source_changed);
+		done(error.empty() ? autosave_recovery::restore_outcome{ {}, shader->id(), shader->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
 	};
 	ports.restore_data = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
 		m_asset_open->data_documents().open(request.source, true);

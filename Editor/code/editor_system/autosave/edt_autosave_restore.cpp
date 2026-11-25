@@ -3,6 +3,8 @@
 #include "edt_mesh_document.h"
 #include "edt_mesh_io.h"
 #include "edt_prefab_document.h"
+#include "edt_shader_source_document.h"
+#include "edt_shader_text.h"
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json/parse.hpp>
@@ -82,5 +84,17 @@ std::string edt::restore_data_bytes(data_document& data, std::span<const std::by
 	std::optional<boost::json::object> object = object_of(bytes, error);
 	if (!object) return error;
 	if (!data.restore_own(std::move(*object))) return "the autosave is of another __type or __parent than the file";
+	return {};
+}
+
+std::string edt::restore_shader_source_bytes(shader_source_document& shader, std::span<const std::byte> bytes, bool source_changed)
+{
+	if (!shader.is_open()) return "the shader is not open";
+	if (std::string reason = shader.read_only_reason(); !reason.empty()) return reason;
+	std::string error;
+	const std::optional<shader_text_file> read = read_shader_text(bytes, error);
+	if (!read) return error;
+	if (!shader.set_text(read->text) && shader.text() != read->text) return "the shader cannot be edited now";
+	if (source_changed) shader.raise_conflict();
 	return {};
 }
