@@ -7,6 +7,7 @@
 #include "rnd_shader_source_map.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <format>
@@ -15,12 +16,15 @@
 // The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
 // on it, see lights_params) and the stage the source is compiled for. engine_define_lines lines, in front of the
 // constants and the defines: problems_of_build_log tells them apart by that count.
+static constexpr std::string_view engine_defines_format = "#define {} {}\n#define {}\n";
+static_assert(std::ranges::count(engine_defines_format, '\n') == rnd::engine_define_lines);
+
 static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 {
     std::string_view stage = rnd::vertex_stage_define;
     if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = rnd::fragment_stage_define;
     if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = rnd::geometry_stage_define;
-    return std::format("#define {} {}\n#define {}\n", rnd::max_light_count_define, rnd::lights_params::MAX_LIGHT_COUNT, stage);
+    return std::format(engine_defines_format, rnd::max_light_count_define, rnd::lights_params::MAX_LIGHT_COUNT, stage);
 }
 
 static rnd::shader_problem make_problem(res::tag file, int line, std::string code, std::string message)
