@@ -19,16 +19,26 @@ namespace edt
 	shader_editor_panel::~shader_editor_panel()
 	{
 		flush_pending(true);
-		if (m_ctx) m_ctx->set_edit_source({}, {});
+		if (m_ctx) {
+			m_ctx->set_edit_source({}, {});
+			m_ctx->set_history_source({});
+		}
 	}
 
 	void shader_editor_panel::set_context(shader_source_document* shown)
 	{
 		if (m_ctx == shown) return;
 		flush_pending(true);
-		if (m_ctx) m_ctx->set_edit_source({}, {});
+		if (m_ctx) {
+			m_ctx->set_edit_source({}, {});
+			m_ctx->set_history_source({});
+		}
 		m_ctx = shown;
-		if (m_ctx) m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); });
+		if (m_ctx) {
+			m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); });
+			m_ctx->set_history_source({ [this] { return m_view.can_undo(); }, [this] { return m_view.can_redo(); },
+				[this] { step_history(false); }, [this] { step_history(true); } });
+		}
 		m_error.clear();
 		m_unplaced.clear();
 		m_loaded = false;
@@ -121,6 +131,16 @@ namespace edt
 		m_markers_ready = true;
 	}
 
+	void shader_editor_panel::step_history(bool redo)
+	{
+		if (!m_ctx) return;
+		if (redo) m_view.redo();
+		else m_view.undo();
+		m_pending = false;
+		m_ctx->set_text(m_view.text());
+		m_synced_generation = m_ctx->generation();
+	}
+
 	void shader_editor_panel::flush_pending(bool force)
 	{
 		if (!m_pending) return;
@@ -169,7 +189,10 @@ namespace edt
 
 	void shader_editor_panel::render_banners()
 	{
-		if (m_ctx->changed_on_disk()) {
+		if (m_ctx->missing_on_disk()) {
+			ImGui::TextColored(colors().warning, "The file was deleted or renamed outside the window. Overwrite writes it again with your text.");
+			if (ImGui::Button("Overwrite")) request_overwrite();
+		} else if (m_ctx->changed_on_disk()) {
 			ImGui::TextColored(colors().warning, "The shader was changed outside the window. Reload takes that text, Overwrite keeps yours.");
 			if (ImGui::Button("Reload")) request_revert();
 			ImGui::SameLine();

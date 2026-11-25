@@ -70,6 +70,8 @@ namespace edt
 
 		// Somebody changed the file on disk since it was read, and the document has edits.
 		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		// The file is gone from every layer (deleted or renamed outside): `changed_on_disk()` too. Save refuses; Overwrite writes it again.
+		bool missing_on_disk() const { return m_open && m_missing_on_disk; }
 		// The window's typing met a change made behind its back (a reload of the file, another edit): the person gets the Reload / Overwrite
 		// choice of a changed file.
 		void raise_conflict();
@@ -77,6 +79,21 @@ namespace edt
 		std::string revert();
 		// Keeps the edits and writes them over the file as it is now.
 		save_result overwrite();
+
+		// The window's text history, which Edit > Undo / Redo reach through the document: each step is given to the window, which hands the text
+		// over to the document (`set_text`) before it returns. Cleared with an empty source.
+		struct history_source
+		{
+			std::function<bool()> can_undo;
+			std::function<bool()> can_redo;
+			std::function<void()> undo;
+			std::function<void()> redo;
+		};
+		void set_history_source(history_source source) { m_history = std::move(source); }
+		bool undo() override { return step_history(false); }
+		bool redo() override { return step_history(true); }
+		std::optional<history_entry> next_undo_entry() const override { return history_entry_of(false); }
+		std::optional<history_entry> next_redo_entry() const override { return history_entry_of(true); }
 
 		void set_files(desc_file_layout files) { m_files = std::move(files); }
 		void set_lock_source(std::function<bool()> locked) { m_locked = std::move(locked); }
@@ -94,6 +111,8 @@ namespace edt
 			std::string relative;
 			std::filesystem::path file;
 			bool top_layer = false;
+			// No layer holds the file (error is then set too).
+			bool missing = false;
 			std::string error;
 		};
 		struct disk_read
@@ -108,6 +127,11 @@ namespace edt
 		// Reads and parses `path`; the document's own state changes only when it worked.
 		bool load(const res::tag& tag, const std::filesystem::path& path, std::string& error);
 		void announce();
+		bool step_history(bool redo);
+		std::optional<history_entry> history_entry_of(bool redo) const;
+		void mark_missing();
+		// Overwrite of a file no layer holds: writes the text as a new file of the top layer.
+		save_result recreate();
 		void watch();
 		void unwatch();
 		void on_source_changed(const res::tag& changed);
@@ -118,6 +142,7 @@ namespace edt
 		std::function<bool()> m_locked;
 		std::function<bool()> m_pending_edits;
 		std::function<void()> m_flush_edits;
+		history_source m_history;
 		res::resource_system* m_watching = nullptr;
 
 		bool m_open = false;
@@ -132,6 +157,7 @@ namespace edt
 		std::string m_disk_version;
 		bool m_dirty = false;
 		bool m_changed_on_disk = false;
+		bool m_missing_on_disk = false;
 		std::uint64_t m_generation = 0;
 	};
 }

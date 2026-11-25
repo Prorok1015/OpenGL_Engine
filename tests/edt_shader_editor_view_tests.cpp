@@ -365,6 +365,53 @@ BOOST_AUTO_TEST_CASE(Revert_TakesTheFilesText_AndTheTypingNotHandedOverGoesWithI
 	BOOST_TEST(panel.widget_text() == document->text());
 }
 
+BOOST_AUTO_TEST_CASE(EditUndoAndRedo_ReachTheWidgetsHistory_AndTheWidgetAndTheDocumentStayEqual)
+{
+	draw();
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
+
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	const auto entry = document->next_undo_entry();
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->label == "Typing");
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(!panel.has_pending_edits());
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(!document->is_dirty());
+	draw();
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(document->next_redo_entry().has_value());
+
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(document->text().rfind("// typed\n", 0) == 0u);
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(!document->next_redo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(EditUndo_IsRefusedWhileEditsAreLocked_AndAfterTheWindowLetGo)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	bool locked = true;
+	document->set_lock_source([&locked] { return locked; });
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
+	locked = false;
+	BOOST_TEST(document->next_undo_entry().has_value());
+	document->set_lock_source({});
+
+	panel.set_context(nullptr);
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
+}
+
 BOOST_AUTO_TEST_CASE(Revert_ThatFails_KeepsTheTyping)
 {
 	draw();

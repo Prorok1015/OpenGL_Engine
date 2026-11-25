@@ -40,6 +40,8 @@ namespace edt
 		// Overwrite hands the typing over first.
 		void request_revert();
 		void request_overwrite();
+		// Edit > Undo / Redo of the document: one step of the widget's history, handed over to the document at once.
+		void step_history(bool redo);
 		// Types `text` at the cursor of the shown document's text.
 		void insert_text(const std::string& text) { m_view.insert_text(text); }
 		// The cursor goes to `line` (1-based) of the shown document on the next frame.
