@@ -140,6 +140,12 @@ std::string edt::document_creator::check_file(std::string_view folder, std::stri
 
 edt::document_creation edt::document_creator::create(std::string_view folder, std::string_view type, std::string_view name) const
 {
+	return create(folder, type, name, json::object{});
+}
+
+edt::document_creation edt::document_creator::create(std::string_view folder, std::string_view type, std::string_view name,
+	const json::object& fields) const
+{
 	if (const std::optional<std::string> why = m_ports.blocker ? m_ports.blocker() : std::nullopt) {
 		return { {}, *why };
 	}
@@ -157,9 +163,12 @@ edt::document_creation edt::document_creator::create(std::string_view folder, st
 	}
 	const std::string file = file_name_of(type, name);
 	const std::string relative = folder.empty() ? file : std::format("{}/{}", folder, file);
-	const json::value content = json::object{ { "__type", std::string(type) }, { "__version", descs->current_version(type) } };
+	json::object content{ { "__type", std::string(type) }, { "__version", descs->current_version(type) } };
+	for (const auto& field : fields) {
+		if (field.key() != "__type" && field.key() != "__version") content[field.key()] = field.value();
+	}
 	const res::tag tag = res::tag::make(relative);
-	if (const res::file_operation made = resources->create_sync(tag, desc::pretty_json_bytes(content)); !made.ok) {
+	if (const res::file_operation made = resources->create_sync(tag, desc::pretty_json_bytes(json::value(std::move(content)))); !made.ok) {
 		return { {}, made.error };
 	}
 	return { tag, {} };

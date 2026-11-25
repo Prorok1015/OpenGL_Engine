@@ -37,7 +37,8 @@ namespace edt
 		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return {gui::icon::model, "[3D] "};
 		if (ext == ".desc")                                                      return {gui::icon::desc, "[D]  "};
 		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
-		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp")                  return {gui::icon::image, "[IMG]"};
+		    ext == ".tga"  || ext == ".hdr"  || ext == ".bmp"  ||
+		    ext == ".pct"  || ext == ".raw")                                     return {gui::icon::image, "[IMG]"};
 		if (ext == ".vert" || ext == ".frag" || ext == ".geom" || ext == ".glsl") return {gui::icon::file_code, "[SHD]"};
 		if (ext == ".wav"  || ext == ".ogg"  || ext == ".mp3")                  return {gui::icon::sound, "[SND]"};
 		return {gui::icon::file, "[F]  "};
@@ -50,7 +51,9 @@ namespace edt
 
 	const char* asset_browser_panel::get_file_icon(const std::filesystem::path& p) const
 	{
-		const file_icon icon = icon_of_extension(to_lower(fs_paths::utf8_of(p.extension())));
+		// A texture desc is a texture, not any desc (#1205).
+		const bool texture_desc = to_lower(fs_paths::utf8_of(p.filename())).ends_with(".txm.desc");
+		const file_icon icon = texture_desc ? file_icon{ gui::icon::image, "[IMG]" } : icon_of_extension(to_lower(fs_paths::utf8_of(p.extension())));
 		return gui::ui_font_has_icons() ? icon.glyph : icon.text;
 	}
 

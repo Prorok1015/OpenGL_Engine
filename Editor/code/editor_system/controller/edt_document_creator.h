@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/model_codec/res_tag.h>
+#include <boost/json/object.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -76,6 +77,10 @@ namespace edt
 		// Writes `{"__type", "__version"}` and nothing else (the fields read as the schema's defaults, the ID of the file is
 		// the asset database's). The file is made by create_sync: never over a file, also one that appears meanwhile.
 		document_creation create(std::string_view folder, std::string_view type, std::string_view name) const;
+		// The same with the file's first own fields after `__type` and `__version` (a texture made for a picture: its
+		// `__parent` and `data`, #1205); a `__type` or `__version` among them is not taken.
+		document_creation create(std::string_view folder, std::string_view type, std::string_view name,
+			const boost::json::object& fields) const;
 
 	private:
 		std::string check_file(std::string_view folder, std::string_view name, const std::string& file,

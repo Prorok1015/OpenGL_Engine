@@ -29,6 +29,18 @@ edt::asset_open_component::asset_open_component(ports from)
 			if (dynamic_cast<const prefab_document*>(&open)) m_ports.show_prefab();
 		});
 	m_data_documents->set_asset_source(m_ports.asset_catalog);
+	m_creator = std::make_shared<document_creator>(document_creator::ports{
+		[this] { return m_ports.services.descs(); },
+		[this] { return m_ports.services.writable_resources(); },
+		[this] { return m_ports.resources.get_resource_layers(); },
+		[this] { return m_ports.write_blocker(); },
+		[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); } });
+	m_texture_viewers = std::make_unique<texture_viewer_host>(texture_viewer_host::ports{
+		.context = m_ports.context,
+		.services = m_ports.services,
+		.layout = [this] { return desc_layout(); },
+		.creator = [this]() -> const document_creator* { return m_creator.get(); },
+		.open_texture = [this](const res::tag& tag) { open(tag, false); } });
 }
 
 edt::asset_open_component::~asset_open_component() = default;
@@ -41,15 +53,10 @@ void edt::asset_open_component::install(std::vector<registration>& out)
 	asset_hooks.edits_locked = m_ports.play_active;
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) { add_to_scene(tag); };
 	asset_hooks.open_desc = [this](const res::tag& tag) { m_data_documents->open(tag, m_open_quiet); };
+	asset_hooks.open_texture = [this](const res::tag& tag) { open_texture(tag); };
+	asset_hooks.open_picture = [this](const res::tag& tag) { m_texture_viewers->open_picture(tag); };
 	for (auto& kind : register_builtin_asset_kinds(m_ports.context.asset_kinds(), std::move(asset_hooks))) out.push_back(std::move(kind));
-	m_ports.browser.set_document_creator(
-		std::make_shared<document_creator>(document_creator::ports{
-			[this] { return m_ports.services.descs(); },
-			[this] { return m_ports.services.writable_resources(); },
-			[this] { return m_ports.resources.get_resource_layers(); },
-			[this] { return m_ports.write_blocker(); },
-			[this] { return edt::desc_kind_suffixes(m_ports.context.asset_kinds()); } }),
-		[this](const res::tag& tag) { open(tag, false); });
+	m_ports.browser.set_document_creator(m_creator, [this](const res::tag& tag) { open(tag, false); });
 	m_ports.browser.set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
 		open(res::tag::make(res_rel.generic_string()), false);
 	});
@@ -78,6 +85,34 @@ bool edt::asset_open_component::open(const res::tag& tag, bool quiet)
 	if (!tag.relative().ends_with(".desc")) return false;
 	m_data_documents->open(tag, quiet);
 	return true;
+}
+
+void edt::asset_open_component::open_texture(const res::tag& tag)
+{
+	// An engine or package texture is no data document of the project: it is shown, not refused with a message.
+	if (m_texture_viewers->is_lower_layer_desc(tag)) {
+		m_texture_viewers->open_desc(tag);
+		return;
+	}
+	m_data_documents->open(tag, m_open_quiet);
+}
+
+void edt::asset_open_component::release_previews()
+{
+	m_data_documents->release_previews();
+	m_texture_viewers->release_previews();
+}
+
+void edt::asset_open_component::rebuild_previews()
+{
+	m_data_documents->rebuild_previews();
+	m_texture_viewers->rebuild_previews();
+}
+
+void edt::asset_open_component::shutdown_windows()
+{
+	m_texture_viewers->shutdown();
+	m_data_documents->shutdown();
 }
 
 edt::desc_file_layout edt::asset_open_component::desc_layout()

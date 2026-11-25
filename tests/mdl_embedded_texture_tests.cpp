@@ -89,18 +89,14 @@ struct memory_sink final : mdl::import_sink
 	}
 };
 
-// One triangle drawn once per used image (every image when `used` is empty), each with a material whose base colour is
-// that image (a data URI, as glTF embeds).
-std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images, std::vector<std::size_t> used = {})
+// One triangle drawn once per image, each with a material whose base colour is that image (a data URI, as glTF embeds).
+std::string gltf_with_images(const std::vector<std::pair<std::string, std::string>>& images)
 {
-	if (used.empty()) {
-		for (std::size_t i = 0; i < images.size(); ++i) used.push_back(i);
-	}
 	std::string primitives, materials, textures, list;
-	for (std::size_t m = 0; m < used.size(); ++m) {
+	for (std::size_t m = 0; m < images.size(); ++m) {
 		const std::string comma = m == 0 ? "" : ",";
 		primitives += std::format(R"json({}{{"attributes":{{"POSITION":0}},"material":{}}})json", comma, m);
-		materials += std::format(R"json({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})json", comma, used[m]);
+		materials += std::format(R"json({}{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}}}})json", comma, m);
 	}
 	for (std::size_t i = 0; i < images.size(); ++i) {
 		const std::string comma = i == 0 ? "" : ",";
@@ -413,6 +409,9 @@ BOOST_AUTO_TEST_CASE(TexelsOfAnotherSizeOrSide_GiveNothing)
 	}
 	BOOST_TEST(!mdl::store_texels(four, 2, 2).pixels.empty());
 	BOOST_TEST(mdl::store_texels({}, 65535, 65535).raw.empty());
+	// Sides within the limit, pixels past the decoded size: refused before anything is allocated.
+	const mdl::stored_texels huge = mdl::store_texels({}, 16384, 16384);
+	BOOST_TEST((huge.raw.empty() && huge.pixels.empty()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

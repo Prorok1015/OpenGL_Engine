@@ -21,7 +21,8 @@ namespace edt
 	namespace picker { class catalog; }
 	struct editor_services;
 
-	// Which window a data document opens in (#1196): the one of its type (a material_desc has the material window), or the
+	// Which window a data document opens in (#1196): the one of its type (a material_desc has the material window, a
+	// texture_2d_desc the texture window, #1205), or the
 	// generic data window ("Open as data" of the asset browser, for diagnostics).
 	enum class data_window_kind
 	{
@@ -87,9 +88,9 @@ namespace edt
 		void set_shown_mesh(std::function<document_id()> shown_mesh) { m_shown_mesh = std::move(shown_mesh); }
 		// The same for the prefab editor's window: its shown prefab, not the active preview (a mesh may be the active one). Without it the window gives the scene.
 		void set_shown_prefab(std::function<document_id()> shown_prefab) { m_shown_prefab = std::move(shown_prefab); }
-		// Where the material windows' preview cameras take the mouse from (#1196); null: no orbit. For the windows opened after.
+		// Where the material and texture windows' preview cameras take the mouse from (#1196); null: no orbit. For the windows opened after.
 		void set_input_router(inp::input_router* router) { m_input_router = router; }
-		// The game layer goes / came: the material windows' preview stages (sets of its context manager) are dropped and made
+		// The game layer goes / came: the material and texture windows' preview stages (sets of its context manager) are dropped and made
 		// again, as the modeller's (modeller_component::park_for_layer_change).
 		void release_previews();
 		void rebuild_previews();

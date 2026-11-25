@@ -1897,6 +1897,36 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypeAndTheVersionOnly_AndTh
 	BOOST_TEST(!document.is_dirty());
 }
 
+// #1205: Create Texture writes a picture's texture desc with its first fields, through the same checks.
+BOOST_AUTO_TEST_CASE(DocumentCreator_CreateWithFields_WritesThemAfterTheTypeAndVersion_AndRefusesAsCreateDoes)
+{
+	bool blocked = false;
+	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; },
+		[&blocked]() -> std::optional<std::string> {
+			return blocked ? std::optional<std::string>{ "a project migration is running" } : std::nullopt;
+		} } };
+	const json::object fields{ { "speed", 3.0 }, { "__type", "test.tagged" }, { "__version", 99 } };
+	const edt::document_creation made = creator.create("", "test.config", "fielded", fields);
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	const json::object content = parsed("fielded.desc");
+	BOOST_TEST(content.size() == 3u);
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "test.config");
+	BOOST_TEST(content.at("__version").to_number<int>() == descs->current_version("test.config"));
+	BOOST_TEST(content.at("speed").to_number<double>() == 3.0);
+	BOOST_TEST(std::string(content.begin()->key()) == "__type");
+
+	const std::string before = text_of("fielded.desc");
+	const edt::document_creation taken = creator.create("", "test.config", "fielded", fields);
+	BOOST_TEST(!taken.ok());
+	BOOST_TEST(text_of("fielded.desc") == before);
+
+	blocked = true;
+	const edt::document_creation refused = creator.create("", "test.config", "other", fields);
+	BOOST_TEST(refused.error == "a project migration is running");
+	BOOST_TEST(!fs::exists(res_root / "other.desc"));
+}
+
 BOOST_AUTO_TEST_CASE(DocumentCreator_Create_InAFolderThatDoesNotExistYet_MakesItInTheTopLayer)
 {
 	const edt::document_creator creator{ { [this] { return descs.get(); }, [this] { return rs.get(); },
