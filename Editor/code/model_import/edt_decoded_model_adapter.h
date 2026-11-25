@@ -46,6 +46,11 @@ namespace edt {
 		// is on the disk, so an earlier run of the editor left the files of its load there.
 		static std::string memory_folder_of(const res::tag& tag);
 
+		// What a decode of `model` for `source` is remembered by: the decoder's build, the bytes, the limits, the
+		// settings (#1195) and the place. Two keys are equal only when a decode of one is the decode of the other.
+		static std::string cache_key(const std::string& decoder_version, const std::vector<std::byte>& model,
+			const import_source& source);
+
 	private:
 		// The last decode of a model's memory:// folder, for this run of the editor only.
 		struct cached_decode

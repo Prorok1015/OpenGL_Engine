@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_decoder_sandbox.h"
+#include "edt_model_import_settings.h"
 #include <snk/model_codec/res_tag.h>
 #include <boost/json.hpp>
 #include <array>
@@ -39,6 +40,11 @@ namespace edt {
 
 		// What the decoder process said of its OS sandbox for this import (#1076); not reported by an importer in this process.
 		decoder_sandbox_status             sandbox{};
+
+		// What the `.resource` of the exported prefab records (#1195); set by the caller that read the model file, not
+		// by the decoder. An empty sha256: no `.resource` is written for the prefab.
+		model_import_settings              settings{};
+		std::string                        source_sha256{};
 	};
 
 } // namespace edt

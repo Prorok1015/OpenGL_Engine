@@ -54,6 +54,10 @@ namespace edt {
 		// A resource with no remap, one that cannot be read, a missing root and a desc that is not JSON stop the export too
 		// (false, `progress->error` says which). A leaf the import lists but never stored is left out and named in
 		// `progress->skipped`.
+		// With `result.source_sha256` set (#1195) the prefab's `.resource` (plan_model_meta, edt_model_import_meta.h) is
+		// checked before any file is written and written right before the prefab (taken back when the prefab is not);
+		// `written` gets it, below `meta_top` (empty: the resource system's top layer, where the files go). An existing
+		// one is rewritten only with `may_replace_meta` (a person's overwrite).
 		bool export_to_project(
 			const import_result& result,
 			const std::unordered_map<res::tag, res::tag>& remap,
@@ -61,7 +65,9 @@ namespace edt {
 			ds::task_context* ctx = nullptr,
 			std::vector<res::tag>* written = nullptr,
 			bool wait_for_writes = false,
-			const std::function<void(int, int)>& on_file = {}) const;
+			const std::function<void(int, int)>& on_file = {},
+			const std::filesystem::path& meta_top = {},
+			bool may_replace_meta = true) const;
 
 		// Empty when everything the remap would write is something an import of `asset_name` makes, below `target_folder`, with the
 		// extension it had (an agent's import: nothing it chose may turn a resource into a model file). Else why not.

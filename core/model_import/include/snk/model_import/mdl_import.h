@@ -184,11 +184,28 @@ namespace mdl
 		std::string error;
 	};
 
+	enum class normals_mode
+	{
+		smooth, // normals the model lacks are averaged over the faces that share a position
+		flat,   // each face's own normal
+	};
+
+	// How the import post-processes the meshes (#1195). A struct of its own, never fields added to import_options: a
+	// caller built against an older header passes the shorter struct by reference (docs/abi/changes/1195.md).
+	struct mesh_processing
+	{
+		normals_mode normals = normals_mode::smooth;
+		bool tangents = true;
+	};
+
 	// Reads the model `model_name` (opened through `files`) and writes its geometry, materials and textures through
 	// `sink`. Never throws for a problem of the model (import_result::error); what `files`, `sink` or a stop request
-	// throws passes through.
+	// throws passes through. Meshes as mesh_processing{} makes them.
 	SNK_MODEL_IMPORT_API import_result import_model(std::string_view model_name, file_source& files, import_sink& sink,
 		const import_options& options);
+	// The same with the meshes made as `processing` says (#1195).
+	SNK_MODEL_IMPORT_API import_result import_model(std::string_view model_name, file_source& files, import_sink& sink,
+		const import_options& options, const mesh_processing& processing);
 
 	// The files a model refers to, read without post-processing (the editor's scans).
 	struct referenced_files

@@ -189,7 +189,8 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 	im.geom_tag = options.geometry_tag;
 
 	model_file_source files(abs_path, file_data, files_access);
-	mdl::import_result imported = mdl::import_model(abs_path.string(), files, sink, options);
+	mdl::import_result imported = mdl::import_model(abs_path.string(), files, sink, options,
+		mesh_processing_of(source.settings));
 	switch (imported.failed) {
 	case mdl::failure::none:
 		break;
@@ -233,4 +234,12 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 		egLOG("edt/import", "  tag: {}", t.view());
 	}
 	return im;
+}
+
+mdl::mesh_processing edt::mesh_processing_of(const model_import_settings& settings)
+{
+	mdl::mesh_processing out;
+	out.normals = settings.normals == model_normals::flat ? mdl::normals_mode::flat : mdl::normals_mode::smooth;
+	out.tangents = settings.tangents;
+	return out;
 }

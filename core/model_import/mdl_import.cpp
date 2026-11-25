@@ -66,6 +66,17 @@ private:
 	std::chrono::steady_clock::time_point m_deadline;
 };
 
+// Triangulate always: the geometry holds triangles, lines and points only. GenNormals only fills normals a mesh lacks:
+// flat drops the model's own first.
+unsigned int post_process_flags(const mdl::mesh_processing& processing)
+{
+	unsigned int flags = aiProcess_Triangulate;
+	flags |= processing.normals == mdl::normals_mode::flat ? aiProcess_DropNormals | aiProcess_GenNormals
+		: aiProcess_GenSmoothNormals;
+	if (processing.tangents) flags |= aiProcess_CalcTangentSpace;
+	return flags;
+}
+
 // The importer reading `model_name` through `files`; null scene: see importer.GetErrorString().
 const aiScene* read_scene(Assimp::Importer& importer, std::string_view model_name, mdl::file_source& files,
 	const mdl::import_options& options, unsigned int flags)
@@ -964,14 +975,19 @@ mdl::stored_texels mdl::store_texels(std::span<const std::byte> bgra, std::uint3
 
 mdl::import_result mdl::import_model(std::string_view model_name, file_source& files, import_sink& sink, const import_options& options)
 {
+	return import_model(model_name, files, sink, options, mesh_processing{});
+}
+
+mdl::import_result mdl::import_model(std::string_view model_name, file_source& files, import_sink& sink,
+	const import_options& options, const mesh_processing& processing)
+{
 	import_result out;
 	out.geometry_tag = options.geometry_tag;
 	out.prefab_tag = options.prefab_tag;
 	checkpoint(options);
 
 	Assimp::Importer importer;
-	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-	const aiScene* scene = read_scene(importer, model_name, files, options, flags);
+	const aiScene* scene = read_scene(importer, model_name, files, options, post_process_flags(processing));
 	// An aborted parse also returns no scene: that is a stop, not an import error.
 	checkpoint(options);
 	if (past_deadline(options.deadline)) {
