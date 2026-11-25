@@ -882,6 +882,13 @@ void edt::editor_system::install_autosave_recovery(bool headless)
 		const std::string error = restore_mesh_bytes(*mesh, *request.bytes);
 		done(error.empty() ? autosave_recovery::restore_outcome{ {}, mesh->id(), mesh->generation() } : autosave_recovery::restore_outcome{ error, {}, 0 });
 	};
+	ports.restore_shader_source = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
+		const shader_restore_result restored = restore_shader_source(m_context->documents(),
+			[this](const res::tag& tag) { return m_shader_editor && m_shader_editor->open(tag, 0, true); },
+			request.source, *request.bytes, request.source_changed);
+		done(restored.error.empty() ? autosave_recovery::restore_outcome{ {}, restored.document, restored.generation }
+			: autosave_recovery::restore_outcome{ restored.error, {}, 0 });
+	};
 	ports.restore_data = [this](const autosave_recovery::restore_request& request, std::function<void(autosave_recovery::restore_outcome)> done) {
 		m_asset_open->data_documents().open(request.source, true);
 		data_document* data = nullptr;

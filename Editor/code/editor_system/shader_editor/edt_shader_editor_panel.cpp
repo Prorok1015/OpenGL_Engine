@@ -35,7 +35,7 @@ namespace edt
 		}
 		m_ctx = shown;
 		if (m_ctx) {
-			m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); });
+			m_ctx->set_edit_source([this] { return m_pending; }, [this] { flush_pending(true); }, [this] { return m_view.text(); });
 			m_ctx->set_history_source({ [this] { return m_view.can_undo(); }, [this] { return m_view.can_redo(); },
 				[this] { step_history(false); }, [this] { step_history(true); } });
 		}

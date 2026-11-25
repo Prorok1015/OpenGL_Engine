@@ -99,10 +99,12 @@ namespace edt
 		void set_lock_source(std::function<bool()> locked) { m_locked = std::move(locked); }
 		// The window that edits the text: `pending` says it holds typing not handed over, `flush` hands it over (`set_text`). Save runs
 		// `flush` first, so a save that does not come from the window (Save All, Exit) never leaves typing behind. Cleared with empty functions.
-		void set_edit_source(std::function<bool()> pending, std::function<void()> flush)
+		// `peek` gives the text the window holds without handing it over: the autosave writes it, and the debounce stays.
+		void set_edit_source(std::function<bool()> pending, std::function<void()> flush, std::function<std::string()> peek = {})
 		{
 			m_pending_edits = std::move(pending);
 			m_flush_edits = std::move(flush);
+			m_peek_edits = std::move(peek);
 		}
 
 	private:
@@ -143,6 +145,7 @@ namespace edt
 		std::function<bool()> m_pending_edits;
 		std::function<void()> m_flush_edits;
 		history_source m_history;
+		std::function<std::string()> m_peek_edits;
 		res::resource_system* m_watching = nullptr;
 
 		bool m_open = false;

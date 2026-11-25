@@ -298,6 +298,23 @@ BOOST_AUTO_TEST_CASE(MixedLineEndings_AreExposedForTheBanner_AndAPlainFileIsNot)
 	BOOST_TEST(!document->mixed_endings());
 }
 
+BOOST_AUTO_TEST_CASE(Save_WhileAConflictIsRaised_WritesNothing_AndOverwriteDoes)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("// mine\n"));
+	document->raise_conflict();
+	BOOST_REQUIRE(document->changed_on_disk());
+
+	BOOST_TEST(!document->save().saved);
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == k_frag);
+	BOOST_TEST(document->changed_on_disk());
+
+	const edt::save_result overwritten = document->overwrite();
+	BOOST_REQUIRE_MESSAGE(overwritten.saved, overwritten.error);
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "// mine\n");
+}
+
 BOOST_AUTO_TEST_CASE(Save_KeepsTheFilesCrlfAndBom)
 {
 	write(res_root, "shaders/crlf.vert", "\xEF\xBB\xBF#version 450\r\nvoid main() {}\r\n");

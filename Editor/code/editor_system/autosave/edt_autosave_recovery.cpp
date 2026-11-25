@@ -1,5 +1,6 @@
 #include "edt_autosave_recovery.h"
 #include "edt_file_identity.h"
+#include "edt_shader_problems.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/hash/sha256.h>
 #include <snk/common/logger/engine_log.h>
@@ -38,6 +39,9 @@ namespace
 	// Why a record's source cannot be the source of its kind; empty when it can (a data record's __type is checked later).
 	std::string kind_mismatch(std::string_view kind, std::string_view source)
 	{
+		if (kind == edt::k_autosave_kind_shader_source) {
+			return edt::is_shader_source(source) ? std::string{} : std::string{ "its source is not a shader source file" };
+		}
 		const bool desc = source.ends_with(k_desc_suffix);
 		const bool special = source.ends_with(k_prefab_suffix) || source.ends_with(k_poly_suffix) || source.ends_with(k_geometry_suffix);
 		if (kind == edt::k_autosave_kind_scene) {
@@ -511,6 +515,7 @@ std::string edt::recovery_shown_text(std::string_view text)
 
 std::string edt::recovery_working_name(std::string_view kind, std::string_view leaf)
 {
+	if (kind == k_autosave_kind_shader_source) return std::string(leaf);
 	const std::string_view extension = kind == k_autosave_kind_prefab ? k_prefab_suffix : kind == k_autosave_kind_mesh ? k_poly_suffix : k_desc_suffix;
 	std::string name(leaf);
 	if (kind == k_autosave_kind_scene && (name.ends_with(k_prefab_suffix) || name.ends_with(k_poly_suffix) || name.ends_with(k_geometry_suffix))) {
@@ -525,6 +530,7 @@ std::string_view edt::recovery_kind_label(std::string_view kind)
 	if (kind == k_autosave_kind_scene) return "Level";
 	if (kind == k_autosave_kind_prefab) return "Prefab";
 	if (kind == k_autosave_kind_mesh) return "Mesh";
+	if (kind == k_autosave_kind_shader_source) return "Shader";
 	return "Data";
 }
 
@@ -883,6 +889,7 @@ edt::autosave_recovery::restore_port edt::autosave_recovery::port_of(std::string
 	if (kind == k_autosave_kind_prefab) return m_ports.restore_prefab;
 	if (kind == k_autosave_kind_mesh) return m_ports.restore_mesh;
 	if (kind == k_autosave_kind_data) return m_ports.restore_data;
+	if (kind == k_autosave_kind_shader_source) return m_ports.restore_shader_source;
 	return {};
 }
 
@@ -900,6 +907,7 @@ void edt::autosave_recovery::restore_next()
 	request.kind = found.meta.kind;
 	if (!found.meta.source.empty()) request.source = autosave_source_tag(found.meta.source).value_or(res::tag{});
 	request.bytes = found.bytes;
+	request.source_changed = found.source_changed || found.source_not_checked || found.meta.source_sha256.empty();
 	request.leaf = std::string(autosave_leaf_of(found.file));
 	request.working_name = recovery_working_name(request.kind, request.leaf);
 	request.serial = ++m_serial;
