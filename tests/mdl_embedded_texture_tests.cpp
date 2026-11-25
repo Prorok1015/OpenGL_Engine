@@ -315,18 +315,20 @@ BOOST_AUTO_TEST_CASE(APictureOverTheLimitsOrOfAnotherKind_IsSkippedWithItsReason
 }
 
 // The editor refuses an answer naming an index past the limit: the import must never store one, or the whole model fails.
+// Every image has a material: assimp's glTF reader numbers only the images materials use, in the order it meets them.
 BOOST_AUTO_TEST_CASE(ATexturePastTheIndexLimit_IsSkipped_AndTheModelImports)
 {
-	std::vector<std::pair<std::string, std::string>> images(300, { "", png_uri(k_red_1x1) });
-	images[299] = { "", png_uri(k_green_2x1) };
+	const std::vector<std::pair<std::string, std::string>> images(300, { "", png_uri(k_red_1x1) });
 	memory_sink sink;
-	const mdl::import_result result = import_text("m.gltf", gltf_with_images(images, { 299, 0 }), sink);
+	const mdl::import_result result = import_text("m.gltf", gltf_with_images(images), sink);
 
 	BOOST_REQUIRE(result.error.empty());
-	BOOST_REQUIRE(result.missing_textures.size() == 1u);
-	BOOST_TEST(result.missing_textures.front().starts_with("*299: embedded texture 299 is past the first 256"), result.missing_textures.front());
-	const std::set<std::string> expected = { "memory://emb/__embedded_txm/m.texture_0.pct", "memory://emb/__embedded_txm/m.texture_0.txm.desc" };
-	BOOST_TEST((sink.embedded() == expected));
+	BOOST_TEST(result.missing_textures.size() == 44u);
+	BOOST_TEST(any_contains(result.missing_textures, "*256: embedded texture 256 is past the first 256"));
+	BOOST_TEST(any_contains(result.missing_textures, "*299: embedded texture 299 is past the first 256"));
+	BOOST_TEST(sink.embedded().size() == 512u);
+	BOOST_TEST(sink.stored.contains("memory://emb/__embedded_txm/m.texture_255.pct"));
+	BOOST_TEST(!sink.stored.contains("memory://emb/__embedded_txm/m.texture_256.pct"));
 }
 
 // The names are the same for every model of one stem: a second import into the same place writes its own bytes.
