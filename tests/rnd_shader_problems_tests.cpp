@@ -5,6 +5,7 @@
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
 #include <algorithm>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <cctype>
 #include <chrono>
 #include <format>
@@ -165,12 +166,13 @@ BOOST_AUTO_TEST_CASE(ACheckReportsTheProblemsOfAProgramWithoutTouchingTheCache)
 	const std::uint64_t generation = shaders.problems_generation();
 	const std::size_t variants = shaders.variants().size();
 
-	const shader_check_result result = shaders.check(program_of(vertex, fragment));
-	BOOST_REQUIRE(result.problems.size() == 1u);
-	BOOST_TEST(result.problems[0].file == lib);
-	BOOST_TEST(result.problems[0].line == 1);
-	BOOST_TEST((std::ranges::find(result.files, lib) != result.files.end()));
-	BOOST_TEST((std::ranges::find(result.files, vertex) != result.files.end()));
+	std::vector<res::tag> files;
+	const std::vector<shader_problem> found = shaders.check(program_of(vertex, fragment), &files);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST(found[0].file == lib);
+	BOOST_TEST(found[0].line == 1);
+	BOOST_TEST((std::ranges::find(files, lib) != files.end()));
+	BOOST_TEST((std::ranges::find(files, vertex) != files.end()));
 	BOOST_TEST(shaders.problems().empty());
 	BOOST_TEST(shaders.problems_generation() == generation);
 	BOOST_TEST(shaders.variants().size() == variants);
@@ -181,9 +183,11 @@ BOOST_AUTO_TEST_CASE(ACheckOfAGoodProgramHasNoProblems_AndKeepsNoProgram)
 	driver::null::driver drv;
 	ShaderManager shaders(&drv, *env.rs);
 	const std::size_t variants = shaders.variants().size();
-	const shader_check_result result = shaders.check(program_of(put("ok.vert", "#version 450 core\nvoid main() {}\n"), put("ok.frag", good_fragment)));
-	BOOST_TEST(result.problems.empty());
-	BOOST_TEST(result.files.size() == 2u);
+	std::vector<res::tag> files;
+	const std::vector<shader_problem> found = shaders.check(program_of(put("ok.vert", "#version 450 core\nvoid main() {}\n"), put("ok.frag", good_fragment)), &files);
+	BOOST_TEST(found.empty());
+	BOOST_TEST(files.size() == 2u);
+	BOOST_TEST(drv.stats().shaders.live() == 0u);
 	BOOST_TEST(shaders.variants().size() == variants);
 	BOOST_TEST(shaders.problems().empty());
 }
@@ -192,12 +196,33 @@ BOOST_AUTO_TEST_CASE(ACheckOfASourceThatCannotBePrepared_IsAProblem_AndIsNotLogg
 {
 	driver::null::driver drv;
 	ShaderManager shaders(&drv, *env.rs);
-	const shader_check_result result = shaders.check(program_of(put("nov.vert", "void main() {}\n"), put("nov.frag", good_fragment)));
-	BOOST_REQUIRE(!result.problems.empty());
-	BOOST_TEST(result.problems[0].code == "shader/load");
-	const auto quiet = shader_config::load(program_of(put("nov2.vert", "void main() {}\n"), put("nov2.frag", good_fragment)), *env.rs,
-		driver::per_type_binding_table, shader_config::load_options{ true });
+	const std::vector<shader_problem> found = shaders.check(program_of(put("nov.vert", "void main() {}\n"), put("nov.frag", good_fragment)));
+	BOOST_REQUIRE(!found.empty());
+	BOOST_TEST(found[0].code == "shader/load");
+}
+
+BOOST_AUTO_TEST_CASE(TheQuietLoadDoesNotLogAnError_TheOldLoadStillDoes)
+{
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.push_back(std::string(message));
+	});
+	const auto broken = program_of(put("quiet.vert", "void main() {}\n"), put("quiet.frag", good_fragment));
+	const auto quiet = shader_config::load(broken, *env.rs, driver::per_type_binding_table, shader_config::load_options{ true });
 	BOOST_TEST(!quiet.ok());
+	BOOST_TEST(errors.empty());
+	const auto loud = shader_config::load(broken, *env.rs, driver::per_type_binding_table);
+	BOOST_TEST(!loud.ok());
+	BOOST_TEST(errors.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludeTagOfALayerWalkIsTheTagTheLoadReports)
+{
+	const auto lib = put("shaders/walk_lib.glsl", "float x;\n");
+	const auto vertex = put("shaders/walk.vert", "#version 450 core\n#include \"walk_lib.glsl\"\nvoid main() {}\n");
+	const auto loaded = load(program_of(vertex, put("shaders/walk.frag", good_fragment)));
+	BOOST_TEST((std::ranges::find(loaded.files, res::tag::make("shaders/walk_lib.glsl")) != loaded.files.end()));
+	BOOST_TEST((std::ranges::find(loaded.files, lib) != loaded.files.end()));
 }
 
 BOOST_AUTO_TEST_CASE(AnIncludeThatCannotBeReadIsAProblemOfTheIncludingFileAtItsLine)

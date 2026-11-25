@@ -31,19 +31,34 @@ void touch(const fs::path& file)
 	std::ofstream(file, std::ios::binary) << "{}";
 }
 
+struct program_info
+{
+	std::vector<rnd::shader_problem> problems;
+	std::vector<res::tag> files;
+	std::string name;
+};
+
 struct check_fixture
 {
-	std::function<rnd::shader_check_result(const res::tag&)> checker()
+	edt::shader_check_ports ports()
 	{
-		return [this](const res::tag& desc) {
-			asked.push_back(std::string(desc.view()));
+		edt::shader_check_ports out;
+		out.files_of = [this](const res::tag& desc) {
 			const auto found = programs.find(std::string(desc.view()));
-			return found == programs.end() ? rnd::shader_check_result{} : found->second;
+			return found == programs.end() ? std::vector<res::tag>{} : found->second.files;
 		};
+		out.check = [this](const res::tag& desc, std::string* program) {
+			built.push_back(std::string(desc.view()));
+			const auto found = programs.find(std::string(desc.view()));
+			if (found == programs.end()) return std::vector<rnd::shader_problem>{};
+			if (program) *program = found->second.name;
+			return found->second.problems;
+		};
+		return out;
 	}
 
-	std::map<std::string, rnd::shader_check_result> programs;
-	std::vector<std::string> asked;
+	std::map<std::string, program_info> programs;
+	std::vector<std::string> built;
 	const res::tag lib = res::tag::make("shaders/lib.glsl");
 	const res::tag vert = res::tag::make("shaders/a.vert");
 	const res::tag frag = res::tag::make("shaders/a.frag");
@@ -69,54 +84,61 @@ BOOST_AUTO_TEST_CASE(ADescIsFoundInEveryLayer_SortedAndOnce)
 BOOST_AUTO_TEST_CASE(ACheckOfADesc_BuildsThatDescOnly_AndNamesTheDefaultVariant)
 {
 	const res::tag desc = res::tag::make("shaders/a.shader.desc");
-	rnd::shader_check_result result;
-	result.program = "a.vert + a.frag";
-	result.files = { vert, frag };
-	result.problems = { problem_in(frag, 3) };
-	programs[std::string(desc.view())] = result;
-	const edt::shader_check_report report = edt::check_shader_source(desc, { res::tag::make("shaders/other.shader.desc") }, checker());
-	BOOST_TEST(asked.size() == 1u);
+	programs[std::string(desc.view())] = { { problem_in(frag, 3) }, { vert, frag }, "a.vert + a.frag" };
+	const edt::shader_check_report report = edt::check_shader_source(desc, { res::tag::make("shaders/other.shader.desc") }, ports());
+	BOOST_TEST(built.size() == 1u);
 	BOOST_REQUIRE(report.problems.size() == 1u);
 	BOOST_TEST(report.problems[0].program == "default variant: a.vert + a.frag");
 	BOOST_TEST(report.summary.find("1 problem") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(AnInclude_ChecksTheProgramsThatIncludeIt_AndOnlyThose)
+BOOST_AUTO_TEST_CASE(AnInclude_BuildsOnlyTheProgramsThatIncludeIt)
 {
 	const res::tag uses = res::tag::make("shaders/uses.shader.desc");
 	const res::tag other = res::tag::make("shaders/other.shader.desc");
 	programs[std::string(uses.view())] = { { problem_in(lib, 2) }, { vert, lib }, "a.vert" };
 	programs[std::string(other.view())] = { { problem_in(frag, 9) }, { frag }, "b.frag" };
-	const edt::shader_check_report report = edt::check_shader_source(lib, { other, uses }, checker());
-	BOOST_TEST(asked.size() == 2u);
-	BOOST_TEST(report.built == 2u);
+	const edt::shader_check_report report = edt::check_shader_source(lib, { other, uses }, ports());
+	BOOST_TEST(report.examined == 2u);
+	BOOST_TEST(built.size() == 1u);
+	BOOST_TEST(built[0] == std::string(uses.view()));
 	BOOST_TEST(report.belonging == 1u);
 	BOOST_REQUIRE(report.problems.size() == 1u);
 	BOOST_TEST(report.problems[0].line == 2);
 }
 
-BOOST_AUTO_TEST_CASE(AFileNoProgramIsMadeOf_SaysSo_AndAGoodProgramHasNoProblems)
+BOOST_AUTO_TEST_CASE(AFileNoProgramIsMadeOf_BuildsNothing_AndAGoodProgramHasNoProblems)
 {
 	const res::tag desc = res::tag::make("shaders/a.shader.desc");
 	programs[std::string(desc.view())] = { {}, { vert }, "a.vert" };
-	const edt::shader_check_report none = edt::check_shader_source(lib, { desc }, checker());
+	const edt::shader_check_report none = edt::check_shader_source(lib, { desc }, ports());
 	BOOST_TEST(none.belonging == 0u);
-	BOOST_TEST(none.problems.empty());
+	BOOST_TEST(built.empty());
 	BOOST_TEST(none.summary.find("nothing to check") != std::string::npos);
-	const edt::shader_check_report good = edt::check_shader_source(vert, { desc }, checker());
+	const edt::shader_check_report good = edt::check_shader_source(vert, { desc }, ports());
 	BOOST_TEST(good.belonging == 1u);
+	BOOST_TEST(good.problems.empty());
 	BOOST_TEST(good.summary.find("no problems") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(MoreDescsThanTheLimit_AreNotAllBuilt)
+BOOST_AUTO_TEST_CASE(TheLimitIsAppliedAfterTheFilter)
 {
 	std::vector<res::tag> many;
 	for (std::size_t index = 0; index < edt::k_shader_check_max_programs + 5; ++index) {
-		many.push_back(res::tag::make("shaders/p" + std::to_string(index) + ".shader.desc"));
+		const res::tag desc = res::tag::make("shaders/p" + std::to_string(index) + ".shader.desc");
+		many.push_back(desc);
+		programs[std::string(desc.view())] = { {}, { index % 2 == 0 ? lib : frag }, "p" };
 	}
-	const edt::shader_check_report report = edt::check_shader_source(lib, many, checker());
-	BOOST_TEST(report.truncated);
-	BOOST_TEST(asked.size() == edt::k_shader_check_max_programs);
+	const edt::shader_check_report report = edt::check_shader_source(lib, many, ports());
+	BOOST_TEST(report.examined == many.size());
+	BOOST_TEST(!report.truncated);
+	BOOST_TEST(built.size() == (many.size() + 1) / 2);
+
+	built.clear();
+	for (auto& [name, info] : programs) info.files = { lib };
+	const edt::shader_check_report limited = edt::check_shader_source(lib, many, ports());
+	BOOST_TEST(limited.truncated);
+	BOOST_TEST(built.size() == edt::k_shader_check_max_programs);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

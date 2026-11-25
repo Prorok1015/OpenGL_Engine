@@ -161,7 +161,10 @@ namespace edt
 		ImGui::EndDisabled();
 		if (m_on_check) {
 			ImGui::SameLine();
-			if (ImGui::Button("Check")) m_check_status = m_on_check();
+			if (ImGui::Button("Check")) {
+				flush_pending(true);
+				m_check_status = m_on_check();
+			}
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Close")) press_close();

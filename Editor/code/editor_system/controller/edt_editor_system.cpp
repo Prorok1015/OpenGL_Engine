@@ -126,6 +126,7 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_router.h>
@@ -1129,8 +1130,18 @@ std::string edt::editor_system::check_shader_source_now(const res::tag& source)
 	const desc_file_layout files = m_asset_open->desc_layout();
 	std::vector<std::filesystem::path> layers = files.layers ? files.layers() : std::vector<std::filesystem::path>{};
 	if (layers.empty() && files.top_layer) layers.push_back(files.top_layer());
-	const shader_check_report report = check_shader_source(source, shader_descs_in(layers),
-		[this](const res::tag& desc) { return m_context->render().check_shader_program(desc); });
+	const shader_check_ports ports{
+		.files_of = [this](const res::tag& desc) {
+			auto handle = m_context->resources().require_sync<rnd::shader_desc>(desc);
+			const std::shared_ptr<rnd::shader_desc> read = handle.is_ready() ? handle.get_sync() : nullptr;
+			rnd::driver::driver_interface* driver = m_context->render().get_driver();
+			if (!read || !driver) return std::vector<res::tag>{};
+			return rnd::shader_config::load(read->config().cdata, m_context->resources(), driver->bindings(), rnd::shader_config::load_options{ true }).files;
+		},
+		.check = [this](const res::tag& desc, std::string* program) {
+			return m_context->render().check_shader_program(desc, nullptr, program);
+		} };
+	const shader_check_report report = check_shader_source(source, shader_descs_in(layers), ports);
 	m_problems->show_shader_check(report.problems);
 	return report.summary;
 }

@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 
@@ -81,9 +82,9 @@ rnd::ShaderManager::built_program rnd::ShaderManager::build_program(const shader
 	return out;
 }
 
-rnd::shader_check_result rnd::ShaderManager::check(const res::tag& desc_tag) const
+std::vector<rnd::shader_problem> rnd::ShaderManager::check(const res::tag& desc_tag, std::vector<res::tag>* files, std::string* program) const
 {
-	shader_check_result out;
+	ASSERT_MSG(std::this_thread::get_id() == m_owner_thread, "ShaderManager::check: main thread only");
 	auto handle = m_res_sys.require_sync<shader_desc>(desc_tag);
 	const std::shared_ptr<shader_desc> desc = handle.is_ready() ? handle.get_sync() : nullptr;
 	if (!desc) {
@@ -91,21 +92,19 @@ rnd::shader_check_result rnd::ShaderManager::check(const res::tag& desc_tag) con
 		unreadable.file = desc_tag;
 		unreadable.code = "shader/load";
 		unreadable.message = "the shader desc cannot be read";
-		out.files.push_back(desc_tag);
-		out.problems.push_back(std::move(unreadable));
-		return out;
+		if (files) *files = { desc_tag };
+		return { std::move(unreadable) };
 	}
-	return check(desc->config().cdata);
+	return check(desc->config().cdata, files, program);
 }
 
-rnd::shader_check_result rnd::ShaderManager::check(const shader_config::constant_data& cdata) const
+std::vector<rnd::shader_problem> rnd::ShaderManager::check(const shader_config::constant_data& cdata, std::vector<res::tag>* files, std::string* program) const
 {
+	ASSERT_MSG(std::this_thread::get_id() == m_owner_thread, "ShaderManager::check: main thread only");
 	built_program built = build_program(cdata, true);
-	shader_check_result out;
-	out.problems = std::move(built.problems);
-	out.files = std::move(built.files);
-	out.program = std::move(built.name);
-	return out;
+	if (files) *files = std::move(built.files);
+	if (program) *program = std::move(built.name);
+	return std::move(built.problems);
 }
 
 rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id variant) const

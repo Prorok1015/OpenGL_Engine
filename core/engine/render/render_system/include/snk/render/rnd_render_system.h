@@ -82,7 +82,10 @@ namespace rnd
 		// without touching the program cache: nothing is kept or watched, shader_problems() and its generation do not change (#1386).
 		// Main thread, the thread of the GL context. It is synchronous and may stall the frame while the driver compiles and
 		// links: call it from a button, never from a per-frame path.
-		SNK_API rnd::shader_check_result check_shader_program(const res::tag& desc) const;
+		// `files`, when given, gets every file the program is made of (the stages and what they include), `program` the stages and defines
+		// as a problem names the program.
+		SNK_API std::vector<rnd::shader_problem> check_shader_program(const res::tag& desc, std::vector<res::tag>* files = nullptr,
+			std::string* program = nullptr) const;
 
 	private:
 		rnd::skinning_manager* m_skinning_manager = nullptr;

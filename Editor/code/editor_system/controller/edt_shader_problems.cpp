@@ -49,7 +49,12 @@ void edt::shader_problem_publisher::follow(problem_list& problems, std::uint64_t
 		m_check.clear();
 	}
 	std::vector<rnd::shader_problem> items = snapshot();
-	items.insert(items.end(), m_check.begin(), m_check.end());
+	for (const rnd::shader_problem& row : m_check) {
+		const auto same = std::ranges::find_if(items, [&row](const rnd::shader_problem& known) {
+			return known.file == row.file && known.line == row.line && known.message == row.message;
+		});
+		if (same == items.end()) items.push_back(row);
+	}
 	std::vector<problem> now = to_problems(items);
 	if (now.empty()) {
 		if (m_published) {

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -58,9 +59,11 @@ namespace rnd
 		// without touching the cache: no program is kept, no file is watched, problems() and problems_generation() stay as they were.
 		// Synchronous, on the thread of the GL context, and it may stall the frame: the driver compiles and links before it returns.
 		// Never on a per-frame path.
-		shader_check_result check(const res::tag& desc) const;
+		// `files`, when given, gets every file the source is made of; `program` the stages and defines as a problem names them.
+		std::vector<shader_problem> check(const res::tag& desc, std::vector<res::tag>* files = nullptr, std::string* program = nullptr) const;
 		// The same for a program given by its constant data (the stages and defines).
-		shader_check_result check(const shader_config::constant_data& cdata) const;
+		std::vector<shader_problem> check(const shader_config::constant_data& cdata, std::vector<res::tag>* files = nullptr,
+			std::string* program = nullptr) const;
 
 		void update_global_uniform(const global_params& val) const;
 		void update_global_sun(const lights_params& val) const;
@@ -101,5 +104,6 @@ namespace rnd
 		// A replaced program waits here for begin_frame: a pass may still draw with it in the frame it was replaced in.
 		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_retired;
 		mutable std::uint64_t m_problems_generation = 0;
+		const std::thread::id m_owner_thread = std::this_thread::get_id();
 	};
 }
