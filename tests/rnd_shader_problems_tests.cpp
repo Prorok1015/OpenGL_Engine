@@ -601,4 +601,70 @@ BOOST_AUTO_TEST_CASE(ALineCutInsideAMultibyteCharacterStaysValidUtf8)
 	BOOST_TEST(kept.ends_with('x'));
 }
 
+BOOST_AUTO_TEST_CASE(AProgramTitleParsesBackToTheDefinesItWasFormattedFrom)
+{
+	const std::vector<std::string> entries{ "USE_FOG", "LEVEL 2", "OPAQUE" };
+	const std::string title = "m.vert + m.frag " + format_program_defines(entries);
+	BOOST_TEST(title == "m.vert + m.frag { USE_FOG | LEVEL 2 | OPAQUE }");
+	BOOST_TEST((parse_program_defines(title) == entries));
+	BOOST_TEST(format_program_defines({}).empty());
+	BOOST_TEST(parse_program_defines("m.vert + m.frag").empty());
+
+	// The title load() gives a problem names the constants and the defines it was built from (constants in any order).
+	shader_config::constant_data cdata = program_of(put("titled.vert", "void main() {}\n"), put("titled.frag", good_fragment));
+	cdata.constants = { { "K_ONE", "1" }, { "K_TWO", "2" } };
+	cdata.defines = { "USE_FOG", "LEVEL 2" };
+	const auto result = load(cdata);
+	BOOST_REQUIRE(!result.problems.empty());
+	std::vector<std::string> parsed = parse_program_defines(result.problems.front().program);
+	std::vector<std::string> expected = program_define_entries(cdata);
+	std::ranges::sort(parsed);
+	std::ranges::sort(expected);
+	BOOST_TEST((parsed == expected));
+}
+
+BOOST_AUTO_TEST_CASE(AHostileProgramTitle_GivesTheLastPairsDefines_AndTheTextBeforeIt)
+{
+	using entries = std::vector<std::string>;
+	// "{ }": the " }" overlaps the "{ ", there is no pair.
+	BOOST_TEST(parse_program_defines("{ }").empty());
+	BOOST_TEST(program_title_stages("{ }") == "{ }");
+	// "{  }": a pair with nothing between.
+	BOOST_TEST(parse_program_defines("{  }").empty());
+	BOOST_TEST(program_title_stages("{  }") == "");
+	BOOST_TEST(parse_program_defines("{ A").empty());
+	BOOST_TEST(program_title_stages("{ A") == "{ A");
+	BOOST_TEST(parse_program_defines("A }").empty());
+	BOOST_TEST(program_title_stages("A }") == "A }");
+	// The last " }" and the last "{ " before it: the inner "{ " opens, the entry runs to the outer " }".
+	BOOST_TEST((parse_program_defines("{ { A } }") == entries{ "A }" }));
+	BOOST_TEST(program_title_stages("{ { A } }") == "{");
+
+	std::string flood;
+	flood.reserve(100 * 1024);
+	while (flood.size() < 100 * 1024) flood += "{ ";
+	BOOST_TEST(parse_program_defines(flood).empty());
+	BOOST_TEST(program_title_stages(flood).size() == flood.size() - 1);
+
+	const std::string_view odd_path = "res://we{ ird/a.vert + res://b.frag { X | Y }";
+	BOOST_TEST((parse_program_defines(odd_path) == entries{ "X", "Y" }));
+	BOOST_TEST(program_title_stages(odd_path) == "res://we{ ird/a.vert + res://b.frag");
+}
+
+BOOST_AUTO_TEST_CASE(TheEngineDefinesOfAStageAreTheNamedConstants)
+{
+	const auto result = load(program_of(put("engine.vert", "#version 450 core\nvoid main() {}\n"), put("engine.frag", good_fragment)));
+	BOOST_REQUIRE(result.ok());
+	BOOST_REQUIRE(result.headers.size() == 2u);
+	const std::string light = std::format("#define {} ", max_light_count_define);
+	BOOST_TEST(result.headers[0].body.find(light) != std::string::npos);
+	BOOST_TEST(result.headers[0].body.find(std::format("#define {}\n", vertex_stage_define)) != std::string::npos);
+	BOOST_TEST(result.headers[1].body.find(light) != std::string::npos);
+	BOOST_TEST(result.headers[1].body.find(std::format("#define {}\n", fragment_stage_define)) != std::string::npos);
+	for (const std::string_view name : { max_light_count_define, vertex_stage_define, fragment_stage_define, geometry_stage_define }) {
+		BOOST_TEST(is_engine_define(name));
+	}
+	BOOST_TEST(!is_engine_define("USE_FOG"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

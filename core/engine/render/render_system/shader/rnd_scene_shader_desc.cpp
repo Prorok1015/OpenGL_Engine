@@ -16,10 +16,10 @@
 // on it, see lights_params) and the stage the source is compiled for.
 static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 {
-    const char* stage = "SNK_VERTEX_SHADER";
-    if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = "SNK_FRAGMENT_SHADER";
-    if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = "SNK_GEOMETRY_SHADER";
-    return std::format("#define MAX_LIGHT_COUNT {}\n#define {}\n", rnd::lights_params::MAX_LIGHT_COUNT, stage);
+    std::string_view stage = rnd::vertex_stage_define;
+    if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = rnd::fragment_stage_define;
+    if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = rnd::geometry_stage_define;
+    return std::format("#define {} {}\n#define {}\n", rnd::max_light_count_define, rnd::lights_params::MAX_LIGHT_COUNT, stage);
 }
 
 static rnd::shader_problem make_problem(res::tag file, int line, std::string code, std::string message)
@@ -100,30 +100,17 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 		result.sources.push_back(std::move(expanded.sources));
 	}
 
-	std::vector<std::string> dbg_addition_defines_names;
-
 	std::ostringstream addition_defines;
 	for (const auto& [name, value] : cdata.constants) {
-		auto define = std::vformat("#define {0} {1}\n", std::make_format_args(name, value));
-		addition_defines << define;
-		dbg_addition_defines_names.push_back(name);
+		addition_defines << std::format("#define {} {}\n", name, value);
 	}
 
 	for (const auto& def : cdata.defines) {
-		auto define = std::vformat("#define {0}\n", std::make_format_args(def));
-		addition_defines << define;
-		dbg_addition_defines_names.push_back(def);
+		addition_defines << std::format("#define {}\n", def);
 	}
 
-	std::string defines_title;
-	if (!dbg_addition_defines_names.empty()) {
-		std::string format = dbg_addition_defines_names.front();
-		for (std::size_t i = 1; i < dbg_addition_defines_names.size(); ++i) {
-			auto& name_ = dbg_addition_defines_names[i];
-			format = std::vformat("{0} | {1}", std::make_format_args(format, name_));
-		}
-		defines_title = std::vformat("{{ {0} }}", std::make_format_args(format));
-
+	const std::string defines_title = rnd::format_program_defines(rnd::program_define_entries(cdata));
+	if (!defines_title.empty()) {
 		for (auto& header : headers) {
 			header.title.insert(header.title.find_first_of('.'), defines_title);
 		}
