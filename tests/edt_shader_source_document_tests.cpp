@@ -194,7 +194,7 @@ BOOST_AUTO_TEST_CASE(AFileOfALowerLayer_OpensReadOnly_AndIsNeverSaved)
 	BOOST_TEST(!document->can_save());
 	BOOST_TEST(document->read_only_reason().find("layer below") != std::string::npos);
 	BOOST_TEST(!document->set_text("edited\n"));
-	BOOST_TEST(!document->save().saved || !document->is_dirty());
+	BOOST_TEST(!document->save().saved);
 	BOOST_TEST(text_of(lower / "shaders/engine.frag") == "lower\n");
 }
 
