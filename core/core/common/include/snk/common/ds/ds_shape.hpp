@@ -52,13 +52,13 @@ namespace ds {
 		return { shape.center - extent, shape.center + extent };
 	}
 
-	inline float distance_sq(const glm::vec3& a, const glm::vec3& b)
-	{
-		const glm::vec3 d = a - b;
-		return glm::dot(d, d);
-	}
-
 	namespace shape_detail {
+		inline float distance_sq(const glm::vec3& a, const glm::vec3& b)
+		{
+			const glm::vec3 d = a - b;
+			return glm::dot(d, d);
+		}
+
 		// n / d, 0 for a zero divisor (no division by a constant zero is ever left in the code, #1350).
 		inline float divide(float n, float d) { return d != 0.f ? n / (d != 0.f ? d : 1.f) : 0.f; }
 
@@ -66,6 +66,13 @@ namespace ds {
 
 		// Below this a squared length is no length (an axis that is no axis, a segment that is a point).
 		constexpr float k_tiny = 1e-20f;
+	}
+
+	// The point of the segment a-b nearest to `p` (a segment that is a point gives that point).
+	inline glm::vec3 closest_point_on_segment(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b)
+	{
+		const glm::vec3 ab = b - a;
+		return a + ab * shape_detail::clamp01(shape_detail::divide(glm::dot(p - a, ab), glm::dot(ab, ab)));
 	}
 
 	// The point of the triangle nearest to `p` (Ericson, Real-Time Collision Detection 5.1.5).
@@ -93,8 +100,29 @@ namespace ds {
 		const float va = d3 * d6 - d5 * d4;
 		if (va <= 0.f && (d4 - d3) >= 0.f && (d5 - d6) >= 0.f) return b + (c - b) * divide(d4 - d3, (d4 - d3) + (d5 - d6));
 		const float denom = va + vb + vc;
-		if (denom == 0.f) return a;
-		return a + ab * (vb / denom) + ac * (vc / denom);
+		const float v = divide(vb, denom);
+		const float w = divide(vc, denom);
+		// A triangle that is a line or a point up to rounding has its regions decided by noise: the coordinates leave the
+		// triangle or land anywhere in it. The nearest point is then on one of its edges (the sliver's width is lost: at most
+		// 1e-4 of its length).
+		const glm::vec3 normal = glm::cross(ab, ac);
+		const bool sliver = glm::dot(normal, normal) <= 1e-8f * glm::dot(ab, ab) * glm::dot(ac, ac);
+		if (sliver || !(denom > 0.f) || v < 0.f || w < 0.f || v + w > 1.f) {
+			const glm::vec3 on_ab = closest_point_on_segment(p, a, b);
+			const glm::vec3 on_bc = closest_point_on_segment(p, b, c);
+			const glm::vec3 on_ca = closest_point_on_segment(p, c, a);
+			glm::vec3 best = on_ab;
+			float best_sq = shape_detail::distance_sq(p, on_ab);
+			for (const glm::vec3& candidate : { on_bc, on_ca }) {
+				const float candidate_sq = shape_detail::distance_sq(p, candidate);
+				if (candidate_sq < best_sq) {
+					best_sq = candidate_sq;
+					best = candidate;
+				}
+			}
+			return best;
+		}
+		return a + ab * v + ac * w;
 	}
 
 	// The squared distance between two segments (Ericson 5.1.9).
@@ -132,7 +160,7 @@ namespace ds {
 				}
 			}
 		}
-		return distance_sq(p1 + d1 * s, p2 + d2 * t);
+		return shape_detail::distance_sq(p1 + d1 * s, p2 + d2 * t);
 	}
 
 	// The squared distance between a segment and a triangle: 0 when they meet, else the least of the segment's ends against
@@ -140,8 +168,10 @@ namespace ds {
 	inline float segment_triangle_distance_sq(const glm::vec3& p, const glm::vec3& q, const glm::vec3& a, const glm::vec3& b,
 		const glm::vec3& c)
 	{
+		// NaN or infinity: no distance (ray_triangle would call a NaN a hit).
+		if (!std::isfinite(glm::dot(p + q + a + b + c, glm::vec3{ 1.f }))) return std::numeric_limits<float>::infinity();
 		if (ray_triangle(p, q - p, a, b, c, false, 1.f)) return 0.f;
-		float best = std::min(distance_sq(p, closest_point_on_triangle(p, a, b, c)), distance_sq(q, closest_point_on_triangle(q, a, b, c)));
+		float best = std::min(shape_detail::distance_sq(p, closest_point_on_triangle(p, a, b, c)), shape_detail::distance_sq(q, closest_point_on_triangle(q, a, b, c)));
 		best = std::min(best, segment_segment_distance_sq(p, q, a, b));
 		best = std::min(best, segment_segment_distance_sq(p, q, b, c));
 		return std::min(best, segment_segment_distance_sq(p, q, c, a));
@@ -151,6 +181,8 @@ namespace ds {
 	// the three box axes, the triangle's normal and the nine edge cross products).
 	inline bool triangle_overlaps_box(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, const glm::vec3& half)
 	{
+		// NaN or infinity anywhere: no overlap (the comparisons below would answer "not separated" for a NaN).
+		if (!std::isfinite(glm::dot(v0 + v1 + v2 + half, glm::vec3{ 1.f }))) return false;
 		const glm::vec3 v[3] = { v0, v1, v2 };
 		const glm::vec3 edges[3] = { v1 - v0, v2 - v1, v0 - v2 };
 		for (int axis = 0; axis < 3; ++axis) {
@@ -180,7 +212,7 @@ namespace ds {
 
 	inline bool sphere_triangle(const sphere3& shape, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
 	{
-		return distance_sq(shape.center, closest_point_on_triangle(shape.center, a, b, c)) <= shape.radius * shape.radius;
+		return shape_detail::distance_sq(shape.center, closest_point_on_triangle(shape.center, a, b, c)) <= shape.radius * shape.radius;
 	}
 
 	inline bool capsule_triangle(const capsule3& shape, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
@@ -188,8 +220,23 @@ namespace ds {
 		return segment_triangle_distance_sq(shape.a, shape.b, a, b, c) <= shape.radius * shape.radius;
 	}
 
+	// Whether the three columns are unit vectors at right angles (within rounding).
+	inline bool orthonormal(const glm::mat3& axes)
+	{
+		constexpr float k_slack = 1e-3f;
+		for (int i = 0; i < 3; ++i) {
+			if (std::abs(glm::dot(axes[i], axes[i]) - 1.f) > k_slack) return false;
+			for (int j = i + 1; j < 3; ++j) {
+				if (std::abs(glm::dot(axes[i], axes[j])) > k_slack) return false;
+			}
+		}
+		return true;
+	}
+
 	inline bool obb_triangle(const obb3& shape, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
 	{
+		ASSERT_MSG(!std::isfinite(glm::dot(shape.axes[0] + shape.axes[1] + shape.axes[2], glm::vec3{ 1.f })) || orthonormal(shape.axes),
+			"obb_triangle: the box's axes are not unit vectors at right angles");
 		const glm::mat3 to_local = glm::transpose(shape.axes);
 		return triangle_overlaps_box(to_local * (a - shape.center), to_local * (b - shape.center), to_local * (c - shape.center), shape.half);
 	}
@@ -201,8 +248,8 @@ namespace ds {
 		// The point of the triangle the sphere touches, and the unit direction from it to the sphere's centre at `t`.
 		glm::vec3 point{ 0.f };
 		glm::vec3 normal{ 0.f };
-		// The sphere met the triangle where it started: t is 0 and `normal` is the way out, or against the motion when
-		// the centre is on the triangle.
+		// The sphere met the triangle where it started (touching counts, also when it moves away): t is 0 and `normal` is the way
+		// out, or against the motion when the centre is on the triangle.
 		bool started_inside = false;
 	};
 
@@ -216,9 +263,10 @@ namespace ds {
 		const glm::vec3 triangle_normal = glm::cross(b - a, c - a);
 		const float normal_length = glm::length(triangle_normal);
 		const float speed_sq = glm::dot(direction, direction);
+		if (!std::isfinite(speed_sq)) return std::nullopt;
 
 		const glm::vec3 start_point = closest_point_on_triangle(shape.center, a, b, c);
-		if (distance_sq(shape.center, start_point) <= radius_sq) {
+		if (shape_detail::distance_sq(shape.center, start_point) <= radius_sq) {
 			sweep_hit hit;
 			hit.started_inside = true;
 			hit.point = start_point;
@@ -281,7 +329,8 @@ namespace ds {
 			const glm::vec3 along = direction - edge * (glm::dot(direction, edge) / edge_sq);
 			const glm::vec3 from = m - edge * (glm::dot(m, edge) / edge_sq);
 			const float qa = glm::dot(along, along);
-			if (qa <= k_tiny) return;
+			// The motion along the edge's own direction: nothing to solve when that is all there is.
+			if (qa <= 1e-12f * speed_sq) return;
 			const float qb = glm::dot(from, along);
 			const float qc = glm::dot(from, from) - radius_sq;
 			const float disc = qb * qb - qa * qc;

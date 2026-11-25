@@ -222,6 +222,9 @@ BOOST_AUTO_TEST_CASE(TheSweepOfASphere_StopsWhereItTouches_AndNothingBeforeItDoe
 	generator gen(41);
 	constexpr float k_reach = 8.f;
 	constexpr float k_step = 0.01f;
+	// The independent oracle marches in coarser steps and asks the grid of the triangle's points, which never reads the code under
+	// test: a grid distance is never below the true one, so one clearly under the radius is a certain overlap.
+	constexpr float k_grid_step = 0.02f;
 	int hits = 0;
 	for (int run = 0; run < 300; ++run) {
 		const triangle t = gen.make_triangle();
@@ -235,7 +238,18 @@ BOOST_AUTO_TEST_CASE(TheSweepOfASphere_StopsWhereItTouches_AndNothingBeforeItDoe
 				break;
 			}
 		}
+		std::optional<float> certain;
+		for (float at = 0.f; at <= k_reach; at += k_grid_step) {
+			if (sampled_distance(sphere.center + direction * at, t, 30) < sphere.radius - k_grid_slack) {
+				certain = at;
+				break;
+			}
+		}
 		BOOST_TEST_CONTEXT("run " << run) {
+			if (certain) {
+				BOOST_REQUIRE(hit.has_value());
+				BOOST_TEST(hit->t <= *certain + 1e-3f);
+			}
 			if (marched) {
 				BOOST_REQUIRE(hit.has_value());
 				BOOST_TEST(hit->t <= *marched + 1e-3f);
@@ -246,6 +260,8 @@ BOOST_AUTO_TEST_CASE(TheSweepOfASphere_StopsWhereItTouches_AndNothingBeforeItDoe
 				const glm::vec3 at = sphere.center + direction * hit->t;
 				const float gap = glm::distance(at, ds::closest_point_on_triangle(at, t.a, t.b, t.c));
 				BOOST_TEST(gap == sphere.radius, boost::test_tools::tolerance(2e-3f));
+				BOOST_TEST(sampled_distance(at, t, 30) >= sphere.radius - 1e-3f);
+				BOOST_TEST(ds::sphere_triangle({ at, sphere.radius + 2e-3f }, t.a, t.b, t.c));
 				BOOST_TEST(glm::length(hit->normal) == 1.f, boost::test_tools::tolerance(1e-3f));
 			}
 		}
@@ -313,6 +329,124 @@ BOOST_AUTO_TEST_CASE(TheNearestWalk_StaysWithinTheDistanceItIsGiven_AndStopsWhen
 		return ds::bvh_nearest_action{};
 	});
 	BOOST_TEST(ds::distance_to_box({ 0.f, 0.f, 0.f }, ds::aabb3{}) == std::numeric_limits<float>::infinity());
+}
+
+
+BOOST_AUTO_TEST_CASE(TheNearestPointOfANearlyCollinearTriangle_IsOnItsLine)
+{
+	// A case a fuzz found: the three regions of the plain formula were decided by rounding and the point left the triangle.
+	const glm::vec3 a{ 3.2646768f, 0.13918376f, 0.23231745f };
+	const glm::vec3 b{ 2.5168927f, -0.6002254f, -0.38513815f };
+	const glm::vec3 c{ 0.24641013f, -2.8452787f, -2.2599068f };
+	const glm::vec3 p{ 0.7232902f, -1.1988856f, -0.9770048f };
+	const glm::vec3 nearest = ds::closest_point_on_triangle(p, a, b, c);
+	BOOST_TEST(nearest.x == 1.436f, boost::test_tools::tolerance(1e-2f));
+	BOOST_TEST(nearest.y == -1.669f, boost::test_tools::tolerance(1e-2f));
+	BOOST_TEST(nearest.z == -1.278f, boost::test_tools::tolerance(1e-2f));
+
+	generator gen(61);
+	for (int run = 0; run < 2000; ++run) {
+		const glm::vec3 origin = gen.point(3.f);
+		const glm::vec3 along = gen.unit();
+		const glm::vec3 v0 = origin + along * gen.real(-3.f, 3.f);
+		const glm::vec3 v1 = origin + along * gen.real(-3.f, 3.f);
+		const glm::vec3 v2 = origin + along * gen.real(-3.f, 3.f);
+		const glm::vec3 q = gen.point(5.f);
+		// On a line the answer is the nearest point of the segment between the two ends that are farthest apart.
+		glm::vec3 lo = v0;
+		glm::vec3 hi = v1;
+		if (glm::distance(v0, v2) > glm::distance(lo, hi)) hi = v2;
+		if (glm::distance(v1, v2) > glm::distance(lo, hi)) {
+			lo = v1;
+			hi = v2;
+		}
+		const float span = glm::dot(hi - lo, hi - lo);
+		const glm::vec3 truth = span > 0.f ? lo + (hi - lo) * std::clamp(glm::dot(q - lo, hi - lo) / span, 0.f, 1.f) : lo;
+		const glm::vec3 got = ds::closest_point_on_triangle(q, v0, v1, v2);
+		BOOST_TEST_CONTEXT("run " << run) {
+			BOOST_TEST(std::abs(glm::distance(q, got) - glm::distance(q, truth)) <= 1e-2f);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ANanOrInfinity_IsNeverAnOverlapOrAHit)
+{
+	const float nan = std::nanf("");
+	const float inf = std::numeric_limits<float>::infinity();
+	const triangle t{ { -1.f, 0.f, -1.f }, { 1.f, 0.f, -1.f }, { 0.f, 0.f, 1.f } };
+	const triangle bad{ { nan, 0.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 1.f, 0.f } };
+	const ds::obb3 box{ { 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f }, glm::mat3{ 1.f } };
+	const ds::obb3 nan_box{ { nan, 0.f, 0.f }, { 1.f, 1.f, 1.f }, glm::mat3{ 1.f } };
+	const ds::obb3 inf_box{ { 0.f, 0.f, 0.f }, { inf, 1.f, 1.f }, glm::mat3{ 1.f } };
+	BOOST_TEST(!ds::obb_triangle(box, bad.a, bad.b, bad.c));
+	BOOST_TEST(!ds::obb_triangle(nan_box, t.a, t.b, t.c));
+	BOOST_TEST(!ds::obb_triangle(inf_box, t.a, t.b, t.c));
+	BOOST_TEST(!ds::sphere_triangle({ { nan, 0.f, 0.f }, 1.f }, t.a, t.b, t.c));
+	BOOST_TEST(!ds::sphere_triangle({ { 0.f, 0.f, 0.f }, 1.f }, bad.a, bad.b, bad.c));
+	BOOST_TEST(!ds::capsule_triangle({ { nan, 0.f, 0.f }, { 0.f, 1.f, 0.f }, 1.f }, t.a, t.b, t.c));
+	BOOST_TEST(!ds::capsule_triangle({ { 0.f, 0.f, 0.f }, { 0.f, 1.f, 0.f }, 1.f }, bad.a, bad.b, bad.c));
+	BOOST_TEST(!ds::sphere_sweep_triangle({ { 0.f, 5.f, 0.f }, 1.f }, { nan, -1.f, 0.f }, t.a, t.b, t.c).has_value());
+	BOOST_TEST(!ds::sphere_sweep_triangle({ { 0.f, 5.f, 0.f }, nan }, { 0.f, -1.f, 0.f }, t.a, t.b, t.c).has_value());
+	BOOST_TEST(!ds::sphere_sweep_triangle({ { 0.f, 5.f, 0.f }, 1.f }, { 0.f, -1.f, 0.f }, bad.a, bad.b, bad.c).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ADegenerateTriangle_AgainstABoxACapsuleAndASweep)
+{
+	const glm::vec3 point{ 0.f, 0.f, 0.f };
+	const ds::obb3 box{ { 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f }, glm::mat3{ 1.f } };
+	BOOST_TEST(ds::obb_triangle(box, point, point, point));
+	BOOST_TEST(!ds::obb_triangle(box, { 5.f, 0.f, 0.f }, { 5.f, 0.f, 0.f }, { 5.f, 0.f, 0.f }));
+	BOOST_TEST(ds::obb_triangle(box, { -3.f, 0.f, 0.f }, { 0.f, 0.f, 0.f }, { 3.f, 0.f, 0.f }));
+	BOOST_TEST(ds::capsule_triangle({ { 1.f, 0.f, 0.f }, { 1.f, 2.f, 0.f }, 1.f }, point, point, point));
+	BOOST_TEST(!ds::capsule_triangle({ { 3.f, 0.f, 0.f }, { 3.f, 2.f, 0.f }, 1.f }, point, point, point));
+
+	// A triangle with no area is its segments: a sphere falls on the line and stops a radius short of it.
+	const auto line = ds::sphere_sweep_triangle({ { 1.f, 3.f, 0.f }, 1.f }, { 0.f, -1.f, 0.f }, { 0.f, 0.f, 0.f }, { 2.f, 0.f, 0.f }, { 4.f, 0.f, 0.f });
+	BOOST_REQUIRE(line.has_value());
+	BOOST_TEST(line->t == 2.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(line->normal.y == 1.f, boost::test_tools::tolerance(1e-4f));
+	const auto point_hit = ds::sphere_sweep_triangle({ { 0.f, 5.f, 0.f }, 1.f }, { 0.f, -1.f, 0.f }, point, point, point);
+	BOOST_REQUIRE(point_hit.has_value());
+	BOOST_TEST(point_hit->t == 4.f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(ASweepInThePlaneOfTheTriangle_HitsItsEdge_AndOneAlongTheFaceMisses)
+{
+	const triangle t{ { -10.f, 0.f, -10.f }, { 10.f, 0.f, -10.f }, { 0.f, 0.f, 10.f } };
+	const auto in_plane = ds::sphere_sweep_triangle({ { 0.f, 0.f, -20.f }, 1.f }, { 0.f, 0.f, 1.f }, t.a, t.b, t.c);
+	BOOST_REQUIRE(in_plane.has_value());
+	BOOST_TEST(in_plane->t == 9.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(in_plane->normal.z == -1.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(!ds::sphere_sweep_triangle({ { -20.f, 3.f, 0.f }, 1.f }, { 1.f, 0.f, 0.f }, t.a, t.b, t.c).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ASphereThatTouchesAtTheStart_StartsInside_WhetherItMovesInOrAway)
+{
+	const triangle t{ { -10.f, 0.f, -10.f }, { 10.f, 0.f, -10.f }, { 0.f, 0.f, 10.f } };
+	for (const float way : { -1.f, 1.f }) {
+		const auto hit = ds::sphere_sweep_triangle({ { 0.f, 2.f, 0.f }, 2.f }, { 0.f, way, 0.f }, t.a, t.b, t.c);
+		BOOST_REQUIRE(hit.has_value());
+		BOOST_TEST(hit->started_inside);
+		BOOST_TEST(hit->t == 0.f);
+		BOOST_TEST(hit->normal.y == 1.f, boost::test_tools::tolerance(1e-4f));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ASphereWithNoRadius_IsAPoint_AndABoxWithNoVolume_IsAPlaneOrAPoint)
+{
+	const triangle t{ { -10.f, 0.f, -10.f }, { 10.f, 0.f, -10.f }, { 0.f, 0.f, 10.f } };
+	const auto hit = ds::sphere_sweep_triangle({ { 0.f, 5.f, 0.f }, 0.f }, { 0.f, -1.f, 0.f }, t.a, t.b, t.c);
+	BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->t == 5.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(ds::sphere_triangle({ { 0.f, 0.f, 0.f }, 0.f }, t.a, t.b, t.c));
+	BOOST_TEST(!ds::sphere_triangle({ { 0.f, 0.1f, 0.f }, 0.f }, t.a, t.b, t.c));
+
+	const ds::obb3 flat{ { 0.f, 0.f, 0.f }, { 1.f, 1.f, 0.f }, glm::mat3{ 1.f } };
+	BOOST_TEST(ds::obb_triangle(flat, { -1.f, -1.f, -1.f }, { 1.f, 1.f, -1.f }, { 0.f, 0.f, 1.f }));
+	BOOST_TEST(!ds::obb_triangle(flat, { -1.f, -1.f, 1.f }, { 1.f, 1.f, 1.f }, { 0.f, 0.f, 2.f }));
+	const ds::obb3 nothing{ { 0.f, 0.f, 0.f }, { 0.f, 0.f, 0.f }, glm::mat3{ 1.f } };
+	BOOST_TEST(ds::obb_triangle(nothing, { -1.f, -1.f, 0.f }, { 1.f, -1.f, 0.f }, { 0.f, 1.f, 0.f }));
+	BOOST_TEST(!ds::obb_triangle(nothing, { -1.f, -1.f, 0.5f }, { 1.f, -1.f, 0.5f }, { 0.f, 1.f, 0.5f }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
