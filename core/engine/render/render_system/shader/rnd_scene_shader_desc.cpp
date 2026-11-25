@@ -162,6 +162,12 @@ rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& r
 
 rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
+	return load(cdata, res_sys, bindings, load_options{});
+}
+
+rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings,
+	const load_options& options)
+{
     std::vector<res::tag> tags;
     std::vector<res::tag> unreadable;	// stages that could not be read: still files of the source, one may appear later
     std::vector<driver::shader_header> headers;
@@ -215,7 +221,9 @@ rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cd
         }
     }
     if (!result.error.empty()) {
-        egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        if (!options.quiet) {
+            egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        }
         return result;
     }
     result.headers = std::move(headers);

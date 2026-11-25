@@ -2,6 +2,7 @@
 #include <snk/model_codec/res_tag.h>
 
 #include <string>
+#include <vector>
 
 namespace rnd
 {
@@ -22,5 +23,15 @@ namespace rnd
 		std::string program;
 
 		bool operator==(const shader_problem&) const = default;
+	};
+
+	// What `check_shader_program` found for one program built without a material (#1386): the same problems as a normal build, and every
+	// file the source is made of (the stages and what they include), so a caller can tell which programs a file belongs to.
+	struct shader_check_result
+	{
+		std::vector<shader_problem> problems;
+		std::vector<res::tag> files;
+		// The stages and defines, as a problem names the program.
+		std::string program;
 	};
 }

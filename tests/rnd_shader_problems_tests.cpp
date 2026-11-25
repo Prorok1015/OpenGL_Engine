@@ -4,6 +4,7 @@
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <format>
@@ -147,6 +148,57 @@ driver::shader_build_log stage_log(std::size_t stage, std::string text)
 }
 
 BOOST_FIXTURE_TEST_SUITE(RndShaderProblemsTests, shader_problems_fixture)
+
+BOOST_AUTO_TEST_CASE(ACheckReportsTheProblemsOfAProgramWithoutTouchingTheCache)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	drv.judge_shaders_with([](const std::vector<driver::shader_header>& headers) -> std::optional<driver::shader_build_log> {
+		if (headers[0].body.find("BROKEN") == std::string::npos) {
+			return std::nullopt;
+		}
+		return stage_log(0, "1(1) : error C1008: undefined variable \"BROKEN\"\n");
+	});
+	const auto lib = put("check_lib.glsl", "BROKEN;\n");
+	const auto vertex = put("check.vert", "#version 450 core\n#include \"check_lib.glsl\"\nvoid main() {}\n");
+	const auto fragment = put("check.frag", good_fragment);
+	const std::uint64_t generation = shaders.problems_generation();
+	const std::size_t variants = shaders.variants().size();
+
+	const shader_check_result result = shaders.check(program_of(vertex, fragment));
+	BOOST_REQUIRE(result.problems.size() == 1u);
+	BOOST_TEST(result.problems[0].file == lib);
+	BOOST_TEST(result.problems[0].line == 1);
+	BOOST_TEST((std::ranges::find(result.files, lib) != result.files.end()));
+	BOOST_TEST((std::ranges::find(result.files, vertex) != result.files.end()));
+	BOOST_TEST(shaders.problems().empty());
+	BOOST_TEST(shaders.problems_generation() == generation);
+	BOOST_TEST(shaders.variants().size() == variants);
+}
+
+BOOST_AUTO_TEST_CASE(ACheckOfAGoodProgramHasNoProblems_AndKeepsNoProgram)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const std::size_t variants = shaders.variants().size();
+	const shader_check_result result = shaders.check(program_of(put("ok.vert", "#version 450 core\nvoid main() {}\n"), put("ok.frag", good_fragment)));
+	BOOST_TEST(result.problems.empty());
+	BOOST_TEST(result.files.size() == 2u);
+	BOOST_TEST(shaders.variants().size() == variants);
+	BOOST_TEST(shaders.problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ACheckOfASourceThatCannotBePrepared_IsAProblem_AndIsNotLoggedAsAnError)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+	const shader_check_result result = shaders.check(program_of(put("nov.vert", "void main() {}\n"), put("nov.frag", good_fragment)));
+	BOOST_REQUIRE(!result.problems.empty());
+	BOOST_TEST(result.problems[0].code == "shader/load");
+	const auto quiet = shader_config::load(program_of(put("nov2.vert", "void main() {}\n"), put("nov2.frag", good_fragment)), *env.rs,
+		driver::per_type_binding_table, shader_config::load_options{ true });
+	BOOST_TEST(!quiet.ok());
+}
 
 BOOST_AUTO_TEST_CASE(AnIncludeThatCannotBeReadIsAProblemOfTheIncludingFileAtItsLine)
 {

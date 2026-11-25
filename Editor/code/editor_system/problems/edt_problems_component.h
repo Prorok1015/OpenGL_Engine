@@ -75,6 +75,8 @@ namespace edt
 		// The shader programs that did not build are problems of the source "shader" (the frame hook; only when the renderer's
 		// problems changed).
 		void follow_shaders();
+		// The rows a Check made (#1386), next to the renderer's of the source "shader" until those change.
+		void show_shader_check(std::vector<rnd::shader_problem> rows) { m_shader.set_check(std::move(rows)); }
 		// What a row of Problems (double click, Enter, "Go to") leads to: its node selected in its world, or its file opened when an
 		// asset kind opens it; nothing for a node that is gone or a level that is not open (#596).
 		void go_to_problem(const std::string& source, const problem& item);

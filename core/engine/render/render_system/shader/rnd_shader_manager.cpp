@@ -1,5 +1,6 @@
 #include "rnd_shader_manager.h"
 #include "rnd_shader_source_map.h"
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/common/logger/engine_log.h>
@@ -55,6 +56,58 @@ void rnd::ShaderManager::begin_frame() const
 	m_retired.clear();
 }
 
+rnd::ShaderManager::built_program rnd::ShaderManager::build_program(const shader_config::constant_data& cdata, bool quiet) const
+{
+	built_program out;
+	auto source = shader_config::load(cdata, m_res_sys, drv->bindings(), shader_config::load_options{ quiet });
+	out.files = source.files;
+	out.name = source.program;
+	out.problems = std::move(source.problems);
+	if (source.ok()) {
+		driver::shader_build_log log;
+		out.program = drv->create_shader(source.headers, &log);
+		if (!out.program) {
+			out.problems = problems_of_build_log(log, source.headers, source.sources, source.program);
+			if (out.problems.empty()) {
+				shader_problem unknown;
+				unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
+				unknown.code = "shader/compile";
+				unknown.message = "the driver did not build the program and said nothing";
+				unknown.program = source.program;
+				out.problems.push_back(std::move(unknown));
+			}
+		}
+	}
+	return out;
+}
+
+rnd::shader_check_result rnd::ShaderManager::check(const res::tag& desc_tag) const
+{
+	shader_check_result out;
+	auto handle = m_res_sys.require_sync<shader_desc>(desc_tag);
+	const std::shared_ptr<shader_desc> desc = handle.is_ready() ? handle.get_sync() : nullptr;
+	if (!desc) {
+		shader_problem unreadable;
+		unreadable.file = desc_tag;
+		unreadable.code = "shader/load";
+		unreadable.message = "the shader desc cannot be read";
+		out.files.push_back(desc_tag);
+		out.problems.push_back(std::move(unreadable));
+		return out;
+	}
+	return check(desc->config().cdata);
+}
+
+rnd::shader_check_result rnd::ShaderManager::check(const shader_config::constant_data& cdata) const
+{
+	built_program built = build_program(cdata, true);
+	shader_check_result out;
+	out.problems = std::move(built.problems);
+	out.files = std::move(built.files);
+	out.program = std::move(built.name);
+	return out;
+}
+
 rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id variant) const
 {
 	if (variant.value >= m_programs.size()) {
@@ -64,25 +117,10 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 	auto& slot = m_programs[variant.value];
 	if (slot.stale || (!slot.program && !slot.failed)) {
 		slot.stale = false;
-		auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
-		track_files(variant, source.files);
-		std::vector<shader_problem> problems = std::move(source.problems);
-		std::unique_ptr<driver::shader_interface> fresh;
-		if (source.ok()) {
-			driver::shader_build_log log;
-			fresh = drv->create_shader(source.headers, &log);
-			if (!fresh) {
-				problems = problems_of_build_log(log, source.headers, source.sources, source.program);
-				if (problems.empty()) {
-					shader_problem unknown;
-					unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
-					unknown.code = "shader/compile";
-					unknown.message = "the driver did not build the program and said nothing";
-					unknown.program = source.program;
-					problems.push_back(std::move(unknown));
-				}
-			}
-		}
+		built_program built = build_program(m_variants.resolve(variant), false);
+		track_files(variant, built.files);
+		std::vector<shader_problem> problems = std::move(built.problems);
+		std::unique_ptr<driver::shader_interface> fresh = std::move(built.program);
 		if (fresh) {
 			if (slot.program) {
 				m_retired.push_back(std::move(slot.program));
