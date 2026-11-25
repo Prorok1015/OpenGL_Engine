@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_agent_source_rule.h"
 #include "edt_asset_exporter.h"
 #include "edt_async_import_task.h"
 #include "edt_model_file_access.h"
@@ -36,11 +37,13 @@ namespace edt {
 		std::string files_token;
 	};
 
-	// What a request resolves to: the file the person is shown and approves, and the files the job will write. Resolved
-	// once when the question is put and again when the job starts; the two must agree.
+	// What a request resolves to: the file the person is shown and approves, and the files the job will write. An
+	// agent's plan made for the question holds the source as given and no size, time or identity: nothing on its disk
+	// was looked at (text_plan). The start resolves it on the disk; the targets of the two must agree.
 	struct agent_import_plan
 	{
-		std::filesystem::path source;	// resolved: absolute, no link on the way
+		std::filesystem::path source;	// on the disk: resolved, absolute, no link on the way
+		bool on_disk = false;
 		std::uintmax_t size = 0;
 		std::filesystem::file_time_type modified{};
 		file_id id{};
@@ -62,6 +65,8 @@ namespace edt {
 
 		bool ok() const { return error.empty(); }
 		bool same_file_as(const agent_import_plan& other) const;
+		// The same name, folder and prefab: what a person was shown of the files the import writes.
+		bool same_targets(const agent_import_plan& other) const;
 	};
 
 	struct agent_import_options
@@ -90,6 +95,10 @@ namespace edt {
 		std::chrono::seconds parse_time_limit{ k_agent_parse_time_limit };
 		// What the model may make the import read besides itself.
 		model_file_limits file_limits;
+		// Where an agent's source and side files may lie (agent_source_path_problem); tests fake a remote drive or
+		// mount.
+		std::function<unsigned(char letter)> drive_type = system_drive_type;
+		std::function<std::optional<std::string>()> mount_table = system_mount_table;
 	};
 
 	// The file lists jobs found and a person has not been shown yet; defined in the .cpp.
@@ -112,14 +121,19 @@ namespace edt {
 		// An import job of this service is running.
 		bool running() const;
 
-		// Resolves the request without running anything. Public for the tests; describe and start use it.
-		agent_import_plan resolve(const agent_import_request& request) const;
+		// Resolves the request on the disk (a stat, the canonical path, the size, the file's identity and the folders of
+		// every layer) without reading the model. `person`: no source rule; else agent_source_path_problem first, on the
+		// path given and on the path resolved. For an agent's call it runs only once a person approved it (start).
+		agent_import_plan resolve(const agent_import_request& request, bool person) const;
 
-		// What the person is asked: the full resolved path, the size and the destination, or why the call is refused;
-		// only the file system is asked (a stat), the model is not read. With `files_token` (the second call, after a job
-		// found that the model refers to other files) it lists every one of those files with its size and the total.
-		// Remembers the plan for the start that follows the answer.
-		std::optional<std::string> describe(const agent_import_request& request, const cmd::origin& caller);
+		// What the person is asked: the source, the destination, or why the call will be refused. For an agent's call
+		// it never looks at the source on the disk (only the project's layers): the path as given, no size. A person's
+		// call is described from the disk. With `files_token` (the second call, after a job found that the model refers
+		// to other files) it lists every one of those files with its size and the total; for an agent each of them
+		// passes the source rule first. Remembers the plan for the start that follows, bound to `ticket` (the id of the
+		// question the registry is about to put, cmd::call::confirmation; empty for a call it allows).
+		std::optional<std::string> describe(const agent_import_request& request, const cmd::origin& caller,
+			std::string_view ticket = {});
 
 		struct started
 		{
@@ -128,11 +142,14 @@ namespace edt {
 			std::string error;
 			bool ok() const { return code.empty(); }
 		};
-		// `confirmed`: a person approved this call (the call carries its ticket). Only a call whose plan was shown, still
-		// is the same file and is allowed now starts the job. The job reads and parses the model; when it refers to other
-		// files the job ends with {needs_files_approval, files_token, files[], total_bytes} and writes nothing: the agent
-		// calls again with the token, a person is shown those files, and that job imports exactly them.
-		started start(const agent_import_request& request, const cmd::origin& caller, bool confirmed);
+		// Anyone but a person needs the plan describe remembered for exactly this call: the command registry runs a
+		// call the policy asks about only with an approved ticket, and describes every allowed call first
+		// (describe_before_allowed_invoke). Only then is the source looked at on the disk, after the source rule. The
+		// job reads and parses the model; when it refers to other files the job ends with {needs_files_approval,
+		// files_token, file_count} and writes nothing: the agent calls again with the token, a person is shown those
+		// files, and that job imports exactly them. `ticket` (the call's confirmation) must be the one the plan was
+		// described with: an approved call runs the plan of its own question.
+		started start(const agent_import_request& request, const cmd::origin& caller, std::string_view ticket = {});
 
 		// Per agent session: one session cannot push another one's questions or file lists out.
 		static constexpr std::size_t k_max_shown = 32;
@@ -144,15 +161,22 @@ namespace edt {
 		{
 			std::string key;
 			std::string session;
+			std::string ticket;
 			agent_import_plan plan;
 			std::chrono::steady_clock::time_point at;
 		};
 
 		std::chrono::steady_clock::time_point now() const;
+		source_volume_ports volumes() const;
+		// Everything of a plan but the source: the name, the folder, the prefab, whether it is free, the blockers.
+		void plan_targets(const agent_import_request& request, const std::string& stem, agent_import_plan& plan) const;
+		// An agent's plan for the question, from the text of the request only.
+		agent_import_plan text_plan(const agent_import_request& request) const;
 		std::string scan_key(const agent_import_request& request, const cmd::origin& caller) const;
 		std::string call_key(const agent_import_request& request, const cmd::origin& caller) const;
-		void remember(std::string key, std::string session, agent_import_plan plan);
-		std::optional<agent_import_plan> take(const std::string& key);
+		void remember(std::string key, std::string session, std::string ticket, agent_import_plan plan);
+		// The plan remembered for `key` is used up either way; it comes back only when it was described for `ticket`.
+		std::optional<agent_import_plan> take(const std::string& key, std::string_view ticket);
 
 		asset_exporter& m_exporter;
 		job_service& m_jobs;

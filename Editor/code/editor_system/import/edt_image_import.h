@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_agent_source_rule.h"
 #include "edt_file_identity.h"
 #include "edt_model_import_limits.h"
 #include <snk/command/cmd_types.h>
@@ -66,37 +67,6 @@ namespace edt
 	boost::json::object image_texture_desc_json(const res::tag& image, std::string_view name,
 		const image_import_settings& settings);
 
-	// DRIVE_REMOVABLE and DRIVE_FIXED of GetDriveTypeW: the only drive types an agent's source may lie on.
-	inline constexpr unsigned k_drive_removable = 2;
-	inline constexpr unsigned k_drive_fixed = 3;
-
-	// GetDriveTypeW of "X:\" (the local drive table only, no network round trip); 0 (DRIVE_UNKNOWN) off Windows.
-	unsigned system_drive_type(char letter);
-	// The text of /proc/self/mounts; nullopt when it cannot be read (and on Windows).
-	std::optional<std::string> system_mount_table();
-
-	// How agent_source_path_problem tells a local volume from another one, without touching the path.
-	struct source_volume_ports
-	{
-#if defined(_WIN32)
-		bool windows = true;
-#else
-		bool windows = false;
-#endif
-		// Windows rules: the type of a drive by its letter; null: unknown.
-		std::function<unsigned(char letter)> drive_type = system_drive_type;
-		// POSIX rules: the mount table; null or nullopt: it cannot be read, every path is refused.
-		std::function<std::optional<std::string>()> mount_table = system_mount_table;
-	};
-
-	// The allowed source roots of an agent's import: only local fixed or removable volumes. Why `path` (as an agent
-	// gave it) may not be read for an agent; empty when it may. The text alone decides, plus the drive table or the
-	// mount table: the path itself is never looked at. Refused: UNC and device paths (two leading separators,
-	// `\??\`), a `.` or `..` component; Windows: no drive letter, a drive that is not DRIVE_FIXED/DRIVE_REMOVABLE;
-	// POSIX: a path whose longest mount point is a network or automount one (agent_log_mounts).
-	std::string agent_source_path_problem(std::string_view path, const source_volume_ports& ports);
-	std::string agent_source_path_problem(std::string_view path);
-
 	// What a caller asks for: the person's window or file.import_image.
 	struct image_import_request
 	{
@@ -163,7 +133,8 @@ namespace edt
 		// The largest picture an agent may import; a person's call may bring k_max_person_source_bytes.
 		std::uintmax_t max_agent_bytes = k_max_agent_source_bytes;
 		std::uintmax_t max_person_bytes = k_max_person_source_bytes;
-		// Where an agent's source may lie (agent_source_path_problem); tests fake a remote drive or mount.
+		// Where an agent's source may lie (agent_source_path_problem, edt_agent_source_rule.h); tests fake a remote
+		// drive or mount.
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
 		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"); true fails that write.
@@ -188,8 +159,10 @@ namespace edt
 
 		// What the person is asked for an agent's call: the source as given, the four files and the settings; or why
 		// the call will be refused. Never looks at the source on the disk (only the project's layers). Remembers the
-		// plan for the start that follows. A person's call is described from the disk.
-		std::optional<std::string> describe(const image_import_request& request, const cmd::origin& caller);
+		// plan for the start that follows, bound to `ticket` (the id of the question the registry is about to put,
+		// cmd::call::confirmation; empty for a call it allows). A person's call is described from the disk.
+		std::optional<std::string> describe(const image_import_request& request, const cmd::origin& caller,
+			std::string_view ticket = {});
 
 		struct started
 		{
@@ -201,8 +174,9 @@ namespace edt
 		// Anyone but a person needs the plan describe remembered for exactly this call: the command registry runs a
 		// call the policy asks about only with an approved ticket, and describes every allowed call first
 		// (describe_before_allowed_invoke). The job reads the picture, proves it decodes and writes the files; its
-		// result is {image, resource, texture, texture_resource, guid, texture_guid}.
-		started start(const image_import_request& request, const cmd::origin& caller);
+		// result is {image, resource, texture, texture_resource, guid, texture_guid}. `ticket` (the call's
+		// confirmation) must be the one the plan was described with: an approved call runs the plan of its own question.
+		started start(const image_import_request& request, const cmd::origin& caller, std::string_view ticket = {});
 
 		// Empty when `bytes` are a png or jpeg (matching `extension`) that decodes within the picture adapter's limits.
 		static std::string image_problem(std::span<const std::byte> bytes, std::string_view extension);
@@ -214,11 +188,6 @@ namespace edt
 		static image_import_written write_files(const std::filesystem::path& top, const image_import_plan& plan,
 			std::span<const std::byte> bytes, const std::function<bool(std::string_view)>& fail_step = {});
 
-		// `text` with every spelling of each of `roots` read as res:// and of `source` as its file name: what an error
-		// that reaches an agent may hold of this machine's paths.
-		static std::string without_paths(std::string text, const std::vector<std::filesystem::path>& roots,
-			const std::filesystem::path& source);
-
 		static constexpr std::string_view k_extensions[] = { ".png", ".jpg", ".jpeg" };
 		static constexpr std::size_t k_max_shown = 32;
 		static constexpr std::chrono::minutes k_shown_lifetime{ 5 };
@@ -228,6 +197,7 @@ namespace edt
 		{
 			std::string key;
 			std::string session;
+			std::string ticket;
 			image_import_plan plan;
 			std::chrono::steady_clock::time_point at;
 		};
@@ -239,8 +209,9 @@ namespace edt
 			image_import_plan& plan) const;
 		// An agent's plan for the question, from the text of the request only.
 		image_import_plan text_plan(const image_import_request& request) const;
-		void remember(std::string key, std::string session, image_import_plan plan);
-		std::optional<image_import_plan> take(const std::string& key);
+		void remember(std::string key, std::string session, std::string ticket, image_import_plan plan);
+		// The plan remembered for `key` is used up either way; it comes back only when it was described for `ticket`.
+		std::optional<image_import_plan> take(const std::string& key, std::string_view ticket);
 
 		job_service& m_jobs;
 		image_import_options m_options;

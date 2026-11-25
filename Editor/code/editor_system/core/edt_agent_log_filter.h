@@ -83,12 +83,13 @@ namespace edt
 	// ("\040" is a space); a mount point further down than the first level is left out.
 	std::vector<std::string> agent_log_remote_mounts(std::string_view mounts);
 
-	// One line of /proc/self/mounts: the mount point (absolute, octal escapes decoded) and whether its type is one
-	// agent_log_remote_mounts counts as a network or automount one.
+	// One line of /proc/self/mounts: the mount point (absolute, octal escapes decoded), whether its type is one
+	// agent_log_remote_mounts counts as a network or automount one, and the type as written.
 	struct agent_log_mount
 	{
 		std::string point;
 		bool remote = false;
+		std::string type;
 	};
 	// Every mount point of `mounts`, at any depth, in the order of the text.
 	std::vector<agent_log_mount> agent_log_mounts(std::string_view mounts);
