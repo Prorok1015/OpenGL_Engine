@@ -933,6 +933,16 @@ BOOST_AUTO_TEST_CASE(OpenLevelAndImportModel_HandOverThePickedFile)
 	BOOST_TEST((calls == std::vector<std::string>{ "load:res/levels/e.desc", "import:models/m.glb" }));
 }
 
+BOOST_AUTO_TEST_CASE(APersonsImportWithSettings_ReachesTheDialogFlow_WithoutAnAgentImport)
+{
+	// No agent_import hook here: a call that went to the background import would answer "disabled".
+	BOOST_REQUIRE(hooks.agent_import == nullptr);
+	const auto result = actions.invoke("file.import_model", boost::json::object{ { "path", "models/m.glb" },
+		{ "settings", boost::json::object{ { "normals", "flat" }, { "tangents", false } } } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((calls == std::vector<std::string>{ "import:models/m.glb normals flat, tangents off" }));
+}
+
 BOOST_AUTO_TEST_CASE(ImportModel_AsksForTheSettings_CancelImportsNothing_ImportTakesThem)
 {
 	edt::model_import_settings_form form;

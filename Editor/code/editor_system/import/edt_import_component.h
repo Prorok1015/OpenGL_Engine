@@ -81,6 +81,8 @@ namespace edt
 		void ask_settings(const std::filesystem::path& absolute_path, model_import_settings_form::import_fn on_import);
 		// The settings window is open: a modal for the editor's shortcuts (#470).
 		bool settings_open() const { return m_settings_form.is_open(); }
+		// What the window shows and Import does; the tests choose and submit through it as a click would.
+		model_import_settings_form& settings_form() { return m_settings_form; }
 
 #if SNK_HAS_ASSIMP
 		// The job with `settings`, the "Importing" popup (Esc cancels) and then the export dialog.

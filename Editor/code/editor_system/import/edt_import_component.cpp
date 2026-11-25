@@ -198,6 +198,7 @@ bool edt::import_component::draw_settings_window()
 	if (!m_settings_form.is_open()) return false;
 	constexpr const char* title = "Model Import Settings";
 	if (!ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
+	// Not shown this frame (opened in it, or under another modal): the window stays and is tried next frame.
 	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return true;
 	const model_import_settings settings = m_settings_form.settings();
 	ImGui::Text("Model: %s", m_settings_form.shown_name().c_str());
@@ -274,7 +275,11 @@ std::optional<std::string> edt::import_component::agent_import_blocker() const
 void edt::import_component::start_import(const std::filesystem::path& absolute_path,
 	const model_import_settings& settings)
 {
-	if (m_importing) return;
+	if (m_importing) {
+		egLOG_INFO("Editor/Import", "Import of '{}' not started: another import is running",
+			text_escape::escaped_text(fs_paths::utf8_of(absolute_path.filename()), 256));
+		return;
+	}
 	if (m_dialog_open) {
 		m_ports.context.dialogs().message(message_level::info,
 			"An import is waiting in the editor's export dialog: export it or close the dialog first.");

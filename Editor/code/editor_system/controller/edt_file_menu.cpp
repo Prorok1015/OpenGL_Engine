@@ -751,7 +751,7 @@ void edt::file_menu::register_actions()
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
-			&& !args.contains("folder") && !args.contains("settings");
+			&& !args.contains("folder");
 		if (dialog) {
 			// A person at the menu or a script of theirs with a path and maybe settings: the dialog flow.
 			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
@@ -776,8 +776,9 @@ void edt::file_menu::register_actions()
 					"link. An agent's import asks a person first, and its source must lie on a local fixed or "
 					"removable disk (no share, network drive or mount, no '..')." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
-				{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, "
-					"imports without the dialog." } } },
+				{ "description", "Asset name (default: the file name without extension). A person's call with "
+					"neither name nor folder opens the editor's export dialog (with the settings given); giving "
+					"either imports without it." } } },
 			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an "
 					"existing file." } } },
@@ -787,7 +788,8 @@ void edt::file_menu::register_actions()
 					"and this token; a person is shown those files and decides." } } },
 			{ "settings", json::object{ { "type", "object" },
 				{ "description", "How the meshes are made; recorded in the .resource of the prefab. A missing key "
-					"takes its default; unknown keys are refused. A files_token holds for the same settings only." },
+					"takes its default; unknown keys are refused. A files_token holds for the same settings only. "
+					"They do not decide between the dialog and the background import: name and folder do." },
 				{ "properties", json::object{
 					{ "normals", json::object{ { "type", "string" }, { "enum", json::array{ "smooth", "flat" } },
 						{ "description", "smooth: averaged over the faces that share a vertex (default); flat: "
