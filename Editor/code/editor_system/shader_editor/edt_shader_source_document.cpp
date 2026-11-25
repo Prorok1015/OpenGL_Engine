@@ -208,7 +208,7 @@ void edt::shader_source_document::close()
 	unwatch();
 	m_open = false;
 	m_file = {};
-	m_tag = {};
+	m_tag = res::tag{};
 	m_disk_path.clear();
 	m_text.clear();
 	m_saved_text.clear();
