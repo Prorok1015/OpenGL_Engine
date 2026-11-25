@@ -561,18 +561,29 @@ bool edt::agent_log_drive_is_listed(char letter, unsigned type)
 	return is_letter(letter) && !floppy && type == k_agent_log_drive_fixed;
 }
 
-std::vector<std::string> edt::agent_log_remote_mounts(std::string_view mounts)
+std::vector<edt::agent_log_mount> edt::agent_log_mounts(std::string_view mounts)
 {
-	std::vector<std::string> out;
+	std::vector<agent_log_mount> out;
 	while (!mounts.empty()) {
 		const std::size_t line_end = mounts.find('\n');
 		std::string_view line = mounts.substr(0, line_end);
 		mounts.remove_prefix(line_end == std::string_view::npos ? mounts.size() : line_end + 1);
 		next_mount_field(line);
-		const std::string point = unescaped_mount(next_mount_field(line));
+		std::string point = unescaped_mount(next_mount_field(line));
 		const std::string_view type = next_mount_field(line);
+		if (point.empty() || point[0] != '/') continue;
+		out.push_back({ std::move(point), is_remote_mount_type(type) });
+	}
+	return out;
+}
+
+std::vector<std::string> edt::agent_log_remote_mounts(std::string_view mounts)
+{
+	std::vector<std::string> out;
+	for (const agent_log_mount& mount : agent_log_mounts(mounts)) {
+		const std::string& point = mount.point;
 		// The listing enters first-level folders only: a mount point further down is never read.
-		if (!is_remote_mount_type(type) || point.size() < 2 || point[0] != '/' || point.find('/', 1) != std::string::npos) continue;
+		if (!mount.remote || point.size() < 2 || point.find('/', 1) != std::string::npos) continue;
 		out.push_back(point.substr(1));
 	}
 	return out;

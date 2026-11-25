@@ -320,6 +320,7 @@ Snake Editor provides a scene editing environment:
 | [GLFW](https://github.com/glfw/glfw) | Window management and input |
 | [GLM](https://github.com/g-truc/glm) | Linear algebra (vectors, matrices, quaternions) |
 | [ImGui](https://github.com/ocornut/imgui) (docking) | Editor UI |
+| [ImGuiColorTextEdit](https://github.com/goossens/ImGuiColorTextEdit) | Text editor widget of the shader editor (MIT) |
 | [Assimp](https://github.com/assimp/assimp) | 3D model import (glb/gltf/fbx/obj) |
 | [spdlog](https://github.com/gabime/spdlog) | Logging |
 | [yaml-cpp](https://github.com/jbeder/yaml-cpp) | YAML configuration |

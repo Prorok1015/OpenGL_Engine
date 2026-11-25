@@ -186,7 +186,7 @@ endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE color_text_edit PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 target_link_libraries(unit_tests PRIVATE snk::project_migration)
 # The model import library (#1108): the engine's model adapter and the editor's importer run in the tests.
 if(TARGET snk::model_import_assimp)
@@ -207,7 +207,7 @@ target_link_libraries(unit_tests PRIVATE ${_snk_test_image})
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # White-box tests: PRIVATE access to the internal (non-public) editor_system headers, test-only.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/play" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/mesh" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/modeller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/prefab" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/live")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/assets" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/vcs" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/forge" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/play" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/mesh" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/modeller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/prefab" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/live" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/shader_editor")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
