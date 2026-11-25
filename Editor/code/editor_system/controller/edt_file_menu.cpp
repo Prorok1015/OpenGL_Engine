@@ -751,7 +751,7 @@ void edt::file_menu::register_actions()
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
-			&& !args.contains("folder");
+			&& !args.contains("folder") && !args.contains("settings");
 		if (dialog) {
 			// A person at the menu or a script of theirs with a path and maybe settings: the dialog flow.
 			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");

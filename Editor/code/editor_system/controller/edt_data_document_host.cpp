@@ -169,7 +169,9 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 	if (kind == data_window_kind::by_type && data.type() == k_texture_type) {
 		panel = std::make_shared<texture_window_panel>(data, m_services, id, quiet, view);
 	} else if (kind == data_window_kind::by_type && has_window_of_its_own(data.type())) {
-		panel = std::make_shared<material_window_panel>(data, m_services, id, quiet, view);
+		auto material = std::make_shared<material_window_panel>(data, m_services, id, quiet, view);
+		material->set_picture_texture(m_picture_texture);
+		panel = std::move(material);
 	} else {
 		panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	}

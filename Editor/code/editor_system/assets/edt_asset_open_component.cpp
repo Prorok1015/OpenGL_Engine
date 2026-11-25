@@ -42,6 +42,7 @@ edt::asset_open_component::asset_open_component(ports from)
 		.layout = [this] { return desc_layout(); },
 		.creator = [this]() -> const document_creator* { return m_creator.get(); },
 		.open_texture = [this](const res::tag& tag) { open(tag, false); } });
+	m_data_documents->set_picture_texture([this](const res::tag& picture) { return m_texture_viewers->texture_of_picture(picture); });
 }
 
 edt::asset_open_component::~asset_open_component() = default;

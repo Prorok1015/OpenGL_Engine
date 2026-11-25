@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace inp { class input_router; }
@@ -64,6 +65,8 @@ namespace edt
 		// The files a reference field of any window may point at, asked for at each frame (null: no picker). Set once, also
 		// for the windows already open.
 		void set_asset_source(std::function<const picker::catalog*()> source);
+		// Which texture desc a picture dropped on a material's texture slot stands for (#1205). For the windows opened after.
+		void set_picture_texture(std::function<res::tag(const res::tag& picture)> lookup) { m_picture_texture = std::move(lookup); }
 
 		std::vector<document_id> dirty() const;
 		// Saves every dirty one; the first that cannot be saved is told to the person and stops it (false). A file that
@@ -99,6 +102,7 @@ namespace edt
 
 	private:
 		std::function<const picker::catalog*()> m_asset_source;
+		std::function<res::tag(const res::tag& picture)> m_picture_texture;
 
 		struct window
 		{

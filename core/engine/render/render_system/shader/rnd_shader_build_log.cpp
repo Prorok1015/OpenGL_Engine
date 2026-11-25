@@ -6,6 +6,7 @@
 #include <format>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -231,6 +232,59 @@ namespace
 		return problem;
 	}
 
+	bool is_version_line(std::string_view line)
+	{
+		cursor at{ line };
+		at.skip_blank();
+		if (!at.eat('#')) {
+			return false;
+		}
+		at.skip_blank();
+		return at.eat("version") && (at.pos == line.size() || line[at.pos] == ' ' || line[at.pos] == '\t');
+	}
+
+	// The lines of the block of defines shader_config::load put after the #version line: `#line 1 <index>` opens it,
+	// the next #line (back to the stage) closes it. Empty when `body` has no such block.
+	std::vector<std::string_view> injected_lines(std::string_view body, std::size_t index)
+	{
+		const std::string opening = std::format("#line 1 {}", index);
+		std::vector<std::string_view> lines;
+		bool after_version = false;
+		bool inside = false;
+		std::size_t line_begin = 0;
+		while (line_begin < body.size()) {
+			const std::size_t newline = body.find('\n', line_begin);
+			std::string_view line = body.substr(line_begin, newline == std::string_view::npos ? std::string_view::npos : newline - line_begin);
+			line_begin = newline == std::string_view::npos ? body.size() : newline + 1;
+			if (line.ends_with('\r')) {
+				line.remove_suffix(1);
+			}
+			if (inside) {
+				if (line.starts_with("#line")) {
+					return lines;
+				}
+				lines.push_back(line);
+			} else if (after_version && line == opening) {
+				inside = true;
+			} else {
+				after_version = is_version_line(line);
+			}
+		}
+		return inside ? lines : std::vector<std::string_view>{};
+	}
+
+	// "injected define #k "<its line>" (engine|constant|define): " for line `k` of the block, as the log numbers it.
+	std::string injected_prefix(const std::vector<std::string_view>& block, int k, std::size_t constant_count)
+	{
+		if (k < 1 || static_cast<std::size_t>(k) > block.size()) {
+			return std::format("injected define #{}: ", k);
+		}
+		const std::size_t at = static_cast<std::size_t>(k);
+		const std::string_view kind = at <= rnd::engine_define_lines ? "engine"
+			: at <= rnd::engine_define_lines + constant_count ? "constant" : "define";
+		return std::format("injected define #{} \"{}\" ({}): ", k, bounded(block[at - 1], false), kind);
+	}
+
 	// The rows of one kind (errors or warnings): the first max_problems kept, the rest counted.
 	struct bounded_rows
 	{
@@ -248,7 +302,7 @@ namespace
 }
 
 std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader_build_log& log, const std::vector<driver::shader_header>& headers,
-	const std::vector<std::vector<res::tag>>& sources, const std::string& program)
+	const std::vector<std::vector<res::tag>>& sources, const std::string& program, std::size_t constant_count)
 {
 	const auto stage_file = [&](std::size_t stage) -> res::tag {
 		return stage < sources.size() && !sources[stage].empty() ? sources[stage].front() : res::tag{};
@@ -259,6 +313,8 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 	std::size_t budget = max_log_bytes;
 	for (const driver::shader_stage_log& stage : log.stages) {
 		const std::size_t before = errors.total + warnings.total;
+		const bool mapped = stage.stage < sources.size() && stage.stage < headers.size();
+		const std::vector<std::string_view> block = mapped ? injected_lines(headers[stage.stage].body, sources[stage.stage].size()) : std::vector<std::string_view>{};
 		const std::string_view text = utf8_prefix(stage.text, budget);
 		budget -= text.size();
 		std::size_t line_begin = 0;
@@ -289,6 +345,10 @@ std::vector<rnd::shader_problem> rnd::problems_of_build_log(const driver::shader
 			}
 			// A source number the stage's table does not have names no file of it, so its line is no line of a file either.
 			const bool known = stage.stage < sources.size() && parsed->source < sources[stage.stage].size();
+			const bool injected = !known && !block.empty() && parsed->source == sources[stage.stage].size();
+			if (injected) {
+				message = bounded(injected_prefix(block, parsed->line, constant_count) + message, false);
+			}
 			auto problem = known
 				? make_problem(sources[stage.stage][parsed->source], parsed->line, parsed->column, std::move(message), program)
 				: make_problem(stage_file(stage.stage), 0, 0, std::move(message), program);

@@ -1,4 +1,5 @@
 #include "edt_texture_viewer_host.h"
+#include "edt_material_creator.h"
 #include "edt_texture_viewer_panel.h"
 #include "edt_texture_window_model.h"
 #include <snk/common/fs_paths.h>
@@ -38,6 +39,7 @@ edt::picture_texture edt::picture_texture_of(const res::tag& picture)
 json::object edt::initial_document_fields(std::string_view type)
 {
 	if (type == k_texture_type) return json::object{ { "__parent", k_base_texture } };
+	if (type == k_material_type) return material_fields();
 	return {};
 }
 
@@ -136,20 +138,28 @@ void edt::texture_viewer_host::open_picture(const res::tag& picture)
 	refresh_picture(viewer, picture);
 }
 
+res::tag edt::existing_picture_texture(const document_creator& creator, res::resource_system& resources, const desc::desc_system& descs,
+	const desc_file_layout& layout, const res::tag& picture)
+{
+	const res::tag texture = picture_texture_tag(creator, picture);
+	const desc_file_read read = read_desc_file(resources, descs, layout, texture);
+	if (!read.error.empty()) return {};
+	boost::system::error_code ec;
+	const json::value file = json::parse(std::string_view(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size()), ec);
+	if (ec || !file.is_object()) return {};
+	const json::value* type = file.as_object().if_contains("__type");
+	if (!type || !type->is_string() || std::string_view(type->as_string()) != k_texture_type) return {};
+	const texture_source source = texture_source_of(file);
+	return source.from == texture_source::kind::file && source.file == picture.view() ? texture : res::tag{};
+}
+
 res::tag edt::texture_viewer_host::texture_of_picture(const res::tag& picture) const
 {
 	const document_creator* creator = m_ports.creator ? m_ports.creator() : nullptr;
 	res::resource_system* resources = m_ports.services.resources();
 	const desc::desc_system* descs = m_ports.services.descs();
 	if (!creator || !resources || !descs || !m_ports.layout) return {};
-	const res::tag texture = picture_texture_tag(*creator, picture);
-	const desc_file_read read = read_desc_file(*resources, *descs, m_ports.layout(), texture);
-	if (!read.error.empty()) return {};
-	boost::system::error_code ec;
-	const json::value file = json::parse(std::string_view(reinterpret_cast<const char*>(read.bytes.data()), read.bytes.size()), ec);
-	if (ec) return {};
-	const texture_source source = texture_source_of(file);
-	return source.from == texture_source::kind::file && source.file == picture.view() ? texture : res::tag{};
+	return existing_picture_texture(*creator, *resources, *descs, m_ports.layout(), picture);
 }
 
 void edt::texture_viewer_host::refresh_picture(texture_viewer_panel& viewer, const res::tag& picture)
