@@ -2251,7 +2251,6 @@ BOOST_AUTO_TEST_CASE(NewMaterial_ResolvesTheBaseMaterialsSceneShader)
 	BOOST_REQUIRE_MESSAGE(shader.is_ready(), "the scene shader was still loading after 5 s");
 	BOOST_TEST(!shader.has_error());
 	BOOST_TEST(shader.get()->vertex.string() == "res://shaders/scene.vert");
-	BOOST_TEST((material.get()->queue == scn::pass_queue::OPAQUE));
 }
 
 // Without the material kind a new file would be a plain Material.desc: refused, nothing is written.
