@@ -849,9 +849,12 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 				if (!nested) {
 					const std::string named = field.ref_type.empty() ? std::format("{}{}", type, field.key) : field.ref_type;
 					if (unschemed.insert(named).second) {
-						schema_error(at, field.ref_type.empty()
+						// A warning, as for a desc whose type has no schema: a module's type may nest a struct without .ref(), and such a
+						// file was savable before #1445. The {guid, path} references under it are still checked below.
+						add(std::string(res::diagnostic_kind::schema), at, field.ref_type.empty()
 							? std::format("field '{}' of '{}' names no schema for its structures: the tags in them are not checked", field.name, type)
-							: std::format("'{}' has no schema: the tags in its structures are not checked", field.ref_type));
+							: std::format("'{}' has no schema: the tags in its structures are not checked", field.ref_type),
+							res::diagnostic_severity::warning);
 					}
 					check_references_by_shape(check_references_by_shape, *held, at);
 					continue;
