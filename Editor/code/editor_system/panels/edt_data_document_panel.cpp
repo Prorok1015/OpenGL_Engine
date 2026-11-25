@@ -92,6 +92,7 @@ void edt::data_document_panel::on_render()
 		ImGui::TextColored(colors().error, "%s", m_error.c_str());
 	}
 	ImGui::Separator();
+	draw_before_fields();
 
 	if (ImGui::BeginChild("##fields", ImVec2(0.f, 0.f), ImGuiChildFlags_None)) {
 		const desc::type_schema* schema = m_document.schema();

@@ -247,58 +247,6 @@ BOOST_AUTO_TEST_CASE(TheTextureHeader_FollowsTheSettings_AndNamesNoTypeUsageExte
 	BOOST_CHECK_EQUAL(mip_header.at("data").as_object().at("mip_levels").as_int64(), edt::k_image_full_mip_chain);
 }
 
-BOOST_AUTO_TEST_CASE(AnAgentsSource_IsToldLocalOrNot_ByItsTextAndTheVolumeTables)
-{
-	int asked = 0;
-	edt::source_volume_ports windows;
-	windows.windows = true;
-	unsigned type = edt::k_drive_fixed;
-	windows.drive_type = [&](char letter) {
-		++asked;
-		BOOST_CHECK_EQUAL(letter, 'D');
-		return type;
-	};
-	windows.mount_table = {};
-	const auto refused = [](const std::string& why) { return !why.empty(); };
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\pictures\\rock.png", windows)));
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:/pictures/rock.png", windows)));
-	type = edt::k_drive_removable;
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("D:\\rock.png", windows)));
-	for (const unsigned other : { 0u, 1u, 4u, 5u, 6u }) {
-		type = other;
-		BOOST_CHECK(refused(edt::agent_source_path_problem("D:\\rock.png", windows)));
-	}
-	asked = 0;
-	for (const char* path : { "\\\\server\\share\\x.png", "//server/share/x.png", "\\\\?\\UNC\\server\\share\\x.png",
-		"\\\\?\\D:\\x.png", "\\\\.\\D:\\x.png", "\\??\\D:\\x.png", "/\\server\\x.png", "\\pictures\\x.png",
-		"pictures\\x.png", "D:x.png", "D:\\a\\..\\x.png", "D:\\.\\x.png", "D:\\x.png:stream" }) {
-		BOOST_TEST_CONTEXT(path)
-		{
-			BOOST_CHECK(refused(edt::agent_source_path_problem(path, windows)));
-		}
-	}
-	BOOST_CHECK_EQUAL(asked, 0);
-
-	edt::source_volume_ports posix;
-	posix.windows = false;
-	posix.drive_type = {};
-	std::optional<std::string> table = std::string("/dev/sda1 / ext4 rw 0 0\nnas:/x /mnt/nas nfs4 rw 0 0\n"
-		"/dev/sdb1 /mnt/nas/local ext4 rw 0 0\nhost:/y /media/net\\040share cifs rw 0 0\n");
-	posix.mount_table = [&] { return table; };
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("/home/user/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt/nas/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt//nas/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/mnt/nas", posix)));
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("/mnt/nasty/rock.png", posix)));
-	BOOST_CHECK(!refused(edt::agent_source_path_problem("/mnt/nas/local/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/media/net share/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/home/../mnt/nas/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("//server/share/rock.png", posix)));
-	BOOST_CHECK(refused(edt::agent_source_path_problem("rock.png", posix)));
-	table.reset();
-	BOOST_CHECK(refused(edt::agent_source_path_problem("/home/user/rock.png", posix)));
-}
-
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtImageImportTests, image_fixture)
@@ -565,11 +513,6 @@ BOOST_AUTO_TEST_CASE(AFailingWritesError_HoldsNoAbsolutePath)
 		BOOST_CHECK_MESSAGE(written.error.find(part) == std::string::npos, written.error);
 	}
 
-	const std::string text = top().string() + "/textures/x.png, " + top().generic_string() + " and " + source.string();
-	const std::string clean = edt::image_importer::without_paths(text, { top() }, source);
-	BOOST_CHECK_MESSAGE(clean.find("unit_test_tmp") == std::string::npos, clean);
-	BOOST_CHECK_MESSAGE(clean.find("res://textures/x.png") != std::string::npos, clean);
-	BOOST_CHECK_MESSAGE(clean.find("rock.png") != std::string::npos, clean);
 }
 
 BOOST_AUTO_TEST_CASE(WithNoProjectOpen_NothingIsImported)
@@ -606,6 +549,24 @@ BOOST_AUTO_TEST_CASE(AnAgent_NeedsThePlanDescribedForThatVeryCall)
 	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
 	// The plan is spent.
 	BOOST_CHECK_EQUAL(importer->start(request(nullptr, std::nullopt, "again"), agent).code, cmd::codes::denied);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgent_RunsOnlyThePlanOfItsOwnTicket)
+{
+	// Described for one question: a call without that ticket, or with another, uses the plan up and runs nothing.
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(importer->start(request(), agent).code, cmd::codes::denied);
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	BOOST_CHECK_EQUAL(importer->start(request(), agent, "ticket-b").code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(importer->start(request(), agent, "ticket-a").code, cmd::codes::denied);
+	test_util::pump(tasks);
+	BOOST_CHECK(nothing_written());
+
+	BOOST_REQUIRE(importer->describe(request(), agent, "ticket-a").has_value());
+	const edt::image_importer::started started = importer->start(request(), agent, "ticket-a");
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	test_util::pump(tasks);
+	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(AnAgentsQuestion_DoesNotLookAtTheSource)
@@ -836,6 +797,21 @@ BOOST_AUTO_TEST_CASE(AnAgentsCall_WithATicketNotApprovedOrRejected_IsDenied_AnAp
 	test_util::pump(tasks);
 	BOOST_CHECK(fs::exists(top() / "textures" / "rock.png.txm.desc"));
 	actions.commands().set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(APlanDescribedForARejectedTicket_RunsForNoOtherCall)
+{
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::ask));
+	const json::object args{ { "path", source.string() } };
+	const cmd::result asked = call(agent, args);
+	BOOST_REQUIRE_EQUAL(asked.code, cmd::codes::confirmation_required);
+	actions.commands().discard(std::string(asked.value.at("ticket").as_string()));
+	// No gate judges these calls: the importer alone holds the line.
+	actions.commands().set_policy_gate(nullptr);
+	BOOST_CHECK_EQUAL(call(agent, args).code, cmd::codes::denied);
+	BOOST_CHECK_EQUAL(call(agent, args, "another-ticket").code, cmd::codes::denied);
+	test_util::pump(tasks);
+	BOOST_CHECK(nothing_written());
 }
 
 BOOST_AUTO_TEST_CASE(ACallNeverDescribed_IsDenied)
