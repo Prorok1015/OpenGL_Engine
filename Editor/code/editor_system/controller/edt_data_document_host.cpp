@@ -101,6 +101,12 @@ void edt::data_document_host::follow_focus()
 			return;
 		}
 	}
+	if (taken != panels.end() && taken->id == "shader_editor" && m_shown_shader_source) {
+		if (const document_id shown = m_shown_shader_source(); shown != document_id{}) {
+			manager.set_active(shown);
+			return;
+		}
+	}
 	manager.set_active(manager.scene().id());
 }
 

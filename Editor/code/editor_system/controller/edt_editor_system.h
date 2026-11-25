@@ -85,6 +85,7 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_component;
 	class modeller_component;
+	class shader_editor_component;
 	class shape_parameters_component;
 	class play_session;
 	class editor_mode_controller;
@@ -104,6 +105,7 @@ namespace edt {
 		// The prefab editor (tests drive its close/apply/open flows through it).
 		prefab_editor_component& prefab_editor() const { return *m_prefab; }
 		modeller_component& modeller() const { return *m_modeller; }
+		shader_editor_component& shader_editor() const { return *m_shader_editor; }
 		play_session* play() const { return m_play; }
 
 		// False (and nothing changes) when the file is there but is not a level: loading, say, a material as a level
@@ -212,6 +214,8 @@ namespace edt {
 		// The mesh modeller (EPIC-77, #1011): its window, its asset kinds and close question; the mesh documents belong to the document_manager.
 		std::unique_ptr<modeller_component> m_modeller;
 		modeller_settings m_modeller_settings;
+		// The GLSL editor (#1202): its window, the asset kinds of the shader sources and the close question; the documents belong to the document_manager.
+		std::unique_ptr<shader_editor_component> m_shader_editor;
 
 		// Opening an asset and adding one to the scene, with the data documents (EPIC-56, #793, #1004).
 		std::unique_ptr<asset_open_component> m_asset_open;

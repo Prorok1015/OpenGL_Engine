@@ -54,6 +54,8 @@ namespace edt
 		std::function<std::string()> level_path; // res-relative path of the saved level, empty if untitled
 		std::function<void()> new_level;
 		std::function<bool()> quick_save;     // overwrite the saved level, true if written
+		// Ctrl+S and Save Level: saves the focused document when it is one the level's save must not take (a shader source, #1202); true when it did.
+		std::function<bool()> save_focused_document = {};
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		// The documents besides the scene (data documents): unsaved changes among them count for New, Open and Exit, the

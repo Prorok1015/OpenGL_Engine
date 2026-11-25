@@ -1,5 +1,6 @@
 #include "edt_asset_filter.h"
 #include "edt_asset_database.h"
+#include "edt_asset_kind_names.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/platform/plt_beneath.h>
 #include <algorithm>
@@ -69,7 +70,9 @@ std::string edt::asset_kind_of(const asset_kind_registry* kinds, std::string_vie
 	if (kinds) {
 		if (const asset_kind_desc* registered = kinds->kind_for_open(path)) {
 			if (!registered->id.empty()) {
-				return registered->id == "poly" ? std::string{ k_asset_kind_mesh } : registered->id;
+				if (registered->id == "poly") return std::string{ k_asset_kind_mesh };
+				// The GLSL editor's kinds, one per suffix, are the one kind of the shader sources (#1202).
+				return std::string{ outward_kind_name(registered->id) };
 			}
 		}
 	}
@@ -224,7 +227,7 @@ std::vector<edt::asset_filter_kind> edt::asset_filter_kinds(const asset_kind_reg
 		for (const std::string& id : kinds->ids()) {
 			const asset_kind_desc* registered = kinds->find(id);
 			const bool opens = registered && registered->open;
-			const bool known = id == "poly" || id == "desc" || std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
+			const bool known = id == "poly" || id == "desc" || id.starts_with(k_shader_source_kind_prefix) || std::ranges::any_of(out, [&](const asset_filter_kind& kind) { return kind.id == id; });
 			if (opens && !known) {
 				out.push_back({ id, id });
 			}

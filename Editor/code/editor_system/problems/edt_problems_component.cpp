@@ -6,6 +6,7 @@
 #include "edt_problems_panel.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
+#include "edt_shader_source_documents.h"
 #include "edt_world_controller.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_context.h>
@@ -144,7 +145,12 @@ void edt::problems_component::follow_shaders()
 void edt::problems_component::go_to_problem(const std::string& source, const problem& item)
 {
 	if (source == shader_problem_publisher::source) {
-		// The file opens in the app the system gives it, at its top: going to the line is #1291.
+		if (m_ports.open_shader_source && !item.file.empty() && !shader_preview_id_of(item.file).empty()) {
+			// A suffix the editor opens: when it fails the reason has been shown, and the system's app is not tried instead.
+			m_ports.open_shader_source(res::tag{ item.file }, item.line);
+			return;
+		}
+		// Not one the editor opens (an upper-case suffix, none): the file opens in the app the system gives it, at its top.
 		const auto disk_path = [this](const res::tag& file) -> std::optional<std::filesystem::path> {
 			const std::optional<res::disk_file> on_disk = m_ports.context.resources().disk_file_of(file);
 			return on_disk ? std::optional<std::filesystem::path>{ on_disk->file } : std::nullopt;

@@ -22,6 +22,7 @@
 #include <snk/common/text_escape.h>
 #include "edt_selection_wiring.h"
 #include "edt_modeller_component.h"
+#include "edt_shader_editor_component.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_prefab_file_edit.h"
@@ -263,6 +264,10 @@ edt::editor_system::~editor_system()
 		m_modeller->detach_document();
 		m_modeller.reset();
 	}
+	if (m_shader_editor) {
+		m_shader_editor->detach_document();
+		m_shader_editor.reset();
+	}
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_game_layer_change(nullptr);
 		ctx_mgr->set_on_reload_result(nullptr);
@@ -365,7 +370,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.assets = [this] { return m_asset_component.get(); },
 		.open_asset = [this](const res::tag& tag, bool quiet) { return m_asset_open->open(tag, quiet); },
 		.play_active = [this] { return m_play && m_play->active(); },
-		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); } });
+		.open_file = [](const std::filesystem::path& file) { return platform::open_in_shell(file); },
+		.open_shader_source = [this](const res::tag& tag, int line) { return m_shader_editor && m_shader_editor->open(tag, line); } });
 
 	// A link in code/ that leaves the project: the project opens, the person is told (#1300).
 	if (data.has_value<prj::project_context>()) {
@@ -429,6 +435,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.desc_layout = [this] { return m_asset_open->desc_layout(); },
 		.edits_locked = [this] { return m_play && m_play->active(); } });
 
+	// The GLSL editor (#1202).
+	m_shader_editor = std::make_unique<shader_editor_component>(shader_editor_component::ports{
+		.context = *m_context,
+		.desc_layout = [this] { return m_asset_open->desc_layout(); },
+		.edits_locked = [this] { return m_play && m_play->active(); },
+		.open_is_quiet = [this] { return m_asset_open && m_asset_open->open_is_quiet(); } });
+
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
 		.apply_to_prefab = [this](const res::tag& tag, const std::vector<scn::override_record>& records) {
@@ -457,6 +470,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	m_asset_open->data_documents().set_shown_mesh([this] { return m_modeller ? m_modeller->shown_id() : document_id{}; });
 	m_asset_open->data_documents().set_input_router(m_input_router);
+	m_asset_open->data_documents().set_shown_shader_source([this] { return m_shader_editor ? m_shader_editor->shown_id() : document_id{}; });
 	m_shape_parameters = std::make_unique<shape_parameters_component>(shape_parameters_component::ports{
 		*m_context, m_services, m_state, m_res, *m_panels->inspector(), [this] { return m_asset_open->desc_layout(); },
 		[this] { return m_prefab->shown_prefab(); } });
@@ -477,6 +491,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_panels->install(m_registrations, [this] {
 		m_prefab->install(m_registrations);
 		m_modeller->install(m_registrations);
+		m_shader_editor->install(m_registrations);
 	});
 
 	auto& wnd_sys = data.require<wnd::window_system>();
@@ -531,6 +546,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.discard_meshes = [this] { m_modeller->drop_dirty(); },
 		.show_mesh = [this](document_id id) { m_modeller->show(id); },
 		.request_close_mesh = [this](document_id id) { m_modeller->request_close(id); },
+		.shaders_dirty = [this] { return m_shader_editor->dirty(); },
+		.save_shaders = [this] { return m_shader_editor->save_dirty(); },
+		.discard_shaders = [this] { m_shader_editor->drop_dirty(); },
+		.show_shader_source = [this](document_id id) { m_shader_editor->show(id); },
+		.save_focused_shader = [this] { return m_shader_editor->save_active(); },
+		.request_close_shader_source = [this](document_id id) { m_shader_editor->request_close(id); },
 		.level_disk = m_level_disk.get() });
 	m_file_menu->install(m_registrations);
 	m_level_load->install(m_registrations);
@@ -722,6 +743,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_state.mark_clean();
 			m_prefab->close_dirty();
 			m_modeller->drop_dirty();
+			m_shader_editor->drop_dirty();
 		};
 		agent_ports.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		// The guard is in place before the server can take a call.

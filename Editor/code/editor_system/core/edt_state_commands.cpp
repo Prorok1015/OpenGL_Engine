@@ -12,6 +12,7 @@
 #include <snk/resource/res_asset_walk.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include "edt_asset_kind_names.h"
 #include "edt_asset_layers.h"
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
@@ -771,10 +772,13 @@ namespace {
 		return out;
 	}
 
+	// The GLSL editor registers one kind per suffix (`shader_source.<suffix>`): to an agent they are the one kind `shader` (the asset
+	// browser's filter says the same, `asset_kind_of`).
 	std::string kind_of_asset(const edt::asset_kind_registry& kinds, const std::string& path)
 	{
-		if (const auto* kind = kinds.kind_for_open(path)) return kind->id;
-		if (const auto* kind = kinds.kind_for_drop(path)) return kind->id;
+		const auto named = [](const edt::asset_kind_desc& kind) { return std::string{ edt::outward_kind_name(kind.id) }; };
+		if (const auto* kind = kinds.kind_for_open(path)) return named(*kind);
+		if (const auto* kind = kinds.kind_for_drop(path)) return named(*kind);
 		return {};
 	}
 
