@@ -65,6 +65,21 @@ edt::save_result edt::disk_state::overwrite(std::string& version, std::string on
 	return saved;
 }
 
+std::optional<std::string> edt::write_gate::blocker(const desc_file_layout& files)
+{
+	return files.write_blocker ? files.write_blocker() : std::nullopt;
+}
+
+edt::file_write_check edt::write_gate::check(res::resource_system& reader, const desc::desc_system& descs, const desc_file_layout& files,
+	const res::tag& tag, std::string_view disk_version, disk_state& state, const std::function<void()>& announce)
+{
+	file_write_check allowed = check_file_write(reader, descs, files, tag, disk_version);
+	if (allowed.changed_on_disk) {
+		state.raise(announce);
+	}
+	return allowed;
+}
+
 void edt::source_watch::watch(res::resource_system* resources, const res::tag& tag, void* owner, std::function<void(const res::tag&)> changed)
 {
 	unwatch();

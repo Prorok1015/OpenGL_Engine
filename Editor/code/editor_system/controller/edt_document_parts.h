@@ -1,12 +1,16 @@
 #pragma once
+#include "edt_desc_file_commands.h"
+#include "edt_file_write_check.h"
 #include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+namespace desc { class desc_system; }
 namespace res { class resource_system; }
 
 namespace edt
@@ -75,6 +79,20 @@ namespace edt
 		bool m_changed = false;
 		std::string m_flagged_version;
 		std::uint64_t m_serial = 0;
+	};
+
+	// What a document that writes a desc file asks before it does (prefab, mesh, data; #1400 PR 2).
+	struct write_gate
+	{
+		// Why nothing may be written into the project now (the layout's `write_blocker` port: a migration that runs or stopped
+		// half way); nullopt: it may. The one place the port is read.
+		static std::optional<std::string> blocker(const desc_file_layout& files);
+
+		// check_file_write for a document that keeps `state`: when the file turns out to differ from `disk_version` the flag is
+		// set and `announce` called (once: not when it was set already), though the watcher may not have said so yet (Save All's
+		// question depends on the flag). The result is check_file_write's, whole: the caller refuses on its `error`.
+		static file_write_check check(res::resource_system& reader, const desc::desc_system& descs, const desc_file_layout& files,
+			const res::tag& tag, std::string_view disk_version, disk_state& state, const std::function<void()>& announce);
 	};
 
 	// One watched file of a document, registered on the writable resources and given back with the document (prefab, mesh, shader;
