@@ -4,11 +4,13 @@
 #include "edt_async_import_task.h"
 #include "edt_model_file_access.h"
 #include "edt_model_import_limits.h"
+#include "edt_model_import_settings.h"
 #include "edt_model_importer.h"
 #include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
+#include <boost/json/value.hpp>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -35,6 +37,9 @@ namespace edt {
 		// From the result of a first call whose model refers to other files: the second call, which shows a person
 		// exactly those files, carries it. Empty: the first call.
 		std::string files_token;
+		// {normals?, tangents?} (parse_model_settings, #1195); null: the defaults. A files_token holds for the
+		// settings it was made with only.
+		boost::json::value settings{};
 	};
 
 	// What a request resolves to: the file the person is shown and approves, and the files the job will write. An
@@ -56,6 +61,8 @@ namespace edt {
 		std::string name;
 		std::string folder;
 		std::string prefab;	// res:// tag of the prefab the import produces
+		// How the meshes are made: part of what the person approves (#1195).
+		model_import_settings settings{};
 		// The files besides the model that the import may read: what the person was shown (the second question).
 		std::vector<referenced_file> files;
 		std::uintmax_t files_bytes = 0;
@@ -68,7 +75,7 @@ namespace edt {
 
 		bool ok() const { return error.empty(); }
 		bool same_file_as(const agent_import_plan& other) const;
-		// The same name, folder and prefab: what a person was shown of the files the import writes.
+		// The same name, folder, prefab and settings: what a person was shown of the files the import writes.
 		bool same_targets(const agent_import_plan& other) const;
 	};
 

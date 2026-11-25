@@ -63,6 +63,7 @@ Editor/
     │   ├── edt_asset_exporter.cpp/h
     │   ├── edt_asset_export_dialog.cpp/h
     │   ├── edt_agent_model_import.cpp/h
+    │   ├── edt_model_import_meta.cpp/h # the `.resource` of an imported prefab (#1195): plan_model_meta / write_model_meta / take_back_model_meta through platform::beneath
     │   └── edt_agent_source_rule.cpp/h # the one rule of where an agent's import may read (#1378/#1380): `agent_source_path_problem`, `source_volume_ports`, `system_drive_type`/`system_mount_table`, `without_paths`; the no-follow walk `agent_source_links_problem`, `cloud_attributes_problem`, `agent_side_file_problem` (#1408); `read_agent_file` (#1412): the source and the side files looked at and read only through the handle a no-follow walk opens (`read_beneath` + `read_limits` on the route of `agent_read_route_of`: from `/` with the mount points named, or the drive; no recall), `same_file_stamp` against the plan's stamp; the image and the model import use it
     │
     ├── gizmo/                        # Transform gizmo
@@ -132,6 +133,7 @@ Editor/
 
 code/model_import/                    # snk::model_import (#647): what reads a model and guards what it may read, no editor code; its decoder side is compiled again as snk_model_decoder_side for the decoder process, which links no engine (#1077)
     ├── edt_model_import_core.cpp/h   # import_source, scan_model_files, list_model_requests, import_model_into (mdl::import_model into an mdl::import_sink, prefab stamped by the caller): decoder side, no desc/resource system
+    ├── edt_model_import_settings.cpp/h # model_import_settings (#1195): normals smooth|flat, tangents; strict parse/JSON of the `settings` of importer "model", the rewrite that keeps a newer editor's keys; built without assimp too
     ├── edt_model_importer.cpp/h      # model_importer: import_model_into over the resource system with the prefab stamped (import_background), finalize_on_main
     ├── edt_process_decoder.cpp/h     # process_decoder, accept_import_answer (stamps the decoder's unstamped prefab with the editor's desc_system, #1077)
     ├── edt_decode_{bundle,codec,runner}.cpp/h  # the decoder process (#647): bundle file format, JSON of request/scan/import, decode_runner (scratch folder 0700, kill on deadline/cancel, stale-folder cleanup)

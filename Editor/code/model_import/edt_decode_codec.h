@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_async_import_task.h"
 #include "edt_model_file_access.h"
+#include "edt_model_import_settings.h"
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 #include <cstddef>
@@ -73,6 +74,8 @@ namespace edt {
 		std::string memory_folder;
 		// import_source::on_disk.
 		bool on_disk = true;
+		// import_source::settings (#1195); a request without them is read as the defaults.
+		model_import_settings settings{};
 	};
 
 	boost::json::object to_json(const decode_request& request);

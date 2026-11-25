@@ -1,4 +1,5 @@
 #include "edt_person_model_import.h"
+#include "edt_decode_codec.h"
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
@@ -175,5 +176,8 @@ edt::import_intermediate edt::person_model_import(const fs::path& path, const st
 		throw ds::task_cancelled{};
 	}
 	imported.source_path = path;
+	// The bytes the decoder imported: the `.resource` of the prefab records them by their hash, never by the path.
+	imported.settings = source.settings;
+	imported.source_sha256 = digest_to_hex(digest_of(bytes));
 	return imported;
 }
