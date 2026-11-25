@@ -41,6 +41,8 @@ namespace edt {
 		bool on_disk = true;
 		// The decoder process's OS sandbox (#1043) this import asks for at least; off asks for nothing beyond the setting.
 		sandbox_mode sandbox = sandbox_mode::off;
+		// Set for an agent's import (#1408): every side file read from the disk passes it first (model_file_access).
+		model_read_rule may_read;
 	};
 
 	// The files a model would read (needs `source.preloaded`): parses it, stores nothing. `error` says why the model

@@ -117,9 +117,13 @@ namespace {
 			held);
 	}
 
-	// Empty when `plan.source` still is the file that was shown: a plain file, the same place, size and time.
-	std::string identity_problem(const edt::agent_import_plan& plan)
+	// Empty when `plan.source` still is the file that was shown: a plain file, the same place, size and time. `agent`
+	// (an agent's import): no link on the way to it either, looked at before anything follows one.
+	std::string identity_problem(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
+		if (agent) {
+			if (std::string why = edt::agent_source_links_problem(plan.source, *agent); !why.empty()) return why;
+		}
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -132,9 +136,9 @@ namespace {
 	}
 
 	// The bytes of the model, read once: no more than the size that was shown, and the file must still be that file.
-	std::vector<std::byte> read_checked_source(const edt::agent_import_plan& plan)
+	std::vector<std::byte> read_checked_source(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		if (const std::string why = identity_problem(plan); !why.empty()) throw std::runtime_error(why);
+		if (const std::string why = identity_problem(plan, agent); !why.empty()) throw std::runtime_error(why);
 		std::ifstream in(plan.source, std::ios::binary);
 		if (!in) throw std::runtime_error("the file cannot be opened");
 		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));
@@ -142,7 +146,9 @@ namespace {
 		if (static_cast<std::uintmax_t>(in.gcount()) != plan.size || in.peek() != std::char_traits<char>::eof()) {
 			throw std::runtime_error("the size of the file changed while it was read");
 		}
-		if (const std::string why = identity_problem(plan); !why.empty()) throw std::runtime_error("the file changed while it was read: " + why);
+		if (const std::string why = identity_problem(plan, agent); !why.empty()) {
+			throw std::runtime_error("the file changed while it was read: " + why);
+		}
 		return bytes;
 	}
 
@@ -255,9 +261,10 @@ namespace {
 			}
 		}
 		ctx.set_progress(0.f, "Reading the model");
-		if (const std::string why = identity_problem(in.plan); !why.empty()) throw std::runtime_error(why);
+		const edt::source_volume_ports* const agent = in.agent ? &in.volumes : nullptr;
+		if (const std::string why = identity_problem(in.plan, agent); !why.empty()) throw std::runtime_error(why);
 
-		const std::vector<std::byte> source_bytes = read_checked_source(in.plan);
+		const std::vector<std::byte> source_bytes = read_checked_source(in.plan, agent);
 		const edt::content_digest digest = edt::digest_of(source_bytes);
 		if (in.plan.hashed && digest != in.plan.digest) throw std::runtime_error("the content of the file changed since its files were listed");
 		edt::import_source source;
@@ -266,6 +273,12 @@ namespace {
 		source.limits = in.limits;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 		source.time_limit = in.time_limit;
+		if (in.agent) {
+			// Every side file passes the rule by the name the model gives it, before the disk is asked about it.
+			source.may_read = [volumes = in.volumes, folder = in.plan.source.parent_path()](const fs::path& candidate) {
+				return edt::agent_side_file_problem(candidate, folder, volumes);
+			};
+		}
 		std::vector<edt::referenced_file> files = in.plan.files;
 		if (!in.plan.scanned) {
 			const edt::model_file_scan found = in.scan(source, &ctx);
@@ -293,7 +306,7 @@ namespace {
 		edt::import_result result;
 		try {
 			if (!imported.error.empty()) throw std::runtime_error(imported.error);
-			if (const std::string why = identity_problem(in.plan); !why.empty()) {
+			if (const std::string why = identity_problem(in.plan, agent); !why.empty()) {
 				throw std::runtime_error("the file changed while it was imported: " + why);
 			}
 			ctx.throw_if_stopped();
@@ -365,10 +378,8 @@ namespace {
 		} catch (const std::exception& failed) {
 			std::vector<fs::path> roots = in.layers;
 			roots.push_back(in.top);
-			// The spellings of a source are looked up on the disk: only of one the rule still allows.
-			const std::string source_text = fs_paths::utf8_of(in.plan.source);
-			const bool local = edt::agent_source_path_problem(source_text, in.volumes).empty();
-			throw std::runtime_error(edt::without_paths(failed.what(), roots, local ? in.plan.source : fs::path{}));
+			// without_paths replaces the source by its text only: nothing of it is looked up on the disk.
+			throw std::runtime_error(edt::without_paths(failed.what(), roots, in.plan.source));
 		}
 	}
 }
@@ -473,6 +484,12 @@ edt::agent_import_plan edt::agent_model_import::resolve(const agent_import_reque
 
 	const fs::path given = from_utf8(request.path);
 	if (!given.is_absolute()) return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a model file");
+	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
+	if (!person) {
+		if (std::string why = agent_source_links_problem(given, volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, std::move(why));
+		}
+	}
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
 	if (ec || status.type() == fs::file_type::not_found) {

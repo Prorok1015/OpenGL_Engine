@@ -122,8 +122,9 @@ namespace {
 }
 
 edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed,
-	const fs::path& boundary, bool on_disk)
-	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_on_disk(on_disk)
+	const fs::path& boundary, bool on_disk, model_read_rule may_read)
+	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_may_read(std::move(may_read)),
+	m_on_disk(on_disk)
 {
 	m_root_extension = lowered_extension(m_root_file);
 	m_dir_as_given = m_root_file.parent_path().lexically_normal();
@@ -206,7 +207,8 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	constexpr const char* not_allowed = "a name the rule does not allow";
 	if (reference.find('\0') != std::string_view::npos) return refuse(refusal_kind::rule, not_allowed);
 	const fs::path given = fs_paths::path_from_utf8(with_forward_slashes(reference));
-	if (given.has_root_name() || given.has_root_directory()) {
+	const bool absolute_name = given.has_root_name() || given.has_root_directory();
+	if (absolute_name) {
 		// The model's own folder may be a share (//server/share): Assimp names its side files from it. Only what lies below
 		// that folder is the model's spelling.
 		const fs::path normal = given.lexically_normal();
@@ -219,7 +221,21 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 		// A ".." that leaves the boundary is refused here, so weakly_canonical below never asks the disk about a path outside it.
 		return refuse(refusal_kind::rule, outside);
 	}
-	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
+	// With a rule of the caller, the path judged is the path resolved: `link/../x` must not reach the disk as written,
+	// where the `..` would be taken after the link is followed.
+	std::string judged;
+	if (m_may_read) {
+		const auto dotted = [](const fs::path& part) { return part == "." || part == ".."; };
+		if (std::any_of(given.begin(), given.end(), dotted)) {
+			return refuse(refusal_kind::rule, "a '.' or '..' in a name an agent's import reads");
+		}
+		if (absolute_name && kind != model_file_kind::side_file) return refuse(refusal_kind::rule, outside);
+		const fs::path candidate = absolute_name ? given.lexically_normal() : (m_dir / given).lexically_normal();
+		if (std::string why = m_may_read(candidate); !why.empty()) return refuse(refusal_kind::rule, std::move(why));
+		judged = fs_paths::generic_utf8_of(candidate);
+	}
+	const auto inside = m_may_read ? res::path_within_dir_from(m_boundary, m_dir, judged, true)
+		: res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(refusal_kind::rule, outside);
 	std::error_code ec;
 	const fs::path relative = inside->lexically_relative(m_boundary);

@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "test_folder_link.hpp"
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_model_import.h"
@@ -78,6 +79,7 @@ struct import_fixture : test_util::scene_env
 			++scans;
 			deadline_was_set = source.deadline != std::chrono::steady_clock::time_point{};
 			scan_sandbox = source.sandbox;
+			scan_rule = source.may_read;
 			edt::model_file_scan scan;
 			scan.error = scan_error;
 			scan.files = listed_files;
@@ -214,6 +216,8 @@ struct import_fixture : test_util::scene_env
 	std::vector<edt::referenced_file> listed_files;
 	bool scan_leaves_unhashed = false;
 	std::vector<edt::referenced_file> seen_allowed;
+	// The side-file rule the job handed the scan (#1408): set for an agent only.
+	edt::model_read_rule scan_rule;
 	std::string seen_bytes;
 	std::optional<res::tag> foreign_tag;
 	std::function<void()> during_import;
@@ -1110,6 +1114,71 @@ BOOST_AUTO_TEST_CASE(ASideFileOnAVolumeThatTurnedRemote_IsRefusedByTheSecondCall
 	BOOST_CHECK_EQUAL(imports, 0);
 	BOOST_CHECK(!fs::exists(res_root / "models"));
 }
+
+// #1408: a link on the way to the source is refused where it is, never followed (here its target is gone).
+BOOST_AUTO_TEST_CASE(AnAgentsSource_BelowAFolderLink_IsRefusedAtTheLink_BeforeAnythingFollowsIt)
+{
+	const fs::path outside = source.parent_path();
+	fs::create_directories(outside / "gone");
+	test_util::make_folder_link(outside / "linked", outside / "gone");
+	fs::remove(outside / "gone");
+	const edt::agent_import_request wanted{ (outside / "linked" / "robot.glb").string(), "hero", "models" };
+
+	const edt::agent_import_plan plan = service->resolve(wanted, false);
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(plan.error.find("'linked' on the way to the source is a link") != std::string::npos, plan.error);
+	BOOST_CHECK_MESSAGE(plan.error.find("no such file") == std::string::npos, plan.error);
+
+	const auto started = approved_start(wanted, agent);
+	BOOST_CHECK_EQUAL(started.code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(scans, 0);
+	BOOST_CHECK_EQUAL(imports, 0);
+	BOOST_CHECK(!fs::exists(res_root / "models"));
+	// A person's import has no such rule: the file is simply not there.
+	BOOST_CHECK_EQUAL(service->resolve(wanted, true).code, cmd::codes::not_found);
+}
+
+BOOST_AUTO_TEST_CASE(AFolderLinkInsideTheModelFolder_IsRefusedToAnAgentsScan_APersonsReadsIt)
+{
+	const std::string png = std::string("\x89PNG\r\n\x1a\n", 8) + std::string(32, 'x');
+	dir.write("outside/tex/skin.png", png);
+	test_util::make_folder_link(source.parent_path() / "linked", source.parent_path() / "tex");
+
+	BOOST_REQUIRE(finished(approved_start(request("hero", "models"), agent).job).contains("prefab"));
+	BOOST_REQUIRE(scan_rule);
+	edt::model_file_access as_agent(source, {}, nullptr, {}, true, scan_rule);
+	const auto refused = as_agent.resolve("linked/skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(refused.error.find("'linked' on the way to the source is a link") != std::string::npos,
+		refused.error);
+	BOOST_CHECK(as_agent.files().empty());
+	BOOST_CHECK(as_agent.resolve("tex/skin.png", edt::model_file_kind::texture).found());
+
+	const auto mine = service->start(request("mine", "mine"), cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(mine.ok(), mine.error);
+	finished(mine.job);
+	BOOST_CHECK(!scan_rule);
+	edt::model_file_access as_person(source, {}, nullptr, {}, true, scan_rule);
+	const auto found = as_person.resolve("linked/skin.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(found.found(), found.error);
+	BOOST_CHECK(as_person.read(found).has_value());
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(ANetworkMountBelowTheModelFolder_IsRefusedToAnAgentsScan)
+{
+	const std::string png = std::string("\x89PNG\r\n\x1a\n", 8) + std::string(32, 'x');
+	dir.write("outside/net/skin.png", png);
+	BOOST_REQUIRE(finished(approved_start(request("hero", "models"), agent).job).contains("prefab"));
+	BOOST_REQUIRE(scan_rule);
+	mounts += "nas:/export " + fs_paths::generic_utf8_of(source.parent_path() / "net") + " nfs rw 0 0\n";
+	edt::model_file_access as_agent(source, {}, nullptr, {}, true, scan_rule);
+	const auto refused = as_agent.resolve("net/skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(refused.error.find("'nfs' file system") != std::string::npos, refused.error);
+	BOOST_CHECK(as_agent.files().empty());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
 

@@ -1,12 +1,17 @@
 #include <boost/test/unit_test.hpp>
+#include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
+#include "edt_agent_source_rule.h"
 #include "edt_model_file_access.h"
+#include <snk/common/fs_paths.h>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 #if !defined(_WIN32)
@@ -43,8 +48,24 @@ struct access_fixture
 		return edt::model_file_access(root, limits, allowed);
 	}
 
+	// The source rule of an agent's import (#1408) for a model in this fixture: a local disk, `mounts` added.
+	edt::model_read_rule agent_rule(std::string mounts = {})
+	{
+		edt::source_volume_ports ports;
+		ports.drive_type = [](char) { return edt::k_drive_fixed; };
+		ports.mount_table = [mounts]() -> std::optional<std::string> { return "/dev/sda1 / ext4 rw 0 0\n" + mounts; };
+		ports.entry_of = [this](const fs::path& path, std::error_code& ec) {
+			++walked;
+			return platform::beneath::link_entry_at(path, ec);
+		};
+		return [ports, folder = fs::weakly_canonical(root.parent_path())](const fs::path& candidate) {
+			return edt::agent_side_file_problem(candidate, folder, ports);
+		};
+	}
+
 	test_util::temp_dir dir{ "model_file_access" };
 	fs::path root;
+	int walked = 0;
 };
 
 }
@@ -468,6 +489,94 @@ BOOST_AUTO_TEST_CASE(OneFile_MayBeNamedInAtMostEightWays)
 	// A name it already has is no new one.
 	BOOST_CHECK(access.resolve("skin.png", edt::model_file_kind::texture).found());
 }
+
+// #1408: the caller's rule judges the name as the model gives it, before anything of it is looked at on the disk.
+BOOST_AUTO_TEST_CASE(ARuleOfTheCaller_RefusesANameBeforeTheDiskIsAsked_AndItsFileIsNeverReadOrHashed)
+{
+	std::vector<fs::path> judged;
+	edt::model_read_rule rule = [&](const fs::path& candidate) -> std::string {
+		judged.push_back(candidate);
+		return candidate.filename() == "normal.png" ? "not for this import" : "";
+	};
+	edt::model_file_access access(root, {}, nullptr, {}, true, rule);
+	const auto refused = access.resolve("tex/normal.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!refused.found());
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(refused.error.find("not for this import") != std::string::npos, refused.error);
+	BOOST_CHECK(access.resolve("skin.png", edt::model_file_kind::texture).found());
+	BOOST_REQUIRE_EQUAL(access.files().size(), 1u);
+	BOOST_CHECK(access.files()[0].path.filename() == "skin.png");
+	BOOST_REQUIRE_EQUAL(judged.size(), 2u);
+	BOOST_CHECK(judged[0] == (fs::weakly_canonical(root.parent_path()) / "tex" / "normal.png").lexically_normal());
+}
+
+BOOST_AUTO_TEST_CASE(AFolderLinkInsideTheModelFolder_IsRefusedForAnAgent_AndReadForAPerson)
+{
+	test_util::make_folder_link(dir.path() / "models" / "linked", fs::weakly_canonical(dir.path() / "models" / "tex"));
+	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule());
+	const auto refused = agent.resolve("linked/normal.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!refused.found());
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(refused.error.find("'linked' on the way to the source is a link") != std::string::npos,
+		refused.error);
+	BOOST_CHECK(!agent.read(refused).has_value());
+	BOOST_CHECK(agent.files().empty());
+	// The model's own folder was checked before (the source's walk): only what lies below it is walked.
+	BOOST_CHECK_EQUAL(walked, 1);
+	BOOST_CHECK(agent.resolve("tex/normal.png", edt::model_file_kind::texture).found());
+
+	auto person = make();
+	const auto found = person.resolve("linked/normal.png", edt::model_file_kind::texture);
+	BOOST_REQUIRE_MESSAGE(found.found(), found.error);
+	BOOST_CHECK(person.read(found).has_value());
+}
+
+// `link/../x` resolved as written would follow the link before taking the `..`: refused for an agent, whatever is
+// behind the link, before the disk is asked.
+BOOST_AUTO_TEST_CASE(ADotDotAfterALink_IsRefusedForAnAgent_WhateverIsBehindIt)
+{
+	const fs::path models = fs::weakly_canonical(dir.path() / "models");
+	test_util::make_folder_link(models / "linked", models / "tex");
+	fs::create_directories(dir.path() / "gone");
+	test_util::make_folder_link(models / "dangling", fs::weakly_canonical(dir.path() / "gone"));
+	fs::remove(dir.path() / "gone");
+	edt::model_file_access agent(root, {}, nullptr, {}, true, agent_rule());
+	for (const char* reference : { "linked/../skin.png", "linked/../none.png", "dangling/../skin.png", "./skin.png",
+		"tex/../skin.png" }) {
+		BOOST_TEST_CONTEXT(reference)
+		{
+			const auto refused = agent.resolve(reference, edt::model_file_kind::texture);
+			BOOST_CHECK(!refused.found());
+			BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+			BOOST_CHECK_MESSAGE(refused.error.find("'.' or '..'") != std::string::npos, refused.error);
+			BOOST_CHECK(!agent.read(refused).has_value());
+		}
+	}
+	BOOST_CHECK_EQUAL(walked, 0);
+	BOOST_CHECK(agent.files().empty());
+
+	// A person's import reads such names as before.
+	auto person = make();
+	BOOST_CHECK(person.resolve("tex/../skin.png", edt::model_file_kind::texture).found());
+	const auto through = person.resolve("linked/../skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK_MESSAGE(through.error.find("'.' or '..'") == std::string::npos, through.error);
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(ANetworkMountBelowTheModelFolder_IsRefusedForAnAgent_BeforeItIsLookedAt)
+{
+	dir.write("models/net/skin.png", png_bytes);
+	const fs::path mount = fs::weakly_canonical(dir.path() / "models") / "net";
+	edt::model_file_access agent(root, {}, nullptr, {}, true,
+		agent_rule("nas:/export " + fs_paths::generic_utf8_of(mount) + " nfs rw 0 0\n"));
+	const auto refused = agent.resolve("net/skin.png", edt::model_file_kind::texture);
+	BOOST_CHECK(!refused.found());
+	BOOST_CHECK(refused.refusal == edt::refusal_kind::rule);
+	BOOST_CHECK_MESSAGE(refused.error.find("'nfs' file system") != std::string::npos, refused.error);
+	BOOST_CHECK_EQUAL(walked, 0);
+	BOOST_CHECK(agent.files().empty());
+}
+#endif
 
 #if !defined(_WIN32)
 BOOST_AUTO_TEST_CASE(AFifoInsteadOfATexture_IsNeverOpened)

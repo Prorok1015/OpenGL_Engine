@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -72,6 +73,10 @@ namespace edt {
 		bool ok() const { return error.empty(); }
 	};
 
+	// Why a side file at a path (lexically normal, as the model names it, never resolved) may not be read; empty when it
+	// may. Asked by resolve() before anything of the path is looked at on the disk.
+	using model_read_rule = std::function<std::string(const std::filesystem::path&)>;
+
 	// Why resolve() refused a name. `rule`: the name may never be read (outside the folder, hidden, a kind of file or a
 	// spelling the rule does not allow, a model that is no file on the disk); `limit`: a count or size limit; `other`:
 	// the file on the disk cannot be trusted (not a plain file, its size, time or identity unreadable).
@@ -106,9 +111,10 @@ namespace edt {
 		enum class provided_mode { record, strict };
 
 		// `on_disk` false: the model was only given as bytes (served from memory or a pack, #925). It has no folder, so every
-		// file it refers to is refused and nothing is read from the disk.
+		// file it refers to is refused and nothing is read from the disk. `may_read` (an agent's import, #1408): a
+		// non-empty answer refuses the file by the rule before the disk is asked about it.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed = nullptr,
-			const std::filesystem::path& boundary = {}, bool on_disk = true);
+			const std::filesystem::path& boundary = {}, bool on_disk = true, model_read_rule may_read = {});
 		// `provided` must outlive the access.
 		model_file_access(std::filesystem::path root_file, model_file_limits limits, const std::vector<provided_file>* provided, provided_mode mode);
 
@@ -142,6 +148,7 @@ namespace edt {
 		model_file_limits m_limits;
 		const std::vector<referenced_file>* m_allowed = nullptr;
 		const std::vector<provided_file>* m_provided = nullptr;
+		model_read_rule m_may_read;
 		provided_mode m_mode = provided_mode::strict;
 		std::vector<requested_file> m_requested;
 		bool m_on_disk = true;
