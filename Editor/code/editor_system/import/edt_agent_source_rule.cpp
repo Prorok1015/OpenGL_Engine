@@ -395,6 +395,18 @@ fs::path edt::agent_source_spelled(const fs::path& given, const source_volume_po
 	return spelled;
 }
 
+std::string edt::agent_file_changed(const fs::path& path, const std::optional<platform::beneath::file_stamp>& shown,
+	const source_volume_ports& ports)
+{
+	if (std::string why = agent_source_links_problem(path, ports); !why.empty()) return why;
+	const agent_file_read stamped = read_agent_file(path, UINTMAX_MAX, ports, true);
+	if (!stamped.problem.empty()) return stamped.problem;
+	if (!shown || !same_file_stamp(*stamped.stamp, *shown)) {
+		return "the file changed since it was shown: another file, or other content";
+	}
+	return {};
+}
+
 bool edt::same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b)
 {
 	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.file_id == b.file_id && a.device == b.device;

@@ -105,8 +105,8 @@ namespace
 	// `agent` (an agent's import): no link on the way to the file either, looked at before anything follows one.
 	std::string identity_problem(const edt::image_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		// An agent's file is judged by the handle its read opens (read_checked_source), never by the path.
-		if (agent) return edt::agent_source_links_problem(plan.source, *agent);
+		// An agent's file is judged by the handle a read opens, never by the path.
+		if (agent) return edt::agent_file_changed(plan.source, plan.stamp, *agent);
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";

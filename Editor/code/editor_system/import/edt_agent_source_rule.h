@@ -146,6 +146,11 @@ namespace edt
 	// device.
 	bool same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b);
 
+	// Why `path` is no longer the file an agent was shown with `shown`: a link on its way (agent_source_links_problem),
+	// or the stamp of the handle a read opens (stamp only, nothing read) differs. Empty when it still is.
+	std::string agent_file_changed(const std::filesystem::path& path,
+		const std::optional<platform::beneath::file_stamp>& shown, const source_volume_ports& ports);
+
 	// What stands in for the folder of the source in an error an agent reads.
 	inline constexpr std::string_view k_source_folder_text = "<source folder>";
 

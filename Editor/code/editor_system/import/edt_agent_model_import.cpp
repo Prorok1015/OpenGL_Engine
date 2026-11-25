@@ -122,8 +122,8 @@ namespace {
 	// (an agent's import): no link on the way to it either, looked at before anything follows one.
 	std::string identity_problem(const edt::agent_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		// An agent's file is judged by the handle its read opens (read_checked_source), never by the path.
-		if (agent) return edt::agent_source_links_problem(plan.source, *agent);
+		// An agent's file is judged by the handle a read opens, never by the path.
+		if (agent) return edt::agent_file_changed(plan.source, plan.stamp, *agent);
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -424,7 +424,10 @@ namespace {
 
 bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 {
-	return source == other.source && size == other.size && modified == other.modified && id.same_as(other.id) && name == other.name && folder == other.folder;
+	// An agent's plan holds the stamp of the handle in place of the time and the id a look by the path takes.
+	const bool same_file = stamp || other.stamp ? stamp && other.stamp && same_file_stamp(*stamp, *other.stamp)
+		: modified == other.modified && id.same_as(other.id);
+	return source == other.source && size == other.size && same_file && name == other.name && folder == other.folder;
 }
 
 bool edt::agent_import_plan::same_targets(const agent_import_plan& other) const
@@ -765,7 +768,8 @@ edt::agent_model_import::started edt::agent_model_import::start(const agent_impo
 		if (!listed || !listed->same_file_as(plan)) return { 0, cmd::codes::denied, "no list of files belongs to this token, or the model changed since it was made: ask again without files_token" };
 		const auto same_list = [](const std::vector<referenced_file>& a, const std::vector<referenced_file>& b) {
 			return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const referenced_file& x, const referenced_file& y) {
-				return x.path == y.path && x.size == y.size && x.modified == y.modified && x.id == y.id;
+				return x.path == y.path && x.size == y.size && x.modified == y.modified && x.id == y.id
+					&& x.stamp == y.stamp;
 			});
 		};
 		if (shown && !same_list(shown->files, listed->files)) return { 0, cmd::codes::denied, "the files changed since a person was shown them: ask again" };
