@@ -1,6 +1,7 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
 #include "edt_desc_file_commands.h"
+#include "edt_document_parts.h"
 #include "edt_editor_camera.h"
 #include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
@@ -73,7 +74,7 @@ namespace edt
 
 		// The file changed on disk while the working copy has edits (a clean copy takes the new file by itself): Apply is
 		// refused until reload() or overwrite().
-		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
+		bool changed_on_disk() const { return m_open && m_disk.changed(); }
 		// Takes the file as it is now and drops the edits (like revert()). The error text, empty when it worked.
 		std::string reload() { return revert(); }
 		// Keeps the edits and writes them over the file as it is now.
@@ -126,8 +127,6 @@ namespace edt
 		// current versions of their types (#1255), which leaves the copy edited.
 		std::string take_from(const scn::prefab_desc& source);
 		void sync_preview();
-		void watch_source();
-		void unwatch_source();
 		void on_source_changed(const res::tag& changed);
 		void announce();
 
@@ -142,9 +141,9 @@ namespace edt
 		std::string m_disk_version;
 		std::uint64_t m_generation = 0;
 		std::uint64_t m_replaced = 0;
-		bool m_changed_on_disk = false;
+		disk_state m_disk;
 		bool m_lower_layer = false;
-		res::resource_system* m_watching = nullptr;
+		source_watch m_watch;
 
 		res::tag m_source_tag;
 		std::string m_prefab_name;

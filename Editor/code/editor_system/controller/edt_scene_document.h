@@ -1,5 +1,6 @@
 #pragma once
 #include "../autosave/edt_autosave_source.h"
+#include "edt_document_parts.h"
 #include "edt_editor_camera.h"
 #include "edt_scene_history.h"
 #include <snk/command/cmd_types.h>
@@ -147,15 +148,11 @@ namespace edt
 		save_result save_as(const res::tag& target) override;
 		// The level file was changed by someone else while the level had unsaved edits or Play ran (#1188): the level
 		// controller set it, Save asks (a person) or refuses (an agent) until a Reload or an Overwrite clears it.
-		bool changed_on_disk() const { return m_changed_on_disk; }
+		bool changed_on_disk() const { return m_disk.changed(); }
 		// Grows with each outside version of the file flagged: a banner the person put off comes back for the next one.
-		std::uint64_t disk_change_serial() const { return m_disk_changes; }
-		void flag_changed_on_disk()
-		{
-			m_changed_on_disk = true;
-			++m_disk_changes;
-		}
-		void clear_changed_on_disk() { m_changed_on_disk = false; }
+		std::uint64_t disk_change_serial() const { return m_disk.serial(); }
+		void flag_changed_on_disk() { m_disk.flag(); }
+		void clear_changed_on_disk() { m_disk.set_changed(false); }
 
 		// What the level controller would write for the level as it is (#1186); empty with an error until the editor sets it.
 		void set_autosave_capture(std::function<autosave_snapshot()> capture) { m_autosave_capture = std::move(capture); }
@@ -178,8 +175,7 @@ namespace edt
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
 		bool m_unrecorded = false;
 		bool m_edits_locked = false;
-		bool m_changed_on_disk = false;
-		std::uint64_t m_disk_changes = 0;
+		disk_state m_disk{ disk_serial::every_flag };
 		document_history m_history;
 		scene_history_index m_index;
 		scene_commit_stats m_last_stats;

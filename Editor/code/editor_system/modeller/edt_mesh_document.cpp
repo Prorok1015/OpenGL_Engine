@@ -105,7 +105,7 @@ void edt::mesh_document::open(const res::tag& source)
 	rebake();
 	open_preview_world();
 	if (!m_has_world) release_preview_resources();
-	watch_source();
+	m_watch.watch(m_services.writable_resources(), m_poly_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
 	egLOG("Editor/Mesh", "Opened mesh '{}' for editing", m_poly_tag.view());
 }
 
@@ -141,7 +141,7 @@ bool edt::mesh_document::load_source(std::string& error)
 	m_saved_text = working_text();
 	m_disk_version = file.version;
 	m_dirty = false;
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	check_geometry_match();
 	return true;
 }
@@ -187,7 +187,7 @@ edt::autosave_snapshot edt::mesh_document::autosave_capture() const
 void edt::mesh_document::close()
 {
 	if (!m_open) return;
-	unwatch_source();
+	m_watch.unwatch();
 	close_preview_world();
 	if (res::resource_system* writer = m_services.writable_resources()) {
 		writer->erase(m_preview_tag);
@@ -197,7 +197,7 @@ void edt::mesh_document::close()
 	m_geometry_stale = false;
 	m_geometry_mismatch = false;
 	m_mismatch_message.clear();
-	m_changed_on_disk = false;
+	m_disk.set_changed(false);
 	m_stale_message.clear();
 	m_working = {};
 	m_view.reset();
@@ -457,8 +457,8 @@ edt::save_result edt::mesh_document::save_impl(bool replace_foreign_geometry)
 	bool source_written = false;
 	if (m_dirty) {
 		const file_write_check allowed = check_file_write(*reader, *descs, m_files, m_poly_tag, m_disk_version);
-		if (allowed.changed_on_disk && !m_changed_on_disk) {
-			m_changed_on_disk = true;
+		if (allowed.changed_on_disk && !m_disk.changed()) {
+			m_disk.set_changed(true);
 			announce();
 		}
 		if (!allowed.error.empty()) {
@@ -472,7 +472,7 @@ edt::save_result edt::mesh_document::save_impl(bool replace_foreign_geometry)
 		m_saved_text = working_text();
 		m_disk_version = code_version_of(bytes);
 		m_dirty = false;
-		m_changed_on_disk = false;
+		m_disk.set_changed(false);
 		m_geometry_stale = true;
 		source_written = true;
 	}
@@ -530,31 +530,9 @@ edt::save_result edt::mesh_document::overwrite()
 	if (!on_disk.error.empty() && !on_disk.located) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_poly_tag.view(), on_disk.error));
 	}
-	const std::string previous_version = std::exchange(m_disk_version, on_disk.version);
-	const save_result saved = save();
 	// Still dirty means the source was not written (a written source makes it clean even when the geometry pair failed).
-	if (!saved.saved && m_dirty) {
-		m_disk_version = previous_version;
-		m_changed_on_disk = true;
-	}
-	return saved;
-}
-
-void edt::mesh_document::watch_source()
-{
-	unwatch_source();
-	m_watching = m_services.writable_resources();
-	if (m_watching) {
-		m_watching->watch(m_poly_tag, this, [this](const res::tag& changed) { on_source_changed(changed); });
-	}
-}
-
-void edt::mesh_document::unwatch_source()
-{
-	if (m_watching) {
-		m_watching->unwatch(m_poly_tag, this);
-		m_watching = nullptr;
-	}
+	return m_disk.overwrite(m_disk_version, on_disk.version, [this] { return save(); },
+		[this](const save_result& saved) { return !saved.saved && m_dirty; });
 }
 
 void edt::mesh_document::on_source_changed(const res::tag& changed)
@@ -563,24 +541,16 @@ void edt::mesh_document::on_source_changed(const res::tag& changed)
 		return;
 	}
 	const desc_file_read on_disk = read_desc_file(*m_services.resources(), *m_services.descs(), m_files, m_poly_tag);
-	if (on_disk.version == m_disk_version) {
-		if (m_changed_on_disk) {
-			m_changed_on_disk = false;
-			announce();
-		}
-		return;
-	}
-	if (!m_dirty && !edits_locked()) {
-		if (const std::string error = revert(); error.empty()) {
-			return;
-		} else {
-			egLOG_WARN("Editor/Mesh", "{}", error);
-		}
-	}
-	if (!m_changed_on_disk) {
-		m_changed_on_disk = true;
-		announce();
-	}
+	m_disk.on_source_changed(on_disk.version, m_disk_version, m_dirty, [this] { return edits_locked(); },
+		[this] {
+			if (const std::string error = revert(); error.empty()) {
+				return true;
+			} else {
+				egLOG_WARN("Editor/Mesh", "{}", error);
+				return false;
+			}
+		},
+		[this] { announce(); });
 }
 
 namespace

@@ -1785,4 +1785,34 @@ BOOST_AUTO_TEST_CASE(AutosaveCapture_IsWhatApplyWrites_AndChangesNothing)
 	BOOST_TEST(std::string(reinterpret_cast<const char*>(captured.data()), captured.size()) == written);
 }
 
+BOOST_AUTO_TEST_CASE(DiskFlag_IsAnnouncedWhenSet_NotAgainForTheSameOutsideVersion_AndWhenCleared)
+{
+	edt::editor_events events;
+	std::size_t announced = 0;
+	const edt::connection seen = events.document_changed.subscribe([&announced](edt::document_id, std::uint64_t) { ++announced; });
+	document->bind_events(&events);
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(rename_arm("arm2"));
+	const std::size_t before = announced;
+
+	write(res_root, "prefabs/a.prefab.desc", R"({"__type":"prefab_desc","__version":5,"children":[{"__id":"00000000000000a1","name":"outside"}]})");
+	rs->signal_changed(tag);
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(announced == before + 1);
+
+	rs->signal_changed(tag);
+	pump();
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(announced == before + 1);
+
+	write(res_root, "prefabs/a.prefab.desc", PREFAB);
+	rs->signal_changed(tag);
+	pump();
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(announced == before + 2);
+	BOOST_TEST(arm_name() == "arm2");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
