@@ -122,8 +122,9 @@ namespace {
 }
 
 edt::model_file_access::model_file_access(fs::path root_file, model_file_limits limits, const std::vector<referenced_file>* allowed,
-	const fs::path& boundary, bool on_disk)
-	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_on_disk(on_disk)
+	const fs::path& boundary, bool on_disk, model_read_rule may_read)
+	: m_root_file(std::move(root_file)), m_limits(limits), m_allowed(allowed), m_may_read(std::move(may_read)),
+	m_on_disk(on_disk)
 {
 	m_root_extension = lowered_extension(m_root_file);
 	m_dir_as_given = m_root_file.parent_path().lexically_normal();
@@ -206,7 +207,8 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	constexpr const char* not_allowed = "a name the rule does not allow";
 	if (reference.find('\0') != std::string_view::npos) return refuse(refusal_kind::rule, not_allowed);
 	const fs::path given = fs_paths::path_from_utf8(with_forward_slashes(reference));
-	if (given.has_root_name() || given.has_root_directory()) {
+	const bool absolute_name = given.has_root_name() || given.has_root_directory();
+	if (absolute_name) {
 		// The model's own folder may be a share (//server/share): Assimp names its side files from it. Only what lies below
 		// that folder is the model's spelling.
 		const fs::path normal = given.lexically_normal();
@@ -218,6 +220,11 @@ edt::resolved_reference edt::model_file_access::resolve(std::string_view referen
 	} else if (!lexically_under((m_dir / given).lexically_normal(), m_boundary)) {
 		// A ".." that leaves the boundary is refused here, so weakly_canonical below never asks the disk about a path outside it.
 		return refuse(refusal_kind::rule, outside);
+	}
+	if (m_may_read) {
+		// The name as written, before path_within_dir_from resolves it: a link on the way is judged, never followed.
+		const fs::path candidate = absolute_name ? given.lexically_normal() : (m_dir / given).lexically_normal();
+		if (std::string why = m_may_read(candidate); !why.empty()) return refuse(refusal_kind::rule, std::move(why));
 	}
 	const auto inside = res::path_within_dir_from(m_boundary, m_dir, reference, kind == model_file_kind::side_file);
 	if (!inside) return refuse(refusal_kind::rule, outside);

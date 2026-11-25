@@ -153,6 +153,94 @@ std::optional<std::string> edt::system_mount_table()
 #endif
 }
 
+std::optional<std::uint32_t> edt::system_file_attributes(const fs::path& path)
+{
+#if defined(_WIN32)
+	// Attributes only: no handle is opened, so neither a link is followed nor a placeholder fetched.
+	const DWORD attributes = GetFileAttributesW(platform::beneath::long_path(path).c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES) return std::nullopt;
+	return static_cast<std::uint32_t>(attributes);
+#else
+	static_cast<void>(path);
+	return std::nullopt;
+#endif
+}
+
+std::string edt::cloud_attributes_problem(std::uint32_t attributes)
+{
+	constexpr std::uint32_t fetched = k_file_attribute_offline | k_file_attribute_recall_on_open
+		| k_file_attribute_recall_on_data_access;
+	if ((attributes & fetched) == 0) return {};
+	return "it is a cloud file that is not on this disk (online-only): opening it would download it; make the file "
+		"available offline (keep it on this device) and ask again";
+}
+
+std::string edt::agent_source_links_problem(const fs::path& path, const source_volume_ports& ports,
+	const fs::path& checked)
+{
+	if (!path.is_absolute()) return "the source must be an absolute path";
+	if (!ports.entry_of) return "the entries on the way to the source cannot be inspected";
+	// The parts of `checked` that `path` starts with were walked already.
+	const fs::path relative = path.relative_path();
+	auto part = relative.begin();
+	const auto end = relative.end();
+	fs::path at = path.root_path();
+	if (!checked.empty() && checked.root_path() == path.root_path()) {
+		auto from = part;
+		fs::path walked = at;
+		bool under = true;
+		for (const fs::path& folder : checked.relative_path()) {
+			if (folder.empty()) continue;
+			if (from == end || *from != folder) {
+				under = false;
+				break;
+			}
+			walked /= *from;
+			++from;
+		}
+		if (under) {
+			part = from;
+			at = std::move(walked);
+		}
+	}
+	for (; part != end; ++part) {
+		if (part->empty()) continue;
+		if (*part == "." || *part == "..") {
+			return "the source path holds a '.' or '..' component: name the file by its plain absolute path";
+		}
+		at /= *part;
+		const std::string name = text_escape::escaped_text(fs_paths::utf8_of(*part), 256);
+		std::error_code ec;
+		const std::optional<platform::beneath::link_entry> entry = ports.entry_of(at, ec);
+		if (ec) return std::format("'{}' on the way to the source cannot be inspected", name);
+		if (!entry) return {};
+		if (*entry == platform::beneath::link_entry::link) {
+			return std::format("'{}' on the way to the source is a link (a symlink, a junction, a mount point or "
+				"another reparse point): an agent's import never follows one; name the file by its real path", name);
+		}
+		if (ports.windows && ports.file_attributes) {
+			const std::optional<std::uint32_t> attributes = ports.file_attributes(at);
+			if (!attributes) return std::format("'{}' on the way to the source cannot be inspected", name);
+			if (std::string why = cloud_attributes_problem(*attributes); !why.empty()) {
+				return std::format("'{}' on the way to the source: {}", name, why);
+			}
+		}
+	}
+	return {};
+}
+
+std::string edt::agent_side_file_problem(const fs::path& candidate, const fs::path& model_folder,
+	const source_volume_ports& ports)
+{
+	if (std::string why = agent_source_path_problem(fs_paths::utf8_of(candidate), ports); !why.empty()) {
+		return "an agent may not read it: " + why;
+	}
+	if (std::string why = agent_source_links_problem(candidate, ports, model_folder); !why.empty()) {
+		return "an agent may not read it: " + why;
+	}
+	return {};
+}
+
 std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)
 {
 	if (path.empty()) return "the source path is empty";

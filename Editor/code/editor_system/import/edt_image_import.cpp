@@ -102,8 +102,12 @@ namespace
 			std::format("{} is taken in the {} layer (by '{}'): choose another name or folder", tag, layer, holder) };
 	}
 
-	std::string identity_problem(const edt::image_import_plan& plan)
+	// `agent` (an agent's import): no link on the way to the file either, looked at before anything follows one.
+	std::string identity_problem(const edt::image_import_plan& plan, const edt::source_volume_ports* agent)
 	{
+		if (agent) {
+			if (std::string why = edt::agent_source_links_problem(plan.source, *agent); !why.empty()) return why;
+		}
 		std::error_code ec;
 		const fs::file_status status = fs::symlink_status(plan.source, ec);
 		if (ec || status.type() != fs::file_type::regular) return "the file is gone or is no plain file any more";
@@ -116,9 +120,9 @@ namespace
 	}
 
 	// The picture read once: no more than the size that was shown, and the file must still be that file.
-	std::vector<std::byte> read_checked_source(const edt::image_import_plan& plan)
+	std::vector<std::byte> read_checked_source(const edt::image_import_plan& plan, const edt::source_volume_ports* agent)
 	{
-		if (const std::string why = identity_problem(plan); !why.empty()) throw std::runtime_error(why);
+		if (const std::string why = identity_problem(plan, agent); !why.empty()) throw std::runtime_error(why);
 		std::ifstream in(plan.source, std::ios::binary);
 		if (!in) throw std::runtime_error("the file cannot be opened");
 		std::vector<std::byte> bytes(static_cast<std::size_t>(plan.size));
@@ -126,7 +130,7 @@ namespace
 		if (static_cast<std::uintmax_t>(in.gcount()) != plan.size || in.peek() != std::char_traits<char>::eof()) {
 			throw std::runtime_error("the size of the file changed while it was read");
 		}
-		if (const std::string why = identity_problem(plan); !why.empty()) {
+		if (const std::string why = identity_problem(plan, agent); !why.empty()) {
 			throw std::runtime_error("the file changed while it was read: " + why);
 		}
 		return bytes;
@@ -179,7 +183,7 @@ namespace
 			if (!why.empty()) throw std::runtime_error(why);
 		}
 		ctx.set_progress(0.f, "Reading the picture");
-		const std::vector<std::byte> bytes = read_checked_source(in.plan);
+		const std::vector<std::byte> bytes = read_checked_source(in.plan, in.agent ? &in.volumes : nullptr);
 		ctx.set_progress(0.3f, "Decoding the picture");
 		const std::string why = edt::image_importer::image_problem(bytes, extension_of(in.plan.name));
 		if (!why.empty()) {
@@ -374,6 +378,12 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	const fs::path given = from_utf8(request.path);
 	if (!given.is_absolute()) {
 		return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a picture");
+	}
+	// Nothing on the way to an agent's source is followed: a link is refused where it is, before any stat goes through.
+	if (!person) {
+		if (std::string why = agent_source_links_problem(given, volumes()); !why.empty()) {
+			return refuse(cmd::codes::invalid_args, std::move(why));
+		}
 	}
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);

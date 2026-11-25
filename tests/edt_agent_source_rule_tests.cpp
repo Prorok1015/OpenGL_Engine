@@ -1,12 +1,19 @@
 #include <boost/test/unit_test.hpp>
+#include "test_folder_link.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_agent_source_rule.h"
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 // The one rule of where an agent's import may read from (#1378, #1380): the picture and the model import share it.
-// Told from the text and the volume tables only; the path is never looked at.
+// Told from the text and the volume tables only; the path is never looked at. Then (#1408) the walk that refuses a
+// link on the way, never following one.
 
 namespace {
 
@@ -16,6 +23,47 @@ bool refused(const std::string& why)
 {
 	return !why.empty();
 }
+
+// An absolute path on this system: the walk of #1408 iterates fs::path.
+fs::path absolute_path(std::string_view rest)
+{
+#if defined(_WIN32)
+	return fs::path("C:/") / fs::path(rest);
+#else
+	return fs::path("/") / fs::path(rest);
+#endif
+}
+
+using platform::beneath::link_entry;
+
+// Ports whose disk is a list of entries: what is not listed is missing; every path asked is recorded.
+struct fake_disk
+{
+	edt::source_volume_ports ports(bool windows = false)
+	{
+		edt::source_volume_ports out;
+		out.windows = windows;
+		out.entry_of = [this](const fs::path& path, std::error_code& ec) -> std::optional<link_entry> {
+			ec.clear();
+			asked.push_back(path);
+			for (const auto& [at, kind] : entries) {
+				if (at == path) return kind;
+			}
+			if (path == broken) ec = std::make_error_code(std::errc::permission_denied);
+			return std::nullopt;
+		};
+		out.file_attributes = [this](const fs::path& path) -> std::optional<std::uint32_t> {
+			return path == cloud ? cloud_attributes : 0x20u;
+		};
+		return out;
+	}
+
+	std::vector<std::pair<fs::path, link_entry>> entries;
+	std::vector<fs::path> asked;
+	fs::path broken;
+	fs::path cloud;
+	std::uint32_t cloud_attributes = 0;
+};
 
 }
 
@@ -201,6 +249,90 @@ BOOST_AUTO_TEST_CASE(WithoutPaths_NamesTheSourcesFolderNeutrally)
 	// A source at a root keeps the separators of every other path.
 	const std::string rooted = edt::without_paths("/a/b and /robot.glb", {}, fs::path("/robot.glb"));
 	BOOST_CHECK_EQUAL(rooted, "/a/b and robot.glb");
+}
+
+// #1408: the walk from the root down refuses at the first link and looks at nothing below it.
+BOOST_AUTO_TEST_CASE(TheLinksWalk_StopsAtTheFirstLink_AndLooksAtNothingBelowIt)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("a"), link_entry::plain }, { absolute_path("a/b"), link_entry::link },
+		{ absolute_path("a/b/c"), link_entry::plain }, { absolute_path("a/b/c/d.glb"), link_entry::plain } };
+	const std::string why = edt::agent_source_links_problem(absolute_path("a/b/c/d.glb"), disk.ports());
+	BOOST_CHECK_MESSAGE(why.find("'b' on the way to the source is a link") != std::string::npos, why);
+	BOOST_REQUIRE_EQUAL(disk.asked.size(), 2u);
+	BOOST_CHECK(disk.asked[0] == absolute_path("a"));
+	BOOST_CHECK(disk.asked[1] == absolute_path("a/b"));
+
+	disk.entries[1].second = link_entry::plain;
+	disk.asked.clear();
+	BOOST_CHECK(!refused(edt::agent_source_links_problem(absolute_path("a/b/c/d.glb"), disk.ports())));
+	BOOST_CHECK_EQUAL(disk.asked.size(), 4u);
+}
+
+BOOST_AUTO_TEST_CASE(TheLinksWalk_EndsAtAMissingEntry_AndRefusesOneThatCannotBeInspected)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("a"), link_entry::plain } };
+	BOOST_CHECK(!refused(edt::agent_source_links_problem(absolute_path("a/gone/x.glb"), disk.ports())));
+	BOOST_CHECK_EQUAL(disk.asked.size(), 2u);
+	disk.broken = absolute_path("a/locked");
+	const std::string why = edt::agent_source_links_problem(absolute_path("a/locked/x.glb"), disk.ports());
+	BOOST_CHECK_MESSAGE(why.find("cannot be inspected") != std::string::npos, why);
+	edt::source_volume_ports none;
+	none.entry_of = {};
+	BOOST_CHECK(refused(edt::agent_source_links_problem(absolute_path("a/x.glb"), none)));
+	BOOST_CHECK(refused(edt::agent_source_links_problem(fs::path("a/x.glb"), disk.ports())));
+}
+
+BOOST_AUTO_TEST_CASE(TheLinksWalk_BelowAFolderThatWasChecked_LooksOnlyBelowIt)
+{
+	fake_disk disk;
+	disk.entries = { { absolute_path("m"), link_entry::link }, { absolute_path("m/tex"), link_entry::link } };
+	const std::string why = edt::agent_source_links_problem(absolute_path("m/tex/skin.png"), disk.ports(),
+		absolute_path("m"));
+	BOOST_CHECK_MESSAGE(why.find("'tex' on the way to the source is a link") != std::string::npos, why);
+	BOOST_REQUIRE_EQUAL(disk.asked.size(), 1u);
+	BOOST_CHECK(disk.asked[0] == absolute_path("m/tex"));
+	// A name outside that folder is walked whole.
+	disk.asked.clear();
+	BOOST_CHECK(refused(edt::agent_source_links_problem(absolute_path("m/x.png"), disk.ports(), absolute_path("n"))));
+	BOOST_CHECK(disk.asked.front() == absolute_path("m"));
+}
+
+BOOST_AUTO_TEST_CASE(ACloudFile_IsRefusedOnlyWhenOpeningItWouldFetchItFromTheNetwork)
+{
+	BOOST_CHECK(!refused(edt::cloud_attributes_problem(0x20u)));
+	// A placeholder kept on this disk (a reparse point, pinned) is a local file.
+	BOOST_CHECK(!refused(edt::cloud_attributes_problem(0x400u | 0x20u | 0x80000u)));
+	for (const std::uint32_t fetched : { edt::k_file_attribute_recall_on_data_access,
+		edt::k_file_attribute_recall_on_open, edt::k_file_attribute_offline }) {
+		const std::string why = edt::cloud_attributes_problem(0x400u | fetched);
+		BOOST_CHECK_MESSAGE(why.find("make the file available offline") != std::string::npos, why);
+	}
+
+	fake_disk disk;
+	disk.entries = { { absolute_path("od"), link_entry::kept_in_place },
+		{ absolute_path("od/robot.glb"), link_entry::kept_in_place } };
+	disk.cloud = absolute_path("od/robot.glb");
+	disk.cloud_attributes = 0x400u | edt::k_file_attribute_recall_on_data_access;
+	const std::string why = edt::agent_source_links_problem(absolute_path("od/robot.glb"), disk.ports(true));
+	BOOST_CHECK_MESSAGE(why.find("available offline") != std::string::npos, why);
+	disk.cloud_attributes = 0x400u | 0x20u;
+	BOOST_CHECK(!refused(edt::agent_source_links_problem(absolute_path("od/robot.glb"), disk.ports(true))));
+}
+
+BOOST_AUTO_TEST_CASE(ARealFolderLink_OnTheWayToTheSource_IsRefused_EvenWhenItsTargetIsGone)
+{
+	const test_util::temp_dir dir{ "agent_source_links" };
+	dir.write("real/robot.glb", "glb");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	fs::create_directories(base / "gone");
+	test_util::make_folder_link(base / "linked", base / "gone");
+	fs::remove(base / "gone");
+	edt::source_volume_ports ports;
+	BOOST_CHECK(!refused(edt::agent_source_links_problem(base / "real" / "robot.glb", ports)));
+	const std::string why = edt::agent_source_links_problem(base / "linked" / "robot.glb", ports);
+	BOOST_CHECK_MESSAGE(why.find("'linked' on the way to the source is a link") != std::string::npos, why);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
