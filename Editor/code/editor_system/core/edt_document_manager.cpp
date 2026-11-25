@@ -6,6 +6,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -34,6 +35,88 @@ const adopted_list& adopted_view(const edt::document_manager* manager)
 adopted_list& adopted_of(const edt::document_manager* manager)
 {
 	return adopted_lists()[manager];
+}
+
+struct link_record
+{
+	edt::document_id id = 0;
+	edt::open_context context;
+};
+
+struct host_record
+{
+	edt::host_id id = 0;
+	edt::document_id link = 0;
+};
+
+struct link_tables
+{
+	std::vector<link_record> links;
+	std::vector<host_record> hosts;
+	edt::host_id next_host = 1;
+	std::uint64_t revision = 0;
+};
+
+using link_table = std::map<const edt::document_manager*, link_tables>;
+
+// Never destroyed, like the adopted lists.
+link_table& link_tables_of_all()
+{
+	static auto* tables = new link_table;
+	return *tables;
+}
+
+link_tables& links_of(const edt::document_manager* manager)
+{
+	return link_tables_of_all()[manager];
+}
+
+// For a read: a manager with no links has no entry, and a read makes none.
+const link_tables& links_view(const edt::document_manager* manager)
+{
+	static const link_tables none;
+	const auto found = link_tables_of_all().find(manager);
+	return found != link_tables_of_all().end() ? found->second : none;
+}
+
+const link_record* find_record(const link_tables& tables, edt::document_id id)
+{
+	const auto found = std::ranges::find_if(tables.links, [id](const link_record& r) { return r.id == id; });
+	return found != tables.links.end() ? &*found : nullptr;
+}
+
+host_record* find_host_showing(link_tables& tables, edt::document_id link)
+{
+	const auto found = std::ranges::find_if(tables.hosts, [link](const host_record& h) { return h.link == link; });
+	return found != tables.hosts.end() ? &*found : nullptr;
+}
+
+host_record* find_host(link_tables& tables, edt::host_id id)
+{
+	const auto found = std::ranges::find_if(tables.hosts, [id](const host_record& h) { return h.id == id; });
+	return found != tables.hosts.end() ? &*found : nullptr;
+}
+
+void erase_host(link_tables& tables, edt::host_id id)
+{
+	std::erase_if(tables.hosts, [id](const host_record& h) { return h.id == id; });
+	++tables.revision;
+}
+
+// A host that lets go of `link`: it goes back to the link's parent when that is a link too, open and without a host, else it closes
+// (a root document, the level, is not a thing a host shows by itself).
+void release_host_of(link_tables& tables, edt::document_id link, const std::function<bool(edt::document_id)>& is_open)
+{
+	host_record* host = find_host_showing(tables, link);
+	if (!host) return;
+	const link_record* record = find_record(tables, link);
+	const edt::document_id parent = record ? record->context.parent : 0;
+	if (parent != 0 && find_record(tables, parent) && is_open(parent) && !find_host_showing(tables, parent)) {
+		host->link = parent;
+		++tables.revision;
+		return;
+	}
+	erase_host(tables, host->id);
 }
 
 std::string source_key(const res::tag& source)
@@ -75,6 +158,7 @@ edt::document_manager::document_manager(document& scene, editor_events& events)
 edt::document_manager::~document_manager()
 {
 	adopted_lists().erase(this);
+	link_tables_of_all().erase(this);
 }
 
 void edt::document_manager::set_preview_kinds(asset_kind_registry& kinds, editor_services& services, problem_list* problems)
@@ -247,13 +331,173 @@ edt::document& edt::document_manager::adopt(std::unique_ptr<document> adopted)
 	return kept;
 }
 
+edt::document_id edt::document_manager::open_linked(std::unique_ptr<document> opened, const open_context& context)
+{
+	ASSERT_MSG(opened, "document_manager::open_linked: no document");
+	if (context.kind == link_kind::instance) {
+		if (!find(context.parent)) return 0;
+		if (const std::optional<document_id> existing = find_link(context.parent, context.anchor)) return *existing;
+	}
+	const document_id id = adopt(std::move(opened)).id();
+	link_existing(id, context);
+	return id;
+}
+
+bool edt::document_manager::link_existing(document_id id, const open_context& context)
+{
+	if (!find(id)) return false;
+	link_tables& tables = links_of(this);
+	const auto known = std::ranges::find_if(tables.links, [id](const link_record& r) { return r.id == id; });
+	if (known != tables.links.end()) return false;
+	tables.links.push_back({ id, context });
+	++tables.revision;
+	return true;
+}
+
+std::vector<edt::document_id> edt::document_manager::chain_of(document_id id)
+{
+	std::vector<document_id> chain;
+	if (!find(id)) return chain;
+	const link_tables& tables = links_view(this);
+	for (document_id at = id; at != 0 && chain.size() <= tables.links.size() + 1;) {
+		chain.push_back(at);
+		const link_record* record = find_record(tables, at);
+		at = record && record->context.kind == link_kind::instance ? record->context.parent : 0;
+	}
+	std::ranges::reverse(chain);
+	return chain;
+}
+
+std::optional<edt::document_id> edt::document_manager::find_link(document_id parent, const std::string& anchor)
+{
+	for (const link_record& record : links_view(this).links) {
+		if (record.context.kind == link_kind::instance && record.context.parent == parent && record.context.anchor == anchor) return record.id;
+	}
+	return std::nullopt;
+}
+
+std::optional<edt::open_context> edt::document_manager::link_of(document_id id)
+{
+	const link_record* record = find_record(links_view(this), id);
+	return record ? std::optional<open_context>(record->context) : std::nullopt;
+}
+
+std::vector<edt::document_id> edt::document_manager::descendants_of(document_id id)
+{
+	const link_tables& tables = links_view(this);
+	std::vector<document_id> out;
+	std::vector<document_id> level{ id };
+	while (!level.empty()) {
+		std::vector<document_id> next;
+		for (const document_id at : level) {
+			for (const link_record& record : tables.links) {
+				if (record.context.kind == link_kind::instance && record.context.parent == at) next.push_back(record.id);
+			}
+		}
+		out.insert(out.end(), next.begin(), next.end());
+		level = std::move(next);
+	}
+	std::ranges::reverse(out);
+	return out;
+}
+
+std::vector<edt::document_id> edt::document_manager::unhosted_links()
+{
+	link_tables& tables = links_of(this);
+	std::vector<document_id> out;
+	for (const link_record& record : tables.links) {
+		if (!find_host_showing(tables, record.id)) out.push_back(record.id);
+	}
+	return out;
+}
+
+edt::host_id edt::document_manager::open_host(document_id link)
+{
+	if (!find(link)) return 0;
+	link_tables& tables = links_of(this);
+	if (const host_record* shown = find_host_showing(tables, link)) return shown->id;
+	link_existing(link, {});
+	const host_id id = tables.next_host++;
+	tables.hosts.push_back({ id, link });
+	++tables.revision;
+	return id;
+}
+
+void edt::document_manager::close_host(host_id host)
+{
+	erase_host(links_of(this), host);
+}
+
+std::optional<edt::host_id> edt::document_manager::host_of(document_id link)
+{
+	const host_record* host = find_host_showing(links_of(this), link);
+	return host ? std::optional<host_id>(host->id) : std::nullopt;
+}
+
+std::optional<edt::document_id> edt::document_manager::host_link(host_id host)
+{
+	const host_record* found = find_host(links_of(this), host);
+	return found ? std::optional<document_id>(found->link) : std::nullopt;
+}
+
+std::vector<edt::host_id> edt::document_manager::hosts()
+{
+	std::vector<host_id> out;
+	for (const host_record& host : links_view(this).hosts) out.push_back(host.id);
+	return out;
+}
+
+edt::host_id edt::document_manager::set_host_link(host_id host, document_id link)
+{
+	link_tables& tables = links_of(this);
+	host_record* target = find_host(tables, host);
+	if (!target || !find(link)) return 0;
+	if (const host_record* shown = find_host_showing(tables, link)) return shown->id;
+	link_existing(link, {});
+	target = find_host(tables, host);
+	target->link = link;
+	++tables.revision;
+	return host;
+}
+
+edt::host_id edt::document_manager::move_link(document_id link, host_id to_host)
+{
+	link_tables& tables = links_of(this);
+	if (!find(link)) return 0;
+	if (to_host != 0 && !find_host(tables, to_host)) return 0;
+	const host_record* shown = find_host_showing(tables, link);
+	if (shown && shown->id == to_host) return to_host;
+	link_existing(link, {});
+	const auto is_open = [this](document_id other) { return find(other) != nullptr; };
+	if (to_host == 0) {
+		release_host_of(tables, link, is_open);
+		const host_id created = tables.next_host++;
+		tables.hosts.push_back({ created, link });
+		++tables.revision;
+		return created;
+	}
+	if (shown) erase_host(tables, shown->id);
+	find_host(tables, to_host)->link = link;
+	++tables.revision;
+	return to_host;
+}
+
+std::uint64_t edt::document_manager::links_revision() const
+{
+	return links_view(this).revision;
+}
+
 edt::document* edt::document_manager::find_by_source(const res::tag& source)
 {
 	if (!source.is_valid()) return nullptr;
 	const std::string wanted = source_key(source);
 	document* found = nullptr;
 	for_each([&](document& candidate) {
-		if (!found && candidate.source().is_valid() && source_key(candidate.source()) == wanted) found = &candidate;
+		if (found || !candidate.source().is_valid() || source_key(candidate.source()) != wanted) return;
+		// An instance's source() is its parent's tag: that file is not the instance's.
+		const link_record* link = find_record(links_view(this), candidate.id());
+		if (link && link->context.kind == link_kind::instance) return;
+		found = &candidate;
 	});
 	return found;
 }
@@ -280,6 +524,30 @@ std::vector<edt::previewable_document*> edt::document_manager::previews()
 }
 
 void edt::document_manager::close(document_id id)
+{
+	if (!find(id) || (m_scene && id == m_scene->id())) {
+		close_document(id);
+		return;
+	}
+	close_descendants(id);
+	document_closed_link(id);
+	close_document(id);
+}
+
+void edt::document_manager::close_descendants(document_id id)
+{
+	for (const document_id below : descendants_of(id)) close(below);
+}
+
+void edt::document_manager::document_closed_link(document_id id)
+{
+	link_tables& tables = links_of(this);
+	release_host_of(tables, id, [this](document_id other) { return find(other) != nullptr; });
+	std::erase_if(tables.links, [id](const link_record& r) { return r.id == id; });
+	++tables.revision;
+}
+
+void edt::document_manager::close_document(document_id id)
 {
 	if (m_scene && id == m_scene->id()) {
 		egLOG_WARN("Editor/Documents", "The scene document cannot be closed");
@@ -313,6 +581,8 @@ void edt::document_manager::close(document_id id)
 void edt::document_manager::end_preview(previewable_document& closing)
 {
 	const document_id id = closing.id();
+	close_descendants(id);
+	document_closed_link(id);
 	closing.close();
 	std::erase(m_open_previews, &closing);
 	if (m_active == id) {
