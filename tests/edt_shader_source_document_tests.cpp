@@ -267,4 +267,142 @@ BOOST_AUTO_TEST_CASE(AClosedDocument_HoldsNothing_AndRefusesToSave)
 	BOOST_TEST(!document->autosave_capture().error.empty());
 }
 
+BOOST_AUTO_TEST_CASE(SetText_FoldsPastedLineBreaks_SoACrlfFileIsNotCorrupted)
+{
+	write(res_root, "shaders/crlf.vert", "a\r\nb\r\n");
+	document->open(res::tag{ "res://shaders/crlf.vert" });
+	BOOST_REQUIRE_MESSAGE(document->is_open(), document->last_error());
+
+	BOOST_REQUIRE(document->set_text("a\r\nb\r\nc\rd\n"));
+	BOOST_TEST(document->text() == "a\nb\nc\nd\n");
+	BOOST_REQUIRE(document->save().saved);
+
+	BOOST_TEST(text_of(res_root / "shaders/crlf.vert") == "a\r\nb\r\nc\r\nd\r\n");
+}
+
+BOOST_AUTO_TEST_CASE(Save_AWriteThatFails_KeepsTheEditsAndDoesNotRaiseAConflict)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_write, res::write_policy::read_only());
+
+	const edt::save_result failed = document->save();
+
+	BOOST_TEST(!failed.saved);
+	BOOST_TEST(failed.error.find("could not be written") != std::string::npos);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == k_frag);
+
+	rs->unregistrate_resolver(res::tag::default_protocol());
+	rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ lower, res_root },
+		res::mount_access::read_write, res::write_policy::allow_all());
+	const edt::save_result again = document->save();
+	BOOST_REQUIRE_MESSAGE(again.saved, again.error);
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "mine\n");
+}
+
+BOOST_AUTO_TEST_CASE(Overwrite_ThatIsRefusedForAnotherReason_LeavesTheConflictFlagAsItWas)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	blocked = "a migration runs";
+
+	const edt::save_result refused = document->overwrite();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error == "a migration runs");
+	BOOST_TEST(!document->changed_on_disk());
+
+	blocked.reset();
+	write(res_root, "shaders/scene.frag", "somebody else\n");
+	BOOST_TEST(!document->save().saved);
+	BOOST_REQUIRE(document->changed_on_disk());
+	blocked = "a migration runs";
+	BOOST_TEST(!document->overwrite().saved);
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "somebody else\n");
+
+	blocked.reset();
+	bool locked = true;
+	document->set_lock_source([&locked] { return locked; });
+	BOOST_TEST(!document->overwrite().saved);
+	BOOST_TEST(document->changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(Open_ALinkIsRefused_ItIsNotAPlainFileInsideTheProject)
+{
+	std::error_code ec;
+	fs::create_symlink(res_root / "shaders/scene.frag", res_root / "shaders/link.frag", ec);
+	if (ec) return;
+
+	document->open(res::tag{ "res://shaders/link.frag" });
+
+	BOOST_TEST(!document->is_open());
+	BOOST_TEST(document->last_error().find("plain file") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheWatcher_TakesAChangedFileByItself_WhenTheDocumentIsClean)
+{
+	open_frag();
+	const std::uint64_t before = document->generation();
+	write(res_root, "shaders/scene.frag", "new on disk\n");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+
+	BOOST_TEST(document->text() == "new on disk\n");
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(document->generation() > before);
+}
+
+BOOST_AUTO_TEST_CASE(TheWatcher_AnnouncesAChangedFile_WhenTheDocumentHasEdits_AndKeepsTheEdits)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("mine\n"));
+	const std::size_t announced = changed.size();
+	write(res_root, "shaders/scene.frag", "somebody else\n");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(document->text() == "mine\n");
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(changed.size() > announced);
+
+	write(res_root, "shaders/scene.frag", k_frag);
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_TEST(!document->changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(TheGeneration_MovesWithEverySetTextSaveAndRevert)
+{
+	open_frag();
+	std::uint64_t seen = document->generation();
+
+	BOOST_REQUIRE(document->set_text("one\n"));
+	BOOST_TEST(document->generation() > seen);
+	seen = document->generation();
+
+	BOOST_REQUIRE(document->save().saved);
+	BOOST_TEST(document->generation() > seen);
+	seen = document->generation();
+
+	BOOST_REQUIRE(document->set_text("two\n"));
+	seen = document->generation();
+	BOOST_TEST(document->revert().empty());
+	BOOST_TEST(document->generation() > seen);
+	BOOST_TEST(document->text() == "one\n");
+}
+
+BOOST_AUTO_TEST_CASE(AClosedDocument_ForgetsItsFile)
+{
+	open_frag();
+	document->close();
+
+	BOOST_TEST(document->source().view().empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

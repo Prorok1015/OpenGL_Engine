@@ -51,6 +51,23 @@ namespace
 		return std::string(path);
 	}
 
+	// The editor's text has LF breaks only: a CRLF pair or a lone CR (a paste from another system) is one break.
+	std::string fold_line_breaks(std::string text)
+	{
+		if (text.find('\r') == std::string::npos) return text;
+		std::string out;
+		out.reserve(text.size());
+		for (std::size_t i = 0; i < text.size(); ++i) {
+			if (text[i] != '\r') {
+				out.push_back(text[i]);
+				continue;
+			}
+			out.push_back('\n');
+			if (i + 1 < text.size() && text[i + 1] == '\n') ++i;
+		}
+		return out;
+	}
+
 	std::vector<std::byte> bytes_of(std::string_view text)
 	{
 		const auto* first = reinterpret_cast<const std::byte*>(text.data());
@@ -100,7 +117,7 @@ edt::shader_source_document::located edt::shader_source_document::locate(const r
 	return out;
 }
 
-edt::shader_source_document::disk_read edt::shader_source_document::read_disk() const
+edt::shader_source_document::disk_read edt::shader_source_document::read_disk(const res::tag& tag, const fs::path& path) const
 {
 	disk_read out;
 	res::resource_system* resources = m_services.resources();
@@ -109,26 +126,26 @@ edt::shader_source_document::disk_read edt::shader_source_document::read_disk() 
 		return out;
 	}
 	std::error_code ec;
-	const auto size = fs::file_size(m_disk_path, ec);
+	const auto size = fs::file_size(path, ec);
 	if (ec) {
-		out.error = std::format("'{}' could not be read", m_tag.view());
+		out.error = std::format("'{}' could not be read", tag.view());
 		return out;
 	}
 	if (size > k_max_shader_text_bytes) {
-		out.error = std::format("'{}' is larger than 4 MiB", m_tag.view());
+		out.error = std::format("'{}' is larger than 4 MiB", tag.view());
 		return out;
 	}
-	const auto raw = resources->fetch_data(m_tag);
+	const auto raw = resources->fetch_data(tag);
 	if (!raw) {
 		out.error = "the project resources are not mounted";
 		return out;
 	}
 	if (!raw->wait_for(k_read_timeout)) {
-		out.error = std::format("'{}' could not be read in {} s", m_tag.view(), k_read_timeout.count());
+		out.error = std::format("'{}' could not be read in {} s", tag.view(), k_read_timeout.count());
 		return out;
 	}
 	if (!raw->is_ready()) {
-		out.error = std::format("'{}' could not be read", m_tag.view());
+		out.error = std::format("'{}' could not be read", tag.view());
 		return out;
 	}
 	out.bytes = raw->data;
@@ -150,12 +167,12 @@ void edt::shader_source_document::open(const res::tag& source)
 		m_error = where.error;
 		return;
 	}
+	if (!load(source, where.file, m_error)) {
+		return;
+	}
 	m_tag = source;
 	m_disk_path = where.file;
 	m_top_layer = where.top_layer;
-	if (!load(m_error)) {
-		return;
-	}
 	const std::string_view path = where.relative;
 	const std::size_t slash = path.rfind('/');
 	m_title = std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
@@ -164,9 +181,9 @@ void edt::shader_source_document::open(const res::tag& source)
 	egLOG("Editor/Shader", "Opened shader source '{}' for editing", m_tag.view());
 }
 
-bool edt::shader_source_document::load(std::string& error)
+bool edt::shader_source_document::load(const res::tag& tag, const fs::path& path, std::string& error)
 {
-	const disk_read read = read_disk();
+	const disk_read read = read_disk(tag, path);
 	if (!read.error.empty()) {
 		error = read.error;
 		return false;
@@ -174,7 +191,7 @@ bool edt::shader_source_document::load(std::string& error)
 	std::string why;
 	std::optional<shader_text_file> parsed = read_shader_text(read.bytes, why);
 	if (!parsed) {
-		error = std::format("{}: {}", m_tag.view(), why);
+		error = std::format("{}: {}", tag.view(), why);
 		return false;
 	}
 	m_file = std::move(*parsed);
@@ -190,6 +207,9 @@ void edt::shader_source_document::close()
 {
 	unwatch();
 	m_open = false;
+	m_file = {};
+	m_tag = {};
+	m_disk_path.clear();
 	m_text.clear();
 	m_saved_text.clear();
 	m_dirty = false;
@@ -220,7 +240,11 @@ std::string edt::shader_source_document::read_only_reason() const
 
 bool edt::shader_source_document::set_text(std::string text)
 {
-	if (!m_open || !m_top_layer || edits_locked() || text == m_text) {
+	if (!m_open || !m_top_layer || edits_locked()) {
+		return false;
+	}
+	text = fold_line_breaks(std::move(text));
+	if (text == m_text) {
 		return false;
 	}
 	m_text = std::move(text);
@@ -303,13 +327,11 @@ std::string edt::shader_source_document::revert()
 	if (!where.error.empty()) {
 		return where.error;
 	}
-	const fs::path previous_path = std::exchange(m_disk_path, where.file);
-	const bool previous_layer = std::exchange(m_top_layer, where.top_layer);
-	if (!load(error)) {
-		m_disk_path = previous_path;
-		m_top_layer = previous_layer;
+	if (!load(m_tag, where.file, error)) {
 		return error;
 	}
+	m_disk_path = where.file;
+	m_top_layer = where.top_layer;
 	++m_generation;
 	announce();
 	return {};
@@ -320,19 +342,29 @@ edt::save_result edt::shader_source_document::overwrite()
 	if (!m_open) {
 		return save_result::failure("the shader is not open");
 	}
+	if (edits_locked()) {
+		return save_result::failure("Stop Play to save the shader");
+	}
+	if (!m_top_layer) {
+		return save_result::failure(read_only_reason());
+	}
 	if (!m_dirty) {
 		const std::string error = revert();
 		return error.empty() ? save_result::ok() : save_result::failure(error);
+	}
+	if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+		return save_result::failure(*why);
 	}
 	const disk_read now = read_disk();
 	if (!now.error.empty()) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
 	const std::string previous_version = std::exchange(m_disk_version, code_version_of(now.bytes));
+	const bool previous_changed = m_changed_on_disk;
 	const save_result saved = save();
 	if (!saved.saved) {
 		m_disk_version = previous_version;
-		m_changed_on_disk = true;
+		m_changed_on_disk = previous_changed;
 	}
 	return saved;
 }

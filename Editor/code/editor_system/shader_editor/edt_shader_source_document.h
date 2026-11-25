@@ -71,7 +71,6 @@ namespace edt
 		bool changed_on_disk() const { return m_open && m_changed_on_disk; }
 		// Takes the file as it is on disk and drops the edits. The error text, empty when it worked.
 		std::string revert();
-		std::string reload() { return revert(); }
 		// Keeps the edits and writes them over the file as it is now.
 		save_result overwrite();
 
@@ -93,8 +92,10 @@ namespace edt
 		};
 
 		located locate(const res::tag& tag) const;
-		disk_read read_disk() const;
-		bool load(std::string& error);
+		disk_read read_disk() const { return read_disk(m_tag, m_disk_path); }
+		disk_read read_disk(const res::tag& tag, const std::filesystem::path& path) const;
+		// Reads and parses `path`; the document's own state changes only when it worked.
+		bool load(const res::tag& tag, const std::filesystem::path& path, std::string& error);
 		void announce();
 		void watch();
 		void unwatch();
