@@ -112,6 +112,8 @@ edt::import_result edt::model_importer::finalize_on_main(import_intermediate&& i
 	result.source_path = std::move(im.source_path);
 	result.root_tag = im.prefab_tag;
 	result.all_tags = std::move(im.all_tags);
+	result.settings = im.settings;
+	result.source_sha256 = std::move(im.source_sha256);
 
 	// desc_sys.create_instance + deserialize — main thread only
 	auto instance = m_desc.create_instance("prefab_desc", im.prefab_tag);

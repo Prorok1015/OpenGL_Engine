@@ -3,6 +3,7 @@
 #include "edt_decoder_sandbox.h"
 #include "edt_model_file_access.h"
 #include "edt_model_import_limits.h"
+#include "edt_model_import_settings.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #if SNK_HAS_ASSIMP
 #include <snk/model_import/mdl_import.h>
@@ -45,6 +46,8 @@ namespace edt {
 		model_read_rule may_read;
 		// Set for an agent's import (#1412): reads a side file from the handle that was checked (model_file_access).
 		model_file_reader read_file;
+		// How the meshes are made (#1195); a scan does not use them.
+		model_import_settings settings{};
 	};
 
 	// The files a model would read (needs `source.preloaded`): parses it, stores nothing. `error` says why the model
@@ -66,6 +69,9 @@ namespace edt {
 	// that list fails the import; with `source.provided` set, a side file it was not given does.
 	import_intermediate import_model_into(const import_source& source, mdl::import_sink& sink, ds::task_context* ctx = nullptr,
 		const std::function<void(boost::json::object&)>& stamp = {});
+
+	// What mdl::import_model is told of `settings`.
+	mdl::mesh_processing mesh_processing_of(const model_import_settings& settings);
 #endif
 
 } // namespace edt

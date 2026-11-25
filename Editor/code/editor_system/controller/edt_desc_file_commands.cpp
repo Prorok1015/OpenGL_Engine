@@ -809,6 +809,116 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 		}
 	};
 
+	// Structures whose type has no schema, one problem each: nothing says which of their values are tags.
+	std::unordered_set<std::string> unschemed;
+	// Under such a structure only the shape tells a reference, as in a prefab's component; its strings get the loose walk.
+	const auto check_references_by_shape = [&](const auto& self_shape, const json::value& value, const std::string& at) -> void {
+		if (const json::array* items = value.if_array()) {
+			std::size_t index = 0;
+			for (const json::value& item : *items) self_shape(self_shape, item, std::format("{}/{}", at, index++));
+			return;
+		}
+		const json::object* members = value.if_object();
+		if (!members || members->contains("__type")) return;
+		if (edt::is_guid_reference(*members)) {
+			check_reference(value, at);
+			return;
+		}
+		for (const auto& member : *members) {
+			self_shape(self_shape, member.value(), at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+		}
+	};
+
+	// The fields `schema` says hold a tag: a path inside the project, whatever it looks like. A structure, alone or as the
+	// elements of a list or the values of a map, is checked by its own schema the same way: the walk over every string is
+	// only the loose side (#1445).
+	const auto check_tag_fields = [&](const auto& self_fields, const desc::type_schema& schema, std::string_view type, const json::object& object,
+		const std::string& pointer, int depth) -> void {
+		if (depth > 32) {
+			schema_error(pointer, "nested deeper than 32: not checked");
+			return;
+		}
+		for (const desc::field_schema& field : schema.fields) {
+			const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
+			const json::value* held = object.if_contains(key);
+			if (!held) continue;
+			const std::string at = pointer + "/" + res::json_pointer_token(key);
+			const bool container = field.kind == desc::field_kind::array || field.kind == desc::field_kind::map;
+			if (field.kind == desc::field_kind::structure || (container && field.element == desc::field_kind::structure)) {
+				const desc::type_schema* nested = descs.find_schema(field.ref_type);
+				if (!nested) {
+					const std::string named = field.ref_type.empty() ? std::format("{}{}", type, field.key) : field.ref_type;
+					if (unschemed.insert(named).second) {
+						// A warning, as for a desc whose type has no schema: a module's type may nest a struct without .ref(), and such a
+						// file was savable before #1445. The {guid, path} references under it are still checked below.
+						add(std::string(res::diagnostic_kind::schema), at, field.ref_type.empty()
+							? std::format("field '{}' of '{}' names no schema for its structures: the tags in them are not checked", field.name, type)
+							: std::format("'{}' has no schema: the tags in its structures are not checked", field.ref_type),
+							res::diagnostic_severity::warning);
+					}
+					check_references_by_shape(check_references_by_shape, *held, at);
+					continue;
+				}
+				const auto check_nested = [&](const json::value& value, const std::string& nested_at) {
+					const json::object* members = value.if_object();
+					if (!members) return;
+					// An inline desc of a type with a schema is checked by the walk under its own type: not here a second time.
+					if (const json::value* inline_type = members->if_contains("__type"); inline_type && inline_type->is_string()
+						&& descs.find_schema(view_of(inline_type->as_string()))) {
+						return;
+					}
+					self_fields(self_fields, *nested, nested->name, *members, nested_at, depth + 1);
+				};
+				if (field.kind == desc::field_kind::structure) {
+					check_nested(*held, at);
+				} else if (const json::array* items = held->if_array(); items && field.kind == desc::field_kind::array) {
+					std::size_t index = 0;
+					for (const json::value& item : *items) check_nested(item, std::format("{}/{}", at, index++));
+				} else if (const json::object* entries = held->if_object(); entries && field.kind == desc::field_kind::map) {
+					for (const auto& entry : *entries) {
+						check_nested(entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+					}
+				}
+				continue;
+			}
+			// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
+			const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
+				|| field.kind == desc::field_kind::custom
+				|| (container && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
+			if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
+			// Inline descs (desc_ref objects) are walked as descs; the values of any other object are all tags.
+			const bool inline_descs_allowed = field.kind == desc::field_kind::desc_ref || field.element == desc::field_kind::desc_ref;
+			// A custom field's codec reads its own objects (the samplers of a material): only a res_tag or a
+			// desc_ref holds a {guid, path} reference.
+			const bool references = field.kind != desc::field_kind::custom;
+			const auto check_tag = [&](const auto& self_tag, const json::value& tag, const std::string& tag_at) -> void {
+				if (tag.is_string()) {
+					if (tag.as_string().empty()) return;
+					if (const std::string problem = strict_tag_problem(view_of(tag.as_string())); !problem.empty()) schema_error(tag_at, problem);
+				} else if (tag.is_array()) {
+					std::size_t index = 0;
+					for (const json::value& element : tag.as_array()) self_tag(self_tag, element, std::format("{}/{}", tag_at, index++));
+				} else if (references && edt::is_reference_object(tag)) {
+					check_reference(tag, tag_at);
+				} else if (tag.is_object() && !inline_descs_allowed) {
+					for (const auto& member : tag.as_object()) {
+						self_tag(self_tag, member.value(), tag_at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+					}
+				}
+			};
+			if (field.kind == desc::field_kind::map) {
+				// The values of a map are the tags (or inline descs), one by one, never the map itself as one inline desc.
+				if (const json::object* entries = held->if_object()) {
+					for (const auto& entry : *entries) {
+						check_tag(check_tag, entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
+					}
+				}
+				continue;
+			}
+			check_tag(check_tag, *held, at);
+		}
+	};
+
 	const auto walk = [&](const auto& self, const json::value& value, const std::string& pointer) -> void {
 		if (value.is_string()) {
 			if (std::string problem = loose_tag_problem(view_of(value.as_string())); !problem.empty()) schema_error(pointer, std::move(problem));
@@ -933,49 +1043,7 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 								bad.status == desc::override_status::stale ? std::format("'{}' has no such field", owner)
 									: std::format("the value does not fit the field of '{}'{}{}", owner, expected.empty() ? "" : ": expected ", expected));
 						}
-						// The fields the schema says hold a tag: a path inside the project, whatever it looks like.
-						for (const desc::field_schema& field : schema->fields) {
-							// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
-							const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
-								|| field.kind == desc::field_kind::custom
-								|| ((field.kind == desc::field_kind::array || field.kind == desc::field_kind::map)
-									&& (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
-							if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
-							const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
-							const json::value* held = patch.if_contains(key);
-							if (!held) continue;
-							// Inline descs (desc_ref objects) are walked as descs; the values of any other object are all tags.
-							const bool inline_descs_allowed = field.kind == desc::field_kind::desc_ref || field.element == desc::field_kind::desc_ref;
-							// A custom field's codec reads its own objects (the samplers of a material): only a res_tag or a
-							// desc_ref holds a {guid, path} reference.
-							const bool references = field.kind != desc::field_kind::custom;
-							const auto check_tag = [&](const auto& self_tag, const json::value& tag, const std::string& at) -> void {
-								if (tag.is_string()) {
-									if (tag.as_string().empty()) return;
-									if (const std::string problem = strict_tag_problem(view_of(tag.as_string())); !problem.empty()) schema_error(at, problem);
-								} else if (tag.is_array()) {
-									std::size_t index = 0;
-									for (const json::value& element : tag.as_array()) self_tag(self_tag, element, std::format("{}/{}", at, index++));
-								} else if (references && edt::is_reference_object(tag)) {
-									check_reference(tag, at);
-								} else if (tag.is_object() && !inline_descs_allowed) {
-									for (const auto& member : tag.as_object()) {
-										self_tag(self_tag, member.value(), at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
-									}
-								}
-							};
-							const std::string at = pointer + "/" + res::json_pointer_token(key);
-							if (field.kind == desc::field_kind::map) {
-								// The values of a map are the tags (or inline descs), one by one, never the map itself as one inline desc.
-								if (const json::object* entries = held->if_object()) {
-									for (const auto& entry : *entries) {
-										check_tag(check_tag, entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
-									}
-								}
-								continue;
-							}
-							check_tag(check_tag, *held, at);
-						}
+						check_tag_fields(check_tag_fields, *schema, type, patch, pointer, 0);
 					}
 				}
 			}

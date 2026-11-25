@@ -717,6 +717,7 @@ int main(int argc, char** argv)
 	import.boundary = request->boundary;
 	import.memory_folder = request->memory_folder;
 	import.on_disk = request->on_disk;
+	import.settings = request->settings;
 	import.provided = &files;
 	if (request->deadline_ms != 0) {
 		import.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request->deadline_ms);

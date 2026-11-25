@@ -356,6 +356,7 @@ boost::json::object edt::to_json(const decode_request& request)
 	out["boundary"] = path_text(request.boundary);
 	out["memory_folder"] = request.memory_folder;
 	out["on_disk"] = request.on_disk;
+	out["settings"] = model_settings_json(request.settings);
 	return out;
 }
 
@@ -421,5 +422,11 @@ std::optional<edt::decode_request> edt::decode_request_from_json(const boost::js
 	request.boundary = path_from(*boundary);
 	request.memory_folder = *memory_folder;
 	request.on_disk = on_disk->as_bool();
+	// The decoder imports by these alone: settings it does not read in full, or a source, refuse the request.
+	if (const json::value* settings = object.if_contains("settings")) {
+		const model_settings_parse parsed = parse_model_settings(*settings);
+		if (!parsed.ok() || parsed.source || !settings->is_object()) return std::nullopt;
+		request.settings = parsed.settings;
+	}
 	return request;
 }

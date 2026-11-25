@@ -1,4 +1,5 @@
 #include "edt_agent_model_import.h"
+#include "edt_decode_codec.h"
 #include "edt_file_menu.h"
 #include "edt_forge_types.h"
 #include <snk/common/fs_paths.h>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
+#include <boost/json/serialize.hpp>
 #include <cctype>
 #include <format>
 #include <fstream>
@@ -303,6 +305,7 @@ namespace {
 		source.path = in.plan.source;
 		source.preloaded = &source_bytes;
 		source.limits = in.limits;
+		source.settings = in.plan.settings;
 		source.deadline = std::chrono::steady_clock::now() + in.time_limit;
 		source.time_limit = in.time_limit;
 		if (in.agent) {
@@ -352,6 +355,8 @@ namespace {
 			result.root_tag = imported.prefab_tag;
 			result.all_tags = imported.all_tags;
 			result.source_path = in.plan.source;
+			result.settings = in.plan.settings;
+			result.source_sha256 = edt::digest_to_hex(digest);
 			remap = in.exporter->build_remap(result, in.plan.name, in.plan.folder);
 			if (const std::string why = edt::asset_exporter::remap_problem(remap, in.plan.name, in.plan.folder); !why.empty()) {
 				throw std::runtime_error("the import cannot be exported: " + why);
@@ -381,10 +386,11 @@ namespace {
 			}
 
 			ctx.set_progress(0.5f, "Writing the assets");
+			// Never over a file: an agent's `.resource` of the prefab is new too.
 			const bool exported = in.exporter->export_to_project(result, remap, nullptr, &ctx, &written, true,
 				[&ctx](int done, int total) {
 					ctx.set_progress(0.5f + 0.5f * static_cast<float>(done) / static_cast<float>(std::max(total, 1)), "Writing the assets");
-				});
+				}, in.top, false);
 			if (!exported) throw std::runtime_error("the assets could not be written");
 		} catch (...) {
 			take_back(written, in.top);
@@ -432,7 +438,7 @@ bool edt::agent_import_plan::same_file_as(const agent_import_plan& other) const
 
 bool edt::agent_import_plan::same_targets(const agent_import_plan& other) const
 {
-	return name == other.name && folder == other.folder && prefab == other.prefab;
+	return name == other.name && folder == other.folder && prefab == other.prefab && settings == other.settings;
 }
 
 edt::agent_model_import::agent_model_import(asset_exporter& exporter, job_service& jobs, res::resource_system& resources, agent_import_options options)
@@ -463,8 +469,13 @@ edt::source_volume_ports edt::agent_model_import::volumes() const
 
 std::string edt::agent_model_import::scan_key(const agent_import_request& request, const cmd::origin& caller) const
 {
-	return std::format("{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(), request.path,
-		request.name.size(), request.name, request.folder.size(), request.folder);
+	// The settings as they are read, so a list of files is bound to the settings it was made with (#1195).
+	const model_settings_parse parsed = parse_model_settings(request.settings);
+	const std::string settings = parsed.ok() ? boost::json::serialize(model_settings_json(parsed.settings))
+		: boost::json::serialize(request.settings);
+	return std::format("{}:{}|{}:{}|{}:{}|{}:{}|{}:{}", caller.session.size(), caller.session, request.path.size(),
+		request.path, request.name.size(), request.name, request.folder.size(), request.folder, settings.size(),
+		settings);
 }
 
 std::string edt::agent_model_import::call_key(const agent_import_request& request, const cmd::origin& caller) const
@@ -654,6 +665,12 @@ void edt::agent_model_import::plan_targets(const agent_import_request& request, 
 		}
 	}
 	plan.name = name.path;
+	const model_settings_parse settings = parse_model_settings(request.settings);
+	if (!settings.ok()) return refuse(cmd::codes::invalid_args, shown_message(settings.error));
+	if (settings.source) {
+		return refuse(cmd::codes::invalid_args, "settings.source is written by the import, not asked for");
+	}
+	plan.settings = settings.settings;
 	const agent_level_path folder = check_agent_folder(request.folder.empty() ? "assets/" + plan.name : request.folder);
 	if (!folder.ok()) return refuse(cmd::codes::invalid_args, "the folder: " + folder.error);
 	plan.folder = folder.path;
@@ -688,8 +705,10 @@ std::optional<std::string> edt::agent_model_import::describe(const agent_import_
 	if (!plan.ok()) return "This request will be refused: " + shown_message(plan.error);
 	const std::string size = plan.on_disk ? size_text(plan.size) : std::string{ "(its size is read once approved)" };
 	std::string text = std::format("Import the model\n  {}\n  {}\ninto res://{}/ as '{}'\n  prefab: {}\n"
-		"Its geometry, materials and textures are written next to the prefab.\n",
-		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab));
+		"  settings: {}\n"
+		"Its geometry, materials and textures are written next to the prefab, and the settings in its .resource.\n",
+		shown_path(plan.source), size, shown(plan.folder), shown(plan.name), shown(plan.prefab),
+		model_settings_text(plan.settings));
 	edt::decoder_sandbox_status sandbox = m_options.sandbox_status ? m_options.sandbox_status() : decoder_sandbox_status{};
 	if (request.files_token.empty()) {
 		text += "Allowing this reads the model and, to list the files it refers to, reads and hashes every file of "
