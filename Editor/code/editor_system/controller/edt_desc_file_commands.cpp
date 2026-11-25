@@ -809,12 +809,35 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 		}
 	};
 
+	// Structures whose type has no schema, one problem each: nothing says which of their values are tags.
+	std::unordered_set<std::string> unschemed;
+	// Under such a structure only the shape tells a reference, as in a prefab's component; its strings get the loose walk.
+	const auto check_references_by_shape = [&](const auto& self_shape, const json::value& value, const std::string& at) -> void {
+		if (const json::array* items = value.if_array()) {
+			std::size_t index = 0;
+			for (const json::value& item : *items) self_shape(self_shape, item, std::format("{}/{}", at, index++));
+			return;
+		}
+		const json::object* members = value.if_object();
+		if (!members || members->contains("__type")) return;
+		if (edt::is_guid_reference(*members)) {
+			check_reference(value, at);
+			return;
+		}
+		for (const auto& member : *members) {
+			self_shape(self_shape, member.value(), at + "/" + res::json_pointer_token(std::string_view(member.key().data(), member.key().size())));
+		}
+	};
+
 	// The fields `schema` says hold a tag: a path inside the project, whatever it looks like. A structure, alone or as the
 	// elements of a list or the values of a map, is checked by its own schema the same way: the walk over every string is
 	// only the loose side (#1445).
 	const auto check_tag_fields = [&](const auto& self_fields, const desc::type_schema& schema, std::string_view type, const json::object& object,
 		const std::string& pointer, int depth) -> void {
-		if (depth > 32) return;
+		if (depth > 32) {
+			schema_error(pointer, "nested deeper than 32: not checked");
+			return;
+		}
 		for (const desc::field_schema& field : schema.fields) {
 			const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
 			const json::value* held = object.if_contains(key);
@@ -823,9 +846,25 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 			const bool container = field.kind == desc::field_kind::array || field.kind == desc::field_kind::map;
 			if (field.kind == desc::field_kind::structure || (container && field.element == desc::field_kind::structure)) {
 				const desc::type_schema* nested = descs.find_schema(field.ref_type);
-				if (!nested) continue;
+				if (!nested) {
+					const std::string named = field.ref_type.empty() ? std::format("{}{}", type, field.key) : field.ref_type;
+					if (unschemed.insert(named).second) {
+						schema_error(at, field.ref_type.empty()
+							? std::format("field '{}' of '{}' names no schema for its structures: the tags in them are not checked", field.name, type)
+							: std::format("'{}' has no schema: the tags in its structures are not checked", field.ref_type));
+					}
+					check_references_by_shape(check_references_by_shape, *held, at);
+					continue;
+				}
 				const auto check_nested = [&](const json::value& value, const std::string& nested_at) {
-					if (const json::object* members = value.if_object()) self_fields(self_fields, *nested, nested->name, *members, nested_at, depth + 1);
+					const json::object* members = value.if_object();
+					if (!members) return;
+					// An inline desc of a type with a schema is checked by the walk under its own type: not here a second time.
+					if (const json::value* inline_type = members->if_contains("__type"); inline_type && inline_type->is_string()
+						&& descs.find_schema(view_of(inline_type->as_string()))) {
+						return;
+					}
+					self_fields(self_fields, *nested, nested->name, *members, nested_at, depth + 1);
 				};
 				if (field.kind == desc::field_kind::structure) {
 					check_nested(*held, at);
