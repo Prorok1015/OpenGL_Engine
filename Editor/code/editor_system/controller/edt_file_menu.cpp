@@ -727,54 +727,80 @@ void edt::file_menu::register_actions()
 	};
 	constexpr const char* IMPORT_UNAVAILABLE = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).";
 
-	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
-		.disabled_tooltip = IMPORT_UNAVAILABLE,
-		.disabled_reason = [this] {
-			const std::string why = m_hooks.agent_import != nullptr ? m_hooks.agent_import->unavailable_reason() : std::string{};
-			return why.empty() ? std::string(IMPORT_UNAVAILABLE) : why;
-		},
-		.execute_call = [this, import_request_of](const cmd::call& request) {
-			const json::object& args = request.args.as_object();
-			const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name") && !args.contains("folder");
-			if (dialog) {
-				// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
-				if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
-				m_hooks.import_model(from_json_string(args.at("path").as_string()));
-				return action_result::success();
-			}
-			// An agent, or a person naming the asset and its folder: no dialog, one background job.
-			if (m_hooks.agent_import == nullptr) return action_result::failure(cmd::codes::disabled, IMPORT_UNAVAILABLE);
-			const agent_model_import::started started = m_hooks.agent_import->start(import_request_of(args), request.from, !request.confirmation.empty());
-			if (!started.ok()) return action_result::failure(started.code, started.error);
-			return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
-		},
-		.args_schema = json::object{
-			{ "type", "object" },
-			{ "properties", json::object{
-				{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Absolute path of the model file (.glb, .gltf, .obj, .fbx); a regular file, not a link. An agent's import asks a person first." } } },
-				{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, imports without the dialog." } } },
-				{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an existing file." } } },
-				{ "files_token", json::object{ { "type", "string" }, { "minLength", 1 },
-					{ "description", "Only for the second call: when the job of the first call ends with needs_files_approval (the model refers to other files), call again with the same arguments and this token; a person is shown those files and decides." } } } } },
-			{ "required", json::array{ "path" } },
-			{ "additionalProperties", false } },
-		.result_schema = json::object{
-			{ "type", "object" },
-			{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
-				{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}, or {needs_files_approval, files_token, file_count} when the model refers to other files (nothing is written then); both carry decoder_sandbox {fs: landlock|none, syscalls: seccomp|none, why?, warning?}, what the model decoder said of its OS sandbox (warning: the user's files were not protected from the parser); job.cancel stops it and takes back what it wrote." } } } } },
-			{ "additionalProperties", false } },
-		.activate = [this] { import_model(); },
-		.enabled = import_available,
-		.category = cmd::agent_category::scene_edit,
-		.risk = cmd::danger::confirm,
-		.describe = [this, import_request_of](const cmd::call& request) -> std::optional<std::string> {
-			if (m_hooks.agent_import == nullptr) return std::nullopt;
-			return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from);
-		},
-		.starts_job = true });
+	// A command_desc for describe_before_allowed_invoke: the registry describes a call the policy allows right before
+	// it runs (cmd_registry.cpp, apply_policy), and the import runs an agent's call only with the plan describe
+	// remembered for it.
+	cmd::command_desc import_command;
+	import_command.id = "file.import_model";
+	import_command.summary = "Import Model...";
+	import_command.mutates = true;
+	import_command.invoke = [this, import_request_of](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
+			&& !args.contains("folder");
+		if (dialog) {
+			// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
+			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
+			m_hooks.import_model(from_json_string(args.at("path").as_string()));
+			return action_result::success();
+		}
+		// An agent, or a person naming the asset and its folder: no dialog, one background job.
+		if (m_hooks.agent_import == nullptr) return action_result::failure(cmd::codes::disabled, IMPORT_UNAVAILABLE);
+		const agent_model_import::started started = m_hooks.agent_import->start(import_request_of(args), request.from);
+		if (!started.ok()) return action_result::failure(started.code, started.error);
+		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
+	};
+	import_command.args_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{
+			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Absolute path of the model file (.glb, .gltf, .obj, .fbx); a regular file, not a "
+					"link. An agent's import asks a person first, and its source must lie on a local fixed or "
+					"removable disk (no share, network drive or mount, no '.' or '..')." } } },
+			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, "
+					"imports without the dialog." } } },
+			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an "
+					"existing file." } } },
+			{ "files_token", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Only for the second call: when the job of the first call ends with "
+					"needs_files_approval (the model refers to other files), call again with the same arguments "
+					"and this token; a person is shown those files and decides." } } } } },
+		{ "required", json::array{ "path" } },
+		{ "additionalProperties", false } };
+	import_command.result_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
+			{ "description", "The import job: job.get shows its progress and, when done, {prefab, assets}, or "
+				"{needs_files_approval, files_token, file_count} when the model refers to other files (nothing is "
+				"written then); both carry decoder_sandbox {fs: landlock|none, syscalls: seccomp|none, why?, "
+				"warning?}, what the model decoder said of its OS sandbox (warning: the user's files were not "
+				"protected from the parser); job.cancel stops it and takes back what it wrote." } } } } },
+		{ "additionalProperties", false } };
+	import_command.enabled = import_available;
+	import_command.category = cmd::agent_category::scene_edit;
+	import_command.risk = cmd::danger::confirm;
+	import_command.describe = [this, import_request_of](const cmd::call& request) -> std::optional<std::string> {
+		if (m_hooks.agent_import == nullptr) return std::nullopt;
+		return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from);
+	};
+	import_command.describe_before_allowed_invoke = true;
+	import_command.starts_job = true;
+	const auto import_disabled_reason = [this] {
+		const std::string why =
+			m_hooks.agent_import != nullptr ? m_hooks.agent_import->unavailable_reason() : std::string{};
+		return why.empty() ? std::string(IMPORT_UNAVAILABLE) : why;
+	};
+	import_command.disabled_reason = import_disabled_reason;
+	action_ui import_ui;
+	import_ui.label = "Import Model...";
+	import_ui.menu_path = "File";
+	import_ui.separator_before = true;
+	import_ui.disabled_tooltip = IMPORT_UNAVAILABLE;
+	import_ui.disabled_reason = import_disabled_reason;
+	import_ui.activate = [this] { import_model(); };
+	m_registrations.push_back(m_actions.add(std::move(import_command), std::move(import_ui)));
 
 	if (m_hooks.image_import != nullptr) register_image_import();
 

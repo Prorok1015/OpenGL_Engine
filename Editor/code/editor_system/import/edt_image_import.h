@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_agent_source_rule.h"
 #include "edt_file_identity.h"
 #include "edt_model_import_limits.h"
 #include <snk/command/cmd_types.h>
@@ -66,37 +67,6 @@ namespace edt
 	boost::json::object image_texture_desc_json(const res::tag& image, std::string_view name,
 		const image_import_settings& settings);
 
-	// DRIVE_REMOVABLE and DRIVE_FIXED of GetDriveTypeW: the only drive types an agent's source may lie on.
-	inline constexpr unsigned k_drive_removable = 2;
-	inline constexpr unsigned k_drive_fixed = 3;
-
-	// GetDriveTypeW of "X:\" (the local drive table only, no network round trip); 0 (DRIVE_UNKNOWN) off Windows.
-	unsigned system_drive_type(char letter);
-	// The text of /proc/self/mounts; nullopt when it cannot be read (and on Windows).
-	std::optional<std::string> system_mount_table();
-
-	// How agent_source_path_problem tells a local volume from another one, without touching the path.
-	struct source_volume_ports
-	{
-#if defined(_WIN32)
-		bool windows = true;
-#else
-		bool windows = false;
-#endif
-		// Windows rules: the type of a drive by its letter; null: unknown.
-		std::function<unsigned(char letter)> drive_type = system_drive_type;
-		// POSIX rules: the mount table; null or nullopt: it cannot be read, every path is refused.
-		std::function<std::optional<std::string>()> mount_table = system_mount_table;
-	};
-
-	// The allowed source roots of an agent's import: only local fixed or removable volumes. Why `path` (as an agent
-	// gave it) may not be read for an agent; empty when it may. The text alone decides, plus the drive table or the
-	// mount table: the path itself is never looked at. Refused: UNC and device paths (two leading separators,
-	// `\??\`), a `.` or `..` component; Windows: no drive letter, a drive that is not DRIVE_FIXED/DRIVE_REMOVABLE;
-	// POSIX: a path whose longest mount point is a network or automount one (agent_log_mounts).
-	std::string agent_source_path_problem(std::string_view path, const source_volume_ports& ports);
-	std::string agent_source_path_problem(std::string_view path);
-
 	// What a caller asks for: the person's window or file.import_image.
 	struct image_import_request
 	{
@@ -163,7 +133,8 @@ namespace edt
 		// The largest picture an agent may import; a person's call may bring k_max_person_source_bytes.
 		std::uintmax_t max_agent_bytes = k_max_agent_source_bytes;
 		std::uintmax_t max_person_bytes = k_max_person_source_bytes;
-		// Where an agent's source may lie (agent_source_path_problem); tests fake a remote drive or mount.
+		// Where an agent's source may lie (agent_source_path_problem, edt_agent_source_rule.h); tests fake a remote
+		// drive or mount.
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
 		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"); true fails that write.
@@ -213,11 +184,6 @@ namespace edt
 		// first. An error names a file below `top` as res:// and holds no absolute path.
 		static image_import_written write_files(const std::filesystem::path& top, const image_import_plan& plan,
 			std::span<const std::byte> bytes, const std::function<bool(std::string_view)>& fail_step = {});
-
-		// `text` with every spelling of each of `roots` read as res:// and of `source` as its file name: what an error
-		// that reaches an agent may hold of this machine's paths.
-		static std::string without_paths(std::string text, const std::vector<std::filesystem::path>& roots,
-			const std::filesystem::path& source);
 
 		static constexpr std::string_view k_extensions[] = { ".png", ".jpg", ".jpeg" };
 		static constexpr std::size_t k_max_shown = 32;
