@@ -4,6 +4,7 @@
 #include "edt_builtin_asset_kinds.h"
 #include "edt_data_document.h"
 #include "edt_document_creator.h"
+#include "edt_material_creator.h"
 #include "edt_texture_viewer_host.h"
 #include "edt_migration_startup.h"
 #include "edt_version_notice.h"
@@ -18,11 +19,15 @@
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/model_codec/res_asset_id.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/render/rnd_shader_desc.h>
+#include <snk/scene/scn_material_desc.h>
 #include <snk/resource/res_asset_index.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <boost/json.hpp>
 #include <imgui.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -33,6 +38,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1753,6 +1759,8 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheBuiltInKinds_GiveAShaderDescItsSuffix)
 	wired.desc_kinds = kinds_of(kinds);
 	const edt::document_creator creator{ std::move(wired) };
 	BOOST_TEST(creator.suffix_of("shader_desc") == ".shader.desc");
+	BOOST_TEST(creator.suffix_of("material_desc") == ".mat.desc");
+	BOOST_TEST(creator.file_name_of("material_desc", "rock.shader.desc") == "rock.mat.desc");
 	BOOST_TEST(creator.file_name_of("shader_desc", "lit.prefab.desc") == "lit.shader.desc");
 	BOOST_TEST(creator.file_name_of("test.config", "lit.shader.desc") == "lit.desc");
 	const edt::asset_kind_desc* opens = kinds.kind_for_open(creator.file_name_of("shader_desc", "lit"));
@@ -1947,6 +1955,8 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_Create_WritesTheTypesInitialFields)
 	const json::object texture = edt::initial_document_fields("texture_2d_desc");
 	BOOST_TEST(texture.at("__parent").as_string() == "res://base_texture.desc");
 	BOOST_TEST(texture.size() == 1u);
+	// #1198: a material made by Create Document is the same child of the base material as one of New Material.
+	BOOST_TEST((edt::initial_document_fields("material_desc") == edt::material_fields()));
 	BOOST_TEST(edt::initial_document_fields("test.config").empty());
 }
 
@@ -2117,6 +2127,302 @@ BOOST_AUTO_TEST_CASE(DocumentCreator_TheForm_CreatesWhenTheNameIsGood_AndSaysWha
 	form.set_name("game");
 	BOOST_TEST(form.problem() == "'game.desc' already exists in the project layer");
 	BOOST_TEST(!form.can_submit());
+}
+
+// ---- New Material (#1198, EPIC-07 US-07-C): material_creator over Create Document's creator ----
+
+namespace {
+	edt::asset_kind_hooks material_kind_hooks()
+	{
+		edt::asset_kind_hooks hooks;
+		hooks.open_prefab = [](const res::tag&) {};
+		hooks.add_desc_to_scene = [](const res::tag&) {};
+		hooks.open_desc = [](const res::tag&) {};
+		return hooks;
+	}
+
+	// shader_desc is a render desc, which the scene environment does not register.
+	struct render_descs
+	{
+		explicit render_descs(desc::desc_system& system) : descs(system) { engine::render::register_render_descs(descs); }
+		~render_descs() { engine::render::unregister_render_descs(descs); }
+		render_descs(const render_descs&) = delete;
+		render_descs& operator=(const render_descs&) = delete;
+
+		desc::desc_system& descs;
+	};
+}
+
+// The editor's wiring (asset_open_component): the built-in kinds name the files, the creator's blocker refuses.
+struct material_wiring
+{
+	material_wiring(document_fixture& fixture, std::function<std::optional<std::string>()> blocker = {})
+		: builtin(edt::register_builtin_asset_kinds(kinds, material_kind_hooks()))
+		, names(ports_of(fixture, std::move(blocker)))
+		, creator(names)
+	{
+	}
+
+	edt::document_creator::ports ports_of(document_fixture& fixture, std::function<std::optional<std::string>()> blocker)
+	{
+		edt::document_creator::ports wired{ [&fixture] { return fixture.descs.get(); }, [&fixture] { return fixture.rs.get(); },
+			[&fixture] { return std::vector<fs::path>{ fixture.lower, fixture.res_root }; }, std::move(blocker) };
+		wired.desc_kinds = kinds_of(kinds);
+		wired.initial_fields = [](std::string_view type) { return edt::initial_document_fields(type); };
+		return wired;
+	}
+
+	edt::asset_kind_registry kinds;
+	std::vector<edt::registration> builtin;
+	edt::document_creator names;
+	edt::material_creator creator;
+};
+
+BOOST_AUTO_TEST_CASE(NewMaterial_IsAMatDescHoldingTheTypeTheVersionAndTheBaseMaterialAsItsParent)
+{
+	const material_wiring wiring{ *this };
+	BOOST_TEST(wiring.creator.suffix() == ".mat.desc");
+	BOOST_TEST(wiring.creator.file_name("Rock") == "Rock.mat.desc");
+
+	const edt::document_creation made = wiring.creator.create("", "Rock");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+	BOOST_TEST(made.tag.string() == "res://Rock.mat.desc");
+	const json::object content = parsed("Rock.mat.desc");
+	BOOST_TEST(content.size() == 3u);
+	std::vector<std::string> keys;
+	for (const auto& field : content) keys.emplace_back(field.key());
+	BOOST_TEST((keys == std::vector<std::string>{ "__type", "__version", "__parent" }));
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "material_desc");
+	BOOST_TEST(content.at("__version").to_number<int>() == descs->current_version("material_desc"));
+	BOOST_TEST(std::string(content.at("__parent").as_string()) == "res://base_material.desc");
+
+	// The material kind opens it (the data document host gives a material its window by `__type`).
+	const edt::asset_kind_desc* opens = wiring.kinds.kind_for_open("materials/x.mat.desc");
+	BOOST_REQUIRE(opens != nullptr);
+	BOOST_TEST(opens->id == "material_desc");
+	BOOST_TEST(opens->suffix == ".mat.desc");
+}
+
+// PR 2 and PR 3 of #1198 reuse the creator: a shader of the user's choice, another material as the parent.
+BOOST_AUTO_TEST_CASE(NewMaterial_WithOptions_WritesTheShader_AndTheParentInPlaceOfTheBaseMaterial)
+{
+	const material_wiring wiring{ *this };
+	edt::material_options options;
+	options.shader = res::tag{ "res://shaders/sky.shader.desc" };
+	const edt::document_creation shaded = wiring.creator.create("", "Sky", options);
+	BOOST_REQUIRE_MESSAGE(shaded.ok(), shaded.error);
+	const json::object sky = parsed("Sky.mat.desc");
+	BOOST_TEST(sky.size() == 4u);
+	BOOST_TEST(std::string(sky.at("__parent").as_string()) == "res://base_material.desc");
+	BOOST_TEST(std::string(sky.at("shader").as_string()) == "res://shaders/sky.shader.desc");
+
+	options = edt::material_options{};
+	options.parent = shaded.tag;
+	const edt::document_creation child = wiring.creator.create("", "SkyVariant", options);
+	BOOST_REQUIRE_MESSAGE(child.ok(), child.error);
+	const json::object variant = parsed("SkyVariant.mat.desc");
+	BOOST_TEST(variant.size() == 3u);
+	BOOST_TEST(std::string(variant.at("__parent").as_string()) == "res://Sky.mat.desc");
+}
+
+// It draws: the shader it resolves through the base material is the engine's scene shader.
+BOOST_AUTO_TEST_CASE(NewMaterial_ResolvesTheBaseMaterialsSceneShader)
+{
+	fs::create_directories(lower / "shaders");
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "base_material.desc", lower / "base_material.desc", fs::copy_options::overwrite_existing);
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "shaders" / "scene.shader.desc", lower / "shaders" / "scene.shader.desc",
+		fs::copy_options::overwrite_existing);
+	const render_descs shaders{ *descs };
+	const material_wiring wiring{ *this };
+	const edt::document_creation made = wiring.creator.create("materials", "Fresh");
+	BOOST_REQUIRE_MESSAGE(made.ok(), made.error);
+
+	const auto material = require_loaded<scn::material_desc>(made.tag);
+	BOOST_REQUIRE(material.is_ready());
+	BOOST_REQUIRE(!material.has_error());
+	const auto& shader = material.get()->shader;
+	BOOST_TEST(shader.get_tag().view() == "res://shaders/scene.shader.desc");
+	// The shader's own load runs on the resolver's io thread.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!shader.is_ready() && !shader.has_error() && std::chrono::steady_clock::now() < deadline) {
+		pump();
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	BOOST_REQUIRE_MESSAGE(shader.is_ready(), "the scene shader was still loading after 5 s");
+	BOOST_TEST(!shader.has_error());
+	BOOST_TEST(shader.get()->vertex.string() == "res://shaders/scene.vert");
+#pragma push_macro("OPAQUE")
+#undef OPAQUE // a Windows header macro
+	BOOST_TEST((material.get()->queue == scn::pass_queue::OPAQUE));
+#pragma pop_macro("OPAQUE")
+}
+
+// Without the material kind a new file would be a plain Material.desc: refused, nothing is written.
+BOOST_AUTO_TEST_CASE(NewMaterial_WithoutTheMaterialKind_IsRefused_AndWritesNothing)
+{
+	edt::document_creator::ports ports{ [this] { return descs.get(); }, [this] { return rs.get(); },
+		[this] { return std::vector<fs::path>{ lower, res_root }; } };
+	ports.desc_kinds = [] { return std::vector<std::pair<std::string, std::string>>{ { "shader_desc", ".shader.desc" } }; };
+	ports.initial_fields = [](std::string_view type) { return edt::initial_document_fields(type); };
+	const edt::document_creator names(ports);
+	const edt::material_creator creator(names);
+	BOOST_TEST(creator.suffix() != ".mat.desc");
+
+	const std::string expected = "no asset kind names material_desc files '.mat.desc': materials cannot be created";
+	BOOST_TEST(creator.check("", "Rock") == expected);
+	const edt::document_creation refused = creator.create("", "Rock");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == expected);
+	BOOST_TEST(creator.suggested_name("").empty());
+
+	// The window opens without a name and says why Create is off.
+	edt::material_create_form form(creator);
+	form.open("");
+	BOOST_TEST(form.name().empty());
+	BOOST_TEST(form.problem() == expected);
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(!form.submit().has_value());
+	BOOST_TEST(fs::is_empty(res_root));
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_SuggestsMaterial_ThenMaterial2_AndRefusesATakenName)
+{
+	const material_wiring wiring{ *this };
+	BOOST_TEST(wiring.creator.suggested_name("") == "Material");
+	edt::material_create_form form(wiring.creator);
+	form.open("");
+	BOOST_TEST(form.suggested() == "Material");
+	BOOST_TEST(form.name() == "Material");
+	BOOST_TEST(form.file_name() == "Material.mat.desc");
+	BOOST_TEST(form.problem().empty());
+	const std::optional<res::tag> first = form.submit();
+	BOOST_REQUIRE(first.has_value());
+	BOOST_TEST(first->string() == "res://Material.mat.desc");
+
+	BOOST_TEST(wiring.creator.suggested_name("") == "Material-2");
+	form.open("");
+	BOOST_TEST(form.name() == "Material-2");
+	BOOST_TEST(form.file_name() == "Material-2.mat.desc");
+	form.set_name("Material");
+	BOOST_TEST(form.problem() == "'Material.mat.desc' already exists in the project layer");
+	BOOST_TEST(!form.can_submit());
+	BOOST_TEST(!form.submit().has_value());
+
+	// taken after the name was checked: the submit checks again and refuses as Create Document does
+	form.set_name("Late");
+	BOOST_TEST(form.can_submit());
+	put("Late.mat.desc", R"({"__type":"material_desc"})");
+	const std::string before = text_of("Late.mat.desc");
+	BOOST_TEST(!form.submit().has_value());
+	BOOST_TEST(form.error() == "'Late.mat.desc' already exists in the project layer");
+	BOOST_TEST(text_of("Late.mat.desc") == before);
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_InASubfolder_LandsThereInTheTopLayer)
+{
+	const material_wiring wiring{ *this };
+	put("Material.mat.desc", R"({"__type":"material_desc"})");
+	edt::material_create_form form(wiring.creator);
+	form.open("materials/rock");
+	BOOST_TEST(form.folder() == "materials/rock");
+	BOOST_TEST(form.name() == "Material");
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://materials/rock/Material.mat.desc");
+	BOOST_TEST(fs::exists(res_root / "materials" / "rock" / "Material.mat.desc"));
+	BOOST_TEST(!fs::exists(lower / "materials"));
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_IsRefusedWhileTheProjectMayNotBeWritten_AndOverANameOfALowerLayer)
+{
+	bool blocked = true;
+	const material_wiring wiring{ *this, [&blocked]() -> std::optional<std::string> {
+		return blocked ? std::optional<std::string>{ "a project migration is running" } : std::nullopt;
+	} };
+	const edt::document_creation refused = wiring.creator.create("", "Material");
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(refused.error == "a project migration is running");
+	BOOST_TEST(!fs::exists(res_root / "Material.mat.desc"));
+
+	blocked = false;
+	write(lower, "Stone.mat.desc", R"({"__type":"material_desc"})");
+	BOOST_TEST(wiring.creator.check("", "Stone") == "'Stone.mat.desc' already exists in the engine layer");
+	BOOST_TEST(!wiring.creator.create("", "Stone").ok());
+	BOOST_TEST(!fs::exists(res_root / "Stone.mat.desc"));
+	write(lower, "Material.mat.desc", R"({"__type":"material_desc"})");
+	BOOST_TEST(wiring.creator.suggested_name("") == "Material-2");
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_ANameThatIsAPath_IsRefusedByCheckCreateAndTheForm_AndWritesNothing)
+{
+	const material_wiring wiring{ *this };
+	edt::material_create_form form(wiring.creator);
+	form.open("materials");
+	const std::pair<std::string_view, std::string_view> refusals[] = {
+		{ "../x", "a name is one path segment, without '/'" },
+		{ "a/b", "a name is one path segment, without '/'" },
+		{ "a\\b", "the path must use '/' as the separator" },
+	};
+	for (const auto& [name, expected] : refusals) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		{
+			BOOST_TEST(wiring.creator.check("materials", name) == expected);
+			const edt::document_creation made = wiring.creator.create("materials", name);
+			BOOST_TEST(!made.ok());
+			BOOST_TEST(made.error == expected);
+			form.set_name(std::string(name));
+			BOOST_TEST(form.problem() == expected);
+			BOOST_TEST(!form.can_submit());
+			BOOST_TEST(!form.submit().has_value());
+		}
+	}
+	BOOST_TEST(fs::is_empty(res_root));
+	BOOST_TEST(fs::is_empty(lower));
+}
+
+// As Create Document (#1263): a typed material suffix, a bare ".mat", ".desc" or another kind's suffix is replaced, never doubled.
+BOOST_AUTO_TEST_CASE(NewMaterial_ATypedSuffix_IsReplacedByTheMaterials_NotDoubled)
+{
+	const material_wiring wiring{ *this };
+	for (const std::string_view name : { "foo", "foo.mat.desc", "foo.mat", "foo.desc", "foo.MAT.DESC", "foo.shader.desc" }) {
+		BOOST_TEST_CONTEXT("name: " << name)
+		BOOST_TEST(wiring.creator.file_name(name) == "foo.mat.desc");
+	}
+	edt::material_create_form form(wiring.creator);
+	form.open("");
+	form.set_name("foo.mat.desc");
+	BOOST_TEST(form.file_name() == "foo.mat.desc");
+	BOOST_TEST(form.problem().empty());
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://foo.mat.desc");
+	BOOST_TEST(fs::exists(res_root / "foo.mat.desc"));
+	BOOST_TEST(!fs::exists(res_root / "foo.mat.desc.mat.desc"));
+	BOOST_TEST(wiring.creator.check("", "foo.mat") == "'foo.mat.desc' already exists in the project layer");
+}
+
+// Create Document has no port for the open level: its file is refused as any file that exists (name_taken), as in
+// DocumentCreator_Create_NeverOverAFile_OfTheTopLayerOrOfALowerOne. The level's own name gets the material's suffix.
+BOOST_AUTO_TEST_CASE(NewMaterial_TheOpenLevelsFile_IsNeverWrittenOver)
+{
+	const material_wiring wiring{ *this };
+	put("Level.desc", R"({"__type":"test.config"})");
+	open_level = { "Level.desc" };
+	const std::string level_before = text_of("Level.desc");
+	BOOST_TEST(wiring.creator.file_name("Level.desc") == "Level.mat.desc");
+	const edt::document_creation beside = wiring.creator.create("", "Level.desc");
+	BOOST_REQUIRE_MESSAGE(beside.ok(), beside.error);
+	BOOST_TEST(beside.tag.string() == "res://Level.mat.desc");
+	BOOST_TEST(text_of("Level.desc") == level_before);
+
+	put("Scene.mat.desc", R"({"__type":"test.config"})");
+	open_level = { "Scene.mat.desc" };
+	const std::string scene_before = text_of("Scene.mat.desc");
+	BOOST_TEST(wiring.creator.check("", "Scene") == "'Scene.mat.desc' already exists in the project layer");
+	const edt::document_creation over = wiring.creator.create("", "Scene.mat.desc");
+	BOOST_TEST(!over.ok());
+	BOOST_TEST(over.error == "'Scene.mat.desc' already exists in the project layer");
+	BOOST_TEST(text_of("Scene.mat.desc") == scene_before);
 }
 
 // #773: a save writes a reference as {guid, path} when its target has an ID, and the document holds what the file does; the

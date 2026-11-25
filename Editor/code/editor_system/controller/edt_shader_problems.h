@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_problem_list.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -12,7 +13,6 @@
 namespace rnd
 {
 	class render_system;
-	struct shader_problem;
 }
 
 namespace edt
@@ -45,7 +45,13 @@ namespace edt
 		void follow(problem_list& problems, std::uint64_t generation, const std::function<std::vector<rnd::shader_problem>()>& snapshot);
 		void follow(problem_list& problems, const rnd::render_system& renderer);
 
+		// The result of a Check (#1386) is rows of the same source next to the renderer's, until the renderer's problems change (a save, a
+		// hot reload) or the next Check replaces them. Empty rows drop the earlier ones.
+		void set_check(std::vector<rnd::shader_problem> rows);
+
 	private:
+		std::vector<rnd::shader_problem> m_check;
+		bool m_check_fresh = false;
 		// render_system's generation starts at 0 with no problems.
 		std::uint64_t m_generation = 0;
 		bool m_published = false;

@@ -158,8 +158,10 @@ namespace rnd
 		}
 
 		// The source of every stage with includes and defines resolved and the binding macros expanded for `bindings`.
-		// Every included file is wrapped in #line directives (`#line 1 <k>` before it, `#line <n> <parent>` after it) and
-		// `#line <n> 0` follows the defines after #version, so the compiler reports the lines of the files themselves.
+		// Every included file is wrapped in #line directives (`#line 1 <k>` before it, `#line <n> <parent>` after it). The
+		// defines inserted after #version are source N, one past the stage's `sources` (`#line 1 <N>`, the engine's
+		// defines, the constants, the defines, then `#line <v+1> 0`, v the #version line), so the compiler reports the
+		// lines of the files themselves and an error in an inserted define as source N.
 		// A source the engine cannot prepare (an unreadable binding macro, no #version) is not returned: `error`
 		// says why and the shader must not reach the compiler.
 		struct load_result
@@ -182,6 +184,14 @@ namespace rnd
 
 		SNK_API load_result load(res::resource_system& res_sys, const driver::binding_table& bindings) const;
 		SNK_API static load_result load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings);
+
+		struct load_options
+		{
+			// A source that cannot be prepared is not logged as an error: the caller reports it (a check run by the person, #1386).
+			bool quiet = false;
+		};
+		SNK_API static load_result load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings,
+			const load_options& options);
 
 		constant_data cdata;
 		runtime_data rdata;

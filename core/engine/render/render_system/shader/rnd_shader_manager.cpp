@@ -1,8 +1,10 @@
 #include "rnd_shader_manager.h"
 #include "rnd_shader_source_map.h"
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 
@@ -55,6 +57,56 @@ void rnd::ShaderManager::begin_frame() const
 	m_retired.clear();
 }
 
+rnd::ShaderManager::built_program rnd::ShaderManager::build_program(const shader_config::constant_data& cdata, bool quiet) const
+{
+	built_program out;
+	auto source = shader_config::load(cdata, m_res_sys, drv->bindings(), shader_config::load_options{ quiet });
+	out.files = source.files;
+	out.name = source.program;
+	out.problems = std::move(source.problems);
+	if (source.ok()) {
+		driver::shader_build_log log;
+		out.program = drv->create_shader(source.headers, &log);
+		if (!out.program) {
+			out.problems = problems_of_build_log(log, source.headers, source.sources, source.program, cdata.constants.size());
+			if (out.problems.empty()) {
+				shader_problem unknown;
+				unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
+				unknown.code = "shader/compile";
+				unknown.message = "the driver did not build the program and said nothing";
+				unknown.program = source.program;
+				out.problems.push_back(std::move(unknown));
+			}
+		}
+	}
+	return out;
+}
+
+std::vector<rnd::shader_problem> rnd::ShaderManager::check(const res::tag& desc_tag, std::vector<res::tag>* files, std::string* program) const
+{
+	ASSERT_MSG(std::this_thread::get_id() == m_owner_thread, "ShaderManager::check: main thread only");
+	auto handle = m_res_sys.require_sync<shader_desc>(desc_tag);
+	const std::shared_ptr<shader_desc> desc = handle.is_ready() ? handle.get_sync() : nullptr;
+	if (!desc) {
+		shader_problem unreadable;
+		unreadable.file = desc_tag;
+		unreadable.code = "shader/load";
+		unreadable.message = "the shader desc cannot be read";
+		if (files) *files = { desc_tag };
+		return { std::move(unreadable) };
+	}
+	return check(desc->config().cdata, files, program);
+}
+
+std::vector<rnd::shader_problem> rnd::ShaderManager::check(const shader_config::constant_data& cdata, std::vector<res::tag>* files, std::string* program) const
+{
+	ASSERT_MSG(std::this_thread::get_id() == m_owner_thread, "ShaderManager::check: main thread only");
+	built_program built = build_program(cdata, true);
+	if (files) *files = std::move(built.files);
+	if (program) *program = std::move(built.name);
+	return std::move(built.problems);
+}
+
 rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id variant) const
 {
 	if (variant.value >= m_programs.size()) {
@@ -64,25 +116,10 @@ rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id va
 	auto& slot = m_programs[variant.value];
 	if (slot.stale || (!slot.program && !slot.failed)) {
 		slot.stale = false;
-		auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
-		track_files(variant, source.files);
-		std::vector<shader_problem> problems = std::move(source.problems);
-		std::unique_ptr<driver::shader_interface> fresh;
-		if (source.ok()) {
-			driver::shader_build_log log;
-			fresh = drv->create_shader(source.headers, &log);
-			if (!fresh) {
-				problems = problems_of_build_log(log, source.headers, source.sources, source.program);
-				if (problems.empty()) {
-					shader_problem unknown;
-					unknown.file = source.sources.empty() || source.sources.front().empty() ? res::tag{} : source.sources.front().front();
-					unknown.code = "shader/compile";
-					unknown.message = "the driver did not build the program and said nothing";
-					unknown.program = source.program;
-					problems.push_back(std::move(unknown));
-				}
-			}
-		}
+		built_program built = build_program(m_variants.resolve(variant), false);
+		track_files(variant, built.files);
+		std::vector<shader_problem> problems = std::move(built.problems);
+		std::unique_ptr<driver::shader_interface> fresh = std::move(built.program);
 		if (fresh) {
 			if (slot.program) {
 				m_retired.push_back(std::move(slot.program));
@@ -128,7 +165,8 @@ void rnd::ShaderManager::track_files(variant_id variant, const std::vector<res::
 	for (const res::tag& file : files) {
 		auto [it, added] = m_users.try_emplace(file);
 		if (added) {
-			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this](const res::tag& changed) { on_file_changed(changed); });
+			// The users are keyed by the tag watched: after a rename the resource system tells the file's new path (#1387).
+			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this, file](const res::tag&) { on_file_changed(file); });
 		}
 		if (std::ranges::find(it->second, variant.value) == it->second.end()) {
 			it->second.push_back(variant.value);

@@ -148,6 +148,8 @@ namespace edt
 		std::optional<history_entry> next_redo_entry() const override;
 		// Writes the edits made since the last record as one record; nothing when there are none.
 		void commit_pending();
+		// The same under `label` ("Set Diffuse texture") instead of the one made from the changed fields.
+		void commit_pending(std::string label);
 		// `own` differs from the last record (an edit the history has not taken yet).
 		bool has_pending_edit() const { return m_open && !(m_own == m_committed_own); }
 		const document_history& history() const { return m_history; }
@@ -156,7 +158,7 @@ namespace edt
 		friend struct data_document_test_access;
 
 		// Records the step from `before` to `after` (what commit_pending does with the pending edit).
-		void record_change(const boost::json::object& before, const boost::json::object& after);
+		void record_change(const boost::json::object& before, const boost::json::object& after, std::string label = {});
 
 		struct loaded
 		{

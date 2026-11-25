@@ -7,19 +7,24 @@
 #include "rnd_shader_source_map.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <format>
 #include <sstream>
 
 // The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
-// on it, see lights_params) and the stage the source is compiled for.
+// on it, see lights_params) and the stage the source is compiled for. engine_define_lines lines, in front of the
+// constants and the defines: problems_of_build_log tells them apart by that count.
+static constexpr std::string_view engine_defines_format = "#define {} {}\n#define {}\n";
+static_assert(static_cast<std::size_t>(std::ranges::count(engine_defines_format, '\n')) == rnd::engine_define_lines);
+
 static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 {
     std::string_view stage = rnd::vertex_stage_define;
     if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = rnd::fragment_stage_define;
     if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = rnd::geometry_stage_define;
-    return std::format("#define {} {}\n#define {}\n", rnd::max_light_count_define, rnd::lights_params::MAX_LIGHT_COUNT, stage);
+    return std::format(engine_defines_format, rnd::max_light_count_define, rnd::lights_params::MAX_LIGHT_COUNT, stage);
 }
 
 static rnd::shader_problem make_problem(res::tag file, int line, std::string code, std::string message)
@@ -100,12 +105,24 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 		result.sources.push_back(std::move(expanded.sources));
 	}
 
+	// One injected define per line: a line break would shift the kinds the build log names, or start a #line that
+	// closes the block early. Such entries are not injected and fail the load.
+	const auto has_line_break = [](std::string_view text) { return text.find_first_of("\r\n") != std::string_view::npos; };
+	std::vector<std::string> broken_defines;
 	std::ostringstream addition_defines;
 	for (const auto& [name, value] : cdata.constants) {
+		if (has_line_break(name) || has_line_break(value)) {
+			broken_defines.push_back(name);
+			continue;
+		}
 		addition_defines << std::format("#define {} {}\n", name, value);
 	}
 
 	for (const auto& def : cdata.defines) {
+		if (has_line_break(def)) {
+			broken_defines.push_back(def);
+			continue;
+		}
 		addition_defines << std::format("#define {}\n", def);
 	}
 
@@ -128,13 +145,20 @@ static void preprocess_shader_code(const std::vector<res::tag>& tags, std::vecto
 			problems += std::format("'{}': {}", header.title, errors);
 			add_macro_problems(errors, header.body, result.sources[index], result.problems);
 		}
-		// The compiler numbers the lines after the inserted defines as the file does again (source 0: the stage).
+		// The defines are source number N (one past the stage's files, which problems_of_build_log reads as "injected"),
+		// then the compiler numbers the lines after them as the file does again (source 0: the stage).
 		const rnd::source_location after_version = rnd::locate_line(header.body, first_code_line(header.body));
-		const std::string inserted = engine_defines(header.type) + std::string{ addition_defines.view() }
+		const std::string inserted = std::format("#line 1 {}\n", result.sources[index].size())
+			+ engine_defines(header.type) + std::string{ addition_defines.view() }
 			+ std::format("#line {} {}\n", after_version.line + 1, after_version.source);
 		if (!rnd::insert_after_version(header.body, inserted)) {
 			problems += std::format("'{}': the source has to begin with a #version directive\n", header.title);
 			result.problems.push_back(make_problem(tags[index], 0, "shader/load", "the source has to begin with a #version directive"));
+		}
+		for (const std::string& name : broken_defines) {
+			std::string message = std::format("define \"{}\" has a line break in its value; injected defines are one line each", name);
+			problems += std::format("'{}': {}\n", header.title, message);
+			result.problems.push_back(make_problem(tags[index], 0, "shader/load", std::move(message)));
 		}
 	}
 	for (rnd::shader_problem& problem : result.problems) {
@@ -148,6 +172,12 @@ rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& r
 }
 
 rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
+{
+	return load(cdata, res_sys, bindings, load_options{});
+}
+
+rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings,
+	const load_options& options)
 {
     std::vector<res::tag> tags;
     std::vector<res::tag> unreadable;	// stages that could not be read: still files of the source, one may appear later
@@ -202,7 +232,9 @@ rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cd
         }
     }
     if (!result.error.empty()) {
-        egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        if (!options.quiet) {
+            egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        }
         return result;
     }
     result.headers = std::move(headers);
