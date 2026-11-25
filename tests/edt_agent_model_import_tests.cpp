@@ -862,6 +862,40 @@ BOOST_AUTO_TEST_CASE(Job_RefusesAFileThatChangesWhileItIsImported_AndLeavesNothi
 	}
 }
 
+// #1412: the same bytes' size written in place, the write time set back: the change time of the handle tells.
+BOOST_AUTO_TEST_CASE(Job_RefusesASameSizeRewriteWithItsTimeSetBack)
+{
+	const auto started = approved_start(request(), agent);
+	BOOST_REQUIRE(started.ok());
+	during_import = [this] {
+		const fs::file_time_type written = fs::last_write_time(source);
+		dir.write("outside/robot.glb", "glb bytes of the r0bot");
+		fs::last_write_time(source, written);
+	};
+	run_jobs();
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed") != std::string::npos, info->error);
+	BOOST_CHECK(!fs::exists(res_root / "assets"));
+}
+
+// #1412: an agent's plan holds a stamp and no time or id: a plan with a stamp on one side only is another file.
+BOOST_AUTO_TEST_CASE(SameFileAs_WithAStampOnOneSideOnly_IsAnotherFile)
+{
+	const edt::agent_import_plan plan = service->resolve(request(), false);
+	BOOST_REQUIRE_MESSAGE(plan.ok(), plan.error);
+	BOOST_REQUIRE(plan.stamp.has_value());
+	BOOST_CHECK(plan.same_file_as(plan));
+	edt::agent_import_plan bare = plan;
+	bare.stamp.reset();
+	BOOST_CHECK(!plan.same_file_as(bare));
+	BOOST_CHECK(!bare.same_file_as(plan));
+	edt::agent_import_plan touched = plan;
+	touched.stamp->change_time_ns += 1;
+	BOOST_CHECK(!plan.same_file_as(touched));
+}
+
 BOOST_AUTO_TEST_CASE(Job_ABrokenModelFailsAndLeavesNothing)
 {
 	fail_import = true;

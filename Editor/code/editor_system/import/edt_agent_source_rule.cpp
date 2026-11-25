@@ -337,6 +337,8 @@ edt::agent_file_read edt::read_agent_file(const fs::path& path, std::uint64_t ma
 	switch (read.status) {
 	case read_status::ok:
 		if (!read.stamp) return refuse("the file changed while it was read");
+		// A zero id would make two files with the same size and times look like one.
+		if (read.stamp->file_id == 0) return refuse("the identity of the file on the disk cannot be read");
 		out.stamp = read.stamp;
 		return out;
 	case read_status::missing:
@@ -409,7 +411,9 @@ std::string edt::agent_file_changed(const fs::path& path, const std::optional<pl
 
 bool edt::same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b)
 {
-	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.file_id == b.file_id && a.device == b.device;
+	// The change time too: a tool can set the write time back, never the change time.
+	return a.size == b.size && a.write_time_ns == b.write_time_ns && a.change_time_ns == b.change_time_ns
+		&& a.file_id == b.file_id && a.device == b.device;
 }
 
 std::string edt::agent_source_path_problem(std::string_view path, const source_volume_ports& ports)

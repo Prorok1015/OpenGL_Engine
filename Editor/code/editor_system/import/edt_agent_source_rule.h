@@ -142,8 +142,8 @@ namespace edt
 	agent_file_read read_agent_file(const std::filesystem::path& path, std::uint64_t max_bytes,
 		const source_volume_ports& ports, bool stamp_only = false);
 
-	// Whether two stamps of an agent's read are of one file holding the same content: size, write time, file id and
-	// device.
+	// Whether two stamps of an agent's read are of one file holding the same content: size, write and change time,
+	// file id and device.
 	bool same_file_stamp(const platform::beneath::file_stamp& a, const platform::beneath::file_stamp& b);
 
 	// Why `path` is no longer the file an agent was shown with `shown`: a link on its way (agent_source_links_problem),

@@ -569,6 +569,28 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ComesFromTheHandleThatWasChecked)
 	BOOST_CHECK(gone.missing);
 }
 
+// #1412: agent_file_changed refuses a link on the way, a plan without a stamp and another stamp; the shown file
+// passes.
+BOOST_AUTO_TEST_CASE(AgentFileChanged_RefusesALinkAMissingStampAndAnotherStamp)
+{
+	const test_util::temp_dir dir{ "agent_file_changed" };
+	dir.write("real/robot.glb", "glTF");
+	const fs::path base = fs::weakly_canonical(dir.path());
+	const fs::path file = base / "real" / "robot.glb";
+	edt::source_volume_ports ports;
+	const edt::agent_file_read shown = edt::read_agent_file(file, 64, ports, true);
+	BOOST_REQUIRE_MESSAGE(shown.problem.empty(), shown.problem);
+	BOOST_CHECK(edt::agent_file_changed(file, shown.stamp, ports).empty());
+	const std::string unstamped = edt::agent_file_changed(file, std::nullopt, ports);
+	BOOST_CHECK_MESSAGE(unstamped.find("changed since it was shown") != std::string::npos, unstamped);
+	platform::beneath::file_stamp other = *shown.stamp;
+	other.change_time_ns += 1;
+	BOOST_CHECK(!edt::agent_file_changed(file, other, ports).empty());
+	test_util::make_folder_link(base / "linked", base / "real");
+	const std::string linked = edt::agent_file_changed(base / "linked" / "robot.glb", shown.stamp, ports);
+	BOOST_CHECK_MESSAGE(linked.find("'linked' on the way to the source is a link") != std::string::npos, linked);
+}
+
 // #1412: a folder swapped for a link after the walk checked it is not followed by the read.
 BOOST_AUTO_TEST_CASE(AFolderSwappedForALink_AfterTheCheck_IsNotFollowed)
 {
