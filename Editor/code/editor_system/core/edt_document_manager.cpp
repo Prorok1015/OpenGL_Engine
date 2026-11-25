@@ -59,6 +59,7 @@ struct link_tables
 	std::vector<host_record> hosts;
 	edt::host_id next_host = 1;
 	std::uint64_t revision = 0;
+	bool sweeping = false;
 };
 
 using link_table = std::map<const edt::document_manager*, link_tables>;
@@ -373,7 +374,7 @@ edt::document_id edt::document_manager::open_instance(std::unique_ptr<document> 
 	tables.links.push_back({ id, link_kind::instance, parent, std::string(anchor) });
 	++tables.revision;
 	m_events.document_opened.emit(id);
-	return id;
+	return find_open(id) ? id : 0;
 }
 
 void edt::document_manager::register_asset_link(document_id id)
@@ -602,21 +603,56 @@ void edt::document_manager::close(document_id id)
 	forget_closed_links();
 }
 
+// A preview that closed itself is not announced closed (nobody calls close() for it), while the documents opened from it are: they close
+// here, so a listener hears about the children but never about the parent.
 void edt::document_manager::forget_closed_links()
 {
+	link_tables& state = links_of(this);
+	if (state.sweeping) return;
+	state.sweeping = true;
 	for (;;) {
 		const link_tables& tables = links_view(this);
 		const auto stale = std::ranges::find_if(tables.links, [this](const link_record& r) { return !find_open(r.id); });
-		if (stale == tables.links.end()) return;
+		if (stale == tables.links.end()) break;
 		const document_id id = stale->id;
-		close_descendants(id);
+		close_or_release_descendants(id);
 		document_closed_link(id);
 	}
+	links_of(this).sweeping = false;
 }
 
-void edt::document_manager::close_descendants(document_id id)
+void edt::document_manager::close_or_release_descendants(document_id id)
 {
-	for (const document_id below : descendants_of(id)) close(below);
+	const std::vector<document_id> below = descendants_of(id);
+	std::set<document_id> kept;
+	std::vector<problem> stayed;
+	// Shallowest first: a document stays when it has unsaved changes or hangs from one that stays.
+	for (auto at = below.rbegin(); at != below.rend(); ++at) {
+		const document* open = find_open(*at);
+		if (!open) continue;
+		const document_id parent = link_parent(*at);
+		if (open->is_dirty() && !kept.contains(parent)) {
+			kept.insert(*at);
+			// A root now: nothing is above it any more.
+			link_tables& tables = links_of(this);
+			std::erase_if(tables.links, [at](const link_record& r) { return r.id == *at; });
+			++tables.revision;
+			const std::string message = "'" + open->title() + "' stayed open: its parent closed";
+			egLOG_WARN("Editor/Documents", "{}", message);
+			problem item;
+			item.severity = problem_severity::warning;
+			item.file = std::string(open->source().relative());
+			item.message = message;
+			stayed.push_back(std::move(item));
+		} else if (kept.contains(parent)) {
+			kept.insert(*at);
+		}
+	}
+	for (const document_id member : below) {
+		if (!kept.contains(member)) close(member);
+	}
+	// Replaces the earlier rows of this source: the list has no way to add one.
+	if (m_problems && !stayed.empty()) m_problems->set("links", std::move(stayed));
 }
 
 void edt::document_manager::document_closed_link(document_id id)
@@ -694,7 +730,7 @@ void edt::document_manager::preview_removed(const asset_preview_desc& preview)
 			unsaved.push_back(std::move(item));
 		}
 		const document_id closing_id = instance->id();
-		close_descendants(closing_id);
+		close_or_release_descendants(closing_id);
 		end_preview(*instance);
 		document_closed_link(closing_id);
 	}

@@ -20,7 +20,7 @@ namespace edt
 	// Where a document was opened from. `asset`: from the asset browser or a menu, the file is the identity. `instance`: from
 	// a place inside a parent document named by an anchor (a node and a field); the identity is the pair (parent, anchor), never the file.
 	// Only plain values cross the module boundary here: the context itself is the manager's private record.
-	enum class link_kind { asset, instance };
+	enum class link_kind : std::uint8_t { asset, instance };
 
 	class asset_kind_registry;
 	class editor_events;
@@ -94,7 +94,8 @@ namespace edt
 		// Reads never make a table entry.
 		//
 		// Adopts `opened` as an `instance` link of `parent` at `anchor` (announced after the link is recorded). When the pair is linked
-		// already, that link's id is returned and `opened` is destroyed unopened; 0 when `parent` is not open (nothing is adopted).
+		// already, that link's id is returned and `opened` is destroyed unopened; 0 when `parent` is not open (nothing is adopted) or when a
+		// listener of document_opened closed the document again.
 		document_id open_instance(std::unique_ptr<document> opened, document_id parent, std::string_view anchor);
 		// Records an `asset` link for a document that is open (a preview, a data document; never the scene). The id of the link of that file when
 		// another document of the same source is linked as an asset already; `id` itself when it is linked; 0 for a document that is not open.
@@ -159,6 +160,9 @@ namespace edt
 		void close_document(document_id id);
 		// The links of documents that closed without close() (a preview that closed itself) go, their descendants and hosts with them.
 		void forget_closed_links();
+		// What a closed parent leaves behind when nobody asked about it: clean descendants close, one with unsaved changes (and what is
+		// opened from it) stays open as a root, said in the log and in Problems.
+		void close_or_release_descendants(document_id id);
 		const document* find_open(document_id id) const;
 		document& adopt_quiet(std::unique_ptr<document> adopted);
 		void register_asset_link(document_id id);
