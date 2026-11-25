@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <optional>
 #include <string>
@@ -462,9 +463,20 @@ BOOST_AUTO_TEST_CASE(TheLongSpelling_IsAskedForOnlyAfterTheWalkPassed)
 // #1412 (review): a junction met under its 8.3 spelling is refused by the walk, and nothing beyond it is looked at.
 BOOST_AUTO_TEST_CASE(OnWindows_AJunctionUnderItsShortName_IsRefused_AndNothingBeyondItIsTouched)
 {
-	const test_util::temp_dir dir{ "agent_short_junction" };
-	dir.write("target/robot.glb", "glTF");
-	const fs::path base = fs::weakly_canonical(dir.path());
+	// Under the system's temp folder (C: on the runners): the build tree's volume may make no 8.3 names.
+	const fs::path base = fs::weakly_canonical(fs::temp_directory_path()) / "snk_agent_short_junction";
+	struct removed_at_end {
+		fs::path path;
+		~removed_at_end()
+		{
+			std::error_code ec;
+			fs::remove_all(path, ec);
+		}
+	} const cleanup{ base };
+	std::error_code ec;
+	fs::remove_all(base, ec);
+	fs::create_directories(base / "target");
+	std::ofstream(base / "target" / "robot.glb") << "glTF";
 	test_util::make_folder_link(base / "a_long_junction_name", base / "target");
 	const fs::path short_link = test_util::short_path(base / "a_long_junction_name");
 	BOOST_REQUIRE_MESSAGE(!short_link.empty() && short_link.filename() != "a_long_junction_name",
