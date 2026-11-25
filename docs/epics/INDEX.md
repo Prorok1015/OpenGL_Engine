@@ -40,6 +40,7 @@
 | [EPIC-42](editor/EPIC-42.md) | Workspace & Game Project System — разделение движка и игровых данных (#19, переработан по ADR-02) | planned |
 | [EPIC-60](editor/EPIC-60.md) | Autosave & Recovery — автосохранение несохранённых документов в `cache://autosave/` и восстановление после сбоя (#32: #1186, #1187, #1188) | in_progress |
 | [EPIC-77](editor/EPIC-77.md) | Mesh Modeller — полноценный моделлер в редакторе: полигональный меш, инструменты, сохранение в `*.geom.desc` (#1007) | design |
+| [EPIC-82](editor/EPIC-82.md) | Nested Editing — редактор из контекста правит экземпляр, из браузера ассетов — ассет; крошки, верхняя панель, override'ы материала (#1397) | design |
 
 ### Desc-Driven Architecture
 
