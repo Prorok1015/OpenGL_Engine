@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "png_bomb_builder.hpp"
+#include "test_folder_link.hpp"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_asset_database.h"
@@ -439,6 +440,21 @@ BOOST_AUTO_TEST_CASE(ALinkAsTheSource_IsRefused)
 	edt::image_import_request wanted = request();
 	wanted.path = link.string();
 	BOOST_CHECK_EQUAL(refusal_code(wanted), cmd::codes::invalid_args);
+}
+
+// #1408: the same walk as the model import's: a link on the way to an agent's picture is refused where it is.
+BOOST_AUTO_TEST_CASE(AnAgentsSource_BelowAFolderLink_IsRefusedAtTheLink)
+{
+	const fs::path outside = source.parent_path();
+	const fs::path pictures = fs::weakly_canonical(dir.write("pictures/rock.png", png_text)).parent_path();
+	test_util::make_folder_link(outside / "linked", pictures);
+	edt::image_import_request wanted = request();
+	wanted.path = (outside / "linked" / "rock.png").string();
+	const edt::image_import_plan plan = importer->resolve(wanted, false);
+	BOOST_CHECK_EQUAL(plan.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(plan.error.find("'linked' on the way to the source is a link") != std::string::npos, plan.error);
+	// A person's pick goes through the link to the file, as before.
+	BOOST_CHECK(importer->resolve(wanted, true).ok());
 }
 
 BOOST_AUTO_TEST_CASE(BadSettings_ABadNameOrFolder_AreRefused)

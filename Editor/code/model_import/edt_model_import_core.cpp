@@ -45,7 +45,7 @@ edt::model_file_scan edt::scan_model_files(const import_source& source, ds::task
 		scan.error = "the model file was not read";
 		return scan;
 	}
-	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk);
+	model_file_access access(source.path, source.limits, nullptr, source.boundary, source.on_disk, source.may_read);
 	model_file_source files(source.path, *source.preloaded, &access);
 	const mdl::referenced_files found = mdl::list_referenced_files(source.path.string(), files, read_options(source, ctx));
 	if (found.failed == mdl::failure::timed_out) {
@@ -135,7 +135,7 @@ edt::import_intermediate edt::import_model_into(const import_source& source, mdl
 	if (source.provided) {
 		access.emplace(abs_path, source.limits, source.provided, model_file_access::provided_mode::strict);
 	} else if (source.allowed) {
-		access.emplace(abs_path, source.limits, source.allowed, source.boundary, source.on_disk);
+		access.emplace(abs_path, source.limits, source.allowed, source.boundary, source.on_disk, source.may_read);
 	}
 	model_file_access* const files_access = access ? &*access : nullptr;
 	checkpoint(ctx);
