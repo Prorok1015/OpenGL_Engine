@@ -160,7 +160,7 @@ std::unique_ptr<edt::thumbnail_service> edt::panels_component::make_thumbnail_se
 			});
 	};
 	ports.stat = &stat_asset_file;
-	ports.decode = [this](const std::filesystem::path& root, const std::filesystem::path& relative) {
+	ports.decode = [](const std::filesystem::path& root, const std::filesystem::path& relative) {
 		const std::shared_ptr<thumbnail_disk_cache>& cache = bound_thumbnail_cache::current();
 		if (!cache || !cache->is_open())
 			return decode_thumbnail_file(root, relative);
