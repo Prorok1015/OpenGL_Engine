@@ -93,6 +93,7 @@
 #include "../autosave/edt_autosave_component.h"
 #include "../autosave/edt_autosave_settings.h"
 #include "../autosave/edt_autosave_recovery.h"
+#include "../modeller/edt_modeller_settings.h"
 #include "../autosave/edt_autosave_restore.h"
 #include "edt_data_document.h"
 #include "edt_mesh_documents.h"
@@ -742,6 +743,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (!m_autosave->allowed()) return "Off for this run: cfg editor/autosave is false.";
 			if (m_autosave->cache_root().empty()) return "No project is open: autosave has nowhere to write.";
 			return {};
+		} });
+	m_modeller_settings = load_modeller_settings(m_res);
+	if (m_modeller) m_modeller->set_settings_source([this] { return m_modeller_settings; });
+	m_theme_settings->settings_panel().set_modeller(modeller_settings_port{
+		.get = [this] { return m_modeller_settings; },
+		.set = [this](const modeller_settings& settings) -> std::string {
+			m_modeller_settings = clamped(settings);
+			return save_modeller_settings(m_res, m_modeller_settings) ? std::string{}
+				: std::string{ "The settings could not be written: they apply until the editor closes." };
 		} });
 	install_autosave_recovery(headless);
 }

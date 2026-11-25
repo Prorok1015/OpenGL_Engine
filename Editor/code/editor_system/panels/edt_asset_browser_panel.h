@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/editor/edt_panel_base.h>
+#include "edt_asset_filter.h"
 #include "edt_asset_layers.h"
 #include "edt_asset_operation_form.h"
 #include "edt_asset_usages.h"
@@ -13,6 +14,7 @@
 
 namespace edt
 {
+	class asset_kind_registry;
 	class code_section;
 	class document_creator;
 	class document_create_form;
@@ -45,6 +47,8 @@ namespace edt
 		// item.
 		using image_picker = std::function<void(std::function<void(const std::filesystem::path&)> picked)>;
 		void set_image_importer(image_importer* importer, image_picker pick_file);
+		// The registry the "Kinds" filter reads the kinds of modules from; null: only the fixed kinds.
+		void set_asset_kinds(const asset_kind_registry* kinds) { m_kinds = kinds; }
 
 		~asset_browser_panel() override;
 
@@ -66,6 +70,13 @@ namespace edt
 		void set_variant_creator(std::shared_ptr<prefab_variant_creator> creator, std::function<void(const res::tag&)> on_created);
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
+		}
+		// "Open as data" in the context menu of a file `offered` says yes to (a material, #1196): `open` opens it in the generic
+		// data window instead of the window of its type. `offered` is asked once, when the menu opens. Null: no item.
+		void set_open_as_data(std::function<bool(const res::tag&)> offered, std::function<void(const res::tag&)> open)
+		{
+			m_open_as_data_offered = std::move(offered);
+			m_open_as_data = std::move(open);
 		}
 
 	protected:
@@ -101,6 +112,9 @@ namespace edt
 		std::filesystem::path m_selected_rel;
 		usage_list m_usages;
 		char m_search[128] = {};
+		asset_filter m_filter;
+		desc_type_cache m_desc_types;
+		const asset_kind_registry* m_kinds = nullptr;
 
 		struct entry {
 			layer_entry src;
@@ -111,6 +125,10 @@ namespace edt
 		// The labels were built with icon glyphs; a theme that loads or drops the icon font rebuilds them.
 		bool m_labels_have_icons = false;
 		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
+		std::function<bool(const res::tag&)> m_open_as_data_offered;
+		std::function<void(const res::tag&)> m_open_as_data;
+		// What `m_open_as_data_offered` said for the file whose context menu is open.
+		bool m_offers_open_as_data = false;
 		std::shared_ptr<prefab_variant_creator> m_variant_creator;
 		std::unique_ptr<prefab_variant_form> m_variant_form;
 		std::function<void(const res::tag&)> m_on_variant_created;
