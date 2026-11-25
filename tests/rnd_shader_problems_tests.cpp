@@ -216,15 +216,6 @@ BOOST_AUTO_TEST_CASE(TheQuietLoadDoesNotLogAnError_TheOldLoadStillDoes)
 	BOOST_TEST(errors.size() == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(AnIncludeTagOfALayerWalkIsTheTagTheLoadReports)
-{
-	const auto lib = put("shaders/walk_lib.glsl", "float x;\n");
-	const auto vertex = put("shaders/walk.vert", "#version 450 core\n#include \"walk_lib.glsl\"\nvoid main() {}\n");
-	const auto loaded = load(program_of(vertex, put("shaders/walk.frag", good_fragment)));
-	BOOST_TEST((std::ranges::find(loaded.files, res::tag::make("shaders/walk_lib.glsl")) != loaded.files.end()));
-	BOOST_TEST((std::ranges::find(loaded.files, lib) != loaded.files.end()));
-}
-
 BOOST_AUTO_TEST_CASE(AnIncludeThatCannotBeReadIsAProblemOfTheIncludingFileAtItsLine)
 {
 	const auto vertex = put("missing.vert", "#version 450 core\n\n#include \"nowhere.glsl\"\nvoid main() {}\n");

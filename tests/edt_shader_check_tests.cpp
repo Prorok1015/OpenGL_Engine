@@ -1,6 +1,10 @@
 #include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_shader_check.h"
+#include <snk/driver/rnd_bind_group.h>
+#include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -139,6 +143,33 @@ BOOST_AUTO_TEST_CASE(TheLimitIsAppliedAfterTheFilter)
 	const edt::shader_check_report limited = edt::check_shader_source(lib, many, ports());
 	BOOST_TEST(limited.truncated);
 	BOOST_TEST(built.size() == edt::k_shader_check_max_programs);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtShaderCheckRealFiles)
+
+BOOST_AUTO_TEST_CASE(TheTagOfAnInclude_IsTheTagTheLoadReportsForTheFilesOfAProject)
+{
+	test_util::temp_dir dir{ "edt_shader_check_files" };
+	touch(dir.path() / "res" / "shaders" / "lib.glsl");
+	{
+		std::ofstream(dir.path() / "res" / "shaders" / "lib.glsl", std::ios::binary) << "float x;\n";
+		std::ofstream(dir.path() / "res" / "shaders" / "a.vert", std::ios::binary) << "#version 450 core\n#include \"lib.glsl\"\nvoid main() {}\n";
+		std::ofstream(dir.path() / "res" / "shaders" / "a.frag", std::ios::binary) << "#version 450 core\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+	}
+	test_util::scene_env env;
+	env.rs->unregistrate_resolver(res::tag::default_protocol());
+	env.rs->registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(), std::vector<fs::path>{ dir.path() / "res" },
+		res::mount_access::read_write, res::write_policy::allow_all());
+	rnd::shader_config::constant_data cdata;
+	cdata.program = rnd::shader_config::shader_program_data::build()
+		.set_vertex_shader(res::tag::make("shaders/a.vert")).set_fragment_shader(res::tag::make("shaders/a.frag"));
+
+	const auto loaded = rnd::shader_config::load(cdata, *env.rs, rnd::driver::per_type_binding_table, rnd::shader_config::load_options{ true });
+
+	BOOST_TEST(loaded.ok());
+	BOOST_TEST((std::ranges::find(loaded.files, res::tag::make("shaders/lib.glsl")) != loaded.files.end()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
