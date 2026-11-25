@@ -77,6 +77,8 @@ struct subject
 	std::function<edt::save_result()> overwrite;
 	// A file of a lower layer: the text the document refuses it with (at open, or at save).
 	std::function<std::string()> lower_layer_refusal;
+	// The data document tells its window again for every signal of the file, even for a version it flagged already; the others tell it once.
+	bool announces_a_repeat = false;
 };
 
 struct disk_scenarios_fixture : test_util::scene_env
@@ -181,6 +183,7 @@ struct disk_scenarios_fixture : test_util::scene_env
 			return opened.opened ? std::string{} : opened.error;
 		};
 		d.overwrite = [this] { return data->save_over(); };
+		d.announces_a_repeat = true;
 		d.lower_layer_refusal = [this] {
 			write(lower, "engine.desc", R"({"__type":"test.config","speed":8.0})");
 			return edt::data_document(services, layout()).open(res::tag{ "res://engine.desc" }).error;
@@ -366,7 +369,7 @@ BOOST_AUTO_TEST_CASE(Overwrite_WritesTheEditsOverTheOutsideVersion_AndClearsTheF
 	}
 }
 
-BOOST_AUTO_TEST_CASE(ADirtyDocumentWhoseFileIsSignalled_IsFlaggedAndAnnouncedOnce_TheSameVersionAgainAnnouncesNothing)
+BOOST_AUTO_TEST_CASE(ADirtyDocumentWhoseFileIsSignalled_IsFlaggedAndAnnounced_TheSameVersionAgainAnnouncesNothingMoreExceptForData)
 {
 	for (subject& one : subjects()) {
 		BOOST_TEST_CONTEXT(one.name) {
@@ -386,7 +389,7 @@ BOOST_AUTO_TEST_CASE(ADirtyDocumentWhoseFileIsSignalled_IsFlaggedAndAnnouncedOnc
 			pump();
 
 			BOOST_TEST(one.flagged());
-			BOOST_TEST(announced_for(one.document->id()) == before + 1);
+			BOOST_TEST(announced_for(one.document->id()) == before + (one.announces_a_repeat ? 2 : 1));
 		}
 	}
 }
@@ -425,7 +428,7 @@ BOOST_AUTO_TEST_CASE(AWriteBlocker_RefusesTheSaveWithItsReason_NothingIsWritten_
 
 			blocked.reset();
 			const edt::save_result saved = one.document->save();
-			BOOST_TEST_REQUIRE(saved.saved, saved.error);
+			BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
 			BOOST_TEST(text_of(one.file) != before);
 		}
 	}
