@@ -13,12 +13,11 @@ namespace rnd
 	// system: `name` is resolved next to the file that includes it (the same protocol and directory), so nested
 	// includes work from any folder of the VFS. `origin` is the tag the source was read from.
 	//
-	// Guards: a file is expanded once per call, wherever and however often it is included, as if it began with
-	// `#pragma once`. The second include of a file leaves nothing in its place, so declarations shared by several
-	// libraries (snk_common.glsl) never collide.
-	//
-	// A file counts as expanded on its first include even inside an inactive #if / #ifdef, so a later include of
-	// the same file is dropped: stricter than the compiler's #pragma once. Nesting is limited to 32 files.
+	// Guards: a file is expanded at every include of it, wrapped in its own guard (`#ifndef SNK_INCLUDE_<hash>` /
+	// `#define` ... `#endif`), so the compiler keeps the first copy it takes, as with `#pragma once`, and declarations
+	// shared by several libraries (snk_common.glsl) never collide. An include inside a group the compiler skips does
+	// not hide the file from a later include in a group it keeps (#1301). Nesting is limited to 32 files, and the
+	// expanded text is bounded as well.
 	//
 	// Includes in comments are left alone. Returns what could not be expanded, one problem per line
 	// ("'file' line N: ..."): a file that cannot be read, an include that closes a cycle (the chain is named, the
