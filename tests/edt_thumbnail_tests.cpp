@@ -4,6 +4,9 @@
 #include "test_temp_dir.hpp"
 #include <snk/image/img_image.h>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <functional>
 #include <map>
 #include <string>
@@ -172,6 +175,87 @@ BOOST_AUTO_TEST_CASE(AnAbsurdPicture_IsRefusedFromItsHeader_BeforeAnythingIsAllo
 	BOOST_TEST(!refused.error.empty());
 }
 
+BOOST_AUTO_TEST_CASE(ABottomUpPicture_IsTurnedSoItsRowsGoFromTheTop)
+{
+	test_util::temp_dir dir("thumbnail_flipped");
+	const std::filesystem::path root = std::filesystem::weakly_canonical(dir.path());
+	std::vector<unsigned char> pixels = picture(8, 8, 3, 0);
+	for (std::size_t i = 0; i < 8u * 4u * 3u; ++i) pixels[i] = 255;
+	std::vector<std::byte> png;
+	img::image::write_to_memory(img::image_type::png, pixels.data(), 8, 8, 3, png);
+	BOOST_REQUIRE(!png.empty());
+	dir.write("up.png", std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
+
+	const edt::thumbnail_decoded upright = edt::decode_thumbnail_file(root, "up.png");
+	BOOST_REQUIRE(upright.pixels.has_value());
+	BOOST_TEST(pixel_at(*upright.pixels, 0, 0)[0] == 255);
+	BOOST_TEST(pixel_at(*upright.pixels, 0, 7)[0] == 0);
+
+	struct restore_flip { ~restore_flip() { img::image::set_flip(img::image_flip::none); } } restore;
+	img::image::set_flip(img::image_flip::vertical);
+	const edt::thumbnail_decoded flipped = edt::decode_thumbnail_file(root, "up.png");
+	BOOST_REQUIRE(flipped.pixels.has_value());
+	BOOST_TEST(pixel_at(*flipped.pixels, 0, 0)[0] == 255);
+	BOOST_TEST(pixel_at(*flipped.pixels, 0, 7)[0] == 0);
+}
+
+BOOST_AUTO_TEST_CASE(APictureOverTheAreaCap_IsRefusedFromItsHeader_EvenWithEverySideInRange)
+{
+	test_util::temp_dir dir("thumbnail_area");
+	const std::filesystem::path root = std::filesystem::weakly_canonical(dir.path());
+	const auto pixels = picture(8, 8, 3, 1);
+	std::vector<std::byte> png;
+	img::image::write_to_memory(img::image_type::png, pixels.data(), 8, 8, 3, png);
+	BOOST_REQUIRE(png.size() > 24);
+	const auto set_be = [&](std::size_t at, std::uint32_t value) {
+		for (int i = 0; i < 4; ++i) png[at + static_cast<std::size_t>(i)] = static_cast<std::byte>((value >> (24 - 8 * i)) & 0xFF);
+	};
+	set_be(16, 16000);
+	set_be(20, 16000);
+	dir.write("wide.png", std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
+	const edt::thumbnail_decoded refused = edt::decode_thumbnail_file(root, "wide.png");
+	BOOST_TEST(!refused.pixels.has_value());
+	BOOST_TEST(!refused.error.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AFileOverTheSizeCap_IsRefusedWithoutBeingRead)
+{
+	test_util::temp_dir dir("thumbnail_big");
+	const std::filesystem::path root = std::filesystem::weakly_canonical(dir.path());
+	const std::filesystem::path file = dir.write("big.png", "x");
+	std::error_code ec;
+	std::filesystem::resize_file(file, edt::k_thumbnail_max_file_bytes + 1, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("cannot make a sparse file here: skipped");
+		return;
+	}
+	const edt::thumbnail_decoded refused = edt::decode_thumbnail_file(root, "big.png");
+	BOOST_TEST(!refused.pixels.has_value());
+	BOOST_TEST(refused.error.find("larger") != std::string::npos);
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(ALinkAtTheLeaf_IsNotFollowed)
+{
+	test_util::temp_dir dir("thumbnail_link");
+	const std::filesystem::path root = std::filesystem::weakly_canonical(dir.path());
+	const auto pixels = picture(8, 8, 3, 9);
+	std::vector<std::byte> png;
+	img::image::write_to_memory(img::image_type::png, pixels.data(), 8, 8, 3, png);
+	const std::filesystem::path target = dir.write("real.png", std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
+	std::error_code ec;
+	std::filesystem::create_symlink(target, root / "link.png", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("cannot make a symlink here: skipped");
+		return;
+	}
+	BOOST_TEST(edt::decode_thumbnail_file(root, "real.png").pixels.has_value());
+	const edt::thumbnail_decoded refused = edt::decode_thumbnail_file(root, "link.png");
+	BOOST_TEST(!refused.pixels.has_value());
+	BOOST_TEST(!refused.error.empty());
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
@@ -312,9 +396,11 @@ BOOST_AUTO_TEST_CASE(AShownFileIsNotDecodedAgain_UntilItsStampChanges)
 	env.add("a.png", 2);
 	env.clock = 10.0;
 	BOOST_TEST((service.lookup("root", "a.png").state == view_state::pending));
-	BOOST_TEST(env.releases == 1);
+	BOOST_TEST(env.releases == 0);
+	BOOST_TEST(service.graveyard() == 1u);
 	BOOST_TEST(service.textures() == 0u);
 	service.tick();
+	BOOST_TEST(env.releases == 1);
 	env.run_tasks();
 	service.tick();
 	BOOST_TEST((service.lookup("root", "a.png").state == view_state::ready));
@@ -399,8 +485,12 @@ BOOST_AUTO_TEST_CASE(LeavingAFolder_GivesTheTexturesBack_AndAnAnswerThatArrivesL
 
 	service.release_all();
 	BOOST_TEST(service.entries() == 0u);
-	BOOST_TEST(env.live_textures.empty());
+	BOOST_TEST(env.live_textures.size() == 1u);
+	BOOST_TEST(service.graveyard() == 1u);
 	BOOST_TEST(service.textures() == 0u);
+	service.tick();
+	BOOST_TEST(env.live_textures.empty());
+	BOOST_TEST(service.graveyard() == 0u);
 
 	in_flight[1].second(in_flight[1].first());
 	service.tick();
@@ -428,9 +518,66 @@ BOOST_AUTO_TEST_CASE(TheCacheIsBounded_TheLeastRecentlyAskedForGoesAndGivesItsTe
 	env.add("c.png");
 	service.lookup("root", "c.png");
 	BOOST_TEST(service.entries() == 2u);
+	BOOST_TEST(env.releases == 0);
+	service.tick();
 	BOOST_TEST(env.releases == 1);
 	BOOST_TEST(env.live_textures.size() == 1u);
 	BOOST_TEST((service.lookup("root", "b.png").state == view_state::ready));
+}
+
+BOOST_AUTO_TEST_CASE(TextureKeysAreReused_SoTheTextureManagerGrowsNoSlotPerFileEverShown)
+{
+	service_env env;
+	edt::thumbnail_service::limits limits;
+	limits.max_entries = 2;
+	limits.uploads_per_frame = 1;
+	edt::thumbnail_service service(env.make_ports(), limits);
+	for (int i = 0; i < 40; ++i) {
+		const std::string name = "f" + std::to_string(i) + ".png";
+		env.add(name);
+		service.lookup("root", name);
+		service.tick();
+		env.run_tasks();
+		service.tick();
+		service.release_all();
+	}
+	service.tick();
+	BOOST_TEST(env.uploads == 40);
+	BOOST_TEST(service.keys_made() <= 3u);
+	BOOST_TEST(env.live_textures.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ATextureHeldByTheFrameBeingDrawn_IsNotGivenBackBeforeTheNextTick)
+{
+	service_env env;
+	env.add("a.png");
+	edt::thumbnail_service service(env.make_ports());
+	service.lookup("root", "a.png");
+	service.tick();
+	env.run_tasks();
+	service.tick();
+	BOOST_REQUIRE((service.lookup("root", "a.png").state == view_state::ready));
+	service.release_all();
+	BOOST_TEST(env.releases == 0);
+	BOOST_TEST(env.live_textures.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheDestructor_GivesEveryTextureBack_TheGraveyardToo)
+{
+	service_env env;
+	{
+		env.add("a.png");
+		env.add("b.png");
+		edt::thumbnail_service service(env.make_ports());
+		service.lookup("root", "a.png");
+		service.lookup("root", "b.png");
+		service.tick();
+		env.run_tasks();
+		service.tick();
+		service.lookup("root", "a.png");
+		service.release_all();
+	}
+	BOOST_TEST(env.live_textures.empty());
 }
 
 BOOST_AUTO_TEST_CASE(ARowThatIsNoLongerAskedFor_LeavesTheQueue_SoTheScrolledPastFilesCostNothing)

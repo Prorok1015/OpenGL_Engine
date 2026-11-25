@@ -16,6 +16,18 @@ edt::thumbnail_service::thumbnail_service(ports from, limits with)
 edt::thumbnail_service::~thumbnail_service()
 {
 	release_all();
+	flush_graveyard();
+}
+
+void edt::thumbnail_service::flush_graveyard()
+{
+	for (std::string& key : m_graveyard) {
+		if (m_ports.release) {
+			m_ports.release(key);
+		}
+		m_free_keys.push_back(std::move(key));
+	}
+	m_graveyard.clear();
 }
 
 std::string edt::thumbnail_service::key_of(const std::filesystem::path& root, const std::filesystem::path& relative)
@@ -46,10 +58,8 @@ edt::thumbnail_service::view edt::thumbnail_service::view_of(const entry& e) con
 
 void edt::thumbnail_service::drop_texture(entry& e)
 {
-	if (e.texture != 0 || !e.texture_key.empty()) {
-		if (m_ports.release && !e.texture_key.empty()) {
-			m_ports.release(e.texture_key);
-		}
+	if (!e.texture_key.empty()) {
+		m_graveyard.push_back(std::move(e.texture_key));
 		if (m_textures > 0 && e.texture != 0) {
 			--m_textures;
 		}
@@ -150,6 +160,7 @@ void edt::thumbnail_service::finish(const std::string& key, std::uint64_t reques
 void edt::thumbnail_service::tick()
 {
 	++m_tick;
+	flush_graveyard();
 
 	int uploads = m_limits.uploads_per_frame;
 	std::vector<std::string> later;
@@ -164,9 +175,17 @@ void edt::thumbnail_service::tick()
 		}
 		--uploads;
 		entry& e = found->second;
-		const std::string texture_key = "memory://editor/thumbs/" + std::to_string(++m_next_texture);
+		// A key given back is used again: the texture manager keeps a slot for every tag it ever saw.
+		std::string texture_key;
+		if (!m_free_keys.empty()) {
+			texture_key = std::move(m_free_keys.back());
+			m_free_keys.pop_back();
+		} else {
+			texture_key = "memory://editor/thumbs/" + std::to_string(++m_next_texture);
+		}
 		const std::uint64_t id = m_ports.upload ? m_ports.upload(texture_key, *e.pixels) : 0;
 		if (id == 0) {
+			m_free_keys.push_back(std::move(texture_key));
 			e.state = phase::failed;
 			e.error = "the picture could not be put on the GPU";
 		} else {

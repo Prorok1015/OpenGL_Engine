@@ -66,14 +66,20 @@ namespace edt
 		// Once per frame: uploads, then starts the decodes that wait (those still asked for), up to the limits.
 		void tick();
 
-		// Gives every texture back and forgets every entry (a folder was left, the layers changed); results of decodes
-		// still running are dropped when they arrive.
+		// Forgets every entry (a folder was left, the layers changed); results of decodes still running are dropped when
+		// they arrive. The textures are not freed here: this may run in the middle of a frame whose draw list already holds
+		// them, so they go to a graveyard that the next tick() empties before it uploads anything.
 		void release_all();
 
 		std::size_t entries() const { return m_entries.size(); }
 		int running() const { return m_running; }
 		std::size_t decodes_started() const { return m_decodes_started; }
+		// Textures held by entries (not those waiting in the graveyard).
 		std::size_t textures() const { return m_textures; }
+		// Texture keys that wait for the next tick() to be given back.
+		std::size_t graveyard() const { return m_graveyard.size(); }
+		// The keys ever made: bounded by max_entries plus what one frame buries, because a given-back key is used again.
+		std::size_t keys_made() const { return static_cast<std::size_t>(m_next_texture); }
 
 	private:
 		enum class phase : std::uint8_t { queued, decoding, uploading, ready, failed };
@@ -101,12 +107,15 @@ namespace edt
 		void drop_texture(entry& e);
 		void evict_over_limit(const std::string& keep);
 		void finish(const std::string& key, std::uint64_t request, thumbnail_decoded decoded);
+		void flush_graveyard();
 
 		ports m_ports;
 		limits m_limits;
 		std::unordered_map<std::string, entry> m_entries;
 		std::vector<std::string> m_waiting;
 		std::vector<std::string> m_upload_queue;
+		std::vector<std::string> m_graveyard;
+		std::vector<std::string> m_free_keys;
 		std::uint64_t m_tick = 0;
 		std::uint64_t m_next_request = 0;
 		std::uint64_t m_next_texture = 0;

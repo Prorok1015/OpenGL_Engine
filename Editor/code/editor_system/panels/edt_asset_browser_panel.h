@@ -77,9 +77,9 @@ namespace edt
 	private:
 		// Non-recursive merged scan of m_current_rel into m_entries.
 		void refresh_entries();
-		// Recursive directory tree for the left panel; rel_dir is relative to res://.
 		// A picture row's thumbnail and name over the selectable just drawn at screen position (x, y); `failure` gets why there is none.
 		void draw_picture_row(const layer_entry& src, const std::string& label, float x, float y, float height, std::string& failure);
+		// Recursive directory tree for the left panel; rel_dir is relative to res://.
 		void draw_dir_tree(const std::filesystem::path& rel_dir, int depth = 0);
 		// Navigate the right panel to rel_dir (relative to res://).
 		void navigate_to(const std::filesystem::path& rel_dir);

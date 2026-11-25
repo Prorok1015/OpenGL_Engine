@@ -13,7 +13,7 @@ namespace edt
 	// What a picture may be before it is decoded at all: the header says, nothing is allocated for more (#928 has the
 	// decoder's own budget; this one refuses a preview of an absurd picture with a reason).
 	inline constexpr int k_thumbnail_max_picture_side = 16384;
-	inline constexpr std::uint64_t k_thumbnail_max_picture_pixels = 64ull * 1024 * 1024;
+	inline constexpr std::uint64_t k_thumbnail_max_picture_pixels = 16ull * 1024 * 1024; // 4096 x 4096: with 4 decodes at once, bounds the memory
 	inline constexpr std::uint64_t k_thumbnail_max_file_bytes = 64ull * 1024 * 1024;
 
 	struct thumbnail_pixels
