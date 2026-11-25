@@ -273,7 +273,7 @@ BOOST_AUTO_TEST_CASE(Connections_StopRoutingWhenDropped)
 
 BOOST_AUTO_TEST_CASE(SelectPaths_ReplaceAddRemove_FollowTheViewportBoxRules)
 {
-	const auto add_node = [this](std::vector<scn::prefab_desc::prefab_node>& into, std::uint64_t id) -> scn::prefab_desc::prefab_node& {
+	const auto add_node = [](std::vector<scn::prefab_desc::prefab_node>& into, std::uint64_t id) -> scn::prefab_desc::prefab_node& {
 		scn::prefab_desc::prefab_node node;
 		node.node_id = id;
 		node.name = "n" + std::to_string(id);
