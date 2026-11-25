@@ -2319,6 +2319,89 @@ BOOST_FIXTURE_TEST_CASE(ExitAndSaveAll_SeeADirtyShader_AndSaveOrDropIt, shader_d
 	BOOST_TEST(file_of("scene.frag") == "// edited\n");
 }
 
+BOOST_FIXTURE_TEST_CASE(CtrlS_SavesTheActiveShader_NotTheLevel_AndSaysNoForAnotherActiveDocument, shader_documents_fixture)
+{
+	BOOST_TEST(!editor().shader_editor().save_active());
+
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	BOOST_REQUIRE(shader.set_text("// ctrl s\n"));
+	BOOST_REQUIRE(documents().active() == &shader);
+
+	BOOST_TEST(editor().shader_editor().save_active());
+	BOOST_TEST(file_of("scene.frag") == "// ctrl s\n");
+	BOOST_TEST(!shader.is_dirty());
+
+	documents().set_active(documents().scene().id());
+	BOOST_TEST(!editor().shader_editor().save_active());
+}
+
+BOOST_FIXTURE_TEST_CASE(SaveAll_WritesAShaderWithTypingNotHandedOver, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	BOOST_REQUIRE(shader.set_text("// first\n"));
+	BOOST_REQUIRE(shader.save().saved);
+	bool pending = true;
+	shader.set_edit_source([&pending] { return pending; }, [&pending, &shader] {
+		pending = false;
+		shader.set_text("// typed last\n");
+	});
+	BOOST_TEST(shader.is_dirty());
+
+	edt::save_all_scene_ports scene_ports;
+	const edt::save_all_report report = edt::save_all_write(documents(), scene_ports);
+
+	BOOST_TEST(file_of("scene.frag") == "// typed last\n");
+	BOOST_TEST(report.failed.empty());
+	shader.set_edit_source({}, {});
+}
+
+BOOST_FIXTURE_TEST_CASE(RevertOfAShader_AsksFirst_AndTakesTheFilesText, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	const std::string original = shader.text();
+	BOOST_REQUIRE(shader.set_text("// edited\n"));
+
+	editor().shader_editor().request_revert_shown();
+	auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "cancel", true } }).ok);
+	BOOST_TEST(shader.text() == "// edited\n");
+
+	editor().shader_editor().request_revert_shown();
+	asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+	BOOST_TEST(shader.text() == original);
+	BOOST_TEST(!shader.is_dirty());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheAnswerOfARevertQuestion_IsDropped_WhenAnotherShaderIsShownByThen, shader_documents_fixture)
+{
+	edt::shader_source_document& first = open_shader("scene.frag");
+	BOOST_REQUIRE(first.set_text("// edited\n"));
+	editor().shader_editor().request_revert_shown();
+	open_shader("other.vert");
+
+	const auto asked = dialogs().list();
+	BOOST_REQUIRE_EQUAL(asked.size(), 1u);
+	BOOST_REQUIRE(dialogs().answer(asked.front().id, boost::json::object{ { "index", 0 } }).ok);
+
+	BOOST_TEST(first.text() == "// edited\n");
+}
+
+BOOST_FIXTURE_TEST_CASE(ThePlayLock_RefusesTheSaveOfAShader, shader_documents_fixture)
+{
+	edt::shader_source_document& shader = open_shader("scene.frag");
+	BOOST_REQUIRE(shader.set_text("// edited\n"));
+	shader.set_lock_source([] { return true; });
+
+	const edt::save_result refused = shader.save();
+
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("Play") != std::string::npos);
+	BOOST_TEST(file_of("scene.frag") != "// edited\n");
+}
+
 BOOST_FIXTURE_TEST_CASE(GoToOnAShaderRow_OpensTheFileInTheEditor, shader_documents_fixture)
 {
 	edt::problem row;

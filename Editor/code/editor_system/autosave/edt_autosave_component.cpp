@@ -193,7 +193,8 @@ void edt::autosave_component::write(document& doc, tracked& record, document_id 
 	record.due.reset();
 	record.written_generation = generation;
 	const auto* source = dynamic_cast<const autosave_source*>(&doc);
-	if (!source) {
+	// A kind the recovery does not know (a shader source until #1413) is not written: its folder would never be restored or cleaned.
+	if (!source || !is_autosave_kind(doc.kind())) {
 		return;
 	}
 	write_order order;

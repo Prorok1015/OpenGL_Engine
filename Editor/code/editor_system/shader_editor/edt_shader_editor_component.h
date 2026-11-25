@@ -6,6 +6,7 @@
 #include <snk/model_codec/res_tag.h>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace edt
@@ -29,6 +30,8 @@ namespace edt
 			std::function<desc_file_layout()> desc_layout = {};
 			// Play runs: no shader can be edited or saved. Null: never.
 			std::function<bool()> edits_locked = {};
+			// An open that is a link, an agent's or a recovery's shows no dialog (asset_open_component::open_is_quiet). Null: not quiet.
+			std::function<bool()> open_is_quiet = {};
 		};
 
 		explicit shader_editor_component(ports from);
@@ -38,13 +41,17 @@ namespace edt
 		// window follows are subscribed.
 		void install(std::vector<registration>& out);
 
-		// Opens the shader source `source` in the window, at `line` (1-based, 0: where it was). False, with the reason shown, when it
-		// cannot be opened.
-		bool open(const res::tag& source, int line = 0);
+		// Opens the shader source `source` in the window, at `line` (1-based, 0: where it was). False when it cannot be opened: the reason
+		// is shown in a dialog, or only logged when `quiet`.
+		bool open(const res::tag& source, int line = 0, bool quiet = false);
 		// The window shows this document and comes to the front.
 		void show(document_id id);
 		// Closes the shader source after Save / Discard / Cancel when it has unsaved edits (typing not handed over included).
 		void request_close(document_id id);
+		// The window's Revert: asks first, then takes the file's text for the document that was shown when asked.
+		void request_revert_shown();
+		// Ctrl+S: saves the active document when it is a shader source (typing handed over first); false when the active document is another.
+		bool save_active();
 		// Exit, New and Open: any shader source with unsaved edits.
 		bool dirty() const;
 		// Saves every dirty shader source in the order opened; false (the reason shown) at the first one that was not saved.
@@ -62,8 +69,7 @@ namespace edt
 		void close_now(document_id id);
 		void confirm_close(shader_source_document& shader, std::function<void()> proceed);
 		void save_shown();
-		void revert_shown();
-		void report(const std::string& text);
+		void report(const std::string& text, bool quiet = false);
 
 		ports m_ports;
 		std::shared_ptr<shader_editor_panel> m_panel;

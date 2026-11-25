@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_asset_kind_names.h"
 #include "edt_shader_source_document.h"
 #include <snk/editor/edt_document_manager.h>
 #include <array>
@@ -35,7 +36,7 @@ namespace edt
 
 	// One kind and one preview per suffix: the registry matches a suffix as written (case-sensitive), and asset_type_of says "shader" for
 	// these (is_shader_source). The ids start with k_shader_source_id_prefix, which the asset browser's filter reads as the kind "shader".
-	inline constexpr std::string_view k_shader_source_id_prefix = "shader_source";
+	inline constexpr std::string_view k_shader_source_id_prefix = k_shader_source_kind_prefix;
 	inline constexpr std::array<std::string_view, 8> k_shader_source_suffixes = { ".glsl", ".vert", ".frag", ".geom", ".comp", ".tesc", ".tese", ".shader" };
 
 	inline std::string shader_source_id(std::string_view suffix)

@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_asset_filter.h"
+#include "edt_asset_kind_names.h"
 #include "test_temp_dir.hpp"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <algorithm>
@@ -278,6 +279,15 @@ BOOST_AUTO_TEST_CASE(TheNameIsCheckedBeforeAnythingElse)
 	BOOST_TEST(filter.accepts_name("Rock.png"));
 	BOOST_TEST(!filter.accepts_name("sand.png"));
 	BOOST_TEST(edt::asset_filter{}.accepts_name("anything"));
+}
+
+BOOST_AUTO_TEST_CASE(OutwardKindName_FoldsTheGlslEditorsKinds_AndLeavesTheOthers)
+{
+	BOOST_TEST(edt::outward_kind_name("shader_source.frag") == "shader");
+	BOOST_TEST(edt::outward_kind_name("shader_source.glsl") == "shader");
+	BOOST_TEST(edt::outward_kind_name("shader_desc") == "shader_desc");
+	BOOST_TEST(edt::outward_kind_name("poly") == "poly");
+	BOOST_TEST(edt::outward_kind_name("prefab") == "prefab");
 }
 
 BOOST_AUTO_TEST_CASE(TheGlslEditorsKinds_AreTheKindShader_AndAreNotOfferedAgain)

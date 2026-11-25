@@ -21,7 +21,7 @@ edt::shader_editor_component::shader_editor_component(ports from)
 		if (m_shown != document_id{}) request_close(m_shown);
 	});
 	m_panel->set_on_save([this] { save_shown(); });
-	m_panel->set_on_revert([this] { revert_shown(); });
+	m_panel->set_on_revert([this] { request_revert_shown(); });
 }
 
 edt::shader_editor_component::~shader_editor_component() = default;
@@ -40,7 +40,7 @@ void edt::shader_editor_component::install(std::vector<registration>& out)
 	};
 	for (const std::string_view suffix : k_shader_source_suffixes) {
 		out.push_back(kinds.add({ .id = shader_source_id(suffix), .suffix = std::string(suffix), .icon = "[G]",
-			.open = [this](editor_context&, const res::tag& tag) { open(tag); } }));
+			.open = [this](editor_context&, const res::tag& tag) { open(tag, 0, m_ports.open_is_quiet && m_ports.open_is_quiet()); } }));
 		out.push_back(kinds.add_preview({ .id = shader_source_id(suffix), .suffix = std::string(suffix), .make_preview = make, .multiple = true }));
 	}
 
@@ -77,18 +77,18 @@ void edt::shader_editor_component::show(document_id id)
 	}
 }
 
-void edt::shader_editor_component::report(const std::string& text)
+void edt::shader_editor_component::report(const std::string& text, bool quiet)
 {
 	egLOG_WARN("editor", "{}", text);
-	m_ports.context.dialogs().message(message_level::error, text);
+	if (!quiet) m_ports.context.dialogs().message(message_level::error, text);
 }
 
-bool edt::shader_editor_component::open(const res::tag& source, int line)
+bool edt::shader_editor_component::open(const res::tag& source, int line, bool quiet)
 {
 	document_manager& documents = m_ports.context.documents();
 	const std::string preview_id = shader_preview_id_of(source.view());
 	if (preview_id.empty()) {
-		report(std::format("'{}' is not a shader source", source.view()));
+		report(std::format("'{}' is not a shader source", source.view()), quiet);
 		return false;
 	}
 	shader_source_document* shader = nullptr;
@@ -98,11 +98,11 @@ bool edt::shader_editor_component::open(const res::tag& source, int line)
 	if (!shader) {
 		auto* opened = dynamic_cast<shader_source_document*>(documents.open_preview(preview_id, source));
 		if (!opened) {
-			report(std::format("'{}' cannot be opened as a shader source", source.view()));
+			report(std::format("'{}' cannot be opened as a shader source", source.view()), quiet);
 			return false;
 		}
 		if (!opened->is_open()) {
-			report(std::format("'{}' was not opened:\n{}", source.pure_name(), opened->last_error()));
+			report(std::format("'{}' was not opened:\n{}", source.pure_name(), opened->last_error()), quiet);
 			return false;
 		}
 		shader = opened;
@@ -121,13 +121,15 @@ void edt::shader_editor_component::save_shown()
 	if (const save_result saved = shader->save(); !saved.saved) report(std::format("'{}' was not saved:\n{}", shader->title(), saved.error));
 }
 
-void edt::shader_editor_component::revert_shown()
+void edt::shader_editor_component::request_revert_shown()
 {
 	shader_source_document* shader = shown();
 	if (!shader) return;
 	m_ports.context.dialogs().choose("Revert shader", std::format("Drop the edits of '{}' and take the file again?", shader->title()), { "Revert", "Cancel" },
-		[this, alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
+		[this, id = shader->id(), alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> choice) {
 			if (!alive.lock() || choice != std::optional<std::size_t>{ 0 }) return;
+			// The window may show another shader by now (or none): the answer was about the one asked.
+			if (m_shown != id) return;
 			m_panel->request_revert();
 			if (!m_panel->error().empty()) report(std::format("The shader was not reverted:\n{}", m_panel->error()));
 		});
@@ -169,6 +171,17 @@ void edt::shader_editor_component::close_now(document_id id)
 		m_panel->set_open(false);
 	}
 	m_ports.context.documents().close(id);
+}
+
+bool edt::shader_editor_component::save_active()
+{
+	document* active = m_ports.context.documents().active();
+	if (!active || active->kind() != "shader_source") return false;
+	shader_source_document* shader = shader_source_by_id(m_ports.context.documents(), active->id());
+	if (!shader) return false;
+	if (shader->id() == m_shown) m_panel->flush_edits();
+	if (const save_result saved = shader->save(); !saved.saved) report(std::format("'{}' was not saved:\n{}", shader->title(), saved.error));
+	return true;
 }
 
 bool edt::shader_editor_component::dirty() const

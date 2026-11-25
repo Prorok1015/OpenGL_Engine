@@ -69,6 +69,8 @@ namespace edt
 		// The kinds of the asset registry first, then any `.desc` as a data document. `quiet`: a problem or a link, not a double
 		// click: a file that is no data document is a log line, no window. False when nothing opens the file.
 		bool open(const res::tag& tag, bool quiet);
+		// True while an open() asked quietly (a link, an agent, a recovery) is running: what a kind's open callback may read.
+		bool open_is_quiet() const { return m_open_quiet; }
 		desc_file_layout desc_layout();
 		data_document_host& data_documents() { return *m_data_documents; }
 

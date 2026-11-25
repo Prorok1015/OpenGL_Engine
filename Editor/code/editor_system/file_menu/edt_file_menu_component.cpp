@@ -115,6 +115,7 @@ edt::file_menu_component::file_menu_component(ports from)
 		}
 		return m_ports.state.save_as(res::tag::make(rel_path)).saved;
 	};
+	hooks.save_focused_document = [this] { return m_ports.save_focused_shader && m_ports.save_focused_shader(); };
 	hooks.discard_changes = [this] { m_ports.state.mark_clean(); };
 	hooks.other_documents_dirty = [this] {
 		return !m_ports.asset_open.data_documents().dirty().empty() || m_ports.prefab.dirty() != nullptr || (m_ports.meshes_dirty && m_ports.meshes_dirty())

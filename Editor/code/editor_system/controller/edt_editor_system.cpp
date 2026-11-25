@@ -431,7 +431,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_shader_editor = std::make_unique<shader_editor_component>(shader_editor_component::ports{
 		.context = *m_context,
 		.desc_layout = [this] { return m_asset_open->desc_layout(); },
-		.edits_locked = [this] { return m_play && m_play->active(); } });
+		.edits_locked = [this] { return m_play && m_play->active(); },
+		.open_is_quiet = [this] { return m_asset_open && m_asset_open->open_is_quiet(); } });
 
 	m_panels->inspector()->set_instance_hooks(instance_overrides_hooks{
 		.open_prefab = [this](const res::tag& tag) { m_prefab->open(tag); },
@@ -541,6 +542,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.save_shaders = [this] { return m_shader_editor->save_dirty(); },
 		.discard_shaders = [this] { m_shader_editor->drop_dirty(); },
 		.show_shader_source = [this](document_id id) { m_shader_editor->show(id); },
+		.save_focused_shader = [this] { return m_shader_editor->save_active(); },
 		.request_close_shader_source = [this](document_id id) { m_shader_editor->request_close(id); },
 		.level_disk = m_level_disk.get() });
 	m_file_menu->install(m_registrations);
@@ -637,7 +639,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			const auto contexts = m_services.ctx_manager.lock();
 			return contexts && contexts->level_switch_pending();
 		},
-		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty() || m_modeller->dirty() || m_shader_editor->dirty(); },
+		.prefab_has_unapplied_edits = [this] { return m_prefab->dirty() || m_modeller->dirty(); },
 		.live_mode_enabled = [this] { return m_live && m_live->enabled(); },
 		.play = [this] { return m_play; } };
 	m_build = std::make_unique<game_build_component>(std::move(build_ports));

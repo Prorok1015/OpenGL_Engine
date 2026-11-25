@@ -145,8 +145,9 @@ void edt::problems_component::follow_shaders()
 void edt::problems_component::go_to_problem(const std::string& source, const problem& item)
 {
 	if (source == shader_problem_publisher::source) {
-		if (m_ports.open_shader_source && !item.file.empty() && !shader_preview_id_of(item.file).empty()
-			&& m_ports.open_shader_source(res::tag{ item.file }, item.line)) {
+		if (m_ports.open_shader_source && !item.file.empty() && !shader_preview_id_of(item.file).empty()) {
+			// A suffix the editor opens: when it fails the reason has been shown, and the system's app is not tried instead.
+			m_ports.open_shader_source(res::tag{ item.file }, item.line);
 			return;
 		}
 		// Not one the editor opens (an upper-case suffix, none): the file opens in the app the system gives it, at its top.
