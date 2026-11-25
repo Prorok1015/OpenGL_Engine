@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_problem_list.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/render/rnd_shader_problem.h>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -12,7 +13,6 @@
 namespace rnd
 {
 	class render_system;
-	struct shader_problem;
 }
 
 namespace edt
