@@ -10,6 +10,8 @@
 
 // Links and window hosts of the document manager (#1402, EPIC-82 5.4): the model has no ImGui.
 
+BOOST_TEST_DONT_PRINT_LOG_VALUE(edt::link_kind)
+
 namespace {
 
 struct stub_document final : edt::document
