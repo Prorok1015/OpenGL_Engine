@@ -500,9 +500,10 @@ namespace
 		out.folders.push_back(folder);
 		for (std::size_t next = 0; next < out.folders.size(); ++next) {
 			const std::string current = out.folders[next];
-			const std::size_t depth = static_cast<std::size_t>(std::ranges::count(std::string_view(current).substr(folder.size()), '/'));
+			// The asset database reads no folder this deep below res://: its files would never get a record.
+			const std::size_t depth = static_cast<std::size_t>(std::ranges::count(current, '/')) + 1;
 			if (depth >= static_cast<std::size_t>(res::asset_walk_max_depth)) {
-				return std::format("'{}' is nested deeper than {} folders", current, res::asset_walk_max_depth);
+				return std::format("'{}' is {} folders deep, and the asset database reads nothing {} folders deep or deeper", current, depth, res::asset_walk_max_depth);
 			}
 			const platform::beneath::list_result listed = platform::beneath::list_beneath(pinned, path_of(current), max_files + 1);
 			if (listed.missing) return std::format("'{}' is not there any more", current);
@@ -558,7 +559,7 @@ namespace
 	// A file below the folder `base` that a walk of the layer never lists as an asset: a name on the way it skips (hidden,
 	// temporary, system), a .resource (of nothing, or of such a file) or a desc's binary file (a .bin.new too). Any other file
 	// without a record is one the asset database has not read yet.
-	bool never_listed(std::string_view relative, std::string_view base)
+	bool never_listed(const fs::path& root, std::string_view relative, std::string_view base)
 	{
 		const std::string_view rest = relative.substr(base.size() + 1);
 		std::size_t begin = 0;
@@ -567,7 +568,12 @@ namespace
 			const bool last = end == std::string_view::npos;
 			const std::string_view segment = rest.substr(begin, last ? std::string_view::npos : end - begin);
 			if (res::is_skipped_asset_name(segment, !last)) return true;
-			if (last) return res::is_asset_meta_sidecar(segment) || res::desc_binary_owner_name(segment).has_value();
+			if (last) {
+				if (res::is_asset_meta_sidecar(segment)) return true;
+				// A binary file without its desc beside it is an asset of its own: the walk lists it.
+				return res::desc_binary_owner_name(segment).has_value()
+					&& res::is_desc_binary_entry((root / path_of(std::string(relative))).parent_path(), segment, false);
+			}
 			begin = end + 1;
 		}
 	}
@@ -631,8 +637,8 @@ namespace
 		return std::ranges::none_of(path_of(root), [](const fs::path& part) { return part == ".."; });
 	}
 
-	// Whether the journal of `plan` could grow past what is read back (k_journal_read_limit, with room to spare).
-	std::optional<edt::refusal> journal_too_long(const edt::operation_plan& plan)
+	// Whether the journal of `plan` could grow past `limit` (asset_ops_limits::max_journal_bytes), so it would not be read back.
+	std::optional<edt::refusal> journal_too_long(const edt::operation_plan& plan, std::uint64_t limit)
 	{
 		const std::uint64_t root = canonical_root(plan.root).size() + k_step_overhead;
 		std::uint64_t bytes = 0;
@@ -648,9 +654,9 @@ namespace
 		for (const edt::planned_move& move : plan.carried) add(move.from.size() + move.to.size());
 		for (const std::string& folder : plan.make_folders) add(folder.size());
 		for (const std::string& folder : plan.remove_folders) add(folder.size());
-		if (bytes <= edt::k_journal_read_limit / 2 && steps / k_steps_per_file < k_max_step_files) return std::nullopt;
-		return stop(edt::refusal_code::too_many_files, std::format("the journal of the operation would take about {} bytes for {} steps: at most {} bytes of journal are read back",
-			bytes, steps, edt::k_journal_read_limit / 2));
+		if (bytes <= limit && steps / k_steps_per_file < k_max_step_files) return std::nullopt;
+		return stop(edt::refusal_code::too_many_files, std::format("the journal of the operation would take about {} bytes for {} steps: at most {} bytes of journal are written",
+			bytes, steps, limit));
 	}
 
 	// A file at the step's source counts as put back only when it is the file the step moved (#1309): another file there
@@ -1146,7 +1152,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
 	if (!db) return stop(refusal_code::no_database, "no project is open: there is no asset database");
 	// A file the database has not read yet would be taken for one it never lists, and moved without its pair and its references.
-	if (!db->walked_once() || db->pending_hashes() > 0) {
+	if (!db->walked_once() || db->scanning() || db->pending_hashes() > 0) {
 		return stop(refusal_code::database_not_ready, "the asset database is still reading the project's files: try again when it is done");
 	}
 	const bool removing = operation == asset_operation::remove;
@@ -1201,8 +1207,13 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 			continue;
 		}
 		// Only a name that passed these checks is looked at on the disk, and never through a link.
-		const bool safe = is_safe_relative(relative) && destination_problem(relative, out.root, false).empty();
+		const std::string unlisted = is_safe_relative(relative) ? destination_problem(relative, out.root, false) : std::string{};
+		const bool safe = is_safe_relative(relative) && unlisted.empty();
 		std::error_code ec;
+		if (!unlisted.empty() && fs::symlink_status(out.root / path_of(relative), ec).type() == fs::file_type::directory) {
+			return stop(refusal_code::bad_name, std::format("'{}' is a folder the asset database does not read (the project's code, build output, "
+				"a hidden or temporary folder): it is no folder of assets and is not renamed, moved or deleted here ({})", shown(relative), unlisted));
+		}
 		const fs::file_type type = safe ? fs::symlink_status(out.root / path_of(relative), ec).type() : fs::file_type::not_found;
 		if (type == fs::file_type::symlink) {
 			return stop(refusal_code::folder_has_foreign_entries, std::format("'{}' is a link: a link is never followed nor moved", shown(relative)));
@@ -1392,7 +1403,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 	std::vector<std::string> unread;
 	for (const walked_file& file : walked) {
 		if (covered.contains(key_of(file.from))) continue;
-		if (!never_listed(file.from, file.base)) {
+		if (!never_listed(out.root, file.from, file.base)) {
 			unread.push_back(shown(file.from));
 			continue;
 		}
@@ -1453,7 +1464,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 			});
 			item.needs_force = !item.referrers.empty();
 		}
-		return journal_too_long(out);
+		return journal_too_long(out, limits.max_journal_bytes);
 	}
 	std::set<std::string> taken;
 	const auto check_target = [&](const planned_move& move) -> std::optional<refusal> {
@@ -1469,7 +1480,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		if (std::optional<refusal> why = check_target(move)) return why;
 	}
 	if (std::optional<refusal> why = plan_rewrites(out.items, facts)) return why;
-	return journal_too_long(out);
+	return journal_too_long(out, limits.max_journal_bytes);
 }
 
 std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item, const std::optional<std::string>& to, usage_index& usages, item_facts& facts) const
@@ -1995,7 +2006,19 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	}
 	originals.clear();
 	if (m_ports.operation_started) {
-		m_ports.operation_started(journal);
+		std::string unlisted;
+		try {
+			unlisted = m_ports.operation_started(journal);
+		} catch (const std::exception& error) {
+			unlisted = error.what();
+		} catch (...) {
+			unlisted = "an unexpected error";
+		}
+		if (!unlisted.empty()) {
+			report.refused = stop(refusal_code::io_error, std::format("the operation was not listed in the history, so a crash in the middle could not be "
+				"undone; nothing was changed: {}", unlisted));
+			return;
+		}
 		started = true;
 	}
 

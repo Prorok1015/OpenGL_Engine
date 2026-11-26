@@ -288,6 +288,8 @@ namespace edt
 	{
 		std::size_t max_files = 4096;
 		std::uint64_t max_bytes = 2ull * 1024u * 1024u * 1024u;
+		// What the journal may take on the disk, by estimate: half of what is read back, as JSON may grow it.
+		std::uint64_t max_journal_bytes = k_journal_read_limit / 2;
 	};
 
 	struct asset_ops_ports
@@ -322,9 +324,10 @@ namespace edt
 		std::function<std::string(std::string_view)> rename_error;
 		asset_ops_limits limits;
 		// Right before the first step (the journal has its id and folder, no step yet), so the history lists the operation while it
-		// runs and a crash leaves it to be undone at the next start; then once it ended: `done`, or taken back (the journal keeps
-		// only the steps that could not be).
-		std::function<void(const operation_journal&)> operation_started;
+		// runs and a crash leaves it to be undone at the next start. A non-empty answer (or a throw) is why it could not be listed:
+		// the operation is refused, nothing done. Then once it ended: `done`, or rolled back (the journal is empty when every step
+		// went back, and keeps all its steps when one could not: an undo skips the ones already back).
+		std::function<std::string(const operation_journal&)> operation_started;
 		std::function<void(const operation_journal&, bool done)> operation_ended;
 	};
 
@@ -378,7 +381,8 @@ namespace edt
 		// Tells report_self_change what `steps` did (`undoing`: what taking them back did).
 		void announce(const std::vector<journal_step>& steps, bool undoing) const;
 		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report, bool& started) const;
-		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
+		// Takes the steps of report.journal back, newest first, and writes the journal again: emptied when every step went back,
+		// else with all its steps (the ones that did not go back are in rollback_failures).
 		void roll_back(operation_report& report) const;
 
 		asset_ops_ports m_ports;

@@ -180,8 +180,9 @@ struct ops_fixture
 		ports.force_copy = [this](std::string_view) { return copy_instead_of_rename; };
 		ports.rename_error = [this](std::string_view) { return rename_error_text; };
 		ports.limits = limits;
-		ports.operation_started = [this](const edt::operation_journal& started) {
-			if (history) history->record_pending(started);
+		ports.operation_started = [this](const edt::operation_journal& started) -> std::string {
+			if (throw_when_listed) throw std::runtime_error("the history threw");
+			return history ? history->record_pending(started) : std::string{};
 		};
 		ports.operation_ended = [this](const edt::operation_journal& ended, bool done) {
 			if (history) history->end_pending(ended, done);
@@ -331,6 +332,26 @@ struct ops_fixture
 	test_util::temp_dir settings{ "asset_ops_settings" };
 	std::uint64_t history_serial = 0;
 	std::unique_ptr<edt::asset_history> history;
+	bool throw_when_listed = false;
+
+	// 40 assets with their .resource in big/: an operation of more than 64 steps.
+	void make_big()
+	{
+		for (int i = 0; i < 40; ++i) {
+			write(std::format("big/f{:02}.desc", i), canonical(R"({ "__type": "material_desc" })"));
+			write(std::format("big/f{:02}.desc.resource", i), meta_text(std::format("12345678-0000-4000-8000-{:012x}", i + 1)));
+		}
+	}
+
+	// A journal folder written by hand, listed in the history as an operation that did not end.
+	void forge_pending(const std::string& id)
+	{
+		edt::operation_journal listed;
+		listed.id = id;
+		listed.directory = (journal.path() / id).generic_string();
+		BOOST_REQUIRE(history);
+		BOOST_REQUIRE(history->record_pending(listed).empty());
+	}
 
 	// The history as the editor makes it at a start: the list in `settings`, read again.
 	edt::asset_history& start_history()
@@ -2198,6 +2219,207 @@ BOOST_AUTO_TEST_CASE(TheHistoryListsAnOperationWhileItRuns_AndForgetsOneThatWasT
 	BOOST_TEST(listed.size() == 1u);
 	BOOST_TEST(!listed.next_is_interrupted());
 	BOOST_TEST(start_history().size() == 1u, "and it is read back as an ordinary entry");
+}
+
+BOOST_AUTO_TEST_CASE(AnOrphanBinaryFileTheDatabaseHasNotRead_RefusesTheOperation_ItIsNotCarried)
+{
+	make_kit();
+	open();
+	write("kit/sub/nav.mesh.bin", "an orphan binary file: an asset of its own");
+	const auto before = tree();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::database_not_ready));
+	BOOST_TEST(planned.refused->reason.find("kit/sub/nav.mesh.bin") != std::string::npos, planned.refused->reason);
+	BOOST_TEST((tree() == before));
+
+	// Once read, it is an asset like any other and goes with its folder.
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(has("set/sub/nav.mesh.bin"));
+}
+
+BOOST_AUTO_TEST_CASE(ADatabaseWalkingAgain_RefusesAnOperationUntilItIsDone)
+{
+	open();
+	db->rebuild();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::database_not_ready));
+	test_util::pump(tasks);
+	BOOST_TEST(!plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc")).refused.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AFolderTheDatabaseDoesNotRead_IsRefusedWithItsReason_NotLeftWaitingForTheDatabase)
+{
+	write(std::string(prj::k_manifest_file_name), "{}");
+	write("code/game.cpp", "int x;");
+	write(".hidden/notes.desc", canonical(R"({ "__type": "material_desc" })"));
+	std::string deep = "kit";
+	for (int i = 0; i < 64; ++i) deep += "/d";
+	write(deep + "/far.desc", canonical(R"({ "__type": "material_desc" })"));
+	open();
+	const auto before = tree();
+	for (const std::string_view folder : { "code", ".hidden" }) {
+		const edt::operation_plan planned = plan(request(edt::asset_operation::move, folder, "env"));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), folder);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::bad_name), folder);
+		BOOST_TEST(planned.refused->reason.find("does not read") != std::string::npos, planned.refused->reason);
+	}
+	const edt::operation_plan too_deep = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(too_deep.refused.has_value());
+	BOOST_TEST((too_deep.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(too_deep.refused->reason.find("folders deep") != std::string::npos, too_deep.refused->reason);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationTheHistoryCannotList_IsRefusedBeforeItsFirstStep)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	throw_when_listed = true;
+	const edt::operation_report thrown = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(thrown.refused.has_value());
+	BOOST_TEST((thrown.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(thrown.refused->reason.find("the history threw") != std::string::npos, thrown.refused->reason);
+	BOOST_TEST(thrown.journal.steps.empty());
+	BOOST_TEST((tree() == before));
+	throw_when_listed = false;
+
+	settings.write("blocker", "a file where the history's folder would be");
+	history = std::make_unique<edt::asset_history>(journal.path(), settings.path() / "blocker" / "list.json", [this] { return ++history_serial; });
+	const edt::operation_report unsaved = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(unsaved.refused.has_value());
+	BOOST_TEST((unsaved.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(unsaved.refused->reason.find("not saved") != std::string::npos, unsaved.refused->reason);
+	BOOST_TEST(history->size() == 0u, "an entry that could not be saved is not kept");
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationTakenBackWhole_LetsNoOlderEntryGo)
+{
+	open();
+	edt::asset_history& listed = start_history();
+	for (std::size_t i = 0; i < edt::asset_history::max_entries; ++i) {
+		edt::operation_journal made;
+		made.id = std::format("op{:02}", i);
+		made.directory = (journal.path() / made.id).generic_string();
+		made.steps.push_back(edt::journal_step{ edt::journal_step_kind::move, "root", "a.desc", "b.desc", "h", {}, {} });
+		listed.record(made);
+	}
+	BOOST_REQUIRE(listed.size() == edt::asset_history::max_entries);
+	fail_at = "move:sky.desc.resource";
+	const edt::operation_report failed = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(listed.size() == edt::asset_history::max_entries, "nothing was let go for an operation that left no trace");
+	BOOST_TEST((listed.next_operation_id() == std::optional<std::string>("op19")));
+	fail_at.clear();
+	const edt::operation_report done = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(done.ok, done.error);
+	BOOST_TEST(listed.size() == edt::asset_history::max_entries);
+	BOOST_TEST((listed.next_operation_id() == std::optional<std::string>(done.operation_id)));
+}
+
+BOOST_AUTO_TEST_CASE(ALongOperationCutShort_IsUndoneThroughItsStepFiles_AlsoBetweenAStepFileAndItsHeader)
+{
+	make_big();
+	open();
+	const auto before = tree();
+	// Step 66 is next: 65 steps are written, the 65th the first of steps.1.json.
+	for (const bool header_lost : { false, true }) {
+		start_history();
+		on_step = [&](std::string_view step) {
+			if (step == "move:big/f32.desc") keep_crash();
+		};
+		const edt::operation_report report = run(request(edt::asset_operation::rename, "big", "large"));
+		BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+		on_step = {};
+		history.reset();
+		back_to_crash();
+		const fs::path header = journal.path() / report.operation_id / "journal.json";
+		BOOST_REQUIRE(fs::is_regular_file(header.parent_path() / "steps.1.json"));
+		if (header_lost) {
+			// The crash came after steps.1.json was written and before journal.json named it, so its step was not done either.
+			std::ifstream in(header, std::ios::binary);
+			json::value head = json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+			in.close();
+			BOOST_REQUIRE(head.as_object().erase("more_steps") == 1u);
+			std::ofstream(header, std::ios::binary | std::ios::trunc) << json::serialize(head);
+			fs::rename(layer.path() / "large" / "f31.desc.resource", layer.path() / "big" / "f31.desc.resource");
+		}
+		edt::asset_history& restarted = start_history();
+		BOOST_REQUIRE_MESSAGE(restarted.size() == 1u, header_lost);
+		BOOST_TEST(restarted.next_is_interrupted());
+		const edt::asset_fix_result undone = restarted.undo_last(ops());
+		BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+		BOOST_TEST((tree() == before), header_lost);
+		history.reset();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AForgedPendingJournal_IsIgnoredAtTheStart)
+{
+	make_kit();
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = tree();
+	start_history();
+	const auto forged = [&](const std::string& id, json::value value) {
+		value.as_object()["id"] = id;
+		value.as_object()["directory"] = (journal.path() / id).generic_string();
+		journal.write(id + "/journal.json", json::serialize(value));
+		forge_pending(id);
+	};
+	json::value outside = edt::journal_to_json(report.journal);
+	for (json::value& step : outside.at("steps").as_array()) step.as_object()["root"] = foreign.path().generic_string();
+	forged("outside", outside);
+	for (const std::int64_t files : { std::int64_t{ 0 }, std::int64_t{ 1025 }, std::int64_t{ 1 } }) {
+		json::value header = edt::journal_to_json(report.journal);
+		header.as_object()["more_steps"] = files;
+		forged(std::format("more{}", files), header);
+	}
+	json::value big = edt::journal_to_json(report.journal);
+	big.as_object()["padding"] = std::string(std::size_t{ 17 } << 20, 'x');
+	forged("huge", big);
+	BOOST_REQUIRE(history->size() == 5u);
+
+	edt::asset_history& restarted = start_history();
+	BOOST_TEST(restarted.size() == 0u, "a root outside the project, a wrong step count, a missing step file, a journal over 16 MiB");
+	BOOST_TEST(!restarted.undo_last(ops()).ok);
+	BOOST_TEST((tree() == after));
+}
+
+BOOST_AUTO_TEST_CASE(ARollbackThatCouldNotTakeEverythingBack_StaysInTheHistoryAfterARestart)
+{
+	open();
+	start_history();
+	fail_at = "stash:lonely.desc.resource";
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:lonely.desc") write("lonely.desc", "someone else's file");
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_REQUIRE(report.rollback_failures.size() == 1u);
+	BOOST_TEST(history->next_is_interrupted());
+	on_step = {};
+	fail_at.clear();
+	edt::asset_history& restarted = start_history();
+	BOOST_TEST(restarted.size() == 1u);
+	BOOST_TEST(restarted.next_is_interrupted(), "what could not be taken back can still be undone after a restart");
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationWhoseJournalWouldBeTooBig_IsRefused)
+{
+	make_kit();
+	open();
+	limits.max_journal_bytes = 1000;
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::too_many_files));
+	BOOST_TEST(planned.refused->reason.find("journal") != std::string::npos, planned.refused->reason);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

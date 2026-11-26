@@ -50,7 +50,8 @@ namespace edt
 		// An operation about to take its first step (asset_ops_ports::operation_started): listed, and saved, as interrupted before
 		// anything is changed, so a crash in the middle leaves it to be undone at the next start. Its journal on the disk is then not
 		// checked against a hash (it was still being written), only by journal_from_json and the roots.
-		void record_pending(const operation_journal& journal);
+		// Empty, or why the list could not be saved (the entry is not kept then: the operation must not start).
+		[[nodiscard]] std::string record_pending(const operation_journal& journal);
 		// The operation ended (asset_ops_ports::operation_ended): done, it is an ordinary entry; taken back, it is forgotten, unless
 		// steps could not be taken back (they stay to be undone).
 		void end_pending(const operation_journal& journal, bool done);
@@ -90,7 +91,10 @@ namespace edt
 
 		bool inside_root(const std::filesystem::path& directory) const;
 		void set_aside(const operation_journal& journal) const;
-		void save() const;
+		// Empty, or why the list was not written.
+		std::string save() const;
+		// Lets go of the oldest entries past max_entries.
+		void trim();
 
 		std::filesystem::path m_root;
 		std::filesystem::path m_list_file;

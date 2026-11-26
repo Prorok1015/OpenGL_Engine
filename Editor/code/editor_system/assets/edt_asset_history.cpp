@@ -123,9 +123,9 @@ edt::asset_history::asset_history(fs::path journal_root, fs::path list_file, std
 {
 }
 
-void edt::asset_history::save() const
+std::string edt::asset_history::save() const
 {
-	if (m_list_file.empty()) return;
+	if (m_list_file.empty()) return {};
 	json::array items;
 	for (const entry& item : m_entries) {
 		json::object one{ { "id", item.journal.id }, { "label", item.label }, { "hash", item.hash } };
@@ -138,7 +138,7 @@ void edt::asset_history::save() const
 	fs::create_directories(m_list_file.parent_path(), ec);
 	if (ec) {
 		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", ec.message());
-		return;
+		return ec.message();
 	}
 	const fs::path temporary = m_list_file.parent_path() / (fs_paths::utf8_of(m_list_file.filename()) + ".tmp");
 	{
@@ -149,14 +149,17 @@ void edt::asset_history::save() const
 			out.close();
 			fs::remove(temporary, ec);
 			egLOG_WARN("asset_ops", "the list of the asset operations was not saved: it cannot be written");
-			return;
+			return "it cannot be written";
 		}
 	}
 	fs::rename(temporary, m_list_file, ec);
 	if (ec) {
+		const std::string why = ec.message();
 		fs::remove(temporary, ec);
-		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", ec.message());
+		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", why);
+		return why;
 	}
+	return {};
 }
 
 bool edt::asset_history::inside_root(const fs::path& directory) const
@@ -272,6 +275,7 @@ void edt::asset_history::record(operation_journal journal)
 		same->hash = std::move(hash);
 		same->journal = std::move(journal);
 		same->interrupted = false;
+		trim();
 		save();
 		return;
 	}
@@ -280,11 +284,20 @@ void edt::asset_history::record(operation_journal journal)
 	save();
 }
 
-void edt::asset_history::record_pending(const operation_journal& journal)
+std::string edt::asset_history::record_pending(const operation_journal& journal)
 {
-	if (m_entries.size() >= max_entries) m_entries.erase(m_entries.begin());
+	// Nothing older is let go yet: the operation may still be taken back whole, and then it is no entry at all.
 	m_entries.push_back(entry{ m_serial ? m_serial() : static_cast<std::uint64_t>(m_entries.size()), asset_operation_label(journal), {}, 0, journal, true });
-	save();
+	if (std::string error = save(); !error.empty()) {
+		m_entries.pop_back();
+		return std::format("the list of the asset operations was not saved: {}", error);
+	}
+	return {};
+}
+
+void edt::asset_history::trim()
+{
+	while (m_entries.size() > max_entries) m_entries.erase(m_entries.begin());
 }
 
 void edt::asset_history::end_pending(const operation_journal& journal, bool done)
@@ -301,6 +314,7 @@ void edt::asset_history::end_pending(const operation_journal& journal, bool done
 		same->label = asset_operation_label(journal);
 		same->hash = hash_of_journal(journal);
 		same->journal = journal;
+		trim();
 	}
 	save();
 }
