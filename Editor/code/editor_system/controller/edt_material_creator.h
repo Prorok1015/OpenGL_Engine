@@ -29,6 +29,9 @@ namespace edt
 
 	// The fields of a new material after `__type` and `__version`: `__parent`, then `shader` when the options name one.
 	boost::json::object material_fields(const material_options& options = {});
+	// What desc.create adds to an agent's material, as the menu writes it (#1198): the base material as `__parent` when the
+	// root is a material_desc with none (a `shader` alone included). Anything else is left as it is.
+	void add_material_defaults(boost::json::object& desc);
 
 	// The material item the context menu of a file offers, by its asset kind (asset_kind_of: the kind ids are the desc types).
 	enum class material_menu_item
@@ -39,9 +42,9 @@ namespace edt
 		// "Create Material Variant": a material whose parent is that one.
 		variant,
 	};
-	material_menu_item material_menu_item_of(std::string_view kind);
-	// The same by a plain .desc's `__type`: the asset kinds tell only levels, worlds and prefabs apart by it.
-	material_menu_item material_menu_item_of_type(std::string_view type);
+	// By an asset kind id or a plain .desc's `__type` (the asset kinds tell only levels, worlds and prefabs apart by it): both
+	// are the desc type's name.
+	material_menu_item material_menu_item_of(std::string_view kind_or_type);
 
 	// A desc file a material is made from: its folder below res:// ('/' separated, empty = the root) and its name.
 	struct material_source
@@ -129,6 +132,9 @@ namespace edt
 
 	private:
 		void recheck();
+		// The window for a material made from the desc `file` of `type`, suggested `<stem><tail>` numbered with `separator`.
+		bool open_from_source(const res::tag& file, std::string_view type, material_options options, std::string_view tail,
+			std::string_view separator, std::string_view title_head);
 
 		const material_creator& m_creator;
 		std::string m_title{ k_material_title };

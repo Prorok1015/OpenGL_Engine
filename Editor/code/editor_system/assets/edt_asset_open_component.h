@@ -74,6 +74,8 @@ namespace edt
 		// True while an open() asked quietly (a link, an agent, a recovery) is running: what a kind's open callback may read.
 		bool open_is_quiet() const { return m_open_quiet; }
 		desc_file_layout desc_layout();
+		// Create Document's names (suffixes by asset kind, name checks), shared with desc.create (#1198).
+		std::shared_ptr<const document_creator> document_names() const { return m_creator; }
 		data_document_host& data_documents() { return *m_data_documents; }
 		// The read-only texture viewers (#1205): pictures and the texture descs of lower layers.
 		texture_viewer_host& texture_viewers() { return *m_texture_viewers; }

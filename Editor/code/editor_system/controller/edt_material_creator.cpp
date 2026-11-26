@@ -33,18 +33,16 @@ json::object edt::material_fields(const material_options& options)
 	return out;
 }
 
-edt::material_menu_item edt::material_menu_item_of(std::string_view kind)
+void edt::add_material_defaults(json::object& desc)
 {
-	if (kind == k_shader_type) {
-		return material_menu_item::from_shader;
+	const json::value* type = desc.if_contains("__type");
+	if (!type || !type->is_string() || std::string_view(type->as_string()) != k_material_type || desc.contains("__parent")) {
+		return;
 	}
-	if (kind == k_material_type) {
-		return material_menu_item::variant;
-	}
-	return material_menu_item::none;
+	desc["__parent"] = material_fields().at("__parent");
 }
 
-edt::material_menu_item edt::material_menu_item_of_type(std::string_view type)
+edt::material_menu_item edt::material_menu_item_of(std::string_view type)
 {
 	if (type == k_shader_type) {
 		return material_menu_item::from_shader;
@@ -141,31 +139,31 @@ void edt::material_create_form::open(std::string folder, material_options option
 	recheck();
 }
 
-bool edt::material_create_form::open_from_shader(const res::tag& shader)
+bool edt::material_create_form::open_from_source(const res::tag& file, std::string_view type, material_options options,
+	std::string_view tail, std::string_view separator, std::string_view title_head)
 {
-	const std::optional<material_source> source = m_creator.source_of(shader, k_shader_type);
+	const std::optional<material_source> source = m_creator.source_of(file, type);
 	if (!source) {
 		return false;
 	}
+	std::string suggestion = m_creator.suggested_name(source->folder, source->stem + std::string(tail), separator);
+	open(source->folder, std::move(options), std::move(suggestion), std::format("{} {}", title_head, source->file));
+	return true;
+}
+
+bool edt::material_create_form::open_from_shader(const res::tag& shader)
+{
 	material_options options;
 	options.shader = shader;
-	std::string suggestion = m_creator.suggested_name(source->folder, source->stem, "-");
-	open(source->folder, std::move(options), std::move(suggestion), std::format("{} from {}", k_material_title, source->file));
-	return true;
+	return open_from_source(shader, k_shader_type, std::move(options), "", "-", std::format("{} from", k_material_title));
 }
 
 bool edt::material_create_form::open_variant_of(const res::tag& material)
 {
-	const std::optional<material_source> source = m_creator.source_of(material, k_material_type);
-	if (!source) {
-		return false;
-	}
 	material_options options;
 	options.parent = material;
 	// As prefab_variant_creator::suggested_name: "<stem>_variant", then "<stem>_variant2", no separator before the number.
-	std::string suggestion = m_creator.suggested_name(source->folder, std::format("{}_variant", source->stem), "");
-	open(source->folder, std::move(options), std::move(suggestion), std::format("Material Variant of {}", source->file));
-	return true;
+	return open_from_source(material, k_material_type, std::move(options), "_variant", "", "Material Variant of");
 }
 
 void edt::material_create_form::recheck()

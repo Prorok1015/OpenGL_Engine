@@ -2,6 +2,7 @@
 #include "edt_forge_types.h"
 #include "edt_code_commands.h"
 #include "edt_file_menu.h"
+#include "edt_material_creator.h"
 #include "edt_forge_types.h"
 #include "edt_reference.h"
 #include "edt_tag_text.h"
@@ -529,6 +530,13 @@ namespace {
 		return {};
 	}
 
+	std::string lowered_copy(std::string_view text)
+	{
+		std::string out(text);
+		std::ranges::transform(out, out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return out;
+	}
+
 	std::string type_of_text(std::string_view text)
 	{
 		boost::system::error_code ec;
@@ -556,6 +564,27 @@ namespace {
 			if (!edt::is_valid_utf8(text)) return cmd::result::failure(cmd::codes::failed, std::format("'{}' is not a text file (not UTF-8)", path.relative));
 			return cmd::result::success(json::object{ { "text", text }, { "type", type_of_text(text) },
 				{ "version", edt::code_version_of(file.bytes) }, { "bytes", file.bytes.size() } });
+		}
+
+		// A material's file is named and checked as the menu's New Material names and checks it (#1198): its kind's suffix (another
+		// name is refused, naming the one to use), then document_creator::check (a name before the suffix, no hidden name).
+		std::string material_name_refusal(const std::string& relative, const json::value& content) const
+		{
+			if (type_name_of(content) != edt::k_material_type) return {};
+			const std::shared_ptr<const edt::document_creator>& names = m_files.deps().document_names;
+			if (!names) return std::format("'res://{}': no material can be created here (the editor's file names are not wired)", relative);
+			const std::size_t slash = relative.rfind('/');
+			const std::string folder = slash == std::string::npos ? std::string{} : relative.substr(0, slash);
+			const std::string file = slash == std::string::npos ? relative : relative.substr(slash + 1);
+			const std::string expected = names->file_name_of(edt::k_material_type, file);
+			if (lowered_copy(expected) != lowered_copy(file)) {
+				return std::format("'res://{}': a material's file is named like 'res://{}' (its kind's suffix); create that instead", relative,
+					folder.empty() ? expected : folder + "/" + expected);
+			}
+			if (std::string problem = names->check(folder, edt::k_material_type, file); !problem.empty()) {
+				return std::format("'res://{}': {}", relative, problem);
+			}
+			return {};
 		}
 
 		cmd::result create(const cmd::call& call) const
@@ -587,7 +616,13 @@ namespace {
 					std::format("'res://{}' is a name of the open level (its file or one of its worlds): change the level with the scene commands and save it with file.save", path.relative));
 			}
 			if (level.claim == level_claim::unreadable_entry) return cmd::result::failure(cmd::codes::busy, unreadable_entry_text(level));
-			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, call.args.as_object().at("desc"));
+			// After the name checks above, so a taken name stays `needs_input`.
+			if (std::string why = material_name_refusal(path.relative, call.args.as_object().at("desc")); !why.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(why));
+			}
+			json::value content = call.args.as_object().at("desc");
+			if (content.is_object()) edt::add_material_defaults(content.as_object());
+			const prepared_file ready = prepare(m_files.deps().descs, m_files.deps().res, m_files.index_wait(), path.relative, content);
 			if (!ready.problems.empty()) return invalid_content(ready.problems);
 			if (!ready.busy.empty()) return cmd::result::failure(cmd::codes::busy, ready.busy);
 			if (!ready.error.empty()) return cmd::result::failure(cmd::codes::invalid_args, ready.error);
@@ -1107,6 +1142,8 @@ std::vector<edt::registration> edt::register_desc_file_commands(cmd::command_reg
 			"Every object with a `__type` must fit its schema (unknown fields are refused), else nothing is written and the errors name the JSON pointer. "
 			"A reference is a res:// string or a {\"guid\", \"path\"} object (desc.read may show one); a string is enough. "
 			"Content with a guid is answered `busy` while the editor's asset index is still being built. "
+			"A material_desc is named <name>.mat.desc (another name is refused, naming the one to use) and gets `__parent` res://base_material.desc "
+			"when the content names no `__parent`, as the editor's New Material makes it. "
 			"*.geom.desc and *.poly.desc files (and content whose `__type` is geometry_desc or poly_mesh_desc) are refused: mesh data is written only by the editor, "
 			"a geometry's vertices living in a binary file next to the desc (EPIC-79); a geometry comes from a model import (file.import_model), "
 			"an editable mesh from the editor's mesh editing (no tool)",

@@ -107,7 +107,7 @@
 - **PR 2 (сделано):** в контекстном меню файла браузера ассетов: на шейдере — **Create Material**, на материале —
   **Create Material Variant**. Шейдер и материал узнаются по суффиксу (`.shader.desc` / `.mat.desc`, в любом регистре
   букв; основа имени сохраняет свой регистр), а простой `.desc` — по `__type` (`shader_desc` / `material_desc`), который
-  читается один раз при открытии меню и сопоставляется в `material_menu_item_of_type`: `asset_kind_of` знает простой
+  читается один раз при открытии меню и сопоставляется в том же `material_menu_item_of`: `asset_kind_of` знает простой
   `.desc` только как уровень, мир или префаб, поэтому фильтр Kinds по-прежнему показывает такой файл как `data` (это не
   меняется). Пункт не показывается, если имя файла не разбирается (`material_creator::source_of`). Create Material создаёт материал в папке
   шейдера: `__parent` остаётся `res://base_material.desc` (остальные поля наследуются), `shader` — этот шейдер; имя
@@ -119,7 +119,16 @@
   Форма и окно общие с New Material: `material_create_form::open(folder, options, suggestion, title)` плюс
   `open_from_shader` / `open_variant_of`; заголовок окна говорит, что создаётся («New Material from toon.shader.desc»,
   «Material Variant of rock.mat.desc»). Тесты: `EdtDataDocumentTests` NewMaterial_FromAShader_*, NewMaterial_AVariant_*.
-- **PR 3:** команда агента через тот же `material_creator`.
+- **PR 3 (сделано):** новой команды для агента нет, `desc.create` материала получает те же правила, что и меню
+  (решение в обсуждении плана в #1198). Путь, имя которого не `<основа>.mat.desc` (часть вида — в любом регистре
+  букв), отклоняется с `invalid_args`, и в ответе назван путь, который нужно создать; молча файл не переименовывается.
+  Суффикс берётся из того же `document_creator::file_name_of`, что у Create Document (`desc_file_deps::document_names`),
+  затем имя проверяет `document_creator::check`: суффикс без имени (`.mat.desc`) и скрытое имя отклоняются, как в меню.
+  Без этого порта материал не создаётся вовсе.
+  Если в содержимом нет `__parent`, добавляется `res://base_material.desc` (`edt::add_material_defaults`, общее с
+  `material_fields` меню), в том числе когда задан только `shader`. Проверки имени (занято в любом слое, оставшийся
+  `.resource`, регистр букв) у `desc.create` уже были те же, что у `document_creator::check`. `desc.write` и уже
+  существующие материалы с простым `.desc` не меняются. Тесты: `EdtDescFileCommands` `AnAgentsMaterial_*`.
 
 ---
 

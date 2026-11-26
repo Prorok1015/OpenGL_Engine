@@ -2448,26 +2448,35 @@ namespace {
 	}
 }
 
-BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_FollowTheAssetKind)
+// A kind id or a plain .desc's `__type` (the asset kinds know only levels, worlds and prefabs by it, so the panel maps a
+// material's or a shader's type itself): both are the desc type's name.
+BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_FollowTheKindOrTheType)
 {
 	BOOST_TEST((edt::material_menu_item_of("shader_desc") == edt::material_menu_item::from_shader));
 	BOOST_TEST((edt::material_menu_item_of("material_desc") == edt::material_menu_item::variant));
-	for (const std::string_view kind : { "", "data", "prefab", "shader", "texture" }) {
-		BOOST_TEST_CONTEXT("kind: " << kind)
+	for (const std::string_view kind : { "", "data", "prefab", "shader", "texture", "prefab_desc", "level_desc", "world_desc",
+			"MATERIAL_DESC", "material" }) {
+		BOOST_TEST_CONTEXT("kind or type: " << kind)
 		BOOST_TEST((edt::material_menu_item_of(kind) == edt::material_menu_item::none));
 	}
 }
 
-// A plain .desc is a material or a shader by its `__type`, which the asset kinds do not map (they know only levels, worlds
-// and prefabs by it), so the panel maps the type itself.
-BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_OfAPlainDesc_FollowItsType)
+BOOST_AUTO_TEST_CASE(NewMaterial_TheSourceOfAFileAtTheRoot_OrWithTwoKindSuffixes_AndNoBaseName)
 {
-	BOOST_TEST((edt::material_menu_item_of_type("material_desc") == edt::material_menu_item::variant));
-	BOOST_TEST((edt::material_menu_item_of_type("shader_desc") == edt::material_menu_item::from_shader));
-	for (const std::string_view type : { "", "prefab_desc", "level_desc", "world_desc", "MATERIAL_DESC", "material" }) {
-		BOOST_TEST_CONTEXT("type: " << type)
-		BOOST_TEST((edt::material_menu_item_of_type(type) == edt::material_menu_item::none));
-	}
+	const material_wiring wiring{ *this };
+	const std::optional<edt::material_source> root = wiring.creator.source_of(res::tag{ "res://toon.shader.desc" }, edt::k_shader_type);
+	BOOST_REQUIRE(root.has_value());
+	BOOST_TEST(root->folder.empty());
+	BOOST_TEST(root->stem == "toon");
+	BOOST_TEST(root->file == "toon.shader.desc");
+
+	// Only the kind's own suffix comes off: the rest is the stem.
+	const std::optional<edt::material_source> both = wiring.creator.source_of(res::tag{ "res://m/a.shader.mat.desc" }, edt::k_material_type);
+	BOOST_REQUIRE(both.has_value());
+	BOOST_TEST(both->folder == "m");
+	BOOST_TEST(both->stem == "a.shader");
+
+	BOOST_TEST(wiring.creator.suggested_name("", "", "-").empty());
 }
 
 // The browser's kind lookup ignores letter case, so the suffix comes off in any case and the stem keeps its own.
