@@ -2,8 +2,11 @@
 #include "edt_agent_model_import.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_asset_exporter.h"
+#include "edt_asset_picker.h"
 #include "edt_decoder_sandbox_notice.h"
 #include "edt_editor_layer.h"
+#include "edt_file_identity.h"
+#include "edt_file_menu.h"
 #include "edt_image_import.h"
 #include "edt_import_problems.h"
 #include "edt_model_importer.h"
@@ -14,6 +17,7 @@
 #include "edt_person_model_import.h"
 #include <snk/model_import/mdl_model_adapter.h>
 #endif
+#include <snk/command/cmd_types.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/text_escape.h>
@@ -21,10 +25,15 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_job_service.h>
+#include <snk/platform/plt_beneath.h>
 #include <snk/platform/plt_process.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
+#include <array>
+#include <cstddef>
 #include <format>
+#include <fstream>
+#include <span>
 #include <utility>
 
 namespace
@@ -34,6 +43,40 @@ namespace
 	// The decoder's OS sandbox (#1043) for every import, a person's setting: on (run without it where the system has
 	// none, with one WARN), off, or required (CI: refuse to decode without it). An agent's import never changes it.
 	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "on");
+
+	constexpr std::string_view k_prefab_suffix = ".prefab.desc";
+	// Past this a picked model is not hashed on the main thread for the note "the same file as last time".
+	constexpr std::uintmax_t k_max_hashed_bytes = 64ull * 1024 * 1024;
+
+	std::string shown(std::string_view text)
+	{
+		return text_escape::escaped_text(text, 512);
+	}
+
+	// The SHA-256 of the file as lowercase hex; empty when it cannot be read or is too big to hash here.
+	std::string sha256_of_file(const std::filesystem::path& path)
+	{
+		std::error_code ec;
+		const std::uintmax_t size = std::filesystem::file_size(path, ec);
+		if (ec || size > k_max_hashed_bytes) return {};
+		std::ifstream in(path, std::ios::binary);
+		if (!in) return {};
+		edt::content_hasher hasher;
+		std::vector<char> chunk(1024 * 1024);
+		while (in) {
+			in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+			const std::streamsize got = in.gcount();
+			if (got > 0) hasher.update(std::as_bytes(std::span(chunk.data(), static_cast<std::size_t>(got))));
+		}
+		if (in.bad()) return {};
+		constexpr std::string_view hex = "0123456789abcdef";
+		std::string out;
+		for (const std::uint8_t byte : hasher.finish()) {
+			out += hex[byte >> 4];
+			out += hex[byte & 0x0f];
+		}
+		return out;
+	}
 }
 
 edt::import_component::import_component(ports from)
@@ -58,6 +101,9 @@ void edt::import_component::build()
 	res::resource_system& resources = m_ports.resources;
 	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources,
 		m_ports.context.colors());
+	m_export_dialog->set_open_check([this](const res::tag& tag) {
+		return m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(tag);
+	});
 	agent_import_options import_options;
 #if SNK_HAS_ASSIMP
 	// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
@@ -200,6 +246,125 @@ void edt::import_component::ask_settings(const std::filesystem::path& absolute_p
 	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
 }
 
+const edt::asset_export_dialog& edt::import_component::export_dialog() const
+{
+	return *m_export_dialog;
+}
+
+edt::model_import_record edt::import_component::check_reimport(const res::tag& prefab) const
+{
+	model_import_record refused;
+	const auto refuse = [&refused](const char* code, std::string why) {
+		refused.code = code;
+		refused.error = std::move(why);
+		return refused;
+	};
+	if (m_shut_down) return refuse(cmd::codes::disabled, "the editor is closing");
+	if (m_ports.project_open && !m_ports.project_open()) return refuse(cmd::codes::disabled, "no project is open");
+	const std::string named = shown(prefab.view());
+	if (prefab.protocol() != res::tag::default_protocol() || !prefab.relative().ends_with(k_prefab_suffix)) {
+		return refuse(cmd::codes::invalid_args, std::format("{} is not a prefab (.prefab.desc) of the project", named));
+	}
+	if (const agent_level_path checked = check_agent_level_path(prefab.relative()); !checked.ok()) {
+		return refuse(cmd::codes::invalid_args, std::format("{}: {}", named, checked.error));
+	}
+	const std::filesystem::path top = m_ports.resources.get_resources_path();
+	if (top.empty()) return refuse(cmd::codes::disabled, "no project is open");
+
+	// The prefab: in the project's own layer only.
+	const std::filesystem::path path = fs_paths::path_from_utf8(std::string(prefab.relative()));
+	platform::beneath::read_request request;
+	request.root = top;
+	request.folder = path.parent_path();
+	request.leaf = path.filename();
+	request.max_bytes = 64ull * 1024 * 1024;
+	request.stamp_only = true;
+	std::vector<std::byte> none;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, none);
+	if (read.status == platform::beneath::read_status::missing) {
+		const std::vector<std::filesystem::path> layers = m_ports.resources.get_resource_layers();
+		for (std::size_t index = 0; index < layers.size(); ++index) {
+			if (layers[index] == top) continue;
+			std::error_code ec;
+			if (std::filesystem::exists(std::filesystem::symlink_status(layers[index] / path, ec))) {
+				return refuse(cmd::codes::invalid_args, std::format("{} is in the {} layer, not the project's own: "
+					"only a prefab of the project is re-imported", named, picker::layer_label(index, layers.size())));
+			}
+		}
+		return refuse(cmd::codes::not_found, std::format("{} is not in the project", named));
+	}
+	if (read.status != platform::beneath::read_status::ok) {
+		return refuse(cmd::codes::invalid_args, std::format("{} is not a plain file: nothing was re-imported", named));
+	}
+	model_import_record record = read_model_import_record(top, prefab);
+	if (!record.ok()) return record;
+	if (m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(prefab)) {
+		return refuse(cmd::codes::busy, std::format("{} is open with unsaved changes: save or close it first; nothing "
+			"was re-imported", named));
+	}
+	return record;
+}
+
+void edt::import_component::ask_reimport_settings(const res::tag& prefab, const std::filesystem::path& source,
+	model_import_settings_form::import_fn on_import)
+{
+	if (m_shut_down || m_settings_form.is_open()) return;
+	const model_import_record record = check_reimport(prefab);
+	if (!record.ok()) {
+		m_ports.context.dialogs().message(message_level::warning, "Re-import refused: " + record.error);
+		return;
+	}
+	std::vector<std::string> notes;
+	if (record.source) {
+		notes.push_back("Last imported from " + shown(record.source->name));
+		const model_source_record picked = model_source_of(fs_paths::utf8_of(source.filename()), {});
+		if (picked.name != record.source->name) notes.push_back("The picked file's name differs from the recorded one");
+		if (sha256_of_file(source) == record.source->sha256) {
+			notes.push_back("The same file as last time (its SHA-256 matches)");
+		}
+	}
+	if (!m_settings_form.open_reimport(source, std::string(prefab.view()), record.settings, std::move(notes),
+		std::move(on_import))) {
+		return;
+	}
+	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
+}
+
+std::optional<edt::model_import_refusal> edt::import_component::reimport(const res::tag& prefab,
+	const std::filesystem::path& source, const boost::json::value& settings)
+{
+	const model_import_record record = check_reimport(prefab);
+	if (!record.ok()) return model_import_refusal{ record.code, record.error };
+#if SNK_HAS_ASSIMP
+	model_import_settings chosen = record.settings;
+	if (settings.is_object()) {
+		const model_settings_parse parsed = parse_model_settings(settings);
+		if (!parsed.ok()) return model_import_refusal{ cmd::codes::invalid_args, parsed.error };
+		const boost::json::object& given = settings.as_object();
+		if (given.contains("normals")) chosen.normals = parsed.settings.normals;
+		if (given.contains("tangents")) chosen.tangents = parsed.settings.tangents;
+	} else if (!settings.is_null()) {
+		return model_import_refusal{ cmd::codes::invalid_args, "settings must be an object" };
+	}
+	if (m_importing) return model_import_refusal{ cmd::codes::busy, "an import is already running in the editor" };
+	if (m_dialog_open) {
+		return model_import_refusal{ cmd::codes::busy, "an import is waiting in the editor's export dialog" };
+	}
+	if (agent_import_running()) {
+		return model_import_refusal{ cmd::codes::busy, "an import asked for by an agent is running" };
+	}
+	if (const play_session* play = m_ports.play ? m_ports.play() : nullptr; play && play->active()) {
+		return model_import_refusal{ cmd::codes::busy, "Stop Play to import." };
+	}
+	start_import(source, chosen, prefab);
+	return std::nullopt;
+#else
+	static_cast<void>(source);
+	static_cast<void>(settings);
+	return model_import_refusal{ cmd::codes::disabled, "model import is not built in" };
+#endif
+}
+
 bool edt::import_component::draw_settings_window()
 {
 	if (!m_settings_form.is_open()) return false;
@@ -208,6 +373,10 @@ bool edt::import_component::draw_settings_window()
 	// Not shown this frame (opened in it, or under another modal): the window stays and is tried next frame.
 	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return true;
 	const model_import_settings settings = m_settings_form.settings();
+	if (m_settings_form.reimport()) {
+		ImGui::Text("Re-import %s", shown(m_settings_form.target()).c_str());
+		for (const std::string& note : m_settings_form.notes()) ImGui::TextDisabled("%s", note.c_str());
+	}
 	ImGui::Text("Model: %s", m_settings_form.shown_name().c_str());
 	ImGui::Separator();
 	ImGui::TextUnformatted("Normals");
@@ -223,7 +392,7 @@ bool edt::import_component::draw_settings_window()
 	if (ImGui::Checkbox("Tangents", &tangents)) m_settings_form.set_tangents(tangents);
 	ImGui::TextDisabled("%s", "Tangents are needed for normal maps. Both are recorded in the prefab's .resource.");
 	ImGui::Separator();
-	const bool import = ImGui::Button("Import");
+	const bool import = ImGui::Button(m_settings_form.reimport() ? "Re-import" : "Import");
 	ImGui::SetItemDefaultFocus();
 	ImGui::SameLine();
 	const bool cancel = ImGui::Button("Cancel") || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
@@ -280,7 +449,7 @@ std::optional<std::string> edt::import_component::agent_import_blocker() const
 }
 
 void edt::import_component::start_import(const std::filesystem::path& absolute_path,
-	const model_import_settings& settings)
+	const model_import_settings& settings, const res::tag& reimport)
 {
 	if (m_importing) {
 		egLOG_INFO("Editor/Import", "Import of '{}' not started: another import is running",
@@ -305,6 +474,7 @@ void edt::import_component::start_import(const std::filesystem::path& absolute_p
 
 	m_importing = true;
 	m_finished = false;
+	m_reimport_target = reimport;
 	m_spinner_t = 0.f;
 	m_result.reset();
 	m_failure.clear();
@@ -339,6 +509,7 @@ void edt::import_component::finish_import()
 	m_result.reset();
 	m_failure.clear();
 	m_name.clear();
+	m_reimport_target = res::tag{};
 }
 
 bool edt::import_component::poll_progress()
@@ -395,6 +566,7 @@ bool edt::import_component::poll_progress()
 	// The dialog takes the folder over; finish_import erases what is left of any other outcome.
 	std::string folder = std::exchange(m_import_folder, std::string{});
 	const std::string name = m_name;
+	const res::tag reimport = m_reimport_target;
 	finish_import();
 
 	if (!intermediate.error.empty()) {
@@ -413,7 +585,7 @@ bool edt::import_component::poll_progress()
 		context.problems().set(k_import_problem_source, std::move(rows));
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
 		m_dialog_folder = std::move(folder);
-		m_export_dialog->open(std::move(result));
+		m_export_dialog->open(std::move(result), reimport);
 		m_dialog_open = true;
 		return true;
 	}

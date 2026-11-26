@@ -54,6 +54,12 @@ namespace edt
 		// item. The same picker and window give "Re-import..." on a picture row that has a `.resource` (#1194).
 		using image_picker = std::function<void(std::function<void(const std::filesystem::path&)> picked)>;
 		void set_image_importer(image_importer* importer, image_picker pick_file);
+		// "Re-import..." on a `.prefab.desc` row whose `.resource` is beside it (#1194): `reimport` gets the prefab's
+		// tag (the picker and the window are its). Null: no item.
+		void set_model_reimport(std::function<void(const res::tag&)> reimport)
+		{
+			m_reimport_model = std::move(reimport);
+		}
 		// The registry the "Kinds" filter reads the kinds of modules from; null: only the fixed kinds.
 		void set_asset_kinds(const asset_kind_registry* kinds) { m_kinds = kinds; }
 
@@ -170,6 +176,8 @@ namespace edt
 		bool m_image_requested = false;
 		// Whether the open context menu offers "Re-import...": looked at once, when the menu appears.
 		bool m_offers_reimport = false;
+		bool m_offers_model_reimport = false;
+		std::function<void(const res::tag&)> m_reimport_model;
 		// Re-import of the picture `target` (its res:// tag): the picker, then the window in re-import mode.
 		void ask_reimport(std::string target);
 		// A picker's answer that comes after the panel is gone does nothing.

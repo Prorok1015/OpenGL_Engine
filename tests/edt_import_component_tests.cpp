@@ -5,6 +5,8 @@
 #include "edt_editor_layer.h"
 #include "edt_file_menu.h"
 #include "edt_import_component.h"
+#include "edt_asset_export_dialog.h"
+#include "edt_file_identity.h"
 #include "edt_import_problems.h"
 #include "edt_model_import_limits.h"
 #include "edt_process_decoder.h"
@@ -22,11 +24,14 @@
 #include <snk/gui/gui_system.h>
 #include <snk/platform/plt_process.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
 #include <imgui.h>
 #include <chrono>
 #include <cstddef>
@@ -37,6 +42,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -144,7 +150,8 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	void make_component()
 	{
 		component = std::make_unique<edt::import_component>(edt::import_component::ports{ .context = *context, .resources = rs(),
-			.desc = descs(), .tasks = tasks, .layer = *layer, .decoder = [this] { return decoder(); } });
+			.desc = descs(), .tasks = tasks, .layer = *layer, .decoder = [this] { return decoder(); },
+			.open_with_unsaved_changes = [this](const res::tag& tag) { return tag.view() == open_dirty; } });
 	}
 
 	// One editor frame: the import's popup (its implicit callback), then the jobs and the main-thread queue.
@@ -234,6 +241,8 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	int scans = 0;
 	int imports = 0;
 	std::vector<edt::model_import_settings> import_settings;
+	// The tag a document holds with unsaved edits; empty: none.
+	std::string open_dirty;
 	std::unique_ptr<edt::import_component> component;
 };
 
@@ -491,6 +500,224 @@ BOOST_AUTO_TEST_CASE(AtStartup_TheImportsOfARunThatEnded_Go_AndThoseOfThisRunSta
 	make_component();
 	BOOST_TEST(within(std::chrono::seconds(5), [&] { return !rs().exists(ended); }));
 	BOOST_TEST(rs().exists(current));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+// A prefab an earlier import made (#1194): res:// on the disk, an engine layer below the project's own.
+struct reimport_fixture : import_component_fixture
+{
+	reimport_fixture()
+	{
+		fs::create_directories(engine_res);
+		fs::create_directories(project_res);
+		rs().unregistrate_resolver(res::tag::default_protocol());
+		rs().registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(),
+			std::vector<fs::path>{ engine_res, project_res }, res::mount_access::read_write,
+			res::write_policy::allow_all());
+	}
+
+	static res::tag prefab() { return res::tag::make("assets/robot/robot.prefab.desc"); }
+
+	// The SHA-256 the import records for the model file.
+	std::string model_sha() const
+	{
+		const std::string bytes = "glb-bytes";
+		const edt::content_digest digest = edt::digest_of(std::as_bytes(std::span(bytes)));
+		std::string hex;
+		for (const std::uint8_t byte : digest) hex += std::format("{:02x}", byte);
+		return hex;
+	}
+
+	// The prefab and its `.resource` as the import wrote them; `importer` and `newer` spoil it.
+	res::asset_meta write_record(std::string importer = "model")
+	{
+		dir.write("project/res/assets/robot/robot.prefab.desc", R"({"__type":"prefab_desc"})");
+		res::asset_meta meta;
+		meta.guid = res::generate_asset_id();
+		meta.importer = std::move(importer);
+		meta.settings = edt::model_settings_json(recorded, edt::model_source_of("robot.glb", model_sha()));
+		meta.flags = { "keep" };
+		dir.write("project/res/assets/robot/robot.prefab.desc.resource", res::write_asset_meta(meta));
+		return meta;
+	}
+
+	cmd::result import_call(const cmd::origin& from, boost::json::object args)
+	{
+		cmd::call request;
+		request.args = std::move(args);
+		request.from = from;
+		return context->actions().invoke("file.import_model", request);
+	}
+
+	const fs::path engine_res = dir.path() / "engine_res";
+	const fs::path project_res = dir.path() / "project" / "res";
+	const edt::model_import_settings recorded{ .normals = edt::model_normals::flat, .tangents = false };
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtModelReimportTests, reimport_fixture)
+
+BOOST_AUTO_TEST_CASE(TheWindow_OpensFilledFromTheRecord_AndCancelImportsNothing)
+{
+	write_record();
+	make_component();
+	int imported = 0;
+	component->ask_reimport_settings(prefab(), model,
+		[&imported](const fs::path&, const edt::model_import_settings&) { ++imported; });
+	BOOST_REQUIRE(component->settings_open());
+	const edt::model_import_settings_form& form = component->settings_form();
+	BOOST_CHECK(form.reimport());
+	BOOST_CHECK_EQUAL(form.target(), std::string(prefab().view()));
+	BOOST_CHECK(form.settings() == recorded);
+	bool same_file = false;
+	for (const std::string& note : form.notes()) same_file = same_file || contains(note, "same file as last time");
+	BOOST_CHECK(same_file);
+	frame_without_jobs(false);
+	frame_without_jobs(true);
+	BOOST_CHECK(!component->settings_open());
+	frames_until([] { return false; });
+	BOOST_TEST(imported == 0);
+	BOOST_TEST(imports == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnotherFileName_IsNoted_AndBlocksNothing)
+{
+	write_record();
+	make_component();
+	component->ask_reimport_settings(prefab(), dir.write("models/robot_v2.glb", "other bytes"),
+		[](const fs::path&, const edt::model_import_settings&) {});
+	BOOST_REQUIRE(component->settings_open());
+	bool other_name = false;
+	bool same_file = false;
+	for (const std::string& note : component->settings_form().notes()) {
+		other_name = other_name || contains(note, "name differs");
+		same_file = same_file || contains(note, "same file as last time");
+	}
+	BOOST_CHECK(other_name);
+	BOOST_CHECK(!same_file);
+	component->settings_form().cancel();
+}
+
+BOOST_AUTO_TEST_CASE(TheRecordedSettings_ReachTheDecoder_AndTheExportDialogIsOverThePrefab)
+{
+	write_record();
+	make_component();
+	edt::file_menu_hooks hooks;
+	hooks.import_model = [this](const fs::path& source, const edt::model_import_settings& settings) {
+		component->start_import(source, settings);
+	};
+	hooks.reimport_model = [this](const res::tag& tag, const fs::path& source, const boost::json::value& settings) {
+		return component->reimport(tag, source, settings);
+	};
+	auto menu = std::make_unique<edt::file_menu>(context->dialogs(), context->actions(), hooks);
+	menu->register_actions();
+	const cmd::result started = import_call(cmd::origin::ui(),
+		boost::json::object{ { "path", model.string() }, { "reimport", std::string(prefab().view()) } });
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	frames_until([this] { return component->dialog_open(); });
+	BOOST_REQUIRE(component->dialog_open());
+	BOOST_REQUIRE_EQUAL(import_settings.size(), 1u);
+	BOOST_CHECK(import_settings[0] == recorded);
+	const edt::asset_export_dialog& dialog = component->export_dialog();
+	BOOST_CHECK(dialog.reimport_target() == prefab());
+	BOOST_CHECK_EQUAL(std::string(dialog.asset_name()), "robot");
+	BOOST_CHECK_EQUAL(std::string(dialog.target_folder()), "assets/robot");
+	component->shutdown();
+	menu.reset();
+}
+
+BOOST_AUTO_TEST_CASE(SettingsGiven_ReplaceOnlyTheirKeys)
+{
+	write_record();
+	make_component();
+	BOOST_REQUIRE(!component->reimport(prefab(), model, boost::json::object{ { "tangents", true } }).has_value());
+	frames_until([this] { return component->dialog_open(); });
+	BOOST_REQUIRE_EQUAL(import_settings.size(), 1u);
+	const edt::model_import_settings expected{ .normals = edt::model_normals::flat, .tangents = true };
+	BOOST_CHECK(import_settings[0] == expected);
+	component->shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsCallWithReimport_IsDenied_ANameWithItIsRefused)
+{
+	write_record();
+	make_component();
+	edt::file_menu_hooks hooks;
+	hooks.import_model = [this](const fs::path& source, const edt::model_import_settings& settings) {
+		component->start_import(source, settings);
+	};
+	hooks.reimport_model = [this](const res::tag& tag, const fs::path& source, const boost::json::value& settings) {
+		return component->reimport(tag, source, settings);
+	};
+	auto menu = std::make_unique<edt::file_menu>(context->dialogs(), context->actions(), hooks);
+	menu->register_actions();
+	const boost::json::object args{ { "path", model.string() }, { "reimport", std::string(prefab().view()) } };
+	for (const cmd::origin& from : { cmd::origin::agent("session"), cmd::origin::test(), cmd::origin::game() }) {
+		const cmd::result denied = import_call(from, args);
+		BOOST_CHECK(!denied.ok);
+		BOOST_CHECK_EQUAL(denied.code, cmd::codes::denied);
+	}
+	boost::json::object named = args;
+	named["name"] = "other";
+	BOOST_CHECK_EQUAL(import_call(cmd::origin::ui(), named).code, cmd::codes::invalid_args);
+	frames_until([] { return false; });
+	BOOST_TEST(imports == 0);
+	BOOST_CHECK(!component->person_import_running());
+	menu.reset();
+}
+
+BOOST_AUTO_TEST_CASE(ABrokenRecord_IsRefused_BeforeAnythingHappens)
+{
+	make_component();
+	write_record("texture");
+	BOOST_CHECK_EQUAL(component->check_reimport(prefab()).code, cmd::codes::invalid_args);
+
+	const res::asset_meta meta = write_record();
+	dir.write("project/res/assets/robot/robot.prefab.desc.resource", res::write_asset_meta(meta) + "\n");
+	BOOST_CHECK_EQUAL(component->check_reimport(prefab()).code, cmd::codes::invalid_args);
+
+	boost::json::object newer = boost::json::parse(res::write_asset_meta(meta)).as_object();
+	newer["__version"] = 99;
+	dir.write("project/res/assets/robot/robot.prefab.desc.resource", boost::json::serialize(newer));
+	const edt::model_import_record refused = component->check_reimport(prefab());
+	BOOST_CHECK_EQUAL(refused.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(contains(refused.error, "newer editor"), refused.error);
+
+	fs::remove(project_res / "assets" / "robot" / "robot.prefab.desc.resource");
+	BOOST_CHECK_EQUAL(component->check_reimport(prefab()).code, cmd::codes::not_found);
+
+	// The window does not open; the person is told why.
+	component->ask_reimport_settings(prefab(), model, [](const fs::path&, const edt::model_import_settings&) {});
+	BOOST_CHECK(!component->settings_open());
+	bool told = false;
+	for (const std::string& text : dialog_texts()) told = told || contains(text, "Re-import refused");
+	BOOST_CHECK(told);
+	BOOST_CHECK(component->reimport(prefab(), model, nullptr).has_value());
+	frames_until([] { return false; });
+	BOOST_TEST(imports == 0);
+}
+
+BOOST_AUTO_TEST_CASE(APrefabOfALowerLayer_OrOpenWithUnsavedChanges_IsRefused)
+{
+	make_component();
+	dir.write("engine_res/assets/robot/robot.prefab.desc", R"({"__type":"prefab_desc"})");
+	const edt::model_import_record lower = component->check_reimport(prefab());
+	BOOST_CHECK_EQUAL(lower.code, cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(contains(lower.error, "layer"), lower.error);
+
+	write_record();
+	open_dirty = std::string(prefab().view());
+	const std::optional<edt::model_import_refusal> busy = component->reimport(prefab(), model, nullptr);
+	BOOST_REQUIRE(busy.has_value());
+	BOOST_CHECK_EQUAL(busy->code, cmd::codes::busy);
+	open_dirty.clear();
+	BOOST_CHECK(component->check_reimport(prefab()).ok());
+	frames_until([] { return false; });
+	BOOST_TEST(imports == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

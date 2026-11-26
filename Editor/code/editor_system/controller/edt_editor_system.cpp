@@ -571,6 +571,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.request_close_shader_source = [this](document_id id) { m_shader_editor->request_close(id); },
 		.level_disk = m_level_disk.get() });
 	m_file_menu->install(m_registrations);
+	m_panels->asset_browser()->set_model_reimport([this](const res::tag& prefab) {
+		m_file_menu->reimport_model(prefab);
+	});
 	m_level_load->install(m_registrations);
 	m_file_menu->install_edit_actions(m_registrations);
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).

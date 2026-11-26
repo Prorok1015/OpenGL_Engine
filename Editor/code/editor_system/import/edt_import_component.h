@@ -1,8 +1,10 @@
 #pragma once
 #include "edt_async_import_task.h"
 #include "edt_model_import_form.h"
+#include "edt_model_import_meta.h"
 #include "edt_process_decoder.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <boost/json/value.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <utility>
@@ -88,9 +90,25 @@ namespace edt
 		// What the window shows and Import does; the tests choose and submit through it as a click would.
 		model_import_settings_form& settings_form() { return m_settings_form; }
 
+		// Whether `prefab` may be re-imported now (#1194, a person's only): a prefab of the project's own layer whose
+		// `.resource` read_model_import_record takes, not open with unsaved edits. Its record, else the refusal.
+		model_import_record check_reimport(const res::tag& prefab) const;
+		// The settings window in re-import mode for `source` over `prefab`, filled from its record; a refusal is
+		// shown as a message and nothing opens.
+		void ask_reimport_settings(const res::tag& prefab, const std::filesystem::path& source,
+			model_import_settings_form::import_fn on_import);
+		// file.import_model {path, reimport, settings?}: a key `settings` leaves out keeps the recorded value; then the
+		// import as start_import runs it, its export dialog over `prefab`. The refusal, else nullopt.
+		std::optional<model_import_refusal> reimport(const res::tag& prefab, const std::filesystem::path& source,
+			const boost::json::value& settings);
+		// The tests look at what the export dialog was opened with.
+		const asset_export_dialog& export_dialog() const;
+
 #if SNK_HAS_ASSIMP
-		// The job with `settings`, the "Importing" popup (Esc cancels) and then the export dialog.
-		void start_import(const std::filesystem::path& absolute_path, const model_import_settings& settings = {});
+		// The job with `settings`, the "Importing" popup (Esc cancels) and then the export dialog (over `reimport`,
+		// a prefab of the project, when valid).
+		void start_import(const std::filesystem::path& absolute_path, const model_import_settings& settings = {},
+			const res::tag& reimport = {});
 #endif
 
 	private:
@@ -133,6 +151,8 @@ namespace edt
 		bool m_finished = false;
 		std::uint64_t m_job = 0;
 		std::string m_name;
+		// The prefab the import in flight re-imports (#1194); invalid for a new import.
+		res::tag m_reimport_target{};
 		float m_spinner_t = 0.f;
 		std::optional<import_intermediate> m_result;
 		// Set when the job itself failed (exception); a failed import reports through m_result->error.

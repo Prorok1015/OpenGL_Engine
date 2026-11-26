@@ -5,8 +5,10 @@
 #include "edt_file_dialog.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace res {
 	class resource_system;
@@ -27,8 +29,20 @@ namespace edt {
 			const gui::theme_semantic_colors& colors);
 		~asset_export_dialog();
 
-		// Set the import result to export
-		void open(import_result result);
+		// Set the import result to export. `reimport` (#1194): the prefab it is exported over; its name and folder are
+		// fixed, and the files the earlier import made that this one does not are listed after the export.
+		void open(import_result result, res::tag reimport = {});
+
+		// Whether a document holds unsaved edits of a file the export would overwrite: Export is refused. Null: none.
+		void set_open_check(std::function<bool(const res::tag&)> open_with_unsaved_changes)
+		{
+			m_open_with_unsaved_changes = std::move(open_with_unsaved_changes);
+		}
+		const res::tag& reimport_target() const { return m_reimport; }
+		const char* asset_name() const { return m_asset_name; }
+		const char* target_folder() const { return m_target_folder; }
+		// After a re-import: what the earlier import made and this one did not (still in the project).
+		const std::vector<res::tag>& no_longer_made() const { return m_left_over; }
 
 		// Render the dialog. Returns false when dialog is closed.
 		bool render();
@@ -38,6 +52,7 @@ namespace edt {
 
 	private:
 		void render_export_form();
+		void render_reimport_report();
 		void render_export_progress();
 
 		asset_exporter& m_exporter;
@@ -53,6 +68,10 @@ namespace edt {
 		file_dialog m_folder_dialog;
 
 		res::tag m_exported_tag;
+		res::tag m_reimport;
+		std::vector<res::tag> m_left_over;
+		bool m_show_report = false;
+		std::function<bool(const res::tag&)> m_open_with_unsaved_changes;
 
 		// Async export state
 		job_service& m_jobs;

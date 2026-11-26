@@ -81,6 +81,11 @@ namespace edt {
 		// Empty when `asset_name` is one name by the rules of check_agent_name. Else why not.
 		static std::string asset_name_problem(std::string_view asset_name);
 
+		// The res:// files below `target_folder` that the prefab of an earlier import (its text, read before the
+		// re-import overwrote it) refers to and the remap no longer writes (#1194): left in the project, only listed.
+		static std::vector<res::tag> no_longer_made(std::string_view old_prefab, std::string_view target_folder,
+			const std::unordered_map<res::tag, res::tag>& remap);
+
 		// What a person's export is held to: the folder and the name are plain, and everything the remap writes lands below
 		// `target_folder` under a path check_agent_folder accepts. Empty when so, else why not. remap_problem adds the agent's
 		// rules on names and extensions.

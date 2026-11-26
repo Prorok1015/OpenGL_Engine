@@ -108,6 +108,21 @@ BOOST_AUTO_TEST_CASE(BuildRemap_OfAPersonsImport_DropsTheRunsFolder)
 	BOOST_TEST(renamed.at(imported.root_tag).string() == "res://assets/bot/bot.prefab.desc");
 }
 
+BOOST_AUTO_TEST_CASE(NoLongerMade_ListsWhatTheOldPrefabNamesBelowTheFolder_AndTheRemapNoLongerWrites)
+{
+	std::unordered_map<res::tag, res::tag> remap;
+	remap[res::tag{ res::tag::memory, "r/r.prefab.desc" }] = res::tag::make("assets/robot/robot.prefab.desc");
+	remap[res::tag{ res::tag::memory, "r/r.geom.desc" }] = res::tag::make("assets/robot/robot.geom.desc");
+	const std::string old_prefab = R"({"nodes":[{"mesh":"res://assets/robot/robot.geom.desc",)"
+		R"("material":{"albedo":"res://assets/robot/textures/old.png"}},)"
+		R"({"shared":"res://assets/common/stone.png","again":"res://assets/robot/textures/old.png"}]})";
+	const std::vector<res::tag> left = edt::asset_exporter::no_longer_made(old_prefab, "assets/robot", remap);
+	BOOST_REQUIRE_EQUAL(left.size(), 1u);
+	BOOST_TEST(left.front().string() == "res://assets/robot/textures/old.png");
+
+	BOOST_TEST(edt::asset_exporter::no_longer_made("not json", "assets/robot", remap).empty());
+}
+
 BOOST_AUTO_TEST_CASE(RemapProblem_RefusesANameAnImportDoesNotGive_AndAChangedExtension)
 {
 	const auto tag = [](const char* text) { return res::tag::make(text); };

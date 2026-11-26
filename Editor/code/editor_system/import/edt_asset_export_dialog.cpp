@@ -4,9 +4,11 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/fs_paths.h>
 #include <snk/gui/gui_theme.h>
+#include <snk/platform/plt_beneath.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <format>
 #include <string>
 #include <string_view>
@@ -21,6 +23,23 @@ void copy_to_buffer(char (&dst)[N], std::string_view text)
 	const std::size_t count = std::min(text.size(), N - 1);
 	std::copy_n(text.data(), count, dst);
 	dst[count] = '\0';
+}
+
+constexpr std::string_view k_prefab_suffix = ".prefab.desc";
+
+// The prefab of the project's own layer as it is now; empty when it cannot be read.
+std::string prefab_text(const std::filesystem::path& top, const res::tag& prefab)
+{
+	const std::filesystem::path path = fs_paths::path_from_utf8(std::string(prefab.relative()));
+	platform::beneath::read_request request;
+	request.root = top;
+	request.folder = path.parent_path();
+	request.leaf = path.filename();
+	request.max_bytes = 64ull * 1024 * 1024;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+	if (read.status != platform::beneath::read_status::ok) return {};
+	return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
 // What a failed export leaves in the project, for the person to keep or delete.
@@ -49,19 +68,31 @@ edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_serv
 
 edt::asset_export_dialog::~asset_export_dialog() = default;
 
-void edt::asset_export_dialog::open(import_result result)
+void edt::asset_export_dialog::open(import_result result, res::tag reimport)
 {
 	m_import = std::move(result);
 	m_is_open = true;
 	m_exported_tag = res::tag::null;
 	m_exporting = false;
 	m_export_error.clear();
+	m_reimport = std::move(reimport);
+	m_left_over.clear();
+	m_show_report = false;
 
-	std::string name = m_import.source_path.stem().string();
-	copy_to_buffer(m_asset_name, name);
-
-	std::string folder = "assets/" + name;
-	copy_to_buffer(m_target_folder, folder);
+	if (m_reimport.is_valid()) {
+		// The prefab's own name and folder: the files land where the earlier import put them.
+		const std::string relative(m_reimport.relative());
+		const std::size_t slash = relative.rfind('/');
+		std::string file = slash == std::string::npos ? relative : relative.substr(slash + 1);
+		if (file.ends_with(k_prefab_suffix)) file.resize(file.size() - k_prefab_suffix.size());
+		copy_to_buffer(m_asset_name, file);
+		copy_to_buffer(m_target_folder, slash == std::string::npos ? std::string{} : relative.substr(0, slash));
+	} else {
+		std::string name = m_import.source_path.stem().string();
+		copy_to_buffer(m_asset_name, name);
+		std::string folder = "assets/" + name;
+		copy_to_buffer(m_target_folder, folder);
+	}
 
 	m_browse_folder = false;
 	m_needs_open = true;
@@ -105,7 +136,9 @@ bool edt::asset_export_dialog::render()
 	ImGui::SetNextWindowSize(ImVec2(em(500.f), em(400.f)), ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal("Export to Project##edt_export", nullptr, ImGuiWindowFlags_None))
 	{
-		if (m_exporting)
+		if (m_show_report)
+			render_reimport_report();
+		else if (m_exporting)
 			render_export_progress();
 		else
 			render_export_form();
@@ -124,19 +157,28 @@ bool edt::asset_export_dialog::render()
 
 void edt::asset_export_dialog::render_export_form()
 {
-	ImGui::Text("Asset name:");
-	ImGui::SetNextItemWidth(-FLT_MIN);
-	ImGui::InputText("##asset_name", m_asset_name, sizeof(m_asset_name));
+	const bool reimport = m_reimport.is_valid();
+	if (reimport) {
+		const std::string target(m_reimport.view());
+		ImGui::Text("Re-import %s", target.c_str());
+		ImGui::TextDisabled("Asset name: %s", m_asset_name);
+		ImGui::TextDisabled("Target folder: %s", m_target_folder);
+	} else {
+		ImGui::Text("Asset name:");
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		ImGui::InputText("##asset_name", m_asset_name, sizeof(m_asset_name));
 
-	ImGui::Spacing();
+		ImGui::Spacing();
 
-	ImGui::Text("Target folder (relative to res://):");
-	float browse_w = ImGui::CalcTextSize("Browse...").x + ImGui::GetStyle().FramePadding.x * 2.f + ImGui::GetStyle().ItemSpacing.x;
-	ImGui::SetNextItemWidth(-browse_w);
-	ImGui::InputText("##target_folder", m_target_folder, sizeof(m_target_folder));
-	ImGui::SameLine();
-	if (ImGui::Button("Browse...")) {
-		m_browse_folder = true;
+		ImGui::Text("Target folder (relative to res://):");
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float browse_w = ImGui::CalcTextSize("Browse...").x + style.FramePadding.x * 2.f + style.ItemSpacing.x;
+		ImGui::SetNextItemWidth(-browse_w);
+		ImGui::InputText("##target_folder", m_target_folder, sizeof(m_target_folder));
+		ImGui::SameLine();
+		if (ImGui::Button("Browse...")) {
+			m_browse_folder = true;
+		}
 	}
 
 	const std::string asset_name(m_asset_name);
@@ -151,6 +193,21 @@ void edt::asset_export_dialog::render_export_form()
 		remap = m_exporter.build_remap(m_import, asset_name, target_folder);
 		problem = asset_exporter::destination_problem(remap, asset_name, target_folder);
 	}
+	if (problem.empty() && reimport) {
+		const auto root = remap.find(m_import.root_tag);
+		if (root == remap.end() || root->second != m_reimport) {
+			problem = std::format("the model's prefab would be written as {}, not over {}",
+				root == remap.end() ? std::string("nothing") : std::string(root->second.view()), m_reimport.view());
+		}
+	}
+	if (problem.empty() && m_open_with_unsaved_changes) {
+		for (const auto& [mem_tag, res_tag] : remap) {
+			if (m_resources.exists(res_tag) && m_open_with_unsaved_changes(res_tag)) {
+				problem = std::format("{} is open with unsaved changes: save or close it first", res_tag.view());
+				break;
+			}
+		}
+	}
 	if (!problem.empty()) {
 		ImGui::PushStyleColor(ImGuiCol_Text, error_color);
 		ImGui::TextWrapped("%s", problem.c_str());
@@ -164,7 +221,8 @@ void edt::asset_export_dialog::render_export_form()
 	ImGui::Spacing();
 
 	if (problem.empty()) {
-		ImGui::Text("Files to be created:");
+		ImGui::Text("%s", reimport ? "Files to be written ([overwrite] keeps its .resource and ID):"
+			: "Files to be created:");
 		float buttons_height = ImGui::GetFrameHeightWithSpacing() * 2.f + ImGui::GetStyle().ItemSpacing.y * 3.f;
 		if (!m_export_error.empty()) {
 			const auto lines = 1 + std::ranges::count(m_export_error, '\n');
@@ -211,16 +269,27 @@ void edt::asset_export_dialog::render_export_form()
 		auto progress_ptr = m_export_progress;
 		auto* exporter_ptr = &m_exporter;
 		auto written = std::make_shared<std::vector<res::tag>>();
+		auto left_over = std::make_shared<std::vector<res::tag>>();
+		const std::filesystem::path top = m_resources.get_resources_path();
+		const res::tag reimport_target = m_reimport;
 
 		// io lane: the work is writing files to the project; the exporter reports through export_progress.
 		// wait_for_writes: a write the resource system refuses ends the export with its reason instead of a "successful" one.
 		m_export_job = m_jobs.start(ds::lane::io, { "Export " + asset_name, "export" }, m_lifetime,
-			[exporter_ptr, import_copy = std::move(import_copy),
-			 remap = std::move(remap), progress_ptr, written](ds::task_context& ctx) {
+			[exporter_ptr, import_copy = std::move(import_copy), remap = std::move(remap), progress_ptr, written,
+			 left_over, top, reimport_target, target_folder](ds::task_context& ctx) {
 				ctx.throw_if_stopped();
-				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx, written.get(), true);
+				// The prefab as the earlier import left it, read before it is overwritten.
+				const std::string before =
+					reimport_target.is_valid() ? prefab_text(top, reimport_target) : std::string{};
+				const bool done =
+					exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx, written.get(), true);
+				if (done && reimport_target.is_valid()) {
+					*left_over = asset_exporter::no_longer_made(before, target_folder, remap);
+				}
+				return done;
 			},
-			[this, written](ds::task_result<bool>& result) {
+			[this, written, left_over](ds::task_result<bool>& result) {
 				if (result.status == ds::task_status::cancelled) {
 					egLOG("edt/export", "Export cancelled");
 				} else if (!result.ok()) {
@@ -237,6 +306,18 @@ void edt::asset_export_dialog::render_export_form()
 				} else {
 					m_exported_tag = m_export_progress->exported_tag;
 					egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
+				}
+				if (m_export_error.empty() && m_reimport.is_valid()) {
+					for (const res::tag& tag : *left_over) {
+						if (m_resources.exists(tag)) m_left_over.push_back(tag);
+					}
+					std::string listed;
+					for (const res::tag& tag : m_left_over) listed += std::format("\n  {}", tag.view());
+					if (!m_left_over.empty()) {
+						egLOG_WARN("edt/export", "Re-imported {}; no longer made by the model, they stay in the "
+							"project:{}", m_reimport.view(), listed);
+						m_show_report = true;
+					}
 				}
 				if (!m_export_error.empty()) {
 					// Not taken back: a written file may have replaced one the project had, which is gone by now.
@@ -287,9 +368,32 @@ void edt::asset_export_dialog::render_export_progress()
 		m_exporting = false;
 		m_export_progress.reset();
 		// A failed export goes back to the form with the reason; the files it wrote before stay (see export_to_project).
-		if (m_export_error.empty()) {
+		if (m_export_error.empty() && !m_show_report) {
 			m_is_open = false;
 			ImGui::CloseCurrentPopup();
 		}
+	}
+}
+
+void edt::asset_export_dialog::render_reimport_report()
+{
+	const std::string target(m_reimport.view());
+	ImGui::Text("Re-imported %s.", target.c_str());
+	ImGui::TextWrapped("%s", "No longer made by the model; they stay in the project:");
+	const float list_height = std::max(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.f,
+		em(80.f));
+	ImGui::BeginChild("##no_longer_made", ImVec2(0.f, list_height), ImGuiChildFlags_Borders,
+		ImGuiWindowFlags_HorizontalScrollbar);
+	for (const res::tag& tag : m_left_over) {
+		const std::string text(tag.view());
+		ImGui::TextUnformatted(text.c_str());
+	}
+	ImGui::EndChild();
+	const bool escape = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+		&& ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+	if (ImGui::Button("Close", { em(110.f), 0.f }) || escape) {
+		m_show_report = false;
+		m_is_open = false;
+		ImGui::CloseCurrentPopup();
 	}
 }

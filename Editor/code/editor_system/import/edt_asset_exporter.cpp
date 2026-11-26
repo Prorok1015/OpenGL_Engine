@@ -13,6 +13,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <string_view>
 
 namespace json = boost::json;
@@ -95,6 +96,42 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 	}
 
 	return remap;
+}
+
+namespace {
+
+void references_below(const json::value& value, std::string_view prefix, std::set<std::string>& out, int depth = 0)
+{
+	if (depth > 128) return;
+	if (value.is_string()) {
+		const std::string_view text(value.as_string().data(), value.as_string().size());
+		if (text.starts_with(prefix)) out.emplace(text);
+	} else if (value.is_object()) {
+		for (const auto& member : value.as_object()) references_below(member.value(), prefix, out, depth + 1);
+	} else if (value.is_array()) {
+		for (const json::value& item : value.as_array()) references_below(item, prefix, out, depth + 1);
+	}
+}
+
+}
+
+std::vector<res::tag> edt::asset_exporter::no_longer_made(std::string_view old_prefab, std::string_view target_folder,
+	const std::unordered_map<res::tag, res::tag>& remap)
+{
+	json::parse_options opts;
+	opts.max_depth = 128;
+	boost::system::error_code ec;
+	const json::value old = json::parse(old_prefab, ec, {}, opts);
+	if (ec) return {};
+	const std::string prefix =
+		std::format("{}://{}", res::tag::default_protocol(), folder_prefix(target_folder));
+	std::set<std::string> referenced;
+	references_below(old, prefix, referenced);
+	for (const auto& [from, to] : remap) referenced.erase(std::string(to.view()));
+	std::vector<res::tag> out;
+	out.reserve(referenced.size());
+	for (const std::string& text : referenced) out.emplace_back(text);
+	return out;
 }
 
 std::string edt::asset_exporter::folder_problem(std::string_view target_folder)
@@ -414,14 +451,16 @@ bool edt::asset_exporter::export_to_project(
 			output_bytes = bytes;
 		}
 
-		// Before the prefab: the asset database, seeing it, finds its ID and makes none.
+		// A new sidecar goes before the prefab, so the database adopts its guid; one being replaced already holds the
+		// guid, so it follows the prefab it describes (re-import, #1194).
 		const bool with_meta = meta && mem_tag == result.root_tag;
-		if (with_meta) {
+		const bool meta_first = with_meta && !meta->before.has_value();
+		if (meta_first) {
 			if (std::string error = write_model_meta(top, *meta); !error.empty()) return fail(std::move(error));
 			if (written) written->push_back(meta->tag);
 		}
 		const auto prefab_failed = [&](std::string why) {
-			if (with_meta) {
+			if (meta_first) {
 				if (std::string left = take_back_model_meta(top, *meta); !left.empty()) {
 					why += "; " + left;
 				} else if (written && !written->empty() && written->back() == meta->tag) {
@@ -444,6 +483,14 @@ bool edt::asset_exporter::export_to_project(
 			}
 			if (written) written->push_back(res_tag);
 			++files_written;
+		}
+
+		if (with_meta && !meta_first) {
+			if (std::string error = write_model_meta(top, *meta); !error.empty()) {
+				return fail(std::format("{}; the prefab is written, its .resource still records the earlier "
+					"settings", error));
+			}
+			if (written) written->push_back(meta->tag);
 		}
 
 		if (progress) progress->done.fetch_add(1);

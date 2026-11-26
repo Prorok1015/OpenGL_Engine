@@ -2,6 +2,7 @@
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include "edt_agent_model_import.h"
+#include "edt_model_import_meta.h"
 #include "edt_model_import_settings.h"
 #include "edt_save_all.h"
 #include <snk/project/prj_create.h>
@@ -15,6 +16,7 @@
 #include <string_view>
 #include <vector>
 #include <boost/json/object.hpp>
+#include <boost/json/value.hpp>
 
 namespace edt
 {
@@ -104,6 +106,14 @@ namespace edt
 		// Import, never on Cancel. Null: the picked model is imported with the defaults.
 		std::function<void(const std::filesystem::path&, std::function<void(const model_import_settings&)> import)>
 			ask_model_settings;
+		// A person's re-import of an imported prefab (#1194): file.import_model {path, reimport, settings?} with the
+		// settings as given (a key left out keeps the recorded value). The refusal, else nullopt. Null: no re-import.
+		std::function<std::optional<model_import_refusal>(const res::tag& prefab, const std::filesystem::path& source,
+			const boost::json::value& settings)> reimport_model;
+		// The "Model Import Settings" window in re-import mode over `prefab`, filled from its `.resource`; `import`
+		// runs on Re-import, never on Cancel. Null: the recorded settings are used as they are.
+		std::function<void(const res::tag& prefab, const std::filesystem::path&,
+			std::function<void(const model_import_settings&)> import)> ask_model_reimport_settings;
 		std::function<void()> exit;
 		std::filesystem::path resources_path;  // where "Open Level" starts
 		// Starts another editor on the project (its manifest file); this one exits afterwards. The error, if it did not start.
@@ -147,6 +157,9 @@ namespace edt
 		bool anything_dirty() const;
 		void discard_everything();
 		void import_model();
+		// The asset browser's "Re-import..." of a prefab (#1194): the picker, the settings window in re-import mode,
+		// then file.import_model {path, reimport, settings} as the person.
+		void reimport_model(const res::tag& prefab);
 		// Asks for a folder, makes a project there from the template and switches to it (EPIC-42 #158).
 		void new_project();
 		// Asks for a project.snkproj and switches to it. Switching starts another editor and exits this one.
