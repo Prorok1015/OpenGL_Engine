@@ -193,7 +193,12 @@ namespace edt
 			form.set_mips(mips);
 		}
 		bool entered = false;
-		if (!form.reimport()) {
+		if (form.reimport()) {
+			ImGui::TextDisabled("Files rewritten:");
+			for (const std::string& file : form.rewritten_names()) {
+				ImGui::BulletText("%s", file.c_str());
+			}
+		} else {
 			std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
 			std::copy(form.name().begin(), form.name().end(), buffer.begin());
 			if (ImGui::IsWindowAppearing()) {

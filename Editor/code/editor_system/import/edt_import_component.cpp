@@ -150,6 +150,13 @@ void edt::import_component::build()
 		for (const res::tag& tag : tags) m_ports.resources.signal_changed(tag);
 		if (m_ports.assets_written) m_ports.assets_written(tags);
 	};
+	image_options.rewritten = [this](const std::vector<res::tag>& tags) {
+		for (const res::tag& tag : tags) m_ports.resources.signal_changed(tag);
+		if (m_ports.assets_rewritten) m_ports.assets_rewritten(tags);
+	};
+	image_options.open_with_unsaved_changes = [this](const res::tag& tag) {
+		return m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(tag);
+	};
 	m_image_import = std::make_unique<image_importer>(m_ports.context.jobs(), std::move(image_options));
 }
 

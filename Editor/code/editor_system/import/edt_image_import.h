@@ -59,8 +59,8 @@ namespace edt
 	};
 
 	// Strict: an object; a key it does not know, a wrong type or value is an error naming the key; a missing key takes
-	// its default; `version`, when given, must be 1. A null value is all defaults.
-	image_settings_parse parse_image_settings(const boost::json::value& value);
+	// its default (`base`'s); `version`, when given, must be 1. A null value is all defaults.
+	image_settings_parse parse_image_settings(const boost::json::value& value, const image_import_settings& base = {});
 	// What the `.resource` holds: {"version", "wrap", "filter", "mips"}.
 	boost::json::object image_settings_json(const image_import_settings& settings);
 	// The texture desc beside the picture: never header.type, usage, extent or format (the loader takes them from the
@@ -126,7 +126,8 @@ namespace edt
 	{
 		std::string target{};	// res:// tag of the picture in the project's own layer
 		std::string path{};	// absolute, on the disk, anywhere
-		// The settings as JSON (parse_image_settings); null: the ones the picture's `.resource` records.
+		// The settings as JSON (parse_image_settings); a missing key, or null, keeps what the picture's `.resource`
+		// records.
 		boost::json::value settings{};
 	};
 
@@ -145,8 +146,8 @@ namespace edt
 		res::tag texture_meta{};
 		// The picture's `.resource` as read (canonical, importer "texture").
 		res::asset_meta recorded{};
-		// The texture desc's own ID, when its `.resource` reads; it is never written.
-		std::optional<res::asset_id> texture_guid{};
+		// The texture desc's own ID; its `.resource` is never written.
+		res::asset_id texture_guid{};
 		// What was read: the job replaces a file only while it still holds these bytes. The picture is too big to keep
 		// here: its stamp, and the job compares the bytes it reads under that stamp.
 		std::string meta_bytes{};
@@ -155,6 +156,8 @@ namespace edt
 		image_import_settings old_settings{};
 		image_import_settings settings{};
 		bool settings_changed = false;
+		// The texture desc with only the four fields the settings make replaced; empty: it is not rewritten.
+		std::vector<std::byte> texture_patch{};
 		// Set when refused: the command code and why.
 		std::string code{};
 		std::string error{};
@@ -174,6 +177,10 @@ namespace edt
 		std::function<std::optional<std::string>()> blocker;
 		// Main thread, after a job wrote the four files: the asset database and the resource cache are told.
 		std::function<void(const std::vector<res::tag>&)> written;
+		// Main thread, after a re-import replaced these files (also those a failed one could not put back).
+		std::function<void(const std::vector<res::tag>&)> rewritten;
+		// Whether a document holds unsaved edits of `tag`: a re-import of it is refused. Null: none does.
+		std::function<bool(const res::tag&)> open_with_unsaved_changes;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
 		// The largest picture an agent may import; a person's call may bring k_max_person_source_bytes.
@@ -184,7 +191,7 @@ namespace edt
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
 		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"; a re-import's
-		// "reimport_meta", "reimport_image", "reimport_texture"); true fails that write.
+		// "reimport_image", "reimport_texture", "reimport_meta", and "put_back:<step>" for a put-back); true fails it.
 		std::function<bool(std::string_view step)> fail_step;
 	};
 
@@ -232,7 +239,7 @@ namespace edt
 		// below the project's own layer (never through a link) and the source's size; nothing is written.
 		image_reimport_plan resolve_reimport(const image_reimport_request& request, const cmd::origin& caller) const;
 		// The job reads the source, proves it decodes and replaces, each only while it still holds what was read: the
-		// picture's `.resource` (settings changed), the picture, the texture desc (when its bytes change); any failure
+		// picture, then (settings changed) the texture desc's four fields and the picture's `.resource`; any failure
 		// puts back what was replaced. Its result is {image, resource, texture, guid, texture_guid, settings_changed,
 		// texture_rewritten}.
 		started start_reimport(const image_reimport_request& request, const cmd::origin& caller);
@@ -296,6 +303,8 @@ namespace edt
 		void open_reimport(std::string target, std::filesystem::path source);
 		bool reimport() const { return !m_target.empty(); }
 		const std::string& target() const { return m_target; }
+		// Re-import mode: what a submit replaces with the settings chosen now.
+		std::vector<std::string> rewritten_names() const;
 		const std::string& folder() const { return m_folder; }
 		const std::filesystem::path& source() const { return m_source; }
 
@@ -327,6 +336,7 @@ namespace edt
 		std::string m_folder;
 		std::filesystem::path m_source;
 		image_import_settings m_settings;
+		image_import_settings m_recorded;
 		std::string m_name;
 		image_import_plan m_plan;
 		std::string m_problem;

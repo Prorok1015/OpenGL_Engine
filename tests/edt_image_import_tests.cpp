@@ -13,6 +13,7 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/resource/res_asset_meta.h>
 #include <snk/resource/res_file_change.h>
+#include <snk/resource/res_pretty_json.h>
 #include <boost/json.hpp>
 #include <cctype>
 #include <chrono>
@@ -98,11 +99,25 @@ struct image_fixture
 				db->report_self_change(changes);
 			}
 		};
+		result.rewritten = [this](const std::vector<res::tag>& tags) {
+			rewritten = tags;
+			if (db) {
+				std::vector<res::file_change> changes;
+				for (const res::tag& tag : tags) {
+					res::file_change change;
+					change.tag = tag;
+					change.kind = res::change_kind::modified;
+					changes.push_back(std::move(change));
+				}
+				db->report_self_change(changes);
+			}
+		};
+		result.open_with_unsaved_changes = [this](const res::tag& tag) { return tag.view() == open_dirty; };
 		result.now = [this] { return clock; };
 		result.max_agent_bytes = 4096;
 		result.fail_step = [this](std::string_view step) {
 			if (on_step) on_step(step);
-			return step == failing_step;
+			return step == failing_step || step == failing_put_back;
 		};
 		return result;
 	}
@@ -163,6 +178,11 @@ struct image_fixture
 	// Runs at each write step before it is failed or done: a test changes a file there.
 	std::function<void(std::string_view)> on_step;
 	std::vector<res::tag> reported;
+	// A re-import's put-back that fails (#1194), and what a re-import reported as changed.
+	std::string failing_put_back;
+	std::vector<res::tag> rewritten;
+	// The tag a document holds with unsaved edits; empty: none.
+	std::string open_dirty;
 	std::chrono::steady_clock::time_point clock{};
 	const cmd::origin agent = cmd::origin::agent("session-1");
 	bool project_open = true;
@@ -189,6 +209,7 @@ struct reimport_of : Base
 	{
 		first = this->imported(this->request());
 		this->reported.clear();
+		this->rewritten.clear();
 		other = fs::weakly_canonical(this->dir.write("outside/new.png", other_text));
 	}
 
@@ -238,7 +259,7 @@ struct reimport_of : Base
 		last_error = started.error;
 		test_util::pump(this->tasks);
 		BOOST_CHECK(files() == before);
-		BOOST_CHECK(this->reported.empty());
+		BOOST_CHECK(this->rewritten.empty());
 		return started.code;
 	}
 
@@ -858,9 +879,10 @@ BOOST_AUTO_TEST_CASE(AReimport_ReplacesTheBytes_BothSidecarsKeepTheirIds)
 	BOOST_CHECK_EQUAL(text_of(done.at("texture_guid")), text_of(first.at("texture_guid")));
 	BOOST_CHECK(!done.at("settings_changed").as_bool());
 	BOOST_CHECK(!done.at("texture_rewritten").as_bool());
-	// Only what was written is reported.
-	BOOST_REQUIRE_EQUAL(reported.size(), 1u);
-	BOOST_CHECK_EQUAL(reported[0].view(), "res://textures/rock.png");
+	// Only what was written is reported, as changed.
+	BOOST_CHECK(reported.empty());
+	BOOST_REQUIRE_EQUAL(rewritten.size(), 1u);
+	BOOST_CHECK_EQUAL(rewritten[0].view(), "res://textures/rock.png");
 	BOOST_CHECK(fs::is_empty(lower()));
 }
 
@@ -907,17 +929,18 @@ BOOST_AUTO_TEST_CASE(ChangedSettings_RewriteTheResourceAndTheTextureDesc_KeepThe
 	BOOST_CHECK_EQUAL(text_of(desc.at("header").as_object().at("wrap")), "repeat");
 	BOOST_CHECK_EQUAL(text_of(desc.at("header").as_object().at("min")), "linear_mipmap_nearest");
 	BOOST_CHECK_EQUAL(file("rock.png.txm.desc.resource"), before[3]);
-	BOOST_REQUIRE_EQUAL(reported.size(), 3u);
-	BOOST_CHECK_EQUAL(reported[0].view(), "res://textures/rock.png.resource");
-	BOOST_CHECK_EQUAL(reported[1].view(), "res://textures/rock.png");
-	BOOST_CHECK_EQUAL(reported[2].view(), "res://textures/rock.png.txm.desc");
+	// The recipe last.
+	BOOST_REQUIRE_EQUAL(rewritten.size(), 3u);
+	BOOST_CHECK_EQUAL(rewritten[0].view(), "res://textures/rock.png");
+	BOOST_CHECK_EQUAL(rewritten[1].view(), "res://textures/rock.png.txm.desc");
+	BOOST_CHECK_EQUAL(rewritten[2].view(), "res://textures/rock.png.resource");
 }
 
 BOOST_AUTO_TEST_CASE(NullSettings_KeepTheRecordedOnes_AndTheirFiles)
 {
 	reimported(reimport(json::parse(R"({"filter":"linear"})")));
 	const std::vector<std::string> before = files();
-	reported.clear();
+	rewritten.clear();
 	const json::object done = reimported(reimport());
 	BOOST_CHECK(!done.at("settings_changed").as_bool());
 	BOOST_CHECK(!done.at("texture_rewritten").as_bool());
@@ -936,6 +959,7 @@ BOOST_AUTO_TEST_CASE(AnyoneButAPerson_IsDenied)
 	BOOST_CHECK_EQUAL(refused(reimport(), agent), cmd::codes::denied);
 	BOOST_CHECK_MESSAGE(last_error.find("#1457") != std::string::npos, last_error);
 	BOOST_CHECK_EQUAL(refused(reimport(), cmd::origin::test()), cmd::codes::denied);
+	BOOST_CHECK_EQUAL(refused(reimport(), cmd::origin::game()), cmd::codes::denied);
 	BOOST_CHECK(!importer->resolve_reimport(reimport(), agent).ok());
 }
 
@@ -1006,7 +1030,7 @@ BOOST_AUTO_TEST_CASE(ABlocker_IsBusy)
 	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::busy);
 }
 
-BOOST_AUTO_TEST_CASE(APictureChangedBeforeItsWrite_IsNotOverwritten_AndTheResourceIsPutBack)
+BOOST_AUTO_TEST_CASE(APictureChangedBeforeItsWrite_IsNotOverwritten_AndNothingElseIsWritten)
 {
 	const std::vector<std::string> before = files();
 	on_step = [this](std::string_view step) {
@@ -1019,7 +1043,24 @@ BOOST_AUTO_TEST_CASE(APictureChangedBeforeItsWrite_IsNotOverwritten_AndTheResour
 	BOOST_CHECK_EQUAL(file("rock.png"), "someone else's");
 	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
 	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
-	BOOST_CHECK(reported.empty());
+	BOOST_CHECK(rewritten.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AResourceChangedBeforeItsWrite_IsNotOverwritten_ThePictureAndDescArePutBack)
+{
+	const std::vector<std::string> before = files();
+	const std::string theirs = before[1] + "\n";
+	on_step = [this, &theirs](std::string_view step) {
+		if (step == "reimport_meta") dir.write("project/res/textures/rock.png.resource", theirs);
+	};
+	const auto info = run_reimport(reimport(json::parse(R"({"wrap":"repeat"})")));
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed since it was read") != std::string::npos, info->error);
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), theirs);
+	BOOST_CHECK(file("rock.png") == before[0]);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
+	BOOST_CHECK(rewritten.empty());
 }
 
 BOOST_AUTO_TEST_CASE(APictureChangedAfterTheStart_FailsTheJob)
@@ -1032,19 +1073,167 @@ BOOST_AUTO_TEST_CASE(APictureChangedAfterTheStart_FailsTheJob)
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::failed);
 	BOOST_CHECK_EQUAL(file("rock.png"), "someone else's");
-	BOOST_CHECK(reported.empty());
+	BOOST_CHECK(rewritten.empty());
 }
 
-BOOST_AUTO_TEST_CASE(AFailureAtTheTextureStep_PutsThePictureAndItsResourceBack)
+BOOST_AUTO_TEST_CASE(AFailureAtTheTextureOrResourceStep_PutsBackWhatWasReplaced)
+{
+	for (const char* step : { "reimport_texture", "reimport_meta" }) {
+		BOOST_TEST_CONTEXT(step)
+		{
+			const std::vector<std::string> before = files();
+			failing_step = step;
+			const auto info = run_reimport(reimport(json::parse(R"({"mips":true})")));
+			BOOST_REQUIRE(info.has_value());
+			BOOST_CHECK(info->status == edt::job_status::failed);
+			BOOST_CHECK(files() == before);
+			BOOST_CHECK(rewritten.empty());
+			BOOST_CHECK_MESSAGE(info->error.find("nothing was re-imported") != std::string::npos, info->error);
+			BOOST_CHECK_MESSAGE(info->error.find(dir.path().generic_string()) == std::string::npos, info->error);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(APutBackThatFails_SaysWhatStaysChanged_AndReportsIt)
 {
 	const std::vector<std::string> before = files();
-	failing_step = "reimport_texture";
-	const auto info = run_reimport(reimport(json::parse(R"({"mips":true})")));
+	failing_step = "reimport_meta";
+	failing_put_back = "put_back:reimport_image";
+	const auto info = run_reimport(reimport(json::parse(R"({"wrap":"repeat"})")));
 	BOOST_REQUIRE(info.has_value());
 	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("res://textures/rock.png stays changed") != std::string::npos, info->error);
+	BOOST_CHECK_MESSAGE(info->error.find("nothing was re-imported") == std::string::npos, info->error);
+	// The desc was put back, the picture could not be: the cache is told of it.
+	BOOST_CHECK(file("rock.png") == other_text);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
+	BOOST_REQUIRE_EQUAL(rewritten.size(), 1u);
+	BOOST_CHECK_EQUAL(rewritten[0].view(), "res://textures/rock.png");
+}
+
+BOOST_AUTO_TEST_CASE(AnEditedDesc_KeepsWhatWasEdited_OnlyTheSettingsFieldsChange)
+{
+	json::object desc = json::parse(file("rock.png.txm.desc")).as_object();
+	desc["name"] = "custom name";
+	desc["header"].as_object()["extra"] = "kept";
+	const std::vector<std::byte> edited = res::pretty_json_bytes(desc);
+	const std::string edited_text(reinterpret_cast<const char*>(edited.data()), edited.size());
+	dir.write("project/res/textures/rock.png.txm.desc", edited_text);
+
+	const json::object same = reimported(reimport());
+	BOOST_CHECK(!same.at("texture_rewritten").as_bool());
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), edited_text);
+
+	const json::object changed = reimported(reimport(json::parse(R"({"wrap":"repeat","filter":"linear","mips":true})")));
+	BOOST_CHECK(changed.at("texture_rewritten").as_bool());
+	const json::object now = json::parse(file("rock.png.txm.desc")).as_object();
+	BOOST_CHECK_EQUAL(text_of(now.at("name")), "custom name");
+	BOOST_CHECK_EQUAL(text_of(now.at("data")), "res://textures/rock.png");
+	const json::object& header = now.at("header").as_object();
+	BOOST_CHECK_EQUAL(text_of(header.at("extra")), "kept");
+	BOOST_CHECK_EQUAL(text_of(header.at("wrap")), "repeat");
+	BOOST_CHECK_EQUAL(text_of(header.at("mag")), "linear");
+	BOOST_CHECK_EQUAL(text_of(header.at("min")), "linear_mipmap_nearest");
+	BOOST_CHECK_EQUAL(header.at("data").as_object().at("mip_levels").as_int64(), 32);
+}
+
+BOOST_AUTO_TEST_CASE(ADescOfAnotherPicture_OrNoDesc_IsRefused)
+{
+	json::object desc = json::parse(file("rock.png.txm.desc")).as_object();
+	desc["data"] = "res://textures/other.png";
+	dir.write("project/res/textures/rock.png.txm.desc", json::serialize(desc));
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("refers to another picture") != std::string::npos, last_error);
+	dir.write("project/res/textures/rock.png.txm.desc", "not json");
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(ADescWithoutAHeaderToChange_IsRefusedOnlyWhenSettingsChange)
+{
+	json::object desc = json::parse(file("rock.png.txm.desc")).as_object();
+	desc.erase("header");
+	dir.write("project/res/textures/rock.png.txm.desc", json::serialize(desc));
+	BOOST_CHECK_EQUAL(refused(reimport(json::parse(R"({"mips":true})"))), cmd::codes::invalid_args);
+	BOOST_CHECK(importer->resolve_reimport(reimport(), cmd::origin::ui()).ok());
+}
+
+BOOST_AUTO_TEST_CASE(TheDescsOwnResource_MustBeThereAndTheEditors)
+{
+	const std::string kept = file("rock.png.txm.desc.resource");
+	dir.write("project/res/textures/rock.png.txm.desc.resource", kept + "\n");
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	fs::remove(top() / "textures" / "rock.png.txm.desc.resource");
+	BOOST_CHECK_EQUAL(importer->resolve_reimport(reimport(), cmd::origin::ui()).code, cmd::codes::not_found);
+	BOOST_CHECK(file("rock.png") == png_text);
+}
+
+BOOST_AUTO_TEST_CASE(PartialSettings_KeepTheRecordedValues)
+{
+	reimported(reimport(json::parse(R"({"wrap":"repeat_mirror","filter":"linear"})")));
+	reimported(reimport(json::parse(R"({"mips":true})")));
+	const res::asset_meta_result meta = res::read_asset_meta(file("rock.png.resource"));
+	BOOST_REQUIRE(meta);
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("wrap")), "repeat_mirror");
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("filter")), "linear");
+	BOOST_CHECK(meta.meta->settings.at("mips").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(ALinkAtThePictureItsResourceOrItsDesc_IsNotFollowed)
+{
+	for (const char* name : { "rock.png", "rock.png.resource", "rock.png.txm.desc" }) {
+		BOOST_TEST_CONTEXT(name)
+		{
+			const fs::path at = top() / "textures" / name;
+			const fs::path real = dir.path() / "outside" / (std::string("real_") + name);
+			fs::rename(at, real);
+			std::error_code ec;
+			fs::create_symlink(real, at, ec);
+			if (ec) {
+				BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+				fs::rename(real, at);
+				return;
+			}
+			const std::string real_bytes = read_file(real);
+			BOOST_CHECK_EQUAL(refused(reimport(json::parse(R"({"wrap":"repeat"})"))), cmd::codes::invalid_args);
+			BOOST_CHECK(fs::is_symlink(at));
+			BOOST_CHECK(read_file(real) == real_bytes);
+			fs::remove(at);
+			fs::rename(real, at);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheSourceIsThePictureItself_IsRefused)
+{
+	edt::image_reimport_request wanted = reimport();
+	wanted.path = (top() / "textures" / "rock.png").string();
+	BOOST_CHECK_EQUAL(refused(wanted), cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(last_error, "the source is the picture itself");
+}
+
+BOOST_AUTO_TEST_CASE(AFileOpenWithUnsavedChanges_IsBusy)
+{
+	for (const char* tag : { "res://textures/rock.png", "res://textures/rock.png.txm.desc" }) {
+		open_dirty = tag;
+		BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::busy);
+		BOOST_CHECK_MESSAGE(last_error.find("unsaved changes") != std::string::npos, last_error);
+	}
+	open_dirty.clear();
+	reimported(reimport());
+}
+
+BOOST_AUTO_TEST_CASE(ACancelledJob_WritesNothing)
+{
+	const std::vector<std::string> before = files();
+	const edt::image_importer::started started = importer->start_reimport(reimport(json::parse(R"({"mips":true})")),
+		cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	static_cast<void>(jobs.cancel(started.job));
+	test_util::pump(tasks);
 	BOOST_CHECK(files() == before);
-	BOOST_CHECK(reported.empty());
-	BOOST_CHECK_MESSAGE(info->error.find(dir.path().generic_string()) == std::string::npos, info->error);
+	BOOST_CHECK(rewritten.empty());
+	BOOST_CHECK(!importer->running());
 }
 
 BOOST_AUTO_TEST_CASE(BytesThatAreNoPicture_WriteNothing)
@@ -1066,7 +1255,10 @@ BOOST_AUTO_TEST_CASE(TheForm_InReimportMode_StartsFromTheRecordedSettings_AndRei
 	BOOST_CHECK_EQUAL(form.target(), "res://textures/rock.png");
 	BOOST_CHECK((form.settings().wrap == edt::image_wrap::repeat_mirror));
 	BOOST_CHECK_MESSAGE(form.can_submit(), form.problem());
+	BOOST_CHECK((form.rewritten_names() == std::vector<std::string>{ "res://textures/rock.png" }));
 	form.set_mips(true);
+	BOOST_CHECK((form.rewritten_names() == std::vector<std::string>{ "res://textures/rock.png",
+		"res://textures/rock.png.txm.desc", "res://textures/rock.png.resource" }));
 	const std::optional<std::uint64_t> job = form.submit();
 	BOOST_REQUIRE_MESSAGE(job.has_value(), form.error());
 	test_util::pump(tasks);

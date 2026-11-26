@@ -591,6 +591,9 @@ void edt::file_menu::register_image_import()
 
 void edt::file_menu::register_image_reimport(const json::object& settings_schema)
 {
+	json::object reimport_settings = settings_schema;
+	reimport_settings["description"] = "Import settings (importer texture, version 1); a missing key keeps the value "
+		"the picture's .resource records. Unknown keys are refused.";
 	cmd::command_desc command;
 	command.id = "file.reimport_image";
 	command.summary = "Re-import Image";
@@ -620,7 +623,7 @@ void edt::file_menu::register_image_reimport(const json::object& settings_schema
 				{ "description", "Absolute path of the new source picture, of the target's format (png for a png); "
 					"a regular file, not a link. Its bytes replace the picture's; both .resource files keep their "
 					"IDs. A person's action only for now: any other caller is denied." } } },
-			{ "settings", settings_schema } } },
+			{ "settings", reimport_settings } } },
 		{ "required", json::array{ "target", "path" } },
 		{ "additionalProperties", false } };
 	command.result_schema = json::object{
