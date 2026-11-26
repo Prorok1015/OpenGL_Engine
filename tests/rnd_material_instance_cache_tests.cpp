@@ -701,7 +701,7 @@ BOOST_AUTO_TEST_CASE(ABlendedQueueWithAShaderWithoutATransparentPathIsReportedOn
 			cache.acquire(desc, true, false);
 			BOOST_TEST(id.is_valid());	// still drawn
 			BOOST_REQUIRE(cache.problems().size() == 1u);
-			const rnd::shader_problem& problem = cache.problems().front();
+			const rnd::shader_problem problem = cache.problems().front();
 			BOOST_TEST(problem.code == std::string(rnd::k_no_transparent_path_code));
 			BOOST_TEST(problem.file == opaque_only);
 			BOOST_TEST(problem.program == std::string(desc->get_tag().view()));
