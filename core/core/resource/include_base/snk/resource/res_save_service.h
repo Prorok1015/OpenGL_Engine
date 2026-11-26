@@ -93,9 +93,10 @@ namespace res {
 		save_service& operator=(const save_service&) = delete;
 
 		// Why `slot` is not a name of a save, or empty when it is: not portable (res::portable_path_problem), not valid
-		// UTF-8, over k_max_slot_bytes, a part over k_max_name_bytes, a backslash or one of <>"|?*, a part starting with
-		// '.', or ending in .bak, .tmp or .corrupt in any case (those are the service's own files, and a file system
-		// that ignores the case would take x.BAK for the backup of x). Pure.
+		// UTF-8, over k_max_slot_bytes, a part over k_max_name_bytes, a character other than a-z, 0-9, space, '_', '-',
+		// '.' and '/', a part starting with '.', or ending in .bak, .tmp or .corrupt (those are the service's own files).
+		// Names are lowercase ASCII only: slots are told apart without regard to case, so no name is "Save" and "save" at
+		// once on a file system that ignores the case (NTFS, APFS), nor "\xC3\x89" and "\xC3\xA9" (É and é). Pure.
 		[[nodiscard]] static std::string slot_problem(std::string_view slot);
 
 		// Main thread (user:// is looked up here: during Play it is the test profile). The task answers with the result as a

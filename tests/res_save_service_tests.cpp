@@ -69,12 +69,12 @@ BOOST_AUTO_TEST_SUITE(ResSaveService)
 
 BOOST_AUTO_TEST_CASE(ASlotIsAPortableRelativeNameThatIsNotAFileOfTheServiceItself)
 {
-	for (const char* good : { "slot1", "profiles/a/slot_2", "auto save 3", "a.sav", "caf\xC3\xA9" }) {
+	for (const char* good : { "slot1", "profiles/a/slot_2", "auto save 3", "a.sav", "a-b_c.d" }) {
 		BOOST_TEST_CONTEXT(good) { BOOST_TEST(res::save_service::slot_problem(good).empty()); }
 	}
 	for (const char* bad : { "", "../x", "a/../x", "/abs", "a//b", "a\\b", ".hidden", "dir/.hidden", ".dir/x", "x.bak", "dir/x.tmp", "x.corrupt",
 			"x.BAK", "X.Bak", "x.TMP", "x.bak/y", "x.BAK/y/z", "C:x", "con", "nul.sav", "trailing.", "trailing ", "a<b", "a>b", "a\"b", "a|b",
-			"a?b", "a*b", "bad\xFF", "bad\xC3", "over\xED\xA0\x80" }) {
+			"a?b", "a*b", "bad\xFF", "bad\xC3", "over\xED\xA0\x80", "Save", "SLOT", "profiles/Slot", "caf\xC3\xA9", "caf\xC3\x89", "slot~1", "a@b" }) {
 		BOOST_TEST_CONTEXT(bad) { BOOST_TEST(!res::save_service::slot_problem(bad).empty()); }
 	}
 	BOOST_TEST(!res::save_service::slot_problem(std::string(res::save_service::k_max_slot_bytes + 1, 'a')).empty());
@@ -298,6 +298,44 @@ BOOST_FIXTURE_TEST_CASE(TheTempFilesACrashLeft_AreRemovedTheFirstTimeAFolderIsWr
 	BOOST_REQUIRE(write("slot", "v1").status == res::save_status::ok);
 	BOOST_TEST(names_in(saves()) == (names{ ".keep", ".notours.tmp", "other.tmp", "slot" }), boost::test_tools::per_element());
 }
+
+BOOST_FIXTURE_TEST_CASE(TheSweepOfTempFiles_LeavesFoldersLinksAndWhatIsInSubfolders, save_fixture)
+{
+	fs::create_directories(saves() / "sub");
+	const std::string stale = ".slot.0123456789abcdef.tmp";
+	std::ofstream(saves() / stale, std::ios::binary) << "half";
+	std::ofstream(saves() / "sub" / stale, std::ios::binary) << "of a folder not written";
+	fs::create_directories(saves() / ".dir.0123456789abcdef.tmp");
+	std::ofstream(saves() / ".dir.0123456789abcdef.tmp" / "inner", std::ios::binary) << "mine";
+	std::error_code ec;
+	fs::create_symlink(dir.path() / "nowhere", saves() / ".link.0123456789abcdef.tmp", ec);
+	const bool linked = !ec;
+
+	BOOST_REQUIRE(write("slot", "v1").status == res::save_status::ok);
+	BOOST_TEST(!fs::exists(saves() / stale));
+	BOOST_TEST(fs::exists(saves() / "sub" / stale));
+	BOOST_TEST(fs::is_directory(saves() / ".dir.0123456789abcdef.tmp"));
+	BOOST_TEST(fs::exists(saves() / ".dir.0123456789abcdef.tmp" / "inner"));
+	if (linked) BOOST_TEST(fs::is_symlink(saves() / ".link.0123456789abcdef.tmp"));
+}
+
+#ifndef _WIN32
+BOOST_FIXTURE_TEST_CASE(AFileAtTheSlotThatCannotBeRead_IsReplacedAndNotKeptAsTheBackup, save_fixture)
+{
+	BOOST_REQUIRE(write("slot", "v1").status == res::save_status::ok);
+	BOOST_REQUIRE(write("slot", "v2").status == res::save_status::ok);
+	fs::permissions(saves() / "slot", fs::perms::none);
+	if (std::ifstream(saves() / "slot", std::ios::binary).good()) {
+		BOOST_TEST_MESSAGE("the file is readable whatever its mode (running as root): not testable here");
+		return;
+	}
+	const res::save_result result = write("slot", "v3");
+	BOOST_TEST(result.status == res::save_status::ok);
+	BOOST_TEST(!result.backup_made);
+	BOOST_TEST(read_file(saves() / "slot") == "v3");
+	BOOST_TEST(read_file(saves() / "slot.bak") == "v1");
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(WithoutUserMounted_AWriteIsRefusedAsAValue)
 {

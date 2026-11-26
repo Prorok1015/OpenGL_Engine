@@ -31,7 +31,6 @@ namespace {
 
 	constexpr std::string_view k_saves_folder = "saves";
 	constexpr std::string_view k_reserved_suffixes[] = { ".bak", ".tmp", ".corrupt" };
-	constexpr std::string_view k_forbidden_characters = "<>\"|?*\\";
 	constexpr std::size_t k_max_listed_in_a_folder = 4096;
 
 	res::save_result failure(res::save_status status, std::string error)
@@ -150,8 +149,11 @@ std::string res::save_service::slot_problem(std::string_view slot)
 	if (!valid_utf8(slot)) return "the name is not valid UTF-8";
 	if (std::string problem = portable_path_problem(slot); !problem.empty()) return problem;
 	if (slot.size() > k_max_slot_bytes) return std::format("the name is over {} bytes", k_max_slot_bytes);
-	if (const std::size_t at = slot.find_first_of(k_forbidden_characters); at != std::string_view::npos) {
-		return std::format("'{}' is not allowed in a name", slot[at]);
+	for (const char c : slot) {
+		const bool allowed = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == ' ' || c == '/';
+		if (!allowed) {
+			return "only a-z, 0-9, space, '_', '-', '.' and '/' are allowed: the names of two slots never differ by case alone";
+		}
 	}
 	std::size_t begin = 0;
 	while (begin <= slot.size()) {
