@@ -1488,7 +1488,7 @@ BOOST_AUTO_TEST_CASE(ASphereCast_AnswersAsAMarchedSampledQuadDoes_ForRandomQuads
 	constexpr float k_slack = 0.12f;
 	constexpr float k_reach = 20.f;
 	int hits = 0;
-	for (int run = 0; run < 20; ++run) {
+	for (int run = 0; run < 40; ++run) {
 		const glm::vec3 centre{ position(random), position(random), position(random) };
 		const float radius = size(random);
 		const glm::vec3 direction = glm::normalize(glm::vec3{ position(random), position(random), position(random) } + glm::vec3{ 0.01f });
@@ -1525,7 +1525,7 @@ BOOST_AUTO_TEST_CASE(ASphereCast_AnswersAsAMarchedSampledQuadDoes_ForRandomQuads
 			}
 		}
 	}
-	BOOST_TEST(hits > 3);
+	BOOST_TEST(hits > 5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
