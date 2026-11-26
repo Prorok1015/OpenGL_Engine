@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace res { class resource_system; }
+namespace res { class resource_system; class tag; }
 namespace wnd { class window_system; }
 
 namespace edt
@@ -87,6 +87,8 @@ namespace edt
 		// The Edit actions (undo, redo, delete...): a separate step so that the owner can register what it does between the two
 		// (the order of registrations is the order of the registry's list and of the tools an agent sees).
 		void install_edit_actions(std::vector<registration>& out);
+		// The asset browser's "Re-import..." of a prefab (#1194): File > Import Model...'s picker and window over it.
+		void reimport_model(const res::tag& prefab);
 		// The window's close request goes through the "unsaved changes" flow and the exit blocker.
 		void attach_window_close(wnd::window_system& windows);
 		// The last save that upgraded a file, for a few seconds in the menu bar (#761); nothing otherwise.

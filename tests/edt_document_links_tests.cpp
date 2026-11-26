@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "edt_asset_ops.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
@@ -100,6 +101,24 @@ BOOST_AUTO_TEST_CASE(OpeningTheSameAnchorAgain_ReturnsTheLink_AndMakesNoDocument
 	std::size_t after = 0;
 	documents.for_each([&after](edt::document&) { ++after; });
 	BOOST_TEST(after == before);
+}
+
+// A re-import (#1194) asks this before it writes a prefab: a link of the file is busy while its chain or what hangs
+// below it holds unsaved edits.
+BOOST_AUTO_TEST_CASE(AFileWhoseLinkHasUnsavedEditsBelowIt_IsOpenWithUnsavedChanges)
+{
+	const res::tag prefab = res::tag::make("assets/robot/robot.prefab.desc");
+	const edt::document_id robot = link("Robot#1", level(), "node:1", prefab);
+	const edt::document_id face = link("Face", robot, "field:material");
+	BOOST_REQUIRE(robot != 0 && face != 0);
+	BOOST_TEST(!edt::is_open_with_unsaved_changes(documents, prefab, false));
+	static_cast<stub_document*>(documents.find(face))->m_dirty = true;
+	BOOST_TEST(edt::is_open_with_unsaved_changes(documents, prefab, false));
+	BOOST_TEST(!edt::is_open_with_unsaved_changes(documents, res::tag::make("assets/other.prefab.desc"), false));
+	static_cast<stub_document*>(documents.find(face))->m_dirty = false;
+	static_cast<stub_document*>(documents.find(robot))->m_dirty = true;
+	BOOST_TEST(edt::is_open_with_unsaved_changes(documents, prefab, false));
+	BOOST_TEST(edt::unsaved_edits_holder(documents, prefab) == std::string(prefab.view()));
 }
 
 BOOST_AUTO_TEST_CASE(AnInstanceWhoseParentIsNotOpen_IsRefused)

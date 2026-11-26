@@ -341,9 +341,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		},
 		.open_with_unsaved_changes = [this](const res::tag& tag) {
 			const res::tag& editor_copy = m_state.editor_tag;
-			document_manager& documents = m_context->documents();
-			return edt::is_open_with_unsaved_changes(documents.find_by_source(tag), documents.scene(),
+			// A link of the file (EPIC-82) is busy too when its chain or what hangs below it is unsaved.
+			return edt::is_open_with_unsaved_changes(m_context->documents(), tag,
 				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
+		},
+		.unsaved_edits_holder = [this](const res::tag& tag) {
+			return edt::unsaved_edits_holder(m_context->documents(), tag);
 		},
 		.project_open = [&data] { return data.has_value<prj::project_context>(); } });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -571,6 +574,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		.request_close_shader_source = [this](document_id id) { m_shader_editor->request_close(id); },
 		.level_disk = m_level_disk.get() });
 	m_file_menu->install(m_registrations);
+	m_panels->asset_browser()->set_model_reimport([this](const res::tag& prefab) {
+		m_file_menu->reimport_model(prefab);
+	});
 	m_level_load->install(m_registrations);
 	m_file_menu->install_edit_actions(m_registrations);
 	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).

@@ -376,6 +376,33 @@ void edt::file_menu::import_model()
 	});
 }
 
+void edt::file_menu::reimport_model(const res::tag& prefab)
+{
+	if (!m_hooks.reimport_model) return;
+	pick_file_options options;
+	options.title = "Re-import Model";
+	options.start_path = std::filesystem::current_path();
+	options.extensions = { ".glb", ".obj", ".fbx", ".gltf" };
+	const std::string target(prefab.view());
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive), prefab, target](
+		const std::filesystem::path& picked) {
+		if (!alive.lock()) return;
+		const auto run = [this, picked, target](const json::value& settings) {
+			json::object args{ { "path", to_json_string(picked) }, { "reimport", target } };
+			if (!settings.is_null()) args["settings"] = settings;
+			invoke_or_report("file.import_model", std::move(args), "The model was not re-imported");
+		};
+		if (!m_hooks.ask_model_reimport_settings) {
+			run(nullptr);
+			return;
+		}
+		m_hooks.ask_model_reimport_settings(prefab, picked, [alive, run](const model_import_settings& settings) {
+			if (!alive.lock()) return;
+			run(json::object{ { "normals", model_normals_name(settings.normals) }, { "tangents", settings.tangents } });
+		});
+	});
+}
+
 void edt::file_menu::save_level()
 {
 	if (!m_hooks.has_scene()) {
@@ -793,6 +820,7 @@ void edt::file_menu::register_actions()
 		return static_cast<bool>(m_hooks.import_model) || (m_hooks.agent_import != nullptr && m_hooks.agent_import->available());
 	};
 	constexpr const char* IMPORT_UNAVAILABLE = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).";
+	constexpr const char* REIMPORT_PERSON_ONLY = "re-import is a person's action for now (#1457)";
 
 	// A command_desc for describe_before_allowed_invoke: the registry describes a call the policy allows right before
 	// it runs (cmd_registry.cpp, apply_policy), and the import runs an agent's call only with the plan describe
@@ -803,6 +831,29 @@ void edt::file_menu::register_actions()
 	import_command.mutates = true;
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
+		if (const json::value* reimport = args.if_contains("reimport")) {
+			if (request.from.kind != cmd::origin_kind::ui) {
+				return action_result::failure(cmd::codes::denied, std::string(REIMPORT_PERSON_ONLY));
+			}
+			if (args.contains("name") || args.contains("folder") || args.contains("files_token")) {
+				return action_result::failure(cmd::codes::invalid_args,
+					"reimport keeps the prefab's own name and folder: give neither name, folder nor files_token");
+			}
+			if (!m_hooks.reimport_model) {
+				return action_result::failure(cmd::codes::disabled, "re-import is not built in");
+			}
+			const json::value* settings = args.if_contains("settings");
+			if (settings != nullptr) {
+				if (const model_settings_parse parsed = parse_model_settings(*settings); !parsed.ok()) {
+					return action_result::failure(cmd::codes::invalid_args, parsed.error);
+				}
+			}
+			const std::optional<model_import_refusal> refused = m_hooks.reimport_model(
+				res::tag{ std::string_view(reimport->as_string()) }, from_json_string(args.at("path").as_string()),
+				settings != nullptr ? *settings : json::value{});
+			if (refused) return action_result::failure(refused->code.c_str(), refused->error);
+			return action_result::success();
+		}
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
 			&& !args.contains("folder");
 		if (dialog) {
@@ -835,6 +886,12 @@ void edt::file_menu::register_actions()
 			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an "
 					"existing file." } } },
+			{ "reimport", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "A person's only (any other caller is denied): the res:// tag of a prefab an "
+					"earlier import made in the project's own layer. The model is imported over it: the prefab keeps "
+					"its ID, the files it writes are replaced in place (their .resource files and IDs stay), settings "
+					"left out keep the values its .resource records; files of the earlier import the model no longer "
+					"makes stay and are listed. Not with name, folder or files_token." } } },
 			{ "files_token", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Only for the second call: when the job of the first call ends with "
 					"needs_files_approval (the model refers to other files), call again with the same arguments "
@@ -865,6 +922,9 @@ void edt::file_menu::register_actions()
 	import_command.category = cmd::agent_category::scene_edit;
 	import_command.risk = cmd::danger::confirm;
 	import_command.describe = [this, import_request_of](const cmd::call& request) -> std::optional<std::string> {
+		if (request.args.as_object().contains("reimport") && request.from.kind != cmd::origin_kind::ui) {
+			return "This request will be refused: " + std::string(REIMPORT_PERSON_ONLY);
+		}
 		if (m_hooks.agent_import == nullptr) return std::nullopt;
 		return m_hooks.agent_import->describe(import_request_of(request.args.as_object()), request.from,
 			request.confirmation);

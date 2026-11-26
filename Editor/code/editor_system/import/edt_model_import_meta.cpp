@@ -1,5 +1,7 @@
 #include "edt_model_import_meta.h"
 #include "edt_agent_source_rule.h"
+#include "edt_file_identity.h"
+#include <snk/command/cmd_types.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/text_escape.h>
 #include <snk/platform/plt_beneath.h>
@@ -198,4 +200,131 @@ std::string edt::take_back_model_meta(const fs::path& top, const model_meta_plan
 	}
 	if (error.empty()) return {};
 	return std::format("{} could not be taken back: {}", named, private_text(std::move(error), top));
+}
+
+std::string edt::set_made(model_meta_plan& plan, const made_files& made)
+{
+	if (!plan.ok() || plan.text.empty()) return "no .resource is written";
+	res::asset_meta_result read = res::read_asset_meta(plan.text);
+	if (!read) return "the planned .resource does not read back";
+	res::asset_meta meta = std::move(*read.meta);
+	meta.settings.erase("made");
+	const boost::json::value recorded = made_json(made);
+	if (std::string why = made_problem(recorded); !why.empty()) {
+		plan.text = res::write_asset_meta(meta);
+		return why;
+	}
+	meta.settings["made"] = recorded;
+	plan.text = res::write_asset_meta(meta);
+	return {};
+}
+
+std::string edt::sha256_hex(std::span<const std::byte> bytes)
+{
+	constexpr std::string_view hex = "0123456789abcdef";
+	std::string out;
+	out.reserve(64);
+	for (const std::uint8_t byte : digest_of(bytes)) {
+		out += hex[byte >> 4];
+		out += hex[byte & 0x0f];
+	}
+	return out;
+}
+
+edt::project_file_hash edt::hash_project_file(const fs::path& top, const res::tag& tag, std::uint64_t max_bytes)
+{
+	project_file_hash out;
+	const fs::path path = fs_paths::path_from_utf8(std::string(tag.relative()));
+	platform::beneath::read_request request;
+	request.root = top;
+	request.folder = path.parent_path();
+	request.leaf = path.filename();
+	request.max_bytes = max_bytes;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+	switch (read.status) {
+	case platform::beneath::read_status::ok:
+		out.status = project_file_hash::state::ok;
+		out.sha256 = sha256_hex(bytes);
+		break;
+	case platform::beneath::read_status::missing:
+		out.status = project_file_hash::state::missing;
+		break;
+	case platform::beneath::read_status::not_regular:
+		out.error = std::format("{} is not a plain file", shown(tag.view()));
+		break;
+	case platform::beneath::read_status::too_large:
+		out.error = std::format("{} is larger than {} MiB", shown(tag.view()), max_bytes / (1024 * 1024));
+		break;
+	case platform::beneath::read_status::failed:
+		out.error = std::format("{} cannot be read: {}", shown(tag.view()), private_text(read.error, top));
+		break;
+	}
+	return out;
+}
+
+edt::model_import_record edt::read_model_import_record(const fs::path& top, const res::tag& prefab)
+{
+	model_import_record record;
+	const auto refuse = [&record](const char* code, std::string why) {
+		record.code = code;
+		record.error = std::move(why);
+		return record;
+	};
+	model_meta_plan where;
+	const std::string relative = std::string(prefab.relative()) + std::string(res::asset_meta_suffix);
+	record.meta = res::tag::make(relative);
+	const fs::path path = fs_paths::path_from_utf8(relative);
+	where.folder = path.parent_path();
+	where.leaf = path.filename();
+	const std::string named = shown(record.meta.view());
+	if (top.empty()) return refuse(cmd::codes::disabled, "no project is open");
+
+	const read_meta existing = read_existing(top, where);
+	switch (existing.status) {
+	case platform::beneath::read_status::ok:
+		break;
+	case platform::beneath::read_status::missing:
+		return refuse(cmd::codes::not_found,
+			std::format("{} is missing: only an imported prefab is re-imported", named));
+	case platform::beneath::read_status::not_regular:
+		return refuse(cmd::codes::invalid_args, std::format("{} is not a plain file: nothing was re-imported", named));
+	case platform::beneath::read_status::too_large:
+		return refuse(cmd::codes::invalid_args,
+			std::format("{} is larger than a .resource can be: nothing was re-imported", named));
+	case platform::beneath::read_status::failed:
+		return refuse(cmd::codes::invalid_args, std::format("{} cannot be read: {}; nothing was re-imported", named,
+			private_text(existing.error, top)));
+	}
+	const res::asset_meta_result read = res::read_asset_meta(existing.text);
+	if (!read) {
+		if (read.error.kind == res::asset_meta_error_kind::newer_than_engine) {
+			return refuse(cmd::codes::invalid_args,
+				std::format("{} was written by a newer editor: nothing was re-imported", named));
+		}
+		return refuse(cmd::codes::invalid_args, std::format("{} cannot be read ({}): nothing was re-imported; fix or "
+			"remove it", named, shown(read.error.message)));
+	}
+	if (res::write_asset_meta(*read.meta) != existing.text) {
+		return refuse(cmd::codes::invalid_args, std::format("{} is not in the form the editor writes (edited by hand?): "
+			"nothing was re-imported", named));
+	}
+	if (read.meta->importer != k_model_importer) {
+		const std::string importer = read.meta->importer.empty() ? std::string{ "no importer" }
+			: std::format("the importer '{}'", shown(read.meta->importer));
+		return refuse(cmd::codes::invalid_args, std::format("{} records {}, not {}: nothing was re-imported", named,
+			importer, k_model_importer));
+	}
+	const model_settings_parse settings =
+		parse_model_settings(boost::json::value(read.meta->settings), unknown_settings_keys::ignore);
+	if (!settings.ok()) {
+		return refuse(cmd::codes::invalid_args,
+			std::format("{}: {}; nothing was re-imported", named, shown(settings.error)));
+	}
+	record.guid = read.meta->guid;
+	record.flags = read.meta->flags;
+	record.settings = settings.settings;
+	record.source = settings.source;
+	record.made = settings.made;
+	return record;
 }

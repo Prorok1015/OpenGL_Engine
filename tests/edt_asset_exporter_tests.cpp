@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -86,6 +87,94 @@ BOOST_AUTO_TEST_CASE(BuildRemap_ReplacesTheStemOnlyAtTheStartOfTheFileName_SoNoE
 	tga.all_tags = { tga.root_tag, texture };
 	const auto tga_remap = exporter.build_remap(tga, "fbx", "assets/fbx");
 	BOOST_TEST(tga_remap.at(texture).string() == "res://assets/fbx/textures/x.tga");
+}
+
+// A person's import lies in a folder of its run (#987): the export takes the files from below it, as an agent's.
+BOOST_AUTO_TEST_CASE(BuildRemap_OfAPersonsImport_DropsTheRunsFolder)
+{
+	edt::asset_exporter exporter(*rs);
+	edt::import_result imported;
+	imported.source_path = "models/robot.glb";
+	imported.root_tag = res::tag{ res::tag::memory, "__imports/41/7/robot/robot.prefab.desc" };
+	const res::tag geometry{ res::tag::memory, "__imports/41/7/robot/robot.geom.desc" };
+	const res::tag texture{ res::tag::memory, "__imports/41/7/robot/textures/skin.png" };
+	imported.all_tags = { imported.root_tag, geometry, texture };
+	const auto remap = exporter.build_remap(imported, "robot", "assets/robot");
+	BOOST_TEST(remap.at(imported.root_tag).string() == "res://assets/robot/robot.prefab.desc");
+	BOOST_TEST(remap.at(geometry).string() == "res://assets/robot/robot.geom.desc");
+	BOOST_TEST(remap.at(texture).string() == "res://assets/robot/textures/skin.png");
+	BOOST_TEST(edt::asset_exporter::remap_problem(remap, "robot", "assets/robot").empty());
+
+	const auto renamed = exporter.build_remap(imported, "bot", "assets/bot");
+	BOOST_TEST(renamed.at(imported.root_tag).string() == "res://assets/bot/bot.prefab.desc");
+}
+
+BOOST_AUTO_TEST_CASE(NoLongerMade_ListsWhatTheOldPrefabNamesBelowTheFolder_AndTheRemapNoLongerWrites)
+{
+	std::unordered_map<res::tag, res::tag> remap;
+	remap[res::tag{ res::tag::memory, "r/r.prefab.desc" }] = res::tag::make("assets/robot/robot.prefab.desc");
+	remap[res::tag{ res::tag::memory, "r/r.geom.desc" }] = res::tag::make("assets/robot/robot.geom.desc");
+	const std::string old_prefab = R"({"nodes":[{"mesh":"res://assets/robot/robot.geom.desc",)"
+		R"("material":{"albedo":"res://assets/robot/textures/old.png"}},)"
+		R"({"shared":"res://assets/common/stone.png","again":"res://assets/robot/textures/old.png"}]})";
+	const edt::no_longer_made_list left =
+		edt::asset_exporter::no_longer_made(std::nullopt, old_prefab, "assets/robot", remap);
+	BOOST_REQUIRE_EQUAL(left.tags.size(), 1u);
+	BOOST_TEST(left.tags.front().string() == "res://assets/robot/textures/old.png");
+	BOOST_TEST(left.note.empty());
+
+	const edt::no_longer_made_list broken =
+		edt::asset_exporter::no_longer_made(std::nullopt, std::string("not json"), "assets/robot", remap);
+	BOOST_TEST(broken.tags.empty());
+	BOOST_TEST(broken.note.find("could not be read") != std::string::npos);
+}
+
+// #1194: the record of the earlier export says what it made; the geometry's binary file goes with its desc.
+BOOST_AUTO_TEST_CASE(NoLongerMade_PrefersTheRecord_OverTheOldPrefab)
+{
+	std::unordered_map<res::tag, res::tag> remap;
+	remap[res::tag{ res::tag::memory, "r/r.prefab.desc" }] = res::tag::make("assets/robot/robot.prefab.desc");
+	remap[res::tag{ res::tag::memory, "r/r.geom.desc" }] = res::tag::make("assets/robot/robot.geom.desc");
+	const std::string sha(64, 'a');
+	const edt::made_files made{ { "robot.prefab.desc", sha }, { "robot.geom.desc", sha }, { "robot.geom.bin", sha },
+		{ "textures/old.png", sha }, { "robot.mat.desc", sha } };
+	const std::string old_prefab = R"({"x":"res://assets/robot/other.png"})";
+	const edt::no_longer_made_list left = edt::asset_exporter::no_longer_made(made, old_prefab, "assets/robot", remap);
+	BOOST_REQUIRE_EQUAL(left.tags.size(), 2u);
+	BOOST_TEST(left.tags[0].string() == "res://assets/robot/robot.mat.desc");
+	BOOST_TEST(left.tags[1].string() == "res://assets/robot/textures/old.png");
+	BOOST_TEST(left.note.empty());
+}
+
+BOOST_AUTO_TEST_CASE(NoLongerMade_WithoutARecord_SaysWhatIsNotKnown)
+{
+	std::unordered_map<res::tag, res::tag> remap;
+	remap[res::tag{ res::tag::memory, "r/r.prefab.desc" }] = res::tag::make("robot.prefab.desc");
+	const edt::no_longer_made_list unread =
+		edt::asset_exporter::no_longer_made(std::nullopt, std::nullopt, "assets/robot", remap);
+	BOOST_TEST(unread.tags.empty());
+	BOOST_TEST(unread.note == "the earlier prefab could not be read: files it made are not listed");
+	// Every file of the project lies below the root of res://: an old prefab's references say nothing there.
+	const edt::no_longer_made_list root =
+		edt::asset_exporter::no_longer_made(std::nullopt, std::string(R"({"x":"res://elsewhere/a.png"})"), "", remap);
+	BOOST_TEST(root.tags.empty());
+	BOOST_TEST(root.note == "the files of the earlier import are not known (old record)");
+}
+
+// #1466 again: a source named only by its extension still loses the run's folder of a person's import.
+BOOST_AUTO_TEST_CASE(BuildRemap_OfAPersonsImportWithNoStem_DropsTheRunsFolder)
+{
+	edt::asset_exporter exporter(*rs);
+	for (const std::filesystem::path& source : { std::filesystem::path(".fbx"), std::filesystem::path{} }) {
+		edt::import_result imported;
+		imported.source_path = source;
+		imported.root_tag = res::tag{ res::tag::memory, "__imports/41/7/x/x.prefab.desc" };
+		const res::tag texture{ res::tag::memory, "__imports/41/7/x/textures/skin.png" };
+		imported.all_tags = { imported.root_tag, texture };
+		const auto remap = exporter.build_remap(imported, "box", "assets/box");
+		BOOST_TEST(remap.at(imported.root_tag).string().find("__imports") == std::string::npos);
+		BOOST_TEST(remap.at(texture).string() == "res://assets/box/textures/skin.png");
+	}
 }
 
 BOOST_AUTO_TEST_CASE(RemapProblem_RefusesANameAnImportDoesNotGive_AndAChangedExtension)

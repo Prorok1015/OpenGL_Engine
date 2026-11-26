@@ -1,6 +1,7 @@
 #include "edt_model_import_settings.h"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <format>
 
 namespace json = boost::json;
@@ -71,6 +72,38 @@ std::string source_problem(const json::value& value, edt::model_source_record& o
 	return {};
 }
 
+// The rules check_agent_folder (controller/edt_file_menu.cpp) holds a path inside the project to, which this library
+// cannot link: no ':', '\\', leading '/', control or <>"|?* character, no empty, '.' or '..' segment, no name ending in
+// '.' or ' ', no name Windows reserves for a device.
+bool reserved_device_name(std::string_view segment)
+{
+	std::string upper;
+	for (const char c : segment.substr(0, segment.find('.'))) {
+		upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+	}
+	while (!upper.empty() && upper.back() == ' ') upper.pop_back();
+	if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") return true;
+	if (upper == "CONIN$" || upper == "CONOUT$") return true;
+	return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0'
+		&& upper[3] <= '9';
+}
+
+bool made_path_is_plain(std::string_view path)
+{
+	if (path.empty() || path.front() == '/' || path.find_first_of(":\\<>\"|?*") != std::string_view::npos) return false;
+	const auto control = [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7F; };
+	if (std::ranges::any_of(path, control)) return false;
+	for (std::size_t start = 0;;) {
+		const std::size_t end = path.find('/', start);
+		const std::string_view segment =
+			path.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+		if (segment.empty() || segment == "." || segment == "..") return false;
+		if (segment.back() == '.' || segment.back() == ' ' || reserved_device_name(segment)) return false;
+		if (end == std::string_view::npos) return true;
+		start = end + 1;
+	}
+}
+
 }
 
 std::string_view edt::model_normals_name(model_normals normals)
@@ -109,6 +142,19 @@ edt::model_settings_parse edt::parse_model_settings(const json::value& value, un
 			} else {
 				out.error = "settings.tangents must be true or false";
 			}
+		} else if (key == "made") {
+			if (unknown == unknown_settings_keys::refuse) {
+				out.error = "settings.made is recorded by the editor, not given";
+			} else {
+				out.error = made_problem(item);
+				if (out.error.empty()) {
+					made_files made;
+					for (const json::key_value_pair& file : item.as_object()) {
+						made.emplace(std::string(file.key()), std::string(file.value().as_string()));
+					}
+					out.made = std::move(made);
+				}
+			}
 		} else if (unknown == unknown_settings_keys::refuse) {
 			out.error = std::format("settings.{} is not a setting of a model (version, source, normals, tangents)",
 				shown(key));
@@ -142,8 +188,35 @@ std::string edt::rewrite_model_settings(const json::value& existing, const model
 	}
 	const json::object written = model_settings_json(settings, source);
 	for (const json::key_value_pair& entry : written) kept[entry.key()] = entry.value();
+	// What an earlier export made says nothing of this one.
+	kept.erase("made");
 	out = std::move(kept);
 	return {};
+}
+
+std::string edt::made_problem(const json::value& made)
+{
+	if (!made.is_object()) return "settings.made must be an object {path: sha256}";
+	if (made.as_object().size() > k_max_made_entries) {
+		return std::format("settings.made holds more than {} files", k_max_made_entries);
+	}
+	for (const json::key_value_pair& entry : made.as_object()) {
+		const std::string_view path = entry.key();
+		const bool plain = path.size() <= k_max_made_path_bytes && made_path_is_plain(path);
+		if (!plain) return std::format("settings.made: '{}' is not a path below the prefab's folder", shown(path));
+		const json::value& hash = entry.value();
+		if (!hash.is_string() || hash.as_string().size() != 64 || !is_lower_hex(hash.as_string())) {
+			return std::format("settings.made.{} must be 64 lowercase hex digits", shown(path));
+		}
+	}
+	return {};
+}
+
+json::object edt::made_json(const made_files& made)
+{
+	json::object out;
+	for (const auto& [path, sha256] : made) out[path] = sha256;
+	return out;
 }
 
 edt::model_source_record edt::model_source_of(std::string_view file_name, std::string sha256)

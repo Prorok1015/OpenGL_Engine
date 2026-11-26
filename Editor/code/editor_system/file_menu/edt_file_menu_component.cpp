@@ -200,6 +200,13 @@ edt::file_menu_component::file_menu_component(ports from)
 			const model_import_settings& settings) { import(settings); });
 	};
 #endif
+	hooks.reimport_model = [this](const res::tag& prefab, const std::filesystem::path& source,
+		const boost::json::value& settings) { return m_ports.import.reimport(prefab, source, settings); };
+	hooks.ask_model_reimport_settings = [this](const res::tag& prefab, const std::filesystem::path& source,
+		std::function<void(const model_import_settings&)> import) {
+		m_ports.import.ask_reimport_settings(prefab, source, [import = std::move(import)](const std::filesystem::path&,
+			const model_import_settings& settings) { import(settings); });
+	};
 	hooks.agent_import = m_ports.import.agent_import();
 	hooks.image_import = m_ports.import.image_import();
 	hooks.exit = m_ports.exit;
@@ -254,6 +261,11 @@ void edt::file_menu_component::install_edit_actions(std::vector<registration>& o
 			asset_undo_label, asset_undo, [this]() -> document* { return m_ports.prefab.inspector_prefab(); })) {
 		out.push_back(std::move(action));
 	}
+}
+
+void edt::file_menu_component::reimport_model(const res::tag& prefab)
+{
+	if (m_menu) m_menu->reimport_model(prefab);
 }
 
 void edt::file_menu_component::attach_window_close(wnd::window_system& windows)

@@ -22,6 +22,7 @@ namespace edt
 {
 	class asset_database;
 	class document;
+	class document_manager;
 
 	enum class asset_operation : std::uint8_t { rename, move, remove };
 
@@ -272,6 +273,12 @@ namespace edt
 	// An operation would lose the unsaved edits of a dirty document; the open level, clean or not, cannot take a change of its file
 	// from outside yet (US-60-C, #1188).
 	bool is_open_with_unsaved_changes(const document* open, const document& scene, bool is_editor_copy);
+	// As above for the documents of `documents` whose source is `tag`, and also when one of them is a link (EPIC-82)
+	// and a document of its chain, or one below it, holds unsaved edits (a re-import would write under them, #1194).
+	bool is_open_with_unsaved_changes(document_manager& documents, const res::tag& tag, bool is_editor_copy);
+	// The document whose unsaved edits a link of `tag` lies under (its chain or below it), named for a person ("the
+	// level res://x.level.desc"); empty when none.
+	std::string unsaved_edits_holder(document_manager& documents, const res::tag& tag);
 
 	class asset_ops
 	{

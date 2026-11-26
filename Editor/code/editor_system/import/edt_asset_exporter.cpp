@@ -9,10 +9,13 @@
 #include <snk/render/geom/rnd_geometry_files.h>
 #include <snk/resource/res_desc_binary.h>
 #include <boost/json.hpp>
+#include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <string_view>
 
 namespace json = boost::json;
@@ -60,13 +63,19 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 {
 	std::unordered_map<res::tag, res::tag> remap;
 	std::string model_name = result.source_path.stem().string();
+	// Every file of an import lies under the folder of its prefab: "<model>/" for an agent's, a folder of the run below
+	// "__imports/" for a person's (#987, its name sanitized); the export keeps only what lies below that folder.
+	std::string prefix = model_name + "/";
+	if (const std::string_view root = result.root_tag.relative(); root.find('/') != std::string_view::npos) {
+		const std::string_view folder = root.substr(0, root.rfind('/') + 1);
+		if (folder == prefix || folder.starts_with("__imports/")) prefix = std::string(folder);
+	}
 
 	for (const auto& mem_tag : result.all_tags) {
 		std::string rel = std::string(mem_tag.relative());
 
-		// Strip the model_name/ prefix from relative path
-		std::string prefix = model_name + "/";
-		if (!model_name.empty() && rel.starts_with(prefix))
+		// A person's run folder goes whatever the model's name (#1466): an empty stem leaves it in place otherwise.
+		if ((!model_name.empty() || prefix.starts_with("__imports/")) && rel.starts_with(prefix))
 			rel = rel.substr(prefix.size());
 
 		// Replace the model name with the asset name where the importer put it: at the start of the file name, followed by a dot
@@ -90,6 +99,65 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 	}
 
 	return remap;
+}
+
+namespace {
+
+void references_below(const json::value& value, std::string_view prefix, std::set<std::string>& out, int depth = 0)
+{
+	if (depth > 128) return;
+	if (value.is_string()) {
+		const std::string_view text(value.as_string().data(), value.as_string().size());
+		if (text.starts_with(prefix)) out.emplace(text);
+	} else if (value.is_object()) {
+		for (const auto& member : value.as_object()) references_below(member.value(), prefix, out, depth + 1);
+	} else if (value.is_array()) {
+		for (const json::value& item : value.as_array()) references_below(item, prefix, out, depth + 1);
+	}
+}
+
+}
+
+edt::no_longer_made_list edt::asset_exporter::no_longer_made(const std::optional<made_files>& made,
+	const std::optional<std::string>& old_prefab, std::string_view target_folder,
+	const std::unordered_map<res::tag, res::tag>& remap)
+{
+	no_longer_made_list out;
+	std::set<std::string> targets;
+	for (const auto& [from, to] : remap) {
+		targets.emplace(to.view());
+		if (is_geometry_desc(to.relative())) {
+			if (const std::optional<res::tag> binary = res::desc_binary::binary_tag(to)) {
+				targets.emplace(binary->view());
+			}
+		}
+	}
+	const std::string prefix =
+		std::format("{}://{}", res::tag::default_protocol(), folder_prefix(target_folder));
+	std::set<std::string> left;
+	if (made) {
+		for (const auto& [path, sha256] : *made) left.emplace(prefix + path);
+	} else if (!old_prefab) {
+		out.note = "the earlier prefab could not be read: files it made are not listed";
+		return out;
+	} else if (target_folder.empty()) {
+		out.note = "the files of the earlier import are not known (old record)";
+		return out;
+	} else {
+		json::parse_options opts;
+		opts.max_depth = 128;
+		boost::system::error_code ec;
+		const json::value old = json::parse(*old_prefab, ec, {}, opts);
+		if (ec) {
+			out.note = "the earlier prefab could not be read: files it made are not listed";
+			return out;
+		}
+		references_below(old, prefix, left);
+	}
+	for (const std::string& target : targets) left.erase(target);
+	out.tags.reserve(left.size());
+	for (const std::string& text : left) out.tags.emplace_back(text);
+	return out;
 }
 
 std::string edt::asset_exporter::folder_problem(std::string_view target_folder)
@@ -157,9 +225,11 @@ std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag
 }
 
 std::string edt::asset_exporter::export_geometry(const res::tag& from, const res::tag& to, const json::object& desc,
-	std::vector<res::tag>* written, bool& wrote) const
+	std::vector<res::tag>* written, bool& wrote, std::vector<res::tag>& on_disk,
+	const std::function<void()>& begin_write) const
 {
 	wrote = false;
+	on_disk.clear();
 	rnd::geometry_file_options options;
 	options.topology = rnd::topology_of(desc);
 	if (options.topology != rnd::geometry_topology::triangles) {
@@ -168,12 +238,15 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 		std::vector<std::byte> bytes(text.size());
 		std::memcpy(bytes.data(), text.data(), text.size());
 		if (unchanged_on_disk(to, bytes)) {
+			on_disk.push_back(to);
 			return {};
 		}
+		begin_write();
 		if (!m_res.store_sync(to, bytes)) {
 			return std::format("'{}' could not be written (see the log)", to.view());
 		}
 		if (written) written->push_back(to);
+		on_disk.push_back(to);
 		wrote = true;
 		return {};
 	}
@@ -193,6 +266,7 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 	}
 	const res::tag binary = *res::desc_binary::binary_tag(to);
 	if (unchanged_on_disk(to, files.desc) && unchanged_on_disk(binary, files.binary)) {
+		on_disk = { to, binary };
 		return {};
 	}
 
@@ -200,6 +274,7 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 	const bool had_arrays = mesh::file_holds_geometry_arrays(m_res, to);
 	// A failed write names what it left (the staged file, or the desc with it), so whoever takes the export back takes
 	// exactly that; a desc never goes without the staged file it needs.
+	begin_write();
 	if (std::string problem = rnd::write_geometry_files(m_res, to, geometry, options, written); !problem.empty()) {
 		return problem;
 	}
@@ -210,6 +285,7 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 		written->push_back(to);
 		written->push_back(binary);
 	}
+	on_disk = { to, binary };
 	wrote = true;
 	return {};
 }
@@ -274,6 +350,106 @@ void edt::asset_exporter::remap_json_strings(
 	}
 }
 
+std::optional<std::vector<std::byte>> edt::asset_exporter::planned_bytes(const res::tag& mem_tag,
+	const std::unordered_map<res::tag, res::tag>& remap, std::string& error) const
+{
+	error.clear();
+	const std::string_view rel = mem_tag.relative();
+	if (is_geometry_desc(rel)) return std::nullopt;
+	auto data_block = m_res.fetch_data(mem_tag);
+	if (!data_block) {
+		error = std::format("'{}' could not be read", mem_tag.view());
+		return std::nullopt;
+	}
+	const std::vector<std::byte>& bytes = data_block->get();
+	if (data_block->has_error()) {
+		error = std::format("'{}' could not be read", mem_tag.view());
+		return std::nullopt;
+	}
+	if (rel.find(".desc") == std::string_view::npos) return bytes;
+	try {
+		json::parse_options opts;
+		opts.max_depth = 128;
+		const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		json::value val = json::parse(text, {}, opts);
+		remap_json_strings(val, remap);
+		return desc::pretty_json_bytes(val);
+	} catch (const std::exception& e) {
+		// Written as they are, its memory:// references would point at nothing once the editor closes.
+		error = std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what());
+		return std::nullopt;
+	}
+}
+
+namespace {
+
+edt::edit_state worse(edt::edit_state a, edt::edit_state b)
+{
+	const auto rank = [](edt::edit_state state) {
+		return state == edt::edit_state::changed ? 2 : state == edt::edit_state::unknown ? 1 : 0;
+	};
+	return rank(a) >= rank(b) ? a : b;
+}
+
+}
+
+edt::reimport_scan edt::asset_exporter::scan_reimport(const std::unordered_map<res::tag, res::tag>& remap,
+	const std::filesystem::path& top, std::string_view target_folder, const std::optional<made_files>& made,
+	ds::task_context* ctx) const
+{
+	reimport_scan out;
+	const std::string prefix = folder_prefix(target_folder);
+	const auto recorded = [&](const res::tag& tag) -> const std::string* {
+		const std::string_view rel = tag.relative();
+		if (!made || tag.protocol() != res::tag::default_protocol() || !rel.starts_with(prefix)) return nullptr;
+		const auto found = made->find(std::string(rel.substr(prefix.size())));
+		return found == made->end() ? nullptr : &found->second;
+	};
+	std::vector<std::pair<res::tag, res::tag>> sorted(remap.begin(), remap.end());
+	std::ranges::sort(sorted, [](const auto& a, const auto& b) { return a.second.view() < b.second.view(); });
+	out.files.reserve(sorted.size());
+	for (const auto& [from, to] : sorted) {
+		if (ctx) ctx->throw_if_stopped();
+		reimport_file_check check;
+		check.tag = to;
+		check.state = edit_state::unchanged;
+		std::vector<res::tag> files{ to };
+		if (is_geometry_desc(to.relative())) {
+			if (const std::optional<res::tag> binary = res::desc_binary::binary_tag(to)) files.push_back(*binary);
+		}
+		std::string sha256;
+		for (const res::tag& file : files) {
+			const project_file_hash hash = hash_project_file(top, file);
+			if (hash.status == project_file_hash::state::missing) {
+				out.seen[file] = {};
+				continue;
+			}
+			if (hash.status != project_file_hash::state::ok) {
+				if (out.error.empty()) out.error = hash.error;
+				check.exists = true;
+				check.state = edit_state::unknown;
+				continue;
+			}
+			out.seen[file] = hash.sha256;
+			check.exists = true;
+			if (file == to) sha256 = hash.sha256;
+			const std::string* was = recorded(file);
+			check.state = worse(check.state, !was ? edit_state::unknown
+				: *was == hash.sha256 ? edit_state::unchanged : edit_state::changed);
+		}
+		if (check.exists && !sha256.empty()) {
+			std::string why;
+			// A geometry pair is written by rnd::write_geometry_files: its bytes are not compared here.
+			if (const std::optional<std::vector<std::byte>> planned = planned_bytes(from, remap, why)) {
+				check.same_as_new = sha256_hex(*planned) == sha256;
+			}
+		}
+		if (!check.exists) check.state = edit_state::unchanged;
+		out.files.push_back(std::move(check));
+	}
+	return out;
+}
+
 bool edt::asset_exporter::export_to_project(
 	const import_result& result,
 	const std::unordered_map<res::tag, res::tag>& remap,
@@ -283,7 +459,9 @@ bool edt::asset_exporter::export_to_project(
 	bool wait_for_writes,
 	const std::function<void(int, int)>& on_file,
 	const std::filesystem::path& meta_top,
-	bool may_replace_meta) const
+	bool may_replace_meta,
+	const std::unordered_map<res::tag, std::string>* seen,
+	bool finish_once_writing) const
 {
 	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
 	// root_tag is already known from import_result — no filename guessing needed.
@@ -315,6 +493,7 @@ bool edt::asset_exporter::export_to_project(
 	// The prefab's `.resource` (#1195) is checked before any file is written: a refusal leaves the project as it was.
 	std::optional<model_meta_plan> meta;
 	const std::filesystem::path top = meta_top.empty() ? m_res.get_resources_path() : meta_top;
+	std::string made_prefix;
 	if (!result.source_sha256.empty() && result.root_tag.is_valid()) {
 		const auto root = remap.find(result.root_tag);
 		if (root == remap.end()) {
@@ -324,12 +503,41 @@ bool edt::asset_exporter::export_to_project(
 			model_source_of(fs_paths::utf8_of(result.source_path.filename()), result.source_sha256);
 		meta = plan_model_meta(top, root->second, result.settings, source, may_replace_meta);
 		if (!meta->ok()) return fail(meta->error);
+		const std::string_view prefab = root->second.relative();
+		made_prefix = std::string(prefab.substr(0, prefab.rfind('/') + 1));
 	}
+
+	// What the export leaves on the disk, for the record of the prefab (#1194).
+	made_files made;
+	const auto made_key = [&](const res::tag& tag) -> std::optional<std::string> {
+		const std::string_view rel = tag.relative();
+		if (!meta || tag.protocol() != res::tag::default_protocol() || !rel.starts_with(made_prefix)) {
+			return std::nullopt;
+		}
+		return std::string(rel.substr(made_prefix.size()));
+	};
+	// A re-import overwrites only bytes its check showed the person.
+	const auto changed_since_seen = [&](const res::tag& tag) -> std::string {
+		if (!seen) return {};
+		const auto was = seen->find(tag);
+		if (was == seen->end()) return {};
+		const project_file_hash now = hash_project_file(top, tag);
+		if (now.status == project_file_hash::state::missing) return {};
+		if (now.status == project_file_hash::state::ok && now.sha256 == was->second) return {};
+		return std::format("{} changed after the dialog looked at it: nothing more was written", tag.view());
+	};
+
+	// Once a re-import writes, a stop would leave a half-new asset: it is heeded only before (finish_once_writing).
+	bool writing = false;
+	const std::function<void()> begin_write = [&writing, progress] {
+		writing = true;
+		if (progress) progress->writing.store(true);
+	};
 
 	int files_done = 0;
 	int files_written = 0;
 	for (const auto& mem_tag : ordered_tags) {
-		if (ctx) ctx->throw_if_stopped();
+		if (ctx && !(finish_once_writing && writing)) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
 		if (remap_it == remap.end()) {
 			return fail(std::format("'{}' has no place in the project", mem_tag.view()));
@@ -346,19 +554,17 @@ bool edt::asset_exporter::export_to_project(
 			continue;
 		}
 
-		auto data_block = m_res.fetch_data(mem_tag);
-		if (!data_block) {
-			return fail(std::format("'{}' could not be read", mem_tag.view()));
-		}
-		auto& bytes = data_block->get();
-		if (data_block->has_error()) {
-			return fail(std::format("'{}' could not be read", mem_tag.view()));
-		}
-
-		std::vector<std::byte> output_bytes;
 		std::string rel(mem_tag.relative());
 
 		if (is_geometry_desc(rel)) {
+			auto data_block = m_res.fetch_data(mem_tag);
+			if (!data_block) {
+				return fail(std::format("'{}' could not be read", mem_tag.view()));
+			}
+			auto& bytes = data_block->get();
+			if (data_block->has_error()) {
+				return fail(std::format("'{}' could not be read", mem_tag.view()));
+			}
 			json::value val;
 			try {
 				json::parse_options opts;
@@ -371,9 +577,27 @@ bool edt::asset_exporter::export_to_project(
 			if (!val.is_object()) {
 				return fail(std::format("'{}' is not a JSON object", mem_tag.view()));
 			}
+			if (std::string why = changed_since_seen(res_tag); !why.empty()) return fail(std::move(why));
+			if (const std::optional<res::tag> binary = res::desc_binary::binary_tag(res_tag)) {
+				if (std::string why = changed_since_seen(*binary); !why.empty()) return fail(std::move(why));
+			}
 			bool wrote = false;
-			if (std::string problem = export_geometry(mem_tag, res_tag, val.as_object(), written, wrote); !problem.empty()) {
+			std::vector<res::tag> on_disk;
+			if (std::string problem = export_geometry(mem_tag, res_tag, val.as_object(), written, wrote, on_disk,
+				begin_write);
+				!problem.empty()) {
 				return fail(std::move(problem));
+			}
+			for (const res::tag& file : on_disk) {
+				const std::optional<std::string> key = made_key(file);
+				if (!key) continue;
+				const project_file_hash hash = hash_project_file(top, file);
+				if (hash.status == project_file_hash::state::ok) {
+					made[*key] = hash.sha256;
+				} else {
+					egLOG_WARN("edt/export", "{} is not recorded as made by the import: {}", file.view(),
+						hash.error.empty() ? std::string("it is not on the disk") : hash.error);
+				}
 			}
 			if (wrote) {
 				++files_written;
@@ -387,36 +611,42 @@ bool edt::asset_exporter::export_to_project(
 			continue;
 		}
 
-		// If it's a .desc file, parse JSON and remap memory:// references
-		if (rel.find(".desc") != std::string::npos) {
-			std::string json_str(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-			try {
-				json::parse_options opts;
-				opts.max_depth = 128;
-				json::value val = json::parse(json_str, {}, opts);
-				remap_json_strings(val, remap);
-				output_bytes = desc::pretty_json_bytes(val);
-				for (std::string& line : replaced_embedded_textures(res_tag, val)) {
-					egLOG_WARN("edt/export", "the material slot {} now names another embedded texture; the old file stays in the "
-						"project (point other references at the new one, then remove the old with asset.delete)", line);
-					if (progress) progress->replaced_textures.push_back(std::move(line));
-				}
-			} catch (const std::exception& e) {
-				// Written as they are, its memory:// references would point at nothing once the editor closes.
-				return fail(std::format("'{}' is not valid JSON: {}", mem_tag.view(), e.what()));
+		std::string unreadable;
+		std::optional<std::vector<std::byte>> planned = planned_bytes(mem_tag, remap, unreadable);
+		if (!planned) return fail(std::move(unreadable));
+		const std::vector<std::byte>& output_bytes = *planned;
+		if (res_tag.relative().ends_with(".mat.desc")) {
+			json::parse_options opts;
+			opts.max_depth = 128;
+			boost::system::error_code ec;
+			const std::string_view text(reinterpret_cast<const char*>(output_bytes.data()), output_bytes.size());
+			const json::value val = json::parse(text, ec, {}, opts);
+			for (std::string& line : ec ? std::vector<std::string>{} : replaced_embedded_textures(res_tag, val)) {
+				egLOG_WARN("edt/export", "the material slot {} now names another embedded texture; the old file stays "
+					"in the project (point other references at the new one, then remove the old with "
+					"asset.delete)", line);
+				if (progress) progress->replaced_textures.push_back(std::move(line));
 			}
-		} else {
-			output_bytes = bytes;
 		}
+		if (std::string why = changed_since_seen(res_tag); !why.empty()) return fail(std::move(why));
+		if (const std::optional<std::string> key = made_key(res_tag)) made[*key] = sha256_hex(output_bytes);
 
-		// Before the prefab: the asset database, seeing it, finds its ID and makes none.
+		// A new sidecar goes before the prefab, so the database adopts its guid; one being replaced already holds the
+		// guid, so it follows the prefab it describes (re-import, #1194).
 		const bool with_meta = meta && mem_tag == result.root_tag;
+		const bool meta_first = with_meta && !meta->before.has_value();
 		if (with_meta) {
+			if (std::string why = set_made(*meta, made); !why.empty()) {
+				egLOG_WARN("edt/export", "{} records no files of the import: {}", meta->tag.view(), why);
+			}
+		}
+		if (meta_first) {
+			begin_write();
 			if (std::string error = write_model_meta(top, *meta); !error.empty()) return fail(std::move(error));
 			if (written) written->push_back(meta->tag);
 		}
 		const auto prefab_failed = [&](std::string why) {
-			if (with_meta) {
+			if (meta_first) {
 				if (std::string left = take_back_model_meta(top, *meta); !left.empty()) {
 					why += "; " + left;
 				} else if (written && !written->empty() && written->back() == meta->tag) {
@@ -430,6 +660,7 @@ bool edt::asset_exporter::export_to_project(
 			egLOG_INFO("edt/export", "Unchanged: {}", res_tag.view());
 		} else {
 			// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
+			begin_write();
 			if (wait_for_writes) {
 				if (!m_res.store_sync(res_tag, output_bytes)) {
 					return prefab_failed(std::format("'{}' could not be written (see the log)", res_tag.view()));
@@ -439,6 +670,16 @@ bool edt::asset_exporter::export_to_project(
 			}
 			if (written) written->push_back(res_tag);
 			++files_written;
+		}
+
+		// A replaced sidecar that would come out as it is (an unchanged re-import) is left alone.
+		if (with_meta && !meta_first && meta->text != *meta->before) {
+			begin_write();
+			if (std::string error = write_model_meta(top, *meta); !error.empty()) {
+				return fail(std::format("{}; the prefab is written, its .resource still records the earlier "
+					"settings", error));
+			}
+			if (written) written->push_back(meta->tag);
 		}
 
 		if (progress) progress->done.fetch_add(1);

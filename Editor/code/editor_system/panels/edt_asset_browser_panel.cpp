@@ -745,9 +745,12 @@ namespace edt
 							std::error_code ec;
 							std::filesystem::path sidecar = e.src.path;
 							sidecar += std::string(res::asset_meta_suffix);
-							m_offers_reimport = m_image_form
-								&& std::find(std::begin(pictures), std::end(pictures), extension) != std::end(pictures)
-								&& std::filesystem::is_regular_file(std::filesystem::symlink_status(sidecar, ec));
+							const bool has_sidecar =
+								std::filesystem::is_regular_file(std::filesystem::symlink_status(sidecar, ec));
+							m_offers_reimport = m_image_form && has_sidecar
+								&& std::find(std::begin(pictures), std::end(pictures), extension) != std::end(pictures);
+							m_offers_model_reimport = m_reimport_model && has_sidecar
+								&& to_lower(fs_paths::utf8_of(e.src.path.filename())).ends_with(".prefab.desc");
 							m_material_item = m_material_form ? material_item_of(e.src) : material_menu_item::none;
 						}
 						if (m_offers_open_as_data && ImGui::MenuItem("Open as data")) {
@@ -766,6 +769,9 @@ namespace edt
 						}
 						if (m_offers_reimport && ImGui::MenuItem("Re-import...")) {
 							ask_reimport(std::string(res::tag::make(fs_paths::generic_utf8_of(e.src.relative)).view()));
+						}
+						if (m_offers_model_reimport && ImGui::MenuItem("Re-import...")) {
+							m_reimport_model(res::tag::make(fs_paths::generic_utf8_of(e.src.relative)));
 						}
 						if (m_variant_form && e.src.relative.generic_string().ends_with(".prefab.desc") && ImGui::MenuItem("Create Variant")) {
 							m_variant_form->open(res::tag::make(e.src.relative.generic_string()));
