@@ -128,8 +128,15 @@ namespace ds {
 		return a + ab * v + ac * w;
 	}
 
-	// The squared distance between two segments (Ericson 5.1.9).
-	inline float segment_segment_distance_sq(const glm::vec3& p1, const glm::vec3& q1, const glm::vec3& p2, const glm::vec3& q2)
+	// Two points, one on each of the things a query looked at, nearest to each other.
+	struct closest_pair final
+	{
+		glm::vec3 on_first{ 0.f };
+		glm::vec3 on_second{ 0.f };
+	};
+
+	// The nearest points of two segments (Ericson 5.1.9).
+	inline closest_pair closest_points_segments(const glm::vec3& p1, const glm::vec3& q1, const glm::vec3& p2, const glm::vec3& q2)
 	{
 		using namespace shape_detail;
 		const glm::vec3 d1 = q1 - p1;
@@ -163,7 +170,42 @@ namespace ds {
 				}
 			}
 		}
-		return shape_detail::distance_sq(p1 + d1 * s, p2 + d2 * t);
+		return { p1 + d1 * s, p2 + d2 * t };
+	}
+
+	// The squared distance between two segments.
+	inline float segment_segment_distance_sq(const glm::vec3& p1, const glm::vec3& q1, const glm::vec3& p2, const glm::vec3& q2)
+	{
+		const closest_pair nearest = closest_points_segments(p1, q1, p2, q2);
+		return shape_detail::distance_sq(nearest.on_first, nearest.on_second);
+	}
+
+	// The nearest points of a segment and a triangle: where the segment pierces it (both the same) or else the least of the
+	// segment's ends against the triangle and the segment against each edge. Non-finite input: infinity for the points.
+	inline closest_pair closest_points_segment_triangle(const glm::vec3& p, const glm::vec3& q, const glm::vec3& a, const glm::vec3& b,
+		const glm::vec3& c)
+	{
+		using shape_detail::finite3;
+		constexpr float k_inf = std::numeric_limits<float>::infinity();
+		if (!(finite3(p) && finite3(q) && finite3(a) && finite3(b) && finite3(c))) return { glm::vec3{ k_inf }, glm::vec3{ -k_inf } };
+		if (const auto hit = ray_triangle(p, q - p, a, b, c, false, 1.f)) {
+			const glm::vec3 at = p + (q - p) * hit->t;
+			return { at, at };
+		}
+		closest_pair best{ p, closest_point_on_triangle(p, a, b, c) };
+		float best_sq = shape_detail::distance_sq(best.on_first, best.on_second);
+		const auto consider = [&](const closest_pair& candidate) {
+			const float candidate_sq = shape_detail::distance_sq(candidate.on_first, candidate.on_second);
+			if (candidate_sq < best_sq) {
+				best_sq = candidate_sq;
+				best = candidate;
+			}
+		};
+		consider({ q, closest_point_on_triangle(q, a, b, c) });
+		consider(closest_points_segments(p, q, a, b));
+		consider(closest_points_segments(p, q, b, c));
+		consider(closest_points_segments(p, q, c, a));
+		return best;
 	}
 
 	// The squared distance between a segment and a triangle: 0 when they meet, else the least of the segment's ends against
@@ -174,11 +216,8 @@ namespace ds {
 		// NaN or infinity: no distance (ray_triangle would call a NaN a hit).
 		using shape_detail::finite3;
 		if (!(finite3(p) && finite3(q) && finite3(a) && finite3(b) && finite3(c))) return std::numeric_limits<float>::infinity();
-		if (ray_triangle(p, q - p, a, b, c, false, 1.f)) return 0.f;
-		float best = std::min(shape_detail::distance_sq(p, closest_point_on_triangle(p, a, b, c)), shape_detail::distance_sq(q, closest_point_on_triangle(q, a, b, c)));
-		best = std::min(best, segment_segment_distance_sq(p, q, a, b));
-		best = std::min(best, segment_segment_distance_sq(p, q, b, c));
-		return std::min(best, segment_segment_distance_sq(p, q, c, a));
+		const closest_pair nearest = closest_points_segment_triangle(p, q, a, b, c);
+		return shape_detail::distance_sq(nearest.on_first, nearest.on_second);
 	}
 
 	// Whether a triangle meets the box centred at the origin with the given half sizes (separating axis test of Akenine-Moeller:
@@ -375,5 +414,52 @@ namespace ds {
 			hit.normal = -direction / std::sqrt(speed_sq);
 		}
 		return hit;
+	}
+
+	// The first time the capsule, moving along `direction`, touches the triangle within [0, t_max], by conservative advancement: the
+	// gap between the capsule's surface and the triangle can close no faster than the speed, so the capsule is moved by the gap
+	// (over the speed) until the gap is under a tolerance of 1e-4 of the radius (at least 1e-4). It never moves past a hit; a motion
+	// that only grazes (closing very slowly) may use up its 256 steps first and then reports no hit. `t` is early by at most the
+	// tolerance over the closing speed. A capsule already touching: t = 0 and started_inside, as for the sphere.
+	inline std::optional<sweep_hit> capsule_sweep_triangle(const capsule3& shape, const glm::vec3& direction, const glm::vec3& a,
+		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
+	{
+		using shape_detail::finite3;
+		const float speed_sq = glm::dot(direction, direction);
+		if (!std::isfinite(speed_sq) || !std::isfinite(shape.radius) || !(finite3(a) && finite3(b) && finite3(c) && finite3(shape.a) && finite3(shape.b))) {
+			return std::nullopt;
+		}
+		const float speed = std::sqrt(speed_sq);
+		const float tolerance = 1e-4f * std::max(1.f, shape.radius);
+		const glm::vec3 triangle_normal = glm::cross(b - a, c - a);
+		const float normal_length = glm::length(triangle_normal);
+		constexpr int k_max_steps = 256;
+		float t = 0.f;
+		for (int step = 0; step < k_max_steps; ++step) {
+			const glm::vec3 shift = direction * t;
+			const closest_pair nearest = closest_points_segment_triangle(shape.a + shift, shape.b + shift, a, b, c);
+			const float gap = std::sqrt(shape_detail::distance_sq(nearest.on_first, nearest.on_second)) - shape.radius;
+			if (gap <= tolerance) {
+				sweep_hit hit;
+				hit.t = t;
+				hit.point = nearest.on_second;
+				hit.started_inside = step == 0 && gap <= 0.f;
+				const glm::vec3 out = nearest.on_first - nearest.on_second;
+				const float out_length = glm::length(out);
+				if (out_length > 0.f) {
+					hit.normal = out / out_length;
+				} else if (normal_length > 0.f) {
+					const glm::vec3 unit = triangle_normal / normal_length;
+					hit.normal = glm::dot(unit, direction) > 0.f ? -unit : unit;
+				} else {
+					hit.normal = speed > 0.f ? -direction / speed : glm::vec3{ 0.f, 0.f, 1.f };
+				}
+				return hit;
+			}
+			if (!(speed > 0.f)) return std::nullopt;
+			t += gap / speed;
+			if (!(t <= t_max) || !std::isfinite(t)) return std::nullopt;
+		}
+		return std::nullopt;
 	}
 }

@@ -24,6 +24,7 @@
 //  - a transform is seen once the transform system has run it (it tells the world which entities it moved): a matrix
 //    written after that system, or by anything but a transform_updated event, is seen by the next frame's queries at best;
 //  - hits are per entity for raycast_all (the nearest of each), per triangle inside an entity for the closest and any.
+//  - shape casts (#1328) move a sphere (exactly) or a capsule (conservative advancement) along a direction; a box is not cast yet;
 //  - shape overlaps (#1328) test the triangles (a mesh of over a million triangles answers by their boxes); overlap_point tests the
 //    entities' world bounds only, closest_point the surface: "inside a closed mesh" is not answered (meshes need not be closed);
 //  - the frustum query (#1327) tests the entities' world bounds only (the mesh's box through its matrix), not their triangles: an object whose
@@ -184,7 +185,25 @@ namespace scn {
 		std::uint32_t triangle = ~0u;
 	};
 
+	// What a shape cast met first.
+	struct shape_hit
+	{
+		entt::entity entity = entt::null;
+		// How far the shape moved before it touched, in world units; 0 when it was touching where it started.
+		float distance = 0.f;
+		// The point of the entity's surface it touches.
+		glm::vec3 point{ 0.f };
+		// Unit length: from `point` towards the shape at that moment (the way out when it started touching, the triangle's side
+		// against the motion when its axis lies on the triangle).
+		glm::vec3 normal{ 0.f };
+		// The triangle it touches.
+		std::uint32_t triangle = ~0u;
+		// The shape was touching the entity before it moved (the cast is only told so: distance is 0).
+		bool started_inside = false;
+	};
+
 	static_assert(std::is_trivially_copyable_v<shape> && std::is_standard_layout_v<shape>);
+	static_assert(std::is_trivially_copyable_v<shape_hit> && std::is_standard_layout_v<shape_hit>);
 	static_assert(std::is_trivially_copyable_v<point_hit> && std::is_standard_layout_v<point_hit>);
 	static_assert(std::is_trivially_copyable_v<spatial_layers> && std::is_standard_layout_v<spatial_layers>);
 	static_assert(std::is_trivially_copyable_v<ray> && std::is_standard_layout_v<ray>);
@@ -237,6 +256,12 @@ namespace scn {
 		// nothing (a max_distance of 0 or less answers nothing). Equal distances: the lower entity. The rest of the filter as for
 		// overlap_shape.
 		std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter);
+		// The first entity `volume` touches moving along `direction` (any length: only its direction counts), within
+		// `filter.max_distance` (the length of the cast in world units; unbounded by default), or nothing. A sphere is cast exactly
+		// against the triangles; a capsule by conservative advancement (it never moves past a touch and stops within 1e-4 of the
+		// radius, at least 1e-4, of it; a motion that only grazes may be missed). A box is not cast yet: it answers nothing, as does
+		// a mesh of over a million triangles. Equal distances: the lower entity. The rest of the filter as for overlap_shape.
+		std::optional<shape_hit> shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
@@ -261,6 +286,7 @@ namespace scn {
 	SNK_API void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out);
 	SNK_API void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out);
 	SNK_API std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter = {});
+	SNK_API std::optional<shape_hit> shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter = {});
 	// The view-projection of the part of an image inside a pixel rectangle: what `overlap_frustum` takes for a box on the screen.
 	// `view` and `projection` are the camera's, `corner_a` and `corner_b` two opposite corners in pixels (origin top left, y down, any
 	// order), `image_size` the image's size. The corners are not clamped to the image (a rectangle that reaches past it asks for a

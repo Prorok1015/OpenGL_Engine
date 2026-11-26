@@ -146,6 +146,17 @@ std::optional<scn::point_hit> scn::spatial_world::closest_point(entt::registry& 
 	return m_backend->closest_point(world, point, filter);
 }
 
+std::optional<scn::shape_hit> scn::spatial_world::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction,
+	const ray_filter& filter)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	const float speed_sq = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+	if (!usable(volume) || !finite_vec(direction) || !std::isfinite(speed_sq) || !(speed_sq > 0.f)) {
+		return std::nullopt;
+	}
+	return m_backend->shapecast(world, volume, direction, filter);
+}
+
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "entities_moved runs on the main thread");
@@ -176,6 +187,11 @@ void scn::overlap_point(entt::registry& world, const glm::vec3& point, const ray
 std::optional<scn::point_hit> scn::closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter)
 {
 	return spatial_world::attach(world).closest_point(world, point, filter);
+}
+
+std::optional<scn::shape_hit> scn::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter)
+{
+	return spatial_world::attach(world).shapecast(world, volume, direction, filter);
 }
 
 glm::mat4 scn::screen_rect_view_projection(const glm::mat4& view, const glm::mat4& projection, glm::vec2 corner_a, glm::vec2 corner_b,

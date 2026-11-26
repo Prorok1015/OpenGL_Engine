@@ -434,6 +434,60 @@ namespace {
 		return out;
 	}
 
+	// The box of a box's whole travel: where it starts and where it is after `length` along `unit`.
+	ds::aabb3 swept_bounds(const ds::aabb3& box, const glm::vec3& unit, float length)
+	{
+		ds::aabb3 out = box;
+		const glm::vec3 shift = unit * length;
+		ds::expand(out, box.min + shift);
+		ds::expand(out, box.max + shift);
+		return out;
+	}
+
+	// The first touch of a sphere or capsule moving along `unit` with one mesh, within `limit`: the triangles the shape's travel
+	// reaches (in the mesh's own space), each through the entity's matrix and swept in the world.
+	std::optional<scn::shape_hit> cast_in_mesh(const entry& mesh, const prepared_shape& volume, const glm::vec3& unit, float limit)
+	{
+		const triangle_tree& tree = *mesh.tree;
+		if (tree.boxes_only) {
+			return std::nullopt;
+		}
+		// Past this the shape has left the entity's box behind: no touch is left to find.
+		const ds::aabb3 entity_box = ds::transformed(tree.box, mesh.world);
+		const float entity_reach = glm::distance(ds::center(volume.bounds), ds::center(entity_box)) + 0.5f * glm::length(ds::size(entity_box))
+			+ 0.5f * glm::length(ds::size(volume.bounds));
+		float best = std::min(limit, entity_reach);
+		std::optional<scn::shape_hit> found;
+		tree.triangles.query_box(ds::transformed(swept_bounds(volume.bounds, unit, best), mesh.inverse),
+			[&](std::uint32_t, const std::uint32_t& first_index) {
+				glm::vec3 a;
+				glm::vec3 b;
+				glm::vec3 c;
+				if (!read_triangle(tree, first_index, a, b, c)) {
+					return true;
+				}
+				a = to_world(mesh, a);
+				b = to_world(mesh, b);
+				c = to_world(mesh, c);
+				const std::optional<ds::sweep_hit> hit = volume.kind == scn::shape_kind::sphere
+					? ds::sphere_sweep_triangle(volume.sphere, unit, a, b, c, best)
+					: ds::capsule_sweep_triangle(volume.capsule, unit, a, b, c, best);
+				if (hit && (hit->t < best || !found)) {
+					best = hit->t;
+					scn::shape_hit out;
+					out.entity = mesh.entity;
+					out.distance = hit->t;
+					out.point = hit->point;
+					out.normal = hit->normal;
+					out.triangle = first_index / 3;
+					out.started_inside = hit->started_inside;
+					found = out;
+				}
+				return true;
+			});
+		return found;
+	}
+
 	// Walks the world tree for one ray. `test(index, t_max)` answers the nearest hit inside entry `index`; `found(hit)` returns the
 	// distance the walk goes on to (infinity: every entity; the hit's own distance: only nearer ones). For `any` the walk stops at
 	// the first hit.
@@ -618,6 +672,41 @@ namespace {
 					}
 				}
 				return ds::bvh_nearest_action{ limit, false };
+			});
+			return best;
+		}
+
+		std::optional<scn::shape_hit> shapecast(entt::registry& world, const scn::shape& volume, const glm::vec3& direction,
+			const scn::ray_filter& filter) override
+		{
+			if (volume.kind == scn::shape_kind::box || !(filter.max_distance > 0.f)) {
+				return std::nullopt;
+			}
+			ensure_current(world);
+			const ds::aabb3 everything = m_world.bounds();
+			if (everything.empty()) {
+				return std::nullopt;
+			}
+			const glm::vec3 unit = glm::normalize(direction);
+			const prepared_shape prepared = prepare(volume);
+			// An unbounded cast only needs to go as far as the world reaches.
+			float limit = filter.max_distance;
+			if (!std::isfinite(limit)) {
+				limit = glm::length(ds::size(everything)) + glm::distance(ds::center(prepared.bounds), ds::center(everything))
+					+ glm::length(ds::size(prepared.bounds));
+			}
+			std::optional<scn::shape_hit> best;
+			m_world.query_box(swept_bounds(prepared.bounds, unit, limit), [&](std::uint32_t, const std::uint32_t& index) {
+				const entry& mesh = m_entries[index];
+				if (!sees(world, mesh, filter)) {
+					return true;
+				}
+				const auto hit = cast_in_mesh(mesh, prepared, unit, limit);
+				if (hit && (!best || hit->distance < best->distance || (hit->distance == best->distance && hit->entity < best->entity))) {
+					best = hit;
+					limit = hit->distance;
+				}
+				return true;
 			});
 			return best;
 		}

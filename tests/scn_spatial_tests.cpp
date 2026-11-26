@@ -1166,4 +1166,212 @@ BOOST_AUTO_TEST_CASE(AnEntityWithABrokenMatrix_IsSkipped_ByEveryShapeAndPointQue
 	BOOST_TEST((nearest->entity == good));
 }
 
+
+BOOST_AUTO_TEST_CASE(ASphereCast_StopsAtTheQuad_WithDistancePointNormalAndTriangle_WhateverTheDirectionsLength)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto sphere = scn::shape::make_sphere({ 0.1f, 0.1f, 5.f }, 1.f);
+	for (const glm::vec3 direction : { glm::vec3{ 0.f, 0.f, -1.f }, glm::vec3{ 0.f, 0.f, -3.f } }) {
+		const auto hit = scn::shapecast(reg, sphere, direction);
+		BOOST_REQUIRE(hit.has_value());
+		BOOST_TEST((hit->entity == quad));
+		BOOST_TEST(hit->distance == 4.f, boost::test_tools::tolerance(1e-4f));
+		BOOST_TEST(hit->point.x == 0.1f, boost::test_tools::tolerance(1e-4f));
+		BOOST_TEST(hit->point.z == 0.f, boost::test_tools::tolerance(1e-3f));
+		BOOST_TEST(hit->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
+		BOOST_TEST(hit->triangle < 2u);
+		BOOST_TEST(!hit->started_inside);
+	}
+	const auto from_behind = scn::shapecast(reg, scn::shape::make_sphere({ 0.1f, 0.1f, -5.f }, 1.f), { 0.f, 0.f, 1.f });
+	BOOST_REQUIRE(from_behind.has_value());
+	BOOST_TEST(from_behind->normal.z == -1.f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(AShapeCast_IsCutAtMaxDistance_AndMissesWhatIsBesideItsPath)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto sphere = scn::shape::make_sphere({ 0.f, 0.f, 5.f }, 1.f);
+	scn::ray_filter cut;
+	cut.max_distance = 3.5f;
+	BOOST_TEST(!scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, cut).has_value());
+	cut.max_distance = 4.f;
+	BOOST_TEST(scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, cut).has_value());
+	BOOST_TEST(!scn::shapecast(reg, sphere, { 0.f, 0.f, 1.f }).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_sphere({ 3.f, 0.f, 5.f }, 1.f), { 0.f, 0.f, -1.f }).has_value());
+	cut.max_distance = 0.f;
+	BOOST_TEST(!scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, cut).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AShapeCast_TakesTheNearerEntity_AndTheLowerOneAtATie)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto near_quad = add_quad(reg, at({ 0.f, 0.f, 1.f }));
+	add_quad(reg, at({ 0.f, 0.f, -3.f }));
+	const auto nearest = scn::shapecast(reg, scn::shape::make_sphere({ 0.f, 0.f, 5.f }, 0.5f), { 0.f, 0.f, -1.f });
+	BOOST_REQUIRE(nearest.has_value());
+	BOOST_TEST((nearest->entity == near_quad));
+	BOOST_TEST(nearest->distance == 3.5f, boost::test_tools::tolerance(1e-4f));
+
+	entt::registry twins;
+	const auto first = add_quad(twins, at({ 3.f, 0.f, 0.f }));
+	const auto second = add_quad(twins, at({ 3.f, 0.f, 0.f }));
+	const auto tie = scn::shapecast(twins, scn::shape::make_sphere({ 3.f, 0.f, 5.f }, 0.5f), { 0.f, 0.f, -1.f });
+	BOOST_REQUIRE(tie.has_value());
+	BOOST_TEST((tie->entity == std::min(first, second)));
+}
+
+BOOST_AUTO_TEST_CASE(ACapsuleCast_StopsAtTheRadiusOfItsSide_AndAShapeThatStartsTouchingSaysSo)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto lying = scn::shapecast(reg, scn::shape::make_capsule({ -0.3f, 0.f, 5.f }, { 0.3f, 0.f, 5.f }, 0.5f), { 0.f, 0.f, -1.f });
+	BOOST_REQUIRE(lying.has_value());
+	BOOST_TEST(lying->distance == 4.5f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(lying->normal.z == 1.f, boost::test_tools::tolerance(1e-3f));
+
+	const auto inside = scn::shapecast(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.5f }, 1.f), { 1.f, 0.f, 0.f });
+	BOOST_REQUIRE(inside.has_value());
+	BOOST_TEST(inside->started_inside);
+	BOOST_TEST(inside->distance == 0.f);
+	BOOST_TEST(inside->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
+	const auto capsule_inside = scn::shapecast(reg, scn::shape::make_capsule({ -0.3f, 0.f, 0.5f }, { 0.3f, 0.f, 0.5f }, 1.f), { 0.f, 1.f, 0.f });
+	BOOST_REQUIRE(capsule_inside.has_value());
+	BOOST_TEST(capsule_inside->started_inside);
+}
+
+BOOST_AUTO_TEST_CASE(AShapeCast_UsesTheStretchedMesh_AtItsEdge)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, glm::scale(at({ 0.f, 0.f, 0.f }), glm::vec3{ 4.f, 1.f, 1.f }));
+	// The quad spans x in [-2, 2]: a unit sphere at x = 2.5 meets its edge (2, 0, 0) where z = sqrt(1 - 0.25).
+	const auto hit = scn::shapecast(reg, scn::shape::make_sphere({ 2.5f, 0.f, 3.f }, 1.f), { 0.f, 0.f, -1.f });
+	BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->distance == 3.f - std::sqrt(0.75f), boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(hit->point.x == 2.f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(hit->normal.x == 0.5f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(hit->normal.z == std::sqrt(0.75f), boost::test_tools::tolerance(1e-3f));
+}
+
+BOOST_AUTO_TEST_CASE(AShapeCast_SkipsHiddenOtherLayersAndExcluded_SeesAMoveAndADestroy)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto hidden = add_quad(reg, at({ 0.f, 0.f, 3.f }));
+	reg.remove<scn::renderable>(hidden);
+	const auto other_layer = add_quad(reg, at({ 0.f, 0.f, 2.f }));
+	reg.emplace<scn::spatial_layers>(other_layer, scn::spatial_layers{ scn::spatial_mask{ scn::spatial_layer{ 5 } } });
+	const auto excluded = add_quad(reg, at({ 0.f, 0.f, 1.f }));
+	const auto solid = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto sphere = scn::shape::make_sphere({ 0.f, 0.f, 10.f }, 0.5f);
+
+	scn::ray_filter filter;
+	filter.mask = scn::spatial_mask{ scn::k_default_spatial_layer };
+	const std::vector<entt::entity> out_of_the_way{ excluded };
+	filter.exclude = out_of_the_way;
+	const auto plain = scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, filter);
+	BOOST_REQUIRE(plain.has_value());
+	BOOST_TEST((plain->entity == solid));
+
+	scn::ray_filter everything;
+	everything.include_hidden = true;
+	const auto first = scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, everything);
+	BOOST_REQUIRE(first.has_value());
+	BOOST_TEST((first->entity == hidden));
+
+	reg.get<scn::world_transform>(hidden).world = at({ 50.f, 0.f, 3.f });
+	const entt::entity moved[] = { hidden };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+	const auto after_move = scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, everything);
+	BOOST_REQUIRE(after_move.has_value());
+	BOOST_TEST((after_move->entity == other_layer));
+	reg.destroy(other_layer);
+	const auto after_destroy = scn::shapecast(reg, sphere, { 0.f, 0.f, -1.f }, everything);
+	BOOST_REQUIRE(after_destroy.has_value());
+	BOOST_TEST((after_destroy->entity == excluded));
+}
+
+BOOST_AUTO_TEST_CASE(AShapeCast_OfABoxOfABadShapeOrOfNoDirection_AnswersNothing)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const float nan = std::nanf("");
+	const glm::vec3 down{ 0.f, 0.f, -1.f };
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_box({ 0.f, 0.f, 5.f }, { 0.5f, 0.5f, 0.5f }), down).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_sphere({ 0.f, 0.f, 5.f }, 1.f), { 0.f, 0.f, 0.f }).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_sphere({ 0.f, 0.f, 5.f }, 1.f), { nan, 0.f, -1.f }).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_sphere({ nan, 0.f, 5.f }, 1.f), down).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_sphere({ 0.f, 0.f, 5.f }, -1.f), down).has_value());
+	BOOST_TEST(!scn::shapecast(reg, scn::shape::make_capsule({ 0.f, 0.f, 5.f }, { 0.f, nan, 5.f }, 1.f), down).has_value());
+	entt::registry empty;
+	BOOST_TEST(!scn::shapecast(empty, scn::shape::make_sphere({ 0.f, 0.f, 5.f }, 1.f), down).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ASphereCast_AnswersAsAMarchedSampledQuadDoes_ForRandomQuadsAndCasts)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	std::mt19937 random{ 13281 };
+	std::uniform_real_distribution<float> position{ -8.f, 8.f };
+	std::uniform_real_distribution<float> angle{ 0.f, 6.28f };
+	std::uniform_real_distribution<float> scale{ 0.5f, 3.f };
+	std::uniform_real_distribution<float> size{ 0.3f, 1.2f };
+	std::vector<std::vector<glm::vec3>> quads;
+	for (int i = 0; i < 40; ++i) {
+		glm::mat4 matrix = at({ position(random), position(random), position(random) });
+		matrix = glm::rotate(matrix, angle(random), glm::normalize(glm::vec3{ position(random) + 9.f, position(random) + 9.f, position(random) + 9.f }));
+		matrix = glm::scale(matrix, glm::vec3{ scale(random), scale(random), 1.f });
+		add_quad(reg, matrix);
+		quads.push_back(quad_samples(matrix, 0.5f, 20));
+	}
+	constexpr float k_slack = 0.12f;
+	constexpr float k_reach = 20.f;
+	int hits = 0;
+	for (int run = 0; run < 20; ++run) {
+		const glm::vec3 centre{ position(random), position(random), position(random) };
+		const float radius = size(random);
+		const glm::vec3 direction = glm::normalize(glm::vec3{ position(random), position(random), position(random) } + glm::vec3{ 0.01f });
+		scn::ray_filter reach;
+		reach.max_distance = k_reach;
+		const auto hit = scn::shapecast(reg, scn::shape::make_sphere(centre, radius), direction, reach);
+		std::optional<float> certain;
+		for (float at_t = 0.f; at_t <= k_reach && !certain; at_t += 0.05f) {
+			const glm::vec3 now = centre + direction * at_t;
+			for (const auto& samples : quads) {
+				for (const glm::vec3& sample : samples) {
+					if (glm::distance(now, sample) < radius - k_slack) {
+						certain = at_t;
+						break;
+					}
+				}
+				if (certain) break;
+			}
+		}
+		BOOST_TEST_CONTEXT("cast " << run) {
+			if (certain) {
+				BOOST_REQUIRE(hit.has_value());
+				BOOST_TEST(hit->distance <= *certain + 1e-3f);
+			}
+			if (hit && !hit->started_inside) {
+				++hits;
+				const glm::vec3 now = centre + direction * hit->distance;
+				float nearest = std::numeric_limits<float>::max();
+				for (const auto& samples : quads) {
+					for (const glm::vec3& sample : samples) nearest = std::min(nearest, glm::distance(now, sample));
+				}
+				BOOST_TEST(nearest >= radius - 1e-3f);
+				BOOST_TEST(nearest <= radius + k_slack);
+			}
+		}
+	}
+	BOOST_TEST(hits > 3);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
