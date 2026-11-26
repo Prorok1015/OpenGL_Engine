@@ -67,6 +67,8 @@ namespace edt
 			std::function<std::optional<std::string>()> start_blocker;
 			std::function<bool()> person_is_editing;
 			std::function<cmd::policy_mode(std::string_view)> agent_mode_of;
+			// Waits for the saves queued to user:// (res::save_service::flush); empty without the service.
+			std::function<void()> finish_user_writes;
 		};
 
 		explicit play_component(ports from);

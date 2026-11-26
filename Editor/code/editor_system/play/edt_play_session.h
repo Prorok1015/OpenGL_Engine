@@ -40,6 +40,10 @@ namespace edt
 		// user:// of this resource system is served from `play_profile` while Play runs (emptied at every start) and
 		// from the roots `editor_profile` again after Stop. Null or an empty path: user:// is left alone (no project).
 		res::resource_system* profile_resources = nullptr;
+		// Returns once the writes of the game queued under user:// are done (save_service::flush): called before the profile is
+		// emptied or user:// is served from other folders, so no save of the session before lands in the next profile. Null:
+		// nothing is written through a service.
+		std::function<void()> finish_user_writes{};
 		std::filesystem::path play_profile{};
 		std::vector<std::filesystem::path> editor_profile{};
 		// Shows the selection taken before Play again (the hierarchy, which goes on to select it); false: it could not.
