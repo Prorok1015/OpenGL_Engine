@@ -53,6 +53,10 @@ namespace edt
 			std::function<std::optional<std::string>()> write_blocker = {};
 			// An image import wrote these files (main thread): the asset database is told. Null: nobody is.
 			std::function<void(const std::vector<res::tag>&)> assets_written = {};
+			// A re-import replaced these files (main thread): the asset database is told they changed. Null: nobody is.
+			std::function<void(const std::vector<res::tag>&)> assets_rewritten = {};
+			// Whether a document holds unsaved edits of the file: a re-import of it is refused. Null: none does.
+			std::function<bool(const res::tag&)> open_with_unsaved_changes = {};
 			// Whether a project is open: without one no image import starts. Null: none is.
 			std::function<bool()> project_open = {};
 		};

@@ -6,6 +6,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/model_codec/res_asset_id.h>
 #include <snk/model_codec/res_tag.h>
+#include <snk/resource/res_asset_meta.h>
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 #include <chrono>
@@ -58,8 +59,8 @@ namespace edt
 	};
 
 	// Strict: an object; a key it does not know, a wrong type or value is an error naming the key; a missing key takes
-	// its default; `version`, when given, must be 1. A null value is all defaults.
-	image_settings_parse parse_image_settings(const boost::json::value& value);
+	// its default (`base`'s); `version`, when given, must be 1. A null value is all defaults.
+	image_settings_parse parse_image_settings(const boost::json::value& value, const image_import_settings& base = {});
 	// What the `.resource` holds: {"version", "wrap", "filter", "mips"}.
 	boost::json::object image_settings_json(const image_import_settings& settings);
 	// The texture desc beside the picture: never header.type, usage, extent or format (the loader takes them from the
@@ -119,6 +120,51 @@ namespace edt
 		bool ok() const { return error.empty(); }
 	};
 
+	// Re-import of a picture already in the project (#1194): a person picks a new source; the bytes are replaced, both
+	// `.resource` files keep their IDs.
+	struct image_reimport_request
+	{
+		std::string target{};	// res:// tag of the picture in the project's own layer
+		std::string path{};	// absolute, on the disk, anywhere
+		// The settings as JSON (parse_image_settings); a missing key, or null, keeps what the picture's `.resource`
+		// records.
+		boost::json::value settings{};
+	};
+
+	struct image_reimport_plan
+	{
+		// The source as a person's import resolves it.
+		std::filesystem::path source{};
+		std::uintmax_t size = 0;
+		std::filesystem::file_time_type modified{};
+		file_id id{};
+		std::string folder{};	// below res://, no protocol; empty: the root
+		std::string name{};	// file name of the picture in the project
+		res::tag image{};
+		res::tag meta{};
+		res::tag texture{};
+		res::tag texture_meta{};
+		// The picture's `.resource` as read (canonical, importer "texture").
+		res::asset_meta recorded{};
+		// The texture desc's own ID; its `.resource` is never written.
+		res::asset_id texture_guid{};
+		// What was read: the job replaces a file only while it still holds these bytes. The picture is too big to keep
+		// here: its stamp, and the job compares the bytes it reads under that stamp.
+		std::string meta_bytes{};
+		std::string texture_bytes{};
+		std::optional<platform::beneath::file_stamp> image_stamp{};
+		image_import_settings old_settings{};
+		image_import_settings settings{};
+		bool settings_changed = false;
+		// The texture desc with only the four fields the settings make replaced; empty: it is not rewritten.
+		std::vector<std::byte> texture_patch{};
+		// Set when refused: the command code and why.
+		std::string code{};
+		std::string error{};
+
+		bool ok() const { return error.empty(); }
+	};
+
 	struct image_import_options
 	{
 		// The folders res:// is read from, lowest first: a name taken in any of them is refused.
@@ -131,6 +177,10 @@ namespace edt
 		std::function<std::optional<std::string>()> blocker;
 		// Main thread, after a job wrote the four files: the asset database and the resource cache are told.
 		std::function<void(const std::vector<res::tag>&)> written;
+		// Main thread, after a re-import replaced these files (also those a failed one could not put back).
+		std::function<void(const std::vector<res::tag>&)> rewritten;
+		// Whether a document holds unsaved edits of `tag`: a re-import of it is refused. Null: none does.
+		std::function<bool(const res::tag&)> open_with_unsaved_changes;
 		// For the lifetime of what a person was shown; null: steady_clock.
 		std::function<std::chrono::steady_clock::time_point()> now;
 		// The largest picture an agent may import; a person's call may bring k_max_person_source_bytes.
@@ -140,7 +190,8 @@ namespace edt
 		// drive or mount.
 		std::function<unsigned(char letter)> drive_type = system_drive_type;
 		std::function<std::optional<std::string>()> mount_table = system_mount_table;
-		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"); true fails that write.
+		// Tests only: called before each write ("meta", "texture_meta", "image", "texture"; a re-import's
+		// "reimport_image", "reimport_texture", "reimport_meta", and "put_back:<step>" for a put-back); true fails it.
 		std::function<bool(std::string_view step)> fail_step;
 	};
 
@@ -184,6 +235,15 @@ namespace edt
 		// confirmation) must be the one the plan was described with: an approved call runs the plan of its own question.
 		started start(const image_import_request& request, const cmd::origin& caller, std::string_view ticket = {});
 
+		// A person's re-import only: anyone else is denied (#1457). Reads the picture's `.resource` and texture desc
+		// below the project's own layer (never through a link) and the source's size; nothing is written.
+		image_reimport_plan resolve_reimport(const image_reimport_request& request, const cmd::origin& caller) const;
+		// The job reads the source, proves it decodes and replaces, each only while it still holds what was read: the
+		// picture, then (settings changed) the texture desc's four fields and the picture's `.resource`; any failure
+		// puts back what was replaced. Its result is {image, resource, texture, guid, texture_guid, settings_changed,
+		// texture_rewritten}.
+		started start_reimport(const image_reimport_request& request, const cmd::origin& caller);
+
 		// Empty when `bytes` are a png or jpeg (matching `extension`) that decodes within the picture adapter's limits.
 		static std::string image_problem(std::span<const std::byte> bytes, std::string_view extension);
 
@@ -210,6 +270,9 @@ namespace edt
 
 		std::chrono::steady_clock::time_point now() const;
 		source_volume_ports volumes() const;
+		// A person's source on the disk: resolved, a regular picture within max_person_bytes. Fills source, on_disk,
+		// size, modified and id; else code and error.
+		void resolve_person_source(const std::string& path, image_import_plan& plan) const;
 		// Everything of a plan but the source: settings, names, free names, the blockers.
 		void plan_targets(const image_import_request& request, std::string_view source_name,
 			image_import_plan& plan) const;
@@ -235,6 +298,13 @@ namespace edt
 		explicit image_import_form(image_importer& importer) : m_importer(importer) {}
 
 		void open(std::string folder, std::filesystem::path source);
+		// Re-import mode (#1194): `target` is the picture's res:// tag; the settings start as its `.resource` records
+		// them; no name or folder.
+		void open_reimport(std::string target, std::filesystem::path source);
+		bool reimport() const { return !m_target.empty(); }
+		const std::string& target() const { return m_target; }
+		// Re-import mode: what a submit replaces with the settings chosen now.
+		std::vector<std::string> rewritten_names() const;
 		const std::string& folder() const { return m_folder; }
 		const std::filesystem::path& source() const { return m_source; }
 
@@ -253,17 +323,20 @@ namespace edt
 		bool can_submit() const { return !m_source.empty() && m_problem.empty(); }
 		const std::string& error() const { return m_error; }
 
-		// Starts the import as the person's own call; the job's id, else error() says why.
+		// Starts the import (or the re-import) as the person's own call; the job's id, else error() says why.
 		std::optional<std::uint64_t> submit();
 
 	private:
 		image_import_request request() const;
+		image_reimport_request reimport_request() const;
 		void check();
 
 		image_importer& m_importer;
+		std::string m_target;
 		std::string m_folder;
 		std::filesystem::path m_source;
 		image_import_settings m_settings;
+		image_import_settings m_recorded;
 		std::string m_name;
 		image_import_plan m_plan;
 		std::string m_problem;

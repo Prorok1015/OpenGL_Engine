@@ -12,6 +12,7 @@
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_dynamic.h>
 #include <snk/desc/desc_schema.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/driver/rnd_buffer_interface.h>
@@ -32,13 +33,16 @@
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/game/gs_input_stack_handle.h>
 #include <snk/game/gs_module_layout.h>
+#include <snk/gui/gui_theme_desc.h>
 #include <snk/input/inp_action_state.h>
 #include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_stack.h>
 #include <snk/input/inp_user_bindings.h>
 #include <snk/model_codec/res_desc_binary_codec.h>
+#include <snk/model_codec/res_tag.h>
 #include <snk/model_codec/rnd_geometry_encode.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/rnd_material_desc.h>
 #include <snk/render/rnd_render_context.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_pass_interface.h>
@@ -46,22 +50,40 @@
 #include <snk/render/rnd_shader_problem.h>
 #include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
+#include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/render/texture/rnd_texture_id.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
-#include <snk/model_codec/res_tag.h>
 #include <snk/resource/resolvers/res_control_block.hpp>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_override_record.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/level/scn_world_desc.h>
+#include <snk/scene/scn_anchor_desc.h>
+#include <snk/scene/scn_animated_node_desc.h>
 #include <snk/scene/scn_animation.h>
+#include <snk/scene/scn_animation_clip_desc.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_animation_controller_desc.h>
 #include <snk/scene/scn_blackboard_catalog.h>
+#include <snk/scene/scn_bone_desc.h>
+#include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/scn_component_catalog.h>
+#include <snk/scene/scn_directional_light_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_engine_component_list.h>
 #include <snk/scene/scn_event_subscriptions.h>
+#include <snk/scene/scn_input_actions_desc.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_object_desc.h>
+#include <snk/scene/scn_screen_anchor_desc.h>
+#include <snk/scene/scn_skin_weights_desc.h>
+#include <snk/scene/scn_skinning_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
 #include <snk/scene/scn_spatial.h>
 #include <snk/scene/scn_time.h>
 #include <snk/window/wnd_window.h>
@@ -173,6 +195,23 @@ namespace gs
 			// A module may make or copy a shader_desc: its constructors are implicit and inline, and pin_resource<T> allocates it
 			// in the caller (#1203). stages_for returns the stages by value.
 			rnd::shader_desc, rnd::shader_stage_sources,
+			// The engine's other public descs (#1449): copy_to_same copies them inline, schema_desc's schema_generator builds a
+			// T{}, pin_resource<T> allocates one in the caller; require<T> does not (the engine's factory makes it). The game
+			// key lists theme_desc too: engine_api hands a module the gui headers.
+			rnd::material_desc, rnd::texture_desc, scn::prefab_desc, scn::world_desc, scn::level_desc, scn::object_desc,
+			scn::mesh_node_desc, scn::camera_desc, scn::directional_light_desc, scn::screen_anchor_desc, scn::skybox_desc,
+			scn::input_actions_desc, scn::bone_desc, scn::skinning_desc, scn::skin_weights_desc, scn::animation_clip_desc,
+			scn::animation_collection_desc, scn::animation_controller_desc, scn::animated_node_desc, scn::scene_anchor_desc,
+			desc::dynamic_desc, gui::theme_desc,
+			// What their fields hold, where the desc's own size does not show it (a container's size is not its element's):
+			// clip channels (animation_node and its keys; scale_key is pos_key's type), the input action entries, a world's
+			// input stack; input_action_list and input_gamepad_settings a module builds for their json_codec. Already listed:
+			// res::tag, res_handle<int> (every res_handle member), driver::texture_header, prefab_node and its parts,
+			// override_record, inp::gamepad_config, desc::dyn_blob, desc::schema_binding, glm::mat4, boost::json::value.
+			scn::animation_node, scn::animation_pos_key, scn::animation_rotate_key, scn::input_action_list,
+			scn::input_action_entry, scn::input_binding_entry, scn::input_gamepad_settings, scn::input_stack_desc,
+			// find_stale_records returns a vector of them; set_spawn_limits takes and returns the limits by value.
+			scn::stale_override, scn::spawn_limits,
 			// Passed by value or reference through render_system's exports and the pinned render interfaces (#1312):
 			// texture_manager's ids and bindings, the material cache's ids and compiled materials, the shader problems and
 			// a texture's header.
