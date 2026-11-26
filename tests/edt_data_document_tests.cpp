@@ -2425,6 +2425,175 @@ BOOST_AUTO_TEST_CASE(NewMaterial_TheOpenLevelsFile_IsNeverWrittenOver)
 	BOOST_TEST(text_of("Scene.mat.desc") == scene_before);
 }
 
+// ---- PR 2 of #1198: Create Material on a shader file, Create Material Variant on a material file ----
+
+namespace {
+	std::vector<std::string> keys_of(const json::object& content)
+	{
+		std::vector<std::string> keys;
+		for (const auto& field : content) keys.emplace_back(field.key());
+		return keys;
+	}
+
+	// Waits for a handle whose load runs on the resolver's io thread.
+	template <typename Handle, typename Pump>
+	bool wait_loaded(const Handle& handle, Pump pump)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (!handle.is_ready() && !handle.has_error() && std::chrono::steady_clock::now() < deadline) {
+			pump();
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		return handle.is_ready();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_FollowTheAssetKind)
+{
+	BOOST_TEST((edt::material_menu_item_of("shader_desc") == edt::material_menu_item::from_shader));
+	BOOST_TEST((edt::material_menu_item_of("material_desc") == edt::material_menu_item::variant));
+	for (const std::string_view kind : { "", "data", "prefab", "shader", "texture" }) {
+		BOOST_TEST_CONTEXT("kind: " << kind)
+		BOOST_TEST((edt::material_menu_item_of(kind) == edt::material_menu_item::none));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_FromAShader_HoldsTheBaseMaterialAsParent_AndTheShader_NamedAfterItsStem)
+{
+	const material_wiring wiring{ *this };
+	fs::create_directories(res_root / "fx");
+	const res::tag shader = put("fx/toon.shader.desc", R"({"__type":"shader_desc"})");
+	edt::material_create_form form(wiring.creator);
+	BOOST_REQUIRE(form.open_from_shader(shader));
+	BOOST_TEST(form.title() == "New Material from toon.shader.desc");
+	BOOST_TEST(form.folder() == "fx");
+	BOOST_TEST(form.suggested() == "toon");
+	BOOST_TEST(form.name() == "toon");
+	BOOST_TEST(form.file_name() == "toon.mat.desc");
+	BOOST_TEST(form.problem().empty());
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://fx/toon.mat.desc");
+
+	const json::object content = parsed("fx/toon.mat.desc");
+	BOOST_TEST((keys_of(content) == std::vector<std::string>{ "__type", "__version", "__parent", "shader" }));
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "material_desc");
+	BOOST_TEST(content.at("__version").to_number<int>() == descs->current_version("material_desc"));
+	BOOST_TEST(std::string(content.at("__parent").as_string()) == "res://base_material.desc");
+	BOOST_TEST(std::string(content.at("shader").as_string()) == "res://fx/toon.shader.desc");
+
+	// the stem is taken now: "toon-2", and the taken name is refused at submit
+	BOOST_REQUIRE(form.open_from_shader(shader));
+	BOOST_TEST(form.name() == "toon-2");
+	form.set_name("toon");
+	BOOST_TEST(form.problem() == "'toon.mat.desc' already exists in the project layer");
+	BOOST_TEST(!form.submit().has_value());
+
+	// no res:// desc file: nothing is opened
+	BOOST_TEST(!form.open_from_shader(res::tag{ "res://fx/toon.vert" }));
+	BOOST_TEST(!form.open_from_shader(res::tag{}));
+}
+
+// It draws with that shader, not the base material's.
+BOOST_AUTO_TEST_CASE(NewMaterial_FromAShader_ResolvesThatShader)
+{
+	fs::create_directories(lower / "shaders");
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "base_material.desc", lower / "base_material.desc", fs::copy_options::overwrite_existing);
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "shaders" / "scene.shader.desc", lower / "shaders" / "scene.shader.desc",
+		fs::copy_options::overwrite_existing);
+	const render_descs shaders{ *descs };
+	write(lower, "shaders/toon.shader.desc",
+		R"({"__type":"shader_desc","__version":)" + std::to_string(descs->current_version("shader_desc"))
+			+ R"(,"vertex":"res://shaders/toon.vert","fragment":"res://shaders/toon.frag","defines":[]})");
+	const material_wiring wiring{ *this };
+	edt::material_create_form form(wiring.creator);
+	BOOST_REQUIRE(form.open_from_shader(res::tag{ "res://shaders/toon.shader.desc" }));
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	// the shader is in the engine layer: the material lands in the same folder of the project layer
+	BOOST_TEST(made->string() == "res://shaders/toon.mat.desc");
+	BOOST_TEST(fs::exists(res_root / "shaders" / "toon.mat.desc"));
+	BOOST_TEST(!fs::exists(lower / "shaders" / "toon.mat.desc"));
+
+	const auto material = require_loaded<scn::material_desc>(*made);
+	BOOST_REQUIRE(material.is_ready());
+	BOOST_REQUIRE(!material.has_error());
+	const auto& shader = material.get()->shader;
+	BOOST_TEST(shader.get_tag().view() == "res://shaders/toon.shader.desc");
+	BOOST_REQUIRE_MESSAGE(wait_loaded(shader, [this] { pump(); }), "the shader was still loading after 5 s");
+	BOOST_TEST(!shader.has_error());
+	BOOST_TEST(shader.get()->vertex.string() == "res://shaders/toon.vert");
+}
+
+BOOST_AUTO_TEST_CASE(NewMaterial_AVariant_HoldsOnlyTheMaterialAsParent_NamedStemVariant_ThenVariant2)
+{
+	const material_wiring wiring{ *this };
+	fs::create_directories(res_root / "materials");
+	const res::tag rock = put("materials/rock.mat.desc", R"({"__type":"material_desc"})");
+	edt::material_create_form form(wiring.creator);
+	BOOST_REQUIRE(form.open_variant_of(rock));
+	BOOST_TEST(form.title() == "Material Variant of rock.mat.desc");
+	BOOST_TEST(form.folder() == "materials");
+	BOOST_TEST(form.name() == "rock_variant");
+	BOOST_TEST(form.file_name() == "rock_variant.mat.desc");
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://materials/rock_variant.mat.desc");
+
+	const json::object content = parsed("materials/rock_variant.mat.desc");
+	BOOST_TEST((keys_of(content) == std::vector<std::string>{ "__type", "__version", "__parent" }));
+	BOOST_TEST(std::string(content.at("__type").as_string()) == "material_desc");
+	BOOST_TEST(std::string(content.at("__parent").as_string()) == "res://materials/rock.mat.desc");
+
+	// as a prefab variant: no separator before the number
+	BOOST_REQUIRE(form.open_variant_of(rock));
+	BOOST_TEST(form.name() == "rock_variant2");
+	form.set_name("rock_variant");
+	BOOST_TEST(form.problem() == "'rock_variant.mat.desc' already exists in the project layer");
+	BOOST_TEST(!form.submit().has_value());
+
+	// a material that is a plain .desc (the kind lookup knows it by its `__type`): only ".desc" comes off the stem
+	BOOST_REQUIRE(form.open_variant_of(res::tag{ "res://base_material.desc" }));
+	BOOST_TEST(form.folder().empty());
+	BOOST_TEST(form.name() == "base_material_variant");
+	BOOST_TEST(form.title() == "Material Variant of base_material.desc");
+}
+
+// A variant of an engine material is the project's: the same folder, the project layer; what it draws is inherited.
+BOOST_AUTO_TEST_CASE(NewMaterial_AVariantOfAnEngineMaterial_LandsInTheProjectLayer_AndInheritsItsAlbedo)
+{
+	fs::create_directories(lower / "shaders");
+	fs::create_directories(lower / "materials");
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "base_material.desc", lower / "base_material.desc", fs::copy_options::overwrite_existing);
+	fs::copy_file(fs::path(SNK_CORE_RES_DIR) / "shaders" / "scene.shader.desc", lower / "shaders" / "scene.shader.desc",
+		fs::copy_options::overwrite_existing);
+	const render_descs shaders{ *descs };
+	const res::tag stone = write(lower, "materials/stone.mat.desc",
+		R"({"__type":"material_desc","__version":)" + std::to_string(descs->current_version("material_desc"))
+			+ R"(,"__parent":"res://base_material.desc","uniforms":{"albedo":[0.25,0.5,0.75,1.0]}})");
+	const material_wiring wiring{ *this };
+	edt::material_create_form form(wiring.creator);
+	BOOST_REQUIRE(form.open_variant_of(stone));
+	BOOST_TEST(form.folder() == "materials");
+	BOOST_TEST(form.name() == "stone_variant");
+	const std::optional<res::tag> made = form.submit();
+	BOOST_REQUIRE_MESSAGE(made.has_value(), form.error());
+	BOOST_TEST(made->string() == "res://materials/stone_variant.mat.desc");
+	BOOST_TEST(fs::exists(res_root / "materials" / "stone_variant.mat.desc"));
+	BOOST_TEST(!fs::exists(lower / "materials" / "stone_variant.mat.desc"));
+	BOOST_TEST(parsed("materials/stone_variant.mat.desc").size() == 3u);
+
+	const auto material = require_loaded<scn::material_desc>(*made);
+	BOOST_REQUIRE(material.is_ready());
+	BOOST_REQUIRE(!material.has_error());
+	const auto albedo = material.get()->albedo;
+	BOOST_TEST(albedo.r == 0.25f);
+	BOOST_TEST(albedo.g == 0.5f);
+	BOOST_TEST(albedo.b == 0.75f);
+	BOOST_TEST(albedo.a == 1.0f);
+	BOOST_TEST(material.get()->shader.get_tag().view() == "res://shaders/scene.shader.desc");
+}
+
 // #773: a save writes a reference as {guid, path} when its target has an ID, and the document holds what the file does; the
 // next save keeps it.
 BOOST_AUTO_TEST_CASE(Save_WritesTheIdOfAReferencedFile)
