@@ -12,11 +12,14 @@
 #include <snk/resource/res_pretty_json.h>
 #include <algorithm>
 #include <array>
+#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <cctype>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <system_error>
@@ -70,6 +73,12 @@ namespace
 	{
 		const std::size_t dot = name.rfind('.');
 		return dot == std::string_view::npos || dot == 0 ? std::string{} : lowered(std::string(name.substr(dot)));
+	}
+
+	// The texture desc beside a picture: one rule for the import and the re-import.
+	std::string texture_relative_of(const std::string& picture)
+	{
+		return picture + std::string(edt::k_image_texture_suffix);
 	}
 
 	std::string joined(const std::string& folder, std::string_view name)
@@ -224,9 +233,10 @@ std::string_view edt::image_filter_name(image_filter filter)
 	return k_filter_names[static_cast<std::size_t>(filter)];
 }
 
-edt::image_settings_parse edt::parse_image_settings(const json::value& value)
+edt::image_settings_parse edt::parse_image_settings(const json::value& value, const image_import_settings& base)
 {
 	image_settings_parse out;
+	out.settings = base;
 	if (value.is_null()) {
 		return out;
 	}
@@ -394,10 +404,23 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 		if (!why.empty()) return refuse(cmd::codes::invalid_args, std::move(why));
 		return resolve_for_agent(request, spelled, plan);
 	}
+	resolve_person_source(request.path, plan);
+	if (!plan.ok()) return plan;
+	plan_targets(request, fs_paths::utf8_of(plan.source.filename()), plan);
+	return plan;
+}
+
+void edt::image_importer::resolve_person_source(const std::string& path, image_import_plan& plan) const
+{
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+	};
+	const fs::path given = from_utf8(path);
 	std::error_code ec;
 	const fs::file_status status = fs::symlink_status(given, ec);
 	if (ec || status.type() == fs::file_type::not_found) {
-		return refuse(cmd::codes::not_found, "no such file: " + shown(request.path));
+		return refuse(cmd::codes::not_found, "no such file: " + shown(path));
 	}
 	if (status.type() == fs::file_type::symlink) {
 		return refuse(cmd::codes::invalid_args, "the source is a link: name the file itself");
@@ -410,11 +433,6 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	}
 	const fs::path resolved = fs::canonical(given, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the source path cannot be resolved");
-	if (!person) {
-		if (std::string why = agent_source_path_problem(fs_paths::utf8_of(resolved), volumes()); !why.empty()) {
-			return refuse(cmd::codes::invalid_args, "the source resolves to a path an agent may not read: " + why);
-		}
-	}
 	if (fs::symlink_status(resolved, ec).type() != fs::file_type::regular) {
 		return refuse(cmd::codes::invalid_args, "the source is not a regular file");
 	}
@@ -423,17 +441,15 @@ edt::image_import_plan edt::image_importer::resolve(const image_import_request& 
 	plan.size = fs::file_size(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the size of the source cannot be read");
 	if (plan.size == 0) return refuse(cmd::codes::invalid_args, "the source file is empty");
-	const std::uintmax_t limit = person ? m_options.max_person_bytes : m_options.max_agent_bytes;
+	const std::uintmax_t limit = m_options.max_person_bytes;
 	if (plan.size > limit) {
-		return refuse(cmd::codes::invalid_args, std::format("the picture of {} exceeds {} for {} import ({})",
-			size_text(plan.size), limit_text(limit), person ? "a person's" : "an agent's", k_step_source));
+		return refuse(cmd::codes::invalid_args, std::format("the picture of {} exceeds {} for a person's import ({})",
+			size_text(plan.size), limit_text(limit), k_step_source));
 	}
 	plan.modified = fs::last_write_time(resolved, ec);
 	if (ec) return refuse(cmd::codes::invalid_args, "the time of the source cannot be read");
 	plan.id = file_id_of(resolved);
 	if (!plan.id.valid) return refuse(cmd::codes::invalid_args, "the identity of the source on the disk cannot be read");
-	plan_targets(request, fs_paths::utf8_of(resolved.filename()), plan);
-	return plan;
 }
 
 edt::image_import_plan edt::image_importer::resolve_for_agent(const image_import_request& request,
@@ -524,7 +540,7 @@ void edt::image_importer::plan_targets(const image_import_request& request, std:
 		plan.folder = folder.path;
 	}
 	const std::string relative = joined(plan.folder, plan.name);
-	const std::string texture = relative + std::string(k_image_texture_suffix);
+	const std::string texture = texture_relative_of(relative);
 	const agent_level_path whole = check_agent_level_path(texture);
 	if (!whole.ok()) {
 		return refuse(cmd::codes::invalid_args, "the path: " + whole.error);
@@ -602,6 +618,438 @@ edt::image_importer::started edt::image_importer::start(const image_import_reque
 		[inputs = std::move(inputs)](ds::task_context& ctx) -> json::value { return run_import(inputs, ctx); },
 		[this, tags = std::move(tags)](ds::task_result<json::value>& result) {
 			if (result.ok() && m_options.written) m_options.written(tags);
+		});
+	return { m_job, {}, {} };
+}
+
+namespace
+{
+	// A sidecar is a few hundred bytes, a texture desc a few more; a bigger file at the name is none the import wrote.
+	constexpr std::uint64_t k_max_meta_bytes = 64 * 1024;
+	constexpr std::uint64_t k_max_texture_desc_bytes = 1024 * 1024;
+
+	struct below_read
+	{
+		platform::beneath::read_result result{};
+		std::vector<std::byte> bytes{};
+	};
+
+	below_read read_below(const fs::path& top, const res::tag& tag, std::uint64_t max_bytes, bool stamp_only = false)
+	{
+		const fs::path path = fs_paths::path_from_utf8(std::string(tag.relative()));
+		platform::beneath::read_request request;
+		request.root = top;
+		request.folder = path.parent_path();
+		request.leaf = path.filename();
+		request.max_bytes = max_bytes;
+		request.stamp_only = stamp_only;
+		below_read out;
+		out.result = platform::beneath::read_beneath(request, out.bytes);
+		return out;
+	}
+
+	std::string replace_below(const fs::path& top, const res::tag& tag, std::span<const std::byte> data)
+	{
+		const fs::path path = fs_paths::path_from_utf8(std::string(tag.relative()));
+		platform::beneath::pinned_root pinned{ top };
+		platform::beneath::write_request request;
+		request.folder = path.parent_path();
+		request.leaf = path.filename();
+		request.tmp_leaf = temp_leaf_for(request.leaf);
+		request.data = data;
+		request.replace = true;
+		request.tmp_path = top / request.folder / request.tmp_leaf;
+		return platform::beneath::write_beneath(pinned, request);
+	}
+
+	std::string text_of(const std::vector<std::byte>& bytes)
+	{
+		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	}
+
+	// Replaces the file only while it holds `before`, checked once the temp file is complete: the last point
+	// write_beneath hands back before its flush and rename. A write during the flush is not seen (accepted, #1459).
+	std::string replace_if_unchanged(const fs::path& top, const res::tag& tag, std::span<const std::byte> before,
+		std::span<const std::byte> data, bool& changed)
+	{
+		const fs::path path = fs_paths::path_from_utf8(std::string(tag.relative()));
+		platform::beneath::pinned_root pinned{ top };
+		platform::beneath::write_request request;
+		request.folder = path.parent_path();
+		request.leaf = path.filename();
+		request.tmp_leaf = temp_leaf_for(request.leaf);
+		request.replace = true;
+		request.tmp_path = top / request.folder / request.tmp_leaf;
+		changed = false;
+		const platform::beneath::chunk_source source = [&](const platform::beneath::chunk_sink& sink) {
+			if (!sink(data)) return false;
+			const below_read now = read_below(top, tag, std::max<std::uint64_t>(before.size(), 1));
+			changed = now.result.status != platform::beneath::read_status::ok || !std::ranges::equal(now.bytes, before);
+			return !changed;
+		};
+		request.stream = &source;
+		return platform::beneath::write_beneath(pinned, request);
+	}
+
+	struct reimport_inputs
+	{
+		edt::image_reimport_plan plan;
+		fs::path top;
+		std::uint64_t max_image_bytes = 0;
+		std::function<bool(std::string_view)> fail_step;
+	};
+
+	// What a failed re-import could not put back: still replaced, so the cache must learn of it. Written by the job,
+	// read on the main thread once it ended.
+	struct reimport_leftovers
+	{
+		std::mutex lock;
+		std::vector<res::tag> stays_changed;
+	};
+
+	json::value run_reimport(const reimport_inputs& in, reimport_leftovers& leftovers, ds::task_context& ctx)
+	{
+		const edt::image_reimport_plan& plan = in.plan;
+		const std::vector<fs::path> roots{ in.top };
+		const auto private_text = [&](std::string text) {
+			return shown(edt::without_paths(std::move(text), roots, plan.source));
+		};
+		const auto changed_text = [](const res::tag& tag) {
+			return std::format("{} changed since it was read", shown(tag.view()));
+		};
+		const auto failed = [&in](std::string_view step) { return in.fail_step && in.fail_step(step); };
+		ctx.throw_if_stopped();
+		ctx.set_progress(0.f, "Reading the picture");
+		edt::image_import_plan source;
+		source.source = plan.source;
+		source.size = plan.size;
+		source.modified = plan.modified;
+		source.id = plan.id;
+		const std::vector<std::byte> bytes = read_checked_source(source, nullptr);
+		ctx.set_progress(0.3f, "Decoding the picture");
+		if (const std::string why = edt::image_importer::image_problem(bytes, extension_of(plan.name)); !why.empty()) {
+			throw std::runtime_error(why);
+		}
+		ctx.throw_if_stopped();
+		// The picture in the project, read whole now: the plan kept only its stamp.
+		const below_read old_image = read_below(in.top, plan.image, in.max_image_bytes);
+		if (old_image.result.status != platform::beneath::read_status::ok || !old_image.result.stamp
+			|| !plan.image_stamp || !edt::same_file_stamp(*old_image.result.stamp, *plan.image_stamp)) {
+			throw std::runtime_error(changed_text(plan.image) + ": nothing was re-imported");
+		}
+
+		std::string meta_text;
+		if (plan.settings_changed) {
+			res::asset_meta meta = plan.recorded;
+			meta.settings = edt::image_settings_json(plan.settings);
+			meta_text = res::write_asset_meta(meta);
+		}
+		struct step
+		{
+			std::string_view name;
+			std::string_view put_back;
+			const res::tag* tag;
+			std::span<const std::byte> before;
+			std::span<const std::byte> data;
+		};
+		std::vector<step> steps;
+		steps.reserve(3);
+		steps.push_back({ "reimport_image", "put_back:reimport_image", &plan.image, old_image.bytes, bytes });
+		if (!plan.texture_patch.empty()) {
+			steps.push_back({ "reimport_texture", "put_back:reimport_texture", &plan.texture,
+				std::as_bytes(std::span(plan.texture_bytes)), plan.texture_patch });
+		}
+		// The recipe last: until the outputs are in place it still describes them.
+		if (plan.settings_changed) {
+			steps.push_back({ "reimport_meta", "put_back:reimport_meta", &plan.meta,
+				std::as_bytes(std::span(plan.meta_bytes)), std::as_bytes(std::span(meta_text)) });
+		}
+
+		ctx.set_progress(0.8f, "Writing the files");
+		std::vector<const step*> done;
+		for (const step& item : steps) {
+			bool moved = false;
+			std::string error = failed(item.name) ? std::string{ "a test failed this write" }
+				: replace_if_unchanged(in.top, *item.tag, item.before, item.data, moved);
+			if (error.empty()) {
+				done.push_back(&item);
+				continue;
+			}
+			std::string message = moved ? changed_text(*item.tag)
+				: std::format("{} was not written: {}", shown(item.tag->view()), private_text(std::move(error)));
+			std::vector<res::tag> stays;
+			for (auto put = done.rbegin(); put != done.rend(); ++put) {
+				const step& back = **put;
+				std::string left = failed(back.put_back) ? std::string{ "a test failed this write" }
+					: replace_below(in.top, *back.tag, back.before);
+				if (!left.empty()) {
+					message += std::format("; {} could not be put back: {}; {} stays changed", shown(back.tag->view()),
+						private_text(std::move(left)), shown(back.tag->view()));
+					stays.push_back(*back.tag);
+				}
+			}
+			if (stays.empty()) {
+				message += moved ? ": nothing was re-imported" : "; nothing was re-imported";
+			} else {
+				const std::scoped_lock hold(leftovers.lock);
+				leftovers.stays_changed = std::move(stays);
+			}
+			throw std::runtime_error(message);
+		}
+		return json::object{ { "image", std::string(plan.image.view()) },
+			{ "resource", std::string(plan.meta.view()) }, { "texture", std::string(plan.texture.view()) },
+			{ "guid", res::to_text(plan.recorded.guid) }, { "texture_guid", res::to_text(plan.texture_guid) },
+			{ "settings_changed", plan.settings_changed }, { "texture_rewritten", !plan.texture_patch.empty() } };
+	}
+}
+
+edt::image_reimport_plan edt::image_importer::resolve_reimport(const image_reimport_request& request,
+	const cmd::origin& caller) const
+{
+	image_reimport_plan plan;
+	const auto refuse = [&plan](const char* code, std::string why) {
+		plan.code = code;
+		plan.error = std::move(why);
+		return plan;
+	};
+	if (caller.kind != cmd::origin_kind::ui) {
+		return refuse(cmd::codes::denied, "re-import is a person's action for now (#1457)");
+	}
+	if (!m_options.project_open || !m_options.project_open()) return refuse(cmd::codes::disabled, "no project is open");
+	const fs::path top = m_options.resources_path ? m_options.resources_path() : fs::path{};
+	if (top.empty()) return refuse(cmd::codes::disabled, "no project is open");
+	if (m_options.blocker) {
+		if (std::optional<std::string> why = m_options.blocker()) return refuse(cmd::codes::busy, *why);
+	}
+	if (running()) return refuse(cmd::codes::busy, "an image import is already running");
+
+	// The target: a res:// path whose texture desc name passes the import's own rule.
+	constexpr std::string_view scheme = "res://";
+	const std::string_view target = request.target;
+	if (target.empty()) return refuse(cmd::codes::invalid_args, "the target is empty");
+	if (target.find("://") != std::string_view::npos && !target.starts_with(scheme)) {
+		return refuse(cmd::codes::invalid_args, "the target must be a res:// tag of a picture in the project");
+	}
+	const agent_level_path whole = check_agent_level_path(texture_relative_of(std::string(target)));
+	if (!whole.ok()) return refuse(cmd::codes::invalid_args, "the target: " + whole.error);
+	const std::string relative = whole.path.substr(0, whole.path.size() - k_image_texture_suffix.size());
+	const std::size_t slash = relative.rfind('/');
+	plan.folder = slash == std::string::npos ? std::string{} : relative.substr(0, slash);
+	plan.name = slash == std::string::npos ? relative : relative.substr(slash + 1);
+	plan.image = res::tag::make(relative);
+	plan.meta = res::tag::make(relative + std::string(res::asset_meta_suffix));
+	plan.texture = res::tag::make(texture_relative_of(relative));
+	plan.texture_meta = res::tag::make(texture_relative_of(relative) + std::string(res::asset_meta_suffix));
+	const std::string image_tag = shown(plan.image.view());
+	const std::string extension = extension_of(plan.name);
+	if (!known_extension(extension)) {
+		return refuse(cmd::codes::invalid_args,
+			std::format("{} is not a picture this re-import takes (.png, .jpg or .jpeg)", image_tag));
+	}
+	if (m_options.open_with_unsaved_changes) {
+		for (const res::tag* open : { &plan.image, &plan.texture }) {
+			if (m_options.open_with_unsaved_changes(*open)) {
+				return refuse(cmd::codes::busy, std::format("{} is open with unsaved changes: save or close it first; "
+					"nothing was re-imported", shown(open->view())));
+			}
+		}
+	}
+	const std::vector<fs::path> roots{ top };
+	const auto private_text = [&](std::string text) { return shown(without_paths(std::move(text), roots, {})); };
+	const auto not_canonical = [](const std::string& named) {
+		return std::format("{} is not in the form the editor writes (edited by hand?): it is not rewritten, nothing "
+			"was re-imported", named);
+	};
+	const auto unreadable = [&](const res::tag& tag, const platform::beneath::read_result& read) {
+		using platform::beneath::read_status;
+		const std::string named = shown(tag.view());
+		if (read.status == read_status::not_regular) return std::format("{} is not a plain file", named);
+		if (read.status == read_status::too_large) return std::format("{} is larger than it may be", named);
+		return std::format("{} cannot be read: {}", named, private_text(read.error));
+	};
+
+	// The picture: in the project's own layer only.
+	const below_read image = read_below(top, plan.image, m_options.max_person_bytes, true);
+	if (image.result.status == platform::beneath::read_status::missing) {
+		const std::vector<fs::path> layers =
+			m_options.resource_layers ? m_options.resource_layers() : std::vector<fs::path>{};
+		for (std::size_t index = 0; index < layers.size(); ++index) {
+			if (layers[index] == top) continue;
+			std::error_code ec;
+			if (fs::exists(fs::symlink_status(layers[index] / fs_paths::path_from_utf8(relative), ec))) {
+				return refuse(cmd::codes::invalid_args, std::format("{} is in the {} layer, not the project's own: only "
+					"a picture of the project is re-imported", image_tag, picker::layer_label(index, layers.size())));
+			}
+		}
+		return refuse(cmd::codes::not_found, std::format("{} is not in the project", image_tag));
+	}
+	if (image.result.status != platform::beneath::read_status::ok || !image.result.stamp) {
+		return refuse(cmd::codes::invalid_args, unreadable(plan.image, image.result) + ": nothing was re-imported");
+	}
+	plan.image_stamp = image.result.stamp;
+
+	// Its `.resource`: kept as it is but for the settings, so it must be one this editor writes.
+	const std::string meta_tag = shown(plan.meta.view());
+	const below_read meta = read_below(top, plan.meta, k_max_meta_bytes);
+	if (meta.result.status == platform::beneath::read_status::missing) {
+		return refuse(cmd::codes::not_found, std::format("{} has no {}: only an imported picture is re-imported",
+			image_tag, meta_tag));
+	}
+	if (meta.result.status != platform::beneath::read_status::ok) {
+		return refuse(cmd::codes::invalid_args, unreadable(plan.meta, meta.result) + ": nothing was re-imported");
+	}
+	plan.meta_bytes = text_of(meta.bytes);
+	const res::asset_meta_result read = res::read_asset_meta(plan.meta_bytes);
+	if (!read) {
+		if (read.error.kind == res::asset_meta_error_kind::newer_than_engine) {
+			return refuse(cmd::codes::invalid_args, std::format("{} was written by a newer editor: it is not "
+				"rewritten, nothing was re-imported", meta_tag));
+		}
+		return refuse(cmd::codes::invalid_args, std::format("{} cannot be read ({}): nothing was re-imported; fix or "
+			"remove it", meta_tag, shown(read.error.message)));
+	}
+	if (res::write_asset_meta(*read.meta) != plan.meta_bytes) {
+		return refuse(cmd::codes::invalid_args, not_canonical(meta_tag));
+	}
+	if (read.meta->importer != k_image_importer) {
+		const std::string importer = read.meta->importer.empty() ? std::string{ "no importer" }
+			: std::format("the importer '{}'", shown(read.meta->importer));
+		return refuse(cmd::codes::invalid_args, std::format("{} records {}, not {}: nothing was re-imported",
+			meta_tag, importer, k_image_importer));
+	}
+	const image_settings_parse recorded = parse_image_settings(json::value(read.meta->settings));
+	if (!recorded.ok()) {
+		return refuse(cmd::codes::invalid_args, std::format("{}: {}; nothing was re-imported", meta_tag,
+			shown(recorded.error)));
+	}
+	plan.recorded = *read.meta;
+	plan.old_settings = recorded.settings;
+
+	const image_settings_parse parsed = parse_image_settings(request.settings, plan.old_settings);
+	if (!parsed.ok()) return refuse(cmd::codes::invalid_args, parsed.error);
+	plan.settings = parsed.settings;
+	plan.settings_changed = plan.settings != plan.old_settings;
+
+	// The texture desc beside it, and its own `.resource`, which is never written but must be the editor's.
+	const std::string texture_tag = shown(plan.texture.view());
+	const below_read texture = read_below(top, plan.texture, k_max_texture_desc_bytes);
+	if (texture.result.status == platform::beneath::read_status::missing) {
+		return refuse(cmd::codes::not_found, std::format("{} has no {}: only an imported picture is re-imported",
+			image_tag, texture_tag));
+	}
+	if (texture.result.status != platform::beneath::read_status::ok) {
+		return refuse(cmd::codes::invalid_args, unreadable(plan.texture, texture.result) + ": nothing was re-imported");
+	}
+	plan.texture_bytes = text_of(texture.bytes);
+	const std::string texture_meta_tag = shown(plan.texture_meta.view());
+	const below_read texture_meta = read_below(top, plan.texture_meta, k_max_meta_bytes);
+	if (texture_meta.result.status == platform::beneath::read_status::missing) {
+		return refuse(cmd::codes::not_found, std::format("{} has no {}: only an imported picture is re-imported",
+			image_tag, texture_meta_tag));
+	}
+	if (texture_meta.result.status != platform::beneath::read_status::ok) {
+		return refuse(cmd::codes::invalid_args,
+			unreadable(plan.texture_meta, texture_meta.result) + ": nothing was re-imported");
+	}
+	const std::string texture_meta_text = text_of(texture_meta.bytes);
+	const res::asset_meta_result texture_id = res::read_asset_meta(texture_meta_text);
+	if (!texture_id) {
+		return refuse(cmd::codes::invalid_args, std::format("{} cannot be read ({}): nothing was re-imported; fix or "
+			"remove it", texture_meta_tag, shown(texture_id.error.message)));
+	}
+	if (res::write_asset_meta(*texture_id.meta) != texture_meta_text) {
+		return refuse(cmd::codes::invalid_args, not_canonical(texture_meta_tag));
+	}
+	plan.texture_guid = texture_id.meta->guid;
+
+	// Only the fields the settings make are replaced: whatever else was edited in the desc stays.
+	boost::system::error_code parse_error;
+	json::value desc = json::parse(plan.texture_bytes, parse_error);
+	if (parse_error || !desc.is_object()) {
+		return refuse(cmd::codes::invalid_args, std::format("{} is no JSON object: nothing was re-imported",
+			texture_tag));
+	}
+	json::object& desc_object = desc.as_object();
+	const json::value* picture = desc_object.if_contains("data");
+	if (picture == nullptr || !picture->is_string() || picture->as_string() != plan.image.view()) {
+		return refuse(cmd::codes::invalid_args, std::format("{} refers to another picture: nothing was re-imported",
+			texture_tag));
+	}
+	if (plan.settings_changed) {
+		json::value* header = desc_object.if_contains("header");
+		json::value* header_data = header && header->is_object() ? header->as_object().if_contains("data") : nullptr;
+		if (header_data == nullptr || !header_data->is_object()) {
+			return refuse(cmd::codes::invalid_args, std::format("{} has no header.data object to change: nothing was "
+				"re-imported", texture_tag));
+		}
+		const json::object made = image_texture_desc_json(plan.image, plan.name, plan.settings);
+		const json::object& made_header = made.at("header").as_object();
+		json::object& kept_header = header->as_object();
+		for (const std::string_view key : { "wrap", "mag", "min" }) kept_header[key] = made_header.at(key);
+		header_data->as_object()["mip_levels"] = made_header.at("data").as_object().at("mip_levels");
+		std::vector<std::byte> patched = res::pretty_json_bytes(desc);
+		if (text_of(patched) != plan.texture_bytes) plan.texture_patch = std::move(patched);
+	}
+
+	// The source, as a person's import takes it, in the picture's own format.
+	if (request.path.empty()) return refuse(cmd::codes::invalid_args, "the source path is empty");
+	if (!from_utf8(request.path).is_absolute()) {
+		return refuse(cmd::codes::invalid_args, "the source must be an absolute path to a picture");
+	}
+	image_import_plan source;
+	resolve_person_source(request.path, source);
+	if (!source.ok()) return refuse(source.code.c_str(), source.error);
+	const fs::path own = top / fs_paths::path_from_utf8(relative);
+	std::error_code same_ec;
+	if (fs::equivalent(source.source, own, same_ec) || file_id_of(own).same_as(source.id)) {
+		return refuse(cmd::codes::invalid_args, "the source is the picture itself");
+	}
+	if (is_png_extension(extension_of(fs_paths::utf8_of(source.source.filename()))) != is_png_extension(extension)) {
+		return refuse(cmd::codes::invalid_args, is_png_extension(extension)
+			? std::format("{} is a PNG picture: re-import it from a .png file", image_tag)
+			: std::format("{} is a JPEG picture: re-import it from a .jpg or .jpeg file", image_tag));
+	}
+	plan.source = source.source;
+	plan.size = source.size;
+	plan.modified = source.modified;
+	plan.id = source.id;
+	return plan;
+}
+
+edt::image_importer::started edt::image_importer::start_reimport(const image_reimport_request& request,
+	const cmd::origin& caller)
+{
+	image_reimport_plan plan = resolve_reimport(request, caller);
+	if (!plan.ok()) return { 0, plan.code, plan.error };
+	reimport_inputs inputs;
+	inputs.top = m_options.resources_path ? m_options.resources_path() : fs::path{};
+	inputs.max_image_bytes = m_options.max_person_bytes;
+	inputs.fail_step = m_options.fail_step;
+	inputs.plan = std::move(plan);
+	std::string label = "Re-import " + inputs.plan.name;
+	std::array<res::tag, 3> tags{ inputs.plan.image, inputs.plan.texture, inputs.plan.meta };
+	auto leftovers = std::make_shared<reimport_leftovers>();
+	m_job = m_jobs.start_with_result(ds::lane::compute, { std::move(label), "import" }, m_lifetime,
+		[inputs = std::move(inputs), leftovers](ds::task_context& ctx) -> json::value {
+			return run_reimport(inputs, *leftovers, ctx);
+		},
+		[this, tags, leftovers](ds::task_result<json::value>& result) {
+			if (!m_options.rewritten) return;
+			std::vector<res::tag> written;
+			if (result.ok() && result.value && result.value->is_object()) {
+				const json::object& done = result.value->as_object();
+				const auto flag = [&done](std::string_view key) {
+					const json::value* value = done.if_contains(key);
+					return value != nullptr && value->is_bool() && value->as_bool();
+				};
+				written.push_back(tags[0]);
+				if (flag("texture_rewritten")) written.push_back(tags[1]);
+				if (flag("settings_changed")) written.push_back(tags[2]);
+			} else {
+				const std::scoped_lock hold(leftovers->lock);
+				written = leftovers->stays_changed;
+			}
+			if (!written.empty()) m_options.rewritten(written);
 		});
 	return { m_job, {}, {} };
 }
@@ -699,12 +1147,41 @@ edt::image_import_written edt::image_importer::write_files(const fs::path& top, 
 
 void edt::image_import_form::open(std::string folder, fs::path source)
 {
+	m_target.clear();
 	m_folder = std::move(folder);
 	m_source = std::move(source);
 	m_settings = {};
 	m_name = fs_paths::utf8_of(m_source.filename());
 	m_error.clear();
 	check();
+}
+
+void edt::image_import_form::open_reimport(std::string target, fs::path source)
+{
+	m_target = std::move(target);
+	m_folder.clear();
+	m_source = std::move(source);
+	m_settings = {};
+	m_name.clear();
+	m_plan = {};
+	m_error.clear();
+	image_reimport_request asked = reimport_request();
+	asked.settings = nullptr;
+	const image_reimport_plan plan = m_importer.resolve_reimport(asked, cmd::origin::ui());
+	m_recorded = plan.ok() ? plan.old_settings : image_import_settings{};
+	m_settings = m_recorded;
+	m_problem = plan.error;
+}
+
+std::vector<std::string> edt::image_import_form::rewritten_names() const
+{
+	if (!reimport()) return {};
+	std::vector<std::string> names{ m_target };
+	if (m_settings != m_recorded) {
+		names.push_back(m_target + std::string(k_image_texture_suffix));
+		names.push_back(m_target + std::string(res::asset_meta_suffix));
+	}
+	return names;
 }
 
 void edt::image_import_form::set_name(std::string name)
@@ -727,15 +1204,28 @@ edt::image_import_request edt::image_import_form::request() const
 	return out;
 }
 
+edt::image_reimport_request edt::image_import_form::reimport_request() const
+{
+	image_reimport_request out;
+	out.target = m_target;
+	out.path = fs_paths::utf8_of(m_source);
+	out.settings = image_settings_json(m_settings);
+	return out;
+}
+
 void edt::image_import_form::check()
 {
+	if (reimport()) {
+		m_problem = m_importer.resolve_reimport(reimport_request(), cmd::origin::ui()).error;
+		return;
+	}
 	m_plan = m_importer.resolve(request(), true);
 	m_problem = m_plan.error;
 }
 
 std::vector<std::string> edt::image_import_form::final_names() const
 {
-	if (!m_plan.ok() || !m_plan.image.is_valid()) {
+	if (reimport() || !m_plan.ok() || !m_plan.image.is_valid()) {
 		return {};
 	}
 	return { std::string(m_plan.image.view()), std::string(m_plan.meta.view()), std::string(m_plan.texture.view()),
@@ -747,7 +1237,8 @@ std::optional<std::uint64_t> edt::image_import_form::submit()
 	if (m_source.empty()) {
 		return std::nullopt;
 	}
-	const image_importer::started started = m_importer.start(request(), cmd::origin::ui());
+	const image_importer::started started = reimport() ? m_importer.start_reimport(reimport_request(), cmd::origin::ui())
+		: m_importer.start(request(), cmd::origin::ui());
 	if (!started.ok()) {
 		m_error = started.error;
 		check();
