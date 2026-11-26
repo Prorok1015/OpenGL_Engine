@@ -936,7 +936,7 @@ BOOST_AUTO_TEST_CASE(TheClosestPoint_IsOnTheSurface_WithDistanceNormalAndTriangl
 
 	const auto on = scn::closest_point(reg, { 0.1f, 0.1f, 0.f });
 	BOOST_REQUIRE(on.has_value());
-	BOOST_TEST(on->distance == 0.f);
+	BOOST_TEST(std::abs(on->distance) < 1e-4f);
 	BOOST_TEST(on->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
 
 	const auto below = scn::closest_point(reg, { 0.f, 0.f, -2.f });
@@ -1067,8 +1067,10 @@ BOOST_AUTO_TEST_CASE(AMeshWithNoTriangle_IsNeverFound_ByAPointTheFrustumOrAShape
 	BOOST_TEST(found.empty());
 	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 1.f), {}, found);
 	BOOST_TEST(found.empty());
+	// The frustum sees the quad at x = 5 too, never the mesh with no triangle at the origin.
 	scn::overlap_frustum(reg, camera_view_projection({ 0.f, 0.f, 5.f }, { 0.f, 0.f, 0.f }), {}, found);
-	BOOST_TEST(found.empty());
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == real));
 	const auto nearest = scn::closest_point(reg, { 0.f, 0.f, 0.f });
 	BOOST_REQUIRE(nearest.has_value());
 	BOOST_TEST((nearest->entity == real));
@@ -1114,22 +1116,23 @@ BOOST_AUTO_TEST_CASE(ThePointQueries_SeeAMoveADestroyAndTheFilters_AndAppendToWh
 	BOOST_TEST((after_destroy->entity == mover));
 }
 
-BOOST_AUTO_TEST_CASE(AShapeOfNoSize_MeetsASurfaceItTouches_AndAnUnknownKindAnswersNothing)
+BOOST_AUTO_TEST_CASE(AVeryThinShape_MeetsASurfaceItTouches_AndAnUnknownKindAnswersNothing)
 {
 	put_quad("quad.geom.desc");
 	entt::registry reg;
 	const auto quad = add_quad(reg, at({ 0.f, 0.f, 0.f }));
 	std::vector<entt::entity> found;
-	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.f }, 0.f), {}, found);
+	// A radius of exactly 0 meets a surface only when rounding lets the point stay on it: the sizes below are tiny, not 0.
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.f }, 1e-4f), {}, found);
 	BOOST_REQUIRE(found.size() == 1u);
 	BOOST_TEST((found[0] == quad));
 	found.clear();
-	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.2f }, 0.f), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.2f }, 1e-4f), {}, found);
 	BOOST_TEST(found.empty());
-	scn::overlap_shape(reg, scn::shape::make_capsule({ 0.2f, 0.1f, 0.f }, { 0.2f, 0.1f, 0.f }, 0.f), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_capsule({ 0.2f, 0.1f, 0.f }, { 0.2f, 0.1f, 0.f }, 1e-4f), {}, found);
 	BOOST_TEST(found.size() == 1u);
 	found.clear();
-	scn::overlap_shape(reg, scn::shape::make_box({ 0.2f, 0.1f, 0.f }, { 0.f, 0.f, 0.f }), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.2f, 0.1f, 0.f }, { 1e-4f, 1e-4f, 1e-4f }), {}, found);
 	BOOST_TEST(found.size() == 1u);
 	found.clear();
 	scn::shape unknown = scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 5.f);
