@@ -17,8 +17,9 @@ namespace edt
 	{
 		// Raised when a layout the list cannot see changes for module code: a reorder of fields of one size in a listed
 		// type, or a field a module reads inline moving inside a host type. 1: the key is introduced (#969). 2: the open
-		// previews of document_manager are a member (#1185; its size changes with them, the revision says so too).
-		inline constexpr std::uint64_t editor_layout_revision = 2;
+		// previews of document_manager are a member (#1185; its size changes with them, the revision says so too). 3:
+		// gui::theme_desc enters the list (#1449).
+		inline constexpr std::uint64_t editor_layout_revision = 3;
 
 		// gs::detail::layout_of seeded with editor_layout_revision: the parts mix in as they do in the game key.
 		template<class... Types>

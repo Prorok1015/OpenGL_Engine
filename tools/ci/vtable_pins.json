@@ -1,6 +1,6 @@
 {
-  "layout_revision": 28,
-  "editor_layout_revision": 2,
+  "layout_revision": 30,
+  "editor_layout_revision": 3,
   "interfaces": [
     {
       "class": "module_interface",
