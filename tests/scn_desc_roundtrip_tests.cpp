@@ -1078,6 +1078,10 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_AlphaCutoffDefaultsToTheOldRuleAndIsWrittenOnl
 	for (const auto& member : ser(both).at("uniforms").as_object())
 		keys.emplace_back(member.key());
 	BOOST_TEST((keys == std::vector<std::string>{ "albedo", "emissive", "shininess", "alpha_cutoff" }));
+
+	// The range is the editor's: a file that holds more would discard everything, so the reader clamps it.
+	BOOST_TEST(io.read(R"({"uniforms":{"alpha_cutoff":2.5}})").alpha_cutoff == 1.0f);
+	BOOST_TEST(io.read(R"({"uniforms":{"alpha_cutoff":-1}})").alpha_cutoff == 0.0f);
 }
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_QueueReadsWordsAndNullAndWritesNullForNone)

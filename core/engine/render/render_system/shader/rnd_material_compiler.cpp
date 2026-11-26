@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 rnd::material_shader_state rnd::read_material_shader(const material_desc& mat)
 {
@@ -60,12 +62,28 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 	if (ctx.has_skinning) {
 		cdata.defines.push_back("USE_ANIMATION");
 	}
-	// A cutoff of 0 discards nothing, so the test is left out of the program altogether (#1439).
-	if (mat.alpha_cutoff > 0.0f && std::ranges::find(cdata.defines, std::string_view(k_alpha_test_define)) == cdata.defines.end()) {
-		cdata.defines.push_back(std::string(k_alpha_test_define));
-	}
 
 	return rnd::shader_config{ cdata, rdata };
+}
+
+namespace
+{
+	bool defines_name(const std::vector<std::string>& defines, std::string_view name)
+	{
+		return std::ranges::any_of(defines, [name](const std::string& define) {
+			return define == name || (define.size() > name.size() && define.starts_with(name) && define[name.size()] == ' ');
+		});
+	}
+
+	// Here and not in a compiler, so a module's own compiler keeps the test too (#1439). A cutoff of 0 discards nothing, and a
+	// shader that splits by alpha itself has no use for it: neither gets a variant of its own.
+	void add_alpha_test(rnd::shader_config::constant_data& cdata, const rnd::material_desc& mat)
+	{
+		if (mat.alpha_cutoff <= 0.0f || defines_name(cdata.defines, rnd::k_alpha_split_define) || defines_name(cdata.defines, rnd::k_alpha_test_define)) {
+			return;
+		}
+		cdata.defines.emplace_back(rnd::k_alpha_test_define);
+	}
 }
 
 std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
@@ -88,6 +106,7 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	out->texture_generation = textures.generation();
 
 	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned, shader });
+	add_alpha_test(cfg.cdata, *mat);
 	out->base = variants.intern(cfg.cdata);
 	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);
 	out->runtime = std::move(cfg.rdata);
