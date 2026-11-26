@@ -1074,8 +1074,9 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_AlphaCutoffDefaultsToTheOldRuleAndIsWrittenOnl
 	scn::material_desc both;
 	both.shininess = 8.0f;
 	both.alpha_cutoff = 0.25f;
+	const auto both_written = ser(both);
 	std::vector<std::string> keys;
-	for (const auto& member : ser(both).at("uniforms").as_object())
+	for (const auto& member : both_written.at("uniforms").as_object())
 		keys.emplace_back(member.key());
 	BOOST_TEST((keys == std::vector<std::string>{ "albedo", "emissive", "shininess", "alpha_cutoff" }));
 
