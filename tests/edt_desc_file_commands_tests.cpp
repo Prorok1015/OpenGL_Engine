@@ -16,10 +16,13 @@
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
+#include <snk/render/rnd_material_desc.h>
 #include <snk/render/rnd_render_service_init.h>
+#include <snk/scene/scn_camera_desc.h>
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -202,6 +205,18 @@ public:
 	std::vector<tag_slot> unnamed;
 
 	BOOST_DESCRIBE_CLASS(slot_table_desc, (), (list, map, one, tag, lost, unnamed), (), ())
+};
+
+// #1450: a list and a map whose elements are a custom type (a list of tags, read by the material's json_codec).
+class tag_lists_desc : public desc::schema_desc<tag_lists_desc>
+{
+public:
+	static constexpr std::string_view __type = "test.tag_lists";
+
+	std::vector<std::vector<res::tag>> lists;
+	std::map<std::string, std::vector<res::tag>, std::less<>> by_name;
+
+	BOOST_DESCRIBE_CLASS(tag_lists_desc, (), (lists, by_name), (), ())
 };
 
 }
@@ -1956,6 +1971,100 @@ BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedO
 	BOOST_TEST(refused.code == cmd::codes::invalid_args);
 	BOOST_TEST(refused.error.find("name different files") != std::string::npos, refused.error);
 	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc") == before);
+}
+
+namespace {
+
+std::vector<std::string> errors_at(const std::vector<std::string>& errors, const std::string& pointer)
+{
+	std::vector<std::string> out;
+	for (const std::string& error : errors) {
+		if (error.starts_with(pointer + ": ")) out.push_back(error);
+	}
+	return out;
+}
+
+}
+
+// #1450: the loader reads a field under its key or any of its read aliases, so the strict tag rule reads every one of them;
+// a structure under an alias is checked by its own schema.
+BOOST_AUTO_TEST_CASE(ATagUnderAReadAlias_FollowsTheStrictRule_AsUnderItsKey)
+{
+	register_slot_schemas(*descs);
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.aliased",
+		"fields": [ { "name": "image", "kind": "res_tag", "default": "", "read_aliases": ["/old_image", "/legacy/image"] },
+			{ "name": "slot", "kind": "structure", "ref_type": "test.slot", "read_aliases": ["/old_slot"] } ] })").as_object(),
+		&descs->schemas())));
+	const std::vector<std::pair<std::string, std::string>> refused{
+		{ R"({"__type":"test.aliased","image":"shaders/x.vert"})", "/image" },
+		{ R"({"__type":"test.aliased","old_image":"shaders/x.vert"})", "/old_image" },
+		{ R"({"__type":"test.aliased","legacy":{"image":"shaders/x.vert"}})", "/legacy/image" },
+		{ R"({"__type":"test.aliased","old_slot":{"texture":"shaders/x.vert"}})", "/old_slot/texture" } };
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const auto& [content, pointer] : refused) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				const std::vector<std::string> errors = errors_at(slot_errors(*descs, content, rule), pointer);
+				BOOST_TEST(errors.size() == 1u);
+				if (!errors.empty()) BOOST_TEST(errors[0].find("must be written as res://") != std::string::npos, errors[0]);
+			}
+		}
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs,
+				std::string(R"({"__type":"test.aliased","old_image":"res://a.png","old_slot":{"texture":"res://b.png"}})"), rule);
+			BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
+		}
+	}
+}
+
+// #1450: the case of the issue. A camera's color targets read under "texture" too; both keys follow the same rule.
+BOOST_AUTO_TEST_CASE(ACamerasLegacyTextureKey_IsCheckedAsItsColorTargets)
+{
+	descs->register_component_desc<scn::camera_desc>(scn::camera_desc::__type);
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const char* key : { "color_targets", "texture" }) {
+			const std::string content = std::format(R"({{"__type":"camera_desc","{}":["shaders/x.vert"]}})", key);
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				const std::vector<std::string> errors = errors_at(slot_errors(*descs, content, rule), std::format("/{}/0", key));
+				BOOST_TEST(errors.size() == 1u);
+			}
+		}
+	}
+}
+
+// #1450: the elements of a list or a map of a custom type are read as a single custom field is: every string strictly.
+BOOST_AUTO_TEST_CASE(ATagInAListOrMapOfACustomType_FollowsTheStrictRule)
+{
+	descs->register_desc<slot_test::tag_lists_desc>(slot_test::tag_lists_desc::__type);
+	const desc::type_schema* schema = descs->find_schema(slot_test::tag_lists_desc::__type);
+	BOOST_REQUIRE(schema);
+	BOOST_REQUIRE_EQUAL(schema->fields.size(), 2u);
+	for (const desc::field_schema& field : schema->fields) {
+		BOOST_TEST_CONTEXT(field.name) {
+			BOOST_TEST((field.kind == desc::field_kind::array || field.kind == desc::field_kind::map));
+			BOOST_TEST((field.element == desc::field_kind::custom));
+		}
+	}
+	const std::vector<std::pair<std::string, std::string>> refused{
+		{ R"({"__type":"test.tag_lists","lists":[["res://a.png"],["res://b.png","shaders/x.vert"]]})", "/lists/1/1" },
+		{ R"({"__type":"test.tag_lists","by_name":{"k":["shaders/x.vert"]}})", "/by_name/k/0" },
+		{ R"({"__type":"test.tag_lists","by_name":{"a/b":["shaders/x.vert"]}})", "/by_name/a~1b/0" } };
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const auto& [content, pointer] : refused) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				const std::vector<std::string> errors = slot_errors(*descs, content, rule);
+				BOOST_TEST(errors.size() == 1u);
+				if (!errors.empty()) {
+					BOOST_TEST(errors[0].starts_with(pointer + ": "), errors[0]);
+					BOOST_TEST(errors[0].find("must be written as res://") != std::string::npos, errors[0]);
+				}
+			}
+		}
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs,
+				std::string(R"({"__type":"test.tag_lists","lists":[["res://a.png",""]],"by_name":{"k":["res://b.png"]}})"), rule);
+			BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
