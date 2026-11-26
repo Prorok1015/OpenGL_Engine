@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
@@ -151,13 +152,16 @@ void engine::render::register_render_descs(desc::desc_system& desc_sys)
 	desc_sys.register_schema(texture_2d_schema(desc_sys.current_version("texture_2d_desc")));
 	desc_sys.mark_document("texture_2d_desc", k_texture_2d_codec_fields);
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
-	// A document: every field is on the schema, so the editor opens a .shader.desc as data.
+	// A document: every field is on the schema, so the editor opens a .shader.desc as data. The structure of "backends"
+	// (#1203) comes first: a document's nested schemas must be known when it is marked.
+	desc_sys.register_schema(desc::schema_generator<rnd::shader_stage_sources>::make("shader_stage_sources", 1, desc::schema_kind::structure));
 	desc_sys.register_document<rnd::shader_desc>("shader_desc");
 }
 
 void engine::render::unregister_render_descs(desc::desc_system& desc_sys)
 {
 	desc_sys.unregister_desc("shader_desc");
+	desc_sys.unregister_desc("shader_stage_sources");
 	desc_sys.unregister_desc("texture_cubemap_desc");
 	desc_sys.unregister_desc("texture_2d_desc");
 	desc_sys.unregister_desc("texture_desc");

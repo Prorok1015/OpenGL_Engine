@@ -42,6 +42,7 @@
 #include <snk/render/rnd_render_context.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_pass_interface.h>
+#include <snk/render/rnd_shader_desc.h>
 #include <snk/render/rnd_shader_problem.h>
 #include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
@@ -168,6 +169,9 @@ namespace gs
 			res::binary_range,
 			// The geometry writers (encode_geometry_files, write_geometry_arrays) take a view and options a module builds.
 			rnd::geometry_view, rnd::geometry_file_options,
+			// A module may make or copy a shader_desc: its constructors are implicit and inline, and pin_resource<T> allocates it
+			// in the caller (#1203). stages_for returns the stages by value.
+			rnd::shader_desc, rnd::shader_stage_sources,
 			// Passed by value or reference through render_system's exports and the pinned render interfaces (#1312):
 			// texture_manager's ids and bindings, the material cache's ids and compiled materials, the shader problems and
 			// a texture's header.
