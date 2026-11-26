@@ -111,6 +111,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
+#include <snk/resource/res_save_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/level/scn_start_level.h>
 #include <snk/project/prj_create.h>
@@ -1001,6 +1002,9 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 			if (!agent_access_object()) return cmd::policy_mode::allow;
 			const cmd::command_desc* command = m_context->actions().find(command_id);
 			return command ? agent_access_object()->policy().effective(*command).mode : cmd::policy_mode::deny;
+		},
+		.finish_user_writes = [&data] {
+			if (data.has_value<res::save_service>()) data.require<res::save_service>().flush();
 		} });
 	m_play_component->install(m_registrations);
 	m_play = m_play_component->play();

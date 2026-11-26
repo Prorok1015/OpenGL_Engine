@@ -903,6 +903,7 @@ void edt::play_session::follow_active_world()
 void edt::play_session::mount_user(const std::vector<std::filesystem::path>& roots, bool fresh)
 {
 	if (!m_options.profile_resources || roots.empty() || std::ranges::any_of(roots, [](const auto& root) { return root.empty(); })) return;
+	if (m_options.finish_user_writes) m_options.finish_user_writes();
 	if (fresh) {
 		// Every session starts with an empty profile: nothing saved by the previous one is seen.
 		for (const std::filesystem::path& root : roots) {

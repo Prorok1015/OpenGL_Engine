@@ -35,6 +35,7 @@ edt::play_component::play_component(ports from)
 	// user:// is the project's test profile; Play gets a fresh one of its own every start.
 	if (const auto user_roots = m_ports.resources.mount_roots(res::tag::user); !user_roots.empty() && m_ports.project != nullptr) {
 		options.profile_resources = &m_ports.resources;
+		options.finish_user_writes = m_ports.finish_user_writes;
 		options.play_profile = m_ports.project->play_profile_dir();
 		options.editor_profile = user_roots;
 	}

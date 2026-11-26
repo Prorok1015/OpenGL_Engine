@@ -1838,6 +1838,43 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 	fs::remove_all(base);
 }
 
+// #1487: what the game queued to write under user:// is finished before the profile is emptied and before user:// is
+// served from other folders, at the start and at the stop, so no save of one session lands in the next one's profile.
+BOOST_AUTO_TEST_CASE(the_queued_user_writes_are_finished_before_the_profile_is_emptied_and_swapped)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_flush_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	const fs::path play_profile = base / "play_profile";
+	fs::create_directories(editor_profile);
+	fs::create_directories(play_profile);
+	std::ofstream(play_profile / "save.json") << "{}";
+	{
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		struct moment {
+			bool leftover_still_there;
+			std::vector<fs::path> mounted;
+		};
+		std::vector<moment> moments;
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs,
+				.finish_user_writes = [&] { moments.push_back({ fs::exists(play_profile / "save.json"), profile_rs.mount_roots(res::tag::user) }); },
+				.play_profile = play_profile, .editor_profile = { editor_profile }, .project_root = base });
+
+		BOOST_REQUIRE(session.start());
+		BOOST_REQUIRE_EQUAL(moments.size(), 1u);
+		BOOST_TEST(moments[0].leftover_still_there);
+		BOOST_TEST((moments[0].mounted == std::vector<fs::path>{ editor_profile }));
+
+		session.stop();
+		BOOST_REQUIRE_EQUAL(moments.size(), 2u);
+		BOOST_TEST((moments[1].mounted == std::vector<fs::path>{ play_profile }));
+	}
+	fs::remove_all(base);
+}
+
 // #936: the profile is emptied at every start and Play writes into it. A project whose .cache or play_profile is a link
 // would send both outside the project.
 BOOST_AUTO_TEST_CASE(play_is_refused_when_the_play_profile_is_behind_a_link)

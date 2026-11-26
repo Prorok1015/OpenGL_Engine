@@ -1,4 +1,5 @@
 #include <snk/resource/res_resource_service_init.h>
+#include <snk/resource/res_save_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_shipping_dirs.h>
 #include <snk/config/cfg_variables.h>
@@ -104,6 +105,7 @@ void core::res::resource_init(ds::app_data_storage& data)
 			refuse_cache_links();
 			refuse_snk_links();
 			mount_read_only_project(data, project, engine_base);
+			data.construct<::res::save_service>(std::ref(tasks), std::ref(data.require<::res::resource_system>()));
 			return;
 		}
 		for (const auto& dir : project.writable_dirs()) {
@@ -123,13 +125,19 @@ void core::res::resource_init(ds::app_data_storage& data)
 		data.construct<::res::resource_system>(std::ref(tasks),
 			::res::resource_system::project_mount_table(engine_base, project.content_roots, project.cache_dir(),
 				project.user_profile_dir(), code_dir));
+		data.construct<::res::save_service>(std::ref(tasks), std::ref(data.require<::res::resource_system>()));
 		return;
 	}
 	data.construct<::res::resource_system>(std::ref(tasks));
+	data.construct<::res::save_service>(std::ref(tasks), std::ref(data.require<::res::resource_system>()));
 }
 
 void core::res::resource_term(ds::app_data_storage& data)
 {
+	// Waits for the writes still queued: before the resources it reads user:// from.
+	if (data.has_value<::res::save_service>()) {
+		data.destruct<::res::save_service>();
+	}
 	data.destruct<::res::resource_system>();
 	if (data.has_value<scratch_folder>()) {
 		if (const std::string problem = remove_scratch_dir(data.require<scratch_folder>().path); !problem.empty()) {
