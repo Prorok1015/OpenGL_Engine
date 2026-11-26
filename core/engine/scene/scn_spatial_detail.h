@@ -25,7 +25,8 @@ namespace scn::detail {
 		virtual void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
 		virtual void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
 		virtual std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter) = 0;
-		virtual std::optional<shape_hit> shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter) = 0;
+		// `direction` has unit length; the volume is one `usable` for a cast. A kind the backend does not cast answers unsupported.
+		virtual shapecast_result shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter) = 0;
 		// The transform system moved these entities (and their descendants): their world matrices are new.
 		virtual void entities_moved(entt::registry& world, std::span<const entt::entity> moved) = 0;
 		// A mesh or geometry component was made, changed or destroyed: what the backend built may be wrong.

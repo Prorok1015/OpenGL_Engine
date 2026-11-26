@@ -24,7 +24,7 @@
 //  - a transform is seen once the transform system has run it (it tells the world which entities it moved): a matrix
 //    written after that system, or by anything but a transform_updated event, is seen by the next frame's queries at best;
 //  - hits are per entity for raycast_all (the nearest of each), per triangle inside an entity for the closest and any.
-//  - shape casts (#1328) move a sphere (exactly) or a capsule (conservative advancement) along a direction; a box is not cast yet;
+//  - shape casts (#1328) move a sphere or a capsule (exactly) along a direction; a box is not cast yet (cast_status::unsupported);
 //  - shape overlaps (#1328) test the triangles (a mesh of over a million triangles answers by their boxes); overlap_point tests the
 //    entities' world bounds only, closest_point the surface: "inside a closed mesh" is not answered (meshes need not be closed);
 //  - the frustum query (#1327) tests the entities' world bounds only (the mesh's box through its matrix), not their triangles: an object whose
@@ -202,8 +202,29 @@ namespace scn {
 		bool started_inside = false;
 	};
 
+	// How a shape cast ended: the path is clear, it met something, the engine does not cast that yet, or the arguments cannot be cast.
+	enum class cast_status : std::uint8_t
+	{
+		// Nothing within the cast's length (also: the world holds nothing to meet).
+		clear,
+		// `hit` says what it met.
+		hit,
+		// The shape's kind is not cast (a box, for now): nothing was tested, so the path is not known to be clear.
+		unsupported,
+		// A shape with a NaN or infinite value or a negative size, a direction with none, or a length that is NaN.
+		invalid,
+	};
+
+	struct shapecast_result
+	{
+		cast_status status = cast_status::clear;
+		// Meaningful only for cast_status::hit.
+		shape_hit hit;
+	};
+
 	static_assert(std::is_trivially_copyable_v<shape> && std::is_standard_layout_v<shape>);
 	static_assert(std::is_trivially_copyable_v<shape_hit> && std::is_standard_layout_v<shape_hit>);
+	static_assert(std::is_trivially_copyable_v<shapecast_result> && std::is_standard_layout_v<shapecast_result>);
 	static_assert(std::is_trivially_copyable_v<point_hit> && std::is_standard_layout_v<point_hit>);
 	static_assert(std::is_trivially_copyable_v<spatial_layers> && std::is_standard_layout_v<spatial_layers>);
 	static_assert(std::is_trivially_copyable_v<ray> && std::is_standard_layout_v<ray>);
@@ -257,11 +278,13 @@ namespace scn {
 		// overlap_shape.
 		std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter);
 		// The first entity `volume` touches moving along `direction` (any length: only its direction counts), within
-		// `filter.max_distance` (the length of the cast in world units; unbounded by default), or nothing. A sphere is cast exactly
-		// against the triangles; a capsule by conservative advancement (it never moves past a touch and stops within 1e-4 of the
-		// radius, at least 1e-4, of it; a motion that only grazes may be missed). A box is not cast yet: it answers nothing, as does
-		// a mesh of over a million triangles. Equal distances: the lower entity. The rest of the filter as for overlap_shape.
-		std::optional<shape_hit> shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter);
+		// `filter.max_distance` (the length of the cast in world units; unbounded by default; 0 or less: only what the shape already
+		// touches). A sphere and a capsule are cast exactly against the triangles (a capsule through its two end caps and through its
+		// side against corners and edges). A shape already touching an entity (touching counts) is a hit at distance 0 with
+		// `started_inside`. A mesh of over a million triangles is cast against the box of its triangles (the nearest the shape can
+		// get to it, `triangle` ~0u); a shape starting inside that box is a hit at 0. Equal distances: the lower entity. The filter's
+		// mask, include_hidden and exclude apply; `triangles` and `cull_back_faces` do not. A box is not cast yet (cast_status::unsupported).
+		shapecast_result shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
@@ -286,7 +309,7 @@ namespace scn {
 	SNK_API void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out);
 	SNK_API void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out);
 	SNK_API std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter = {});
-	SNK_API std::optional<shape_hit> shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter = {});
+	SNK_API shapecast_result shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter = {});
 	// The view-projection of the part of an image inside a pixel rectangle: what `overlap_frustum` takes for a box on the screen.
 	// `view` and `projection` are the camera's, `corner_a` and `corner_b` two opposite corners in pixels (origin top left, y down, any
 	// order), `image_size` the image's size. The corners are not clamped to the image (a rectangle that reaches past it asks for a

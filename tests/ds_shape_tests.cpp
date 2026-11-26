@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/common/ds/ds_bvh.hpp>
 #include <snk/common/ds/ds_shape.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -557,6 +558,68 @@ BOOST_AUTO_TEST_CASE(ACapsuleThatIsAPoint_SweepsAsASphereDoes)
 		}
 	}
 	BOOST_TEST(compared > 10);
+}
+
+
+BOOST_AUTO_TEST_CASE(ACapsuleCastAtAGentleAngleOrALongWay_StillStopsWhereItTouches)
+{
+	// A floor wide enough for the longest of these, a capsule standing on its end above it, moving down at a shallow angle: the lowest
+	// point of its lower cap reaches the radius from the floor at t = (height - radius) / sin(angle).
+	const triangle floor{ { -2e5f, 0.f, -2e5f }, { 2e5f, 0.f, -2e5f }, { 0.f, 0.f, 2e5f } };
+	for (const float degrees : { 0.5f, 1.f, 3.f, 20.f }) {
+		for (const float height : { 10.f, 100.f, 300.f }) {
+			const float angle = glm::radians(degrees);
+			const glm::vec3 direction{ std::cos(angle), -std::sin(angle), 0.f };
+			const auto hit = ds::capsule_sweep_triangle({ { 0.f, height, 0.f }, { 0.f, height + 1.f, 0.f }, 0.5f }, direction, floor.a, floor.b, floor.c);
+			BOOST_TEST_CONTEXT(degrees << " degrees from " << height) {
+				BOOST_REQUIRE(hit.has_value());
+				BOOST_TEST(hit->t == (height - 0.5f) / std::sin(angle), boost::test_tools::tolerance(2e-3f));
+				BOOST_TEST(hit->normal.y == 1.f, boost::test_tools::tolerance(1e-3f));
+			}
+		}
+	}
+	// Thousands of units: where a stepped search ran out of steps or of precision.
+	for (const float height : { 1500.f, 3000.f }) {
+		const glm::vec3 direction{ std::cos(glm::radians(20.f)), -std::sin(glm::radians(20.f)), 0.f };
+		const auto hit = ds::capsule_sweep_triangle({ { 0.f, height, 0.f }, { 0.5f, height + 1.f, 0.f }, 0.5f }, direction, floor.a, floor.b, floor.c);
+		BOOST_REQUIRE(hit.has_value());
+		BOOST_TEST(hit->t == (height - 0.5f) / std::sin(glm::radians(20.f)), boost::test_tools::tolerance(2e-3f));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ACapsuleSide_MeetsACornerAndAnEdgeOfATriangle_BeforeItsEnds)
+{
+	// A capsule along Z at the origin, a triangle coming at it from the side: its corner touches the capsule's side at x = -radius.
+	const ds::capsule3 capsule{ { 0.f, 0.f, -2.f }, { 0.f, 0.f, 2.f }, 0.5f };
+	const auto corner = ds::capsule_sweep_triangle(capsule, { 1.f, 0.f, 0.f }, { 3.f, 0.f, 0.f }, { 4.f, 1.f, 0.f }, { 4.f, -1.f, 0.f });
+	// The capsule moves +x and the triangle lies at x >= 3: the capsule's side meets the corner (3, 0, 0) where x + 0.5 = 3.
+	BOOST_REQUIRE(corner.has_value());
+	BOOST_TEST(corner->t == 2.5f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(corner->point.x == 3.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(corner->normal.x == -1.f, boost::test_tools::tolerance(1e-3f));
+
+	// An edge of the triangle running along Y, standing across the capsule's axis: it touches the side too.
+	const auto edge = ds::capsule_sweep_triangle(capsule, { 1.f, 0.f, 0.f }, { 3.f, -1.f, -1.f }, { 3.f, 1.f, -1.f }, { 3.f, 0.f, 1.f });
+	BOOST_REQUIRE(edge.has_value());
+	BOOST_TEST(edge->t == 2.5f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(edge->normal.x == -1.f, boost::test_tools::tolerance(1e-3f));
+
+	// The same triangle beyond the capsule's end (z in [3, 5]) is missed: neither side nor cap reaches it.
+	BOOST_TEST(!ds::capsule_sweep_triangle(capsule, { 1.f, 0.f, 0.f }, { 3.f, -1.f, 3.f }, { 3.f, 1.f, 3.f }, { 3.f, 0.f, 5.f }).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheSurfaceOfABox_IsItsTwelveTrianglesThroughTheMatrix)
+{
+	const ds::aabb3 box{ { -1.f, -2.f, -3.f }, { 1.f, 2.f, 3.f } };
+	const auto faces = ds::box_surface(box, glm::mat4{ 1.f });
+	float area = 0.f;
+	for (const ds::triangle3& face : faces) area += 0.5f * glm::length(glm::cross(face.b - face.a, face.c - face.a));
+	BOOST_TEST(area == 2.f * (2.f * 4.f + 2.f * 6.f + 4.f * 6.f), boost::test_tools::tolerance(1e-4f));
+	const auto hit = ds::sphere_sweep_triangle({ { 0.f, 0.f, 9.f }, 1.f }, { 0.f, 0.f, -1.f }, faces[10].a, faces[10].b, faces[10].c);
+	// faces[10] and [11] are the +z face: a sphere falling on it stops a radius above z = 3.
+	BOOST_TEST((hit.has_value() || ds::sphere_sweep_triangle({ { 0.f, 0.f, 9.f }, 1.f }, { 0.f, 0.f, -1.f }, faces[11].a, faces[11].b, faces[11].c).has_value()));
+	const glm::mat4 moved = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 10.f, 0.f, 0.f });
+	BOOST_TEST(ds::box_surface(box, moved)[0].a.x >= 9.f - 1e-4f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

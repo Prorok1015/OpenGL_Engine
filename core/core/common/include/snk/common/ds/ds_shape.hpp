@@ -2,6 +2,7 @@
 #include "ds_aabb3.hpp"
 #include "ds_intersect.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -285,6 +286,32 @@ namespace ds {
 		return triangle_overlaps_box(to_local * (a - shape.center), to_local * (b - shape.center), to_local * (c - shape.center), shape.half);
 	}
 
+	// The first time a ray enters the cylinder of `radius` around the segment c0-c1 (the cylinder's ends are open: the point of the
+	// axis it meets must lie within the segment), in [0, t_max]. A ray that runs along the axis, or starts inside the cylinder,
+	// has no entry.
+	inline std::optional<float> ray_segment_cylinder(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& c0,
+		const glm::vec3& c1, float radius, float t_max)
+	{
+		const glm::vec3 axis = c1 - c0;
+		const float axis_sq = glm::dot(axis, axis);
+		if (axis_sq <= 0.f) return std::nullopt;
+		const glm::vec3 m = origin - c0;
+		const glm::vec3 along = direction - axis * (glm::dot(direction, axis) / axis_sq);
+		const glm::vec3 from = m - axis * (glm::dot(m, axis) / axis_sq);
+		const float qa = glm::dot(along, along);
+		// The motion along the axis's own direction: nothing to solve when that is all there is.
+		if (qa <= 1e-12f * glm::dot(direction, direction)) return std::nullopt;
+		const float qb = glm::dot(from, along);
+		const float qc = glm::dot(from, from) - radius * radius;
+		const float disc = qb * qb - qa * qc;
+		if (disc < 0.f) return std::nullopt;
+		const float t = (-qb - std::sqrt(disc)) / qa;
+		if (t < 0.f || t > t_max) return std::nullopt;
+		const float along_axis = glm::dot(m + direction * t, axis) / axis_sq;
+		if (along_axis < 0.f || along_axis > 1.f) return std::nullopt;
+		return t;
+	}
+
 	// A sphere that moved `t` along its direction and met a triangle.
 	struct sweep_hit final
 	{
@@ -367,23 +394,7 @@ namespace ds {
 		}
 
 		const auto sweep_edge = [&](const glm::vec3& p0, const glm::vec3& p1) {
-			const glm::vec3 edge = p1 - p0;
-			const float edge_sq = glm::dot(edge, edge);
-			if (edge_sq <= 0.f) return;
-			const glm::vec3 m = shape.center - p0;
-			const glm::vec3 along = direction - edge * (glm::dot(direction, edge) / edge_sq);
-			const glm::vec3 from = m - edge * (glm::dot(m, edge) / edge_sq);
-			const float qa = glm::dot(along, along);
-			// The motion along the edge's own direction: nothing to solve when that is all there is.
-			if (qa <= 1e-12f * speed_sq) return;
-			const float qb = glm::dot(from, along);
-			const float qc = glm::dot(from, from) - radius_sq;
-			const float disc = qb * qb - qa * qc;
-			if (disc < 0.f) return;
-			const float t = (-qb - std::sqrt(disc)) / qa;
-			if (t < 0.f || t > best) return;
-			const float s = glm::dot(m + direction * t, edge) / edge_sq;
-			if (s >= 0.f && s <= 1.f) take(t);
+			if (const auto t = ray_segment_cylinder(shape.center, direction, p0, p1, shape.radius, best)) take(*t);
 		};
 		sweep_edge(a, b);
 		sweep_edge(b, c);
@@ -416,11 +427,11 @@ namespace ds {
 		return hit;
 	}
 
-	// The first time the capsule, moving along `direction`, touches the triangle within [0, t_max], by conservative advancement: the
-	// gap between the capsule's surface and the triangle can close no faster than the speed, so the capsule is moved by the gap
-	// (over the speed) until the gap is under a tolerance of 1e-4 of the radius (at least 1e-4). It never moves past a hit; a motion
-	// that only grazes (closing very slowly) may use up its 256 steps first and then reports no hit. `t` is early by at most the
-	// tolerance over the closing speed. A capsule already touching: t = 0 and started_inside, as for the sphere.
+	// The first time the capsule, moving along `direction`, touches the triangle within [0, t_max], exactly: the capsule is its axis
+	// grown by the radius, so it first touches through one of its two end caps (a sphere swept at the triangle), through its side
+	// against a corner of the triangle (the corner, moving the other way, enters the axis's cylinder) or through its side against an
+	// edge (the distance between the two lines is linear in time: it is the radius where the lines' nearest points are on both
+	// segments). A capsule already touching: t = 0 and started_inside, as for the sphere.
 	inline std::optional<sweep_hit> capsule_sweep_triangle(const capsule3& shape, const glm::vec3& direction, const glm::vec3& a,
 		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
 	{
@@ -429,37 +440,108 @@ namespace ds {
 		if (!std::isfinite(speed_sq) || !std::isfinite(shape.radius) || !(finite3(a) && finite3(b) && finite3(c) && finite3(shape.a) && finite3(shape.b))) {
 			return std::nullopt;
 		}
-		const float speed = std::sqrt(speed_sq);
-		const float tolerance = 1e-4f * std::max(1.f, shape.radius);
+		const float radius = shape.radius;
 		const glm::vec3 triangle_normal = glm::cross(b - a, c - a);
 		const float normal_length = glm::length(triangle_normal);
-		constexpr int k_max_steps = 256;
-		float t = 0.f;
-		for (int step = 0; step < k_max_steps; ++step) {
+		// The hit at time `t`: the nearest points of the capsule's axis and the triangle then.
+		const auto hit_at = [&](float t, bool started_inside) {
 			const glm::vec3 shift = direction * t;
 			const closest_pair nearest = closest_points_segment_triangle(shape.a + shift, shape.b + shift, a, b, c);
-			const float gap = std::sqrt(shape_detail::distance_sq(nearest.on_first, nearest.on_second)) - shape.radius;
-			if (gap <= tolerance) {
-				sweep_hit hit;
-				hit.t = t;
-				hit.point = nearest.on_second;
-				hit.started_inside = step == 0 && gap <= 0.f;
-				const glm::vec3 out = nearest.on_first - nearest.on_second;
-				const float out_length = glm::length(out);
-				if (out_length > 0.f) {
-					hit.normal = out / out_length;
-				} else if (normal_length > 0.f) {
-					const glm::vec3 unit = triangle_normal / normal_length;
-					hit.normal = glm::dot(unit, direction) > 0.f ? -unit : unit;
-				} else {
-					hit.normal = speed > 0.f ? -direction / speed : glm::vec3{ 0.f, 0.f, 1.f };
-				}
-				return hit;
+			sweep_hit hit;
+			hit.t = t;
+			hit.point = nearest.on_second;
+			hit.started_inside = started_inside;
+			const glm::vec3 out = nearest.on_first - nearest.on_second;
+			const float out_length = glm::length(out);
+			if (out_length > 0.f) {
+				hit.normal = out / out_length;
+			} else if (normal_length > 0.f) {
+				const glm::vec3 unit = triangle_normal / normal_length;
+				hit.normal = glm::dot(unit, direction) > 0.f ? -unit : unit;
+			} else {
+				hit.normal = speed_sq > 0.f ? -direction / std::sqrt(speed_sq) : glm::vec3{ 0.f, 0.f, 1.f };
 			}
-			if (!(speed > 0.f)) return std::nullopt;
-			t += gap / speed;
-			if (!(t <= t_max) || !std::isfinite(t)) return std::nullopt;
+			return hit;
+		};
+		const closest_pair start = closest_points_segment_triangle(shape.a, shape.b, a, b, c);
+		if (shape_detail::distance_sq(start.on_first, start.on_second) <= radius * radius) {
+			return hit_at(0.f, true);
 		}
-		return std::nullopt;
+		if (!(speed_sq > 0.f)) return std::nullopt;
+
+		float best = t_max;
+		bool found = false;
+		const auto take = [&](float t) {
+			if (t >= 0.f && t <= best) {
+				best = t;
+				found = true;
+			}
+		};
+		for (const glm::vec3& end : { shape.a, shape.b }) {
+			if (const auto cap = sphere_sweep_triangle({ end, radius }, direction, a, b, c, best); cap && !cap->started_inside) take(cap->t);
+		}
+		const glm::vec3 axis = shape.b - shape.a;
+		const float axis_sq = glm::dot(axis, axis);
+		if (axis_sq > shape_detail::k_tiny) {
+			for (const glm::vec3& corner : { a, b, c }) {
+				if (const auto t = ray_segment_cylinder(corner, -direction, shape.a, shape.b, radius, best)) take(*t);
+			}
+			const auto side_edge = [&](const glm::vec3& p0, const glm::vec3& p1) {
+				const glm::vec3 edge = p1 - p0;
+				const glm::vec3 normal = glm::cross(axis, edge);
+				const float normal_len = glm::length(normal);
+				// Parallel lines have no one nearest pair: the end caps and the corners meet such an edge first.
+				if (!(normal_len > 1e-6f * std::sqrt(axis_sq) * glm::length(edge))) return;
+				const glm::vec3 unit = normal / normal_len;
+				const float separation = glm::dot(shape.a - p0, unit);
+				const float rate = glm::dot(direction, unit);
+				const float side = separation >= 0.f ? 1.f : -1.f;
+				if (!(side * rate < 0.f)) return;
+				const float t = (side * radius - separation) / rate;
+				if (!(t >= 0.f) || t > best) return;
+				const glm::vec3 w = shape.a + direction * t - p0;
+				const float aa = axis_sq;
+				const float ab = glm::dot(axis, edge);
+				const float bb = glm::dot(edge, edge);
+				const float aw = glm::dot(axis, w);
+				const float bw = glm::dot(edge, w);
+				const float denom = aa * bb - ab * ab;
+				if (!(denom > 0.f)) return;
+				const float along_axis = (ab * bw - bb * aw) / denom;
+				const float along_edge = (aa * bw - ab * aw) / denom;
+				constexpr float k_slack = 1e-5f;
+				if (along_axis >= -k_slack && along_axis <= 1.f + k_slack && along_edge >= -k_slack && along_edge <= 1.f + k_slack) take(t);
+			};
+			side_edge(a, b);
+			side_edge(b, c);
+			side_edge(c, a);
+		}
+		if (!found) return std::nullopt;
+		return hit_at(best, false);
+	}
+
+	// A triangle of a surface.
+	struct triangle3 final
+	{
+		glm::vec3 a{ 0.f };
+		glm::vec3 b{ 0.f };
+		glm::vec3 c{ 0.f };
+	};
+
+	// The twelve triangles of the surface of a box through a matrix (the box's corners moved by it).
+	inline std::array<triangle3, 12> box_surface(const aabb3& box, const glm::mat4& matrix)
+	{
+		glm::vec3 corner[8];
+		for (int i = 0; i < 8; ++i) {
+			const glm::vec3 point{ (i & 1) ? box.max.x : box.min.x, (i & 2) ? box.max.y : box.min.y, (i & 4) ? box.max.z : box.min.z };
+			corner[i] = glm::vec3(matrix * glm::vec4(point, 1.f));
+		}
+		constexpr int k_faces[6][4] = { { 0, 4, 6, 2 }, { 1, 3, 7, 5 }, { 0, 1, 5, 4 }, { 2, 6, 7, 3 }, { 0, 2, 3, 1 }, { 4, 5, 7, 6 } };
+		std::array<triangle3, 12> out;
+		for (int face = 0; face < 6; ++face) {
+			out[2 * face] = { corner[k_faces[face][0]], corner[k_faces[face][1]], corner[k_faces[face][2]] };
+			out[2 * face + 1] = { corner[k_faces[face][0]], corner[k_faces[face][2]], corner[k_faces[face][3]] };
+		}
+		return out;
 	}
 }

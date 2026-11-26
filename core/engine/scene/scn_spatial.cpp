@@ -146,15 +146,22 @@ std::optional<scn::point_hit> scn::spatial_world::closest_point(entt::registry& 
 	return m_backend->closest_point(world, point, filter);
 }
 
-std::optional<scn::shape_hit> scn::spatial_world::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction,
+scn::shapecast_result scn::spatial_world::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction,
 	const ray_filter& filter)
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
-	const float speed_sq = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
-	if (!usable(volume) || !finite_vec(direction) || !std::isfinite(speed_sq) || !(speed_sq > 0.f)) {
-		return std::nullopt;
+	shapecast_result result;
+	// The largest component first: the square of a long direction would overflow, its direction does not.
+	const float largest = std::max({ std::abs(direction.x), std::abs(direction.y), std::abs(direction.z) });
+	if (!usable(volume) || !finite_vec(direction) || !(largest > 0.f) || std::isnan(filter.max_distance)) {
+		result.status = cast_status::invalid;
+		return result;
 	}
-	return m_backend->shapecast(world, volume, direction, filter);
+	if (volume.kind == shape_kind::box) {
+		result.status = cast_status::unsupported;
+		return result;
+	}
+	return m_backend->shapecast(world, volume, glm::normalize(direction / largest), filter);
 }
 
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
@@ -189,7 +196,7 @@ std::optional<scn::point_hit> scn::closest_point(entt::registry& world, const gl
 	return spatial_world::attach(world).closest_point(world, point, filter);
 }
 
-std::optional<scn::shape_hit> scn::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter)
+scn::shapecast_result scn::shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter)
 {
 	return spatial_world::attach(world).shapecast(world, volume, direction, filter);
 }
