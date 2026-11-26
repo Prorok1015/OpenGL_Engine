@@ -71,7 +71,8 @@ namespace rnd
 		// Compilations done so far; grows only when an instance is made or rebuilt.
 		std::uint64_t compilations() const noexcept;
 
-		// Shaders of materials that failed to load ("shader/load"), one per (shader, material), for the Problems panel.
+		// The problems of materials, for the Problems panel: a shader that failed to load ("shader/load") and a transparent or
+		// mix material whose shader has no transparent path (k_no_transparent_path_code), each once per (shader, material).
 		// The generation grows whenever they change.
 		std::vector<shader_problem> problems() const;
 		std::uint64_t problems_generation() const noexcept;

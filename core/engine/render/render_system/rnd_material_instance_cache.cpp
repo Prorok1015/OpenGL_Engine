@@ -14,7 +14,6 @@
 namespace
 {
 	constexpr std::string_view k_load_code = "shader/load";
-	constexpr std::string_view k_no_transparent_path_code = rnd::k_no_transparent_path_code;
 
 	rnd::material_shader_state read_shader(const res::res_handle<rnd::shader_desc>& shader)
 	{

@@ -779,6 +779,69 @@ BOOST_AUTO_TEST_CASE(AShaderReloadedWithATransparentPathLosesTheProblem)
 	BOOST_TEST(cache.problems().empty());
 }
 
+// The other way round: a reload that loses the path reports it.
+BOOST_AUTO_TEST_CASE(AShaderReloadedWithoutItsTransparentPathIsReported)
+{
+	const res::tag tag{ res::tag::memory, "t/loses_transparent.shader.desc" };
+	write_file(tag, R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert",)"
+		R"("fragment":"res://shaders/mix_opaque_trans_scene.frag","defines":[],"transparent":true})");
+	const auto desc = make_desc_with_shader(tag);
+	desc->queue = scn::pass_queue::MIX;
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	BOOST_REQUIRE(cache.problems().empty());
+
+	write_shader(tag, "[]");
+	signal(tag);
+	for (int frame = 0; frame < 4 && cache.problems().empty(); ++frame) {
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		test_util::pump(tasks);
+	}
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	BOOST_TEST(cache.problems().front().code == std::string(rnd::k_no_transparent_path_code));
+}
+
+// A material nobody draws any more takes its problem with it; one pointed at a shader with the path loses it at once.
+BOOST_AUTO_TEST_CASE(TheQueueProblemGoesWithTheInstance_AndWithTheOldShader)
+{
+	const res::tag opaque_only{ res::tag::memory, "t/queue_opaque_only.shader.desc" };
+	const res::tag blended{ res::tag::memory, "t/queue_blended.shader.desc" };
+	write_shader(opaque_only, "[]");
+	write_file(blended, R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert",)"
+		R"("fragment":"res://shaders/mix_opaque_trans_scene.frag","defines":[],"transparent":true})");
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+
+	{
+		const auto dropped = make_desc_with_shader(opaque_only);
+		dropped->queue = scn::pass_queue::TRANSPARENT;
+		next_frame(cache);
+		cache.acquire(dropped, false, false);
+		BOOST_REQUIRE(cache.problems().size() == 1u);
+		for (std::uint64_t frame = 0; frame <= rnd::material_instance_cache::grace_frames; ++frame) {
+			next_frame(cache);
+		}
+		BOOST_TEST(cache.size() == 0u);
+		BOOST_TEST(cache.problems().empty());
+	}
+
+	const auto retargeted = make_desc_with_shader(opaque_only);
+	retargeted->queue = scn::pass_queue::TRANSPARENT;
+	next_frame(cache);
+	const auto id = cache.acquire(retargeted, false, false);
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+	retargeted->shader = resources().require<rnd::shader_desc>(blended);
+	test_util::pump(tasks);
+	BOOST_REQUIRE(retargeted->shader.is_ready());
+	next_frame(cache);
+	BOOST_CHECK(cache.acquire(retargeted, false, true) == id);
+	BOOST_TEST(cache.problems().empty());
+}
+
 // The render system's own cache: its problems reach shader_problems() and move its generation.
 BOOST_AUTO_TEST_CASE(TheRenderSystemReportsTheMaterialCachesProblems)
 {

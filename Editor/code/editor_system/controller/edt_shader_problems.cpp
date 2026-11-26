@@ -23,7 +23,8 @@ std::vector<edt::problem> edt::shader_problem_publisher::to_problems(const std::
 			continue;
 		}
 		problem row;
-		row.severity = problem_severity::error;
+		// A material with no transparent path is still drawn, only not blended (#1440).
+		row.severity = item.code == rnd::k_no_transparent_path_code ? problem_severity::warning : problem_severity::error;
 		row.file = item.file.string();
 		row.line = item.line;
 		row.column = item.column;

@@ -147,6 +147,23 @@ BOOST_AUTO_TEST_CASE(AnEmptyOptionalStageIsLeftOut_InTheOrderOfTheFields)
 	BOOST_TEST(back.defines.empty());
 }
 
+// #1440: a shader says it has a transparent path; the default (none) is not written, so no shipped file changes.
+BOOST_AUTO_TEST_CASE(TheTransparentFlagIsWrittenOnlyWhenSet)
+{
+	rnd::shader_desc src;
+	src.vertex = res::tag{ "res://shaders/scene.vert" };
+	src.fragment = res::tag{ "res://shaders/scene.frag" };
+	BOOST_TEST(!ser(src).contains("transparent"));
+
+	src.transparent = true;
+	const json::object written = ser(src);
+	BOOST_REQUIRE(written.contains("transparent"));
+	BOOST_TEST(written.at("transparent").as_bool());
+	rnd::shader_desc back;
+	back.deserialize(*descs, written);
+	BOOST_TEST(back.transparent);
+}
+
 BOOST_AUTO_TEST_CASE(ConfigHoldsTheStagesAndTheDefines)
 {
 	rnd::shader_desc shader;

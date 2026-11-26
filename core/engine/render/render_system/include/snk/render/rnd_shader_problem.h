@@ -6,11 +6,11 @@
 
 namespace rnd
 {
-	// One reason a shader program did not build, at the file and line it is about: an engine preprocessing error or
-	// a line of the compiler's or the linker's log mapped back through the #line directives of the source (#1201).
 	// A material of the transparent or mix queue whose shader desc has no transparent path (#1440).
 	inline constexpr std::string_view k_no_transparent_path_code = "shader/no_transparent_path";
 
+	// One reason a shader program did not build, at the file and line it is about: an engine preprocessing error or
+	// a line of the compiler's or the linker's log mapped back through the #line directives of the source (#1201).
 	struct shader_problem
 	{
 		// The stage or included file; the vertex stage's for a link error.
