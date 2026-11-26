@@ -285,7 +285,11 @@ now (#1457)»; с `name`, `folder` или `files_token` — `invalid_args`); н�
 настройки читаются (`unknown_settings_keys::ignore`); префаб, открытый с несохранёнными
 правками, — `busy`; так же `busy`, когда документ префаба — ссылка (EPIC-82) и любой
 документ её цепочки (`chain_of`) или под ней (`descendants_of`) не сохранён
-(`is_open_with_unsaved_changes(document_manager&, tag, ...)` в `edt_asset_ops.h`).
+(`is_open_with_unsaved_changes(document_manager&, tag, ...)` в `edt_asset_ops.h`). Цепочка
+включает уровень: грязный уровень, из которого префаб открыт как instance-link, тоже даёт
+`busy` (иначе переименование узлов оставит в уровне висящие overrides); отказ называет
+документ (`unsaved_edits_holder`): «... is open from the level X, which has unsaved changes:
+save or discard the edits of the level X first».
 Диалог экспорта в этом режиме: имя и папка — префаба, список файлов
 с «[overwrite]»; Export запрещён, пока любой перезаписываемый файл открыт с
 несохранёнными правками, и пока корневой префаб новой модели ложится не на этот префаб.

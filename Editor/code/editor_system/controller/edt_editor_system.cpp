@@ -345,6 +345,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return edt::is_open_with_unsaved_changes(m_context->documents(), tag,
 				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
 		},
+		.unsaved_edits_holder = [this](const res::tag& tag) {
+			return edt::unsaved_edits_holder(m_context->documents(), tag);
+		},
 		.project_open = [&data] { return data.has_value<prj::project_context>(); } });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));

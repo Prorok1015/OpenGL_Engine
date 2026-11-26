@@ -779,6 +779,11 @@ bool edt::is_open_with_unsaved_changes(const document* open, const document& sce
 bool edt::is_open_with_unsaved_changes(document_manager& documents, const res::tag& tag, bool is_editor_copy)
 {
 	if (is_open_with_unsaved_changes(documents.find_by_source(tag), documents.scene(), is_editor_copy)) return true;
+	return !unsaved_edits_holder(documents, tag).empty();
+}
+
+std::string edt::unsaved_edits_holder(document_manager& documents, const res::tag& tag)
+{
 	std::vector<document_id> linked;
 	documents.for_each([&](document& open) {
 		if (open.source() == tag && documents.has_link(open.id())) linked.push_back(open.id());
@@ -788,10 +793,13 @@ bool edt::is_open_with_unsaved_changes(document_manager& documents, const res::t
 		const std::vector<document_id> below = documents.descendants_of(link);
 		family.insert(family.end(), below.begin(), below.end());
 		for (const document_id id : family) {
-			if (const document* open = documents.find(id); open != nullptr && open->is_dirty()) return true;
+			const document* open = documents.find(id);
+			if (open == nullptr || !open->is_dirty()) continue;
+			if (open->kind() == "scene") return std::format("the level {}", open->source().view());
+			return open->source().is_valid() ? std::string(open->source().view()) : std::format("'{}'", open->title());
 		}
 	}
-	return false;
+	return {};
 }
 
 edt::asset_ops::asset_ops(asset_ops_ports ports)

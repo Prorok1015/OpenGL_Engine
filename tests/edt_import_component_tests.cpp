@@ -171,7 +171,10 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 			.desc = descs(), .tasks = tasks, .layer = *layer,
 			.exported = [this](const res::tag&) { ++exported_to_scene; },
 			.decoder = [this] { return decoder(); },
-			.open_with_unsaved_changes = [this](const res::tag& tag) { return tag.view() == open_dirty; } });
+			.open_with_unsaved_changes = [this](const res::tag& tag) { return tag.view() == open_dirty; },
+			.unsaved_edits_holder = [this](const res::tag& tag) {
+				return tag.view() == open_dirty ? dirty_holder : std::string{};
+			} });
 	}
 
 	// One editor frame: the import's popup (its implicit callback), then the jobs and the main-thread queue.
@@ -263,6 +266,8 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	std::vector<edt::model_import_settings> import_settings;
 	// The tag a document holds with unsaved edits; empty: none.
 	std::string open_dirty;
+	// The other document whose unsaved edits `open_dirty` is open under as a link; empty: its own.
+	std::string dirty_holder;
 	// What the fake decoder stores: the prefab's bytes (empty: four '{') and other files, "<stem><suffix>" -> bytes.
 	std::string prefab_text;
 	std::vector<std::pair<std::string, std::string>> extra_files;
@@ -791,6 +796,12 @@ BOOST_AUTO_TEST_CASE(APrefabOfALowerLayer_OrOpenWithUnsavedChanges_IsRefused)
 	const std::optional<edt::model_import_refusal> busy = component->reimport(prefab(), model, nullptr);
 	BOOST_REQUIRE(busy.has_value());
 	BOOST_CHECK_EQUAL(busy->code, cmd::codes::busy);
+	dirty_holder = "the level res://levels/main.level.desc";
+	const edt::model_import_record under_level = component->check_reimport(prefab());
+	BOOST_CHECK_EQUAL(under_level.code, cmd::codes::busy);
+	BOOST_CHECK_MESSAGE(contains(under_level.error, dirty_holder)
+		&& contains(under_level.error, "save or discard the edits of"), under_level.error);
+	dirty_holder.clear();
 	open_dirty.clear();
 	BOOST_CHECK(component->check_reimport(prefab()).ok());
 	frames_until([] { return false; });

@@ -60,6 +60,9 @@ namespace edt
 			std::function<void(const std::vector<res::tag>&)> assets_rewritten = {};
 			// Whether a document holds unsaved edits of the file: a re-import of it is refused. Null: none does.
 			std::function<bool(const res::tag&)> open_with_unsaved_changes = {};
+			// The document whose unsaved edits the file is open under as a link (EPIC-82), named for a person; empty:
+			// none. A re-import says so and what to do. Null: none is.
+			std::function<std::string(const res::tag&)> unsaved_edits_holder = {};
 			// Whether a project is open: without one no image import starts. Null: none is.
 			std::function<bool()> project_open = {};
 		};
@@ -114,6 +117,8 @@ namespace edt
 #endif
 
 	private:
+		// Why `file` may not be overwritten now for unsaved edits, naming whose and what to do; empty: it may.
+		std::string unsaved_edits_of(const res::tag& file) const;
 		void build();
 		bool poll_pipeline();
 		// Implicit callback: true while the settings window is open.

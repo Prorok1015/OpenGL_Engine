@@ -276,6 +276,9 @@ namespace edt
 	// As above for the documents of `documents` whose source is `tag`, and also when one of them is a link (EPIC-82)
 	// and a document of its chain, or one below it, holds unsaved edits (a re-import would write under them, #1194).
 	bool is_open_with_unsaved_changes(document_manager& documents, const res::tag& tag, bool is_editor_copy);
+	// The document whose unsaved edits a link of `tag` lies under (its chain or below it), named for a person ("the
+	// level res://x.level.desc"); empty when none.
+	std::string unsaved_edits_holder(document_manager& documents, const res::tag& tag);
 
 	class asset_ops
 	{

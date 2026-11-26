@@ -102,9 +102,7 @@ void edt::import_component::build()
 	res::resource_system& resources = m_ports.resources;
 	m_export_dialog = std::make_unique<asset_export_dialog>(*m_exporter, m_ports.context.jobs(), resources,
 		m_ports.context.colors());
-	m_export_dialog->set_open_check([this](const res::tag& tag) {
-		return m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(tag);
-	});
+	m_export_dialog->set_open_check([this](const res::tag& tag) { return unsaved_edits_of(tag); });
 	agent_import_options import_options;
 #if SNK_HAS_ASSIMP
 	// An agent's model is parsed in a process of its own, with a memory limit and killed at its deadline (#647). There is
@@ -248,6 +246,21 @@ void edt::import_component::ask_settings(const std::filesystem::path& absolute_p
 	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
 }
 
+std::string edt::import_component::unsaved_edits_of(const res::tag& file) const
+{
+	const std::string named = shown(file.view());
+	if (const std::string holder = m_ports.unsaved_edits_holder ? m_ports.unsaved_edits_holder(file) : std::string{};
+		!holder.empty()) {
+		const std::string who = shown(holder);
+		return std::format("{} is open from {}, which has unsaved changes: save or discard the edits of {} first",
+			named, who, who);
+	}
+	if (m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(file)) {
+		return std::format("{} is open with unsaved changes: save or close it first", named);
+	}
+	return {};
+}
+
 const edt::asset_export_dialog& edt::import_component::export_dialog() const
 {
 	return *m_export_dialog;
@@ -305,9 +318,8 @@ edt::model_import_record edt::import_component::check_reimport(const res::tag& p
 	}
 	model_import_record record = read_model_import_record(top, prefab);
 	if (!record.ok()) return record;
-	if (m_ports.open_with_unsaved_changes && m_ports.open_with_unsaved_changes(prefab)) {
-		return refuse(cmd::codes::busy, std::format("{} is open with unsaved changes: save or close it first; nothing "
-			"was re-imported", named));
+	if (const std::string why = unsaved_edits_of(prefab); !why.empty()) {
+		return refuse(cmd::codes::busy, why + "; nothing was re-imported");
 	}
 	return record;
 }

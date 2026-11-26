@@ -35,8 +35,9 @@ namespace edt {
 		// first checks (an io job) what each file it would overwrite holds against the prefab's record (`made`).
 		void open(import_result result, res::tag reimport = {});
 
-		// Whether a document holds unsaved edits of a file the export would overwrite: Export is refused. Null: none.
-		void set_open_check(std::function<bool(const res::tag&)> open_with_unsaved_changes)
+		// Why a document's unsaved edits keep the export from overwriting a file (empty: they do not): Export is
+		// refused with that text. Null: none does.
+		void set_open_check(std::function<std::string(const res::tag&)> open_with_unsaved_changes)
 		{
 			m_open_with_unsaved_changes = std::move(open_with_unsaved_changes);
 		}
@@ -108,7 +109,7 @@ namespace edt {
 		std::optional<made_files> m_made{};
 		bool m_overwrite_ticked = false;
 		bool m_show_report = false;
-		std::function<bool(const res::tag&)> m_open_with_unsaved_changes;
+		std::function<std::string(const res::tag&)> m_open_with_unsaved_changes;
 
 		// Async export state
 		job_service& m_jobs;

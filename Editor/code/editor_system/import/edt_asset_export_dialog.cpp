@@ -185,8 +185,9 @@ std::string edt::asset_export_dialog::form_problem(std::unordered_map<res::tag, 
 	}
 	if (problem.empty() && m_open_with_unsaved_changes) {
 		for (const auto& [mem_tag, res_tag] : remap) {
-			if (m_resources.exists(res_tag) && m_open_with_unsaved_changes(res_tag)) {
-				problem = std::format("{} is open with unsaved changes: save or close it first", res_tag.view());
+			if (!m_resources.exists(res_tag)) continue;
+			if (std::string why = m_open_with_unsaved_changes(res_tag); !why.empty()) {
+				problem = std::move(why);
 				break;
 			}
 		}

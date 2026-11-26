@@ -118,6 +118,7 @@ BOOST_AUTO_TEST_CASE(AFileWhoseLinkHasUnsavedEditsBelowIt_IsOpenWithUnsavedChang
 	static_cast<stub_document*>(documents.find(face))->m_dirty = false;
 	static_cast<stub_document*>(documents.find(robot))->m_dirty = true;
 	BOOST_TEST(edt::is_open_with_unsaved_changes(documents, prefab, false));
+	BOOST_TEST(edt::unsaved_edits_holder(documents, prefab) == std::string(prefab.view()));
 }
 
 BOOST_AUTO_TEST_CASE(AnInstanceWhoseParentIsNotOpen_IsRefused)
