@@ -3,6 +3,7 @@
 #include "null_engine_fixture.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_editor_layer.h"
+#include "edt_file_menu.h"
 #include "edt_import_component.h"
 #include "edt_import_problems.h"
 #include "edt_model_import_limits.h"
@@ -127,6 +128,7 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 			// As the decoder process does past its deadline: the limit the import gave it, by name.
 			if (import_times_out) throw std::runtime_error(edt::time_limit_refusal("decoding the model", source.time_limit));
 			++imports;
+			import_settings.push_back(source.settings);
 			edt::import_intermediate result;
 			result.prefab_tag = res::tag{ "memory://" + source.memory_folder + "robot.prefab.desc" };
 			BOOST_TEST(rs().store_sync(result.prefab_tag, std::vector<std::byte>(4, std::byte{ '{' })));
@@ -231,12 +233,98 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	bool import_times_out = false;
 	int scans = 0;
 	int imports = 0;
+	std::vector<edt::model_import_settings> import_settings;
 	std::unique_ptr<edt::import_component> component;
 };
 
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtImportComponentTests, import_component_fixture)
+
+BOOST_AUTO_TEST_CASE(TheSettingsWindow_ClosedWithEsc_ImportsNothing)
+{
+	make_component();
+	int imported = 0;
+	component->ask_settings(model, [&imported](const fs::path&, const edt::model_import_settings&) { ++imported; });
+	BOOST_REQUIRE(component->settings_open());
+	frame_without_jobs(false);
+	BOOST_REQUIRE(component->settings_open());
+	frame_without_jobs(true);
+	BOOST_CHECK(!component->settings_open());
+	frames_until([] { return false; });
+	BOOST_TEST(imported == 0);
+	BOOST_TEST(imports == 0);
+	BOOST_CHECK(!component->person_import_running());
+}
+
+BOOST_AUTO_TEST_CASE(TheSettingsWindow_IgnoresASecondModel_AndShutdownClosesItWithoutImporting)
+{
+	make_component();
+	std::vector<std::string> imported;
+	const auto record = [&imported](const fs::path& source, const edt::model_import_settings&) {
+		imported.push_back(source.filename().string());
+	};
+	component->ask_settings(model, record);
+	component->ask_settings(dir.write("models/other.glb", "glb-bytes"), record);
+	frame_without_jobs(false);
+	BOOST_REQUIRE(component->settings_open());
+	component->shutdown();
+	BOOST_CHECK(!component->settings_open());
+	BOOST_CHECK(imported.empty());
+	BOOST_TEST(imports == 0);
+}
+
+BOOST_AUTO_TEST_CASE(TheMenusImport_GoesThroughTheSettingsWindow_ToTheJobAndTheExportDialog)
+{
+	// The chain as file_menu_component wires it: File > Import Model... -> pick -> the window -> file.import_model
+	// {path, settings} as the person -> start_import. No agent import is wired: the call must take the dialog branch.
+	make_component();
+	context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> pump) {
+		layer->register_implicit(id, std::move(pump));
+	});
+	edt::file_menu_hooks hooks;
+	hooks.import_model = [this](const fs::path& source, const edt::model_import_settings& settings) {
+		component->start_import(source, settings);
+	};
+	hooks.ask_model_settings = [this](const fs::path& source,
+		std::function<void(const edt::model_import_settings&)> import) {
+		component->ask_settings(source, [import = std::move(import)](const fs::path&,
+			const edt::model_import_settings& settings) { import(settings); });
+	};
+	auto menu = std::make_unique<edt::file_menu>(context->dialogs(), context->actions(), hooks);
+	menu->register_actions();
+	edt::dialog_auto_answer answer;
+	answer.picked_file = model;
+	context->dialogs().set_auto_answer(answer);
+
+	menu->import_model();
+	frames_until([this] { return component->settings_open(); });
+	BOOST_REQUIRE(component->settings_open());
+	BOOST_TEST(imports == 0, "nothing is imported before Import");
+	edt::model_import_settings_form& form = component->settings_form();
+	form.set_normals(edt::model_normals::flat);
+	form.set_tangents(false);
+	form.submit();
+
+	frames_until([this] { return component->dialog_open(); });
+	BOOST_REQUIRE_MESSAGE(component->dialog_open(), "the person's import ends in the export dialog");
+	BOOST_REQUIRE_EQUAL(import_settings.size(), 1u);
+	const edt::model_import_settings chosen{ .normals = edt::model_normals::flat, .tangents = false };
+	BOOST_CHECK(import_settings[0] == chosen);
+	component->shutdown();
+	menu.reset();
+}
+
+BOOST_AUTO_TEST_CASE(TheSettingsChosen_ReachTheDecoder)
+{
+	make_component();
+	const edt::model_import_settings flat{ .normals = edt::model_normals::flat, .tangents = false };
+	component->start_import(model, flat);
+	frames_until([this] { return component->dialog_open(); });
+	BOOST_REQUIRE(component->dialog_open());
+	BOOST_REQUIRE_EQUAL(import_settings.size(), 1u);
+	BOOST_CHECK(import_settings[0] == flat);
+}
 
 BOOST_AUTO_TEST_CASE(AnImportWaitingInTheExportDialog_LeavesNothingOfThisRunInMemory_AfterShutdown)
 {

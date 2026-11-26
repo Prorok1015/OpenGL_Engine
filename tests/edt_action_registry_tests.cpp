@@ -103,7 +103,9 @@ struct file_menu_fixture
 		hooks.save_level_as = [this](const std::string& p) { calls.push_back("save_as:" + p); return save_ok; };
 		hooks.discard_changes = [this] { dirty = false; };
 		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };
-		hooks.import_model = [this](const std::filesystem::path& p) { calls.push_back("import:" + p.generic_string()); };
+		hooks.import_model = [this](const std::filesystem::path& p, const edt::model_import_settings&) {
+			calls.push_back("import:" + p.generic_string());
+		};
 		hooks.exit = [this] { calls.push_back("exit"); };
 		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
 		menu->register_actions();

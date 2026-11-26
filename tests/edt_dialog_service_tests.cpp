@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
+#include "edt_model_import_form.h"
 #include <snk/command/cmd_json_schema.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_dialog_service.h>
@@ -113,7 +114,10 @@ struct menu_fixture : dialog_fixture
 		};
 		hooks.discard_changes = [this] { calls.push_back("discard"); };
 		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };
-		hooks.import_model = [this](const std::filesystem::path& p) { calls.push_back("import:" + p.generic_string()); };
+		hooks.import_model = [this](const std::filesystem::path& p, const edt::model_import_settings& settings) {
+			const bool defaults = settings == edt::model_import_settings{};
+			calls.push_back("import:" + p.generic_string() + (defaults ? "" : " " + edt::model_settings_text(settings)));
+		};
 		hooks.exit = [this] { calls.push_back("exit"); };
 		menu = std::make_unique<edt::file_menu>(service, actions, hooks);
 		menu->register_actions();
@@ -927,6 +931,53 @@ BOOST_AUTO_TEST_CASE(OpenLevelAndImportModel_HandOverThePickedFile)
 	menu->import_model();
 	drain();
 	BOOST_TEST((calls == std::vector<std::string>{ "load:res/levels/e.desc", "import:models/m.glb" }));
+}
+
+BOOST_AUTO_TEST_CASE(APersonsImportWithSettings_ReachesTheDialogFlow_WithoutAnAgentImport)
+{
+	// No agent_import hook here: a call that went to the background import would answer "disabled".
+	BOOST_REQUIRE(hooks.agent_import == nullptr);
+	const auto result = actions.invoke("file.import_model", boost::json::object{ { "path", "models/m.glb" },
+		{ "settings", boost::json::object{ { "normals", "flat" }, { "tangents", false } } } });
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((calls == std::vector<std::string>{ "import:models/m.glb normals flat, tangents off" }));
+}
+
+BOOST_AUTO_TEST_CASE(ImportModel_AsksForTheSettings_CancelImportsNothing_ImportTakesThem)
+{
+	edt::model_import_settings_form form;
+	menu.reset();
+	hooks.ask_model_settings = [&form](const std::filesystem::path& picked,
+		std::function<void(const edt::model_import_settings&)> import) {
+		form.open(picked, [import = std::move(import)](const std::filesystem::path&,
+			const edt::model_import_settings& settings) { import(settings); });
+	};
+	menu = std::make_unique<edt::file_menu>(service, actions, hooks);
+	menu->register_actions();
+	edt::dialog_auto_answer answer;
+	answer.picked_file = std::filesystem::path("models/m.glb");
+	service.set_auto_answer(answer);
+
+	menu->import_model();
+	drain();
+	BOOST_REQUIRE(form.is_open());
+	BOOST_TEST(form.shown_name() == "m.glb");
+	form.set_normals(edt::model_normals::flat);
+	form.cancel();
+	drain();
+	BOOST_CHECK(!form.is_open());
+	BOOST_CHECK(calls.empty());
+
+	menu->import_model();
+	drain();
+	BOOST_REQUIRE(form.is_open());
+	BOOST_CHECK(form.settings() == edt::model_import_settings{});
+	form.set_normals(edt::model_normals::flat);
+	form.set_tangents(false);
+	form.submit();
+	drain();
+	BOOST_CHECK(!form.is_open());
+	BOOST_TEST((calls == std::vector<std::string>{ "import:models/m.glb normals flat, tangents off" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

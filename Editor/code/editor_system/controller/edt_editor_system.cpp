@@ -997,8 +997,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label()), m_context->colors()); });
 	// The Input Actions panel waiting for a key is a modal too: Ctrl+S and the rest must not fire under the player's key (#470).
+	// So is the model import's settings window.
 	editor_layer->set_modal_probe([this] {
-		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
+		const bool capturing = m_panels->input_actions() && m_panels->input_actions()->capturing();
+		return m_context->dialogs().pending() > 0 || capturing || m_import->settings_open();
 	});
 	// Bindings two actions share and the shaders that did not build are Problems (sources "input", "shader"), whether or not
 	// the panel is open.

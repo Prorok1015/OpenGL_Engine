@@ -191,7 +191,14 @@ edt::file_menu_component::file_menu_component(ports from)
 		return std::nullopt;
 	};
 #if SNK_HAS_ASSIMP
-	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_ports.import.start_import(abs_path); };
+	hooks.import_model = [this](const std::filesystem::path& abs_path, const model_import_settings& settings) {
+		m_ports.import.start_import(abs_path, settings);
+	};
+	hooks.ask_model_settings = [this](const std::filesystem::path& abs_path,
+		std::function<void(const model_import_settings&)> import) {
+		m_ports.import.ask_settings(abs_path, [import = std::move(import)](const std::filesystem::path&,
+			const model_import_settings& settings) { import(settings); });
+	};
 #endif
 	hooks.agent_import = m_ports.import.agent_import();
 	hooks.image_import = m_ports.import.image_import();

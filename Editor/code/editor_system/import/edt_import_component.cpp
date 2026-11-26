@@ -162,6 +162,7 @@ void edt::import_component::shutdown()
 {
 	if (m_shut_down) return;
 	m_shut_down = true;
+	m_settings_form.cancel();
 #if SNK_HAS_ASSIMP
 	// A load still running keeps the adapter, and with it the decoder, alive until it ends.
 	if (m_adapter_registered) m_ports.resources.unregistrate_adapter(mdl::model_adapter::INFO);
@@ -183,6 +184,51 @@ bool edt::import_component::person_import_running() const
 #else
 	return false;
 #endif
+}
+
+void edt::import_component::ask_settings(const std::filesystem::path& absolute_path,
+	model_import_settings_form::import_fn on_import)
+{
+	if (m_shut_down || !m_settings_form.open(absolute_path, std::move(on_import))) return;
+	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
+}
+
+bool edt::import_component::draw_settings_window()
+{
+	if (!m_settings_form.is_open()) return false;
+	constexpr const char* title = "Model Import Settings";
+	if (!ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
+	// Not shown this frame (opened in it, or under another modal): the window stays and is tried next frame.
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return true;
+	const model_import_settings settings = m_settings_form.settings();
+	ImGui::Text("Model: %s", m_settings_form.shown_name().c_str());
+	ImGui::Separator();
+	ImGui::TextUnformatted("Normals");
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Smooth", settings.normals == model_normals::smooth)) {
+		m_settings_form.set_normals(model_normals::smooth);
+	}
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Flat", settings.normals == model_normals::flat)) {
+		m_settings_form.set_normals(model_normals::flat);
+	}
+	bool tangents = settings.tangents;
+	if (ImGui::Checkbox("Tangents", &tangents)) m_settings_form.set_tangents(tangents);
+	ImGui::TextDisabled("%s", "Tangents are needed for normal maps. Both are recorded in the prefab's .resource.");
+	ImGui::Separator();
+	const bool import = ImGui::Button("Import");
+	ImGui::SetItemDefaultFocus();
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel") || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+		&& ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+	if (import || cancel) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
+	if (cancel) {
+		m_settings_form.cancel();
+	} else if (import) {
+		m_settings_form.submit();
+	}
+	return m_settings_form.is_open();
 }
 
 bool edt::import_component::agent_import_running() const
@@ -226,9 +272,14 @@ std::optional<std::string> edt::import_component::agent_import_blocker() const
 	return std::nullopt;
 }
 
-void edt::import_component::start_import(const std::filesystem::path& absolute_path)
+void edt::import_component::start_import(const std::filesystem::path& absolute_path,
+	const model_import_settings& settings)
 {
-	if (m_importing) return;
+	if (m_importing) {
+		egLOG_INFO("Editor/Import", "Import of '{}' not started: another import is running",
+			text_escape::escaped_text(fs_paths::utf8_of(absolute_path.filename()), 256));
+		return;
+	}
 	if (m_dialog_open) {
 		m_ports.context.dialogs().message(message_level::info,
 			"An import is waiting in the editor's export dialog: export it or close the dialog first.");
@@ -256,9 +307,9 @@ void edt::import_component::start_import(const std::filesystem::path& absolute_p
 	// The model is parsed in the decoder process (#987), never here: the job reads the file and waits for the decoder.
 	m_job = m_ports.context.jobs().start(ds::lane::compute,
 		{ "Import " + m_name, "import" }, m_lifetime,
-		[decoder = m_steps, &resources = m_ports.resources, absolute_path,
+		[decoder = m_steps, &resources = m_ports.resources, absolute_path, settings,
 			folder = m_import_folder](ds::task_context& ctx) -> import_intermediate {
-			return person_model_import(absolute_path, folder, decoder, resources, ctx);
+			return person_model_import(absolute_path, folder, decoder, resources, ctx, settings);
 		},
 		[this](ds::task_result<import_intermediate>& result) {
 			if (!m_importing) return;
