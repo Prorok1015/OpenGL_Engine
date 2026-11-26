@@ -601,6 +601,54 @@ BOOST_AUTO_TEST_CASE(ALiveLevelsAutosave_TakesTheEcsTransforms_AndIsWhatSaveWrit
 	BOOST_TEST(read_file(content / "levels" / "a.desc") == autosaved);
 }
 
+
+// A node whose animation player is playing (#1479) is level data as authored: what autosave and Save write is its desc, not the
+// pose of the frame they happen to run on; a node beside it that was moved is still written.
+BOOST_AUTO_TEST_CASE(APlayedNodesPose_IsNeitherAutosavedNorSaved_ButAMovedNodeBesideItIs_AndOneOfAStoppedPlayerIs)
+{
+	const res::tag tag = put("lv.desc", R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
+			{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}},
+			{"__id":"00000000000000a3","name":"Arm","components":{"stat":{"__type":"stat_desc","hp":4}}}]}]})");
+	state.editor_tag = tag;
+	auto handle = rs->require_sync<scn::level_desc>(tag);
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+	BOOST_REQUIRE(state.has_active_world());
+	save_level();
+
+	entt::registry& reg = mgr->level_set().get("w0").state();
+	int moved = 0;
+	reg.view<scn::node_id_component, scn::local_transform>().each([&](entt::entity entity, const scn::node_id_component& id, scn::local_transform& lt) {
+		if (id.path == std::vector<std::uint64_t>{ 0xa2 }) {
+			lt.local = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 5.f, 0.f, 0.f });
+			++moved;
+		} else if (id.path == std::vector<std::uint64_t>{ 0xa3 }) {
+			lt.local = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 0.f, 7.f, 0.f });
+			reg.emplace<scn::animated_node_component>(entity, scn::animated_node_component{ "Arm" });
+			reg.emplace<scn::animation_controller_component>(entity).playing = true;
+			++moved;
+		}
+	});
+	BOOST_REQUIRE(moved == 2);
+	edit_level();
+	after(1s);
+	after(61s);
+	BOOST_REQUIRE(written(level_file()));
+	const std::string autosaved = read_file(file_of(level_file()));
+	BOOST_TEST(autosaved != read_file(content / "levels" / "a.desc"));
+
+	BOOST_REQUIRE(state.save().saved);
+	const auto& children = state.world_descs[0].get_root().children;
+	BOOST_TEST(children[0].position.x == 5.f);
+	BOOST_TEST(children[1].position.y == 0.f);
+	BOOST_TEST(read_file(content / "levels" / "a.desc") == autosaved);
+
+	reg.view<scn::animation_controller_component>().each([](scn::animation_controller_component& controller) { controller.playing = false; });
+	edit_level();
+	BOOST_REQUIRE(state.save().saved);
+	BOOST_TEST(state.world_descs[0].get_root().children[1].position.y == 7.f);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtAutosaveFiles)

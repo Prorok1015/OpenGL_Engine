@@ -285,6 +285,20 @@ void edt::scene_editor::sync_ecs_transforms_to_desc()
 	}
 }
 
+// The pose of a node its animation player plays is rewritten every frame: it is not level data, the file keeps the node as authored.
+// The player of a node is the controller on the root of its hierarchy (as the animation system finds it).
+static bool is_posed_by_player(const entt::registry& reg, entt::entity node)
+{
+	if (!reg.all_of<scn::animated_node_component>(node)) return false;
+	entt::entity root = node;
+	while (const auto* parent = reg.try_get<scn::parent_component>(root)) {
+		if (reg.all_of<scn::scene_anchor_component>(parent->parent)) break;
+		root = parent->parent;
+	}
+	const auto* controller = reg.try_get<scn::animation_controller_component>(root);
+	return controller && controller->playing;
+}
+
 bool edt::scene_editor::write_live_transforms_into(std::vector<scn::world_desc>& worlds) const
 {
 	auto ctx_mgr = m_services.ctx_manager.lock();
@@ -294,8 +308,8 @@ bool edt::scene_editor::write_live_transforms_into(std::vector<scn::world_desc>&
 	auto& children = worlds[static_cast<std::size_t>(m_state.active_world_idx)].get_root().children;
 	auto& reg = ctx_mgr->level_set().get(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(
-		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
-			if (id.path.empty()) return;
+		[&children, &reg](entt::entity entity, const scn::node_id_component& id, const scn::local_transform& lt) {
+			if (id.path.empty() || is_posed_by_player(reg, entity)) return;
 			// A node inside an instance is placed by its override records, not by the live transform.
 			auto address = resolve_node_path(children, id.path);
 			if (!address.owner || !address.target.empty()) return;
