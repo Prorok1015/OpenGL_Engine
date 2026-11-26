@@ -602,9 +602,9 @@ BOOST_AUTO_TEST_CASE(ALiveLevelsAutosave_TakesTheEcsTransforms_AndIsWhatSaveWrit
 }
 
 
-// A node the animation player poses (#1479) is level data as authored: what autosave and Save write is its desc, not the
+// A node whose animation player is playing (#1479) is level data as authored: what autosave and Save write is its desc, not the
 // pose of the frame they happen to run on; a node beside it that was moved is still written.
-BOOST_AUTO_TEST_CASE(AnAnimatedNodesPose_IsNeitherAutosavedNorSaved_ButAMovedNodeBesideItIs)
+BOOST_AUTO_TEST_CASE(APlayedNodesPose_IsNeitherAutosavedNorSaved_ButAMovedNodeBesideItIs_AndOneOfAStoppedPlayerIs)
 {
 	const res::tag tag = put("lv.desc", R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
 		{"__type":"world_desc","__version":5,"name":"w0","systems":[],"children":[
@@ -625,6 +625,7 @@ BOOST_AUTO_TEST_CASE(AnAnimatedNodesPose_IsNeitherAutosavedNorSaved_ButAMovedNod
 		} else if (id.path == std::vector<std::uint64_t>{ 0xa3 }) {
 			lt.local = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 0.f, 7.f, 0.f });
 			reg.emplace<scn::animated_node_component>(entity, scn::animated_node_component{ "Arm" });
+			reg.emplace<scn::animation_controller_component>(entity).playing = true;
 			++moved;
 		}
 	});
@@ -641,6 +642,11 @@ BOOST_AUTO_TEST_CASE(AnAnimatedNodesPose_IsNeitherAutosavedNorSaved_ButAMovedNod
 	BOOST_TEST(children[0].position.x == 5.f);
 	BOOST_TEST(children[1].position.y == 0.f);
 	BOOST_TEST(read_file(content / "levels" / "a.desc") == autosaved);
+
+	reg.view<scn::animation_controller_component>().each([](scn::animation_controller_component& controller) { controller.playing = false; });
+	edit_level();
+	BOOST_REQUIRE(state.save().saved);
+	BOOST_TEST(state.world_descs[0].get_root().children[1].position.y == 7.f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
