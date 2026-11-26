@@ -3,6 +3,7 @@
 #include "edt_file_write_check.h"
 #include "edt_prefab_file_edit.h"
 #include "edt_override_edit.h"
+#include "edt_prefab_history.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
@@ -118,6 +119,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	sync_preview();
 	m_saved_form = std::move(as_read);
 	m_dirty = working_form() != m_saved_form;
+	restart_history();
 	m_disk.set_changed(false);
 	m_disk_version.clear();
 	m_lower_layer = false;
@@ -143,6 +145,9 @@ void edt::prefab_document::close()
 	m_open = false;
 	m_dirty = false;
 	m_disk.set_changed(false);
+	m_history.clear();
+	m_committed.reset();
+	m_committed_form.clear();
 	m_working.reset();
 	m_root = entt::null;
 	m_saved_form.clear();
@@ -227,19 +232,88 @@ void edt::prefab_document::announce()
 	}
 }
 
-bool edt::prefab_document::edit(const std::function<bool(scn::prefab_desc&)>& change)
+bool edt::prefab_document::edit(const std::function<bool(scn::prefab_desc&)>& change, std::string label, cmd::origin origin)
 {
 	if (!m_open || !m_working || edits_locked()) {
 		return false;
 	}
+	record_edit("Edit node", cmd::origin::ui());
 	if (!change(*m_working)) {
 		return false;
 	}
+	record_edit(std::move(label), origin);
 	++m_generation;
 	sync_preview();
 	m_dirty = working_form() != m_saved_form;
 	announce();
 	return true;
+}
+
+bool edt::prefab_document::record_edit(std::string label, const cmd::origin& origin)
+{
+	if (!m_working || !m_committed) {
+		return false;
+	}
+	std::string form = working_form();
+	if (form == m_committed_form) {
+		return false;
+	}
+	auto after = std::make_shared<scn::prefab_desc>();
+	m_working->copy_to(*after);
+	m_history.record(std::move(label), origin, std::make_unique<prefab_snapshot_change>([this](const prefab_snapshot& snapshot) { history_replace(snapshot); }, m_committed, after));
+	m_committed = std::move(after);
+	m_committed_form = std::move(form);
+	return true;
+}
+
+void edt::prefab_document::restart_history()
+{
+	m_history.clear();
+	m_history.mark_saved();
+	auto snapshot = std::make_shared<scn::prefab_desc>();
+	m_working->copy_to(*snapshot);
+	m_committed = std::move(snapshot);
+	m_committed_form = working_form();
+}
+
+void edt::prefab_document::history_replace(const prefab_snapshot& snapshot)
+{
+	++m_replaced;
+	snapshot->copy_to(*m_working);
+	m_committed = snapshot;
+	m_committed_form = working_form();
+	++m_generation;
+	sync_preview();
+	m_dirty = m_committed_form != m_saved_form;
+	announce();
+}
+
+bool edt::prefab_document::undo()
+{
+	if (!m_open || edits_locked()) return false;
+	record_edit("Edit node", cmd::origin::ui());
+	return m_history.undo();
+}
+
+bool edt::prefab_document::redo()
+{
+	if (!m_open || edits_locked()) return false;
+	record_edit("Edit node", cmd::origin::ui());
+	return m_history.redo();
+}
+
+std::optional<edt::history_entry> edt::prefab_document::next_undo_entry() const
+{
+	const history_record* record = m_history.next_undo();
+	if (!record) return std::nullopt;
+	return history_entry{ record->label, record->origin };
+}
+
+std::optional<edt::history_entry> edt::prefab_document::next_redo_entry() const
+{
+	const history_record* record = m_history.next_redo();
+	if (!record) return std::nullopt;
+	return history_entry{ record->label, record->origin };
 }
 
 std::string edt::prefab_document::apply_blocker() const
@@ -268,11 +342,12 @@ scn::prefab_desc::prefab_node* edt::prefab_document::working_node(const std::vec
 	return node;
 }
 
-bool edt::prefab_document::notify_edited()
+bool edt::prefab_document::notify_edited(std::string label, cmd::origin origin)
 {
 	if (!m_open || !m_working || edits_locked()) {
 		return false;
 	}
+	record_edit(std::move(label), origin);
 	++m_generation;
 	sync_preview();
 	m_dirty = working_form() != m_saved_form;
@@ -339,8 +414,12 @@ edt::save_result edt::prefab_document::save_with(bool without_base)
 		return save_result::failure(std::format("{} could not be written", m_source_tag.view()));
 	}
 	writer->signal_changed(m_source_tag);
-	if (without_base) m_working->set_parent({});
+	if (without_base) {
+		m_working->set_parent({});
+		m_committed_form = working_form();
+	}
 	m_saved_form = working_form();
+	m_history.mark_saved();
 	m_disk_version = code_version_of(bytes);
 	m_dirty = false;
 	m_disk.set_changed(false);
@@ -432,6 +511,7 @@ std::string edt::prefab_document::revert()
 	sync_preview();
 	m_disk_version = std::move(version);
 	m_dirty = working_form() != m_saved_form;
+	restart_history();
 	m_disk.set_changed(false);
 	announce();
 	return {};
