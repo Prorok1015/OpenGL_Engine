@@ -32,6 +32,18 @@ rnd::shader_problem compile_error(std::string file, int line, int column, std::s
 
 BOOST_AUTO_TEST_SUITE(EdtShaderProblemsTests)
 
+// #1440: a material without a transparent path is still drawn: a warning, not an error.
+BOOST_AUTO_TEST_CASE(AMissingTransparentPathIsAWarning)
+{
+	rnd::shader_problem problem = compile_error("res://shaders/scene.shader.desc", 0, 0, "the queue transparent needs a shader with a transparent path");
+	problem.code = std::string(rnd::k_no_transparent_path_code);
+	problem.program = "res://materials/glass.mat.desc";
+	const auto rows = edt::shader_problem_publisher::to_problems({ problem });
+	BOOST_REQUIRE(rows.size() == 1u);
+	BOOST_TEST((rows[0].severity == edt::problem_severity::warning));
+	BOOST_TEST(rows[0].code == "shader/no_transparent_path");
+}
+
 BOOST_AUTO_TEST_CASE(ARowIsAnErrorAtTheFileAndLineWithTheProgramAsItsNote)
 {
 	const auto rows = edt::shader_problem_publisher::to_problems({ compile_error("res://shaders/lib.glsl", 12, 5, "error: `x' undeclared") });

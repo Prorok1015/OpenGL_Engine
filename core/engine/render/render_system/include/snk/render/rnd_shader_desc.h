@@ -48,7 +48,9 @@ namespace desc
 		f("defines").tooltip("Preprocessor defines, one per entry: NAME or NAME VALUE"),
 		// Not if_valid: an empty map is the JSON {}, which if_valid writes; if_not_default leaves it out.
 		f("backends").ref("shader_stage_sources").write_if_not_default()
-			.tooltip("Stage sources per graphics backend (opengl, vulkan, d3d12, metal) over the shared ones; the runtime does not select a backend yet (#1029)"));
+			.tooltip("Stage sources per graphics backend (opengl, vulkan, d3d12, metal) over the shared ones; the runtime does not select a backend yet (#1029)"),
+		f("transparent").write_if_not_default()
+			.tooltip("The program has a transparent path: without OPAQUE it writes the outputs of the transparent pass (#1440)"));
 }
 
 namespace rnd
@@ -81,7 +83,10 @@ namespace rnd
 		std::vector<std::string> defines;
 		// Backend name -> the stages it replaces (#1203). Last: appended after the fields of #1199.
 		std::map<std::string, shader_stage_sources, std::less<>> backends;
+		// A material of the transparent or mix queue needs it: the transparent pass blends two outputs a program without
+		// it does not write (#1440).
+		bool transparent = false;
 
-		BOOST_DESCRIBE_CLASS(shader_desc, (), (vertex, fragment, geometry, defines, backends), (), ())
+		BOOST_DESCRIBE_CLASS(shader_desc, (), (vertex, fragment, geometry, defines, backends, transparent), (), ())
 	};
 }
