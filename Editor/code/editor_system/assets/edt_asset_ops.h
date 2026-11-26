@@ -225,7 +225,16 @@ namespace edt
 		std::vector<journal_step> steps;
 	};
 
+	// The most a journal on the disk may hold (journal.json and its steps.<n>.json together): a bigger one is not read back.
+	inline constexpr std::uint64_t k_journal_read_limit = std::uint64_t{ 16 } << 20;
+
+	// The whole journal as one JSON value. On the disk it is journal.json with its first steps and, past those, the rest in
+	// steps.<n>.json ("more_steps": n), so a step costs a write of a bounded file (read_journal puts them together again).
 	boost::json::value journal_to_json(const operation_journal& journal);
+	// journal.json of <journal_root>/<id>/ and the step files it names as one value journal_from_json reads (a journal of the old
+	// form, all its steps in journal.json, reads as it is); nullopt with `reason` when it cannot be read, is no JSON or is bigger
+	// than k_journal_read_limit. Read without following a link.
+	std::optional<boost::json::value> read_journal(const std::filesystem::path& journal_root, std::string_view id, std::string& reason);
 	// Why `journal` cannot be trusted as it is (empty: its shape is fine): an id that is not one safe name, a step path that is
 	// absolute, has '..', is a name the project does not list (the check of a live operation) or is not where its kind keeps it,
 	// a rewrite of anything but a desc or the manifest. A journal read from a disk is data, never instructions.
@@ -312,6 +321,11 @@ namespace edt
 		// link, a denied access): the step fails and nothing is copied.
 		std::function<std::string(std::string_view)> rename_error;
 		asset_ops_limits limits;
+		// Right before the first step (the journal has its id and folder, no step yet), so the history lists the operation while it
+		// runs and a crash leaves it to be undone at the next start; then once it ended: `done`, or taken back (the journal keeps
+		// only the steps that could not be).
+		std::function<void(const operation_journal&)> operation_started;
+		std::function<void(const operation_journal&, bool done)> operation_ended;
 	};
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).
@@ -363,7 +377,7 @@ namespace edt
 		std::optional<refusal> plan_rewrites(std::vector<plan_item>& items, const std::vector<item_facts>& facts) const;
 		// Tells report_self_change what `steps` did (`undoing`: what taking them back did).
 		void announce(const std::vector<journal_step>& steps, bool undoing) const;
-		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;
+		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report, bool& started) const;
 		// Takes the steps of report.journal back, newest first; the journal is emptied when all of them went.
 		void roll_back(operation_report& report) const;
 

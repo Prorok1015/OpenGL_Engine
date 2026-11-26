@@ -61,6 +61,13 @@ edt::asset_component::asset_component(ports from)
 	ops.is_open_with_unsaved_changes = m_ports.is_open_with_unsaved_changes;
 	ops.hold_changes = [this]() -> std::shared_ptr<void> { return std::make_shared<res::change_hold>(m_ports.resources.hold_changes()); };
 	ops.report_self_change = [this](std::span<const res::file_change> changes) { m_database->report_self_change(changes); };
+	// The history (made below) lists an operation before its first step, so a crash leaves it to be undone at the next start.
+	ops.operation_started = [this](const operation_journal& journal) {
+		if (m_history) m_history->record_pending(journal);
+	};
+	ops.operation_ended = [this](const operation_journal& journal, bool done) {
+		if (m_history) m_history->end_pending(journal, done);
+	};
 	m_ops = std::make_unique<asset_ops>(std::move(ops));
 
 	// Which journals are the editor's own is kept in the person's data, not in the project's cache folder.

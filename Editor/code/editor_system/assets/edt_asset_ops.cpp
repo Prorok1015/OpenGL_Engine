@@ -41,6 +41,11 @@ namespace
 {
 	constexpr std::string_view k_journal_file = "journal.json";
 	constexpr std::size_t k_max_id_length = 64;
+	constexpr std::size_t k_steps_per_file = 64;
+	// The step files one journal may name: more is no journal an operation wrote.
+	constexpr std::uint64_t k_max_step_files = 1024;
+	// What one step of a journal takes on the disk besides its root and paths (keys, hashes, quotes).
+	constexpr std::uint64_t k_step_overhead = 192;
 
 	std::string_view view_of(json::string_view text)
 	{
@@ -472,7 +477,7 @@ namespace
 
 	edt::refusal too_many(std::string_view files, std::uint64_t bytes, const edt::asset_ops_limits& limits)
 	{
-		return stop(edt::refusal_code::too_many_files, std::format("{} file(s) of {} byte(s) in one operation: at most {} files and {} bytes are done at once",
+		return stop(edt::refusal_code::too_many_files, std::format("{} file(s) and folder(s) of {} byte(s) in one operation: at most {} files and folders and {} bytes are done at once",
 			files, bytes, limits.max_files, limits.max_bytes));
 	}
 
@@ -519,7 +524,7 @@ namespace
 				case platform::beneath::entry_kind::other: out.odd.push_back(std::move(relative)); break;
 				}
 			}
-			if (out.files.size() > max_files) {
+			if (out.files.size() + out.folders.size() > max_files) {
 				out.truncated = true;
 				return {};
 			}
@@ -548,6 +553,23 @@ namespace
 		if (const std::optional<std::string> desc = res::desc_binary_owner_name(name)) return join(parent_of(file), *desc);
 		if (file.size() != relative.size()) return std::string(file);
 		return std::nullopt;
+	}
+
+	// A file below the folder `base` that a walk of the layer never lists as an asset: a name on the way it skips (hidden,
+	// temporary, system), a .resource (of nothing, or of such a file) or a desc's binary file (a .bin.new too). Any other file
+	// without a record is one the asset database has not read yet.
+	bool never_listed(std::string_view relative, std::string_view base)
+	{
+		const std::string_view rest = relative.substr(base.size() + 1);
+		std::size_t begin = 0;
+		while (true) {
+			const std::size_t end = rest.find('/', begin);
+			const bool last = end == std::string_view::npos;
+			const std::string_view segment = rest.substr(begin, last ? std::string_view::npos : end - begin);
+			if (res::is_skipped_asset_name(segment, !last)) return true;
+			if (last) return res::is_asset_meta_sidecar(segment) || res::desc_binary_owner_name(segment).has_value();
+			begin = end + 1;
+		}
 	}
 
 	std::string_view step_kind_name(edt::journal_step_kind kind)
@@ -607,6 +629,28 @@ namespace
 	{
 		if (root.empty() || root.find('\\') != std::string::npos || canonical_root(path_of(root)) != root) return false;
 		return std::ranges::none_of(path_of(root), [](const fs::path& part) { return part == ".."; });
+	}
+
+	// Whether the journal of `plan` could grow past what is read back (k_journal_read_limit, with room to spare).
+	std::optional<edt::refusal> journal_too_long(const edt::operation_plan& plan)
+	{
+		const std::uint64_t root = canonical_root(plan.root).size() + k_step_overhead;
+		std::uint64_t bytes = 0;
+		std::size_t steps = 0;
+		const auto add = [&](std::size_t paths) {
+			bytes += root + paths;
+			++steps;
+		};
+		for (const edt::plan_item& item : plan.items) {
+			for (const edt::planned_move& move : item.moves) add(move.from.size() + move.to.size());
+			for (const edt::planned_rewrite& rewrite : item.rewrites) add(rewrite.relative.size() + canonical_root(rewrite.root).size());
+		}
+		for (const edt::planned_move& move : plan.carried) add(move.from.size() + move.to.size());
+		for (const std::string& folder : plan.make_folders) add(folder.size());
+		for (const std::string& folder : plan.remove_folders) add(folder.size());
+		if (bytes <= edt::k_journal_read_limit / 2 && steps / k_steps_per_file < k_max_step_files) return std::nullopt;
+		return stop(edt::refusal_code::too_many_files, std::format("the journal of the operation would take about {} bytes for {} steps: at most {} bytes of journal are read back",
+			bytes, steps, edt::k_journal_read_limit / 2));
 	}
 
 	// A file at the step's source counts as put back only when it is the file the step moved (#1309): another file there
@@ -742,12 +786,50 @@ namespace
 		return step_state::changed;
 	}
 
-	std::string persist(const edt::operation_journal& journal, const fs::path& journal_root)
+	json::object step_json(const edt::journal_step& step)
 	{
-		const std::string text = json::serialize(edt::journal_to_json(journal));
-		const std::string error = write_file(journal_base(journal_root),
-			in_journal(journal_root, journal.id, k_journal_file),
-			std::as_bytes(std::span<const char>(text.data(), text.size())), true);
+		return json::object{ { "kind", std::string(step_kind_name(step.kind)) }, { "root", step.root }, { "from", step.from }, { "to", step.to },
+			{ "hash", step.hash }, { "after_hash", step.after_hash }, { "original", step.original } };
+	}
+
+	std::string steps_file(std::size_t index)
+	{
+		return std::format("steps.{}.json", index);
+	}
+
+	// Writes the journal so that each step is on the disk before its action. journal.json holds the first k_steps_per_file steps,
+	// each further run of them is a steps.<n>.json, so a step rewrites one bounded file, not the whole journal (`last_only`: only
+	// what the newest step changed; the step file before journal.json, so journal.json never names a file not yet there).
+	std::string persist(const edt::operation_journal& journal, const fs::path& journal_root, bool last_only = false)
+	{
+		const std::size_t count = journal.steps.size();
+		const std::size_t more = count > k_steps_per_file ? (count - 1) / k_steps_per_file : 0;
+		const auto steps_of = [&](std::size_t index) {
+			json::array out;
+			for (std::size_t i = index * k_steps_per_file; i < count && i < (index + 1) * k_steps_per_file; ++i) out.push_back(step_json(journal.steps[i]));
+			return out;
+		};
+		const auto write = [&](const std::string& name, const json::value& value) {
+			const std::string text = json::serialize(value);
+			return write_file(journal_base(journal_root), in_journal(journal_root, journal.id, name),
+				std::as_bytes(std::span<const char>(text.data(), text.size())), true);
+		};
+		const auto header = [&] {
+			json::object out{ { "id", journal.id }, { "operation", std::string(edt::asset_operation_name(journal.operation)) },
+				{ "directory", journal.directory }, { "steps", steps_of(0) } };
+			if (more > 0) out["more_steps"] = static_cast<std::uint64_t>(more);
+			return write(std::string(k_journal_file), out);
+		};
+		std::string error;
+		if (!last_only) {
+			for (std::size_t index = 1; index <= more && error.empty(); ++index) error = write(steps_file(index), steps_of(index));
+			if (error.empty()) error = header();
+		} else if (count <= k_steps_per_file) {
+			error = header();
+		} else {
+			error = write(steps_file(more), steps_of(more));
+			if (error.empty() && (count - 1) % k_steps_per_file == 0) error = header();
+		}
 		if (!error.empty()) egLOG_WARN("asset_ops", "the journal of '{}' was not written: {}", journal.id, error);
 		return error.empty() ? std::string{} : std::format("the journal was not written: {}", error);
 	}
@@ -884,12 +966,56 @@ std::string_view edt::refusal_code_name(refusal_code code)
 json::value edt::journal_to_json(const operation_journal& journal)
 {
 	json::array steps;
-	for (const journal_step& step : journal.steps) {
-		steps.push_back(json::object{ { "kind", std::string(step_kind_name(step.kind)) }, { "root", step.root }, { "from", step.from }, { "to", step.to },
-			{ "hash", step.hash }, { "after_hash", step.after_hash }, { "original", step.original } });
-	}
+	for (const journal_step& step : journal.steps) steps.push_back(step_json(step));
 	return json::object{ { "id", journal.id }, { "operation", std::string(asset_operation_name(journal.operation)) },
 		{ "directory", journal.directory }, { "steps", std::move(steps) } };
+}
+
+std::optional<json::value> edt::read_journal(const fs::path& journal_root, std::string_view id, std::string& reason)
+{
+	if (!is_safe_id(id)) {
+		reason = "the id is not one plain name";
+		return std::nullopt;
+	}
+	std::uint64_t budget = k_journal_read_limit;
+	const auto read = [&](const std::string& name) -> std::optional<json::value> {
+		std::vector<std::byte> bytes;
+		if (const std::string error = read_file(journal_base(journal_root), in_journal(journal_root, std::string(id), name), budget, bytes); !error.empty()) {
+			reason = std::format("'{}' cannot be read (or is bigger than {} bytes with the rest of the journal): {}", name, k_journal_read_limit, error);
+			return std::nullopt;
+		}
+		budget -= bytes.size();
+		json::error_code ec;
+		json::value value = json::parse(json::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), ec);
+		if (ec) {
+			reason = std::format("'{}' is not JSON", name);
+			return std::nullopt;
+		}
+		return value;
+	};
+	std::optional<json::value> journal = read(std::string(k_journal_file));
+	if (!journal) return std::nullopt;
+	json::object* object = journal->if_object();
+	json::value* steps = object ? object->if_contains("steps") : nullptr;
+	const json::value* more = object ? object->if_contains("more_steps") : nullptr;
+	if (!more) return journal;
+	const std::optional<std::uint64_t> files = more->is_int64() && more->as_int64() > 0 ? std::optional<std::uint64_t>(static_cast<std::uint64_t>(more->as_int64()))
+		: more->is_uint64() ? std::optional<std::uint64_t>(more->as_uint64()) : std::nullopt;
+	if (!steps || !steps->is_array() || !files || *files == 0 || *files > k_max_step_files) {
+		reason = "the journal names its other step files wrongly";
+		return std::nullopt;
+	}
+	for (std::uint64_t index = 1; index <= *files; ++index) {
+		std::optional<json::value> part = read(steps_file(static_cast<std::size_t>(index)));
+		if (!part) return std::nullopt;
+		if (!part->is_array()) {
+			reason = std::format("'{}' is not a list of steps", steps_file(static_cast<std::size_t>(index)));
+			return std::nullopt;
+		}
+		for (json::value& step : part->as_array()) steps->as_array().push_back(std::move(step));
+	}
+	object->erase("more_steps");
+	return journal;
 }
 
 std::string edt::journal_problem(const operation_journal& journal)
@@ -927,6 +1053,10 @@ std::optional<edt::operation_journal> edt::journal_from_json(const json::value& 
 	const json::value* steps = object->if_contains("steps");
 	if (!id || !operation || !directory || !steps || !steps->is_array()) {
 		reason = "a field of the journal is missing";
+		return std::nullopt;
+	}
+	if (object->contains("more_steps")) {
+		reason = "only the first steps of the journal are here: read it with read_journal";
 		return std::nullopt;
 	}
 
@@ -1015,6 +1145,10 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 	}
 	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
 	if (!db) return stop(refusal_code::no_database, "no project is open: there is no asset database");
+	// A file the database has not read yet would be taken for one it never lists, and moved without its pair and its references.
+	if (!db->walked_once() || db->pending_hashes() > 0) {
+		return stop(refusal_code::database_not_ready, "the asset database is still reading the project's files: try again when it is done");
+	}
 	const bool removing = operation == asset_operation::remove;
 	const bool fold = db->case_insensitive();
 	const std::vector<fs::path>& layers = db->layers();
@@ -1032,6 +1166,8 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		std::string to;
 		std::string folder;
 		std::string request_to;
+		// The requested folder it was found in, below the layer.
+		std::string base;
 	};
 	std::vector<walked_file> walked;
 	std::map<std::string, std::size_t> walked_at;
@@ -1042,6 +1178,15 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 	std::vector<std::string> source_folders;
 	std::vector<std::string> odd;
 	std::vector<const asset_request*> file_requests;
+	// Keys of the requested folders, and of the folders a move puts something into: one may not lie in the other.
+	std::vector<std::string> moving_folders;
+	std::vector<std::pair<std::string, std::string>> targets;
+	const auto into_folder = [](std::string_view folder) {
+		if (folder.starts_with("res://")) folder.remove_prefix(6);
+		while (folder.starts_with('/')) folder.remove_prefix(1);
+		while (folder.ends_with('/')) folder.remove_suffix(1);
+		return std::string(folder);
+	};
 
 	for (const asset_request& request : requests) {
 		if (request.asset.protocol() != res::tag::default_protocol()) {
@@ -1050,6 +1195,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		std::string relative(request.asset.relative());
 		while (relative.ends_with('/')) relative.pop_back();
 		if (relative.empty()) return stop(refusal_code::bad_name, "res:// itself is not renamed, moved or deleted");
+		if (operation == asset_operation::move) targets.emplace_back(key_of(into_folder(request.to)), relative);
 		if (!has_top || db->find_any_case(request.asset)) {
 			file_requests.push_back(&request);
 			continue;
@@ -1112,7 +1258,14 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 			if (exists_named(out.root, dest, fold) || db->find_any_case(res::tag::make(dest))) {
 				return stop(refusal_code::target_exists, std::format("'{}' is taken", shown(dest)));
 			}
+			// The folder would show the lower layer's files under it too, and its own would cover theirs.
+			for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+				if (layer == top || !is_folder(layers[layer], dest)) continue;
+				return stop(refusal_code::folder_in_lower_layer, std::format("'{}' is a folder of {}: the folder would mix with its files there",
+					shown(dest), is_engine_layer(layers, layer, m_ports.engine_base) ? "the engine" : "a lower layer"));
+			}
 		}
+		moving_folders.push_back(key_of(relative));
 
 		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
 			if (layer == top || !is_folder(layers[layer], relative)) continue;
@@ -1155,8 +1308,8 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 				}
 				continue;
 			}
-			walked.push_back(walked_file{ file, mapped(file), shown(relative), request.to });
-			if (walked.size() > limits.max_files) return too_many(std::format("more than {}", limits.max_files), walked_bytes, limits);
+			walked.push_back(walked_file{ file, mapped(file), shown(relative), request.to, relative });
+			if (walked.size() + source_folders.size() > limits.max_files) return too_many(std::format("more than {}", limits.max_files), walked_bytes, limits);
 			const std::optional<std::uint64_t> size = size_of(out.root, file);
 			if (!size) return stop(refusal_code::io_error, std::format("'{}' cannot be read", shown(file)));
 			sizes[key_of(file)] = *size;
@@ -1170,7 +1323,14 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		for (const std::string& entry : odd) why.entries.push_back(shown(entry));
 		return why;
 	}
-	if (walked_bytes > limits.max_bytes) return too_many(std::to_string(walked.size()), walked_bytes, limits);
+	if (walked_bytes > limits.max_bytes) return too_many(std::to_string(walked.size() + source_folders.size()), walked_bytes, limits);
+	// What goes into a folder that moves itself would end up in a place neither request named.
+	for (const auto& [into, asked_for] : targets) {
+		for (const std::string& folder : moving_folders) {
+			if (into != folder && !into.starts_with(folder + "/")) continue;
+			return stop(refusal_code::overlapping_requests, std::format("'{}' goes into '{}', which is moved itself", shown(asked_for), shown(into)));
+		}
+	}
 
 	// What to plan as one asset each: the folders' files that are assets, then the files asked by themselves.
 	struct candidate
@@ -1200,8 +1360,8 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		}
 		candidates.push_back(candidate{ *request, std::nullopt, {} });
 	}
-	if (walked.size() + file_requests.size() > limits.max_files) {
-		return too_many(std::format("at least {}", walked.size() + file_requests.size()), walked_bytes, limits);
+	if (walked.size() + source_folders.size() + file_requests.size() > limits.max_files) {
+		return too_many(std::format("at least {}", walked.size() + source_folders.size() + file_requests.size()), walked_bytes, limits);
 	}
 
 	usage_index usages;
@@ -1229,8 +1389,13 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		for (const planned_move& move : item.moves) covered.insert(key_of(move.from));
 	}
 	std::vector<std::string> foreign;
+	std::vector<std::string> unread;
 	for (const walked_file& file : walked) {
 		if (covered.contains(key_of(file.from))) continue;
+		if (!never_listed(file.from, file.base)) {
+			unread.push_back(shown(file.from));
+			continue;
+		}
 		if (removing) {
 			foreign.push_back(shown(file.from));
 			continue;
@@ -1240,6 +1405,12 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		if (!error.empty()) return stop(refusal_code::io_error, std::format("'{}': {}", shown(file.from), error));
 		out.carried.push_back(planned_move{ file.from, file.to, std::move(hash) });
 	}
+	if (!unread.empty()) {
+		refusal why = stop(refusal_code::database_not_ready, std::format("the asset database has not read {} file(s) of the folder yet: {}; try again when it has",
+			unread.size(), first_names(unread)));
+		why.entries = std::move(unread);
+		return why;
+	}
 	// What the project does not list is not known to be nobody's: a delete never removes it.
 	if (!foreign.empty()) {
 		refusal why = stop(refusal_code::folder_has_foreign_entries, std::format("{} file(s) of the folder are no asset of the project: {}; a delete removes only what it knows",
@@ -1248,7 +1419,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 		return why;
 	}
 
-	std::size_t count = out.carried.size();
+	std::size_t count = out.carried.size() + source_folders.size();
 	std::uint64_t bytes = 0;
 	const auto add_size = [&](const planned_move& move) -> bool {
 		const auto known = sizes.find(key_of(move.from));
@@ -1282,7 +1453,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 			});
 			item.needs_force = !item.referrers.empty();
 		}
-		return std::nullopt;
+		return journal_too_long(out);
 	}
 	std::set<std::string> taken;
 	const auto check_target = [&](const planned_move& move) -> std::optional<refusal> {
@@ -1297,7 +1468,8 @@ std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_requ
 	for (const planned_move& move : out.carried) {
 		if (std::optional<refusal> why = check_target(move)) return why;
 	}
-	return plan_rewrites(out.items, facts);
+	if (std::optional<refusal> why = plan_rewrites(out.items, facts)) return why;
+	return journal_too_long(out);
 }
 
 std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item, const std::optional<std::string>& to, usage_index& usages, item_facts& facts) const
@@ -1655,8 +1827,9 @@ void edt::asset_ops::announce(const std::vector<journal_step>& steps, bool undoi
 edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const execute_options& options) const
 {
 	operation_report report;
+	bool started = false;
 	try {
-		execute_into(plan, options, report);
+		execute_into(plan, options, report, started);
 	} catch (const std::exception& error) {
 		report.ok = false;
 		report.error = error.what();
@@ -1665,6 +1838,13 @@ edt::operation_report edt::asset_ops::execute(const operation_plan& plan, const 
 		report.ok = false;
 		report.error = "an unexpected error";
 		if (!report.journal.steps.empty()) roll_back(report);
+	}
+	if (started && m_ports.operation_ended) {
+		try {
+			m_ports.operation_ended(report.journal, report.ok);
+		} catch (...) {
+			egLOG_WARN("asset_ops", "the history did not take the end of the operation '{}'", report.journal.id);
+		}
 	}
 	return report;
 }
@@ -1698,7 +1878,7 @@ void edt::asset_ops::roll_back(operation_report& report) const
 	}
 }
 
-void edt::asset_ops::execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const
+void edt::asset_ops::execute_into(const operation_plan& plan, const execute_options& options, operation_report& report, bool& started) const
 {
 	if (plan.refused) {
 		report.refused = *plan.refused;
@@ -1814,6 +1994,10 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 		}
 	}
 	originals.clear();
+	if (m_ports.operation_started) {
+		m_ports.operation_started(journal);
+		started = true;
+	}
 
 	const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
 	const std::string root = canonical_root(layer);
@@ -1823,14 +2007,20 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	// says what may have happened, and undo_step takes a step that did not happen for done.
 	const auto record = [&](journal_step step) -> std::string {
 		journal.steps.push_back(std::move(step));
-		return persist(journal, journal_root);
+		return persist(journal, journal_root, true);
 	};
 
 	const auto run = [&]() -> std::string {
 		for (const std::string& folder : plan.make_folders) {
 			if (std::string error = injected("make_folder:" + folder); !error.empty()) return error;
+			// A folder somebody else made meanwhile is never taken for one of the operation's own, which a rollback removes.
+			if (exists_on_disk(layer, folder)) return std::format("'{}' is there already", res::tag::make(folder).view());
 			if (std::string error = record(journal_step{ journal_step_kind::make_folder, root, folder, {}, {}, {}, {} }); !error.empty()) return error;
-			if (std::string error = make_new_folder(layer, folder); !error.empty()) return error;
+			if (std::string error = make_new_folder(layer, folder); !error.empty()) {
+				journal.steps.pop_back();
+				persist(journal, journal_root);
+				return error;
+			}
 		}
 		for (const planned_move* move : moves) {
 			if (removing) {
