@@ -617,7 +617,7 @@ void edt::file_menu::register_image_reimport(const json::object& settings_schema
 		{ "type", "object" },
 		{ "properties", json::object{
 			{ "target", json::object{ { "type", "string" }, { "minLength", 1 },
-				{ "description", "res:// tag of an imported picture in the project's own layer (.png, .jpg, .jpeg) "
+				{ "description", "The res:// tag of an imported picture in the project's own layer (.png, .jpg, .jpeg) "
 					"with its .resource (importer texture) and <name>.txm.desc beside it." } } },
 			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Absolute path of the new source picture, of the target's format (png for a png); "
