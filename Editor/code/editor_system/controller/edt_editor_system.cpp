@@ -595,9 +595,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		desc_files.write_blocker = std::move(layout.write_blocker);
 		desc_files.asset_index_wait = std::move(layout.asset_index_wait);
 		desc_files.events = &m_context->events();
-		desc_files.file_name_of = [names = m_asset_open->document_names()](std::string_view type, std::string_view name) {
-			return names->file_name_of(type, name);
-		};
+		desc_files.document_names = m_asset_open->document_names();
 		for (auto& command : register_desc_file_commands(m_context->actions().commands(), std::move(desc_files))) {
 			m_registrations.push_back(std::move(command));
 		}

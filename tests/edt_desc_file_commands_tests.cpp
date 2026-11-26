@@ -115,9 +115,11 @@ struct desc_fixture : test_util::scene_env
 		deps.events = &events;
 		deps.write_blocker = [this] { return blocked; };
 		deps.asset_index_wait = [this] { return index_pending ? std::optional<std::string>(k_index_wait) : std::nullopt; };
-		deps.file_name_of = [this](std::string_view type, std::string_view name) {
-			return kind_suffixes ? edt_kind_file_name(type, name) : std::string(name);
-		};
+		deps.document_names = std::make_shared<const edt::document_creator>(edt::document_creator::ports{
+			.descs = [this] { return descs.get(); },
+			.resources = [this] { return rs.get(); },
+			.layers = [this] { return std::vector<fs::path>{ lower, res_root }; },
+			.desc_kinds = [] { return edt_desc_kinds(); } });
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -179,13 +181,10 @@ struct desc_fixture : test_util::scene_env
 	std::vector<std::string> open_level;
 	std::optional<std::string> blocked;
 	bool index_pending = false;
-	// The editor's built-in desc kinds name the files (#1198): off, every *.desc name passes as before.
-	bool kind_suffixes = false;
-
-	static std::string edt_kind_file_name(std::string_view type, std::string_view name)
+	// The editor's built-in desc kinds (edt_builtin_asset_kinds.cpp), which name a material's file (#1198).
+	static std::vector<std::pair<std::string, std::string>> edt_desc_kinds()
 	{
-		static const std::vector<std::string> tails{ ".prefab.desc", ".shader.desc", ".mat.desc" };
-		return edt::document_creator::file_name(name, type == edt::k_material_type ? edt::k_material_suffix : std::string_view(".desc"), tails);
+		return { { "prefab", ".prefab.desc" }, { "shader_desc", ".shader.desc" }, { std::string(edt::k_material_type), std::string(edt::k_material_suffix) } };
 	}
 };
 
@@ -289,11 +288,11 @@ BOOST_AUTO_TEST_CASE(AnAgentsMaterial_GetsTheMenusParent_UnlessItNamesOne)
 
 BOOST_AUTO_TEST_CASE(AnAgentsMaterial_NamedWithoutItsKindsSuffix_IsRefused_NamingTheFileToCreate)
 {
-	kind_suffixes = true;
 	for (const auto& [path, expected] : std::vector<std::pair<std::string, std::string>>{
 			{ "materials/a.desc", "res://materials/a.mat.desc" },
 			{ "materials/a.prefab.desc", "res://materials/a.mat.desc" },
-			{ "materials/a.shader.desc", "res://materials/a.mat.desc" } }) {
+			{ "materials/a.shader.desc", "res://materials/a.mat.desc" },
+			{ "a.desc", "res://a.mat.desc" } }) {
 		BOOST_TEST_CONTEXT(path) {
 			const auto refused = call("desc.create", desc_args(path, k_material));
 			BOOST_TEST(refused.code == cmd::codes::invalid_args);
@@ -307,14 +306,56 @@ BOOST_AUTO_TEST_CASE(AnAgentsMaterial_NamedWithoutItsKindsSuffix_IsRefused_Namin
 	const auto upper = call("desc.create", desc_args("materials/B.Mat.desc", k_material));
 	BOOST_TEST(upper.ok, upper.error);
 	make_material("materials/c.mat.desc");
+	// The suffix after another kind's is the material's: the stem is "a.shader", as the menu's source_of reads it.
+	make_material("materials/a.shader.mat.desc");
 	// Only a material is held to it.
 	const auto table = call("desc.create", desc_args("materials/t.desc", R"({"__type":"test.texture_table"})"));
 	BOOST_TEST(table.ok, table.error);
 }
 
+// The rest of the menu's name check (document_creator::check): a suffix alone is no name, a hidden name is not listed.
+BOOST_AUTO_TEST_CASE(AnAgentsMaterial_WithoutANameBeforeTheSuffix_OrHidden_IsRefusedAsTheMenuRefusesIt)
+{
+	for (const char* path : { "materials/.mat.desc", ".mat.desc", "materials/.MAT.desc", "materials/.hidden.mat.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			const auto refused = call("desc.create", desc_args(path, k_material));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / path));
+		}
+	}
+	BOOST_TEST(call("desc.create", desc_args("materials/.mat.desc", k_material)).error.find("give the document a name") != std::string::npos);
+	BOOST_TEST(actions.empty());
+}
+
+// A `__parent` that is there but names nothing is the agent's mistake, not a missing one: refused, never replaced by the base.
+BOOST_AUTO_TEST_CASE(AnAgentsMaterial_WithAnEmptyOrNullParent_IsRefused)
+{
+	for (const char* content : { R"({"__type":"material_desc","__parent":null})", R"({"__type":"material_desc","__parent":""})" }) {
+		BOOST_TEST_CONTEXT(content) {
+			const auto refused = call("desc.create", desc_args("materials/p.mat.desc", content));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(!fs::exists(res_root / "materials" / "p.mat.desc"));
+		}
+	}
+}
+
+// Without the editor's names nothing can tell a material's file: refused rather than written under any name.
+BOOST_AUTO_TEST_CASE(WithoutTheEditorsNames_NoMaterialIsCreated_OtherDescsAre)
+{
+	cmd::command_registry bare;
+	edt::desc_file_deps deps{ *rs, *descs };
+	deps.top_layer = [this] { return res_root; };
+	deps.layers = [this] { return std::vector<fs::path>{ lower, res_root }; };
+	const std::vector<edt::registration> held = edt::register_desc_file_commands(bare, std::move(deps));
+	const auto material = bare.invoke("desc.create", desc_args("materials/n.mat.desc", k_material), cmd::origin::agent("s1"));
+	BOOST_TEST(material.code == cmd::codes::invalid_args);
+	BOOST_TEST(!fs::exists(res_root / "materials" / "n.mat.desc"));
+	const auto table = bare.invoke("desc.create", desc_args("materials/n.desc", R"({"__type":"test.texture_table"})"), cmd::origin::agent("s1"));
+	BOOST_TEST(table.ok, table.error);
+}
+
 BOOST_AUTO_TEST_CASE(AnAgentsMaterial_WhoseNameALowerLayerHolds_IsRefusedAsTheMenuRefusesIt)
 {
-	kind_suffixes = true;
 	std::ofstream(lower / "materials" / "Stone.mat.desc", std::ios::binary) << k_material;
 	for (const char* path : { "materials/stone.mat.desc", "materials/Stone.mat.desc" }) {
 		BOOST_TEST_CONTEXT(path) {

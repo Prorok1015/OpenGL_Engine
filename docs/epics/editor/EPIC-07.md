@@ -122,7 +122,9 @@
 - **PR 3 (сделано):** новой команды для агента нет, `desc.create` материала получает те же правила, что и меню
   (решение в обсуждении плана в #1198). Путь, имя которого не `<основа>.mat.desc` (часть вида — в любом регистре
   букв), отклоняется с `invalid_args`, и в ответе назван путь, который нужно создать; молча файл не переименовывается.
-  Суффикс берётся из того же `document_creator::file_name_of`, что у Create Document (`desc_file_deps::file_name_of`).
+  Суффикс берётся из того же `document_creator::file_name_of`, что у Create Document (`desc_file_deps::document_names`),
+  затем имя проверяет `document_creator::check`: суффикс без имени (`.mat.desc`) и скрытое имя отклоняются, как в меню.
+  Без этого порта материал не создаётся вовсе.
   Если в содержимом нет `__parent`, добавляется `res://base_material.desc` (`edt::add_material_defaults`, общее с
   `material_fields` меню), в том числе когда задан только `shader`. Проверки имени (занято в любом слое, оставшийся
   `.resource`, регистр букв) у `desc.create` уже были те же, что у `document_creator::check`. `desc.write` и уже
