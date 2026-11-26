@@ -1797,7 +1797,8 @@ struct ids_index final : res::asset_index
 // without an asset index the path stays a string. Writing the file again gives the same bytes.
 BOOST_AUTO_TEST_CASE(AWrittenReference_CarriesTheIdOfItsTarget)
 {
-	const char* const content = R"({"__type":"material_desc","shader":"res://shaders/a.shader.desc"})";
+	// The parent is named, so desc.create adds nothing (#1198) and desc.write of the same content gives the same bytes.
+	const char* const content = R"({"__type":"material_desc","__parent":"res://base_material.desc","shader":"res://shaders/a.shader.desc"})";
 	make_material("materials/plain.mat.desc", content);
 	BOOST_TEST(json::parse(read_file(res_root / "materials" / "plain.mat.desc")).at_pointer("/shader")
 		== json::value("res://shaders/a.shader.desc"));
