@@ -219,9 +219,8 @@ constexpr std::uint32_t k_audit_arch = AUDIT_ARCH_AARCH64;
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "the filter reads the low half of an argument at its first bytes");
 
 // Everything the decode path calls after the filter: reading the request and the model, the import's memory:// folder
-// (./sandbox, through a temp file and a rename), the answer, the log, the epoll, eventfd and timerfd calls of boost::asio,
-// libstdc++'s filesystem (stat, getcwd, readlink of each part through realpath) and glibc's own (rseq, robust lists,
-// getrandom).
+// (./sandbox, through a temp file and a rename), the answer, the log, libstdc++'s filesystem (stat, getcwd, readlink of each
+// part through realpath) and glibc's own (rseq, robust lists, getrandom).
 // x86_64 still has the old path calls (mkdir, rename, unlink...) that glibc uses there instead of the *at ones.
 constexpr long k_allowed[] = {
 	__NR_read, __NR_write, __NR_readv, __NR_writev, __NR_pread64, __NR_pwrite64, __NR_openat, __NR_close, __NR_fstat,
@@ -230,31 +229,32 @@ constexpr long k_allowed[] = {
 	__NR_clock_getres, __NR_clock_nanosleep, __NR_nanosleep, __NR_gettimeofday, __NR_restart_syscall, __NR_gettid,
 	__NR_getpid, __NR_getuid, __NR_geteuid, __NR_getgid, __NR_getegid, __NR_sysinfo, __NR_exit, __NR_exit_group,
 	__NR_unlinkat, __NR_renameat2, __NR_mkdirat, __NR_getdents64, __NR_dup, __NR_dup3, __NR_sched_yield,
-	__NR_sched_getaffinity, __NR_set_robust_list, __NR_ftruncate, __NR_fsync, __NR_fdatasync,
-	__NR_getcwd, __NR_readlinkat, __NR_faccessat, __NR_newfstatat, __NR_statx, __NR_epoll_create1, __NR_epoll_ctl,
-	__NR_epoll_pwait, __NR_eventfd2, __NR_timerfd_create, __NR_timerfd_settime, __NR_timerfd_gettime,
+	__NR_set_robust_list, __NR_ftruncate, __NR_fsync, __NR_fdatasync,
+	__NR_getcwd, __NR_readlinkat, __NR_faccessat, __NR_newfstatat, __NR_statx,
 #if defined(__NR_rseq)
 	__NR_rseq,
 #endif
 #if defined(__NR_faccessat2)
 	__NR_faccessat2,
 #endif
-#if defined(__NR_epoll_pwait2)
-	__NR_epoll_pwait2,
-#endif
 #if defined(__NR_renameat)
 	__NR_renameat,
 #endif
 #if defined(__x86_64__)
-	__NR_stat, __NR_lstat, __NR_access, __NR_mkdir, __NR_rmdir, __NR_unlink, __NR_rename, __NR_readlink, __NR_epoll_wait,
-	__NR_time,
+	__NR_stat, __NR_lstat, __NR_access, __NR_mkdir, __NR_rmdir, __NR_unlink, __NR_rename, __NR_readlink, __NR_time,
 #endif
 };
 
 constexpr std::uint32_t k_ret_allow = SECCOMP_RET_ALLOW;
 constexpr std::uint32_t k_ret_eperm = SECCOMP_RET_ERRNO | (static_cast<std::uint32_t>(EPERM) & SECCOMP_RET_DATA);
-[[maybe_unused]] constexpr std::uint32_t k_ret_enosys = SECCOMP_RET_ERRNO | (static_cast<std::uint32_t>(ENOSYS) & SECCOMP_RET_DATA);
+constexpr std::uint32_t k_ret_enosys = SECCOMP_RET_ERRNO | (static_cast<std::uint32_t>(ENOSYS) & SECCOMP_RET_DATA);
 constexpr std::uint32_t k_ret_kill = SECCOMP_RET_KILL_PROCESS;
+
+#if defined(__NR_clone3)
+constexpr long k_nr_clone3 = __NR_clone3;
+#else
+constexpr long k_nr_clone3 = 435;
+#endif
 
 constexpr std::uint32_t argument_low(std::size_t index)
 {
@@ -299,11 +299,9 @@ std::vector<sock_filter> filter_code()
 	program.ret(k_ret_kill);
 #endif
 
-#if defined(__NR_clone3)
 	// ENOSYS, not EPERM: glibc then falls back to clone, which is refused below, rather than failing in a way of its own.
-	program.jump_eq(syscall_number(__NR_clone3), 0, 1);
+	program.jump_eq(syscall_number(k_nr_clone3), 0, 1);
 	program.ret(k_ret_enosys);
-#endif
 
 	// No clone at all: apply checked there is one thread, and nothing starts another after it (the decoder links no
 	// resource or task system since #1077, assimp has none). Threads count in the user's process limit (#1105).
@@ -372,6 +370,7 @@ std::string install_syscall_filter()
 
 #if !defined(SNK_DECODER_SANITIZER_BUILD)
 // Landlock restricts only the thread that calls landlock_restrict_self: a second thread would decode outside it.
+// Threads: does not count a CLONE_VM child that is not a thread; nothing here could have made one before apply.
 // -1: /proc/self/status cannot be read.
 int thread_count()
 {

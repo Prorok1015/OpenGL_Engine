@@ -180,7 +180,7 @@ struct arguments
 	// way to write them (#1099). Exit 5: linked, 0: refused.
 	fs::path self_test_hardlink;
 	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork, thread,
-	// spawn (#1105).
+	// spawn, clone3 (#1105).
 	std::string self_test_call;
 	fs::path self_test_path;
 #endif
@@ -436,6 +436,23 @@ int self_test_call(std::string_view name, const fs::path& path)
 		if (child < 0) return refused(errno);
 		int status = 0;
 		::waitpid(child, &status, 0);
+		return 5;
+	}
+	if (name == "clone3") {
+		// struct clone_args of its first version, zeroed but for exit_signal: a plain child, like fork. The filter cannot
+		// read these flags, so it answers ENOSYS to every clone3 (glibc then falls back to clone).
+		std::uint64_t clone_args[8] = {};
+		clone_args[4] = SIGCHLD;
+#if defined(__NR_clone3)
+		constexpr long nr_clone3 = __NR_clone3;
+#else
+		constexpr long nr_clone3 = 435;
+#endif
+		const long child = ::syscall(nr_clone3, clone_args, sizeof(clone_args));
+		if (child == 0) ::_exit(0);
+		if (child < 0) return errno == ENOSYS ? 0 : 6;
+		int status = 0;
+		::waitpid(static_cast<pid_t>(child), &status, 0);
 		return 5;
 	}
 	return 6;
