@@ -11,6 +11,7 @@
 | Prefab-First | [prefab-first/](prefab-first/) | Замена prototype-десков на prefab-иерархию; type-safe редактор |
 | Render Migration | [render-migration/](render-migration/) | Переход к data-driven конвейеру: экстракторы → render pass'ы → удаление renderer_3d |
 | Infrastructure | [infrastructure/](infrastructure/) | Логгер, профайлер, сборка, инструменты разработки |
+| Runtime | [runtime/](runtime/) | Рантайм-системы игры: анимация и таймлайны |
 
 ---
 
@@ -86,6 +87,12 @@
 | [EPIC-57](infrastructure/EPIC-57.md) | Asset Identity & Database — постоянный ID ассета (`.resource`), база ассетов, обратные зависимости (#27) | design |
 | [EPIC-80](infrastructure/EPIC-80.md) | Game Code in wasm Sandbox — один исходник игры: песочница wasm / нативная DLL / нативный статический (#1084) | idea |
 
+### Runtime
+
+| ID | Title | Status |
+|---|---|---|
+| [EPIC-83](runtime/EPIC-83.md) | Универсальная анимационная система — таймлайн с дорожками «адрес поля + ключи + интерполяция» для любых полей, события, tween'ы; поглощает EPIC-74 (#1471) | design |
+
 ### Render Migration
 
 | ID | Title | Status |
@@ -125,6 +132,11 @@ EPIC-24 (Async Editor Ops)  ← standalone
 
 EPIC-12 + EPIC-13 (Prefab Model)
   └── EPIC-33 (Skinning & Animation Refactoring)
+
+EPIC-82 step (c) #1403 (instance materials)  ← related, not a dependency
+EPIC-33 / EPIC-48 (frozen)
+  └── EPIC-83 (Universal Animation, #1471)  ← US-83-C moves the skeleton onto it
+        └── UI tweens wait for EPIC-67 (#42)
 
 EPIC-22 (Asset Import Pipeline)
   └── EPIC-34 (Editor Model Importer — расширение и упрощение)
