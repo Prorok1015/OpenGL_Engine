@@ -40,6 +40,7 @@ void edt::data_document_panel::on_hidden()
 
 void edt::data_document_panel::on_render()
 {
+	if (m_header) m_header(colors());
 	const data_document_status status = status_of(m_document, m_has_project_migration && m_has_project_migration());
 	ImGui::TextDisabled("%s", status.path.c_str());
 	if (!status.parents.empty()) {

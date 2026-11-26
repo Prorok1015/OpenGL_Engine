@@ -283,15 +283,17 @@ namespace edt
 		if (!m_material_form) {
 			return;
 		}
-		constexpr const char* title = "New Material";
+		material_create_form& form = *m_material_form;
+		// One popup ID whatever the title says (New Material, from a shader, a variant).
+		constexpr const char* id = "###new_material";
 		if (m_material_requested) {
-			ImGui::OpenPopup(title);
+			ImGui::OpenPopup(id);
 			m_material_requested = false;
 		}
-		if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		const std::string title = form.title() + id;
+		if (!ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 			return;
 		}
-		material_create_form& form = *m_material_form;
 		ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
 		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
 		std::copy(form.name().begin(), form.name().end(), buffer.begin());
@@ -307,8 +309,11 @@ namespace edt
 			const std::string target = form.folder().empty() ? form.file_name() : form.folder() + "/" + form.file_name();
 			ImGui::TextDisabled("Creates res://%s", target.c_str());
 		} else {
-			const std::string base{ k_base_material };
-			ImGui::TextDisabled("Give it a name; it is a child of %s", base.c_str());
+			const std::string parent{ form.options().parent.view().empty() ? k_base_material : form.options().parent.view() };
+			ImGui::TextDisabled("Give it a name; it is a child of %s", parent.c_str());
+		}
+		if (!form.options().shader.view().empty()) {
+			ImGui::TextDisabled("Shader: %s", std::string(form.options().shader.view()).c_str());
 		}
 		for (const std::string* text : { &form.problem(), &form.error() }) {
 			if (text->empty()) continue;
@@ -332,6 +337,27 @@ namespace edt
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
+	}
+
+	material_menu_item asset_browser_panel::material_item_of(const layer_entry& file)
+	{
+		const std::string relative = fs_paths::utf8_of(file.relative);
+		std::string desc_type;
+		if (asset_kind_needs_desc_type(m_kinds, relative) && file.layer < m_layers.size()) {
+			int budget = 1;
+			desc_type = m_desc_types.type_of(m_layers[file.layer], file.relative, budget).value_or(std::string{});
+		}
+		// The asset kinds know a plain .desc only as a level, world or prefab by its `__type`: a material or shader is read here.
+		material_menu_item item = material_menu_item_of_type(desc_type);
+		if (item == material_menu_item::none) {
+			item = material_menu_item_of(asset_kind_of(m_kinds, relative, desc_type));
+		}
+		// An item whose click would open nothing (a name the creator cannot split) is not offered.
+		const std::string_view type = item == material_menu_item::from_shader ? k_shader_type : k_material_type;
+		if (item != material_menu_item::none && !m_material_creator->source_of(res::tag::make(file.relative.generic_string()), type)) {
+			return material_menu_item::none;
+		}
+		return item;
 	}
 
 	void asset_browser_panel::set_variant_creator(std::shared_ptr<prefab_variant_creator> creator, std::function<void(const res::tag&)> on_created)
@@ -688,6 +714,9 @@ namespace edt
 							m_offers_open_as_data = m_open_as_data_offered && m_open_as_data
 								&& m_open_as_data_offered(res::tag::make(e.src.relative.generic_string()));
 						}
+						if (ImGui::IsWindowAppearing()) {
+							m_material_item = m_material_form ? material_item_of(e.src) : material_menu_item::none;
+						}
 						if (m_offers_open_as_data && ImGui::MenuItem("Open as data")) {
 							m_open_as_data(res::tag::make(e.src.relative.generic_string()));
 						}
@@ -705,6 +734,12 @@ namespace edt
 						if (m_variant_form && e.src.relative.generic_string().ends_with(".prefab.desc") && ImGui::MenuItem("Create Variant")) {
 							m_variant_form->open(res::tag::make(e.src.relative.generic_string()));
 							m_variant_requested = true;
+						}
+						if (m_material_form && m_material_item == material_menu_item::from_shader && ImGui::MenuItem("Create Material")) {
+							m_material_requested = m_material_form->open_from_shader(res::tag::make(e.src.relative.generic_string()));
+						}
+						if (m_material_form && m_material_item == material_menu_item::variant && ImGui::MenuItem("Create Material Variant")) {
+							m_material_requested = m_material_form->open_variant_of(res::tag::make(e.src.relative.generic_string()));
 						}
 						ImGui::EndPopup();
 					}

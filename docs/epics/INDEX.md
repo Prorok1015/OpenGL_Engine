@@ -31,7 +31,7 @@
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
 | [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов (#30) | in_progress |
-| [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы (#36) | planned |
+| [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы (#36) | done |
 | [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов (#37) | planned |
 | [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | done |
 | [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение (#38) | planned |

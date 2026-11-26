@@ -104,7 +104,21 @@
   материалу этот суффикс и тот же `__parent`, фильтр Kinds показывает «Material», `asset.query` — вид `material_desc`.
   Логика без ImGui — `material_creator` / `material_create_form` (`controller/edt_material_creator.h`) поверх
   `document_creator`; опции `shader` (пишет `shader`) и `parent` (заменяет `__parent`) — для PR 2 и PR 3.
-- **PR 2:** «Create Material» на строке `.shader.desc` (шейдер подставлен) и «Create Material Variant» на материале.
+- **PR 2 (сделано):** в контекстном меню файла браузера ассетов: на шейдере — **Create Material**, на материале —
+  **Create Material Variant**. Шейдер и материал узнаются по суффиксу (`.shader.desc` / `.mat.desc`, в любом регистре
+  букв; основа имени сохраняет свой регистр), а простой `.desc` — по `__type` (`shader_desc` / `material_desc`), который
+  читается один раз при открытии меню и сопоставляется в `material_menu_item_of_type`: `asset_kind_of` знает простой
+  `.desc` только как уровень, мир или префаб, поэтому фильтр Kinds по-прежнему показывает такой файл как `data` (это не
+  меняется). Пункт не показывается, если имя файла не разбирается (`material_creator::source_of`). Create Material создаёт материал в папке
+  шейдера: `__parent` остаётся `res://base_material.desc` (остальные поля наследуются), `shader` — этот шейдер; имя
+  предлагается по основе шейдера (`toon.shader.desc` → `toon`, при занятом — `toon-2`). Create Material Variant создаёт
+  материал в папке исходного с `__parent` = этот материал и больше ничего; имя — `<основа>_variant`, затем `_variant2`,
+  как у варианта префаба (без разделителя перед номером). Если исходный файл в нижнем слое (движок), материал
+  создаётся в той же папке, но в слое проекта — так же, как вариант префаба. Те же правила, что в PR 1: только верхний
+  слой, занятое имя отклоняется, имя проверяется ещё раз при создании; после создания открывается окно материала.
+  Форма и окно общие с New Material: `material_create_form::open(folder, options, suggestion, title)` плюс
+  `open_from_shader` / `open_variant_of`; заголовок окна говорит, что создаётся («New Material from toon.shader.desc»,
+  «Material Variant of rock.mat.desc»). Тесты: `EdtDataDocumentTests` NewMaterial_FromAShader_*, NewMaterial_AVariant_*.
 - **PR 3:** команда агента через тот же `material_creator`.
 
 ---
