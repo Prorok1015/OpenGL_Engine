@@ -668,7 +668,7 @@ namespace
 	}
 
 	// Replaces the file only while it holds `before`, checked once the temp file is complete: the last point
-	// write_beneath hands back before its flush and rename.
+	// write_beneath hands back before its flush and rename. A write during the flush is not seen (accepted, #1459).
 	std::string replace_if_unchanged(const fs::path& top, const res::tag& tag, std::span<const std::byte> before,
 		std::span<const std::byte> data, bool& changed)
 	{
