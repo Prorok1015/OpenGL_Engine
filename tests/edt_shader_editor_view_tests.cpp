@@ -1,10 +1,16 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
+#include "edt_edit_menu.h"
+#include "edt_main_menu.h"
+#include "edt_scene_document.h"
 #include "edt_shader_editor_panel.h"
 #include "edt_shader_palette.h"
 #include "edt_shader_source_document.h"
 #include "edt_shader_text_view.h"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_problem_list.h>
@@ -363,6 +369,105 @@ BOOST_AUTO_TEST_CASE(Revert_TakesTheFilesText_AndTheTypingNotHandedOverGoesWithI
 	BOOST_TEST(!panel.is_dirty());
 	BOOST_TEST(document->text() == k_frag);
 	BOOST_TEST(panel.widget_text() == document->text());
+}
+
+BOOST_AUTO_TEST_CASE(EditUndoAndRedo_ReachTheWidgetsHistory_AndTheWidgetAndTheDocumentStayEqual)
+{
+	draw();
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
+
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	const auto entry = document->next_undo_entry();
+	BOOST_REQUIRE(entry.has_value());
+	BOOST_TEST(entry->label == "Typing");
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(!panel.has_pending_edits());
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(!document->is_dirty());
+	draw();
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(document->next_redo_entry().has_value());
+
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(document->text().rfind("// typed\n", 0) == 0u);
+	BOOST_TEST(panel.widget_text() == document->text());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(!document->next_redo_entry().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(UndoAfterASave_MakesTheDocumentDirtyAgain_AndRedoCleansIt)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	BOOST_REQUIRE(panel.has_pending_edits());
+	BOOST_REQUIRE(document->save().saved);
+	BOOST_REQUIRE(!document->is_dirty());
+
+	BOOST_REQUIRE(document->undo());
+	BOOST_TEST(document->text() == k_frag);
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(panel.widget_text() == document->text());
+
+	BOOST_REQUIRE(document->redo());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->text().rfind("// typed\n", 0) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(CtrlZ_WithTheWidgetFocused_IsLeftToTheWidget_WithoutItTheEditMenuAppliesOneStep)
+{
+	edt::scene_document scene;
+	edt::document_manager documents{ scene, events };
+	edt::dialog_service dialogs;
+	dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+	edt::action_registry actions;
+	const std::vector<edt::registration> menus = edt::register_builtin_menus(actions);
+	const std::vector<edt::registration> registered = edt::register_edit_actions(actions, documents, dialogs, {});
+
+	auto made = std::make_unique<edt::shader_source_document>(services);
+	made->set_files([this] {
+		edt::desc_file_layout layout;
+		layout.top_layer = [this] { return res_root; };
+		layout.layers = [this] { return std::vector<fs::path>{ res_root }; };
+		layout.open_level_files = [] { return std::vector<std::string>{}; };
+		layout.write_blocker = [] { return std::optional<std::string>{}; };
+		return layout;
+	}());
+	made->open(res::tag{ "res://shaders/scene.frag" });
+	BOOST_REQUIRE(made->is_open());
+	auto& managed = dynamic_cast<edt::shader_source_document&>(documents.adopt(std::move(made)));
+	documents.set_active(managed.id());
+	int steps = 0;
+	managed.set_history_source({ [] { return true; }, [] { return false; }, [&steps] { ++steps; }, [] {} });
+
+	BOOST_TEST(!actions.dispatch(*edt::shortcut::parse("Ctrl+Z"), true));
+	BOOST_TEST(steps == 0);
+	BOOST_TEST(actions.dispatch(*edt::shortcut::parse("Ctrl+Z"), false));
+	BOOST_TEST(steps == 1);
+	managed.set_history_source({});
+}
+
+BOOST_AUTO_TEST_CASE(EditUndo_IsRefusedWhileEditsAreLocked_AndAfterTheWindowLetGo)
+{
+	draw();
+	panel.insert_text("// typed\n");
+	draw();
+	bool locked = true;
+	document->set_lock_source([&locked] { return locked; });
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
+	locked = false;
+	BOOST_TEST(document->next_undo_entry().has_value());
+	document->set_lock_source({});
+
+	panel.set_context(nullptr);
+	BOOST_TEST(!document->next_undo_entry().has_value());
+	BOOST_TEST(!document->undo());
 }
 
 BOOST_AUTO_TEST_CASE(Revert_ThatFails_KeepsTheTyping)

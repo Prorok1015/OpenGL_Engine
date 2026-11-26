@@ -3,7 +3,9 @@
 #include "edt_document.h"
 #include "edt_registration.h"
 #include <snk/model_codec/res_tag.h>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -12,6 +14,14 @@
 
 namespace edt
 {
+	// A window host (EPIC-82 5.4): shows one document of the chain at a time. 0 names none.
+	using host_id = std::uint64_t;
+
+	// Where a document was opened from. `asset`: from the asset browser or a menu, the file is the identity. `instance`: from
+	// a place inside a parent document named by an anchor (a node and a field); the identity is the pair (parent, anchor), never the file.
+	// Only plain values cross the module boundary here: the context itself is the manager's private record.
+	enum class link_kind : std::uint8_t { asset, instance };
+
 	class asset_kind_registry;
 	class editor_events;
 	class problem_list;
@@ -79,6 +89,50 @@ namespace edt
 		// open (the editor always edits one scene).
 		void close(document_id id);
 
+		// Links and window hosts (EPIC-82 5.4, #1402). A link is a document plus where it was opened from; the tables live in the .cpp, per
+		// manager, so the class has no field for them. A document without a link is a chain of its own (the level, a prefab opened by name).
+		// Reads never make a table entry.
+		//
+		// Adopts `opened` as an `instance` link of `parent` at `anchor` (announced after the link is recorded). When the pair is linked
+		// already, that link's id is returned and `opened` is destroyed unopened; 0 when `parent` is not open (nothing is adopted) or when a
+		// listener of document_opened closed the document again.
+		document_id open_instance(std::unique_ptr<document> opened, document_id parent, std::string_view anchor);
+		// Records an `asset` link for a document that is open (a preview, a data document; never the scene). The id of the link of that file when
+		// another document of the same source is linked as an asset already; `id` itself when it is linked; 0 for a document that is not open.
+		document_id link_asset(document_id id);
+		bool has_link(document_id id) const;
+		// `asset` for a document with no link.
+		link_kind link_kind_of(document_id id) const;
+		// The document an instance was opened from; 0 for an asset and for a document with no link.
+		document_id link_parent(document_id id) const;
+		std::string link_anchor(document_id id) const;
+		// The documents from the root down to `id`, `id` last. A document with no link: just itself. Empty for an unknown id.
+		std::vector<document_id> chain_of(document_id id) const;
+		// The `instance` link opened from `parent` at `anchor`.
+		std::optional<document_id> find_link(document_id parent, std::string_view anchor) const;
+		// Every open link below `id`, the deepest first (the order they close in).
+		std::vector<document_id> descendants_of(document_id id) const;
+		// Links that no host shows, in the order they were linked.
+		std::vector<document_id> unhosted_links() const;
+
+		// A host showing `link` (a document that has no link record gets an `asset` one, the scene none). A link another host shows keeps that
+		// host: its id is returned and no host is made. 0 for a document that is not open.
+		host_id open_host(document_id link);
+		// The host stops showing anything and goes. The document and its unsaved changes stay open.
+		void close_host(host_id host);
+		std::optional<host_id> host_of(document_id link) const;
+		std::optional<document_id> host_link(host_id host) const;
+		std::vector<host_id> hosts() const;
+		// Back and forward along the chain: `host` shows `link`. When another host shows it, nothing moves and that host's id is
+		// returned (focus goes by identity). The link `host` showed stays open without a host. 0: no such host or link.
+		host_id set_host_link(host_id host, document_id link);
+		// Tear-off (`to_host` 0): a new host shows `link`; the host that showed it goes back to the link's parent when that is a link without a
+		// host, else it closes. Dock-back (`to_host` set): `to_host` shows `link` and the host that showed it closes. The id of the host that
+		// shows `link` now, 0 when nothing was done.
+		host_id move_link(document_id link, host_id to_host);
+		// Moves with every change of the links and the hosts: the windows redraw on it.
+		std::uint64_t links_revision() const;
+
 		// Visits the open documents: the scene first, then the preview, then the adopted ones in the order they were opened.
 		// The list is taken before the first visit: a visitor may close the document it is given.
 		void for_each(const std::function<void(document&)>& fn);
@@ -100,6 +154,18 @@ namespace edt
 		// Closes the document and announces it; destroys nothing (the caller does, after the announcement).
 		void end_preview(previewable_document& closing);
 		void preview_removed(const asset_preview_desc& preview);
+		// The links below `id` close first; the link of a document that closed goes, and the host that showed it too.
+		void close_descendants(document_id id);
+		void document_closed_link(document_id id);
+		void close_document(document_id id);
+		// The links of documents that closed without close() (a preview that closed itself) go, their descendants and hosts with them.
+		void forget_closed_links();
+		// What a closed parent leaves behind when nobody asked about it: clean descendants close, one with unsaved changes (and what is
+		// opened from it) stays open as a root, said in the log and in Problems.
+		void close_or_release_descendants(document_id id);
+		const document* find_open(document_id id) const;
+		document& adopt_quiet(std::unique_ptr<document> adopted);
+		void register_asset_link(document_id id);
 
 		document* m_scene;
 		editor_events& m_events;

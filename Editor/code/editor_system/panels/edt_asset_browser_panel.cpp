@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <iterator>
 #include <optional>
+#include <system_error>
 #include <vector>
 
 namespace edt
@@ -131,6 +133,18 @@ namespace edt
 		}
 	}
 
+	void asset_browser_panel::ask_reimport(std::string target)
+	{
+		const std::weak_ptr<int> alive = m_alive;
+		m_pick_image([this, alive, target = std::move(target)](const std::filesystem::path& picked) {
+			if (!alive.lock()) {
+				return;
+			}
+			m_image_form->open_reimport(target, picked);
+			m_image_requested = true;
+		});
+	}
+
 	void asset_browser_panel::draw_image_window()
 	{
 		if (!m_image_form) {
@@ -146,8 +160,13 @@ namespace edt
 		}
 		image_import_form& form = *m_image_form;
 		const image_import_settings settings = form.settings();
+		if (form.reimport()) {
+			ImGui::Text("Re-import %s", form.target().c_str());
+		}
 		ImGui::TextDisabled("Source: %s", fs_paths::utf8_of(form.source()).c_str());
-		ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
+		if (!form.reimport()) {
+			ImGui::TextDisabled("Folder: res://%s", form.folder().c_str());
+		}
 		const std::string wrap_preview{ image_wrap_name(settings.wrap) };
 		if (ImGui::BeginCombo("Wrap", wrap_preview.c_str())) {
 			for (const image_wrap wrap : { image_wrap::clamp_to_edge, image_wrap::repeat, image_wrap::repeat_mirror,
@@ -173,19 +192,26 @@ namespace edt
 		if (ImGui::Checkbox("Mipmaps", &mips)) {
 			form.set_mips(mips);
 		}
-		std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
-		std::copy(form.name().begin(), form.name().end(), buffer.begin());
-		if (ImGui::IsWindowAppearing()) {
-			ImGui::SetKeyboardFocusHere();
-		}
-		const bool entered =
-			ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
-		if (buffer.data() != form.name()) {
-			form.set_name(buffer.data());
-		}
-		ImGui::TextDisabled("Files written:");
-		for (const std::string& file : form.final_names()) {
-			ImGui::BulletText("%s", file.c_str());
+		bool entered = false;
+		if (form.reimport()) {
+			ImGui::TextDisabled("Files rewritten:");
+			for (const std::string& file : form.rewritten_names()) {
+				ImGui::BulletText("%s", file.c_str());
+			}
+		} else {
+			std::vector<char> buffer(std::max<std::size_t>(form.name().size() + 64, 256), '\0');
+			std::copy(form.name().begin(), form.name().end(), buffer.begin());
+			if (ImGui::IsWindowAppearing()) {
+				ImGui::SetKeyboardFocusHere();
+			}
+			entered = ImGui::InputText("Name", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+			if (buffer.data() != form.name()) {
+				form.set_name(buffer.data());
+			}
+			ImGui::TextDisabled("Files written:");
+			for (const std::string& file : form.final_names()) {
+				ImGui::BulletText("%s", file.c_str());
+			}
 		}
 		for (const std::string* message : { &form.problem(), &form.error() }) {
 			if (!message->empty()) {
@@ -195,7 +221,7 @@ namespace edt
 			}
 		}
 		ImGui::BeginDisabled(!form.can_submit());
-		const bool clicked = ImGui::Button("Import");
+		const bool clicked = ImGui::Button(form.reimport() ? "Re-import" : "Import");
 		ImGui::EndDisabled();
 		if ((clicked || entered) && form.can_submit() && form.submit()) {
 			ImGui::CloseCurrentPopup();
@@ -713,8 +739,15 @@ namespace edt
 						if (ImGui::IsWindowAppearing()) {
 							m_offers_open_as_data = m_open_as_data_offered && m_open_as_data
 								&& m_open_as_data_offered(res::tag::make(e.src.relative.generic_string()));
-						}
-						if (ImGui::IsWindowAppearing()) {
+							// Only a look for the sidecar: the re-import itself refuses what it cannot take.
+							const std::string extension = to_lower(fs_paths::utf8_of(e.src.path.extension()));
+							const auto& pictures = image_importer::k_extensions;
+							std::error_code ec;
+							std::filesystem::path sidecar = e.src.path;
+							sidecar += std::string(res::asset_meta_suffix);
+							m_offers_reimport = m_image_form
+								&& std::find(std::begin(pictures), std::end(pictures), extension) != std::end(pictures)
+								&& std::filesystem::is_regular_file(std::filesystem::symlink_status(sidecar, ec));
 							m_material_item = m_material_form ? material_item_of(e.src) : material_menu_item::none;
 						}
 						if (m_offers_open_as_data && ImGui::MenuItem("Open as data")) {
@@ -730,6 +763,9 @@ namespace edt
 							ImGui::SetClipboardText(fs_paths::utf8_of(e.src.path).c_str());
 						if (ImGui::MenuItem("Copy relative path")) {
 							ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
+						}
+						if (m_offers_reimport && ImGui::MenuItem("Re-import...")) {
+							ask_reimport(std::string(res::tag::make(fs_paths::generic_utf8_of(e.src.relative)).view()));
 						}
 						if (m_variant_form && e.src.relative.generic_string().ends_with(".prefab.desc") && ImGui::MenuItem("Create Variant")) {
 							m_variant_form->open(res::tag::make(e.src.relative.generic_string()));

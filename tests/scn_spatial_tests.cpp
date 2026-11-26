@@ -7,6 +7,7 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_spatial.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <cmath>
@@ -32,13 +33,13 @@ struct spatial_env : test_util::scene_env
 		BOOST_REQUIRE(geometry.is_ready());
 	}
 
-	entt::entity add_quad(entt::registry& reg, const glm::mat4& world)
+	entt::entity add_quad(entt::registry& reg, const glm::mat4& world, scn::mesh_view view = scn::mesh_view{ 0, 4, 0, 6 })
 	{
 		scn::geometry_holds::attach(reg, rs.get());
 		const auto entity = reg.create();
 		reg.emplace<scn::world_transform>(entity, scn::world_transform{ world });
 		reg.emplace<scn::renderable>(entity);
-		reg.emplace<scn::mesh_component>(entity, scn::mesh_component{ scn::mesh_view{ 0, 4, 0, 6 } });
+		reg.emplace<scn::mesh_component>(entity, scn::mesh_component{ view });
 		reg.emplace<scn::geometry_component>(entity, scn::geometry_component{ .geom_tag = geometry.get_tag() });
 		BOOST_REQUIRE(scn::geometry_holds::of(reg).find(entity));
 		return entity;
@@ -722,6 +723,447 @@ BOOST_AUTO_TEST_CASE(AMatrixThatIsNoFrustum_AnswersNothing)
 	entt::registry empty;
 	scn::overlap_frustum(empty, camera_view_projection({ 0.f, 0.f, 0.f }, { 0.f, 0.f, -1.f }), {}, found);
 	BOOST_TEST(found.empty());
+}
+
+
+namespace {
+
+// Points of the quad through its matrix, on a grid: what the shape tests ask instead of the triangles the engine tests, so they do not
+// check the code under test with itself. A sample is never nearer to a shape than the quad is, off by at most a grid step.
+std::vector<glm::vec3> quad_samples(const glm::mat4& matrix, float half = 0.5f, int steps = 40)
+{
+	std::vector<glm::vec3> out;
+	for (int i = 0; i <= steps; ++i) {
+		for (int j = 0; j <= steps; ++j) {
+			const glm::vec3 local{ -half + 2.f * half * static_cast<float>(i) / static_cast<float>(steps),
+				-half + 2.f * half * static_cast<float>(j) / static_cast<float>(steps), 0.f };
+			out.push_back(glm::vec3(matrix * glm::vec4(local, 1.f)));
+		}
+	}
+	return out;
+}
+
+float distance_to_segment(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b)
+{
+	const glm::vec3 ab = b - a;
+	const float length_sq = glm::dot(ab, ab);
+	const float along = length_sq > 0.f ? std::clamp(glm::dot(p - a, ab) / length_sq, 0.f, 1.f) : 0.f;
+	return glm::distance(p, a + ab * along);
+}
+
+// How far a point is outside the shape (0 or less: inside), by the shape's own definition and nothing of the engine's.
+float outside_by(const scn::shape& volume, const glm::vec3& p)
+{
+	switch (volume.kind) {
+	case scn::shape_kind::sphere: return glm::distance(p, volume.center) - volume.radius;
+	case scn::shape_kind::capsule: return distance_to_segment(p, volume.center, volume.end) - volume.radius;
+	case scn::shape_kind::box: {
+		const glm::vec3 local = glm::inverse(glm::mat3_cast(glm::normalize(volume.rotation))) * (p - volume.center);
+		const glm::vec3 over = glm::max(glm::abs(local) - volume.half_extents, glm::vec3{ 0.f });
+		return glm::length(over);
+	}
+	}
+	return 0.f;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(AShapeOverlap_AnswersAsASampledQuadDoes_ForSpheresCapsulesAndBoxes)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	std::mt19937 random{ 1328 };
+	std::uniform_real_distribution<float> position{ -8.f, 8.f };
+	std::uniform_real_distribution<float> angle{ 0.f, 6.28f };
+	std::uniform_real_distribution<float> scale{ 0.5f, 3.f };
+	std::uniform_real_distribution<float> size{ 0.2f, 2.f };
+	std::vector<std::pair<entt::entity, std::vector<glm::vec3>>> quads;
+	for (int i = 0; i < 120; ++i) {
+		glm::mat4 matrix = at({ position(random), position(random), position(random) });
+		matrix = glm::rotate(matrix, angle(random), glm::normalize(glm::vec3{ position(random) + 9.f, position(random) + 9.f, position(random) + 9.f }));
+		matrix = glm::scale(matrix, glm::vec3{ scale(random), scale(random), 1.f });
+		quads.emplace_back(add_quad(reg, matrix), quad_samples(matrix));
+	}
+	constexpr float k_slack = 0.12f;
+	int met = 0;
+	int missed = 0;
+	for (int run = 0; run < 90; ++run) {
+		const glm::vec3 centre{ position(random), position(random), position(random) };
+		scn::shape volume;
+		switch (run % 3) {
+		case 0: volume = scn::shape::make_sphere(centre, size(random)); break;
+		case 1: volume = scn::shape::make_capsule(centre, centre + glm::vec3{ position(random), position(random), position(random) } * 0.3f, size(random) * 0.5f); break;
+		default:
+			volume = scn::shape::make_box(centre, { size(random), size(random), size(random) },
+				glm::angleAxis(angle(random), glm::normalize(glm::vec3{ position(random) + 9.f, position(random) + 9.f, position(random) + 9.f })));
+			break;
+		}
+		std::vector<entt::entity> found;
+		scn::overlap_shape(reg, volume, {}, found);
+		BOOST_TEST(std::is_sorted(found.begin(), found.end()));
+		for (const auto& [entity, samples] : quads) {
+			float nearest = std::numeric_limits<float>::max();
+			for (const glm::vec3& sample : samples) nearest = std::min(nearest, outside_by(volume, sample));
+			const bool reported = std::find(found.begin(), found.end(), entity) != found.end();
+			BOOST_TEST_CONTEXT("run " << run << " quad " << static_cast<std::uint32_t>(entity)) {
+				if (nearest <= 0.f) BOOST_TEST(reported);
+				if (nearest > k_slack) BOOST_TEST(!reported);
+			}
+			met += reported ? 1 : 0;
+			missed += reported ? 0 : 1;
+		}
+	}
+	BOOST_TEST(met > 20);
+	BOOST_TEST(missed > 20);
+}
+
+BOOST_AUTO_TEST_CASE(AShapeOverlap_UsesTheStretchedMeshNotAStretchedShape)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto wide = add_quad(reg, glm::scale(at({ 0.f, 0.f, 0.f }), glm::vec3{ 4.f, 1.f, 1.f }));
+	std::vector<entt::entity> found;
+	// The quad's edge is at x = 2 now: a unit sphere at x = 2.8 reaches it, one at x = 3.2 does not.
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 2.8f, 0.f, 0.f }, 1.f), {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == wide));
+	found.clear();
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 3.2f, 0.f, 0.f }, 1.f), {}, found);
+	BOOST_TEST(found.empty());
+	found.clear();
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 2.f }, 1.f), {}, found);
+	BOOST_TEST(found.empty());
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.f, 0.f, 0.5f }, { 3.f, 0.2f, 0.5f }), {}, found);
+	BOOST_TEST(found.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AShapeOverlap_SkipsHiddenOtherLayersAndExcluded_SeesAMoveAndADestroy)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto shown = add_quad(reg, at({ -1.f, 0.f, 0.f }));
+	const auto hidden = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	reg.remove<scn::renderable>(hidden);
+	const auto other_layer = add_quad(reg, at({ 1.f, 0.f, 0.f }));
+	reg.emplace<scn::spatial_layers>(other_layer, scn::spatial_layers{ scn::spatial_mask{ scn::spatial_layer{ 5 } } });
+	const auto excluded = add_quad(reg, at({ 2.f, 0.f, 0.f }));
+	const scn::shape around = scn::shape::make_box({ 0.5f, 0.f, 0.f }, { 4.f, 1.f, 1.f });
+
+	std::vector<entt::entity> found;
+	scn::ray_filter filter;
+	filter.mask = scn::spatial_mask{ scn::k_default_spatial_layer };
+	const std::vector<entt::entity> out_of_the_way{ excluded };
+	filter.exclude = out_of_the_way;
+	scn::overlap_shape(reg, around, filter, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == shown));
+
+	found.clear();
+	scn::ray_filter everything;
+	everything.include_hidden = true;
+	scn::overlap_shape(reg, around, everything, found);
+	BOOST_TEST(found.size() == 4u);
+
+	reg.get<scn::world_transform>(shown).world = at({ 50.f, 0.f, 0.f });
+	const entt::entity moved[] = { shown };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+	reg.destroy(excluded);
+	found.clear();
+	scn::overlap_shape(reg, around, everything, found);
+	BOOST_TEST(found.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ABadShape_OrAPointThatIsNaN_AnswersNothing)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const float nan = std::nanf("");
+	std::vector<entt::entity> found;
+	scn::overlap_shape(reg, scn::shape::make_sphere({ nan, 0.f, 0.f }, 1.f), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, -1.f), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, nan), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_capsule({ 0.f, 0.f, 0.f }, { 0.f, std::numeric_limits<float>::infinity(), 0.f }, 1.f), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.f, 0.f, 0.f }, { 1.f, -1.f, 1.f }), {}, found);
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f }, glm::quat{ 0.f, 0.f, 0.f, 0.f }), {}, found);
+	scn::overlap_point(reg, { nan, 0.f, 0.f }, {}, found);
+	BOOST_TEST(found.empty());
+	BOOST_TEST(!scn::closest_point(reg, { nan, 0.f, 0.f }).has_value());
+	BOOST_TEST(scn::closest_point(reg, { 0.f, 0.f, 1.f }).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(APointQuery_FindsTheEntitiesWhoseWorldBoxHoldsIt)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto flat = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto turned = add_quad(reg, glm::rotate(at({ 10.f, 0.f, 0.f }), glm::radians(45.f), glm::vec3{ 0.f, 0.f, 1.f }));
+	std::vector<entt::entity> found;
+	scn::overlap_point(reg, { 0.2f, 0.2f, 0.f }, {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == flat));
+	found.clear();
+	scn::overlap_point(reg, { 0.2f, 0.2f, 0.01f }, {}, found);
+	BOOST_TEST(found.empty());
+	// A box of a turned quad is bigger than the quad: its corner counts, as the frustum query's does.
+	scn::overlap_point(reg, { 10.6f, 0.6f, 0.f }, {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == turned));
+	found.clear();
+	scn::overlap_point(reg, { 5.f, 0.f, 0.f }, {}, found);
+	BOOST_TEST(found.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheClosestPoint_IsOnTheSurface_WithDistanceNormalAndTriangle)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto above = scn::closest_point(reg, { 0.2f, 0.1f, 3.f });
+	BOOST_REQUIRE(above.has_value());
+	BOOST_TEST((above->entity == quad));
+	BOOST_TEST(above->distance == 3.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(above->point.x == 0.2f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(above->point.z == 0.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(above->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(above->triangle < 2u);
+
+	const auto beside = scn::closest_point(reg, { 2.5f, 0.f, 0.f });
+	BOOST_REQUIRE(beside.has_value());
+	BOOST_TEST(beside->distance == 2.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(beside->point.x == 0.5f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(beside->normal.x == 1.f, boost::test_tools::tolerance(1e-4f));
+
+	const auto on = scn::closest_point(reg, { 0.1f, 0.1f, 0.f });
+	BOOST_REQUIRE(on.has_value());
+	BOOST_TEST(std::abs(on->distance) < 1e-4f);
+	BOOST_TEST(on->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
+
+	const auto below = scn::closest_point(reg, { 0.f, 0.f, -2.f });
+	BOOST_REQUIRE(below.has_value());
+	BOOST_TEST(below->normal.z == -1.f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(TheClosestPoint_TakesTheNearerEntity_TheSearchRadiusAndTheFilter)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto near_quad = add_quad(reg, at({ 0.f, 0.f, 1.f }));
+	const auto far_quad = add_quad(reg, at({ 0.f, 0.f, 6.f }));
+	const auto best = scn::closest_point(reg, { 0.f, 0.f, 3.f });
+	BOOST_REQUIRE(best.has_value());
+	BOOST_TEST((best->entity == near_quad));
+	BOOST_TEST(best->distance == 2.f, boost::test_tools::tolerance(1e-4f));
+
+	scn::ray_filter close;
+	close.max_distance = 1.5f;
+	BOOST_TEST(!scn::closest_point(reg, { 0.f, 0.f, 3.f }, close).has_value());
+	close.max_distance = 2.f;
+	BOOST_TEST(scn::closest_point(reg, { 0.f, 0.f, 3.f }, close).has_value());
+
+	const std::vector<entt::entity> skipped{ near_quad };
+	scn::ray_filter without;
+	without.exclude = skipped;
+	const auto other = scn::closest_point(reg, { 0.f, 0.f, 3.f }, without);
+	BOOST_REQUIRE(other.has_value());
+	BOOST_TEST((other->entity == far_quad));
+
+	reg.remove<scn::renderable>(far_quad);
+	BOOST_TEST(!scn::closest_point(reg, { 0.f, 0.f, 3.f }, without).has_value());
+	without.include_hidden = true;
+	BOOST_TEST(scn::closest_point(reg, { 0.f, 0.f, 3.f }, without).has_value());
+
+	// Two at the same distance: the lower entity.
+	const auto twin_a = add_quad(reg, at({ 10.f, 0.f, 1.f }));
+	const auto twin_b = add_quad(reg, at({ 10.f, 0.f, -1.f }));
+	const auto tie = scn::closest_point(reg, { 10.f, 0.f, 0.f });
+	BOOST_REQUIRE(tie.has_value());
+	BOOST_TEST((tie->entity == std::min(twin_a, twin_b)));
+}
+
+BOOST_AUTO_TEST_CASE(TheClosestPoint_MeasuresInTheWorld_WhenTheMatrixStretchesTheMesh)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, glm::scale(at({ 0.f, 0.f, 0.f }), glm::vec3{ 4.f, 1.f, 1.f }));
+	// The quad spans x in [-2, 2] now: from (3, 0, 1) the nearest point is its edge (2, 0, 0).
+	const auto hit = scn::closest_point(reg, { 3.f, 0.f, 1.f });
+	BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->point.x == 2.f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(hit->distance == std::sqrt(2.f), boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(TheClosestPoint_AnswersAsASampledQuadDoes_ForRandomQuadsAndPoints)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	std::mt19937 random{ 13280 };
+	std::uniform_real_distribution<float> position{ -8.f, 8.f };
+	std::uniform_real_distribution<float> angle{ 0.f, 6.28f };
+	std::uniform_real_distribution<float> scale{ 0.5f, 3.f };
+	std::vector<std::vector<glm::vec3>> quads;
+	for (int i = 0; i < 80; ++i) {
+		glm::mat4 matrix = at({ position(random), position(random), position(random) });
+		matrix = glm::rotate(matrix, angle(random), glm::normalize(glm::vec3{ position(random) + 9.f, position(random) + 9.f, position(random) + 9.f }));
+		matrix = glm::scale(matrix, glm::vec3{ scale(random), scale(random), 1.f });
+		add_quad(reg, matrix);
+		quads.push_back(quad_samples(matrix));
+	}
+	for (int run = 0; run < 40; ++run) {
+		const glm::vec3 p{ position(random), position(random), position(random) };
+		float sampled = std::numeric_limits<float>::max();
+		for (const auto& samples : quads) {
+			for (const glm::vec3& sample : samples) sampled = std::min(sampled, glm::distance(p, sample));
+		}
+		const auto hit = scn::closest_point(reg, p);
+		BOOST_TEST_CONTEXT("point " << run) {
+			BOOST_REQUIRE(hit.has_value());
+			BOOST_TEST(hit->distance <= sampled + 1e-3f);
+			BOOST_TEST(hit->distance >= sampled - 0.12f);
+			BOOST_TEST(glm::distance(p, hit->point) == hit->distance, boost::test_tools::tolerance(1e-3f));
+		}
+	}
+}
+
+
+BOOST_AUTO_TEST_CASE(OnASurface_TheFrontNormalFollowsATurnedOrMirroredEntity)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	// Turned a quarter about X: the quad stands in the XZ plane and its front looks down (-Y).
+	const auto turned = add_quad(reg, glm::rotate(at({ 0.f, 0.f, 0.f }), glm::radians(90.f), glm::vec3{ 1.f, 0.f, 0.f }));
+	const auto on_turned = scn::closest_point(reg, { 0.2f, 0.f, 0.1f });
+	BOOST_REQUIRE(on_turned.has_value());
+	BOOST_TEST((on_turned->entity == turned));
+	BOOST_TEST(std::abs(on_turned->distance) < 1e-4f);
+	BOOST_TEST(on_turned->normal.y == -1.f, boost::test_tools::tolerance(1e-4f));
+
+	entt::registry other;
+	// Mirrored in X: the front of the mesh is still +Z.
+	add_quad(other, glm::scale(at({ 0.f, 0.f, 0.f }), glm::vec3{ -1.f, 1.f, 1.f }));
+	const auto on_mirrored = scn::closest_point(other, { 0.2f, 0.1f, 0.f });
+	BOOST_REQUIRE(on_mirrored.has_value());
+	BOOST_TEST(on_mirrored->normal.z == 1.f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_CASE(AnEmptyWorld_AnswersNothingToEveryShapeAndPointQuery)
+{
+	entt::registry reg;
+	std::vector<entt::entity> found;
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 5.f), {}, found);
+	scn::overlap_point(reg, { 0.f, 0.f, 0.f }, {}, found);
+	BOOST_TEST(found.empty());
+	BOOST_TEST(!scn::closest_point(reg, { 0.f, 0.f, 0.f }).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AMeshWithNoTriangle_IsNeverFound_ByAPointTheFrustumOrAShape)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	add_quad(reg, at({ 0.f, 0.f, 0.f }), scn::mesh_view{ 0, 4, 0, 0 });
+	const auto real = add_quad(reg, at({ 5.f, 0.f, 0.f }));
+	std::vector<entt::entity> found;
+	scn::overlap_point(reg, { 0.f, 0.f, 0.f }, {}, found);
+	BOOST_TEST(found.empty());
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 1.f), {}, found);
+	BOOST_TEST(found.empty());
+	// The frustum sees the quad at x = 5 too, never the mesh with no triangle at the origin.
+	scn::overlap_frustum(reg, camera_view_projection({ 0.f, 0.f, 5.f }, { 0.f, 0.f, 0.f }), {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == real));
+	const auto nearest = scn::closest_point(reg, { 0.f, 0.f, 0.f });
+	BOOST_REQUIRE(nearest.has_value());
+	BOOST_TEST((nearest->entity == real));
+}
+
+BOOST_AUTO_TEST_CASE(ThePointQueries_SeeAMoveADestroyAndTheFilters_AndAppendToWhatIsThere)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto mover = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	const auto hidden = add_quad(reg, at({ 0.f, 0.f, 2.f }));
+	reg.remove<scn::renderable>(hidden);
+	const entt::entity sentinel = reg.create();
+
+	std::vector<entt::entity> found{ sentinel };
+	scn::overlap_point(reg, { 0.f, 0.f, 0.f }, {}, found);
+	BOOST_REQUIRE(found.size() == 2u);
+	BOOST_TEST((found[0] == sentinel));
+	BOOST_TEST((found[1] == mover));
+
+	reg.get<scn::world_transform>(mover).world = at({ 20.f, 0.f, 0.f });
+	const entt::entity moved[] = { mover };
+	scn::spatial_world::attach(reg).entities_moved(reg, moved);
+	found.assign(1, sentinel);
+	scn::overlap_point(reg, { 0.f, 0.f, 0.f }, {}, found);
+	BOOST_TEST(found.size() == 1u);
+	const auto after_move = scn::closest_point(reg, { 0.f, 0.f, 1.f });
+	BOOST_REQUIRE(after_move.has_value());
+	BOOST_TEST((after_move->entity == mover));
+	const auto at_new_place = scn::closest_point(reg, { 20.f, 0.f, 1.f });
+	BOOST_REQUIRE(at_new_place.has_value());
+	BOOST_TEST((at_new_place->entity == mover));
+	BOOST_TEST(at_new_place->distance == 1.f, boost::test_tools::tolerance(1e-4f));
+
+	scn::ray_filter all;
+	all.include_hidden = true;
+	const auto hidden_hit = scn::closest_point(reg, { 0.f, 0.f, 1.f }, all);
+	BOOST_REQUIRE(hidden_hit.has_value());
+	BOOST_TEST((hidden_hit->entity == hidden));
+	reg.destroy(hidden);
+	const auto after_destroy = scn::closest_point(reg, { 0.f, 0.f, 1.f }, all);
+	BOOST_REQUIRE(after_destroy.has_value());
+	BOOST_TEST((after_destroy->entity == mover));
+}
+
+BOOST_AUTO_TEST_CASE(AVeryThinShape_MeetsASurfaceItTouches_AndAnUnknownKindAnswersNothing)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	const auto quad = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	std::vector<entt::entity> found;
+	// A radius of exactly 0 meets a surface only when rounding lets the point stay on it: the sizes below are tiny, not 0.
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.f }, 1e-4f), {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == quad));
+	found.clear();
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.2f, 0.1f, 0.2f }, 1e-4f), {}, found);
+	BOOST_TEST(found.empty());
+	scn::overlap_shape(reg, scn::shape::make_capsule({ 0.2f, 0.1f, 0.f }, { 0.2f, 0.1f, 0.f }, 1e-4f), {}, found);
+	BOOST_TEST(found.size() == 1u);
+	found.clear();
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.2f, 0.1f, 0.f }, { 1e-4f, 1e-4f, 1e-4f }), {}, found);
+	BOOST_TEST(found.size() == 1u);
+	found.clear();
+	scn::shape unknown = scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 5.f);
+	unknown.kind = static_cast<scn::shape_kind>(7);
+	scn::overlap_shape(reg, unknown, {}, found);
+	BOOST_TEST(found.empty());
+	// A huge but finite size is a usable shape: the sum of its components would overflow, the components do not.
+	scn::overlap_shape(reg, scn::shape::make_box({ 0.f, 0.f, 0.f }, { 1e30f, 1e30f, 1e30f }), {}, found);
+	BOOST_TEST(found.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AnEntityWithABrokenMatrix_IsSkipped_ByEveryShapeAndPointQuery)
+{
+	put_quad("quad.geom.desc");
+	entt::registry reg;
+	glm::mat4 broken{ 1.f };
+	broken[3][0] = std::nanf("");
+	add_quad(reg, broken);
+	add_quad(reg, glm::scale(at({ 0.f, 0.f, 0.f }), glm::vec3{ 0.f }));
+	const auto good = add_quad(reg, at({ 0.f, 0.f, 0.f }));
+	std::vector<entt::entity> found;
+	scn::overlap_shape(reg, scn::shape::make_sphere({ 0.f, 0.f, 0.f }, 1.f), {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == good));
+	found.clear();
+	scn::overlap_point(reg, { 0.f, 0.f, 0.f }, {}, found);
+	BOOST_REQUIRE(found.size() == 1u);
+	BOOST_TEST((found[0] == good));
+	const auto nearest = scn::closest_point(reg, { 0.f, 0.f, 1.f });
+	BOOST_REQUIRE(nearest.has_value());
+	BOOST_TEST((nearest->entity == good));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

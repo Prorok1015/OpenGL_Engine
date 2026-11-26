@@ -313,6 +313,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		[&res = m_res] { return res.get_resource_layers(); } }));
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
+	// What an image import or re-import wrote, told to the asset database as made or as changed.
+	const auto report_import_changes = [this](const std::vector<res::tag>& tags, res::change_kind kind) {
+		if (!m_asset_component) return;
+		std::vector<res::file_change> changes;
+		changes.reserve(tags.size());
+		for (const res::tag& tag : tags) {
+			res::file_change change;
+			change.tag = tag;
+			change.kind = kind;
+			changes.push_back(std::move(change));
+		}
+		m_asset_component->database().report_self_change(changes);
+	};
 	m_import = std::make_unique<import_component>(import_component::ports{ .context = *m_context, .resources = m_res, .desc = desc_system,
 		.tasks = data.require<ds::task_system>(), .layer = *editor_layer,
 		.play = [this]() -> const play_session* { return m_play; },
@@ -320,17 +333,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_state.editor_tag.is_valid()) m_asset_open->add_exported_to_scene(tag);
 		},
 		.write_blocker = [this] { return project_write_blocker(); },
-		.assets_written = [this](const std::vector<res::tag>& tags) {
-			if (!m_asset_component) return;
-			std::vector<res::file_change> changes;
-			changes.reserve(tags.size());
-			for (const res::tag& tag : tags) {
-				res::file_change change;
-				change.tag = tag;
-				change.kind = res::change_kind::created;
-				changes.push_back(std::move(change));
-			}
-			m_asset_component->database().report_self_change(changes);
+		.assets_written = [report_import_changes](const std::vector<res::tag>& tags) {
+			report_import_changes(tags, res::change_kind::created);
+		},
+		.assets_rewritten = [report_import_changes](const std::vector<res::tag>& tags) {
+			report_import_changes(tags, res::change_kind::modified);
+		},
+		.open_with_unsaved_changes = [this](const res::tag& tag) {
+			const res::tag& editor_copy = m_state.editor_tag;
+			document_manager& documents = m_context->documents();
+			return edt::is_open_with_unsaved_changes(documents.find_by_source(tag), documents.scene(),
+				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
 		},
 		.project_open = [&data] { return data.has_value<prj::project_context>(); } });
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -1000,8 +1013,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		[this] { return m_modes && m_modes->startup_pending() && editor_layer->has_implicit_prefix("edt/load_level"); },
 		[this] { draw_loading_screen(loading_screen_text(m_modes->startup_level_label()), m_context->colors()); });
 	// The Input Actions panel waiting for a key is a modal too: Ctrl+S and the rest must not fire under the player's key (#470).
+	// So is the model import's settings window.
 	editor_layer->set_modal_probe([this] {
-		return m_context->dialogs().pending() > 0 || (m_panels->input_actions() && m_panels->input_actions()->capturing());
+		const bool capturing = m_panels->input_actions() && m_panels->input_actions()->capturing();
+		return m_context->dialogs().pending() > 0 || capturing || m_import->settings_open();
 	});
 	// Bindings two actions share and the shaders that did not build are Problems (sources "input", "shader"), whether or not
 	// the panel is open.

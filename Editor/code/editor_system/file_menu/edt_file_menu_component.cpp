@@ -10,6 +10,7 @@
 #include "edt_level_load_component.h"
 #include "edt_main_menu.h"
 #include "edt_path_text.h"
+#include "edt_prefab_document.h"
 #include "edt_prefab_editor_component.h"
 #include "edt_problems_component.h"
 #include "edt_recent_projects.h"
@@ -190,7 +191,14 @@ edt::file_menu_component::file_menu_component(ports from)
 		return std::nullopt;
 	};
 #if SNK_HAS_ASSIMP
-	hooks.import_model = [this](const std::filesystem::path& abs_path) { m_ports.import.start_import(abs_path); };
+	hooks.import_model = [this](const std::filesystem::path& abs_path, const model_import_settings& settings) {
+		m_ports.import.start_import(abs_path, settings);
+	};
+	hooks.ask_model_settings = [this](const std::filesystem::path& abs_path,
+		std::function<void(const model_import_settings&)> import) {
+		m_ports.import.ask_settings(abs_path, [import = std::move(import)](const std::filesystem::path&,
+			const model_import_settings& settings) { import(settings); });
+	};
 #endif
 	hooks.agent_import = m_ports.import.agent_import();
 	hooks.image_import = m_ports.import.image_import();
@@ -243,7 +251,7 @@ void edt::file_menu_component::install_edit_actions(std::vector<registration>& o
 		return result.ok;
 	};
 	for (auto& action : register_edit_actions(m_ports.context.actions(), m_ports.context.documents(), m_ports.context.dialogs(), [] { return ImGui::IsAnyItemActive(); },
-			asset_undo_label, asset_undo, [this] { return m_ports.prefab.owns_inspector(); })) {
+			asset_undo_label, asset_undo, [this]() -> document* { return m_ports.prefab.inspector_prefab(); })) {
 		out.push_back(std::move(action));
 	}
 }

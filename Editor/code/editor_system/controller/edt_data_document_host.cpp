@@ -1,6 +1,7 @@
 #include "edt_data_document_host.h"
 #include "edt_data_document.h"
 #include "edt_data_document_panel.h"
+#include "edt_link_close.h"
 #include "edt_material_window_panel.h"
 #include "edt_texture_window_panel.h"
 #include <snk/common/logger/engine_log.h>
@@ -48,6 +49,11 @@ void edt::data_document_host::focus(document& open)
 		return;
 	}
 	if (m_focus_other) m_focus_other(open);
+}
+
+void edt::data_document_host::show_link(document_id id)
+{
+	if (document* open = m_context.documents().find(id)) focus(*open);
 }
 
 void edt::data_document_host::commit_pending_except(std::string_view focused_window)
@@ -175,6 +181,10 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 	} else {
 		panel = std::make_shared<data_document_panel>(data, m_services, id, quiet);
 	}
+	// The window is a host of its link; its crumbs lead to the other windows, none is dragged out yet (a data window shows its own document only).
+	documents.link_asset(id);
+	auto host = std::make_shared<window_host>(documents, id, window_host::ports{ [this](document_id link) { show_link(link); }, false });
+	panel->set_header([host](const gui::theme_semantic_colors& colors) { host->draw(colors); });
 	panel->set_on_close([this, id] { request_close(id); });
 	panel->set_on_save([this, id] { request_save(id); });
 	panel->set_has_project_migration([this] { return m_context.actions().contains("project.migrate"); });
@@ -184,7 +194,7 @@ void edt::data_document_host::open(const res::tag& tag, bool quiet, data_window_
 	registration registered = m_context.panels().add({
 		.id = panel->get_id(), .title = panel->get_title(), .slot = dock_slot::floating, .open_by_default = true,
 		.show_in_view_menu = false, .panel = panel });
-	m_windows.emplace(id, window{ std::move(panel), &data, std::move(registered) });
+	m_windows.emplace(id, window{ std::move(panel), &data, std::move(host), std::move(registered) });
 }
 
 void edt::data_document_host::release_previews()
@@ -214,6 +224,12 @@ void edt::data_document_host::request_close(document_id id)
 	document* open = m_context.documents().find(id);
 	const auto found = m_windows.find(id);
 	if (!open || found == m_windows.end()) return;
+	// What was opened from this document goes with it: one question for the chain.
+	if (!m_context.documents().descendants_of(id).empty()) {
+		found->second.panel->set_open(true);
+		close_chain(id);
+		return;
+	}
 	if (!open->is_dirty()) {
 		close(id);
 		return;
@@ -245,6 +261,41 @@ void edt::data_document_host::request_close(document_id id)
 		}
 		close(id);
 	});
+}
+
+void edt::data_document_host::close_chain(document_id id)
+{
+	// A second close click while the question is open asks nothing more.
+	if (!m_chain_questions.insert(id).second) return;
+	chain_close_ports ports;
+	auto asked = std::make_shared<bool>(false);
+	ports.ask = [this, id, asked, alive = std::weak_ptr<int>(m_alive)](const std::vector<std::string>&, std::function<void(chain_answer)> answer) {
+		*asked = true;
+		m_chain_questions.insert(id);
+		m_context.dialogs().confirm_unsaved([this, id, alive, answer = std::move(answer)](unsaved_choice choice) {
+			if (!alive.lock()) return;
+			m_chain_questions.erase(id);
+			answer(choice == unsaved_choice::save ? chain_answer::save : choice == unsaved_choice::discard ? chain_answer::discard : chain_answer::cancel);
+		});
+	};
+	// The window's own save flow asks its questions (a file changed on disk, a migrated file's version) in its window: a chain save does not
+	// ask them for several documents at once, it leaves such a document unsaved and open.
+	ports.save = [this](document_id member) -> std::string {
+		document* open = m_context.documents().find(member);
+		if (!open) return {};
+		if (in_conflict(member)) return "the file changed on disk: save it from its own window (Reload / Overwrite)";
+		if (const auto window = m_windows.find(member); window != m_windows.end() && window->second.data->needs_version_confirmation()) {
+			return "the file is in an older version: save it from its own window to confirm the new one";
+		}
+		const save_result saved = open->save();
+		return saved.saved ? std::string{} : (saved.error.empty() ? std::string("not saved") : saved.error);
+	};
+	request_close_link(m_context.documents(), id, ports, [this](const std::string& why) {
+		egLOG_WARN("editor", "{}", why);
+		m_context.dialogs().message(message_level::error, why);
+	});
+	// No question was asked (nothing unsaved, or nothing to close): nothing is pending.
+	if (!*asked) m_chain_questions.erase(id);
 }
 
 void edt::data_document_host::show_error(document_id id, const std::string& text)

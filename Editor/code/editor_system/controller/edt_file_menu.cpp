@@ -362,7 +362,17 @@ void edt::file_menu::import_model()
 	options.start_path = std::filesystem::current_path();
 	options.extensions = { ".glb", ".obj", ".fbx", ".gltf" };
 	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
-		if (alive.lock()) invoke("file.import_model", json::object{ { "path", to_json_string(picked) } });
+		if (!alive.lock()) return;
+		if (!m_hooks.ask_model_settings) {
+			invoke("file.import_model", json::object{ { "path", to_json_string(picked) } });
+			return;
+		}
+		m_hooks.ask_model_settings(picked, [this, alive, picked](const model_import_settings& settings) {
+			if (!alive.lock()) return;
+			const json::object chosen{ { "normals", model_normals_name(settings.normals) },
+				{ "tangents", settings.tangents } };
+			invoke("file.import_model", json::object{ { "path", to_json_string(picked) }, { "settings", chosen } });
+		});
 	});
 }
 
@@ -576,6 +586,59 @@ void edt::file_menu::register_image_import()
 	action_ui ui;
 	ui.label = "Import Image";
 	m_registrations.push_back(m_actions.add(std::move(command), std::move(ui)));
+	register_image_reimport(settings_schema);
+}
+
+void edt::file_menu::register_image_reimport(const json::object& settings_schema)
+{
+	json::object reimport_settings = settings_schema;
+	reimport_settings["description"] = "Import settings (importer texture, version 1); a missing key keeps the value "
+		"the picture's .resource records. Unknown keys are refused.";
+	cmd::command_desc command;
+	command.id = "file.reimport_image";
+	command.summary = "Re-import Image";
+	command.mutates = true;
+	command.invoke = [this](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		image_reimport_request wanted;
+		if (const json::value* target = args.if_contains("target"); target && target->is_string()) {
+			wanted.target = std::string(target->as_string());
+		}
+		if (const json::value* path = args.if_contains("path"); path && path->is_string()) {
+			wanted.path = std::string(path->as_string());
+		}
+		if (const json::value* settings = args.if_contains("settings")) wanted.settings = *settings;
+		// Anyone but a person is denied by the importer (#1457).
+		const image_importer::started started = m_hooks.image_import->start_reimport(wanted, request.from);
+		if (!started.ok()) return action_result::failure(started.code, started.error);
+		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
+	};
+	command.args_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{
+			{ "target", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "The res:// tag of an imported picture in the project's own layer (.png, .jpg, .jpeg) "
+					"with its .resource (importer texture) and <name>.txm.desc beside it." } } },
+			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Absolute path of the new source picture, of the target's format (png for a png); "
+					"a regular file, not a link. Its bytes replace the picture's; both .resource files keep their "
+					"IDs. A person's action only for now: any other caller is denied." } } },
+			{ "settings", reimport_settings } } },
+		{ "required", json::array{ "target", "path" } },
+		{ "additionalProperties", false } };
+	command.result_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
+			{ "description", "The re-import job: job.get shows its progress and, when done, {image, resource, "
+				"texture, guid, texture_guid, settings_changed, texture_rewritten}." } } } } },
+		{ "additionalProperties", false } };
+	// Never offered to an agent, so nobody is asked about a call that would be refused anyway (#1457 lifts it).
+	command.category = cmd::agent_category::not_for_agents;
+	command.expose_as_tool = false;
+	command.starts_job = true;
+	action_ui ui;
+	ui.label = "Re-import Image";
+	m_registrations.push_back(m_actions.add(std::move(command), std::move(ui)));
 }
 
 void edt::file_menu::register_actions()
@@ -741,11 +804,14 @@ void edt::file_menu::register_actions()
 	import_command.invoke = [this, import_request_of](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const bool dialog = request.from.kind == cmd::origin_kind::ui && !args.contains("name")
-			&& !args.contains("folder") && !args.contains("settings");
+			&& !args.contains("folder");
 		if (dialog) {
-			// A person at the menu or a script of theirs with only a path: the dialog flow, as before.
+			// A person at the menu or a script of theirs with a path and maybe settings: the dialog flow.
 			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
-			m_hooks.import_model(from_json_string(args.at("path").as_string()));
+			const json::value* settings = args.if_contains("settings");
+			const model_settings_parse parsed = parse_model_settings(settings != nullptr ? *settings : json::value{});
+			if (!parsed.ok()) return action_result::failure(cmd::codes::invalid_args, parsed.error);
+			m_hooks.import_model(from_json_string(args.at("path").as_string()), parsed.settings);
 			return action_result::success();
 		}
 		// An agent, or a person naming the asset and its folder: no dialog, one background job.
@@ -763,8 +829,9 @@ void edt::file_menu::register_actions()
 					"link. An agent's import asks a person first, and its source must lie on a local fixed or "
 					"removable disk (no share, network drive or mount, no '..')." } } },
 			{ "name", json::object{ { "type", "string" }, { "minLength", 1 },
-				{ "description", "Asset name (default: the file name without extension). Giving it, or a folder, "
-					"imports without the dialog." } } },
+				{ "description", "Asset name (default: the file name without extension). A person's call with "
+					"neither name nor folder opens the editor's export dialog (with the settings given); giving "
+					"either imports without it." } } },
 			{ "folder", json::object{ { "type", "string" }, { "minLength", 1 },
 				{ "description", "Folder below res:// (default: assets/<name>). The import never overwrites an "
 					"existing file." } } },
@@ -774,7 +841,8 @@ void edt::file_menu::register_actions()
 					"and this token; a person is shown those files and decides." } } },
 			{ "settings", json::object{ { "type", "object" },
 				{ "description", "How the meshes are made; recorded in the .resource of the prefab. A missing key "
-					"takes its default; unknown keys are refused. A files_token holds for the same settings only." },
+					"takes its default; unknown keys are refused. A files_token holds for the same settings only. "
+					"They do not decide between the dialog and the background import: name and folder do." },
 				{ "properties", json::object{
 					{ "normals", json::object{ { "type", "string" }, { "enum", json::array{ "smooth", "flat" } },
 						{ "description", "smooth: averaged over the faces that share a vertex (default); flat: "
