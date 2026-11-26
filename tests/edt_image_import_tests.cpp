@@ -862,6 +862,8 @@ BOOST_AUTO_TEST_CASE(TheForm_ChangesSettingsAndNames_AndImports)
 	BOOST_CHECK(meta.meta->settings.at("mips").as_bool());
 }
 
+BOOST_AUTO_TEST_SUITE_END()
+
 BOOST_FIXTURE_TEST_SUITE(EdtImageReimportTests, reimport_fixture)
 
 BOOST_AUTO_TEST_CASE(AReimport_ReplacesTheBytes_BothSidecarsKeepTheirIds)
