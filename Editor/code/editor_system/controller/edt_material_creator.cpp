@@ -1,12 +1,27 @@
 #include "edt_material_creator.h"
 #include <snk/resource/res_free_name.h>
 #include <boost/json.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <utility>
 #include <vector>
 
 namespace json = boost::json;
+
+namespace
+{
+	// The browser's kind lookup lowercases the path, so a suffix written in any case is the kind's.
+	bool ends_with_ignoring_case(std::string_view text, std::string_view suffix)
+	{
+		if (text.size() < suffix.size()) {
+			return false;
+		}
+		const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+		const std::string_view tail = text.substr(text.size() - suffix.size());
+		return std::equal(tail.begin(), tail.end(), suffix.begin(), [&lower](char a, char b) { return lower(a) == lower(b); });
+	}
+}
 
 json::object edt::material_fields(const material_options& options)
 {
@@ -18,9 +33,58 @@ json::object edt::material_fields(const material_options& options)
 	return out;
 }
 
+edt::material_menu_item edt::material_menu_item_of(std::string_view kind)
+{
+	if (kind == k_shader_type) {
+		return material_menu_item::from_shader;
+	}
+	if (kind == k_material_type) {
+		return material_menu_item::variant;
+	}
+	return material_menu_item::none;
+}
+
+edt::material_menu_item edt::material_menu_item_of_type(std::string_view type)
+{
+	if (type == k_shader_type) {
+		return material_menu_item::from_shader;
+	}
+	if (type == k_material_type) {
+		return material_menu_item::variant;
+	}
+	return material_menu_item::none;
+}
+
+std::optional<edt::material_source> edt::material_creator::source_of(const res::tag& file, std::string_view type) const
+{
+	constexpr std::string_view protocol = "res://";
+	constexpr std::string_view plain = ".desc";
+	const std::string_view view = file.view();
+	if (!view.starts_with(protocol) || !ends_with_ignoring_case(view, plain)) {
+		return std::nullopt;
+	}
+	const std::string_view relative = view.substr(protocol.size());
+	const std::size_t slash = relative.rfind('/');
+	const std::string_view name = slash == std::string_view::npos ? relative : relative.substr(slash + 1);
+	const std::string own = m_names.suffix_of(type);
+	const std::size_t cut = !own.empty() && ends_with_ignoring_case(name, own) ? own.size() : plain.size();
+	if (name.size() <= cut) {
+		return std::nullopt;
+	}
+	return material_source{ .folder = slash == std::string_view::npos ? std::string{} : std::string(relative.substr(0, slash)),
+		.stem = std::string(name.substr(0, name.size() - cut)),
+		.file = std::string(name) };
+}
+
 std::string edt::material_creator::suggested_name(std::string_view folder) const
 {
-	if (!kind_problem().empty()) {
+	return suggested_name(folder, k_material_name, "-");
+}
+
+std::string edt::material_creator::suggested_name(std::string_view folder, std::string_view base,
+	std::string_view separator) const
+{
+	if (base.empty() || !kind_problem().empty()) {
 		return {};
 	}
 	const std::string own_suffix = suffix();
@@ -29,7 +93,7 @@ std::string edt::material_creator::suggested_name(std::string_view folder) const
 		const std::size_t slash = relative.rfind('/');
 		return !check(folder, slash == std::string_view::npos ? relative : relative.substr(slash + 1)).empty();
 	};
-	const res::free_name_result found = res::free_name(m_names.layers(), folder, k_material_name, own_suffix, "-", refused);
+	const res::free_name_result found = res::free_name(m_names.layers(), folder, base, own_suffix, separator, refused);
 	if (!found.ok() || found.name.size() <= own_suffix.size()) {
 		return {};
 	}
@@ -63,11 +127,45 @@ edt::document_creation edt::material_creator::create(std::string_view folder, st
 
 void edt::material_create_form::open(std::string folder, material_options options)
 {
+	std::string suggestion = m_creator.suggested_name(folder);
+	open(std::move(folder), std::move(options), std::move(suggestion), std::string(k_material_title));
+}
+
+void edt::material_create_form::open(std::string folder, material_options options, std::string suggestion, std::string title)
+{
+	m_title = std::move(title);
 	m_folder = std::move(folder);
 	m_options = std::move(options);
-	m_suggested = m_creator.suggested_name(m_folder);
+	m_suggested = std::move(suggestion);
 	m_name = m_suggested;
 	recheck();
+}
+
+bool edt::material_create_form::open_from_shader(const res::tag& shader)
+{
+	const std::optional<material_source> source = m_creator.source_of(shader, k_shader_type);
+	if (!source) {
+		return false;
+	}
+	material_options options;
+	options.shader = shader;
+	std::string suggestion = m_creator.suggested_name(source->folder, source->stem, "-");
+	open(source->folder, std::move(options), std::move(suggestion), std::format("{} from {}", k_material_title, source->file));
+	return true;
+}
+
+bool edt::material_create_form::open_variant_of(const res::tag& material)
+{
+	const std::optional<material_source> source = m_creator.source_of(material, k_material_type);
+	if (!source) {
+		return false;
+	}
+	material_options options;
+	options.parent = material;
+	// As prefab_variant_creator::suggested_name: "<stem>_variant", then "<stem>_variant2", no separator before the number.
+	std::string suggestion = m_creator.suggested_name(source->folder, std::format("{}_variant", source->stem), "");
+	open(source->folder, std::move(options), std::move(suggestion), std::format("Material Variant of {}", source->file));
+	return true;
 }
 
 void edt::material_create_form::recheck()
