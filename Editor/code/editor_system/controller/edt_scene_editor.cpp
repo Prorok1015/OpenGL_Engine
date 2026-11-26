@@ -293,7 +293,8 @@ bool edt::scene_editor::write_live_transforms_into(std::vector<scn::world_desc>&
 
 	auto& children = worlds[static_cast<std::size_t>(m_state.active_world_idx)].get_root().children;
 	auto& reg = ctx_mgr->level_set().get(*world_name).state();
-	reg.view<scn::node_id_component, scn::local_transform>().each(
+	// An animated node is posed by its player every frame: the pose is not level data, the file keeps the node as authored.
+	reg.view<scn::node_id_component, scn::local_transform>(entt::exclude<scn::animated_node_component>).each(
 		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
 			if (id.path.empty()) return;
 			// A node inside an instance is placed by its override records, not by the live transform.
