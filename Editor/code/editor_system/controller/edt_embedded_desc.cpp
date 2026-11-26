@@ -1,5 +1,7 @@
 #include "edt_embedded_desc.h"
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema.h>
+#include <snk/resource/res_diagnostics.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -59,6 +61,37 @@ namespace
 		return json::value(x);
 	}
 
+	// The value at `pointer` taken out of `root`, and the objects that were left empty on the way.
+	void remove_with_empty_parents(json::value& root, const std::string& pointer)
+	{
+		desc::json_pointer_remove(root, pointer);
+		for (std::string parent = pointer.substr(0, pointer.rfind('/')); !parent.empty(); parent = parent.substr(0, parent.rfind('/'))) {
+			const json::value* left = desc::json_pointer_get(root, parent);
+			if (!left || !left->is_object() || !left->as_object().empty()) break;
+			desc::json_pointer_remove(root, parent);
+		}
+	}
+
+	// A copy with the keys of every object below in alphabetical order and the numbers made canonical: what no field of the schema names has one form too.
+	json::value sorted(const json::value& value)
+	{
+		if (value.is_number()) return number(value, numbers::as_is);
+		if (value.is_object()) {
+			std::vector<std::string> keys;
+			for (const auto& member : value.as_object()) keys.emplace_back(member.key());
+			std::ranges::sort(keys);
+			json::object out;
+			for (const std::string& key : keys) out[key] = sorted(value.as_object().at(key));
+			return out;
+		}
+		if (value.is_array()) {
+			json::array out;
+			for (const json::value& item : value.as_array()) out.push_back(sorted(item));
+			return out;
+		}
+		return value;
+	}
+
 	// What the value at a field is read as: the schema of the object it holds, the numbers of its kind, and whether it is a reference.
 	struct context
 	{
@@ -102,23 +135,28 @@ namespace
 				inside = context{};
 				inside.schema = schemas.find(std::string_view(type->as_string()));
 			}
-			json::object out;
-			std::set<std::string> done;
-			const auto take = [&](const std::string& key, const desc::field_schema* field) {
-				const auto found = object.find(key);
-				if (found == object.end() || !done.insert(key).second) return;
-				out[key] = value(found->value(), of_field(field));
-			};
+			// The key of a field is a JSON pointer (`/shininess`, `/uniforms/albedo`): the fields come in the order of the schema, each placed by its
+			// pointer, and what no field names follows, alphabetically.
+			const json::value source(object);
+			json::value left(object);
+			json::value out = json::object{};
+			// The header of an inline desc comes first, as the files write it.
+			for (const char* header : { "__type", "__version", "__parent", "__guid" }) {
+				if (const json::value* held = object.if_contains(header)) {
+					out.as_object()[header] = *held;
+					left.as_object().erase(header);
+				}
+			}
 			if (inside.schema) {
-				for (const desc::field_schema& field : inside.schema->fields) take(field.key, &field);
+				for (const desc::field_schema& field : inside.schema->fields) {
+					const json::value* held = desc::json_pointer_get(source, field.key);
+					if (!held) continue;
+					desc::json_pointer_set(out, field.key, value(*held, of_field(&field)));
+					remove_with_empty_parents(left, field.key);
+				}
 			}
-			std::vector<std::string> rest;
-			for (const auto& member : object) {
-				const std::string key(member.key());
-				if (!done.contains(key)) rest.push_back(key);
-			}
-			std::ranges::sort(rest);
-			for (const std::string& key : rest) take(key, nullptr);
+			json::object& result = out.as_object();
+			if (left.is_object()) desc::json_deep_merge(result, sorted(left).as_object());
 			return out;
 		}
 	};
@@ -130,8 +168,10 @@ namespace
 		return type && type->is_string();
 	}
 
-	// What `own` (already canonical) sets over `base` (canonical too), keeping the order of `own`.
-	json::object diff(const desc::schema_registry& schemas, const desc::type_schema* schema, const json::object& own, const json::object& base, int depth)
+	// What `own` (already canonical) sets over `base` (canonical too), keeping the order of `own`. `prefix`: the pointer of `own` below the object the
+	// fields of `schema` are keyed from (a field's key is a pointer such as `/uniforms/albedo`).
+	json::object diff(const desc::schema_registry& schemas, const desc::type_schema* schema, const json::object& own, const json::object& base,
+		const std::string& prefix, int depth)
 	{
 		json::object out;
 		for (const auto& member : own) {
@@ -139,15 +179,18 @@ namespace
 			const json::value* held = nullptr;
 			if (const auto was = base.find(key); was != base.end()) held = &was->value();
 			if (held && *held == member.value()) continue;
-			const desc::field_schema* field = schema ? schema->find_field(key) : nullptr;
+			const std::string pointer = prefix + "/" + res::json_pointer_token(key);
+			const desc::field_schema* field = schema ? schema->find_field(pointer) : nullptr;
 			const bool whole = !member.value().is_object() || !held || !held->is_object() || is_inline_desc(member.value()) || is_inline_desc(*held)
-				|| (field && (field->kind == desc::field_kind::map || is_tag_kind(field->kind))) || depth >= 8;
+				|| (field && (field->kind == desc::field_kind::map || is_tag_kind(field->kind) || field->kind == desc::field_kind::custom)) || depth >= 8;
 			if (whole) {
 				out[key] = member.value();
 				continue;
 			}
-			const desc::type_schema* inner = field && field->kind == desc::field_kind::structure ? schemas.find(field->ref_type) : nullptr;
-			json::object nested = diff(schemas, inner, member.value().as_object(), held->as_object(), depth + 1);
+			// Into a structure the keys of its own schema start again from its root; into a plain container the same schema goes on one pointer deeper.
+			const desc::type_schema* inner = field && field->kind == desc::field_kind::structure ? schemas.find(field->ref_type) : schema;
+			const std::string inner_prefix = field && field->kind == desc::field_kind::structure ? std::string{} : pointer;
+			json::object nested = diff(schemas, inner, member.value().as_object(), held->as_object(), inner_prefix, depth + 1);
 			if (!nested.empty()) out[key] = std::move(nested);
 		}
 		return out;
@@ -173,6 +216,6 @@ boost::json::object edt::canonical_embedded_value(const desc::schema_registry& s
 	out["__type"] = schema.name;
 	out["__version"] = version;
 	if (!parent.empty()) out["__parent"] = std::string(parent);
-	for (auto& member : diff(schemas, &schema, own_form, base_form, 0)) out[member.key()] = std::move(member.value());
+	for (auto& member : diff(schemas, &schema, own_form, base_form, std::string{}, 0)) out[member.key()] = std::move(member.value());
 	return out;
 }

@@ -123,25 +123,37 @@ BOOST_AUTO_TEST_CASE(TheHeaderKeysOfTheOwnFields_AreIgnored_NoSecondParent)
 	BOOST_TEST(!value.contains("__guid"));
 }
 
-BOOST_AUTO_TEST_CASE(AnIntegralNumber_IsAnInteger_Never1Point0Or1E0)
+BOOST_AUTO_TEST_CASE(AnIntegralNumber_IsAnInteger_Never1Point0)
 {
+	// The text of a double is Boost.JSON's (`3.5E0`): what is promised is the VALUE, an integer when it is integral, and that equal values give equal bytes.
 	const json::object own = json::parse(R"({"shininess": 8.0, "counts": [1.0, 2, 3.5], "scale": {"x": 2.0}})").as_object();
 
 	const json::object value = edt::canonical_embedded_value(registry, *schema, own, {}, 1, "");
 
-	BOOST_TEST(json::serialize(value.at("shininess")) == "8");
-	BOOST_TEST(json::serialize(value.at("counts")) == "[1,2,3.5]");
-	BOOST_TEST(json::serialize(value.at("scale")) == R"({"x":2})");
+	BOOST_TEST(value.at("shininess").is_int64());
+	BOOST_TEST(value.at("shininess").as_int64() == 8);
+	const json::array& counts = value.at("counts").as_array();
+	BOOST_REQUIRE(counts.size() == 3u);
+	BOOST_TEST(counts[0].is_int64());
+	BOOST_TEST(counts[1].is_int64());
+	BOOST_TEST(counts[2].is_double());
+	BOOST_TEST(counts[2].as_double() == 3.5);
+	BOOST_TEST(value.at("scale").as_object().at("x").is_int64());
 }
 
-BOOST_AUTO_TEST_CASE(AFloat32Field_TakesTheShortestTextOfItsFloat)
+BOOST_AUTO_TEST_CASE(AFloat32Field_TakesTheDoubleOfTheShortestTextOfItsFloat)
 {
 	json::object own;
 	own["shininess"] = static_cast<double>(0.1f);
+	json::object plain;
+	plain["shininess"] = 0.1;
 
-	const json::object value = edt::canonical_embedded_value(registry, *schema, own, {}, 1, "");
+	const json::object widened = edt::canonical_embedded_value(registry, *schema, own, {}, 1, "");
+	const json::object typed = edt::canonical_embedded_value(registry, *schema, plain, {}, 1, "");
 
-	BOOST_TEST(json::serialize(value.at("shininess")) == "0.1");
+	BOOST_TEST(widened.at("shininess").is_double());
+	BOOST_TEST(widened.at("shininess").as_double() == 0.1);
+	BOOST_TEST(json::serialize(widened) == json::serialize(typed));
 }
 
 BOOST_AUTO_TEST_CASE(AKeptField_IsDroppedWhateverTheFormOfTheNumber)

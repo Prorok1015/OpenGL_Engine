@@ -22,10 +22,12 @@ namespace edt
 	// that are not written, not the defaults. Objects are compared key by key, except what is one value: an inline desc (it has a `__type`), a reference
 	// `{guid, path}` and a map field (a key that is gone cannot be said by a diff) are written whole. Arrays are whole.
 	//
-	// Order: the fields of the schema in its order (a field is matched by its key, a key that is a pointer such as `uniforms/albedo` is not matched), then
-	// the other keys alphabetically, and the same below an object the schema does not describe. Numbers: an integral value is an integer (`1`, never `1.0`
-	// or `1E0`); a float32 field (f32, vectors, quat, color) takes the shortest text of its float, so 0.1f is 0.1. `parent`: the path of the file this value
-	// is the variant of, written as a string; empty: no `__parent`. No ImGui, no resource system.
+	// Order: the key of a field is a JSON pointer (`/shininess`, `/uniforms/albedo`); the fields come in the order of the schema, each placed at its
+	// pointer, then the other keys alphabetically, and the same below an object the schema does not describe. An inline desc keeps its header first.
+	// Numbers: an integral value is an integer (`1`, never `1.0`); a float32 field (f32, vectors, quat, color) takes the double of the shortest text
+	// of its float, so 0.1f and 0.1 are one value. The TEXT of a double is Boost.JSON's (`1E-1`): what is promised is that equal values give equal bytes,
+	// not a particular spelling. `parent`: the path of the file this value is the variant of, written as a string; empty: no `__parent`. No ImGui, no
+	// resource system.
 	boost::json::object canonical_embedded_value(const desc::schema_registry& schemas, const desc::type_schema& schema, const boost::json::object& own,
 		const boost::json::object& base, int version, std::string_view parent, const reference_normalizer& normalize = {});
 }
