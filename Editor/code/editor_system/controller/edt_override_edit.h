@@ -125,6 +125,16 @@ namespace edt::override_edit
 		const boost::json::object& base, const boost::json::object& edited,
 		const desc::desc_system* descs = nullptr, const desc::type_schema* schema = nullptr);
 
+	// Sets `pointer` of `component` to `value` WHOLE, as ONE `set` record (EPIC-82 8.1, a material of an instance: `/material` becomes an embedded
+	// desc `{__type, __version, __parent, ...}` or goes back to a tag string). The earlier `set` records of (target, component) at `pointer` or
+	// below it go; the others stay, and the new one is last so it applies over them. A record below a string cannot be applied (json_pointer_set
+	// refuses it), so there never is one for the same pointer. `version`: the version of the component's type (descs->current_version), 0: as written.
+	void set_whole_value(prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer,
+		boost::json::value value, int version);
+
+	// The value of the last `set` record of (target, component) at exactly `pointer`; null when there is none.
+	const boost::json::value* whole_value(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer);
+
 	// The pointers of the reference fields of `edited` (a component of `schema`) whose value goes whole, not merged: a
 	// {guid, path} reference, or any object where `base` holds one. Read through structures, maps of them and inline
 	// descs, by every key a field is read under.

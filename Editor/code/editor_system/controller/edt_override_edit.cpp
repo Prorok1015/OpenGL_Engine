@@ -1,4 +1,5 @@
 #include "edt_override_edit.h"
+#include <snk/common/engine_assert.h>
 #include <format>
 #include <snk/desc/desc_schema_ops.h>
 #include "edt_reference.h"
@@ -93,7 +94,12 @@ namespace
 		if (depth >= k_max_depth) return;
 		const auto whole_or_into = [&](const json::value& held, const std::string& where, const auto& into) {
 			const json::value* was = desc::json_pointer_get(base, where);
-			if (is_reference(held) || (was && is_reference(*was))) {
+			// An inline desc where the base has a tag, a reference or nothing is ONE value too (EPIC-82 8.1: the record of an embedded material is a
+			// single `set /material`): merged key by key it would put an object into a string, and the next edit of the component would lose the record.
+			const json::value* type = held.is_object() ? held.as_object().if_contains("__type") : nullptr;
+			const bool inline_desc = type && type->is_string();
+			const bool base_is_inline = was && was->is_object() && !is_reference(*was);
+			if (is_reference(held) || (was && is_reference(*was)) || (inline_desc && !base_is_inline)) {
 				out.push_back(where);
 				return;
 			}
@@ -666,6 +672,31 @@ void edt::override_edit::write_component(
 	}
 	// After the record of the whole component: applied later, each sets its value over what that one merged.
 	for (scn::override_record& record : whole) owner.overrides.push_back(std::move(record));
+}
+
+void edt::override_edit::set_whole_value(prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer,
+	json::value value, int version)
+{
+	ASSERT_MSG(!pointer.empty() && pointer.front() == '/', "set_whole_value: the pointer of a field starts with '/' (an empty one is the whole component: write_component)");
+	const std::string below = pointer + "/";
+	std::erase_if(owner.overrides, [&] (const scn::override_record& r) {
+		return same_target(r, target, component) && !r.path.empty() && (r.path == pointer || r.path.starts_with(below));
+	});
+	scn::override_record record;
+	record.target.assign(target.begin(), target.end());
+	record.component = component;
+	record.path = pointer;
+	record.value = std::move(value);
+	record.type_version = version;
+	owner.overrides.push_back(std::move(record));
+}
+
+const json::value* edt::override_edit::whole_value(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer)
+{
+	for (auto at = owner.overrides.rbegin(); at != owner.overrides.rend(); ++at) {
+		if (same_target(*at, target, component) && at->path == pointer) return &at->value;
+	}
+	return nullptr;
 }
 
 void edt::override_edit::write_transform(

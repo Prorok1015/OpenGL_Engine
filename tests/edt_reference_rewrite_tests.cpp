@@ -105,4 +105,24 @@ BOOST_AUTO_TEST_CASE(ReferencesThatAlreadyHoldTheNewPath_NeedNoWrite)
 	BOOST_TEST((outcome.status == edt::rewrite_status::nothing_to_do));
 }
 
+BOOST_AUTO_TEST_CASE(TheParentOfAnEmbeddedMaterial_InARecord_GetsTheNewPath_AndTheRestOfTheRecordStays)
+{
+	const std::string text = canonical(R"({
+		"__type": "level_desc",
+		"children": [ { "overrides": [ { "target": [], "component": "mesh_node_desc", "path": "/material",
+			"value": { "__type": "material_desc", "__parent": "res://mat/face.mat.desc", "defines": [ "FOIL" ] } } ] } ]
+	})");
+	const std::vector<std::string> pointers{ "/children/0/overrides/0/value/__parent" };
+
+	const edt::rewrite_outcome outcome = edt::rewrite_references(text, pointers, "res://mat/face.mat.desc", "res://mat/skin/face.mat.desc", false);
+
+	BOOST_REQUIRE_MESSAGE((outcome.status == edt::rewrite_status::rewritten), outcome.reason);
+	const json::value after = json::parse(outcome.text);
+	const json::value& record = after.at("children").as_array().at(0).at("overrides").as_array().at(0);
+	BOOST_TEST(std::string(record.at("value").at("__parent").as_string().c_str()) == "res://mat/skin/face.mat.desc");
+	BOOST_TEST(std::string(record.at("value").at("__type").as_string().c_str()) == "material_desc");
+	BOOST_TEST(record.at("value").at("defines").as_array().size() == 1u);
+	BOOST_TEST(std::string(record.at("path").as_string().c_str()) == "/material");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
