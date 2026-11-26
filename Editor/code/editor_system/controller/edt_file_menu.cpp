@@ -586,6 +586,56 @@ void edt::file_menu::register_image_import()
 	action_ui ui;
 	ui.label = "Import Image";
 	m_registrations.push_back(m_actions.add(std::move(command), std::move(ui)));
+	register_image_reimport(settings_schema);
+}
+
+void edt::file_menu::register_image_reimport(const json::object& settings_schema)
+{
+	cmd::command_desc command;
+	command.id = "file.reimport_image";
+	command.summary = "Re-import Image";
+	command.mutates = true;
+	command.invoke = [this](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		image_reimport_request wanted;
+		if (const json::value* target = args.if_contains("target"); target && target->is_string()) {
+			wanted.target = std::string(target->as_string());
+		}
+		if (const json::value* path = args.if_contains("path"); path && path->is_string()) {
+			wanted.path = std::string(path->as_string());
+		}
+		if (const json::value* settings = args.if_contains("settings")) wanted.settings = *settings;
+		// Anyone but a person is denied by the importer (#1457).
+		const image_importer::started started = m_hooks.image_import->start_reimport(wanted, request.from);
+		if (!started.ok()) return action_result::failure(started.code, started.error);
+		return action_result::success(json::object{ { "job", static_cast<std::int64_t>(started.job) } });
+	};
+	command.args_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{
+			{ "target", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "res:// tag of an imported picture in the project's own layer (.png, .jpg, .jpeg) "
+					"with its .resource (importer texture) and <name>.txm.desc beside it." } } },
+			{ "path", json::object{ { "type", "string" }, { "minLength", 1 },
+				{ "description", "Absolute path of the new source picture, of the target's format (png for a png); "
+					"a regular file, not a link. Its bytes replace the picture's; both .resource files keep their "
+					"IDs. A person's action only for now: any other caller is denied." } } },
+			{ "settings", settings_schema } } },
+		{ "required", json::array{ "target", "path" } },
+		{ "additionalProperties", false } };
+	command.result_schema = json::object{
+		{ "type", "object" },
+		{ "properties", json::object{ { "job", json::object{ { "type", "integer" }, { "minimum", 0 },
+			{ "description", "The re-import job: job.get shows its progress and, when done, {image, resource, "
+				"texture, guid, texture_guid, settings_changed, texture_rewritten}." } } } } },
+		{ "additionalProperties", false } };
+	// Never offered to an agent, so nobody is asked about a call that would be refused anyway (#1457 lifts it).
+	command.category = cmd::agent_category::not_for_agents;
+	command.expose_as_tool = false;
+	command.starts_job = true;
+	action_ui ui;
+	ui.label = "Re-import Image";
+	m_registrations.push_back(m_actions.add(std::move(command), std::move(ui)));
 }
 
 void edt::file_menu::register_actions()

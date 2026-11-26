@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -99,7 +100,10 @@ struct image_fixture
 		};
 		result.now = [this] { return clock; };
 		result.max_agent_bytes = 4096;
-		result.fail_step = [this](std::string_view step) { return step == failing_step; };
+		result.fail_step = [this](std::string_view step) {
+			if (on_step) on_step(step);
+			return step == failing_step;
+		};
 		return result;
 	}
 
@@ -156,6 +160,8 @@ struct image_fixture
 	std::unique_ptr<edt::image_importer> importer;
 	std::optional<std::string> blocked;
 	std::string failing_step;
+	// Runs at each write step before it is failed or done: a test changes a file there.
+	std::function<void(std::string_view)> on_step;
 	std::vector<res::tag> reported;
 	std::chrono::steady_clock::time_point clock{};
 	const cmd::origin agent = cmd::origin::agent("session-1");
@@ -166,6 +172,90 @@ struct image_fixture
 	int drive_type_calls = 0;
 	int mount_table_calls = 0;
 };
+
+// Another whole 2x2 RGBA picture: the new source of a re-import.
+std::string other_png()
+{
+	const std::vector<unsigned char> rows{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 9, 10, 11, 12, 13, 14, 15, 16 };
+	const std::vector<std::byte> bytes = test_util::png_bomb::png_rgba(2, 2, test_util::png_bomb::zlib_stream(rows, 0));
+	return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+// A picture imported with the defaults (res://textures/rock.png) and a new source beside the old one (#1194).
+template <class Base>
+struct reimport_of : Base
+{
+	reimport_of()
+	{
+		first = this->imported(this->request());
+		this->reported.clear();
+		other = fs::weakly_canonical(this->dir.write("outside/new.png", other_text));
+	}
+
+	edt::image_reimport_request reimport(json::value settings = nullptr,
+		std::string target = "res://textures/rock.png") const
+	{
+		edt::image_reimport_request out;
+		out.target = std::move(target);
+		out.path = other.string();
+		out.settings = std::move(settings);
+		return out;
+	}
+
+	std::optional<edt::job_service::job_info> run_reimport(const edt::image_reimport_request& wanted)
+	{
+		const edt::image_importer::started started = this->importer->start_reimport(wanted, cmd::origin::ui());
+		BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+		test_util::pump(this->tasks);
+		return this->jobs.info(started.job);
+	}
+
+	json::object reimported(const edt::image_reimport_request& wanted)
+	{
+		const auto info = run_reimport(wanted);
+		BOOST_REQUIRE(info.has_value());
+		BOOST_REQUIRE_MESSAGE(info->status == edt::job_status::done, info->error);
+		BOOST_REQUIRE(info->result.has_value());
+		return info->result->as_object();
+	}
+
+	std::string file(std::string_view relative) const { return read_file(this->top() / "textures" / relative); }
+
+	// The four files as they are now.
+	std::vector<std::string> files() const
+	{
+		return { file("rock.png"), file("rock.png.resource"), file("rock.png.txm.desc"),
+			file("rock.png.txm.desc.resource") };
+	}
+
+	// A person's call that is refused before anything is written: its code.
+	std::string refused(const edt::image_reimport_request& wanted, const cmd::origin& from = cmd::origin::ui())
+	{
+		const std::vector<std::string> before = files();
+		const edt::image_importer::started started = this->importer->start_reimport(wanted, from);
+		BOOST_CHECK(!started.ok());
+		BOOST_CHECK_EQUAL(started.job, 0u);
+		last_error = started.error;
+		test_util::pump(this->tasks);
+		BOOST_CHECK(files() == before);
+		BOOST_CHECK(this->reported.empty());
+		return started.code;
+	}
+
+	void rewrite_meta(const std::function<void(json::object&)>& change)
+	{
+		json::object root = json::parse(file("rock.png.resource")).as_object();
+		change(root);
+		this->dir.write("project/res/textures/rock.png.resource", json::serialize(root));
+	}
+
+	const std::string other_text = other_png();
+	fs::path other;
+	json::object first;
+	std::string last_error;
+};
+
+using reimport_fixture = reimport_of<image_fixture>;
 
 // A path on a network volume as the classifier is faked for this platform.
 std::string remote_volume_path(image_fixture& fixture)
@@ -751,6 +841,248 @@ BOOST_AUTO_TEST_CASE(TheForm_ChangesSettingsAndNames_AndImports)
 	BOOST_CHECK(meta.meta->settings.at("mips").as_bool());
 }
 
+BOOST_FIXTURE_TEST_SUITE(EdtImageReimportTests, reimport_fixture)
+
+BOOST_AUTO_TEST_CASE(AReimport_ReplacesTheBytes_BothSidecarsKeepTheirIds)
+{
+	const std::vector<std::string> before = files();
+	const json::object done = reimported(reimport());
+	BOOST_CHECK(file("rock.png") == other_text);
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc.resource"), before[3]);
+	BOOST_CHECK_EQUAL(text_of(done.at("image")), "res://textures/rock.png");
+	BOOST_CHECK_EQUAL(text_of(done.at("resource")), "res://textures/rock.png.resource");
+	BOOST_CHECK_EQUAL(text_of(done.at("texture")), "res://textures/rock.png.txm.desc");
+	BOOST_CHECK_EQUAL(text_of(done.at("guid")), text_of(first.at("guid")));
+	BOOST_CHECK_EQUAL(text_of(done.at("texture_guid")), text_of(first.at("texture_guid")));
+	BOOST_CHECK(!done.at("settings_changed").as_bool());
+	BOOST_CHECK(!done.at("texture_rewritten").as_bool());
+	// Only what was written is reported.
+	BOOST_REQUIRE_EQUAL(reported.size(), 1u);
+	BOOST_CHECK_EQUAL(reported[0].view(), "res://textures/rock.png");
+	BOOST_CHECK(fs::is_empty(lower()));
+}
+
+BOOST_AUTO_TEST_CASE(TheAssetDatabase_KeepsTheIds_AcrossAReimport)
+{
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ lower(), top() });
+	db->rebuild();
+	test_util::pump(tasks);
+	reimported(reimport(json::parse(R"({"wrap":"repeat"})")));
+	test_util::pump(tasks);
+	db->poll(true);
+	test_util::pump(tasks);
+	const edt::asset_record* record = db->find(res::tag::make("textures/rock.png"));
+	BOOST_REQUIRE(record != nullptr && record->id.has_value());
+	BOOST_CHECK_EQUAL(res::to_text(*record->id), text_of(first.at("guid")));
+	const edt::asset_record* desc = db->find(res::tag::make("textures/rock.png.txm.desc"));
+	BOOST_REQUIRE(desc != nullptr && desc->id.has_value());
+	BOOST_CHECK_EQUAL(res::to_text(*desc->id), text_of(first.at("texture_guid")));
+
+	edt::asset_database walked(jobs, &events, std::vector<fs::path>{ lower(), top() });
+	walked.rebuild();
+	test_util::pump(tasks);
+	const edt::asset_record* again = walked.find(res::tag::make("textures/rock.png"));
+	BOOST_REQUIRE(again != nullptr && again->id.has_value());
+	BOOST_CHECK_EQUAL(res::to_text(*again->id), text_of(first.at("guid")));
+}
+
+BOOST_AUTO_TEST_CASE(ChangedSettings_RewriteTheResourceAndTheTextureDesc_KeepTheGuid)
+{
+	const std::vector<std::string> before = files();
+	const json::object done = reimported(reimport(json::parse(R"({"wrap":"repeat","filter":"linear","mips":true})")));
+	BOOST_CHECK(done.at("settings_changed").as_bool());
+	BOOST_CHECK(done.at("texture_rewritten").as_bool());
+	const std::string meta_text = file("rock.png.resource");
+	const res::asset_meta_result meta = res::read_asset_meta(meta_text);
+	BOOST_REQUIRE(meta);
+	BOOST_CHECK_EQUAL(res::to_text(meta.meta->guid), text_of(first.at("guid")));
+	BOOST_CHECK_EQUAL(meta.meta->importer, "texture");
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("wrap")), "repeat");
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("filter")), "linear");
+	BOOST_CHECK(meta.meta->settings.at("mips").as_bool());
+	BOOST_CHECK_EQUAL(res::write_asset_meta(*meta.meta), meta_text);
+	const json::object desc = json::parse(file("rock.png.txm.desc")).as_object();
+	BOOST_CHECK_EQUAL(text_of(desc.at("header").as_object().at("wrap")), "repeat");
+	BOOST_CHECK_EQUAL(text_of(desc.at("header").as_object().at("min")), "linear_mipmap_nearest");
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc.resource"), before[3]);
+	BOOST_REQUIRE_EQUAL(reported.size(), 3u);
+	BOOST_CHECK_EQUAL(reported[0].view(), "res://textures/rock.png.resource");
+	BOOST_CHECK_EQUAL(reported[1].view(), "res://textures/rock.png");
+	BOOST_CHECK_EQUAL(reported[2].view(), "res://textures/rock.png.txm.desc");
+}
+
+BOOST_AUTO_TEST_CASE(NullSettings_KeepTheRecordedOnes_AndTheirFiles)
+{
+	reimported(reimport(json::parse(R"({"filter":"linear"})")));
+	const std::vector<std::string> before = files();
+	reported.clear();
+	const json::object done = reimported(reimport());
+	BOOST_CHECK(!done.at("settings_changed").as_bool());
+	BOOST_CHECK(!done.at("texture_rewritten").as_bool());
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
+	const res::asset_meta_result meta = res::read_asset_meta(file("rock.png.resource"));
+	BOOST_REQUIRE(meta);
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("filter")), "linear");
+	// The same settings given again are no change either.
+	reimported(reimport(json::parse(R"({"version":1,"filter":"linear"})")));
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
+}
+
+BOOST_AUTO_TEST_CASE(AnyoneButAPerson_IsDenied)
+{
+	BOOST_CHECK_EQUAL(refused(reimport(), agent), cmd::codes::denied);
+	BOOST_CHECK_MESSAGE(last_error.find("#1457") != std::string::npos, last_error);
+	BOOST_CHECK_EQUAL(refused(reimport(), cmd::origin::test()), cmd::codes::denied);
+	BOOST_CHECK(!importer->resolve_reimport(reimport(), agent).ok());
+}
+
+BOOST_AUTO_TEST_CASE(APictureWithoutItsResourceOrTextureDesc_IsRefused)
+{
+	const std::string meta_text = file("rock.png.resource");
+	fs::remove(top() / "textures" / "rock.png.resource");
+	BOOST_CHECK_EQUAL(importer->resolve_reimport(reimport(), cmd::origin::ui()).code, cmd::codes::not_found);
+	BOOST_CHECK(file("rock.png") == png_text);
+	dir.write("project/res/textures/rock.png.resource", meta_text);
+	fs::remove(top() / "textures" / "rock.png.txm.desc");
+	BOOST_CHECK_EQUAL(importer->resolve_reimport(reimport(), cmd::origin::ui()).code, cmd::codes::not_found);
+	BOOST_CHECK(file("rock.png") == png_text);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceNotInTheEditorsForm_IsRefused)
+{
+	dir.write("project/res/textures/rock.png.resource", file("rock.png.resource") + "\n");
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("not in the form") != std::string::npos, last_error);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceOfANewerFormat_IsRefused)
+{
+	rewrite_meta([](json::object& root) { root["__version"] = 99; });
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("newer editor") != std::string::npos, last_error);
+}
+
+BOOST_AUTO_TEST_CASE(AResourceOfAnotherImporterOrWithUnknownSettings_IsRefused)
+{
+	const std::string kept = file("rock.png.resource");
+	res::asset_meta meta = *res::read_asset_meta(kept).meta;
+	meta.importer = "model";
+	dir.write("project/res/textures/rock.png.resource", res::write_asset_meta(meta));
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("model") != std::string::npos, last_error);
+
+	meta.importer = "texture";
+	meta.settings["srgb"] = true;
+	dir.write("project/res/textures/rock.png.resource", res::write_asset_meta(meta));
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("srgb") != std::string::npos, last_error);
+}
+
+BOOST_AUTO_TEST_CASE(APngTarget_TakesNoJpegSource)
+{
+	edt::image_reimport_request wanted = reimport();
+	wanted.path = fs::weakly_canonical(dir.write("outside/new.jpg", "\xFF\xD8\xFF")).string();
+	BOOST_CHECK_EQUAL(refused(wanted), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("PNG") != std::string::npos, last_error);
+}
+
+BOOST_AUTO_TEST_CASE(APictureOfALowerLayer_OrNoPicture_IsRefused)
+{
+	dir.write("engine/textures/old.png", png_text);
+	BOOST_CHECK_EQUAL(refused(reimport(nullptr, "res://textures/old.png")), cmd::codes::invalid_args);
+	BOOST_CHECK_MESSAGE(last_error.find("layer") != std::string::npos, last_error);
+	BOOST_CHECK(read_file(lower() / "textures" / "old.png") == png_text);
+	BOOST_CHECK_EQUAL(refused(reimport(nullptr, "res://textures/none.png")), cmd::codes::not_found);
+	BOOST_CHECK_EQUAL(refused(reimport(nullptr, "res://textures/rock.png.txm.desc")), cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(refused(reimport(nullptr, "engine://textures/rock.png")), cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(ABlocker_IsBusy)
+{
+	blocked = "Stop Play to import.";
+	BOOST_CHECK_EQUAL(refused(reimport()), cmd::codes::busy);
+}
+
+BOOST_AUTO_TEST_CASE(APictureChangedBeforeItsWrite_IsNotOverwritten_AndTheResourceIsPutBack)
+{
+	const std::vector<std::string> before = files();
+	on_step = [this](std::string_view step) {
+		if (step == "reimport_image") dir.write("project/res/textures/rock.png", "someone else's");
+	};
+	const auto info = run_reimport(reimport(json::parse(R"({"wrap":"repeat"})")));
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_MESSAGE(info->error.find("changed since it was read") != std::string::npos, info->error);
+	BOOST_CHECK_EQUAL(file("rock.png"), "someone else's");
+	BOOST_CHECK_EQUAL(file("rock.png.resource"), before[1]);
+	BOOST_CHECK_EQUAL(file("rock.png.txm.desc"), before[2]);
+	BOOST_CHECK(reported.empty());
+}
+
+BOOST_AUTO_TEST_CASE(APictureChangedAfterTheStart_FailsTheJob)
+{
+	const edt::image_importer::started started = importer->start_reimport(reimport(), cmd::origin::ui());
+	BOOST_REQUIRE_MESSAGE(started.ok(), started.error);
+	dir.write("project/res/textures/rock.png", "someone else's");
+	test_util::pump(tasks);
+	const auto info = jobs.info(started.job);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK_EQUAL(file("rock.png"), "someone else's");
+	BOOST_CHECK(reported.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AFailureAtTheTextureStep_PutsThePictureAndItsResourceBack)
+{
+	const std::vector<std::string> before = files();
+	failing_step = "reimport_texture";
+	const auto info = run_reimport(reimport(json::parse(R"({"mips":true})")));
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK(files() == before);
+	BOOST_CHECK(reported.empty());
+	BOOST_CHECK_MESSAGE(info->error.find(dir.path().generic_string()) == std::string::npos, info->error);
+}
+
+BOOST_AUTO_TEST_CASE(BytesThatAreNoPicture_WriteNothing)
+{
+	const std::vector<std::string> before = files();
+	dir.write("outside/new.png", "not a picture");
+	const auto info = run_reimport(reimport());
+	BOOST_REQUIRE(info.has_value());
+	BOOST_CHECK(info->status == edt::job_status::failed);
+	BOOST_CHECK(files() == before);
+}
+
+BOOST_AUTO_TEST_CASE(TheForm_InReimportMode_StartsFromTheRecordedSettings_AndReimports)
+{
+	reimported(reimport(json::parse(R"({"wrap":"repeat_mirror"})")));
+	edt::image_import_form form(*importer);
+	form.open_reimport("res://textures/rock.png", other);
+	BOOST_CHECK(form.reimport());
+	BOOST_CHECK_EQUAL(form.target(), "res://textures/rock.png");
+	BOOST_CHECK((form.settings().wrap == edt::image_wrap::repeat_mirror));
+	BOOST_CHECK_MESSAGE(form.can_submit(), form.problem());
+	form.set_mips(true);
+	const std::optional<std::uint64_t> job = form.submit();
+	BOOST_REQUIRE_MESSAGE(job.has_value(), form.error());
+	test_util::pump(tasks);
+	const res::asset_meta_result meta = res::read_asset_meta(file("rock.png.resource"));
+	BOOST_REQUIRE(meta);
+	BOOST_CHECK(meta.meta->settings.at("mips").as_bool());
+	BOOST_CHECK_EQUAL(text_of(meta.meta->settings.at("wrap")), "repeat_mirror");
+	BOOST_CHECK_EQUAL(res::to_text(meta.meta->guid), text_of(first.at("guid")));
+
+	form.open_reimport("res://textures/none.png", other);
+	BOOST_CHECK(!form.can_submit());
+	BOOST_CHECK(!form.problem().empty());
+	form.open("art", source);
+	BOOST_CHECK(!form.reimport());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
@@ -890,6 +1222,52 @@ BOOST_AUTO_TEST_CASE(ACallNeverDescribed_IsDenied)
 	BOOST_CHECK(!result.ok);
 	BOOST_CHECK_EQUAL(result.code, cmd::codes::denied);
 	BOOST_CHECK(nothing_written());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+using reimport_action_fixture = reimport_of<image_action_fixture>;
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtReimportImageActionTests, reimport_action_fixture)
+
+BOOST_AUTO_TEST_CASE(TheCommand_IsRegisteredWithItsSchema)
+{
+	const cmd::command_desc* command = actions.commands().find("file.reimport_image");
+	BOOST_REQUIRE(command != nullptr);
+	BOOST_CHECK(command->mutates);
+	BOOST_CHECK(command->starts_job);
+	BOOST_CHECK(!command->args_schema.as_object().at("additionalProperties").as_bool());
+	cmd::call extra;
+	extra.args = json::object{ { "target", "res://textures/rock.png" }, { "path", other.string() },
+		{ "overwrite", true } };
+	extra.from = cmd::origin::ui();
+	BOOST_CHECK_EQUAL(actions.invoke("file.reimport_image", extra).code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(APersonsCall_Runs_AnAgentsIsDenied)
+{
+	cmd::call request;
+	request.args = json::object{ { "target", "res://textures/rock.png" }, { "path", other.string() } };
+	request.from = agent;
+	const cmd::result denied = actions.invoke("file.reimport_image", request);
+	BOOST_CHECK(!denied.ok);
+	BOOST_CHECK_EQUAL(denied.code, cmd::codes::denied);
+	actions.commands().set_policy_gate(std::make_shared<fixed_gate>(cmd::policy_mode::allow));
+	BOOST_CHECK_EQUAL(actions.invoke("file.reimport_image", request).code, cmd::codes::denied);
+	actions.commands().set_policy_gate(nullptr);
+	test_util::pump(tasks);
+	BOOST_CHECK(file("rock.png") == png_text);
+
+	request.from = cmd::origin::ui();
+	const cmd::result ran = actions.invoke("file.reimport_image", request);
+	BOOST_REQUIRE_MESSAGE(ran.ok, ran.error);
+	BOOST_CHECK_GT(ran.value.as_object().at("job").as_int64(), 0);
+	test_util::pump(tasks);
+	BOOST_CHECK(file("rock.png") == other_text);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

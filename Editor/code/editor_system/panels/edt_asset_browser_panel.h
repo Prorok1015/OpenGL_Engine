@@ -50,7 +50,7 @@ namespace edt
 
 		// "Import Image..." in the same menus (#1193): `pick_file` shows the native file picker and calls back with the
 		// picked file, then a window takes wrap, filter, mips and the file name. `importer` outlives the panel. Null: no
-		// item.
+		// item. The same picker and window give "Re-import..." on a picture row that has a `.resource` (#1194).
 		using image_picker = std::function<void(std::function<void(const std::filesystem::path&)> picked)>;
 		void set_image_importer(image_importer* importer, image_picker pick_file);
 		// The registry the "Kinds" filter reads the kinds of modules from; null: only the fixed kinds.
@@ -162,6 +162,10 @@ namespace edt
 		std::unique_ptr<image_import_form> m_image_form;
 		image_picker m_pick_image;
 		bool m_image_requested = false;
+		// Whether the open context menu offers "Re-import...": looked at once, when the menu appears.
+		bool m_offers_reimport = false;
+		// Re-import of the picture `target` (its res:// tag): the picker, then the window in re-import mode.
+		void ask_reimport(std::string target);
 		// A picker's answer that comes after the panel is gone does nothing.
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 

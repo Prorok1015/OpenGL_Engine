@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <boost/json/object.hpp>
 
 namespace edt
 {
@@ -178,6 +179,8 @@ namespace edt
 		void ask_save_path(std::function<void()> then);
 		// file.import_image (#1193): an agent's or a script's import of a picture, over m_hooks.image_import.
 		void register_image_import();
+		// file.reimport_image (#1194): a person's re-import of a picture, registered with file.import_image.
+		void register_image_reimport(const boost::json::object& settings_schema);
 		// The level file changed on disk and a person saves: asks Reload / Overwrite / Cancel and runs `then` once it was
 		// settled. False: no conflict (or nobody to ask), the save goes on as usual.
 		bool ask_level_disk_conflict(std::function<void()> then);
