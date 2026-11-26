@@ -23,8 +23,7 @@ constexpr const char* k_material_schema = R"({
 		{ "name": "queue", "kind": "string", "default": "opaque" },
 		{ "name": "label", "kind": "string", "default": "" },
 		{ "name": "texture", "kind": "res_tag", "default": "" },
-		{ "name": "detail", "kind": "desc_ref", "ref_type": "test.material" },
-		{ "name": "weights", "kind": "map", "element": "f32" }
+		{ "name": "detail", "kind": "desc_ref", "ref_type": "test.material" }
 	]
 })";
 
@@ -198,10 +197,21 @@ BOOST_AUTO_TEST_CASE(AReference_IsWrittenWhole_NotCutDownToItsPath)
 
 BOOST_AUTO_TEST_CASE(AMapField_IsWrittenWhole_ASomewhereRemovedKeyCanBeSaid)
 {
+	// A map field cannot be in a JSON schema (it needs a C++ type), so the schema of the type is made by hand, as a described type would give it.
+	desc::type_schema maps;
+	maps.name = "test.maps";
+	desc::field_schema weights;
+	weights.name = "weights";
+	weights.key = "weights";
+	weights.kind = desc::field_kind::map;
+	weights.element = desc::field_kind::f32;
+	maps.fields.push_back(weights);
+	const desc::type_schema* added = registry.add(maps);
+	BOOST_REQUIRE(added != nullptr);
 	const json::object base = json::parse(R"({"weights": {"a": 1, "b": 2}})").as_object();
 	const json::object own = json::parse(R"({"weights": {"a": 1}})").as_object();
 
-	const json::object value = edt::canonical_embedded_value(registry, *schema, own, base, 1, "");
+	const json::object value = edt::canonical_embedded_value(registry, *added, own, base, 1, "");
 
 	BOOST_REQUIRE(value.contains("weights"));
 	BOOST_TEST(json::serialize(value.at("weights")) == R"({"a":1})");
@@ -329,7 +339,7 @@ BOOST_AUTO_TEST_SUITE_END()
 namespace {
 
 constexpr const char* k_mesh_schema = R"({
-	"name": "test.meshish", "kind": "desc", "is_component": true,
+	"name": "test.meshish", "kind": "desc",
 	"fields": [
 		{ "name": "material", "kind": "desc_ref", "ref_type": "test.material" },
 		{ "name": "visible", "kind": "boolean", "default": true }
