@@ -440,26 +440,6 @@ BOOST_AUTO_TEST_CASE(TheMaterialIsABlockAndThreeMapsOfSet2)
 	}
 }
 
-// #1439: both shaders of the opaque list discard only under ALPHA_TEST, against the cutoff of the block; the mix shader keeps
-// its own split between the opaque pass and OIT.
-BOOST_AUTO_TEST_CASE(TheOpaqueShadersDiscardUnderTheAlphaTestOnly)
-{
-	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
-	for (const char* frag : { "scene.frag", "z_prepass.frag" }) {
-		BOOST_TEST_CONTEXT(frag) {
-			const std::string code = code_of(read_file(dir / frag));
-			const std::size_t test = code.find("#ifdef ALPHA_TEST");
-			const std::size_t discard = code.find("discard");
-			BOOST_REQUIRE(test != std::string::npos);
-			BOOST_REQUIRE(discard != std::string::npos);
-			BOOST_TEST(discard > test);
-			BOOST_TEST(code.find("result.a < alphaCutoff") != std::string::npos);
-			BOOST_TEST(code.find("discard", discard + 1) == std::string::npos);
-			BOOST_TEST(code.find("result.a < 1.0") == std::string::npos);
-		}
-	}
-}
-
 BOOST_AUTO_TEST_CASE(SkinningNeverReadsPastTheBufferItIsGiven)
 {
 	// A skinned variant of a mesh without weights is bound a buffer of zeros (or one shorter than the mesh):

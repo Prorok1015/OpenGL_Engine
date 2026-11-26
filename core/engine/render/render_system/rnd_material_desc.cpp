@@ -3,6 +3,7 @@
 #include <snk/resource/res_diagnostics.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <string_view>
 
@@ -36,4 +37,11 @@ void rnd::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	}
 
 	desc::schema_desc<material_desc, desc::schema_kind::desc>::deserialize(desc_system, rest);
+
+	// The schema's range is the editor's: a cutoff over 1 read from a file would discard every fragment (#1439).
+	if (!(alpha_cutoff >= 0.0f && alpha_cutoff <= 1.0f)) {
+		const float read = alpha_cutoff;
+		alpha_cutoff = std::isnan(read) ? 1.0f : std::clamp(read, 0.0f, 1.0f);
+		egLOG_WARN("render/material", "alpha_cutoff {} is outside [0, 1]: {} is used", read, alpha_cutoff);
+	}
 }

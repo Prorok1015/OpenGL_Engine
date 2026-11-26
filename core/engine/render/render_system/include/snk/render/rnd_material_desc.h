@@ -88,7 +88,7 @@ namespace desc
 		f("shininess").key("/uniforms/shininess").range(0, 1000, 1).write_if_not_default(),
 		// 1 keeps the old rule (discard below full alpha), so files written before #1439 draw as they did.
 		f("alpha_cutoff").key("/uniforms/alpha_cutoff").range(0, 1, 0.01).write_if_not_default()
-			.tooltip("Fragments with alpha below this are discarded in the opaque pass; 0 turns the alpha test off"),
+			.tooltip("Fragments with alpha below this are discarded; 0 turns the alpha test off"),
 		f("render_mode"));
 
 	// Lower-case words in the desc; an unknown word reads as no queue, like null.
