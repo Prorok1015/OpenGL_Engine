@@ -326,7 +326,7 @@ namespace ds {
 
 	// The first time the sphere, moving along `direction`, touches the triangle within [0, t_max]: its face (the plane moved by
 	// the radius), its edges (a cylinder around each) and its corners (a sphere around each), the least of the three.
-	inline std::optional<sweep_hit> sphere_sweep_triangle(const sphere3& shape, const glm::vec3& direction, const glm::vec3& a,
+	inline std::optional<sweep_hit> sphere_sweep_unshifted(const sphere3& shape, const glm::vec3& direction, const glm::vec3& a,
 		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
 	{
 		using namespace shape_detail;
@@ -432,7 +432,7 @@ namespace ds {
 	// against a corner of the triangle (the corner, moving the other way, enters the axis's cylinder) or through its side against an
 	// edge (the distance between the two lines is linear in time: it is the radius where the lines' nearest points are on both
 	// segments). A capsule already touching: t = 0 and started_inside, as for the sphere.
-	inline std::optional<sweep_hit> capsule_sweep_triangle(const capsule3& shape, const glm::vec3& direction, const glm::vec3& a,
+	inline std::optional<sweep_hit> capsule_sweep_unshifted(const capsule3& shape, const glm::vec3& direction, const glm::vec3& a,
 		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
 	{
 		using shape_detail::finite3;
@@ -478,7 +478,7 @@ namespace ds {
 			}
 		};
 		for (const glm::vec3& end : { shape.a, shape.b }) {
-			if (const auto cap = sphere_sweep_triangle({ end, radius }, direction, a, b, c, best); cap && !cap->started_inside) take(cap->t);
+			if (const auto cap = sphere_sweep_unshifted({ end, radius }, direction, a, b, c, best); cap && !cap->started_inside) take(cap->t);
 		}
 		const glm::vec3 axis = shape.b - shape.a;
 		const float axis_sq = glm::dot(axis, axis);
@@ -518,6 +518,45 @@ namespace ds {
 		}
 		if (!found) return std::nullopt;
 		return hit_at(best, false);
+	}
+
+	// The time to skip before the shape can touch the triangle: float rounding of the quadratics grows with the squared distance
+	// from the start, so a far cast is solved from a point just short of the triangle instead (never past its first possible touch).
+	inline float sweep_head_start(const glm::vec3& centre, float reach, const glm::vec3& direction, const glm::vec3& a, const glm::vec3& b,
+		const glm::vec3& c)
+	{
+		using shape_detail::finite3;
+		const float speed_sq = glm::dot(direction, direction);
+		if (!(speed_sq > 0.f) || !std::isfinite(speed_sq) || !(finite3(a) && finite3(b) && finite3(c) && finite3(centre)) || !std::isfinite(reach)) return 0.f;
+		const glm::vec3 middle = (a + b + c) / 3.f;
+		const float spread = std::sqrt(std::max({ shape_detail::distance_sq(middle, a), shape_detail::distance_sq(middle, b), shape_detail::distance_sq(middle, c) }));
+		const float speed = std::sqrt(speed_sq);
+		const float head = (glm::dot(middle - centre, direction) / speed - (spread + reach + 1.f)) / speed;
+		return head > 0.f && std::isfinite(head) ? head : 0.f;
+	}
+
+	inline std::optional<sweep_hit> sphere_sweep_triangle(const sphere3& shape, const glm::vec3& direction, const glm::vec3& a,
+		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
+	{
+		const float head = sweep_head_start(shape.center, shape.radius, direction, a, b, c);
+		if (!(head > 0.f)) return sphere_sweep_unshifted(shape, direction, a, b, c, t_max);
+		if (head > t_max) return std::nullopt;
+		auto hit = sphere_sweep_unshifted({ shape.center + direction * head, shape.radius }, direction, a, b, c, t_max - head);
+		if (hit) hit->t += head;
+		return hit;
+	}
+
+	inline std::optional<sweep_hit> capsule_sweep_triangle(const capsule3& shape, const glm::vec3& direction, const glm::vec3& a,
+		const glm::vec3& b, const glm::vec3& c, float t_max = std::numeric_limits<float>::infinity())
+	{
+		const float reach = shape.radius + 0.5f * glm::distance(shape.a, shape.b);
+		const float head = sweep_head_start(0.5f * (shape.a + shape.b), reach, direction, a, b, c);
+		if (!(head > 0.f)) return capsule_sweep_unshifted(shape, direction, a, b, c, t_max);
+		if (head > t_max) return std::nullopt;
+		const glm::vec3 shift = direction * head;
+		auto hit = capsule_sweep_unshifted({ shape.a + shift, shape.b + shift, shape.radius }, direction, a, b, c, t_max - head);
+		if (hit) hit->t += head;
+		return hit;
 	}
 
 	// A triangle of a surface.

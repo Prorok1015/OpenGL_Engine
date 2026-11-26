@@ -527,8 +527,7 @@ BOOST_AUTO_TEST_CASE(ACapsuleSweep_NeverGoesPastTheTouch_AndStopsWithinItsTolera
 		}
 	}
 	BOOST_TEST(hits > 10);
-	// A motion that grazes closes the gap so slowly that the steps run out first.
-	BOOST_TEST(missed <= 6);
+	BOOST_TEST(missed == 0);
 }
 
 BOOST_AUTO_TEST_CASE(ACapsuleThatIsAPoint_SweepsAsASphereDoes)
@@ -620,6 +619,41 @@ BOOST_AUTO_TEST_CASE(TheSurfaceOfABox_IsItsTwelveTrianglesThroughTheMatrix)
 	BOOST_TEST((hit.has_value() || ds::sphere_sweep_triangle({ { 0.f, 0.f, 9.f }, 1.f }, { 0.f, 0.f, -1.f }, faces[11].a, faces[11].b, faces[11].c).has_value()));
 	const glm::mat4 moved = glm::translate(glm::mat4{ 1.f }, glm::vec3{ 10.f, 0.f, 0.f });
 	BOOST_TEST(ds::box_surface(box, moved)[0].a.x >= 9.f - 1e-4f);
+}
+
+
+BOOST_AUTO_TEST_CASE(ACastOfThousandsOfUnits_AtAnEdgeOrACorner_FindsTheTouchAndTheNearMissStaysClear)
+{
+	const glm::vec3 ahead{ 0.5026275f, 0.468878f, -0.7263051f };
+	const glm::vec3 direction = glm::normalize(ahead);
+	const triangle far_triangle{ { -2.8830724f, 2.9929521f, 2.7613747f }, { -4.8262892f, 3.0791769f, -0.19610743f }, { -0.73491859f, 2.9399381f, 1.6239512f } };
+	// The axis of this capsule passes through the triangle after 4393 units: a quadratic at that range has no precision left.
+	const ds::capsule3 through{ { -2211.7124f, -2057.5007f, 3193.6230f }, { -2212.1116f, -2057.5969f, 3193.8262f }, 0.99035877f };
+	const auto found = ds::capsule_sweep_triangle(through, direction, far_triangle.a, far_triangle.b, far_triangle.c);
+	BOOST_REQUIRE(found.has_value());
+	BOOST_TEST(found->t > 4380.f);
+	BOOST_TEST(found->t < 4393.5f);
+
+	// The near cases moved back along the cast: the touch is the same distance further on.
+	const ds::capsule3 side{ { 0.f, 0.f, -2.f }, { 0.f, 0.f, 2.f }, 0.5f };
+	for (const float back : { 100.f, 1000.f, 5000.f }) {
+		const glm::vec3 behind{ -back, 0.f, 0.f };
+		const auto set_back = [&](const ds::capsule3& c) { return ds::capsule3{ c.a + behind, c.b + behind, c.radius }; };
+		BOOST_TEST_CONTEXT("back " << back) {
+			const auto corner = ds::capsule_sweep_triangle(set_back(side), { 1.f, 0.f, 0.f }, { 3.f, 0.f, 0.f }, { 4.f, 1.f, 0.f }, { 4.f, -1.f, 0.f });
+			BOOST_REQUIRE(corner.has_value());
+			BOOST_TEST(corner->t == back + 2.5f, boost::test_tools::tolerance(1e-3f));
+			const auto edge = ds::capsule_sweep_triangle(set_back(side), { 1.f, 0.f, 0.f }, { 3.f, -1.f, -1.f }, { 3.f, 1.f, -1.f }, { 3.f, 0.f, 1.f });
+			BOOST_REQUIRE(edge.has_value());
+			BOOST_TEST(edge->t == back + 2.5f, boost::test_tools::tolerance(1e-3f));
+			const auto ball = ds::sphere_sweep_triangle({ glm::vec3{ -back, 0.f, 0.f }, 0.5f }, { 1.f, 0.f, 0.f }, { 3.f, 0.f, 0.f }, { 4.f, 1.f, 0.f }, { 4.f, -1.f, 0.f });
+			BOOST_REQUIRE(ball.has_value());
+			BOOST_TEST(ball->t == back + 2.5f, boost::test_tools::tolerance(1e-3f));
+			const auto passes = ds::capsule_sweep_triangle(set_back(side), { 1.f, 0.f, 0.f }, { 3.f, 0.f, 3.f }, { 4.f, 1.f, 3.f }, { 4.f, -1.f, 5.f });
+			BOOST_TEST(!passes.has_value());
+			BOOST_TEST(!ds::sphere_sweep_triangle({ glm::vec3{ -back, 0.f, 0.f }, 0.5f }, { 1.f, 0.f, 0.f }, { 3.f, 0.f, 1.f }, { 4.f, 1.f, 1.f }, { 4.f, -1.f, 1.f }).has_value());
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

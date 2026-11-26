@@ -203,6 +203,7 @@ namespace scn {
 	};
 
 	// How a shape cast ended: the path is clear, it met something, the engine does not cast that yet, or the arguments cannot be cast.
+	// A value is stored by modules: add new ones only at the end.
 	enum class cast_status : std::uint8_t
 	{
 		// Nothing within the cast's length (also: the world holds nothing to meet).
@@ -282,7 +283,7 @@ namespace scn {
 		// touches). A sphere and a capsule are cast exactly against the triangles (a capsule through its two end caps and through its
 		// side against corners and edges). A shape already touching an entity (touching counts) is a hit at distance 0 with
 		// `started_inside`. A mesh of over a million triangles is cast against the box of its triangles (the nearest the shape can
-		// get to it, `triangle` ~0u); a shape starting inside that box is a hit at 0. Equal distances: the lower entity. The filter's
+		// get to it, `triangle` ~0u); a shape starting inside that box is a hit at 0 (its `point` is the shape's centre, the capsule's first end for a capsule). Equal distances: the lower entity. The filter's
 		// mask, include_hidden and exclude apply; `triangles` and `cull_back_faces` do not. A box is not cast yet (cast_status::unsupported).
 		shapecast_result shapecast(entt::registry& world, const shape& volume, const glm::vec3& direction, const ray_filter& filter);
 		// What the transform system calls for the entities it moved.
