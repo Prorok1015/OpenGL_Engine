@@ -1,8 +1,12 @@
 #include <boost/test/unit_test.hpp>
+#include "test_scene_env.hpp"
 #include "edt_embedded_desc.h"
 #include "edt_override_edit.h"
 #include <snk/desc/desc_schema.h>
+#include <snk/desc/desc_system.h>
 #include <boost/json.hpp>
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -17,7 +21,10 @@ constexpr const char* k_material_schema = R"({
 	"fields": [
 		{ "name": "shininess", "kind": "f32", "default": 32.0 },
 		{ "name": "queue", "kind": "string", "default": "opaque" },
-		{ "name": "label", "kind": "string", "default": "" }
+		{ "name": "label", "kind": "string", "default": "" },
+		{ "name": "texture", "kind": "res_tag", "default": "" },
+		{ "name": "detail", "kind": "desc_ref", "ref_type": "test.material" },
+		{ "name": "weights", "kind": "map", "element": "f32" }
 	]
 })";
 
@@ -117,6 +124,105 @@ BOOST_AUTO_TEST_CASE(TheHeaderKeysOfTheOwnFields_AreIgnored_NoSecondParent)
 	BOOST_TEST(!value.contains("__guid"));
 }
 
+BOOST_AUTO_TEST_CASE(AnIntegralNumber_IsAnInteger_Never1Point0Or1E0)
+{
+	const json::object own = json::parse(R"({"shininess": 8.0, "counts": [1.0, 2, 3.5], "scale": {"x": 2.0}})").as_object();
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, {}, 1, "");
+
+	BOOST_TEST(json::serialize(value.at("shininess")) == "8");
+	BOOST_TEST(json::serialize(value.at("counts")) == "[1,2,3.5]");
+	BOOST_TEST(json::serialize(value.at("scale")) == R"({"x":2})");
+}
+
+BOOST_AUTO_TEST_CASE(AFloat32Field_TakesTheShortestTextOfItsFloat)
+{
+	json::object own;
+	own["shininess"] = static_cast<double>(0.1f);
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, {}, 1, "");
+
+	BOOST_TEST(json::serialize(value.at("shininess")) == "0.1");
+}
+
+BOOST_AUTO_TEST_CASE(AKeptField_IsDroppedWhateverTheFormOfTheNumber)
+{
+	const json::object base = json::parse(R"({"shininess": 8, "weights": {"a": 0.5}})").as_object();
+	json::object own = json::parse(R"({"shininess": 8.0})").as_object();
+	BOOST_TEST(!edt::canonical_embedded_value(registry, *schema, own, base, 1, "").contains("shininess"));
+
+	json::object tenth;
+	tenth["shininess"] = 0.1;
+	json::object widened;
+	widened["shininess"] = static_cast<double>(0.1f);
+	BOOST_TEST(!edt::canonical_embedded_value(registry, *schema, widened, tenth, 1, "").contains("shininess"));
+}
+
+BOOST_AUTO_TEST_CASE(AnIntegerAbove2To53_IsNotTakenForTheDoubleBesideIt)
+{
+	json::object base;
+	base["big"] = 9007199254740992.0;
+	json::object own;
+	own["big"] = static_cast<std::int64_t>(9007199254740993);
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, base, 1, "");
+
+	BOOST_REQUIRE(value.contains("big"));
+	BOOST_TEST(json::serialize(value.at("big")) == "9007199254740993");
+}
+
+BOOST_AUTO_TEST_CASE(AnInlineDesc_IsWrittenWhole_ItsTypeIsNeverLost)
+{
+	const json::object base = json::parse(R"({"detail": {"__type": "test.material", "queue": "opaque", "label": "a"}})").as_object();
+	const json::object own = json::parse(R"({"detail": {"__type": "test.material", "queue": "opaque", "label": "b"}})").as_object();
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, base, 1, "");
+
+	BOOST_REQUIRE(value.contains("detail"));
+	BOOST_TEST(value.at("detail").as_object().contains("__type"));
+	BOOST_TEST(value.at("detail").as_object().contains("queue"));
+	BOOST_TEST(value.at("detail").as_object().at("label").as_string() == "b");
+}
+
+BOOST_AUTO_TEST_CASE(AReference_IsWrittenWhole_NotCutDownToItsPath)
+{
+	const json::object base = json::parse(R"({"texture": {"guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://a.png"}})").as_object();
+	const json::object own = json::parse(R"({"texture": {"guid": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f", "path": "res://b.png"}})").as_object();
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, base, 1, "");
+
+	BOOST_REQUIRE(value.contains("texture"));
+	BOOST_TEST(value.at("texture").as_object().contains("guid"));
+	BOOST_TEST(value.at("texture").as_object().at("path").as_string() == "res://b.png");
+}
+
+BOOST_AUTO_TEST_CASE(AMapField_IsWrittenWhole_ASomewhereRemovedKeyCanBeSaid)
+{
+	const json::object base = json::parse(R"({"weights": {"a": 1, "b": 2}})").as_object();
+	const json::object own = json::parse(R"({"weights": {"a": 1}})").as_object();
+
+	const json::object value = edt::canonical_embedded_value(registry, *schema, own, base, 1, "");
+
+	BOOST_REQUIRE(value.contains("weights"));
+	BOOST_TEST(json::serialize(value.at("weights")) == R"({"a":1})");
+}
+
+BOOST_AUTO_TEST_CASE(TheFormsOfAReference_AreMadeOneByTheNormalizer_SoTheValueBeforeASaveIsTheValueAfterIt)
+{
+	// What the save does (desc_system::write_references): a path becomes {guid, path}. The editor's value is made the same way.
+	const edt::reference_normalizer to_object = [](const json::value& reference) -> json::value {
+		if (reference.is_string()) return json::object{ { "guid", "g1" }, { "path", reference.as_string() } };
+		return reference;
+	};
+	const json::object before = json::parse(R"({"texture": "res://t.png"})").as_object();
+	const json::object after = json::parse(R"({"texture": {"path": "res://t.png", "guid": "g1"}})").as_object();
+
+	const std::string first = json::serialize(edt::canonical_embedded_value(registry, *schema, before, {}, 1, "res://a.mat.desc", to_object));
+	const std::string second = json::serialize(edt::canonical_embedded_value(registry, *schema, after, {}, 1, "res://a.mat.desc", to_object));
+
+	BOOST_TEST(first == second);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtSetWholeValue)
@@ -198,6 +304,83 @@ BOOST_AUTO_TEST_CASE(WholeValue_FindsNothingForAnotherPointerTargetOrComponent)
 	BOOST_TEST(edt::override_edit::whole_value(owner, three, "mesh_node_desc", "/visible") == nullptr);
 	BOOST_TEST(edt::override_edit::whole_value(owner, three, "stat", "/material") == nullptr);
 	BOOST_TEST(edt::override_edit::whole_value(owner, three, "mesh_node_desc", "/material") != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ARecordOfAnotherPointerWithTheSamePrefix_Survives_AndSoDoesAnotherOp)
+{
+	scn::prefab_desc::prefab_node owner;
+	owner.overrides.push_back(record({}, "mesh_node_desc", "/materials", json::array{ 1 }));
+	owner.overrides.push_back(record({}, "mesh_node_desc", "/material~1x", json::value("keep")));
+	scn::override_record removal = record({}, "mesh_node_desc", "/material", json::value());
+	removal.op = scn::override_op::remove;
+	owner.overrides.push_back(removal);
+
+	edt::override_edit::set_whole_value(owner, {}, "mesh_node_desc", "/material", json::object{ { "queue", "b" } }, 4);
+
+	BOOST_REQUIRE(owner.overrides.size() == 4);
+	BOOST_TEST(owner.overrides[0].path == "/materials");
+	BOOST_TEST(owner.overrides[1].path == "/material~1x");
+	BOOST_TEST((owner.overrides[2].op == scn::override_op::remove));
+	BOOST_TEST((owner.overrides[3].op == scn::override_op::set));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+constexpr const char* k_mesh_schema = R"({
+	"name": "test.meshish", "kind": "desc", "is_component": true,
+	"fields": [
+		{ "name": "material", "kind": "desc_ref", "ref_type": "test.material" },
+		{ "name": "visible", "kind": "boolean", "default": true }
+	]
+})";
+
+struct write_component_fixture : test_util::scene_env
+{
+	write_component_fixture()
+	{
+		material = descs->register_schema(desc::parse_type_schema(json::parse(k_material_schema).as_object()));
+		mesh = descs->register_schema(desc::parse_type_schema(json::parse(k_mesh_schema).as_object()));
+		BOOST_REQUIRE(material != nullptr && mesh != nullptr);
+	}
+
+	std::size_t records_at(const scn::prefab_desc::prefab_node& owner, const std::string& path) const
+	{
+		return static_cast<std::size_t>(std::ranges::count_if(owner.overrides, [&](const scn::override_record& r) { return r.path == path; }));
+	}
+
+	const desc::type_schema* material = nullptr;
+	const desc::type_schema* mesh = nullptr;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtWriteComponentKeepsTheMaterialRecord, write_component_fixture)
+
+BOOST_AUTO_TEST_CASE(AnotherEditOfTheComponent_KeepsOneSetOfTheMaterial_AndWritesTheOtherFieldApart)
+{
+	const json::object base = json::parse(R"({"material": "res://m.mat.desc", "visible": true})").as_object();
+	json::object edited = json::parse(R"({"visible": false})").as_object();
+	edited["material"] = json::parse(R"({"__type": "test.material", "__version": 1, "__parent": "res://m.mat.desc", "queue": "blend"})");
+	scn::prefab_desc::prefab_node owner;
+
+	edt::override_edit::write_component(owner, {}, "test.meshish", base, edited, descs.get(), mesh);
+
+	BOOST_TEST(records_at(owner, "/material") == 1u);
+	const json::value* held = edt::override_edit::whole_value(owner, {}, "test.meshish", "/material");
+	BOOST_REQUIRE(held != nullptr);
+	BOOST_TEST(held->as_object().at("queue").as_string() == "blend");
+	BOOST_TEST(held->as_object().at("__parent").as_string() == "res://m.mat.desc");
+	const auto whole_component = std::ranges::find_if(owner.overrides, [](const scn::override_record& r) { return r.path.empty(); });
+	BOOST_REQUIRE(whole_component != owner.overrides.end());
+	BOOST_TEST(!whole_component->value.as_object().contains("material"));
+	BOOST_TEST(whole_component->value.as_object().at("visible").as_bool() == false);
+
+	edited["visible"] = true;
+	edt::override_edit::write_component(owner, {}, "test.meshish", base, edited, descs.get(), mesh);
+	BOOST_TEST(records_at(owner, "/material") == 1u);
+	BOOST_TEST(edt::override_edit::whole_value(owner, {}, "test.meshish", "/material") != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
