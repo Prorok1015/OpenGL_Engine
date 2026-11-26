@@ -2,6 +2,7 @@
 #include <snk/common/ds/ds_aabb3.hpp>
 #include <snk/common/ds/ds_bvh.hpp>
 #include <snk/common/ds/ds_intersect.hpp>
+#include <snk/common/ds/ds_shape.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/scene/scn_geometry_holds.h>
@@ -297,6 +298,135 @@ namespace {
 		return out;
 	}
 
+	bool read_triangle(const triangle_tree& tree, std::uint32_t first_index, glm::vec3& a, glm::vec3& b, glm::vec3& c)
+	{
+		const auto& indices = tree.geometry->indices;
+		return read_position(tree, indices[first_index], a) && read_position(tree, indices[first_index + 1], b)
+			&& read_position(tree, indices[first_index + 2], c);
+	}
+
+	glm::vec3 to_world(const entry& mesh, const glm::vec3& point) { return glm::vec3(mesh.world * glm::vec4(point, 1.f)); }
+
+	// A shape of a query, in the form the shape maths takes.
+	struct prepared_shape
+	{
+		scn::shape_kind kind = scn::shape_kind::sphere;
+		ds::sphere3 sphere;
+		ds::capsule3 capsule;
+		ds::obb3 box;
+		ds::aabb3 bounds;
+	};
+
+	prepared_shape prepare(const scn::shape& volume)
+	{
+		prepared_shape out;
+		out.kind = volume.kind;
+		switch (volume.kind) {
+		case scn::shape_kind::sphere:
+			out.sphere = { volume.center, volume.radius };
+			out.bounds = ds::bounds_of(out.sphere);
+			break;
+		case scn::shape_kind::capsule:
+			out.capsule = { volume.center, volume.end, volume.radius };
+			out.bounds = ds::bounds_of(out.capsule);
+			break;
+		case scn::shape_kind::box:
+			out.box = { volume.center, volume.half_extents, glm::mat3_cast(glm::normalize(volume.rotation)) };
+			out.bounds = ds::bounds_of(out.box);
+			break;
+		}
+		return out;
+	}
+
+	bool shape_meets_triangle(const prepared_shape& volume, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+	{
+		switch (volume.kind) {
+		case scn::shape_kind::sphere: return ds::sphere_triangle(volume.sphere, a, b, c);
+		case scn::shape_kind::capsule: return ds::capsule_triangle(volume.capsule, a, b, c);
+		case scn::shape_kind::box: return ds::obb_triangle(volume.box, a, b, c);
+		}
+		return false;
+	}
+
+	// Whether a triangle of the mesh meets the shape: the triangles the shape's box reaches (in the mesh's own space), each through
+	// the entity's matrix, so a stretched mesh does not stretch the shape. A mesh answered by boxes counts the box of a triangle.
+	bool shape_meets_mesh(const entry& mesh, const prepared_shape& volume)
+	{
+		const triangle_tree& tree = *mesh.tree;
+		bool met = false;
+		tree.triangles.query_box(ds::transformed(volume.bounds, mesh.inverse), [&](std::uint32_t, const std::uint32_t& first_index) {
+			if (tree.boxes_only) {
+				met = true;
+				return false;
+			}
+			glm::vec3 a;
+			glm::vec3 b;
+			glm::vec3 c;
+			if (!read_triangle(tree, first_index, a, b, c)) {
+				return true;
+			}
+			met = shape_meets_triangle(volume, to_world(mesh, a), to_world(mesh, b), to_world(mesh, c));
+			return !met;
+		});
+		return met;
+	}
+
+	// The nearest point of the mesh's surface to a world point, if it is within `limit`. The triangle tree is walked in the mesh's
+	// own space, where distances are not world distances once the matrix stretches: the walk's limit is the world one times the
+	// matrix's Frobenius norm (a world distance is at least a local one over that), and each triangle is measured in the world.
+	std::optional<scn::point_hit> nearest_in_mesh(const entry& mesh, const glm::vec3& point, float limit)
+	{
+		const triangle_tree& tree = *mesh.tree;
+		const glm::vec3 local_point = glm::vec3(mesh.inverse * glm::vec4(point, 1.f));
+		const glm::mat3 inverse_linear{ mesh.inverse };
+		float stretch = 0.f;
+		for (int column = 0; column < 3; ++column) {
+			stretch += glm::dot(inverse_linear[column], inverse_linear[column]);
+		}
+		stretch = std::sqrt(stretch);
+		const auto local_limit = [&](float world_limit) {
+			return std::isfinite(world_limit) ? world_limit * stretch : std::numeric_limits<float>::infinity();
+		};
+		float best = limit;
+		std::optional<scn::point_hit> out;
+		const auto consider = [&](float distance, const glm::vec3& at, std::uint32_t triangle, const glm::vec3& fallback_normal) {
+			if (!(distance < best || (!out && distance <= best))) {
+				return;
+			}
+			best = distance;
+			scn::point_hit hit;
+			hit.entity = mesh.entity;
+			hit.distance = distance;
+			hit.point = at;
+			hit.normal = distance > 0.f ? (point - at) / distance : fallback_normal;
+			hit.triangle = triangle;
+			out = hit;
+		};
+		tree.triangles.query_nearest(local_point, local_limit(best), [&](std::uint32_t id, const std::uint32_t& first_index, float) {
+			if (tree.boxes_only) {
+				const ds::aabb3& box = tree.triangles.at(id).box;
+				const glm::vec3 at = to_world(mesh, glm::clamp(local_point, box.min, box.max));
+				consider(glm::distance(point, at), at, ~0u, glm::vec3{ 0.f, 1.f, 0.f });
+			} else {
+				glm::vec3 a;
+				glm::vec3 b;
+				glm::vec3 c;
+				if (read_triangle(tree, first_index, a, b, c)) {
+					a = to_world(mesh, a);
+					b = to_world(mesh, b);
+					c = to_world(mesh, c);
+					const glm::vec3 at = ds::closest_point_on_triangle(point, a, b, c);
+					const glm::vec3 front = mesh.normal_matrix * glm::cross(b - a, c - a);
+					const float front_length = glm::length(front);
+					consider(glm::distance(point, at), at, first_index / 3,
+						front_length > 0.f ? front / front_length : glm::vec3{ 0.f, 1.f, 0.f });
+				}
+			}
+			return ds::bvh_nearest_action{ local_limit(best), false };
+		});
+		return out;
+	}
+
 	// Walks the world tree for one ray. `test(index, t_max)` answers the nearest hit inside entry `index`; `found(hit)` returns the
 	// distance the walk goes on to (infinity: every entity; the hit's own distance: only nearer ones). For `any` the walk stops at
 	// the first hit.
@@ -434,6 +564,57 @@ namespace {
 			std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end());
 		}
 
+		void overlap_shape(entt::registry& world, const scn::shape& volume, const scn::ray_filter& filter, std::vector<entt::entity>& out) override
+		{
+			ensure_current(world);
+			const prepared_shape prepared = prepare(volume);
+			const std::size_t first = out.size();
+			m_world.query_box(prepared.bounds, [&](std::uint32_t, const std::uint32_t& index) {
+				const entry& mesh = m_entries[index];
+				if (sees(world, mesh, filter) && shape_meets_mesh(mesh, prepared)) {
+					out.push_back(mesh.entity);
+				}
+				return true;
+			});
+			std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end());
+		}
+
+		void overlap_point(entt::registry& world, const glm::vec3& point, const scn::ray_filter& filter, std::vector<entt::entity>& out) override
+		{
+			ensure_current(world);
+			const std::size_t first = out.size();
+			m_world.query_box(ds::aabb3{ point, point }, [&](std::uint32_t, const std::uint32_t& index) {
+				const entry& mesh = m_entries[index];
+				if (sees(world, mesh, filter)) {
+					out.push_back(mesh.entity);
+				}
+				return true;
+			});
+			std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end());
+		}
+
+		std::optional<scn::point_hit> closest_point(entt::registry& world, const glm::vec3& point, const scn::ray_filter& filter) override
+		{
+			if (!(filter.max_distance > 0.f)) {
+				return std::nullopt;
+			}
+			ensure_current(world);
+			std::optional<scn::point_hit> best;
+			float limit = filter.max_distance;
+			m_world.query_nearest(point, limit, [&](std::uint32_t, const std::uint32_t& index, float) {
+				const entry& mesh = m_entries[index];
+				if (sees(world, mesh, filter)) {
+					const auto hit = nearest_in_mesh(mesh, point, limit);
+					if (hit && (!best || hit->distance < best->distance || (hit->distance == best->distance && hit->entity < best->entity))) {
+						best = hit;
+						limit = hit->distance;
+					}
+				}
+				return ds::bvh_nearest_action{ limit, false };
+			});
+			return best;
+		}
+
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved) override
 		{
 			if (!m_built) {
@@ -499,6 +680,17 @@ namespace {
 		}
 
 	private:
+		// Whether a query with this filter looks at the entry at all: the entity is alive and passes the filter as it is now.
+		bool sees(entt::registry& world, const entry& mesh, const scn::ray_filter& filter) const
+		{
+			if (!world.valid(mesh.entity)) {
+				return false;
+			}
+			const auto* layers = world.try_get<scn::spatial_layers>(mesh.entity);
+			return passes_filter(mesh, world.all_of<scn::renderable>(mesh.entity),
+				layers ? layers->mask : scn::spatial_mask{ scn::k_default_spatial_layer }, filter);
+		}
+
 		// A query against the live world: the registry says what each entity is now.
 		template <class Found>
 		void walk(entt::registry& world, const scn::ray& line, const scn::ray_filter& filter, mode how, Found&& found)

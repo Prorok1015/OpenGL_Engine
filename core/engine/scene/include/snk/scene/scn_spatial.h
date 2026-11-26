@@ -5,6 +5,7 @@
 #include <entt/entity/entity.hpp>
 #include <entt/fwd.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -23,6 +24,8 @@
 //  - a transform is seen once the transform system has run it (it tells the world which entities it moved): a matrix
 //    written after that system, or by anything but a transform_updated event, is seen by the next frame's queries at best;
 //  - hits are per entity for raycast_all (the nearest of each), per triangle inside an entity for the closest and any.
+//  - shape overlaps (#1328) test the triangles (a mesh of over a million triangles answers by their boxes); overlap_point tests the
+//    entities' world bounds only, closest_point the surface: "inside a closed mesh" is not answered (meshes need not be closed);
 //  - the frustum query (#1327) tests the entities' world bounds only (the mesh's box through its matrix), not their triangles: an object whose
 //    box touches the frustum is in.
 namespace scn {
@@ -114,6 +117,75 @@ namespace scn {
 		std::vector<ray_result> results;
 	};
 
+	enum class shape_kind : std::uint32_t
+	{
+		sphere,
+		capsule,
+		box,
+	};
+
+	// A volume in world space for overlap_shape. Make one with make_sphere(), make_capsule() or make_box(); the other fields are
+	// what the shape's kind reads (the rest is ignored).
+	struct shape
+	{
+		shape_kind kind = shape_kind::sphere;
+		// sphere and box: the centre; capsule: one end of its axis.
+		glm::vec3 center{ 0.f };
+		// capsule: the other end of its axis.
+		glm::vec3 end{ 0.f };
+		// sphere and capsule; not below 0.
+		float radius = 0.5f;
+		// box: half its size along each of its own axes; not below 0.
+		glm::vec3 half_extents{ 0.5f };
+		// box: its orientation. Need not be a unit quaternion: the queries normalize it.
+		glm::quat rotation{ 1.f, 0.f, 0.f, 0.f };
+
+		static shape make_sphere(const glm::vec3& at, float radius_of)
+		{
+			shape out;
+			out.kind = shape_kind::sphere;
+			out.center = at;
+			out.radius = radius_of;
+			return out;
+		}
+
+		static shape make_capsule(const glm::vec3& from, const glm::vec3& to, float radius_of)
+		{
+			shape out;
+			out.kind = shape_kind::capsule;
+			out.center = from;
+			out.end = to;
+			out.radius = radius_of;
+			return out;
+		}
+
+		static shape make_box(const glm::vec3& at, const glm::vec3& half, const glm::quat& turn = glm::quat{ 1.f, 0.f, 0.f, 0.f })
+		{
+			shape out;
+			out.kind = shape_kind::box;
+			out.center = at;
+			out.half_extents = half;
+			out.rotation = turn;
+			return out;
+		}
+	};
+
+	// The point of an entity's surface nearest to a point.
+	struct point_hit
+	{
+		entt::entity entity = entt::null;
+		// From the query's point to `point`, in world units.
+		float distance = 0.f;
+		glm::vec3 point{ 0.f };
+		// Unit length: from `point` towards the query's point, or the triangle's front normal when the query's point is on the surface
+		// (up for a mesh answered by its boxes).
+		glm::vec3 normal{ 0.f };
+		// The triangle `point` lies on; ~0u for a mesh answered by its boxes.
+		std::uint32_t triangle = ~0u;
+	};
+
+	static_assert(std::is_trivially_copyable_v<shape> && std::is_standard_layout_v<shape>);
+	static_assert(std::is_trivially_copyable_v<point_hit> && std::is_standard_layout_v<point_hit>);
 	static_assert(std::is_trivially_copyable_v<spatial_layers> && std::is_standard_layout_v<spatial_layers>);
 	static_assert(std::is_trivially_copyable_v<ray> && std::is_standard_layout_v<ray>);
 	static_assert(std::is_trivially_copyable_v<ray_hit> && std::is_standard_layout_v<ray_hit>);
@@ -154,6 +226,16 @@ namespace scn {
 		// include_hidden and exclude apply as for a ray; max_distance, triangles and cull_back_faces do not. A matrix that gives no
 		// frustum (not finite, or one whose four side planes have no normal, such as the all-zero matrix) answers nothing.
 		void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
+		// The entities with a triangle that meets `volume` (touching counts), appended to `out` in entity order. The filter's mask,
+		// include_hidden and exclude apply as for a ray; max_distance, triangles and cull_back_faces do not. A shape with a NaN or
+		// infinite value, a negative size, or a box whose rotation is zero, answers nothing.
+		void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out);
+		// The entities whose world bounds contain `point` (the mesh's box through the entity's matrix: conservative, as the frustum
+		// query is), appended to `out` in entity order. The filter as for overlap_shape.
+		void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out);
+		// The nearest point of any entity's surface within `filter.max_distance` (a ray filter's own field: the search radius), or
+		// nothing. Equal distances: the lower entity. The rest of the filter as for overlap_shape.
+		std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);
 
@@ -174,6 +256,10 @@ namespace scn {
 
 	// The entities whose world bounds meet the frustum of `view_projection` (#1327; see spatial_world::overlap_frustum), in entity order.
 	SNK_API void overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out);
+	// The shape and point queries of a world's registry (#1328; see spatial_world).
+	SNK_API void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out);
+	SNK_API void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out);
+	SNK_API std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter = {});
 	// The view-projection of the part of an image inside a pixel rectangle: what `overlap_frustum` takes for a box on the screen.
 	// `view` and `projection` are the camera's, `corner_a` and `corner_b` two opposite corners in pixels (origin top left, y down, any
 	// order), `image_size` the image's size. The corners are not clamped to the image (a rectangle that reaches past it asks for a

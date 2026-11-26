@@ -22,6 +22,9 @@ namespace scn::detail {
 			std::uint64_t frame) = 0;
 		// The entities whose world bounds meet the frustum and pass the filter's flags, appended to `out` in entity order.
 		virtual void overlap_frustum(entt::registry& world, const ds::frustum& view, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
+		virtual void overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
+		virtual void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out) = 0;
+		virtual std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter) = 0;
 		// The transform system moved these entities (and their descendants): their world matrices are new.
 		virtual void entities_moved(entt::registry& world, std::span<const entt::entity> moved) = 0;
 		// A mesh or geometry component was made, changed or destroyed: what the backend built may be wrong.
