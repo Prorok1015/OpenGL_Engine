@@ -263,7 +263,8 @@ namespace ds {
 		const glm::vec3 triangle_normal = glm::cross(b - a, c - a);
 		const float normal_length = glm::length(triangle_normal);
 		const float speed_sq = glm::dot(direction, direction);
-		if (!std::isfinite(speed_sq)) return std::nullopt;
+		// NaN or infinity anywhere: no hit (a triangle with one bad corner would still have good edges and corners to hit).
+		if (!std::isfinite(speed_sq + shape.radius) || !std::isfinite(glm::dot(a + b + c + shape.center, glm::vec3{ 1.f }))) return std::nullopt;
 
 		const glm::vec3 start_point = closest_point_on_triangle(shape.center, a, b, c);
 		if (shape_detail::distance_sq(shape.center, start_point) <= radius_sq) {
