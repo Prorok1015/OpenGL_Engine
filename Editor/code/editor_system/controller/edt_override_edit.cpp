@@ -668,6 +668,30 @@ void edt::override_edit::write_component(
 	for (scn::override_record& record : whole) owner.overrides.push_back(std::move(record));
 }
 
+void edt::override_edit::set_whole_value(prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer,
+	json::value value, int version)
+{
+	const std::string below = pointer + "/";
+	std::erase_if(owner.overrides, [&] (const scn::override_record& r) {
+		return same_target(r, target, component) && !r.path.empty() && (r.path == pointer || r.path.starts_with(below));
+	});
+	scn::override_record record;
+	record.target.assign(target.begin(), target.end());
+	record.component = component;
+	record.path = pointer;
+	record.value = std::move(value);
+	record.type_version = version;
+	owner.overrides.push_back(std::move(record));
+}
+
+const json::value* edt::override_edit::whole_value(const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, const std::string& pointer)
+{
+	for (auto at = owner.overrides.rbegin(); at != owner.overrides.rend(); ++at) {
+		if (same_target(*at, target, component) && at->path == pointer) return &at->value;
+	}
+	return nullptr;
+}
+
 void edt::override_edit::write_transform(
 	prefab_node& owner, std::span<const uint64_t> target, const prefab_node& base,
 	glm::vec3 position, glm::vec3 rotation, glm::vec3 scale)

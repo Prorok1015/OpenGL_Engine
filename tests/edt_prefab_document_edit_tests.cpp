@@ -1817,6 +1817,33 @@ BOOST_AUTO_TEST_CASE(DiskFlag_IsAnnouncedWhenSet_NotAgainForTheSameOutsideVersio
 	BOOST_TEST(arm_name() == "arm2");
 }
 
+BOOST_AUTO_TEST_CASE(AMaterialRecordOfANode_IsWrittenAsOneRecord_TheMaterialFileIsNotTouched)
+{
+	// EPIC-82 8.1 (#1403): an edit of a material from an instance is a record in the owner, never a write to the material's file.
+	const std::string material = R"({"__type":"test.material","__version":1,"queue":"opaque"})";
+	fs::create_directories(res_root / "mat");
+	write(res_root, "mat/face.mat.desc", material);
+	document->open(tag);
+	BOOST_REQUIRE(document->is_open());
+	scn::prefab_desc::prefab_node* arm = document->working_node({ 0xa1 });
+	BOOST_REQUIRE(arm);
+	edt::override_edit::set_whole_value(*arm, {}, "mesh_node_desc", "/material", boost::json::object{
+		{ "__type", "test.material" }, { "__version", 1 }, { "__parent", "res://mat/face.mat.desc" }, { "queue", "blend" } }, 4);
+	BOOST_REQUIRE(document->notify_edited("Edit material"));
+
+	const edt::save_result saved = document->save();
+	BOOST_REQUIRE_MESSAGE(saved.saved, saved.error);
+
+	BOOST_TEST(text_of(res_root, "mat/face.mat.desc") == material);
+	const boost::json::value written = boost::json::parse(text_of(res_root, "prefabs/a.prefab.desc"));
+	const boost::json::array& records = written.at("children").as_array().at(0).at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 1u);
+	BOOST_TEST(std::string(records[0].at("path").as_string().c_str()) == "/material");
+	BOOST_TEST(std::string(records[0].at("value").at("__type").as_string().c_str()) == "test.material");
+	BOOST_TEST(std::string(records[0].at("value").at("__parent").as_string().c_str()) == "res://mat/face.mat.desc");
+	BOOST_TEST(std::string(records[0].at("value").at("queue").as_string().c_str()) == "blend");
+}
+
 BOOST_AUTO_TEST_CASE(History_AnEdit_IsOneRecordWithItsLabelAndOrigin_UndoAndRedoMoveTheCopyAndThePreview)
 {
 	document->open(tag);

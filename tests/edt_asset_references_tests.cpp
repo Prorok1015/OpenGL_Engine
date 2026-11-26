@@ -174,6 +174,25 @@ BOOST_AUTO_TEST_CASE(TheSchemaOfTheOwner_SaysWhatEachReferenceIs)
 	BOOST_TEST((kind_at(k_node + "/components/mesh_node_desc/geometry") == kind::field), "the schema of the component's key");
 }
 
+BOOST_AUTO_TEST_CASE(TheParentOfAnEmbeddedMaterial_InTheRecordOfAnInstance_IsAUsageOfThatFile)
+{
+	// EPIC-82 8.1 (#1403): `set /material` holds {__type, __version, __parent, ...}; rename and move must see the __parent.
+	const std::vector<edt::raw_reference> found = edt::collect_raw_references(json::parse(R"({
+		"__type": "level_desc",
+		"worlds": [ { "__type": "world_desc", "children": [ {
+			"__id": "00000000000000a1",
+			"components": { "inst": { "__type": "prefab_desc", "__parent": "res://card.prefab.desc" } },
+			"overrides": [ { "target": [], "component": "mesh_node_desc", "path": "/material", "version": 4,
+				"value": { "__type": "material_desc", "__version": 2, "__parent": "res://mat/face.mat.desc", "defines": [ "FOIL" ] } } ]
+		} ] } ]
+	})"));
+	const auto parent = std::ranges::find_if(found, [](const edt::raw_reference& r) { return r.json_pointer == "/worlds/0/children/0/overrides/0/value/__parent"; });
+	BOOST_REQUIRE(parent != found.end());
+	BOOST_TEST(parent->path == "res://mat/face.mat.desc");
+	BOOST_TEST((parent->place == edt::reference_place::parent));
+	BOOST_TEST((edt::classify_reference(*parent, descs.get()) == edt::usage_kind::parent));
+}
+
 BOOST_AUTO_TEST_CASE(ThePrefabRoot_HasComponentsToo)
 {
 	const std::vector<edt::raw_reference> found = edt::collect_raw_references(json::parse(R"({
