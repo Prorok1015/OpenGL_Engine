@@ -562,7 +562,7 @@ struct reimport_fixture : import_component_fixture
 	edt::asset_export_dialog& checked_dialog(const fs::path& source)
 	{
 		const std::optional<edt::model_import_refusal> refused = component->reimport(prefab(), source, nullptr);
-		BOOST_REQUIRE_MESSAGE(!refused.has_value(), refused ? refused->error : std::string{});
+		BOOST_REQUIRE_MESSAGE(!refused.has_value(), (refused ? refused->error : std::string{}));
 		frames_until([this] { return component->dialog_open() && !component->export_dialog().checking(); });
 		BOOST_REQUIRE(component->dialog_open());
 		return component->export_dialog();
