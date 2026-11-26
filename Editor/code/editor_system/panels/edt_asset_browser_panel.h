@@ -22,6 +22,7 @@ namespace edt
 	class image_import_form;
 	class material_creator;
 	class material_create_form;
+	enum class material_menu_item;
 	class image_importer;
 	class prefab_variant_creator;
 	class prefab_variant_form;
@@ -138,6 +139,9 @@ namespace edt
 		std::function<void(const res::tag&)> m_open_as_data;
 		// What `m_open_as_data_offered` said for the file whose context menu is open.
 		bool m_offers_open_as_data = false;
+		// The material item of the file whose context menu is open: "Create Material" on a shader, "Create Material Variant"
+		// on a material (#1198); by its asset kind, read when the menu appears.
+		material_menu_item m_material_item{};
 		std::shared_ptr<prefab_variant_creator> m_variant_creator;
 		std::unique_ptr<prefab_variant_form> m_variant_form;
 		std::function<void(const res::tag&)> m_on_variant_created;
@@ -147,6 +151,8 @@ namespace edt
 		void draw_create_menu_item(const std::filesystem::path& folder);
 		void draw_create_window();
 		void draw_material_window();
+		// The material item of `file`'s context menu (its asset kind; a .desc's `__type` is read when not known yet).
+		material_menu_item material_item_of(const layer_entry& file);
 		void draw_variant_window();
 		void draw_image_window();
 		bool has_folder_menu() const { return m_create_form || m_image_form; }

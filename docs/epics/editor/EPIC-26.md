@@ -1,7 +1,7 @@
 # EPIC-26: Shader Desc — шейдеры как desc-ресурсы
 
 **Theme:** editor
-**Status:** planned
+**Status:** done
 **Issue:** [#36](https://github.com/Prorok1015/OpenGL_Engine/issues/36)
 **Depends on:** EPIC-08 (Desc-Driven Core), EPIC-14 (Component UI Registry)
 
@@ -115,7 +115,7 @@ namespace rnd {
 
 Ключи файла: `vertex`, `fragment`, `geometry`, `defines`; чтение и запись — через схему (`desc::field_attrs`), отдельного адаптера нет: любой `*.desc` грузится через `core::desc::desc_adapter_t`.
 
-**Отложено (будущая история):** `parameters` (uniform'ы и define-переключатели с значениями по умолчанию), `samplers` (имя → слот), `name`.
+**Отложено:** `parameters` (uniform'ы и define-переключатели с значениями по умолчанию), `samplers` (имя → слот), `name` — #1461.
 
 **Файлы на диске:**
 - `core/res/shaders/scene.shader.desc` (scene.vert + scene.frag)
@@ -187,6 +187,8 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 
 ### US-26-5 — Inspector UI для shader_desc
 
+**Заменено:** окно материала показывает и правит параметры материала через рефлексию (схему `material_desc`, #1196), а не через `shader_desc::parameters`. Самих `parameters` в `shader_desc` пока нет (#1461).
+
 **Файлы:**
 - Новый `Editor/code/editor_system/edt_component_renderers/edt_cr_shader.cpp`
 - `Editor/code/editor_system/edt_component_renderers.cpp` — регистрация
@@ -215,6 +217,8 @@ std::unordered_map<std::string, res::tag> sampler_bindings;  // name → texture
 ---
 
 ### US-26-6 — Модельный импорт: генерация shader_desc ссылок
+
+**Заменено:** импорт ставит всем материалам один общий шейдер `res://shaders/mix_opaque_trans_scene.shader.desc` (`core/model_import/mdl_import.cpp`), а анимацию включает компилятор материала define `USE_ANIMATION`. Выбора шейдера по свойствам материала, как в наброске ниже, нет.
 
 **Файлы:**
 - `core/model_import/mdl_import.cpp` — сборка `material_desc` при импорте
@@ -361,9 +365,9 @@ EPIC-07 (Material Editor) — после EPIC-26
 
 ## Критерии готовности
 
-- [ ] `shader_desc` загружается через desc pipeline как самостоятельный ресурс
-- [ ] `material_desc` ссылается на `shader_desc` вместо inline GLSL тегов
-- [ ] Legacy material JSON (с `shader_vertex`/`shader_fragment`) продолжает работать
-- [ ] Все существующие сцены рендерятся без регрессий
-- [ ] Inspector показывает параметры шейдера и позволяет их редактировать
-- [ ] Модельный импорт генерирует ссылки на `shader_desc`
+- [x] `shader_desc` загружается через desc pipeline как самостоятельный ресурс (#1199)
+- [x] `material_desc` ссылается на `shader_desc` вместо inline GLSL тегов (#1200)
+- [x] Legacy material JSON (с `shader_vertex`/`shader_fragment`) продолжает работать — через миграцию (#1200)
+- [x] Все существующие сцены рендерятся без регрессий
+- [x] Параметры материала видны и правятся в окне материала — через рефлексию (#1196), а не через `shader_desc::parameters` (US-26-5 заменено)
+- [x] Модельный импорт ставит ссылку на `shader_desc` — один общий `mix_opaque_trans_scene` (US-26-6 заменено)

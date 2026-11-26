@@ -98,6 +98,54 @@ void scn::spatial_world::overlap_frustum(entt::registry& world, const glm::mat4&
 	m_backend->overlap_frustum(world, view, filter, out);
 }
 
+namespace {
+	// Each component: a sum of large finite values would overflow to infinity and reject a good vector.
+	bool finite_vec(const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
+	// A shape the backend can test: finite, no negative size, a box with a rotation that has a direction.
+	bool usable(const scn::shape& volume)
+	{
+		switch (volume.kind) {
+		case scn::shape_kind::sphere:
+			return finite_vec(volume.center) && std::isfinite(volume.radius) && volume.radius >= 0.f;
+		case scn::shape_kind::capsule:
+			return finite_vec(volume.center) && finite_vec(volume.end) && std::isfinite(volume.radius) && volume.radius >= 0.f;
+		case scn::shape_kind::box: {
+			const float turn = volume.rotation.w * volume.rotation.w + volume.rotation.x * volume.rotation.x
+				+ volume.rotation.y * volume.rotation.y + volume.rotation.z * volume.rotation.z;
+			return finite_vec(volume.center) && finite_vec(volume.half_extents) && volume.half_extents.x >= 0.f
+				&& volume.half_extents.y >= 0.f && volume.half_extents.z >= 0.f && std::isfinite(turn) && turn > 0.f;
+		}
+		}
+		return false;
+	}
+}
+
+void scn::spatial_world::overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	if (usable(volume)) {
+		m_backend->overlap_shape(world, volume, filter, out);
+	}
+}
+
+void scn::spatial_world::overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	if (finite_vec(point)) {
+		m_backend->overlap_point(world, point, filter, out);
+	}
+}
+
+std::optional<scn::point_hit> scn::spatial_world::closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter)
+{
+	ASSERT_MSG(!ds::task_system::on_worker(), "spatial queries run on the main thread");
+	if (!finite_vec(point)) {
+		return std::nullopt;
+	}
+	return m_backend->closest_point(world, point, filter);
+}
+
 void scn::spatial_world::entities_moved(entt::registry& world, std::span<const entt::entity> moved)
 {
 	ASSERT_MSG(!ds::task_system::on_worker(), "entities_moved runs on the main thread");
@@ -113,6 +161,21 @@ ds::task_handle<scn::ray_batch> scn::raycast_batch(ds::task_system& tasks, entt:
 void scn::overlap_frustum(entt::registry& world, const glm::mat4& view_projection, const ray_filter& filter, std::vector<entt::entity>& out)
 {
 	spatial_world::attach(world).overlap_frustum(world, view_projection, filter, out);
+}
+
+void scn::overlap_shape(entt::registry& world, const shape& volume, const ray_filter& filter, std::vector<entt::entity>& out)
+{
+	spatial_world::attach(world).overlap_shape(world, volume, filter, out);
+}
+
+void scn::overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out)
+{
+	spatial_world::attach(world).overlap_point(world, point, filter, out);
+}
+
+std::optional<scn::point_hit> scn::closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter)
+{
+	return spatial_world::attach(world).closest_point(world, point, filter);
 }
 
 glm::mat4 scn::screen_rect_view_projection(const glm::mat4& view, const glm::mat4& projection, glm::vec2 corner_a, glm::vec2 corner_b,
