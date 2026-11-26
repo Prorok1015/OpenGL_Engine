@@ -1377,6 +1377,44 @@ jobs:
           tools/headless/check_log.sh headless_out/themes/light_drag_drop/editor.log 'Editor/Drop' \
             "Added 'base_material' to scene"
 
+      # #1197: the samples submodule (update = none, ~700 MB) is not checked out above; only its card/ folder is fetched,
+      # at the SHA the engine pins, with a partial clone and a sparse checkout. A missing card/ fails the job: the card
+      # capture below is the visual check of the card material. Done after the other runs, whose pictures and click
+      # positions were taken with an empty samples folder.
+      - name: Fetch the samples (card/ only)
+        run: |
+          sha=$(git rev-parse HEAD:projects/sandbox/res/samples)
+          echo "samples pinned at $sha"
+          samples=projects/sandbox/res/samples
+          git -C "$samples" init -q
+          git -C "$samples" remote add origin https://github.com/Prorok1015/OpenGL_Engine_samples.git
+          fetched=0
+          for attempt in 1 2 3; do
+            if git -C "$samples" fetch -q --depth 1 --filter=blob:none origin "$sha"; then fetched=1; break; fi
+            echo "fetch attempt $attempt failed"; [ "$attempt" = 3 ] || sleep $((attempt * 10))
+          done
+          [ "$fetched" = 1 ] || { echo "::error::could not fetch the samples at $sha"; exit 1; }
+          git -C "$samples" sparse-checkout set card
+          git -C "$samples" checkout -q FETCH_HEAD
+          test -f projects/sandbox/res/samples/card/card_demo.desc || { echo "::error::samples submodule (card/) missing"; exit 1; }
+
+      # #1197: the card material in the Scene view, captured in-process like "Capture run (viewport.capture)". The level
+      # (samples/card/card_demo.desc) puts a card showing its face on the left, one showing its back on the right and a
+      # lone frame in front of a green plane in the middle; check_card.sh checks that layout's regions: (a) the face card
+      # is drawn, (b) the frame is drawn and its transparent centre shows the green behind it, (c) the back is the back
+      # texture's blue. No reference picture yet: check_smoke.sh only checks the log (min stddev 0).
+      - name: Capture run (card)
+        run: |
+          HEADLESS_USER_DIR="$PWD/headless_out/card/user" \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/card/final.png \
+            --wait-for-log 'captured viewport' \
+            -- --project projects/sandbox --set editor/startup_level samples/card/card_demo.desc capture/on_settled "$PWD/headless_out/card/scene.png"
+          if ! grep -q "level loaded: .*card_demo.desc" headless_out/card/editor.log; then
+            echo "::error::the card level did not load"; tail -20 headless_out/card/editor.log; exit 1
+          fi
+          tools/headless/check_smoke.sh headless_out/card/scene.png headless_out/card/editor.log 100x100+100+100 0
+          tools/headless/check_card.sh headless_out/card/scene.png
+
       # #713: every run above started with the repository root as the working directory (a GL backend under Xvfb included):
       # none of them may have left the layout file or a log folder there.
       - name: Smoke runs leave nothing in the working directory

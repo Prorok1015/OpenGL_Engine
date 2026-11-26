@@ -58,6 +58,18 @@ namespace edt
 		m_editor.SetCursor(line - 1, 0);
 	}
 
+	void shader_text_view::undo()
+	{
+		m_editor.Undo();
+		m_undo_index = m_editor.GetUndoIndex();
+	}
+
+	void shader_text_view::redo()
+	{
+		m_editor.Redo();
+		m_undo_index = m_editor.GetUndoIndex();
+	}
+
 	bool shader_text_view::render(const char* id, const ImVec2& size)
 	{
 		m_editor.Render(id, size);

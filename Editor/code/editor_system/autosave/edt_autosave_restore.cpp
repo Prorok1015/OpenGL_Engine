@@ -49,7 +49,7 @@ std::string edt::restore_prefab_bytes(res::resource_system& writable, res::resou
 		} else if (!prefab.edit([&read](scn::prefab_desc& working) {
 				read->copy_to(working);
 				return true;
-			})) {
+			}, "Restore autosave")) {
 			error = "the prefab cannot be edited now";
 		}
 	}

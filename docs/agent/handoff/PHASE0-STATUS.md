@@ -61,7 +61,7 @@
 - Явные фазы ECS по схеме §9.5 (фаза — свойство системы в коде, набор систем — в `world_desc`, tie-break по порядку desc, `run_in_edit`).
 - Приватные члены — префикс `m_`.
 - GitHub Issues — основной трекер; `refs #N` / `closes #N` в коммитах.
-- Тестовые модели — в сабмодуле `projects/sandbox/res/samples` ([OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples), `update = none`); `robot.glb` остаётся в движке. История git переписывается один раз при мерже `aibranch` → `main`.
+- Тестовые модели — в сабмодуле `projects/sandbox/res/samples` ([OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples), `update = none`); `robot.glb` остаётся в движке. CI берёт из него только папку `card/` (#1197): job «Editor visual smoke (Linux)» делает sparse-fetch по закреплённому SHA, снимает `samples/card/card_demo.desc` и проверяет снимок `tools/headless/check_card.sh`. История git переписывается один раз при мерже `aibranch` → `main`.
 
 ## 3. Что сделано
 
@@ -168,7 +168,7 @@
 ## 7. Окружение облачной сессии (контейнер эфемерный — восстанавливать)
 
 ```bash
-git submodule update --init --depth 1            # кроме projects/sandbox/res/samples (update = none)
+git submodule update --init --depth 1            # кроме projects/sandbox/res/samples (update = none; CI берёт из него только card/, #1197)
 sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
      ccache xvfb libgl1-mesa-dri xdotool imagemagick
 cmake --preset ci-linux-gcc-debug                 # build/ci-linux-gcc-debug; ccache и PCH включены самим CMake (#180)
