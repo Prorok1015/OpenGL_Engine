@@ -64,6 +64,9 @@ namespace ds {
 
 		inline float clamp01(float x) { return std::clamp(x, 0.f, 1.f); }
 
+		// Each component: a sum of large finite values would overflow to infinity and reject a good vector.
+		inline bool finite3(const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
 		// Below this a squared length is no length (an axis that is no axis, a segment that is a point).
 		constexpr float k_tiny = 1e-20f;
 	}
@@ -169,7 +172,8 @@ namespace ds {
 		const glm::vec3& c)
 	{
 		// NaN or infinity: no distance (ray_triangle would call a NaN a hit).
-		if (!std::isfinite(glm::dot(p + q + a + b + c, glm::vec3{ 1.f }))) return std::numeric_limits<float>::infinity();
+		using shape_detail::finite3;
+		if (!(finite3(p) && finite3(q) && finite3(a) && finite3(b) && finite3(c))) return std::numeric_limits<float>::infinity();
 		if (ray_triangle(p, q - p, a, b, c, false, 1.f)) return 0.f;
 		float best = std::min(shape_detail::distance_sq(p, closest_point_on_triangle(p, a, b, c)), shape_detail::distance_sq(q, closest_point_on_triangle(q, a, b, c)));
 		best = std::min(best, segment_segment_distance_sq(p, q, a, b));
@@ -182,7 +186,8 @@ namespace ds {
 	inline bool triangle_overlaps_box(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, const glm::vec3& half)
 	{
 		// NaN or infinity anywhere: no overlap (the comparisons below would answer "not separated" for a NaN).
-		if (!std::isfinite(glm::dot(v0 + v1 + v2 + half, glm::vec3{ 1.f }))) return false;
+		using shape_detail::finite3;
+		if (!(finite3(v0) && finite3(v1) && finite3(v2) && finite3(half))) return false;
 		const glm::vec3 v[3] = { v0, v1, v2 };
 		const glm::vec3 edges[3] = { v1 - v0, v2 - v1, v0 - v2 };
 		for (int axis = 0; axis < 3; ++axis) {
@@ -235,7 +240,7 @@ namespace ds {
 
 	inline bool obb_triangle(const obb3& shape, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
 	{
-		ASSERT_MSG(!std::isfinite(glm::dot(shape.axes[0] + shape.axes[1] + shape.axes[2], glm::vec3{ 1.f })) || orthonormal(shape.axes),
+		ASSERT_MSG(!(shape_detail::finite3(shape.axes[0]) && shape_detail::finite3(shape.axes[1]) && shape_detail::finite3(shape.axes[2])) || orthonormal(shape.axes),
 			"obb_triangle: the box's axes are not unit vectors at right angles");
 		const glm::mat3 to_local = glm::transpose(shape.axes);
 		return triangle_overlaps_box(to_local * (a - shape.center), to_local * (b - shape.center), to_local * (c - shape.center), shape.half);
@@ -264,7 +269,7 @@ namespace ds {
 		const float normal_length = glm::length(triangle_normal);
 		const float speed_sq = glm::dot(direction, direction);
 		// NaN or infinity anywhere: no hit (a triangle with one bad corner would still have good edges and corners to hit).
-		if (!std::isfinite(speed_sq + shape.radius) || !std::isfinite(glm::dot(a + b + c + shape.center, glm::vec3{ 1.f }))) return std::nullopt;
+		if (!std::isfinite(speed_sq) || !std::isfinite(shape.radius) || !(finite3(a) && finite3(b) && finite3(c) && finite3(shape.center))) return std::nullopt;
 
 		const glm::vec3 start_point = closest_point_on_triangle(shape.center, a, b, c);
 		if (shape_detail::distance_sq(shape.center, start_point) <= radius_sq) {
