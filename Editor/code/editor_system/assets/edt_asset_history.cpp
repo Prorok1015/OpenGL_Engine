@@ -23,7 +23,6 @@ namespace
 {
 	constexpr std::string_view k_journal_file = "journal.json";
 	constexpr std::size_t k_max_listed_files = 5;
-	constexpr std::uintmax_t k_max_journal_bytes = std::uintmax_t{ 16 } << 20;
 	constexpr std::uintmax_t k_max_list_bytes = std::uintmax_t{ 1 } << 20;
 	constexpr int k_list_version = 1;
 
@@ -124,18 +123,22 @@ edt::asset_history::asset_history(fs::path journal_root, fs::path list_file, std
 {
 }
 
-void edt::asset_history::save() const
+std::string edt::asset_history::save() const
 {
-	if (m_list_file.empty()) return;
+	if (m_list_file.empty()) return {};
 	json::array items;
-	for (const entry& item : m_entries) items.push_back(json::object{ { "id", item.journal.id }, { "label", item.label }, { "hash", item.hash } });
+	for (const entry& item : m_entries) {
+		json::object one{ { "id", item.journal.id }, { "label", item.label }, { "hash", item.hash } };
+		if (item.interrupted) one["pending"] = true;
+		items.push_back(std::move(one));
+	}
 	const std::string text = json::serialize(json::object{ { "version", k_list_version }, { "journal_root", fs_paths::generic_utf8_of(m_root.lexically_normal()) },
 		{ "entries", std::move(items) } });
 	std::error_code ec;
 	fs::create_directories(m_list_file.parent_path(), ec);
 	if (ec) {
 		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", ec.message());
-		return;
+		return ec.message();
 	}
 	const fs::path temporary = m_list_file.parent_path() / (fs_paths::utf8_of(m_list_file.filename()) + ".tmp");
 	{
@@ -146,14 +149,17 @@ void edt::asset_history::save() const
 			out.close();
 			fs::remove(temporary, ec);
 			egLOG_WARN("asset_ops", "the list of the asset operations was not saved: it cannot be written");
-			return;
+			return "it cannot be written";
 		}
 	}
 	fs::rename(temporary, m_list_file, ec);
 	if (ec) {
+		const std::string why = ec.message();
 		fs::remove(temporary, ec);
-		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", ec.message());
+		egLOG_WARN("asset_ops", "the list of the asset operations was not saved: {}", why);
+		return why;
 	}
+	return {};
 }
 
 bool edt::asset_history::inside_root(const fs::path& directory) const
@@ -172,6 +178,7 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 		std::string id;
 		std::string label;
 		std::string hash;
+		bool pending = false;
 	};
 	std::vector<listed_entry> from_list;
 	if (!m_list_file.empty()) {
@@ -193,7 +200,8 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 				for (const json::value& item : entries->as_array()) {
 					const json::object* one = item.if_object();
 					if (!one) continue;
-					from_list.push_back(listed_entry{ field(*one, "id"), field(*one, "label"), field(*one, "hash") });
+					const json::value* pending = one->if_contains("pending");
+					from_list.push_back(listed_entry{ field(*one, "id"), field(*one, "label"), field(*one, "hash"), pending && pending->is_bool() && pending->as_bool() });
 				}
 			}
 		}
@@ -218,23 +226,21 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 	std::vector<entry> kept;
 	for (const listed_entry& item : from_list) {
 		const fs::path file = m_root / item.id / std::string(k_journal_file);
-		const std::optional<std::string> text = item.id.empty() || item.id.find_first_of("/\\") != std::string::npos || item.id == ".." || item.id == "."
-			? std::nullopt : read_text(file, k_max_journal_bytes);
-		if (!text) continue;
-		json::error_code parse_ec;
-		const json::value parsed = json::parse(*text, parse_ec);
-		if (parse_ec) {
-			egLOG_WARN("asset_ops", "the journal '{}' is not JSON and is ignored", fs_paths::generic_utf8_of(file));
+		std::string reason;
+		const std::optional<json::value> parsed = item.id.empty() || item.id.find_first_of("/\\") != std::string::npos || item.id == ".." || item.id == "."
+			? std::nullopt : read_journal(m_root, item.id, reason);
+		if (!parsed) {
+			if (!reason.empty()) egLOG_WARN("asset_ops", "the journal '{}' is not read and is ignored: {}", fs_paths::generic_utf8_of(file), reason);
 			continue;
 		}
-		std::string reason;
-		std::optional<operation_journal> journal = journal_from_json(parsed, reason);
+		std::optional<operation_journal> journal = journal_from_json(*parsed, reason);
 		if (!journal) {
 			egLOG_WARN("asset_ops", "the journal '{}' is not trusted and is ignored: {}", fs_paths::generic_utf8_of(file), reason);
 			continue;
 		}
 		if (journal->steps.empty() || journal->id != item.id) continue;
-		if (hash_of_journal(*journal) != item.hash) {
+		// An interrupted operation's journal was still being written: what it says is checked, not its hash.
+		if (!item.pending && hash_of_journal(*journal) != item.hash) {
 			egLOG_WARN("asset_ops", "the journal '{}' is not what the editor listed and is ignored", fs_paths::generic_utf8_of(file));
 			continue;
 		}
@@ -247,7 +253,8 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 		}
 		// The folder asset_ops::undo expects, whatever the journal says it was written to.
 		journal->directory = fs_paths::generic_utf8_of(m_root / journal->id);
-		kept.push_back(entry{ 0, forge::escaped_text(item.label.empty() ? asset_operation_label(*journal) : item.label, 128), item.hash, 0, std::move(*journal) });
+		std::string label = item.pending ? asset_operation_label(*journal) : (item.label.empty() ? asset_operation_label(*journal) : item.label);
+		kept.push_back(entry{ 0, forge::escaped_text(label, 128), item.pending ? hash_of_journal(*journal) : item.hash, 0, std::move(*journal), item.pending });
 	}
 	const std::size_t first = kept.size() > max_entries ? kept.size() - max_entries : 0;
 	for (std::size_t i = first; i < kept.size(); ++i) {
@@ -260,11 +267,61 @@ std::size_t edt::asset_history::restore(const std::vector<fs::path>& roots)
 
 void edt::asset_history::record(operation_journal journal)
 {
-	if (m_entries.size() >= max_entries) m_entries.erase(m_entries.begin());
 	std::string label = asset_operation_label(journal);
 	std::string hash = hash_of_journal(journal);
-	m_entries.push_back(entry{ m_serial ? m_serial() : static_cast<std::uint64_t>(m_entries.size()), std::move(label), std::move(hash), 0, std::move(journal) });
+	const auto same = std::ranges::find(m_entries, journal.id, [](const entry& item) { return item.journal.id; });
+	if (same != m_entries.end()) {
+		same->label = std::move(label);
+		same->hash = std::move(hash);
+		same->journal = std::move(journal);
+		same->interrupted = false;
+		trim();
+		save();
+		return;
+	}
+	if (m_entries.size() >= max_entries) m_entries.erase(m_entries.begin());
+	m_entries.push_back(entry{ m_serial ? m_serial() : static_cast<std::uint64_t>(m_entries.size()), std::move(label), std::move(hash), 0, std::move(journal), false });
 	save();
+}
+
+std::string edt::asset_history::record_pending(const operation_journal& journal)
+{
+	// Nothing older is let go yet: the operation may still be taken back whole, and then it is no entry at all.
+	m_entries.push_back(entry{ m_serial ? m_serial() : static_cast<std::uint64_t>(m_entries.size()), asset_operation_label(journal), {}, 0, journal, true });
+	if (std::string error = save(); !error.empty()) {
+		m_entries.pop_back();
+		return std::format("the list of the asset operations was not saved: {}", error);
+	}
+	return {};
+}
+
+void edt::asset_history::trim()
+{
+	while (m_entries.size() > max_entries) m_entries.erase(m_entries.begin());
+}
+
+void edt::asset_history::end_pending(const operation_journal& journal, bool done)
+{
+	const auto same = std::ranges::find(m_entries, journal.id, [](const entry& item) { return item.journal.id; });
+	if (same == m_entries.end()) return;
+	if (done) {
+		record(journal);
+		return;
+	}
+	if (journal.steps.empty()) {
+		m_entries.erase(same);
+	} else {
+		same->label = asset_operation_label(journal);
+		same->hash = hash_of_journal(journal);
+		same->journal = journal;
+		trim();
+	}
+	save();
+}
+
+bool edt::asset_history::next_is_interrupted() const
+{
+	return !m_entries.empty() && m_entries.back().interrupted;
 }
 
 std::optional<std::string> edt::asset_history::next_label() const

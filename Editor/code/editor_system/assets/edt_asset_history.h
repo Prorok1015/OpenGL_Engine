@@ -44,8 +44,19 @@ namespace edt
 		// the project's own layer and the manifest's folder) is an entry. A journal in the folder that is not listed is ignored with a
 		// warning. The label of an entry is the list's. Returns how many entries there are.
 		std::size_t restore(const std::vector<std::filesystem::path>& roots);
-		// An operation that was done (operation_report::journal, already on the disk): listed in the person's data.
+		// An operation that was done (operation_report::journal, already on the disk): listed in the person's data. It replaces the
+		// entry of the same id record_pending made.
 		void record(operation_journal journal);
+		// An operation about to take its first step (asset_ops_ports::operation_started): listed, and saved, as interrupted before
+		// anything is changed, so a crash in the middle leaves it to be undone at the next start. Its journal on the disk is then not
+		// checked against a hash (it was still being written), only by journal_from_json and the roots.
+		// Empty, or why the list could not be saved (the entry is not kept then: the operation must not start).
+		[[nodiscard]] std::string record_pending(const operation_journal& journal);
+		// The operation ended (asset_ops_ports::operation_ended): done, it is an ordinary entry; taken back, it is forgotten, unless
+		// steps could not be taken back (they stay to be undone).
+		void end_pending(const operation_journal& journal, bool done);
+		// Whether the newest entry is an operation that did not end (a crash, or steps a rollback could not take back).
+		bool next_is_interrupted() const;
 
 		std::size_t size() const { return m_entries.size(); }
 		std::optional<std::string> next_label() const;
@@ -75,11 +86,15 @@ namespace edt
 			std::string hash;
 			std::size_t attempts = 0;
 			operation_journal journal;
+			bool interrupted = false;
 		};
 
 		bool inside_root(const std::filesystem::path& directory) const;
 		void set_aside(const operation_journal& journal) const;
-		void save() const;
+		// Empty, or why the list was not written.
+		std::string save() const;
+		// Lets go of the oldest entries past max_entries.
+		void trim();
 
 		std::filesystem::path m_root;
 		std::filesystem::path m_list_file;

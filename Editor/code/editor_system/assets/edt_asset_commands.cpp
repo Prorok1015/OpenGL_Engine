@@ -468,6 +468,9 @@ const char* edt::command_code_of(refusal_code code)
 	case refusal_code::engine_layer:
 	case refusal_code::not_top_layer:
 	case refusal_code::meta_in_other_layer:
+	case refusal_code::folder_in_lower_layer:
+	case refusal_code::folder_has_foreign_entries:
+	case refusal_code::too_many_files:
 		return cmd::codes::failed;
 	case refusal_code::one_asset_only:
 	case refusal_code::not_res_path:
@@ -478,6 +481,9 @@ const char* edt::command_code_of(refusal_code code)
 	case refusal_code::case_only_rename:
 	case refusal_code::target_exists:
 	case refusal_code::binary_name_lost:
+	case refusal_code::mixed_operations:
+	case refusal_code::overlapping_requests:
+	case refusal_code::into_itself:
 		return cmd::codes::invalid_args;
 	}
 	return cmd::codes::failed;

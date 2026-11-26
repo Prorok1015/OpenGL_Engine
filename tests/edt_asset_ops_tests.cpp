@@ -3,6 +3,7 @@
 #include "test_scene_env.hpp"
 #include "test_temp_dir.hpp"
 #include "edt_asset_database.h"
+#include "edt_asset_history.h"
 #include "edt_asset_ops.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -47,6 +49,10 @@ constexpr std::string_view k_lonely_guid = "6c2e3f40-5b6c-4d7e-8f80-1b2c3d4e5f60
 constexpr std::string_view k_rock_guid = "7d3f4051-6c7d-4e8f-8091-2c3d4e5f6071";
 constexpr std::string_view k_rock_bin_guid = "8e405162-7d8e-4f90-81a2-3d4e5f607182";
 constexpr std::string_view k_shadow_guid = "9f516273-8e9f-4a01-92b3-4e5f60718293";
+constexpr std::string_view k_kit_a_guid = "a1b2c3d4-1111-4222-8333-444455556666";
+constexpr std::string_view k_kit_b_guid = "b2c3d4e5-2222-4333-8444-555566667777";
+constexpr std::string_view k_kit_rock_guid = "c3d4e5f6-3333-4444-8555-666677778888";
+constexpr std::string_view k_kit_rock_bin_guid = "d4e5f607-4444-4555-8666-777788889999";
 
 std::string meta_text(std::string_view guid)
 {
@@ -173,6 +179,14 @@ struct ops_fixture
 		};
 		ports.force_copy = [this](std::string_view) { return copy_instead_of_rename; };
 		ports.rename_error = [this](std::string_view) { return rename_error_text; };
+		ports.limits = limits;
+		ports.operation_started = [this](const edt::operation_journal& started) -> std::string {
+			if (throw_when_listed) throw std::runtime_error("the history threw");
+			return history ? history->record_pending(started) : std::string{};
+		};
+		ports.operation_ended = [this](const edt::operation_journal& ended, bool done) {
+			if (history) history->end_pending(ended, done);
+		};
 		ports.fail_step = [this](std::string_view step) -> std::string {
 			steps.emplace_back(step);
 			if (on_step) on_step(step);
@@ -207,6 +221,66 @@ struct ops_fixture
 	}
 
 	bool has(std::string_view relative) const { return fs::is_regular_file(layer.path() / std::string(relative)); }
+
+	// Every file of the project's own folder with its bytes and every folder (a key ending in '/'): what an undo of a folder
+	// operation must give back.
+	std::map<std::string, std::string> tree() const
+	{
+		std::map<std::string, std::string> out;
+		for (const fs::directory_entry& entry : fs::recursive_directory_iterator(layer.path())) {
+			const std::string relative = entry.path().lexically_relative(layer.path()).generic_string();
+			if (entry.is_directory()) out[relative + "/"] = {};
+			else out[relative] = text_of(relative);
+		}
+		return out;
+	}
+
+	// The folder kit/ (#1209): an asset, a desc with its binary file, a file inside that refers to one outside it, and a level
+	// outside that refers to three of them.
+	void make_kit()
+	{
+		write("kit/a.desc", canonical(R"({ "__type": "material_desc" })"));
+		write("kit/a.desc.resource", meta_text(k_kit_a_guid));
+		write("kit/sub/b.desc", canonical(std::string(R"({ "__type": "level_desc", "a": "res://kit/a.desc",
+			"m": { "__type": "mesh_node_desc", "material": { "guid": ")") + std::string(k_kit_a_guid) + R"(", "path": "res://kit/a.desc" } } })"));
+		write("kit/sub/b.desc.resource", meta_text(k_kit_b_guid));
+		write("kit/sub/rock.mesh.desc", canonical(R"({ "__type": "mesh_desc" })"));
+		write("kit/sub/rock.mesh.desc.resource", meta_text(k_kit_rock_guid));
+		write("kit/sub/rock.mesh.bin", std::string("SNKB\x01\x00\x00\x00 geometry", 17));
+		write("kit/sub/rock.mesh.bin.resource", meta_text(k_kit_rock_bin_guid));
+		write("levels/kit_user.desc", canonical(std::string(R"({ "__type": "level_desc", "a": "res://kit/a.desc",
+			"rock": "res://kit/sub/rock.mesh.desc",
+			"b": { "__type": "mesh_node_desc", "material": { "guid": ")") + std::string(k_kit_b_guid) + R"(", "path": "res://kit/sub/b.desc" } } })"));
+	}
+
+	// What a crash leaves: the project's folder, the journals and the history's list as they are now, to be put back by
+	// back_to_crash.
+	void keep_crash()
+	{
+		for (const char* part : { "layer", "journal", "settings" }) {
+			fs::remove_all(crash.path() / part);
+			fs::create_directories(crash.path() / part);
+		}
+		fs::copy(layer.path(), crash.path() / "layer", fs::copy_options::recursive);
+		fs::copy(journal.path(), crash.path() / "journal", fs::copy_options::recursive);
+		fs::copy(settings.path(), crash.path() / "settings", fs::copy_options::recursive);
+	}
+
+	void back_to_crash()
+	{
+		const std::pair<const fs::path*, const char*> parts[] = { { &layer.path(), "layer" }, { &journal.path(), "journal" }, { &settings.path(), "settings" } };
+		for (const auto& [where, part] : parts) {
+			for (const fs::directory_entry& entry : fs::directory_iterator(*where)) fs::remove_all(entry.path());
+			fs::copy(crash.path() / part, *where, fs::copy_options::recursive);
+		}
+	}
+
+	// The string at `pointer` of the JSON file `relative`.
+	std::string value_at(std::string_view relative, std::string_view pointer) const
+	{
+		const json::value document = json::parse(text_of(relative));
+		return std::string(document.at_pointer(pointer).as_string().c_str());
+	}
 
 	// Every file of the project's own folder with its bytes: what a rollback must give back.
 	std::map<std::string, std::string> snapshot() const
@@ -253,6 +327,39 @@ struct ops_fixture
 	int holds = 0;
 	std::vector<res::file_change> self_changes;
 	bool forward_self_changes = false;
+	edt::asset_ops_limits limits;
+	test_util::temp_dir crash{ "asset_ops_crash" };
+	test_util::temp_dir settings{ "asset_ops_settings" };
+	std::uint64_t history_serial = 0;
+	std::unique_ptr<edt::asset_history> history;
+	bool throw_when_listed = false;
+
+	// 40 assets with their .resource in big/: an operation of more than 64 steps.
+	void make_big()
+	{
+		for (int i = 0; i < 40; ++i) {
+			write(std::format("big/f{:02}.desc", i), canonical(R"({ "__type": "material_desc" })"));
+			write(std::format("big/f{:02}.desc.resource", i), meta_text(std::format("12345678-0000-4000-8000-{:012x}", i + 1)));
+		}
+	}
+
+	// A journal folder written by hand, listed in the history as an operation that did not end.
+	void forge_pending(const std::string& id)
+	{
+		edt::operation_journal listed;
+		listed.id = id;
+		listed.directory = (journal.path() / id).generic_string();
+		BOOST_REQUIRE(history);
+		BOOST_REQUIRE(history->record_pending(listed).empty());
+	}
+
+	// The history as the editor makes it at a start: the list in `settings`, read again.
+	edt::asset_history& start_history()
+	{
+		history = std::make_unique<edt::asset_history>(journal.path(), settings.path() / "list.json", [this] { return ++history_serial; });
+		history->restore(ops().changeable_roots());
+		return *history;
+	}
 
 	bool announced(res::change_kind kind, std::string_view tag, std::string_view old_tag = {}) const
 	{
@@ -437,7 +544,11 @@ BOOST_AUTO_TEST_CASE(ANameThatIsNotPortable_AndAFolderThatIsNotThere_AreRefused)
 	BOOST_REQUIRE(unknown.refused.has_value());
 	BOOST_TEST((unknown.refused->code == edt::refusal_code::not_found));
 	const edt::asset_request two[] = { request(edt::asset_operation::remove, "sky.desc"), request(edt::asset_operation::remove, "other.desc") };
-	BOOST_TEST(((ops().plan(two).refused->code) == edt::refusal_code::one_asset_only));
+	const edt::operation_plan both = ops().plan(two);
+	BOOST_TEST(!both.refused.has_value(), "several files are one plan (#1209)");
+	BOOST_TEST(both.items.size() == 2u);
+	const edt::asset_request renames[] = { request(edt::asset_operation::rename, "sky.desc", "a.desc"), request(edt::asset_operation::rename, "other.desc", "b.desc") };
+	BOOST_TEST(((ops().plan(renames).refused->code) == edt::refusal_code::bad_name), "a rename takes one file or folder");
 }
 
 BOOST_AUTO_TEST_CASE(AUsageScanThatSkippedAFile_RefusesARenameAndAMove_ButNotAForcedDelete)
@@ -1577,6 +1688,738 @@ BOOST_AUTO_TEST_CASE(TheHistorySerialsOfTheDatabaseGrow)
 	const std::uint64_t second = database.next_history_serial();
 	BOOST_TEST(second > first);
 	BOOST_TEST(!database.next_undo_serial().has_value());
+}
+
+// #1209: folders and several files, one plan, one journal.
+BOOST_AUTO_TEST_CASE(ARenameOfAFolder_MovesItsTree_AndEveryReferenceFollows_FromOutsideAndInside)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(holds == 1, "the watcher reports the operation as one batch");
+	BOOST_TEST(!fs::exists(layer.path() / "kit"), "the old folder is gone");
+	for (const std::string_view file : { "a.desc", "a.desc.resource", "sub/b.desc.resource", "sub/rock.mesh.desc", "sub/rock.mesh.desc.resource",
+		"sub/rock.mesh.bin", "sub/rock.mesh.bin.resource" }) {
+		BOOST_TEST(text_of("set/" + std::string(file)) == before.at("kit/" + std::string(file)), file);
+	}
+	BOOST_TEST(value_at("set/sub/b.desc", "/a") == "res://set/a.desc", "a moved file that refers to another is rewritten at its new place");
+	BOOST_TEST(value_at("set/sub/b.desc", "/m/material/path") == "res://set/a.desc");
+	BOOST_TEST(value_at("set/sub/b.desc", "/m/material/guid") == k_kit_a_guid);
+	BOOST_TEST(value_at("levels/kit_user.desc", "/a") == "res://set/a.desc");
+	BOOST_TEST(value_at("levels/kit_user.desc", "/rock") == "res://set/sub/rock.mesh.desc");
+	BOOST_TEST(value_at("levels/kit_user.desc", "/b/material/path") == "res://set/sub/b.desc");
+	BOOST_TEST(value_at("levels/kit_user.desc", "/b/material/guid") == k_kit_b_guid);
+	BOOST_TEST(rewritten_in(report, "res://set/sub/b.desc") != nullptr);
+	const edt::rewritten_file* user = rewritten_in(report, "res://levels/kit_user.desc");
+	BOOST_REQUIRE(user);
+	BOOST_TEST(user->json_pointers.size() == 3u, "one rewrite of the file for the three assets it refers to");
+
+	// Originals first, then folders made, moves, rewrites, folders removed.
+	const auto rank = [](edt::journal_step_kind kind) {
+		switch (kind) {
+		case edt::journal_step_kind::make_folder: return 0;
+		case edt::journal_step_kind::move:
+		case edt::journal_step_kind::stash: return 1;
+		case edt::journal_step_kind::rewrite: return 2;
+		case edt::journal_step_kind::remove_folder: return 3;
+		}
+		return 4;
+	};
+	const std::vector<edt::journal_step>& steps = report.journal.steps;
+	BOOST_REQUIRE(!steps.empty());
+	BOOST_TEST((steps.front().kind == edt::journal_step_kind::make_folder));
+	BOOST_TEST(steps.front().from == "set");
+	BOOST_TEST((steps.back().kind == edt::journal_step_kind::remove_folder));
+	BOOST_TEST(steps.back().from == "kit", "the folder goes after the one inside it");
+	BOOST_TEST(std::ranges::is_sorted(steps, {}, [&](const edt::journal_step& step) { return rank(step.kind); }));
+	BOOST_TEST(edt::journal_problem(report.journal).empty());
+
+	const std::optional<edt::operation_journal> loaded = edt::journal_from_json(json::parse(json::serialize(edt::journal_to_json(report.journal))));
+	BOOST_REQUIRE_MESSAGE(loaded.has_value(), "the folder steps survive being written as JSON");
+	const edt::undo_report undone = ops().undo(*loaded);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before), "every folder and every byte back, the folders it made gone");
+}
+
+BOOST_AUTO_TEST_CASE(AMoveOfAFolder_PutsItInsideTheTarget_AndItsUndoRemovesWhatItMade)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	const edt::operation_report report = run(request(edt::asset_operation::move, "kit", "env"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(has("env/kit/a.desc"));
+	BOOST_TEST(has("env/kit/sub/rock.mesh.bin"));
+	BOOST_TEST(has("env/.keep"), "what the target held stays");
+	BOOST_TEST(!fs::exists(layer.path() / "kit"));
+	BOOST_TEST(value_at("env/kit/sub/b.desc", "/a") == "res://env/kit/a.desc");
+	BOOST_TEST(value_at("levels/kit_user.desc", "/rock") == "res://env/kit/sub/rock.mesh.desc");
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+	BOOST_TEST(!fs::exists(layer.path() / "env" / "kit"));
+}
+
+BOOST_AUTO_TEST_CASE(AMoveOfFilesFromDifferentFolders_IsOnePlan_AndAReferrerOfTwoOfThemIsRewrittenOnce)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	const edt::asset_request asked[] = { request(edt::asset_operation::move, "kit/a.desc", "env"),
+		request(edt::asset_operation::move, "kit/sub/rock.mesh.desc", "env"), request(edt::asset_operation::move, "sky.desc", "env") };
+	edt::asset_ops operations = ops();
+	const edt::operation_plan planned = operations.plan(asked);
+	BOOST_REQUIRE_MESSAGE(!planned.refused.has_value(), planned.refused ? planned.refused->reason : std::string{});
+	BOOST_TEST(planned.items.size() == 3u);
+	BOOST_TEST(planned.make_folders.empty());
+	BOOST_TEST(planned.remove_folders.empty(), "a file asked by itself never takes its folder away");
+	const edt::operation_report report = operations.execute(planned);
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(holds == 1);
+	for (const std::string_view file : { "env/a.desc", "env/a.desc.resource", "env/rock.mesh.desc", "env/rock.mesh.bin", "env/rock.mesh.bin.resource", "env/sky.desc" }) {
+		BOOST_TEST(has(file), file);
+	}
+	BOOST_TEST(fs::is_directory(layer.path() / "kit" / "sub"));
+	const auto user_rewrites = std::ranges::count(report.rewritten, std::string("res://levels/kit_user.desc"), &edt::rewritten_file::file);
+	BOOST_TEST(user_rewrites == 1);
+	const edt::rewritten_file* user = rewritten_in(report, "res://levels/kit_user.desc");
+	BOOST_REQUIRE(user);
+	BOOST_TEST(user->json_pointers.size() == 2u);
+	const auto journaled = std::ranges::count_if(report.journal.steps, [](const edt::journal_step& step) {
+		return step.kind == edt::journal_step_kind::rewrite && step.from == "levels/kit_user.desc";
+	});
+	BOOST_TEST(journaled == 1);
+	BOOST_TEST(value_at("levels/kit_user.desc", "/a") == "res://env/a.desc");
+	BOOST_TEST(value_at("levels/kit_user.desc", "/rock") == "res://env/rock.mesh.desc");
+	BOOST_TEST(value_at("kit/sub/b.desc", "/a") == "res://env/a.desc");
+	BOOST_TEST(value_at("levels/main.desc", k_node + "/sky") == "res://env/sky.desc");
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(ADeleteOfAFolder_CountsOnlyTheReferrersOutsideIt_AndIsTakenBackWhole)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	const edt::operation_report refused = run(request(edt::asset_operation::remove, "kit"));
+	BOOST_REQUIRE(refused.refused.has_value());
+	BOOST_TEST((refused.refused->code == edt::refusal_code::has_referrers));
+	BOOST_TEST(refused.refused->referrers.size() == 3u);
+	for (const edt::asset_usage& usage : refused.refused->referrers) {
+		BOOST_TEST(usage.file == "res://levels/kit_user.desc", "b.desc goes too: what it refers to does not count");
+	}
+	BOOST_TEST((tree() == before));
+
+	const edt::operation_report forced = run(request(edt::asset_operation::remove, "kit"), true);
+	BOOST_REQUIRE_MESSAGE(forced.ok, forced.error);
+	BOOST_TEST(!fs::exists(layer.path() / "kit"));
+	BOOST_TEST(fs::is_regular_file(journal.path() / forced.operation_id / "files" / "kit" / "sub" / "rock.mesh.bin"), "kept in its folders");
+	BOOST_TEST(text_of("levels/kit_user.desc") == before.at("levels/kit_user.desc"));
+	BOOST_TEST(forced.broken_references.size() == 3u);
+	BOOST_TEST(edt::journal_problem(forced.journal).empty());
+
+	const edt::undo_report undone = ops().undo(forced.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AFolderWithFilesTheProjectDoesNotList_IsNotDeleted_ButMovesWithThemAsTheyAre)
+{
+	make_kit();
+	write("kit/draft.tmp", "scratch");
+	write("kit/.git/HEAD", "ref: refs/heads/main");
+	open();
+	const auto before = tree();
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "kit"), true);
+	BOOST_REQUIRE(removal.refused.has_value());
+	BOOST_TEST((removal.refused->code == edt::refusal_code::folder_has_foreign_entries));
+	const auto listed = [&](std::string_view entry) { return std::ranges::find(removal.refused->entries, entry) != removal.refused->entries.end(); };
+	BOOST_TEST(listed("res://kit/draft.tmp"));
+	BOOST_TEST(listed("res://kit/.git/HEAD"));
+	BOOST_TEST(removal.refused->reason.find("draft.tmp") != std::string::npos, removal.refused->reason);
+	BOOST_TEST((tree() == before), "nothing is deleted");
+
+	const edt::operation_report renamed = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(renamed.ok, renamed.error);
+	BOOST_TEST(text_of("set/draft.tmp") == "scratch");
+	BOOST_TEST(text_of("set/.git/HEAD") == "ref: refs/heads/main");
+	BOOST_TEST(!fs::exists(layer.path() / "kit"));
+	const auto carried = std::ranges::find(renamed.journal.steps, std::string("kit/.git/HEAD"), &edt::journal_step::from);
+	BOOST_REQUIRE(carried != renamed.journal.steps.end());
+	BOOST_TEST((carried->kind == edt::journal_step_kind::move));
+	BOOST_TEST(carried->to == "set/.git/HEAD");
+	BOOST_TEST(!carried->hash.empty(), "a carried file is moved by its content hash");
+	BOOST_TEST(edt::journal_problem(renamed.journal).empty(), "a file carried along is a move the journal accepts");
+
+	const edt::undo_report undone = ops().undo(renamed.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(ALinkInAFolder_IsNeverFollowedNorMoved_TheOperationIsRefused)
+{
+	make_kit();
+	std::error_code link_error;
+	fs::create_directory_symlink(foreign.path(), layer.path() / "kit" / "outside", link_error);
+	if (link_error) return;
+	open();
+	for (const edt::asset_operation operation : { edt::asset_operation::rename, edt::asset_operation::move, edt::asset_operation::remove }) {
+		const edt::operation_report report = run(request(operation, "kit", operation == edt::asset_operation::move ? "env" : "set"), true);
+		BOOST_REQUIRE_MESSAGE(report.refused.has_value(), edt::asset_operation_name(operation));
+		BOOST_TEST((report.refused->code == edt::refusal_code::folder_has_foreign_entries), edt::asset_operation_name(operation));
+		BOOST_TEST(report.refused->reason.find("kit/outside") != std::string::npos, report.refused->reason);
+	}
+	BOOST_TEST(fs::is_symlink(layer.path() / "kit" / "outside"));
+	BOOST_TEST(has("kit/a.desc"));
+	BOOST_TEST(holds == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnEmptyFolder_IsRenamedAndDeleted_WithFolderStepsOnly)
+{
+	fs::create_directories(layer.path() / "hollow" / "inner");
+	open();
+	const auto before = tree();
+	const edt::operation_report renamed = run(request(edt::asset_operation::rename, "hollow", "void"));
+	BOOST_REQUIRE_MESSAGE(renamed.ok, renamed.error);
+	BOOST_TEST(fs::is_directory(layer.path() / "void" / "inner"));
+	BOOST_TEST(!fs::exists(layer.path() / "hollow"));
+	BOOST_TEST(renamed.journal.steps.size() == 4u);
+	BOOST_TEST(std::ranges::all_of(renamed.journal.steps, [](const edt::journal_step& step) {
+		return step.kind == edt::journal_step_kind::make_folder || step.kind == edt::journal_step_kind::remove_folder;
+	}));
+	const edt::undo_report back = ops().undo(renamed.journal);
+	BOOST_REQUIRE_MESSAGE(back.ok, back.error);
+	BOOST_TEST((tree() == before));
+
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "hollow"));
+	BOOST_REQUIRE_MESSAGE(removal.ok, removal.error);
+	BOOST_TEST(!fs::exists(layer.path() / "hollow"));
+	const edt::undo_report again = ops().undo(removal.journal);
+	BOOST_REQUIRE_MESSAGE(again.ok, again.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AFailureInTheMiddleOfAFolderOperation_TakesEveryStepBack)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	for (const std::string_view step : { "make_folder:set/sub", "move:kit/sub/b.desc", "move:kit/sub/rock.mesh.desc", "rewrite:set/sub/b.desc",
+		"rewrite:levels/kit_user.desc", "remove_folder:kit" }) {
+		fail_at = std::string(step);
+		const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+		BOOST_TEST(!report.ok, step);
+		BOOST_TEST(report.error == "injected failure", step);
+		BOOST_TEST(report.rollback_failures.empty(), step);
+		BOOST_TEST((tree() == before), std::string("everything is as it was after a failure at ") + std::string(step));
+	}
+	fail_at = "stash:kit/sub/rock.mesh.desc";
+	const edt::operation_report removal = run(request(edt::asset_operation::remove, "kit"), true);
+	BOOST_TEST(!removal.ok);
+	BOOST_TEST(removal.rollback_failures.empty());
+	BOOST_TEST((tree() == before), "a delete of a folder that fails half way is taken back");
+}
+
+BOOST_AUTO_TEST_CASE(FolderRequestsThatCannotBeDone_AreRefusedWithTheirOwnCode_AndOverlapsThatAgreeAreOne)
+{
+	make_kit();
+	write("old/new.desc", canonical(R"({ "__type": "material_desc" })"));
+	lower.write("old/left.desc", canonical(R"({ "__type": "material_desc" })"));
+	lower.write("lowonly/y.desc", canonical(R"({ "__type": "material_desc" })"));
+	open(false, edt::platform_case_insensitive, true);
+	const auto before = tree();
+	const auto code_of = [this](std::span<const edt::asset_request> asked) {
+		const edt::operation_plan planned = ops().plan(asked);
+		return planned.refused ? std::optional<edt::refusal_code>(planned.refused->code) : std::nullopt;
+	};
+	const edt::asset_request mixed[] = { request(edt::asset_operation::move, "kit", "env"), request(edt::asset_operation::remove, "sky.desc") };
+	BOOST_TEST((code_of(mixed) == edt::refusal_code::mixed_operations));
+	const edt::asset_request apart[] = { request(edt::asset_operation::move, "kit", "env"), request(edt::asset_operation::move, "kit/a.desc", "levels") };
+	BOOST_TEST((code_of(apart) == edt::refusal_code::overlapping_requests));
+	for (const std::string_view into : { "kit", "kit/sub", "res://kit/sub/" }) {
+		const edt::asset_request itself[] = { request(edt::asset_operation::move, "kit", into) };
+		BOOST_TEST((code_of(itself) == edt::refusal_code::into_itself), into);
+	}
+	const edt::asset_request chained[] = { request(edt::asset_operation::move, "kit/sub", "env"), request(edt::asset_operation::move, "env", "levels") };
+	BOOST_TEST((code_of(chained) == edt::refusal_code::overlapping_requests), "a folder moved into a folder that moves itself");
+	const edt::asset_request into_moving[] = { request(edt::asset_operation::move, "kit", "env"), request(edt::asset_operation::move, "sky.desc", "kit/sub") };
+	BOOST_TEST((code_of(into_moving) == edt::refusal_code::overlapping_requests), "a target inside another folder being moved");
+	const edt::operation_plan lower_target = plan(request(edt::asset_operation::rename, "kit", "lowonly"));
+	BOOST_REQUIRE(lower_target.refused.has_value());
+	BOOST_TEST((lower_target.refused->code == edt::refusal_code::folder_in_lower_layer), "a destination folder only a lower layer has");
+	const edt::operation_plan lower_layer = plan(request(edt::asset_operation::remove, "old"));
+	BOOST_REQUIRE(lower_layer.refused.has_value());
+	BOOST_TEST((lower_layer.refused->code == edt::refusal_code::folder_in_lower_layer));
+	BOOST_TEST((lower_layer.refused->entries == std::vector<std::string>{ "res://old/left.desc" }));
+	BOOST_TEST(lower_layer.refused->reason.find("old/left.desc") != std::string::npos);
+
+	const edt::asset_request agreeing[] = { request(edt::asset_operation::remove, "kit"), request(edt::asset_operation::remove, "kit/a.desc"),
+		request(edt::asset_operation::remove, "kit/sub/rock.mesh.bin"), request(edt::asset_operation::remove, "kit/a.desc.resource"),
+		request(edt::asset_operation::remove, "kit/sub") };
+	const edt::operation_plan one = ops().plan(agreeing);
+	BOOST_REQUIRE_MESSAGE(!one.refused.has_value(), one.refused ? one.refused->reason : std::string{});
+	BOOST_TEST(one.items.size() == 3u, "a file, its folder, its .resource and a desc's binary file are one item");
+	BOOST_TEST((one.remove_folders == std::vector<std::string>{ "kit/sub", "kit" }));
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationOverTheLimits_IsRefused_SayingWhatItCounted)
+{
+	make_kit();
+	open();
+	limits.max_files = 3;
+	const edt::operation_plan files = plan(request(edt::asset_operation::remove, "kit"));
+	BOOST_REQUIRE(files.refused.has_value());
+	BOOST_TEST((files.refused->code == edt::refusal_code::too_many_files));
+	BOOST_TEST(files.refused->reason.find("at most 3 files") != std::string::npos, files.refused->reason);
+
+	limits = {};
+	limits.max_bytes = 10;
+	const edt::operation_plan bytes = plan(request(edt::asset_operation::move, "kit", "env"));
+	BOOST_REQUIRE(bytes.refused.has_value());
+	BOOST_TEST((bytes.refused->code == edt::refusal_code::too_many_files));
+	BOOST_TEST(bytes.refused->reason.find("10 file(s) and folder(s)") != std::string::npos, bytes.refused->reason);
+	BOOST_TEST(bytes.refused->reason.find("and 10 bytes") != std::string::npos, bytes.refused->reason);
+
+	limits = {};
+	limits.max_files = 2;
+	const edt::operation_plan pair = plan(request(edt::asset_operation::rename, "meshes/rock.mesh.desc", "stone.mesh.desc"));
+	BOOST_REQUIRE(pair.refused.has_value());
+	BOOST_TEST((pair.refused->code == edt::refusal_code::too_many_files));
+	BOOST_TEST(pair.refused->reason.find("4 file(s)") != std::string::npos, pair.refused->reason);
+	BOOST_TEST(has("meshes/rock.mesh.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AFolderRenamedInCaseOnly_OrToAFolderTakenUpToCase_IsRefused_WhereNamesIgnoreCase)
+{
+	make_kit();
+	write("Set/x.desc", canonical(R"({ "__type": "material_desc" })"));
+	write("env/KIT/y.desc", canonical(R"({ "__type": "material_desc" })"));
+	open(false, true);
+	const auto before = tree();
+	const edt::operation_plan case_only = plan(request(edt::asset_operation::rename, "kit", "Kit"));
+	BOOST_REQUIRE(case_only.refused.has_value());
+	BOOST_TEST((case_only.refused->code == edt::refusal_code::case_only_rename));
+	const edt::operation_plan taken = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(taken.refused.has_value());
+	BOOST_TEST((taken.refused->code == edt::refusal_code::target_exists));
+	const edt::operation_plan inside = plan(request(edt::asset_operation::move, "kit", "env"));
+	BOOST_REQUIRE(inside.refused.has_value());
+	BOOST_TEST((inside.refused->code == edt::refusal_code::target_exists), "a folder taken up to case below the target");
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithAForgedFolderStep_IsRefused_AndNothingIsTouched)
+{
+	make_kit();
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(edt::journal_problem(report.journal).empty());
+	const auto after = tree();
+	for (const edt::journal_step_kind kind : { edt::journal_step_kind::make_folder, edt::journal_step_kind::remove_folder }) {
+		const auto found = std::ranges::find(report.journal.steps, kind, &edt::journal_step::kind);
+		BOOST_REQUIRE(found != report.journal.steps.end());
+		const std::size_t index = static_cast<std::size_t>(found - report.journal.steps.begin());
+		for (const std::string_view bad : { "/etc", "../outside", "set/../../outside", "C:/x", "a\\b", "", ".git", "set//x", "levels/.." }) {
+			edt::operation_journal forged = report.journal;
+			forged.steps[index].from = std::string(bad);
+			BOOST_TEST(!edt::journal_problem(forged).empty(), bad);
+			std::string reason;
+			BOOST_TEST(!edt::journal_from_json(edt::journal_to_json(forged), reason).has_value(), bad);
+			BOOST_TEST(!reason.empty(), bad);
+			BOOST_TEST(!ops().undo(forged).ok, bad);
+		}
+		edt::operation_journal with_hash = report.journal;
+		with_hash.steps[index].hash = "fnv1a64:0000000000000000";
+		BOOST_TEST(!edt::journal_problem(with_hash).empty(), "a folder step has no hash");
+		edt::operation_journal with_target = report.journal;
+		with_target.steps[index].to = "elsewhere";
+		BOOST_TEST(!edt::journal_problem(with_target).empty(), "a folder step has no target");
+	}
+	edt::operation_journal outside = report.journal;
+	for (edt::journal_step& step : outside.steps) step.root = foreign.path().generic_string();
+	BOOST_TEST(!ops().undo(outside).ok, "a folder step outside the project's own folder");
+	BOOST_TEST((tree() == after));
+}
+
+BOOST_AUTO_TEST_CASE(ADatabaseBehindTheDisk_RefusesAFolderOperation_InsteadOfCarryingAnAssetAlongAsForeign)
+{
+	make_kit();
+	open();
+	write("kit/sub/late.geom.desc", canonical(R"({ "__type": "mesh_desc" })"));
+	write("kit/sub/late.geom.bin", "geometry");
+	const auto before = tree();
+	for (const edt::asset_operation operation : { edt::asset_operation::rename, edt::asset_operation::move, edt::asset_operation::remove }) {
+		const edt::operation_plan planned = plan(request(operation, "kit", operation == edt::asset_operation::move ? "env" : "set"));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), edt::asset_operation_name(operation));
+		BOOST_TEST((planned.refused->code == edt::refusal_code::database_not_ready), edt::asset_operation_name(operation));
+		BOOST_TEST(planned.refused->reason.find("kit/sub/late.geom.desc") != std::string::npos, planned.refused->reason);
+	}
+	BOOST_TEST((tree() == before));
+
+	// Before its first walk the database knows nothing: no operation is planned at all.
+	db = std::make_unique<edt::asset_database>(jobs, &events, std::vector<fs::path>{ engine.path(), layer.path() });
+	db->rebuild();
+	const edt::operation_plan early = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(early.refused.has_value());
+	BOOST_TEST((early.refused->code == edt::refusal_code::database_not_ready));
+	test_util::pump(tasks);
+	BOOST_TEST(!plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc")).refused.has_value(), "once it walked, it plans");
+}
+
+BOOST_AUTO_TEST_CASE(AMovedFolder_TakesAGeometryDescWithItsBinaryPair_AndParentReferencesInsideIt)
+{
+	make_kit();
+	write("kit/sub/shape.geom.desc", canonical(R"({ "__type": "mesh_desc" })"));
+	write("kit/sub/shape.geom.desc.resource", meta_text("e5f60718-5555-4666-8777-88889999aaaa"));
+	write("kit/sub/shape.geom.bin", std::string("SNKB\x01\x00\x00\x00 shape", 14));
+	write("kit/sub/shape.geom.bin.resource", meta_text("f6071829-6666-4777-8888-9999aaaabbbb"));
+	write("kit/sub/child.desc", canonical(R"({ "__type": "material_desc", "__parent": "res://kit/a.desc" })"));
+	write("kit/sub/deeper/grand.desc", canonical(R"({ "__type": "material_desc", "__parent": "res://kit/sub/child.desc" })"));
+	open();
+	const auto before = tree();
+	const edt::operation_report report = run(request(edt::asset_operation::move, "kit", "env"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(text_of("env/kit/sub/shape.geom.bin") == before.at("kit/sub/shape.geom.bin"));
+	BOOST_TEST(text_of("env/kit/sub/shape.geom.bin.resource") == before.at("kit/sub/shape.geom.bin.resource"));
+	BOOST_TEST(text_of("env/kit/sub/shape.geom.desc.resource") == before.at("kit/sub/shape.geom.desc.resource"));
+	const auto bin = std::ranges::find(report.journal.steps, std::string("kit/sub/shape.geom.bin"), &edt::journal_step::from);
+	const auto desc = std::ranges::find(report.journal.steps, std::string("kit/sub/shape.geom.desc"), &edt::journal_step::from);
+	BOOST_REQUIRE(bin != report.journal.steps.end());
+	BOOST_TEST((bin < desc), "the binary file goes before its desc");
+	BOOST_TEST(value_at("env/kit/sub/child.desc", "/__parent") == "res://env/kit/a.desc");
+	BOOST_TEST(value_at("env/kit/sub/deeper/grand.desc", "/__parent") == "res://env/kit/sub/child.desc", "#1460: a parent in the same moved folder");
+
+	const edt::undo_report undone = ops().undo(report.journal);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(ARollback_LeavesAFolderSomebodyElseMade)
+{
+	make_kit();
+	open();
+	on_step = [&](std::string_view step) {
+		if (step == "make_folder:set/sub") fs::create_directories(layer.path() / "set" / "sub");
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_TEST(!report.ok);
+	BOOST_TEST(report.rollback_failures.empty());
+	BOOST_TEST(fs::is_directory(layer.path() / "set" / "sub"), "the folder that was there before the step is not the operation's to remove");
+	BOOST_TEST(has("kit/a.desc"));
+	BOOST_TEST(has("kit/sub/b.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AJournalWithAForgedMoveOfFilesTheProjectDoesNotList_IsRefused)
+{
+	write(std::string(prj::k_manifest_file_name), "{}");
+	make_kit();
+	write("kit/draft.tmp", "scratch");
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_REQUIRE(edt::journal_problem(report.journal).empty());
+	const auto carried = std::ranges::find(report.journal.steps, std::string("kit/draft.tmp"), &edt::journal_step::from);
+	BOOST_REQUIRE(carried != report.journal.steps.end());
+	const std::size_t index = static_cast<std::size_t>(carried - report.journal.steps.begin());
+	const std::pair<std::string_view, std::string_view> forged[] = { { ".hidden/x/draft.tmp", "set/x/draft.tmp" }, { "kit/draft.tmp", ".hidden/draft.tmp" },
+		{ "../kit/draft.tmp", "set/draft.tmp" }, { "kit/../draft.tmp", "set/draft.tmp" }, { ".cache/asset_ops/draft.tmp", "set/asset_ops/draft.tmp" },
+		{ "code/x/evil.tmp", "set/x/evil.tmp" }, { "kit/draft.tmp", "code/draft.tmp" }, { "draft.tmp", "set/draft.tmp" } };
+	const auto after = tree();
+	for (const auto& [from, to] : forged) {
+		edt::operation_journal bad = report.journal;
+		bad.steps[index].from = std::string(from);
+		bad.steps[index].to = std::string(to);
+		BOOST_TEST(!edt::journal_problem(bad).empty(), std::string(from) + " -> " + std::string(to));
+		BOOST_TEST(!ops().undo(bad).ok, from);
+	}
+	BOOST_TEST((tree() == after));
+}
+
+BOOST_AUTO_TEST_CASE(ALongJournal_IsWrittenInStepFiles_AndReadBackWhole)
+{
+	for (int i = 0; i < 40; ++i) {
+		write(std::format("big/f{:02}.desc", i), canonical(R"({ "__type": "material_desc" })"));
+		write(std::format("big/f{:02}.desc.resource", i), meta_text(std::format("12345678-0000-4000-8000-{:012x}", i + 1)));
+	}
+	open();
+	const auto before = tree();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "big", "large"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_REQUIRE(report.journal.steps.size() > 64u);
+	const fs::path folder = journal.path() / report.operation_id;
+	BOOST_TEST(fs::is_regular_file(folder / "steps.1.json"));
+	std::ifstream in(folder / "journal.json", std::ios::binary);
+	const json::value head = json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+	BOOST_TEST(head.at("steps").as_array().size() == 64u, "journal.json keeps the first steps");
+	std::string reason;
+	BOOST_TEST(!edt::journal_from_json(head, reason).has_value(), "the first steps alone are not taken for the journal");
+
+	const std::optional<json::value> whole = edt::read_journal(journal.path(), report.operation_id, reason);
+	BOOST_REQUIRE_MESSAGE(whole.has_value(), reason);
+	const std::optional<edt::operation_journal> loaded = edt::journal_from_json(*whole, reason);
+	BOOST_REQUIRE_MESSAGE(loaded.has_value(), reason);
+	BOOST_TEST((edt::journal_to_json(*loaded) == edt::journal_to_json(report.journal)));
+	const edt::undo_report undone = ops().undo(*loaded);
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AFolderOperationCutShortByACrash_IsUndoneFromTheHistoryAtTheNextStart)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	// Cut short after a few moves; and after the last rewrite was written into the journal but not done.
+	for (const std::string_view crash_at : { "move:kit/sub/rock.mesh.desc", "remove_folder:kit/sub" }) {
+		start_history();
+		on_step = [&](std::string_view step) {
+			if (step == crash_at) keep_crash();
+		};
+		const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+		BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+		on_step = {};
+		history.reset();
+		back_to_crash();
+		if (crash_at == "remove_folder:kit/sub") write("levels/kit_user.desc", before.at("levels/kit_user.desc"));
+
+		edt::asset_history& restarted = start_history();
+		BOOST_REQUIRE_MESSAGE(restarted.size() == 1u, crash_at);
+		BOOST_TEST(restarted.next_is_interrupted(), crash_at);
+		const edt::asset_fix_result undone = restarted.undo_last(ops());
+		BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+		BOOST_TEST((tree() == before), crash_at);
+		BOOST_TEST(restarted.size() == 0u);
+		history.reset();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TheHistoryListsAnOperationWhileItRuns_AndForgetsOneThatWasTakenBack)
+{
+	make_kit();
+	open();
+	edt::asset_history& listed = start_history();
+	on_step = [&](std::string_view step) {
+		if (step == "move:kit/a.desc") BOOST_TEST(listed.next_is_interrupted(), "listed before the first step");
+	};
+	fail_at = "move:kit/sub/b.desc";
+	const edt::operation_report failed = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(listed.size() == 0u, "an operation taken back whole is not in the history");
+	fail_at.clear();
+	const edt::operation_report done = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(done.ok, done.error);
+	BOOST_TEST(listed.size() == 1u);
+	BOOST_TEST(!listed.next_is_interrupted());
+	BOOST_TEST(start_history().size() == 1u, "and it is read back as an ordinary entry");
+}
+
+BOOST_AUTO_TEST_CASE(AnOrphanBinaryFileTheDatabaseHasNotRead_RefusesTheOperation_ItIsNotCarried)
+{
+	make_kit();
+	open();
+	write("kit/sub/nav.mesh.bin", "an orphan binary file: an asset of its own");
+	const auto before = tree();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::database_not_ready));
+	BOOST_TEST(planned.refused->reason.find("kit/sub/nav.mesh.bin") != std::string::npos, planned.refused->reason);
+	BOOST_TEST((tree() == before));
+
+	// Once read, it is an asset like any other and goes with its folder.
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	BOOST_TEST(has("set/sub/nav.mesh.bin"));
+}
+
+BOOST_AUTO_TEST_CASE(ADatabaseWalkingAgain_RefusesAnOperationUntilItIsDone)
+{
+	open();
+	db->rebuild();
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::database_not_ready));
+	test_util::pump(tasks);
+	BOOST_TEST(!plan(request(edt::asset_operation::rename, "sky.desc", "clouds.desc")).refused.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(AFolderTheDatabaseDoesNotRead_IsRefusedWithItsReason_NotLeftWaitingForTheDatabase)
+{
+	write(std::string(prj::k_manifest_file_name), "{}");
+	write("code/game.cpp", "int x;");
+	write(".hidden/notes.desc", canonical(R"({ "__type": "material_desc" })"));
+	std::string deep = "kit";
+	for (int i = 0; i < 64; ++i) deep += "/d";
+	write(deep + "/far.desc", canonical(R"({ "__type": "material_desc" })"));
+	open();
+	const auto before = tree();
+	for (const std::string_view folder : { "code", ".hidden" }) {
+		const edt::operation_plan planned = plan(request(edt::asset_operation::move, folder, "env"));
+		BOOST_REQUIRE_MESSAGE(planned.refused.has_value(), folder);
+		BOOST_TEST((planned.refused->code == edt::refusal_code::bad_name), folder);
+		BOOST_TEST(planned.refused->reason.find("does not read") != std::string::npos, planned.refused->reason);
+	}
+	const edt::operation_plan too_deep = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(too_deep.refused.has_value());
+	BOOST_TEST((too_deep.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(too_deep.refused->reason.find("folders deep") != std::string::npos, too_deep.refused->reason);
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationTheHistoryCannotList_IsRefusedBeforeItsFirstStep)
+{
+	make_kit();
+	open();
+	const auto before = tree();
+	throw_when_listed = true;
+	const edt::operation_report thrown = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(thrown.refused.has_value());
+	BOOST_TEST((thrown.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(thrown.refused->reason.find("the history threw") != std::string::npos, thrown.refused->reason);
+	BOOST_TEST(thrown.journal.steps.empty());
+	BOOST_TEST((tree() == before));
+	throw_when_listed = false;
+
+	settings.write("blocker", "a file where the history's folder would be");
+	history = std::make_unique<edt::asset_history>(journal.path(), settings.path() / "blocker" / "list.json", [this] { return ++history_serial; });
+	const edt::operation_report unsaved = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(unsaved.refused.has_value());
+	BOOST_TEST((unsaved.refused->code == edt::refusal_code::io_error));
+	BOOST_TEST(unsaved.refused->reason.find("not saved") != std::string::npos, unsaved.refused->reason);
+	BOOST_TEST(history->size() == 0u, "an entry that could not be saved is not kept");
+	BOOST_TEST((tree() == before));
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationTakenBackWhole_LetsNoOlderEntryGo)
+{
+	open();
+	edt::asset_history& listed = start_history();
+	for (std::size_t i = 0; i < edt::asset_history::max_entries; ++i) {
+		edt::operation_journal made;
+		made.id = std::format("op{:02}", i);
+		made.directory = (journal.path() / made.id).generic_string();
+		made.steps.push_back(edt::journal_step{ edt::journal_step_kind::move, "root", "a.desc", "b.desc", "h", {}, {} });
+		listed.record(made);
+	}
+	BOOST_REQUIRE(listed.size() == edt::asset_history::max_entries);
+	fail_at = "move:sky.desc.resource";
+	const edt::operation_report failed = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(listed.size() == edt::asset_history::max_entries, "nothing was let go for an operation that left no trace");
+	BOOST_TEST((listed.next_operation_id() == std::optional<std::string>("op19")));
+	fail_at.clear();
+	const edt::operation_report done = run(request(edt::asset_operation::rename, "sky.desc", "clouds.desc"));
+	BOOST_REQUIRE_MESSAGE(done.ok, done.error);
+	BOOST_TEST(listed.size() == edt::asset_history::max_entries);
+	BOOST_TEST((listed.next_operation_id() == std::optional<std::string>(done.operation_id)));
+}
+
+BOOST_AUTO_TEST_CASE(ALongOperationCutShort_IsUndoneThroughItsStepFiles_AlsoBetweenAStepFileAndItsHeader)
+{
+	make_big();
+	open();
+	const auto before = tree();
+	// Step 66 is next: 65 steps are written, the 65th the first of steps.1.json.
+	for (const bool header_lost : { false, true }) {
+		start_history();
+		on_step = [&](std::string_view step) {
+			if (step == "move:big/f32.desc") keep_crash();
+		};
+		const edt::operation_report report = run(request(edt::asset_operation::rename, "big", "large"));
+		BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+		on_step = {};
+		history.reset();
+		back_to_crash();
+		const fs::path header = journal.path() / report.operation_id / "journal.json";
+		BOOST_REQUIRE(fs::is_regular_file(header.parent_path() / "steps.1.json"));
+		if (header_lost) {
+			// The crash came after steps.1.json was written and before journal.json named it, so its step was not done either.
+			std::ifstream in(header, std::ios::binary);
+			json::value head = json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+			in.close();
+			BOOST_REQUIRE(head.as_object().erase("more_steps") == 1u);
+			std::ofstream(header, std::ios::binary | std::ios::trunc) << json::serialize(head);
+			fs::rename(layer.path() / "large" / "f31.desc.resource", layer.path() / "big" / "f31.desc.resource");
+		}
+		edt::asset_history& restarted = start_history();
+		BOOST_REQUIRE_MESSAGE(restarted.size() == 1u, header_lost);
+		BOOST_TEST(restarted.next_is_interrupted());
+		const edt::asset_fix_result undone = restarted.undo_last(ops());
+		BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+		BOOST_TEST((tree() == before), header_lost);
+		history.reset();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AForgedPendingJournal_IsIgnoredAtTheStart)
+{
+	make_kit();
+	open();
+	const edt::operation_report report = run(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE_MESSAGE(report.ok, report.error);
+	const auto after = tree();
+	start_history();
+	const auto forged = [&](const std::string& id, json::value value) {
+		value.as_object()["id"] = id;
+		value.as_object()["directory"] = (journal.path() / id).generic_string();
+		journal.write(id + "/journal.json", json::serialize(value));
+		forge_pending(id);
+	};
+	json::value outside = edt::journal_to_json(report.journal);
+	for (json::value& step : outside.at("steps").as_array()) step.as_object()["root"] = foreign.path().generic_string();
+	forged("outside", outside);
+	for (const std::int64_t files : { std::int64_t{ 0 }, std::int64_t{ 1025 }, std::int64_t{ 1 } }) {
+		json::value header = edt::journal_to_json(report.journal);
+		header.as_object()["more_steps"] = files;
+		forged(std::format("more{}", files), header);
+	}
+	json::value big = edt::journal_to_json(report.journal);
+	big.as_object()["padding"] = std::string(std::size_t{ 17 } << 20, 'x');
+	forged("huge", big);
+	BOOST_REQUIRE(history->size() == 5u);
+
+	edt::asset_history& restarted = start_history();
+	BOOST_TEST(restarted.size() == 0u, "a root outside the project, a wrong step count, a missing step file, a journal over 16 MiB");
+	BOOST_TEST(!restarted.undo_last(ops()).ok);
+	BOOST_TEST((tree() == after));
+}
+
+BOOST_AUTO_TEST_CASE(ARollbackThatCouldNotTakeEverythingBack_StaysInTheHistoryAfterARestart)
+{
+	open();
+	start_history();
+	fail_at = "stash:lonely.desc.resource";
+	on_step = [&](std::string_view step) {
+		if (step == "before_undo:lonely.desc") write("lonely.desc", "someone else's file");
+	};
+	const edt::operation_report report = run(request(edt::asset_operation::remove, "lonely.desc"));
+	BOOST_TEST(!report.ok);
+	BOOST_REQUIRE(report.rollback_failures.size() == 1u);
+	BOOST_TEST(history->next_is_interrupted());
+	on_step = {};
+	fail_at.clear();
+	edt::asset_history& restarted = start_history();
+	BOOST_TEST(restarted.size() == 1u);
+	BOOST_TEST(restarted.next_is_interrupted(), "what could not be taken back can still be undone after a restart");
+}
+
+BOOST_AUTO_TEST_CASE(AnOperationWhoseJournalWouldBeTooBig_IsRefused)
+{
+	make_kit();
+	open();
+	limits.max_journal_bytes = 1000;
+	const edt::operation_plan planned = plan(request(edt::asset_operation::rename, "kit", "set"));
+	BOOST_REQUIRE(planned.refused.has_value());
+	BOOST_TEST((planned.refused->code == edt::refusal_code::too_many_files));
+	BOOST_TEST(planned.refused->reason.find("journal") != std::string::npos, planned.refused->reason);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -297,7 +297,7 @@ BOOST_AUTO_TEST_CASE(EveryRefusalCode_HasItsOwnSentence)
 {
 	std::set<std::string> sentences;
 	int codes = 0;
-	for (int value = 0; value <= static_cast<int>(edt::refusal_code::unrewritable_references); ++value, ++codes) {
+	for (int value = 0; value <= static_cast<int>(edt::refusal_code::too_many_files); ++value, ++codes) {
 		edt::refusal why;
 		why.code = static_cast<edt::refusal_code>(value);
 		const std::string text = edt::refusal_message(why);
