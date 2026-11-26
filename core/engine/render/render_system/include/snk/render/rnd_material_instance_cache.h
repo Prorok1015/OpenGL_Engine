@@ -20,6 +20,7 @@ namespace rnd
 {
 	class texture_manager;
 	struct material_compiler_interface;
+	struct material_shader_state;
 
 	// The material instances of the renderer: a material_desc compiled for drawing (shader variants, resolved
 	// maps, MaterialParams bytes; its set 2 group is made from these by material_groups when a draw binds it).
@@ -115,7 +116,10 @@ namespace rnd
 		void set_shader(slot& s, res::res_handle<shader_desc> shader);
 		void on_shader_changed(const res::tag& shader);
 		void report_problem(const res::tag& shader, std::string_view material, const std::string& error, bool reload);
-		void clear_problem(const res::tag& shader, std::string_view material);
+		// Every problem of the pair, or the one of `code` only.
+		void clear_problem(const res::tag& shader, std::string_view material, std::string_view code = {});
+		// A material of the transparent or mix queue whose shader has no transparent path: drawn as before, reported (#1440).
+		void check_transparent_path(const slot& s, const material_desc& desc, const material_shader_state& shader);
 		// Whether a live slot compiles `material` with `shader` (and, with reload_failed_only, its last reload failed).
 		bool any_slot(const res::tag& shader, std::string_view material, bool reload_failed_only) const;
 

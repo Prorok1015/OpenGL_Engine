@@ -6,11 +6,16 @@
 #include <snk/common/logger/engine_log.h>
 
 #include <algorithm>
+#include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace
 {
+	constexpr std::string_view k_load_code = "shader/load";
+	constexpr std::string_view k_no_transparent_path_code = rnd::k_no_transparent_path_code;
+
 	rnd::material_shader_state read_shader(const res::res_handle<rnd::shader_desc>& shader)
 	{
 		rnd::material_shader_state state;
@@ -78,8 +83,33 @@ void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<materi
 	if (shader.failed) {
 		report_problem(s.shader.get_tag(), s.material_tag, s.shader.error_text(), false);
 	} else if (shader.desc && !s.reload_failed && !any_slot(s.shader.get_tag(), s.material_tag, true)) {
-		clear_problem(s.shader.get_tag(), s.material_tag);
+		clear_problem(s.shader.get_tag(), s.material_tag, k_load_code);
 	}
+	check_transparent_path(s, *desc, shader);
+}
+
+void rnd::material_instance_cache::check_transparent_path(const slot& s, const material_desc& desc, const material_shader_state& shader)
+{
+	if (!shader.desc) {
+		return;
+	}
+	const bool blended = desc.queue == pass_queue::TRANSPARENT || desc.queue == pass_queue::MIX;
+	if (!blended || shader.desc->transparent) {
+		clear_problem(s.shader.get_tag(), s.material_tag, k_no_transparent_path_code);
+		return;
+	}
+	const auto known = std::ranges::find_if(m_problems, [&](const shader_problem& p) {
+		return p.file == s.shader.get_tag() && p.program == s.material_tag && p.code == k_no_transparent_path_code;
+	});
+	if (known != m_problems.end()) {
+		return;
+	}
+	const std::string message = std::format("the queue {} needs a shader with a transparent path (\"transparent\": true, e.g. "
+		"res://shaders/mix_opaque_trans_scene.shader.desc); the transparent pass gets nothing it can blend",
+		desc.queue == pass_queue::MIX ? "mix" : "transparent");
+	egLOG_WARN("render/material", "'{}': {}", s.material_tag, message);
+	m_problems.push_back(shader_problem{ s.shader.get_tag(), 0, 0, std::string(k_no_transparent_path_code), message, s.material_tag });
+	++m_problems_generation;
 }
 
 bool rnd::material_instance_cache::reload_shader(slot& s)
@@ -136,7 +166,9 @@ void rnd::material_instance_cache::on_shader_changed(const res::tag& shader)
 
 void rnd::material_instance_cache::report_problem(const res::tag& shader, std::string_view material, const std::string& error, bool reload)
 {
-	const auto known = std::ranges::find_if(m_problems, [&](const shader_problem& p) { return p.file == shader && p.program == material; });
+	const auto known = std::ranges::find_if(m_problems, [&](const shader_problem& p) {
+		return p.file == shader && p.program == material && p.code == k_load_code;
+	});
 	if (known != m_problems.end()) {
 		// Logged once per pair; the panel still shows the latest reason.
 		if (known->message != error) {
@@ -152,13 +184,16 @@ void rnd::material_instance_cache::report_problem(const res::tag& shader, std::s
 		egLOG_ERROR("render/material", "the shader '{}' of '{}' did not load, the material is not drawn: {}",
 			shader.view(), material, error);
 	}
-	m_problems.push_back(shader_problem{ shader, 0, 0, "shader/load", error, std::string{ material } });
+	m_problems.push_back(shader_problem{ shader, 0, 0, std::string(k_load_code), error, std::string{ material } });
 	++m_problems_generation;
 }
 
-void rnd::material_instance_cache::clear_problem(const res::tag& shader, std::string_view material)
+void rnd::material_instance_cache::clear_problem(const res::tag& shader, std::string_view material, std::string_view code)
 {
-	if (std::erase_if(m_problems, [&](const shader_problem& p) { return p.file == shader && p.program == material; }) != 0) {
+	const auto of_pair = [&](const shader_problem& p) {
+		return p.file == shader && p.program == material && (code.empty() || p.code == code);
+	};
+	if (std::erase_if(m_problems, of_pair) != 0) {
 		++m_problems_generation;
 	}
 }

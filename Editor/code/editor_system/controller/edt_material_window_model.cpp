@@ -543,7 +543,8 @@ edt::compile_errors edt::material_window_model::compile_rows(const std::vector<r
 		return row;
 	};
 	for (const rnd::shader_problem& problem : problems) {
-		const bool own_load = problem.code == "shader/load" && !problem.program.empty()
+		// A material's own rows: its shader did not load, or it does not suit the material's queue (#1440).
+		const bool own_load = (problem.code == "shader/load" || problem.code == rnd::k_no_transparent_path_code) && !problem.program.empty()
 			&& (problem.program == document || (preview_tag.is_valid() && problem.program == preview_tag.view()));
 		if (own_load) {
 			compile_row row = row_of(problem);

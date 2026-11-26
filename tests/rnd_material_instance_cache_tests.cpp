@@ -677,6 +677,108 @@ BOOST_AUTO_TEST_CASE(ACacheDestroyedWithAChangeStillQueuedLetsItsWatchGo)
 	BOOST_TEST(resources().watched_tag_count() == watched);
 }
 
+// #1440: a material of the transparent or mix queue whose shader writes nothing the transparent pass can blend is drawn as
+// before and reported once per shader and material, until the queue or the shader suits it.
+BOOST_AUTO_TEST_CASE(ABlendedQueueWithAShaderWithoutATransparentPathIsReportedOnceUntilFixed)
+{
+	const res::tag opaque_only{ res::tag::memory, "t/opaque_only.shader.desc" };
+	write_shader(opaque_only, "[]");
+	const auto desc = make_desc_with_shader(opaque_only);
+	BOOST_REQUIRE(desc->shader.is_ready());
+	BOOST_TEST(!desc->shader.get()->transparent);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	BOOST_TEST(cache.problems().empty());	// opaque: nothing to say
+
+	for (const scn::pass_queue queue : { scn::pass_queue::TRANSPARENT, scn::pass_queue::MIX }) {
+		BOOST_TEST_CONTEXT("queue " << static_cast<int>(queue)) {
+			desc->queue = queue;
+			next_frame(cache);
+			const auto id = cache.acquire(desc, false, true);
+			cache.acquire(desc, true, false);
+			BOOST_TEST(id.is_valid());	// still drawn
+			BOOST_REQUIRE(cache.problems().size() == 1u);
+			const rnd::shader_problem& problem = cache.problems().front();
+			BOOST_TEST(problem.code == std::string(rnd::k_no_transparent_path_code));
+			BOOST_TEST(problem.file == opaque_only);
+			BOOST_TEST(problem.program == std::string(desc->get_tag().view()));
+			BOOST_TEST(problem.message.find("mix_opaque_trans_scene.shader.desc") != std::string::npos);
+
+			// Another frame and another compile of the same pair: still one row, the generation stays.
+			const std::uint64_t generation = cache.problems_generation();
+			next_frame(cache);
+			cache.acquire(desc, false, true);
+			BOOST_TEST(cache.problems().size() == 1u);
+			BOOST_TEST(cache.problems_generation() == generation);
+		}
+	}
+
+	desc->queue = scn::pass_queue::OPAQUE;
+	next_frame(cache);
+	cache.acquire(desc, false, true);
+	cache.acquire(desc, true, true);
+	BOOST_TEST(cache.problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AShaderThatDeclaresATransparentPath_SuitsTheBlendedQueues)
+{
+	const res::tag blended{ res::tag::memory, "t/blended.shader.desc" };
+	write_file(blended, R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert",)"
+		R"("fragment":"res://shaders/mix_opaque_trans_scene.frag","defines":[],"transparent":true})");
+	const auto desc = make_desc_with_shader(blended);
+	BOOST_REQUIRE(desc->shader.is_ready());
+	BOOST_TEST(desc->shader.get()->transparent);
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	for (const scn::pass_queue queue : { scn::pass_queue::TRANSPARENT, scn::pass_queue::MIX }) {
+		desc->queue = queue;
+		next_frame(cache);
+		cache.acquire(desc, false, true);
+		BOOST_TEST(cache.problems().empty());
+	}
+}
+
+// The shipped shaders say what they can draw: the mix shader has the transparent path, the scene shader has not.
+BOOST_AUTO_TEST_CASE(TheShippedMixShaderHasATransparentPath_TheSceneShaderHasNot)
+{
+	const auto mix = resources().require_sync<rnd::shader_desc>(res::tag::make("shaders/mix_opaque_trans_scene.shader.desc"));
+	const auto scene = resources().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
+	test_util::pump(tasks);
+	BOOST_REQUIRE(mix.get_sync());
+	BOOST_REQUIRE(scene.get_sync());
+	BOOST_TEST(mix.get_sync()->transparent);
+	BOOST_TEST(!scene.get_sync()->transparent);
+}
+
+// A shader that changes so that it suits the queue takes the problem away on its reload.
+BOOST_AUTO_TEST_CASE(AShaderReloadedWithATransparentPathLosesTheProblem)
+{
+	const res::tag tag{ res::tag::memory, "t/gains_transparent.shader.desc" };
+	write_shader(tag, "[]");
+	const auto desc = make_desc_with_shader(tag);
+	desc->queue = scn::pass_queue::TRANSPARENT;
+
+	rnd::shader_config_cache variants;
+	rnd::material_instance_cache cache(variants, textures(), &resources());
+	next_frame(cache);
+	cache.acquire(desc, false, false);
+	BOOST_REQUIRE(cache.problems().size() == 1u);
+
+	write_file(tag, R"({"__type":"shader_desc","__version":1,"vertex":"res://shaders/scene.vert",)"
+		R"("fragment":"res://shaders/mix_opaque_trans_scene.frag","defines":[],"transparent":true})");
+	signal(tag);
+	for (int frame = 0; frame < 4 && !cache.problems().empty(); ++frame) {
+		next_frame(cache);
+		cache.acquire(desc, false, false);
+		test_util::pump(tasks);
+	}
+	BOOST_TEST(cache.problems().empty());
+}
+
 // The render system's own cache: its problems reach shader_problems() and move its generation.
 BOOST_AUTO_TEST_CASE(TheRenderSystemReportsTheMaterialCachesProblems)
 {

@@ -315,8 +315,9 @@ BOOST_AUTO_TEST_CASE(TheShippedBaseAndDerivedMaterials_OpenAsDocuments_AndSaveUn
 	write(lower, "base_material.desc", base_text);
 	edt::data_document& derived = open(put("materials/derived_material.desc", derived_text));
 	BOOST_TEST(!derived.migrated());
-	BOOST_TEST(derived.shown().at("queue").as_string() == "transparent");
-	BOOST_TEST(derived.shown().at("shader").as_string() == "res://shaders/scene.shader.desc");
+	// #1440: drawn in both queues with the shader that has a transparent path.
+	BOOST_TEST(derived.shown().at("queue").as_string() == "mix");
+	BOOST_TEST(derived.shown().at("shader").as_string() == "res://shaders/mix_opaque_trans_scene.shader.desc");
 	const edt::data_document::save_form form = derived.save_bytes();
 	BOOST_REQUIRE_MESSAGE(form.error.empty(), form.error);
 	BOOST_TEST((form.content == json::parse(derived_text)));

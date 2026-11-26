@@ -63,6 +63,8 @@
 
 ### Ошибки компиляции
 
+Материал очереди transparent или mix с шейдером без прозрачного пути (у `shader_desc` нет `"transparent": true`) рисуется как раньше, но получает строку `shader/no_transparent_path` в этом разделе и в Problems (#1440); прозрачный путь есть у `mix_opaque_trans_scene.shader.desc`.
+
 Раздел «Compile errors» под Defines читает снимок последнего рендера
 (`render_system::shader_problems()`, источник Problems `shader`), без нового API движка:
 - «This material»: строки `shader/load` самого документа и его превью, строки файлов шейдера,

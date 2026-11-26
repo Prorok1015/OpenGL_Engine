@@ -2,5 +2,6 @@
     "__type" : "material_desc",
     "__version" : 2,
     "__parent" : "res://base_material.desc",
-    "queue" : "transparent"
+    "shader" : "res://shaders/mix_opaque_trans_scene.shader.desc",
+    "queue" : "mix"
 }
