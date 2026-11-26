@@ -21,7 +21,6 @@
 #include <snk/editor/edt_registration_scope.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/game/gs_module_layout_key.h>
-#include <snk/gui/gui_theme_desc.h>
 
 // The type list of the editor layout key (edt_editor_layout.h says what belongs in it). Its includes are heavy (ImGui,
 // every editor header): edt_editor_extension.h, where SNK_DECLARE_EDITOR_MODULE is, includes it at its end, and the
@@ -68,8 +67,6 @@ namespace edt
 			asset_kind_registry,
 			// ImGui's shared state a module's drawing code reads and writes inline.
 			ImGuiStyle, ImGuiIO,
-			// An editor module may make or copy a theme preset like any public desc (#1449); a game module has no gui service.
-			gui::theme_desc,
 			editor_interface_abi_revisions, imgui_version>;
 
 		// The interface revisions and ImGui must stay in the key: dropping one would pass every other test.
