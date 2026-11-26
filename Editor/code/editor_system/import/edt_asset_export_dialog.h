@@ -4,6 +4,7 @@
 #include "edt_asset_exporter.h"
 #include "edt_file_dialog.h"
 #include <snk/common/ds/ds_task_system.hpp>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -67,8 +68,11 @@ namespace edt {
 		// What holds Export of a re-import back: the check runs, it could not read a file, or a file that holds (or may
 		// hold) edits made after the import would be overwritten without `ticked`. Empty when nothing does.
 		static std::string reimport_blocker(bool checking, const reimport_scan* scan, bool ticked);
-		// A re-import that has written a file runs to its end: a cancel would leave the asset half overwritten.
-		static bool may_cancel_export(bool reimport, int files_done) { return !reimport || files_done == 0; }
+		// A re-import that has begun writing runs to its end (`export_progress::writing`, set right before the first
+		// write): a cancel would leave the asset half overwritten.
+		static bool may_cancel_export(bool reimport, bool writing) { return !reimport || !writing; }
+		// The veto a re-import's export job gets: it refuses every cancel (job.cancel too) once `progress` is writing.
+		static std::function<std::optional<std::string>(bool)> cancel_veto(std::shared_ptr<export_progress> progress);
 
 		// Render the dialog. Returns false when dialog is closed.
 		bool render();
@@ -80,8 +84,11 @@ namespace edt {
 		// Why the name, the folder or the files refuse the export (`remap` filled when they get that far).
 		std::string form_problem(std::unordered_map<res::tag, res::tag>& remap) const;
 		void start_check();
-		// The job ended without a word (cancelled): a re-import says what it left.
+		// The job ended without a word (cancelled): a re-import says what it left, or how it ended when its work ran to
+		// its end all the same (a cancel taken just before it began writing).
 		void export_stopped();
+		// What the export's job came to: `job_error` when it threw, else `returned` from export_to_project.
+		void finish_export(const std::string& job_error, bool returned);
 		void render_export_form();
 		void render_reimport_report();
 		void render_export_progress();
@@ -118,6 +125,9 @@ namespace edt {
 		std::shared_ptr<export_progress> m_export_progress;
 		// What the running export wrote; read once its job is no longer running.
 		std::shared_ptr<std::vector<res::tag>> m_written;
+		std::shared_ptr<no_longer_made_list> m_left_over_result;
+		// Set by the job's work as its last step: 0 not ended, 1 export_to_project returned true, 2 false.
+		std::shared_ptr<std::atomic<int>> m_job_returned;
 		bool m_exporting = false;
 		// Set by the job's on_done (main thread); render_export_progress closes the popup on it.
 		bool m_export_done = false;

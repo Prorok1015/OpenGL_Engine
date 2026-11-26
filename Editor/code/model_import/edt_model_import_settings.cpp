@@ -1,6 +1,7 @@
 #include "edt_model_import_settings.h"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <format>
 
 namespace json = boost::json;
@@ -69,6 +70,38 @@ std::string source_problem(const json::value& value, edt::model_source_record& o
 	}
 	if (!named || !hashed) return "settings.source needs both name and sha256";
 	return {};
+}
+
+// The rules check_agent_folder (controller/edt_file_menu.cpp) holds a path inside the project to, which this library
+// cannot link: no ':', '\\', leading '/', control or <>"|?* character, no empty, '.' or '..' segment, no name ending in
+// '.' or ' ', no name Windows reserves for a device.
+bool reserved_device_name(std::string_view segment)
+{
+	std::string upper;
+	for (const char c : segment.substr(0, segment.find('.'))) {
+		upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+	}
+	while (!upper.empty() && upper.back() == ' ') upper.pop_back();
+	if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") return true;
+	if (upper == "CONIN$" || upper == "CONOUT$") return true;
+	return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0'
+		&& upper[3] <= '9';
+}
+
+bool made_path_is_plain(std::string_view path)
+{
+	if (path.empty() || path.front() == '/' || path.find_first_of(":\\<>\"|?*") != std::string_view::npos) return false;
+	const auto control = [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7F; };
+	if (std::ranges::any_of(path, control)) return false;
+	for (std::size_t start = 0;;) {
+		const std::size_t end = path.find('/', start);
+		const std::string_view segment =
+			path.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+		if (segment.empty() || segment == "." || segment == "..") return false;
+		if (segment.back() == '.' || segment.back() == ' ' || reserved_device_name(segment)) return false;
+		if (end == std::string_view::npos) return true;
+		start = end + 1;
+	}
 }
 
 }
@@ -169,14 +202,7 @@ std::string edt::made_problem(const json::value& made)
 	}
 	for (const json::key_value_pair& entry : made.as_object()) {
 		const std::string_view path = entry.key();
-		bool plain = !path.empty() && path.size() <= k_max_made_path_bytes && !path.starts_with('/')
-			&& path.find('\\') == std::string_view::npos
-			&& std::ranges::none_of(path, [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7F; });
-		for (std::size_t start = 0; plain && start <= path.size();) {
-			const std::size_t end = std::min(path.find('/', start), path.size());
-			plain = path.substr(start, end - start) != "..";
-			start = end + 1;
-		}
+		const bool plain = path.size() <= k_max_made_path_bytes && made_path_is_plain(path);
 		if (!plain) return std::format("settings.made: '{}' is not a path below the prefab's folder", shown(path));
 		const json::value& hash = entry.value();
 		if (!hash.is_string() || hash.as_string().size() != 64 || !is_lower_hex(hash.as_string())) {

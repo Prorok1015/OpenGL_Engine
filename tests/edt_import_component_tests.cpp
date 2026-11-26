@@ -939,12 +939,12 @@ BOOST_AUTO_TEST_CASE(EscBeforeTheFirstFile_StopsTheReimport_AndTheDialogSaysWhat
 	component->shutdown();
 }
 
-BOOST_AUTO_TEST_CASE(OnceAFileIsWritten_AReimportCannotBeCancelled_ANewImportCan)
+BOOST_AUTO_TEST_CASE(OnceWritingBegan_AReimportCannotBeCancelled_ANewImportCan)
 {
 	using dialog = edt::asset_export_dialog;
-	BOOST_CHECK(dialog::may_cancel_export(true, 0));
-	BOOST_CHECK(!dialog::may_cancel_export(true, 1));
-	BOOST_CHECK(dialog::may_cancel_export(false, 3));
+	BOOST_CHECK(dialog::may_cancel_export(true, false));
+	BOOST_CHECK(!dialog::may_cancel_export(true, true));
+	BOOST_CHECK(dialog::may_cancel_export(false, true));
 	edt::reimport_scan scan;
 	scan.files.push_back(
 		{ .tag = prefab(), .exists = true, .same_as_new = false, .state = edt::edit_state::unchanged });
@@ -957,6 +957,43 @@ BOOST_AUTO_TEST_CASE(OnceAFileIsWritten_AReimportCannotBeCancelled_ANewImportCan
 	BOOST_CHECK(dialog::reimport_blocker(false, &scan, false).empty());
 	scan.error = "a file could not be read";
 	BOOST_CHECK(!dialog::reimport_blocker(false, &scan, true).empty());
+}
+
+// The export job's veto (the one start_export sets) against job_service::cancel, job.cancel's path.
+BOOST_AUTO_TEST_CASE(JobCancel_MeetsTheVeto_OnceTheReimportBeganWriting)
+{
+	make_component();
+	const auto progress = std::make_shared<edt::export_progress>();
+	ds::lifetime owner{ ds::lifetime_option::cancel_on_destroy };
+	edt::job_service& jobs = context->jobs();
+	const auto job = jobs.start(ds::lane::io, { "Export robot", "export" }, owner,
+		[](ds::task_context&) { return true; }, [](ds::task_result<bool>&) {});
+	jobs.set_cancel_veto(job, edt::asset_export_dialog::cancel_veto(progress));
+	progress->writing.store(true);
+	BOOST_CHECK(jobs.cancel_refusal(job).has_value());
+	BOOST_CHECK(!jobs.cancel(job));
+	BOOST_CHECK(jobs.is_running(job));
+	progress->writing.store(false);
+	BOOST_CHECK(jobs.cancel(job));
+	frames_until([&jobs, job] { return !jobs.is_running(job); });
+}
+
+// A cancel taken before the export began writing can meet work that already ran to its end (here: it wrote nothing,
+// every file was as the export would leave it): the outcome is shown as any other, not lost with on_done.
+BOOST_AUTO_TEST_CASE(ACancelThatMetFinishedWork_ReportsTheOutcome)
+{
+	reimport_over_an_old_record();
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	BOOST_REQUIRE_MESSAGE(dialog.export_blocker().empty(), dialog.export_blocker());
+	BOOST_REQUIRE(dialog.start_export());
+	// The work runs; its result waits for the main thread.
+	while (tasks.run_one(ds::lane::io)) {}
+	frame_without_jobs(false);
+	frame_without_jobs(true);
+	frames_until([this] { return !component->dialog_open(); });
+	BOOST_CHECK(!component->dialog_open());
+	BOOST_CHECK_MESSAGE(dialog.export_error().empty(), dialog.export_error());
+	BOOST_CHECK_EQUAL(exported_to_scene, 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

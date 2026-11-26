@@ -225,7 +225,8 @@ std::string edt::asset_exporter::remap_problem(const std::unordered_map<res::tag
 }
 
 std::string edt::asset_exporter::export_geometry(const res::tag& from, const res::tag& to, const json::object& desc,
-	std::vector<res::tag>* written, bool& wrote, std::vector<res::tag>& on_disk) const
+	std::vector<res::tag>* written, bool& wrote, std::vector<res::tag>& on_disk,
+	const std::function<void()>& begin_write) const
 {
 	wrote = false;
 	on_disk.clear();
@@ -240,6 +241,7 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 			on_disk.push_back(to);
 			return {};
 		}
+		begin_write();
 		if (!m_res.store_sync(to, bytes)) {
 			return std::format("'{}' could not be written (see the log)", to.view());
 		}
@@ -272,6 +274,7 @@ std::string edt::asset_exporter::export_geometry(const res::tag& from, const res
 	const bool had_arrays = mesh::file_holds_geometry_arrays(m_res, to);
 	// A failed write names what it left (the staged file, or the desc with it), so whoever takes the export back takes
 	// exactly that; a desc never goes without the staged file it needs.
+	begin_write();
 	if (std::string problem = rnd::write_geometry_files(m_res, to, geometry, options, written); !problem.empty()) {
 		return problem;
 	}
@@ -457,7 +460,8 @@ bool edt::asset_exporter::export_to_project(
 	const std::function<void(int, int)>& on_file,
 	const std::filesystem::path& meta_top,
 	bool may_replace_meta,
-	const std::unordered_map<res::tag, std::string>* seen) const
+	const std::unordered_map<res::tag, std::string>* seen,
+	bool finish_once_writing) const
 {
 	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
 	// root_tag is already known from import_result — no filename guessing needed.
@@ -523,10 +527,17 @@ bool edt::asset_exporter::export_to_project(
 		return std::format("{} changed after the dialog looked at it: nothing more was written", tag.view());
 	};
 
+	// Once a re-import writes, a stop would leave a half-new asset: it is heeded only before (finish_once_writing).
+	bool writing = false;
+	const std::function<void()> begin_write = [&writing, progress] {
+		writing = true;
+		if (progress) progress->writing.store(true);
+	};
+
 	int files_done = 0;
 	int files_written = 0;
 	for (const auto& mem_tag : ordered_tags) {
-		if (ctx) ctx->throw_if_stopped();
+		if (ctx && !(finish_once_writing && writing)) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
 		if (remap_it == remap.end()) {
 			return fail(std::format("'{}' has no place in the project", mem_tag.view()));
@@ -572,7 +583,8 @@ bool edt::asset_exporter::export_to_project(
 			}
 			bool wrote = false;
 			std::vector<res::tag> on_disk;
-			if (std::string problem = export_geometry(mem_tag, res_tag, val.as_object(), written, wrote, on_disk);
+			if (std::string problem = export_geometry(mem_tag, res_tag, val.as_object(), written, wrote, on_disk,
+				begin_write);
 				!problem.empty()) {
 				return fail(std::move(problem));
 			}
@@ -629,6 +641,7 @@ bool edt::asset_exporter::export_to_project(
 			}
 		}
 		if (meta_first) {
+			begin_write();
 			if (std::string error = write_model_meta(top, *meta); !error.empty()) return fail(std::move(error));
 			if (written) written->push_back(meta->tag);
 		}
@@ -647,6 +660,7 @@ bool edt::asset_exporter::export_to_project(
 			egLOG_INFO("edt/export", "Unchanged: {}", res_tag.view());
 		} else {
 			// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
+			begin_write();
 			if (wait_for_writes) {
 				if (!m_res.store_sync(res_tag, output_bytes)) {
 					return prefab_failed(std::format("'{}' could not be written (see the log)", res_tag.view()));
@@ -658,7 +672,9 @@ bool edt::asset_exporter::export_to_project(
 			++files_written;
 		}
 
-		if (with_meta && !meta_first) {
+		// A replaced sidecar that would come out as it is (an unchanged re-import) is left alone.
+		if (with_meta && !meta_first && meta->text != *meta->before) {
+			begin_write();
 			if (std::string error = write_model_meta(top, *meta); !error.empty()) {
 				return fail(std::format("{}; the prefab is written, its .resource still records the earlier "
 					"settings", error));

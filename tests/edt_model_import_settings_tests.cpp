@@ -207,6 +207,15 @@ BOOST_AUTO_TEST_CASE(Made_IsRefusedWhenGiven_AndCheckedWhenReadBack)
 		BOOST_CHECK_MESSAGE(!refused.ok(), json::serialize(bad));
 		BOOST_CHECK(!refused.made.has_value());
 	}
+	// The rules of check_agent_folder: no drive or protocol, no empty, '.' or '..' segment, no trailing '/', '.' or
+	// ' ', no character a file name cannot have, no name Windows reserves for a device.
+	for (const char* path : { "c:/a.png", "res://a.png", "a//b.png", "./a.png", "a/./b.png", "a/", "a/b.", "a/b ",
+		"a<b.png", "a|b.png", "a?b.png", "a*b.png", "a\"b.png", "CON.png", "nul/x.png", "textures/COM1", "LPT9.txt" }) {
+		const edt::model_settings_parse refused = edt::parse_model_settings(with(path, hash),
+			edt::unknown_settings_keys::ignore);
+		BOOST_CHECK_MESSAGE(!refused.ok(), path);
+	}
+	BOOST_CHECK(edt::parse_model_settings(with("textures/con_tex.png", hash), edt::unknown_settings_keys::ignore).ok());
 	json::object many;
 	for (std::size_t i = 0; i <= edt::k_max_made_entries; ++i) many[std::to_string(i)] = hash;
 	BOOST_CHECK(!edt::parse_model_settings(json::object{ { "made", many } }, edt::unknown_settings_keys::ignore).ok());

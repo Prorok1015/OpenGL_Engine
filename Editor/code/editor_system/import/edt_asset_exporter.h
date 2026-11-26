@@ -46,6 +46,8 @@ namespace edt {
 	};
 
 	struct export_progress {
+		// Set right before the export starts writing its first file: from then on a re-import runs to its end.
+		std::atomic<bool> writing{ false };
 		std::atomic<int> done{ 0 };
 		std::atomic<int> total{ 0 };
 		std::atomic<bool> finished{ false };
@@ -92,7 +94,9 @@ namespace edt {
 		// SHA-256 of every file the export wrote or left as it was (the prefab and a geometry desc's `.bin` too,
 		// #1194).
 		// `seen` (null: none; a re-import's check): before a file in it is overwritten it is hashed again, and one that
-		// is no longer what the check saw stops the export.
+		// is no longer what the check saw stops the export. `finish_once_writing` (a re-import): `ctx` is heeded only
+		// until the first write begins (`progress->writing`); from then on the export writes to its end, so a stop at
+		// exit leaves no half-new asset and no `.resource` with the earlier `made`.
 		bool export_to_project(
 			const import_result& result,
 			const std::unordered_map<res::tag, res::tag>& remap,
@@ -103,7 +107,8 @@ namespace edt {
 			const std::function<void(int, int)>& on_file = {},
 			const std::filesystem::path& meta_top = {},
 			bool may_replace_meta = true,
-			const std::unordered_map<res::tag, std::string>* seen = nullptr) const;
+			const std::unordered_map<res::tag, std::string>* seen = nullptr,
+			bool finish_once_writing = false) const;
 
 		// The bytes the export writes for `mem_tag` (a desc remapped and pretty-printed, else as it is); nullopt for a
 		// geometry desc (written with its binary file), and with `error` set when it cannot be read.
@@ -152,8 +157,10 @@ namespace edt {
 		// Writes the geometry `desc` (memory:// `from`, references remapped) as `to` and its binary file; lines and points (the
 		// desc names its topology) as one line of JSON arrays, as before EPIC-79. Empty when written or unchanged (`wrote`
 		// says which), else why not; triangles the loader would refuse are not written.
+		// `begin_write` is called right before a file is written.
 		std::string export_geometry(const res::tag& from, const res::tag& to, const boost::json::object& desc,
-			std::vector<res::tag>* written, bool& wrote, std::vector<res::tag>& files) const;
+			std::vector<res::tag>* written, bool& wrote, std::vector<res::tag>& files,
+			const std::function<void()>& begin_write) const;
 
 		// The slots of the material file at `to` (an earlier export) that named an embedded texture other than `desc` names.
 		std::vector<std::string> replaced_embedded_textures(const res::tag& to, const boost::json::value& desc) const;

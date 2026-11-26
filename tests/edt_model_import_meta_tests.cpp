@@ -18,6 +18,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -553,6 +554,73 @@ BOOST_AUTO_TEST_CASE(AFileChangedAfterTheCheck_StopsTheExport_AndStaysAsItIs)
 	BOOST_CHECK_MESSAGE(progress.error.find("changed after the dialog looked at it") != std::string::npos,
 		progress.error);
 	BOOST_CHECK_EQUAL(read_file(res_root / "assets" / "rock" / "textures" / "albedo.png"), "painted after the check");
+}
+
+// Exit stops every job (job_service::cancel_all_and_wait sets the stop token): a re-import that has begun writing does
+// not heed it, so no half-new asset and no `.resource` with the earlier `made` is left.
+BOOST_AUTO_TEST_CASE(AStopAfterAReimportBeganWriting_IsNotHeeded_EveryFileAndTheNewMadeAreWritten)
+{
+	edt::import_result first = imported();
+	add_geometry(first);
+	const auto remap = exporter.build_remap(first, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(first, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+
+	edt::import_result again = imported();
+	add_geometry(again, "1");
+	BOOST_REQUIRE(rs->store_sync(again.root_tag, test_util::to_bytes(R"({"__type":"prefab_desc","name":"v2"})")));
+	BOOST_REQUIRE(rs->store_sync(res::tag{ res::tag::memory, "rock/textures/albedo.png" },
+		test_util::to_bytes("png bytes v2")));
+	std::stop_source stop;
+	ds::task_context ctx;
+	ctx.stop = stop.get_token();
+	const auto on_file = [&stop](int done, int) {
+		if (done == 1) stop.request_stop();
+	};
+	edt::export_progress progress;
+	BOOST_REQUIRE(exporter.export_to_project(again, remap, &progress, &ctx, nullptr, true, on_file, res_root, true,
+		nullptr, true));
+	BOOST_CHECK(progress.writing.load());
+	BOOST_CHECK_EQUAL(progress.done.load(), 3);
+	const fs::path folder = res_root / "assets" / "rock";
+	BOOST_CHECK(read_file(folder / "rock.prefab.desc").find("v2") != std::string::npos);
+	BOOST_CHECK_EQUAL(read_file(folder / "textures" / "albedo.png"), "png bytes v2");
+	const edt::model_import_record record = edt::read_model_import_record(res_root, prefab_tag());
+	BOOST_REQUIRE(record.ok() && record.made.has_value());
+	for (const char* name : { "rock.prefab.desc", "textures/albedo.png", "rock.geom.desc", "rock.geom.bin" }) {
+		BOOST_CHECK_EQUAL(record.made->at(name), sha_of(read_file(folder / name)));
+	}
+
+	// Before anything is written the stop is heeded, re-import or not.
+	std::stop_source early;
+	early.request_stop();
+	ctx.stop = early.get_token();
+	edt::export_progress none;
+	BOOST_CHECK_THROW(exporter.export_to_project(again, remap, &none, &ctx, nullptr, true, {}, res_root, true, nullptr,
+		true), ds::task_cancelled);
+	BOOST_CHECK(!none.writing.load());
+}
+
+BOOST_AUTO_TEST_CASE(AnEditedGeometryBinaryFile_IsChangedInTheReimportCheck)
+{
+	edt::import_result first = imported();
+	add_geometry(first);
+	const auto remap = exporter.build_remap(first, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(first, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+	const edt::model_import_record record = edt::read_model_import_record(res_root, prefab_tag());
+	BOOST_REQUIRE(record.ok());
+	dir.write("res/assets/rock/rock.geom.bin", "edited by hand");
+	const edt::reimport_scan scan = exporter.scan_reimport(remap, res_root, "assets/rock", record.made);
+	BOOST_REQUIRE(scan.error.empty());
+	bool seen = false;
+	for (const edt::reimport_file_check& file : scan.files) {
+		if (file.tag.view() != "res://assets/rock/rock.geom.desc") continue;
+		seen = true;
+		BOOST_CHECK(file.exists);
+		BOOST_CHECK(file.state == edt::edit_state::changed);
+		BOOST_CHECK(!file.same_as_new);
+	}
+	BOOST_CHECK(seen);
+	BOOST_CHECK_EQUAL(scan.seen.at(res::tag::make("assets/rock/rock.geom.bin")), sha_of("edited by hand"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -406,7 +406,10 @@ bool edt::asset_export_dialog::start_export()
 	auto* exporter_ptr = &m_exporter;
 	m_written = std::make_shared<std::vector<res::tag>>();
 	auto written = m_written;
-	auto left_over = std::make_shared<no_longer_made_list>();
+	m_left_over_result = std::make_shared<no_longer_made_list>();
+	auto left_over = m_left_over_result;
+	m_job_returned = std::make_shared<std::atomic<int>>(0);
+	auto returned = m_job_returned;
 	const std::filesystem::path top = m_resources.get_resources_path();
 	const res::tag reimport_target = m_reimport;
 	const std::string target_folder(m_target_folder);
@@ -420,67 +423,88 @@ bool edt::asset_export_dialog::start_export()
 	// one.
 	m_export_job = m_jobs.start(ds::lane::io, { "Export " + std::string(m_asset_name), "export" }, m_lifetime,
 		[exporter_ptr, import_copy = std::move(import_copy), remap = std::move(remap), progress_ptr, written,
-		 left_over, top, reimport_target, target_folder, seen = std::move(seen), made](ds::task_context& ctx) {
+		 left_over, returned, top, reimport_target, target_folder, seen = std::move(seen),
+		 made](ds::task_context& ctx) {
 			ctx.throw_if_stopped();
 			// The prefab as the earlier import left it, read before it is overwritten.
 			const std::optional<std::string> before =
 				reimport_target.is_valid() ? prefab_text(top, reimport_target) : std::nullopt;
+			// A re-import heeds a stop only until it begins writing: exit waits for the rest.
 			const bool done = exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx,
-				written.get(), true, {}, {}, true, seen ? &*seen : nullptr);
+				written.get(), true, {}, {}, true, seen ? &*seen : nullptr, reimport_target.is_valid());
 			if (done && reimport_target.is_valid()) {
 				*left_over = asset_exporter::no_longer_made(made, before, target_folder, remap);
 			}
+			returned->store(done ? 1 : 2);
 			return done;
 		},
-		[this, written, left_over](ds::task_result<bool>& result) {
+		[this](ds::task_result<bool>& result) {
 			if (!result.ok()) {
-				m_export_error = result.error.empty() ? std::string("the export stopped (see the log)") : result.error;
-			} else if (!*result.value || !m_export_progress || !m_export_progress->success.load()) {
-				m_export_error = m_export_progress && !m_export_progress->error.empty()
-					? m_export_progress->error : std::string("a file could not be written (see the log)");
-			} else if (!m_export_progress->skipped.empty()) {
-				m_exported_tag = m_export_progress->exported_tag;
-				std::string missing;
-				for (const res::tag& tag : m_export_progress->skipped) missing += std::format("\n  {}", tag.view());
-				egLOG_WARN("edt/export", "Exported {} without {} file(s) the model refers to but the import did not "
-					"find:{}", m_exported_tag.view(), m_export_progress->skipped.size(), missing);
+				finish_export(result.error.empty() ? std::string("the export stopped (see the log)") : result.error,
+					false);
 			} else {
-				m_exported_tag = m_export_progress->exported_tag;
-				egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
+				finish_export({}, *result.value);
 			}
-			if (m_export_error.empty() && m_reimport.is_valid()) {
-				for (const res::tag& tag : left_over->tags) {
-					if (m_resources.exists(tag)) m_left_over.push_back(tag);
-				}
-				m_left_over_note = left_over->note;
-				std::string listed;
-				for (const res::tag& tag : m_left_over) listed += std::format("\n  {}", tag.view());
-				if (!m_left_over.empty()) {
-					egLOG_WARN("edt/export", "Re-imported {}; no longer made by the model, they stay in the "
-						"project:{}", m_reimport.view(), listed);
-				}
-				if (!m_left_over_note.empty()) {
-					egLOG_WARN("edt/export", "Re-imported {}; {}", m_reimport.view(), m_left_over_note);
-				}
-				m_show_report = !m_left_over.empty() || !m_left_over_note.empty();
-			}
-			if (!m_export_error.empty()) {
-				// Not taken back: a written file may have replaced one the project had, which is gone by now.
-				m_export_error += written_before_text(*written);
-				egLOG_ERROR("edt/export", "Export failed: {}", m_export_error);
-				// What is on the disk now is what the next attempt must be checked against.
-				if (m_reimport.is_valid()) start_check();
-			}
-			m_export_done = true;
 		});
 	if (reimport) {
-		// Also against job.cancel from the job list: past the first file the re-import runs to its end.
-		m_jobs.set_cancel_veto(m_export_job, [progress_ptr](bool) -> std::optional<std::string> {
-			if (may_cancel_export(true, progress_ptr->done.load())) return std::nullopt;
-			return std::string("the re-import has written files: it runs to its end");
-		});
+		// Also against job.cancel from the job list: once writing, the re-import runs to its end.
+		m_jobs.set_cancel_veto(m_export_job, cancel_veto(progress_ptr));
 	}
 	return true;
+}
+
+std::function<std::optional<std::string>(bool)> edt::asset_export_dialog::cancel_veto(
+	std::shared_ptr<export_progress> progress)
+{
+	return [progress = std::move(progress)](bool) -> std::optional<std::string> {
+		if (may_cancel_export(true, progress->writing.load())) return std::nullopt;
+		return std::string("the re-import has begun writing files: it runs to its end");
+	};
+}
+
+void edt::asset_export_dialog::finish_export(const std::string& job_error, bool returned)
+{
+	const std::shared_ptr<std::vector<res::tag>> written = m_written;
+	const std::shared_ptr<no_longer_made_list> left_over = m_left_over_result;
+	if (!job_error.empty()) {
+		m_export_error = job_error;
+	} else if (!returned || !m_export_progress || !m_export_progress->success.load()) {
+		m_export_error = m_export_progress && !m_export_progress->error.empty()
+			? m_export_progress->error : std::string("a file could not be written (see the log)");
+	} else if (!m_export_progress->skipped.empty()) {
+		m_exported_tag = m_export_progress->exported_tag;
+		std::string missing;
+		for (const res::tag& tag : m_export_progress->skipped) missing += std::format("\n  {}", tag.view());
+		egLOG_WARN("edt/export", "Exported {} without {} file(s) the model refers to but the import did not "
+			"find:{}", m_exported_tag.view(), m_export_progress->skipped.size(), missing);
+	} else {
+		m_exported_tag = m_export_progress->exported_tag;
+		egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
+	}
+	if (m_export_error.empty() && m_reimport.is_valid()) {
+		for (const res::tag& tag : left_over->tags) {
+			if (m_resources.exists(tag)) m_left_over.push_back(tag);
+		}
+		m_left_over_note = left_over->note;
+		std::string listed;
+		for (const res::tag& tag : m_left_over) listed += std::format("\n  {}", tag.view());
+		if (!m_left_over.empty()) {
+			egLOG_WARN("edt/export", "Re-imported {}; no longer made by the model, they stay in the "
+				"project:{}", m_reimport.view(), listed);
+		}
+		if (!m_left_over_note.empty()) {
+			egLOG_WARN("edt/export", "Re-imported {}; {}", m_reimport.view(), m_left_over_note);
+		}
+		m_show_report = !m_left_over.empty() || !m_left_over_note.empty();
+	}
+	if (!m_export_error.empty()) {
+		// Not taken back: a written file may have replaced one the project had, which is gone by now.
+		m_export_error += written_before_text(*written);
+		egLOG_ERROR("edt/export", "Export failed: {}", m_export_error);
+		// What is on the disk now is what the next attempt must be checked against.
+		if (m_reimport.is_valid()) start_check();
+	}
+	m_export_done = true;
 }
 
 void edt::asset_export_dialog::export_stopped()
@@ -490,7 +514,12 @@ void edt::asset_export_dialog::export_stopped()
 		egLOG("edt/export", "Export cancelled");
 		return;
 	}
-	// The job is no longer running: what it wrote is all it will write.
+	// The job is no longer running: what it wrote is all it will write. A cancel taken before it began writing may
+	// still have met work that ran to its end: that outcome is reported as any other.
+	if (const int returned = m_job_returned ? m_job_returned->load() : 0; returned != 0) {
+		finish_export({}, returned == 1);
+		return;
+	}
 	m_export_error = "The re-import was cancelled part way";
 	m_export_error += written_before_text(m_written ? *m_written : std::vector<res::tag>{});
 	egLOG_ERROR("edt/export", "{}", m_export_error);
@@ -517,7 +546,7 @@ void edt::asset_export_dialog::render_export_progress()
 		export_stopped();
 
 	const bool reimport = m_reimport.is_valid();
-	const bool may_cancel = !m_export_done && may_cancel_export(reimport, done);
+	const bool may_cancel = !m_export_done && may_cancel_export(reimport, m_export_progress->writing.load());
 	if (!may_cancel) ImGui::BeginDisabled();
 	const bool cancel = ImGui::Button("Cancel", { em(110.f), 0.f });
 	if (!may_cancel) ImGui::EndDisabled();
