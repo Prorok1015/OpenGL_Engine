@@ -3,11 +3,13 @@
 #include "edt_desc_file_commands.h"
 #include "edt_document_parts.h"
 #include "edt_editor_camera.h"
+#include "edt_prefab_history.h"
 #include <snk/editor/edt_document.h>
 #include <snk/model_codec/res_tag.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -92,12 +94,21 @@ namespace edt
 		const scn::prefab_desc* working() const { return m_working.get(); }
 		// Changes the working copy: `change` gets it and says whether it changed anything; the preview follows (reconcile by
 		// node id), the document is dirty when the result differs from the file. False: closed, locked, or nothing changed.
-		bool edit(const std::function<bool(scn::prefab_desc&)>& change);
+		// One record of the undo history, `label` by `origin`; nothing is recorded when the copy ends as it began.
+		bool edit(const std::function<bool(scn::prefab_desc&)>& change, std::string label = "Edit prefab", cmd::origin origin = cmd::origin::ui());
 		// A node of the working copy by its node ids from the root (empty path: the root); null when the document is closed,
 		// locked (Play) or the path leads nowhere. The Inspector changes it in place, then calls notify_edited().
 		scn::prefab_desc::prefab_node* working_node(const std::vector<std::uint64_t>& path);
-		// The copy was changed through working_node(): the preview follows and the dirty mark is judged again. False: closed or locked.
-		bool notify_edited();
+		// The copy was changed through working_node(): the preview follows and the dirty mark is judged again. Everything changed
+		// since the last record is one record, so a drag that changed the node many times is one undo step. False: closed or locked.
+		bool notify_edited(std::string label = "Edit node", cmd::origin origin = cmd::origin::ui());
+		// Undo and redo of the history; refused while locked (Play) and when there is nothing to do. Edits made in place and not yet
+		// announced become a record first.
+		bool undo() override;
+		bool redo() override;
+		std::optional<history_entry> next_undo_entry() const override;
+		std::optional<history_entry> next_redo_entry() const override;
+		const document_history& history() const { return m_history; }
 		// Revert: the working copy comes from the file again (fresh bytes, not the cache), the preview follows. The error
 		// text, empty when it worked; nothing changes on an error.
 		std::string revert();
@@ -127,6 +138,10 @@ namespace edt
 		// current versions of their types (#1255), which leaves the copy edited.
 		std::string take_from(const scn::prefab_desc& source);
 		void sync_preview();
+		// Records what the copy became since the last record; false when it did not differ.
+		bool record_edit(std::string label, const cmd::origin& origin);
+		void restart_history();
+		void history_replace(const prefab_snapshot& snapshot);
 		void on_source_changed(const res::tag& changed);
 		void announce();
 
@@ -144,6 +159,10 @@ namespace edt
 		disk_state m_disk;
 		bool m_lower_layer = false;
 		source_watch m_watch;
+		document_history m_history;
+		// The copy as the last record (or the open, the revert) left it, and its form: what the next record is made against.
+		prefab_snapshot m_committed;
+		std::string m_committed_form;
 
 		res::tag m_source_tag;
 		std::string m_prefab_name;

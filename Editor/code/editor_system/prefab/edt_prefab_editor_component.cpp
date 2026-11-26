@@ -86,6 +86,7 @@ void edt::prefab_editor_component::install(std::vector<registration>& out)
 	// node stays.
 	m_connections.push_back(events.selection_changed.subscribe([this](const selection& sel) {
 		if (!sel.empty()) {
+			m_history_prefab = 0;
 			release_inspector(false);
 			return;
 		}
@@ -109,6 +110,7 @@ void edt::prefab_editor_component::install(std::vector<registration>& out)
 		m_ports.inspector.set_selected_node(node);
 	}));
 	m_connections.push_back(events.document_closed.subscribe([this](document_id id) {
+		if (id == m_history_prefab) m_history_prefab = 0;
 		if (m_inspector_target.is_prefab() && id == m_inspector_target.prefab()) release_inspector(true);
 		if (id == m_shown) leave_shown();
 	}));
@@ -547,6 +549,7 @@ void edt::prefab_editor_component::select_node(const std::vector<std::uint64_t>&
 	// The level's selection ends first (its event would otherwise hand the Inspector back to the level).
 	m_ports.context.selection().clear();
 	m_inspector_target.select_prefab(prefab->id(), path, prefab->working_replaced());
+	m_history_prefab = prefab->id();
 	m_ports.inspector.set_selected_node(prefab->working_node(path));
 }
 

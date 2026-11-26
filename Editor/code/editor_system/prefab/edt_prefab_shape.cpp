@@ -63,7 +63,7 @@ namespace edt
 			report.notes.push_back(std::format("The open prefab keeps the old range of {} node(s): {}", stale, blocker));
 			return report;
 		}
-		const bool edited = prefab->edit([&](scn::prefab_desc& copy) { return mesh::retarget_shape_nodes(copy.get_root(), geometry, *range) > 0; });
+		const bool edited = prefab->edit([&](scn::prefab_desc& copy) { return mesh::retarget_shape_nodes(copy.get_root(), geometry, *range) > 0; }, "Rebuild shape nodes");
 		if (!edited) report.notes.push_back(std::format("The open prefab could not be updated: its {} node(s) keep the old range", stale));
 		return report;
 	}
@@ -93,7 +93,7 @@ namespace edt
 			found_parent = true;
 			parent->children.push_back(std::move(*node));
 			return true;
-		});
+		}, "Add shape");
 		if (changed) return {};
 		return found_parent ? "the prefab cannot be edited now" : "the node the shape goes under is gone";
 	}

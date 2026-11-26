@@ -102,23 +102,32 @@ BOOST_AUTO_TEST_CASE(undo_and_redo_go_through_the_active_document)
 	BOOST_TEST(scene.is_dirty());
 }
 
-BOOST_AUTO_TEST_CASE(a_blocked_history_leaves_undo_and_redo_disabled_until_it_is_released)
+BOOST_AUTO_TEST_CASE(a_history_owner_takes_undo_and_redo_from_the_active_document_until_it_is_released)
 {
-	bool blocked = false;
+	struct no_history_document final : edt::document
+	{
+		std::string_view kind() const override { return "stub"; }
+		const std::string& title() const override { return m_title; }
+		const res::tag& source() const override { return res::tag::null; }
+		bool is_dirty() const override { return false; }
+		std::uint64_t generation() const override { return 0; }
+		std::string m_title;
+	} owner_document;
+	edt::document* owner = nullptr;
 	edt::action_registry own;
 	const std::vector<edt::registration> own_menus = edt::register_builtin_menus(own);
-	const std::vector<edt::registration> own_actions = edt::register_edit_actions(own, documents, dialogs, {}, {}, {}, [&blocked] { return blocked; });
+	const std::vector<edt::registration> own_actions = edt::register_edit_actions(own, documents, dialogs, {}, {}, {}, [&owner] { return owner; });
 	rename("b");
 	BOOST_REQUIRE(own.invoke("edit.undo", boost::json::object{}).ok);
 	BOOST_TEST(own.is_enabled("edit.redo"));
 	rename("c");
 	BOOST_TEST(own.is_enabled("edit.undo"));
 
-	blocked = true;
+	owner = &owner_document;
 	BOOST_TEST(!own.is_enabled("edit.undo"));
 	BOOST_TEST(!own.is_enabled("edit.redo"));
 
-	blocked = false;
+	owner = nullptr;
 	BOOST_TEST(own.is_enabled("edit.undo"));
 }
 
