@@ -115,6 +115,7 @@ edt::shader_source_document::located edt::shader_source_document::locate(const r
 		}
 	}
 	out.error = std::format("no file '{}'", tag.view());
+	out.missing = true;
 	return out;
 }
 
@@ -200,6 +201,7 @@ bool edt::shader_source_document::load(const res::tag& tag, const fs::path& path
 	m_saved_text = m_text;
 	m_disk_version = code_version_of(read.bytes);
 	m_dirty = false;
+	m_missing_on_disk = false;
 	m_disk.set_changed(false);
 	return true;
 }
@@ -214,6 +216,7 @@ void edt::shader_source_document::close()
 	m_text.clear();
 	m_saved_text.clear();
 	m_dirty = false;
+	m_missing_on_disk = false;
 	m_disk.set_changed(false);
 }
 
@@ -222,6 +225,33 @@ void edt::shader_source_document::announce()
 	if (m_events) {
 		m_events->document_changed.emit(id(), m_generation);
 	}
+}
+
+void edt::shader_source_document::mark_missing()
+{
+	if (m_missing_on_disk && m_disk.changed()) return;
+	m_missing_on_disk = true;
+	if (!m_disk.raise([this] { announce(); })) announce();
+}
+
+bool edt::shader_source_document::step_history(bool redo)
+{
+	if (!m_open || !m_top_layer || edits_locked()) return false;
+	const std::function<bool()>& can = redo ? m_history.can_redo : m_history.can_undo;
+	const std::function<void()>& step = redo ? m_history.redo : m_history.undo;
+	if (!can || !step) return false;
+	if (m_flush_edits) m_flush_edits();
+	if (!can()) return false;
+	step();
+	return true;
+}
+
+std::optional<edt::history_entry> edt::shader_source_document::history_entry_of(bool redo) const
+{
+	if (!m_open || !m_top_layer || edits_locked()) return std::nullopt;
+	const std::function<bool()>& can = redo ? m_history.can_redo : m_history.can_undo;
+	if (!can || !can()) return std::nullopt;
+	return history_entry{ "Typing", cmd::origin::ui() };
 }
 
 int edt::shader_source_document::line_count() const
@@ -281,6 +311,10 @@ edt::save_result edt::shader_source_document::save()
 	}
 	const located where = locate(m_tag);
 	if (!where.error.empty()) {
+		if (where.missing) {
+			mark_missing();
+			return save_result::failure(std::format("{} was deleted or renamed outside the editor: Overwrite writes it again", m_tag.view()));
+		}
 		return save_result::failure(where.error);
 	}
 	if (!where.top_layer) {
@@ -290,6 +324,7 @@ edt::save_result edt::shader_source_document::save()
 	if (!now.error.empty()) {
 		return save_result::failure(std::format("{} cannot be checked before it is written: {}", m_tag.view(), now.error));
 	}
+	m_missing_on_disk = false;
 	// A conflict the window raised (restored autosave, typing over a reload) stands though the file is as it was read.
 	if (m_disk.changed() || code_version_of(now.bytes) != m_disk_version) {
 		m_disk.raise([this] { announce(); });
@@ -347,6 +382,37 @@ std::string edt::shader_source_document::revert()
 	return {};
 }
 
+edt::save_result edt::shader_source_document::recreate()
+{
+	res::resource_system* writer = m_services.writable_resources();
+	if (!writer) {
+		return save_result::failure("the project resources are not available");
+	}
+	shader_text_file out = m_file;
+	out.text = m_text;
+	const std::vector<std::byte> bytes = bytes_of(write_shader_text(out));
+	if (bytes.size() > k_max_shader_text_bytes) {
+		return save_result::failure("the text is larger than 4 MiB: nothing was written");
+	}
+	if (!writer->store_sync(m_tag, bytes)) {
+		return save_result::failure(std::format("{} could not be written", m_tag.view()));
+	}
+	const located written = locate(m_tag);
+	if (!written.error.empty() || !written.top_layer) {
+		return save_result::failure(std::format("{} was written, but it is not a file of the project's own layer now", m_tag.view()));
+	}
+	m_disk_path = written.file;
+	m_disk_version = code_version_of(bytes);
+	m_saved_text = m_text;
+	m_dirty = false;
+	m_disk.set_changed(false);
+	m_missing_on_disk = false;
+	writer->signal_changed(m_tag);
+	++m_generation;
+	announce();
+	return save_result::ok();
+}
+
 edt::save_result edt::shader_source_document::overwrite()
 {
 	if (!m_open) {
@@ -357,6 +423,12 @@ edt::save_result edt::shader_source_document::overwrite()
 	}
 	if (!m_top_layer) {
 		return save_result::failure(read_only_reason());
+	}
+	if (locate(m_tag).missing) {
+		if (const std::optional<std::string> why = m_files.write_blocker ? m_files.write_blocker() : std::nullopt) {
+			return save_result::failure(*why);
+		}
+		return recreate();
 	}
 	if (!m_dirty) {
 		const std::string error = revert();
@@ -394,7 +466,15 @@ void edt::shader_source_document::on_source_changed(const res::tag& changed)
 	}
 	const disk_read now = read_disk();
 	if (!now.error.empty()) {
+		if (locate(m_tag).missing) {
+			mark_missing();
+		}
 		return;
+	}
+	if (m_missing_on_disk) {
+		// The file is back: the banner is about its content now (a different one is the usual conflict).
+		m_missing_on_disk = false;
+		announce();
 	}
 	m_disk.on_source_changed(code_version_of(now.bytes), m_disk_version, m_dirty, [this] { return edits_locked(); },
 		[this] {

@@ -147,6 +147,157 @@ BOOST_AUTO_TEST_CASE(Save_WritesTheText_AndTheDocumentIsClean)
 	BOOST_TEST(document->save().saved);
 }
 
+BOOST_AUTO_TEST_CASE(ADeletedFile_RaisesAMissingConflict_SaveRefuses_OverwriteWritesItAgain)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("// kept\n"));
+	fs::remove(res_root / "shaders/scene.frag");
+
+	const edt::save_result refused = document->save();
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("deleted or renamed") != std::string::npos);
+	BOOST_TEST(document->missing_on_disk());
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(!fs::exists(res_root / "shaders/scene.frag"));
+
+	const edt::save_result written = document->overwrite();
+	BOOST_REQUIRE_MESSAGE(written.saved, written.error);
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "// kept\n");
+	BOOST_TEST(!document->missing_on_disk());
+	BOOST_TEST(!document->changed_on_disk());
+	BOOST_TEST(!document->is_dirty());
+	BOOST_TEST(document->save().saved);
+}
+
+BOOST_AUTO_TEST_CASE(ADeletedFile_IsSeenByTheWatcher_AndRecreatedKeepsTheFilesOwnEnding)
+{
+	write(res_root, "shaders/crlf.frag", "\xEF\xBB\xBFvoid main() {}\r\n");
+	document->open(res::tag{ "res://shaders/crlf.frag" });
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(document->set_text("void main() { discard; }\n"));
+	fs::remove(res_root / "shaders/crlf.frag");
+	rs->signal_changed(res::tag{ "res://shaders/crlf.frag" });
+	pump();
+
+	BOOST_TEST(document->missing_on_disk());
+	BOOST_REQUIRE(document->overwrite().saved);
+	BOOST_TEST(text_of(res_root / "shaders/crlf.frag") == "\xEF\xBB\xBFvoid main() { discard; }\r\n");
+}
+
+BOOST_AUTO_TEST_CASE(OverwriteOfADeletedFile_IsRefusedWhileWritesAreBlocked_OrEditsLocked_AndWritesNothing)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("// kept\n"));
+	fs::remove(res_root / "shaders/scene.frag");
+	BOOST_REQUIRE(!document->save().saved);
+
+	blocked = "the project may not be written now";
+	BOOST_TEST(!document->overwrite().saved);
+	BOOST_TEST(!fs::exists(res_root / "shaders/scene.frag"));
+	blocked.reset();
+
+	bool locked = true;
+	document->set_lock_source([&locked] { return locked; });
+	BOOST_TEST(!document->overwrite().saved);
+	BOOST_TEST(!fs::exists(res_root / "shaders/scene.frag"));
+	locked = false;
+	BOOST_TEST(document->overwrite().saved);
+	document->set_lock_source({});
+}
+
+BOOST_AUTO_TEST_CASE(ACleanDocumentWhoseFileWasDeleted_CanWriteItAgainByOverwrite)
+{
+	open_frag();
+	fs::remove(res_root / "shaders/scene.frag");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_REQUIRE(document->missing_on_disk());
+	BOOST_REQUIRE(!document->is_dirty());
+
+	const edt::save_result written = document->overwrite();
+	BOOST_REQUIRE_MESSAGE(written.saved, written.error);
+	BOOST_TEST(text_of(res_root / "shaders/scene.frag") == k_frag);
+	BOOST_TEST(!document->missing_on_disk());
+	BOOST_TEST(!document->changed_on_disk());
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatComesBackWithOtherText_IsAnOrdinaryConflictNotAMissingOne)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("// mine\n"));
+	fs::remove(res_root / "shaders/scene.frag");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+	BOOST_REQUIRE(document->missing_on_disk());
+
+	write(res_root, "shaders/scene.frag", "// somebody else's\n");
+	rs->signal_changed(res::tag{ "res://shaders/scene.frag" });
+	pump();
+
+	BOOST_TEST(!document->missing_on_disk());
+	BOOST_TEST(document->changed_on_disk());
+	BOOST_TEST(document->is_dirty());
+	BOOST_TEST(document->revert().empty());
+	BOOST_TEST(document->text() == "// somebody else's\n");
+}
+
+BOOST_AUTO_TEST_CASE(WhenTheFolderIsGoneToo_OverwriteEitherWritesTheFileOrFailsCleanlyWithTheEditsKept)
+{
+	open_frag();
+	BOOST_REQUIRE(document->set_text("// kept\n"));
+	fs::remove_all(res_root / "shaders");
+
+	const edt::save_result written = document->overwrite();
+
+	BOOST_TEST(written.saved == fs::exists(res_root / "shaders/scene.frag"));
+	if (written.saved) {
+		BOOST_TEST(text_of(res_root / "shaders/scene.frag") == "// kept\n");
+		BOOST_TEST(!document->is_dirty());
+	} else {
+		BOOST_TEST(!written.error.empty());
+		BOOST_TEST(document->is_dirty());
+		BOOST_TEST(document->text() == "// kept\n");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AFileRemovedFromTheTopLayerWhileALowerLayerHoldsIt_RefusesSaveAndWritesNothing)
+{
+	write(lower, "shaders/both.frag", k_frag);
+	write(res_root, "shaders/both.frag", k_frag);
+	document->open(res::tag{ "res://shaders/both.frag" });
+	BOOST_REQUIRE(document->is_open());
+	BOOST_REQUIRE(!document->read_only());
+	BOOST_REQUIRE(document->set_text("// mine\n"));
+	fs::remove(res_root / "shaders/both.frag");
+
+	const edt::save_result refused = document->save();
+
+	BOOST_TEST(!refused.saved);
+	BOOST_TEST(refused.error.find("layer below") != std::string::npos);
+	BOOST_TEST(!fs::exists(res_root / "shaders/both.frag"));
+	BOOST_TEST(document->is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AFileOfALowerLayer_CannotBeRecreatedByOverwrite)
+{
+	write(lower, "shaders/low.frag", k_frag);
+	document->open(res::tag{ "res://shaders/low.frag" });
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->read_only());
+	BOOST_TEST(!document->overwrite().saved);
+	BOOST_TEST(!fs::exists(res_root / "shaders/low.frag"));
+}
+
+BOOST_AUTO_TEST_CASE(MixedLineEndings_AreExposedForTheBanner_AndAPlainFileIsNot)
+{
+	write(res_root, "shaders/mixed.frag", "a\r\nb\nc\r\n");
+	document->open(res::tag{ "res://shaders/mixed.frag" });
+	BOOST_REQUIRE(document->is_open());
+	BOOST_TEST(document->mixed_endings());
+	open_frag();
+	BOOST_TEST(!document->mixed_endings());
+}
+
 BOOST_AUTO_TEST_CASE(Save_WhileAConflictIsRaised_WritesNothing_AndOverwriteDoes)
 {
 	open_frag();

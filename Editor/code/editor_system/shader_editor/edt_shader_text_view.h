@@ -28,6 +28,12 @@ namespace edt
 		// not copied here: `text()` does that, when the owner needs it.
 		bool render(const char* id, const ImVec2& size);
 
+		// The widget's own history; a step made here is not reported by the next `render` (the caller hands the text over itself).
+		bool can_undo() const { return m_editor.CanUndo(); }
+		bool can_redo() const { return m_editor.CanRedo(); }
+		void undo();
+		void redo();
+
 		std::string text() const { return m_editor.GetText(); }
 		int line_count() const { return m_editor.GetLineCount(); }
 		bool has_markers() const { return m_editor.HasMarkers(); }
