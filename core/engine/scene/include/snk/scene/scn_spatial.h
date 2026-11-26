@@ -178,7 +178,7 @@ namespace scn {
 		float distance = 0.f;
 		glm::vec3 point{ 0.f };
 		// Unit length: from `point` towards the query's point, or the triangle's front normal when the query's point is on the surface
-		// (up for a mesh answered by its boxes).
+		// (within 1e-5; up for a mesh answered by its boxes).
 		glm::vec3 normal{ 0.f };
 		// The triangle `point` lies on; ~0u for a mesh answered by its boxes.
 		std::uint32_t triangle = ~0u;
@@ -234,7 +234,8 @@ namespace scn {
 		// query is), appended to `out` in entity order. The filter as for overlap_shape.
 		void overlap_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter, std::vector<entt::entity>& out);
 		// The nearest point of any entity's surface within `filter.max_distance` (a ray filter's own field: the search radius), or
-		// nothing. Equal distances: the lower entity. The rest of the filter as for overlap_shape.
+		// nothing (a max_distance of 0 or less answers nothing). Equal distances: the lower entity. The rest of the filter as for
+		// overlap_shape.
 		std::optional<point_hit> closest_point(entt::registry& world, const glm::vec3& point, const ray_filter& filter);
 		// What the transform system calls for the entities it moved.
 		void entities_moved(entt::registry& world, std::span<const entt::entity> moved);

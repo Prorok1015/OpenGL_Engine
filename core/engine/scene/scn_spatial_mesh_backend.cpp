@@ -205,7 +205,8 @@ namespace {
 	// wanted, on a layer of the mask.
 	bool passes_filter(const entry& mesh, bool renderable, scn::spatial_mask layers, const scn::ray_filter& filter)
 	{
-		if (mesh.degenerate || !mesh.tree || excluded(filter.exclude, mesh.entity)) {
+		// A mesh with no triangle has no box of its own: the world tree holds a point at the origin for it, which nothing may hit.
+		if (mesh.degenerate || !mesh.tree || mesh.tree->box.empty() || excluded(filter.exclude, mesh.entity)) {
 			return false;
 		}
 		if (!filter.include_hidden && !renderable) {
@@ -398,7 +399,9 @@ namespace {
 			hit.entity = mesh.entity;
 			hit.distance = distance;
 			hit.point = at;
-			hit.normal = distance > 0.f ? (point - at) / distance : fallback_normal;
+			// A point within rounding of the surface has no direction to speak of: the triangle's front normal then.
+			constexpr float k_on_surface = 1e-5f;
+			hit.normal = distance > k_on_surface ? (point - at) / distance : fallback_normal;
 			hit.triangle = triangle;
 			out = hit;
 		};
@@ -416,7 +419,11 @@ namespace {
 					b = to_world(mesh, b);
 					c = to_world(mesh, c);
 					const glm::vec3 at = ds::closest_point_on_triangle(point, a, b, c);
-					const glm::vec3 front = mesh.normal_matrix * glm::cross(b - a, c - a);
+					// The corners are in the world already: a mirrored matrix turns the triangle inside out.
+					glm::vec3 front = glm::cross(b - a, c - a);
+					if (mesh.mirrored) {
+						front = -front;
+					}
 					const float front_length = glm::length(front);
 					consider(glm::distance(point, at), at, first_index / 3,
 						front_length > 0.f ? front / front_length : glm::vec3{ 0.f, 1.f, 0.f });

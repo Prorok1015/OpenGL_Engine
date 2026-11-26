@@ -99,7 +99,8 @@ void scn::spatial_world::overlap_frustum(entt::registry& world, const glm::mat4&
 }
 
 namespace {
-	bool finite_vec(const glm::vec3& v) { return std::isfinite(v.x + v.y + v.z); }
+	// Each component: a sum of large finite values would overflow to infinity and reject a good vector.
+	bool finite_vec(const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
 
 	// A shape the backend can test: finite, no negative size, a box with a rotation that has a direction.
 	bool usable(const scn::shape& volume)
