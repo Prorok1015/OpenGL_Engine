@@ -162,7 +162,7 @@ namespace gs
 			inp::input_capture, scn::node_index, ecs::event<int>,
 			// Passed by value to and from the exports of scn::spatial_world and the raycast functions; a module builds a shape for
 			// overlap_shape (#1328).
-			scn::ray, scn::ray_filter, scn::ray_hit, scn::ray_request, scn::ray_result, scn::ray_batch, scn::shape, scn::point_hit,
+			scn::ray, scn::ray_filter, scn::ray_hit, scn::ray_request, scn::ray_result, scn::ray_batch, scn::shape, scn::point_hit, scn::shape_hit, scn::shapecast_result,
 			// Engine events a module's event_reader<T> copies out of the bus.
 			inp::action_event, scn::animation_finished,
 			// The module constructs and moves it, so its size stays in the key; its logic is behind exports since #922 PR 3.
