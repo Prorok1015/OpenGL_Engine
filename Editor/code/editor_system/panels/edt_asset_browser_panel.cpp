@@ -748,8 +748,6 @@ namespace edt
 							m_offers_reimport = m_image_form
 								&& std::find(std::begin(pictures), std::end(pictures), extension) != std::end(pictures)
 								&& std::filesystem::is_regular_file(std::filesystem::symlink_status(sidecar, ec));
-						}
-						if (ImGui::IsWindowAppearing()) {
 							m_material_item = m_material_form ? material_item_of(e.src) : material_menu_item::none;
 						}
 						if (m_offers_open_as_data && ImGui::MenuItem("Open as data")) {
