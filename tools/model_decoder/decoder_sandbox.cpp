@@ -11,7 +11,6 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
-#include <sched.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -220,9 +219,9 @@ constexpr std::uint32_t k_audit_arch = AUDIT_ARCH_AARCH64;
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "the filter reads the low half of an argument at its first bytes");
 
 // Everything the decode path calls after the filter: reading the request and the model, the import's memory:// folder
-// (./sandbox, written by the resource system's io thread through a temp file and a rename), the answer, the log, the
-// io threads of the resource system (boost::asio: epoll, eventfd, timerfd; threads through clone below), libstdc++'s
-// filesystem (stat, getcwd, readlink of each part through realpath) and glibc's own (rseq, robust lists, getrandom).
+// (./sandbox, through a temp file and a rename), the answer, the log, the epoll, eventfd and timerfd calls of boost::asio,
+// libstdc++'s filesystem (stat, getcwd, readlink of each part through realpath) and glibc's own (rseq, robust lists,
+// getrandom).
 // x86_64 still has the old path calls (mkdir, rename, unlink...) that glibc uses there instead of the *at ones.
 constexpr long k_allowed[] = {
 	__NR_read, __NR_write, __NR_readv, __NR_writev, __NR_pread64, __NR_pwrite64, __NR_openat, __NR_close, __NR_fstat,
@@ -269,7 +268,6 @@ public:
 	void ret(std::uint32_t action) { add(BPF_RET | BPF_K, action, 0, 0); }
 	void jump_eq(std::uint32_t value, std::uint8_t if_true, std::uint8_t if_false) { add(BPF_JMP | BPF_JEQ | BPF_K, value, if_true, if_false); }
 	void jump_set(std::uint32_t bits, std::uint8_t if_true, std::uint8_t if_false) { add(BPF_JMP | BPF_JSET | BPF_K, bits, if_true, if_false); }
-	void and_with(std::uint32_t mask) { add(BPF_ALU | BPF_AND | BPF_K, mask, 0, 0); }
 	void append(filter_program& block) { m_code.insert(m_code.end(), block.m_code.begin(), block.m_code.end()); }
 
 	std::vector<sock_filter>& code() { return m_code; }
@@ -302,20 +300,14 @@ std::vector<sock_filter> filter_code()
 #endif
 
 #if defined(__NR_clone3)
-	// clone3 passes its flags in memory the filter cannot read: ENOSYS makes glibc's pthread_create fall back to clone.
+	// ENOSYS, not EPERM: glibc then falls back to clone, which is refused below, rather than failing in a way of its own.
 	program.jump_eq(syscall_number(__NR_clone3), 0, 1);
 	program.ret(k_ret_enosys);
 #endif
 
-	// clone only for a thread of this process (the resource system's io threads): never a new process or namespace.
-	constexpr std::uint32_t thread_flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
-	constexpr std::uint32_t refused_flags = CLONE_NEWNS | CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID
-		| CLONE_NEWNET | CLONE_PTRACE | CLONE_VFORK | CLONE_UNTRACED;
-	program.jump_eq(syscall_number(__NR_clone), 0, 5);
-	program.load(argument_low(0));
-	program.and_with(thread_flags | refused_flags);
-	program.jump_eq(thread_flags, 0, 1);
-	program.ret(k_ret_allow);
+	// No clone at all: apply checked there is one thread, and nothing starts another after it (the decoder links no
+	// resource or task system since #1077, assimp has none). Threads count in the user's process limit (#1105).
+	program.jump_eq(syscall_number(__NR_clone), 0, 1);
 	program.ret(k_ret_eperm);
 
 	// abort() signals itself: only to this process.

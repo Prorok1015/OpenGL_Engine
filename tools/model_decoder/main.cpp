@@ -53,6 +53,8 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -177,7 +179,8 @@ struct arguments
 	// Hard-link this file (outside the run folder) into the run folder: a link would give it the file's contents and a
 	// way to write them (#1099). Exit 5: linked, 0: refused.
 	fs::path self_test_hardlink;
-	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork.
+	// One call the sandbox must refuse (#1082): write, truncate, chmod (on self_test_path), io_uring, ptrace, fork, thread,
+	// spawn (#1105).
 	std::string self_test_call;
 	fs::path self_test_path;
 #endif
@@ -414,6 +417,22 @@ int self_test_call(std::string_view name, const fs::path& path)
 	if (name == "fork") {
 		const pid_t child = ::fork();
 		if (child == 0) ::_exit(0);
+		if (child < 0) return refused(errno);
+		int status = 0;
+		::waitpid(child, &status, 0);
+		return 5;
+	}
+	if (name == "thread") {
+		pthread_t thread{};
+		const int created = ::pthread_create(&thread, nullptr, [](void*) -> void* { return nullptr; }, nullptr);
+		if (created != 0) return refused(created);
+		::pthread_join(thread, nullptr);
+		return 5;
+	}
+	if (name == "spawn") {
+		// The clone of glibc's posix_spawn (CLONE_VM | CLONE_VFORK) without its exec, which the filter refuses on its own.
+		alignas(16) static char stack[64 * 1024];
+		const pid_t child = ::clone([](void*) -> int { ::_exit(0); }, stack + sizeof(stack), CLONE_VM | CLONE_VFORK | SIGCHLD, nullptr);
 		if (child < 0) return refused(errno);
 		int status = 0;
 		::waitpid(child, &status, 0);

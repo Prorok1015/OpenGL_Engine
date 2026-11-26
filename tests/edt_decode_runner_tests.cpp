@@ -446,18 +446,19 @@ BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotTruncateOrChmodAFileOutsideItsFolder)
 	BOOST_CHECK((fs::status(victim).permissions() == before));
 }
 
-// io_uring, ptrace and a new process are refused by the filter alone (Landlock has no say in them).
-BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotUseIoUring_PtraceOrStartAProcess)
+// io_uring, ptrace, a new process and a new thread are refused by the filter alone (Landlock has no say in them). A thread
+// counts in the user's process limit (#1105); spawn is the clone of posix_spawn.
+BOOST_AUTO_TEST_CASE(ASandboxedChild_CannotUseIoUring_PtraceOrStartAProcessOrThread)
 {
 	if (!test_util::k_decoder_has_syscall_filter) {
 		BOOST_TEST_MESSAGE("skipped: a sanitizer build has no system call filter");
 		return;
 	}
 	const fs::path scratch = dir.path() / "scratch";
-	for (const char* call : { "io_uring", "ptrace", "fork" }) {
+	for (const char* call : { "io_uring", "ptrace", "fork", "spawn", "thread" }) {
 		BOOST_TEST_CONTEXT(call) {
 			const auto unsandboxed = run_call(scratch, "off", call);
-			// Only io_uring may be refused by the system itself (sysctl, container profile): ptrace and fork must work.
+			// Only io_uring may be refused by the system itself (sysctl, container profile): the others must work.
 			if (std::string_view(call) == "io_uring" && unsandboxed.exit_code == 0) {
 				BOOST_TEST_MESSAGE("io_uring is refused without the sandbox too: not shown");
 				continue;
