@@ -430,7 +430,7 @@ BOOST_AUTO_TEST_CASE(TheMaterialIsABlockAndThreeMapsOfSet2)
 	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
 	const std::string phong = code_of(read_file(dir / "phong_model_lib.frag"));
 	BOOST_TEST(phong.find("SNK_UBO(2, 0) uniform MaterialParams") != std::string::npos);
-	for (const char* member : { "vec4 diffuseColor;", "vec4 emissiveColor;", "float shininess;" }) {
+	for (const char* member : { "vec4 diffuseColor;", "vec4 emissiveColor;", "float shininess;", "float alphaCutoff;" }) {
 		BOOST_TEST(phong.find(member) != std::string::npos, member);
 	}
 	BOOST_TEST(phong.find("SNK_TEX(2, 0) uniform sampler2D diffuseTxm") != std::string::npos);

@@ -19,12 +19,14 @@ namespace rnd
 		glm::vec4 diffuse_color{ 1.0f };
 		glm::vec4 emissive_color{ 0.0f };
 		float shininess = 32.0f;
-		float pad0[3]{};	// the block is rounded up to a vec4
+		float alpha_cutoff = 1.0f;
+		float pad0[2]{};	// the block is rounded up to a vec4
 	};
 
 	static_assert(offsetof(material_params, diffuse_color) == 0);
 	static_assert(offsetof(material_params, emissive_color) == 16);
 	static_assert(offsetof(material_params, shininess) == 32);
+	static_assert(offsetof(material_params, alpha_cutoff) == 36);
 	static_assert(sizeof(material_params) == 48);
 	static_assert(alignof(material_params) <= 16);
 
@@ -79,6 +81,7 @@ namespace rnd
 		{ "diffuseColor", param_type::vec4, offsetof(material_params, diffuse_color) },
 		{ "emissiveColor", param_type::vec4, offsetof(material_params, emissive_color) },
 		{ "shininess", param_type::f32, offsetof(material_params, shininess) },
+		{ "alphaCutoff", param_type::f32, offsetof(material_params, alpha_cutoff) },
 	};
 
 	static_assert(is_std140_schema(phong_params, sizeof(material_params)));

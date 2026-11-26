@@ -4,7 +4,11 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
+#include <algorithm>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 rnd::material_shader_state rnd::read_material_shader(const material_desc& mat)
 {
@@ -34,6 +38,7 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 		{ "diffuseColor", mat.albedo },
 		{ "emissiveColor", mat.emissive },
 		{ "shininess", mat.shininess },
+		{ "alphaCutoff", mat.alpha_cutoff },
 	};
 	packed_params packed = pack_params(phong_params, sizeof(material_params), values);
 	ASSERT_MSG(packed.ok(), "the phong params schema does not match what the material compiler gives: {}", packed.error);
@@ -61,6 +66,26 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 	return rnd::shader_config{ cdata, rdata };
 }
 
+namespace
+{
+	bool defines_name(const std::vector<std::string>& defines, std::string_view name)
+	{
+		return std::ranges::any_of(defines, [name](const std::string& define) {
+			return define == name || (define.size() > name.size() && define.starts_with(name) && define[name.size()] == ' ');
+		});
+	}
+
+	// Here and not in a compiler, so a module's own compiler keeps the test too (#1439). A cutoff of 0 discards nothing, and a
+	// shader that splits by alpha itself has no use for it: neither gets a variant of its own.
+	void add_alpha_test(rnd::shader_config::constant_data& cdata, const rnd::material_desc& mat)
+	{
+		if (mat.alpha_cutoff <= 0.0f || defines_name(cdata.defines, rnd::k_alpha_split_define) || defines_name(cdata.defines, rnd::k_alpha_test_define)) {
+			return;
+		}
+		cdata.defines.emplace_back(rnd::k_alpha_test_define);
+	}
+}
+
 std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
 	std::shared_ptr<const material_desc> mat, bool skinned)
@@ -81,6 +106,7 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	out->texture_generation = textures.generation();
 
 	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned, shader });
+	add_alpha_test(cfg.cdata, *mat);
 	out->base = variants.intern(cfg.cdata);
 	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);
 	out->runtime = std::move(cfg.rdata);

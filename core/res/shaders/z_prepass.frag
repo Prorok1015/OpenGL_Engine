@@ -24,7 +24,13 @@ void main()
 {    
     vec3 norm = getNormalVector();
     vec4 result = calculatePhongModel(norm, getMaterialColor(PS.UV), getMaterialSpecular(PS.UV), PS.FragPos);
+#if defined(ALPHA_SPLIT)
     if (result.a < 1.0) {
         discard;
     }
+#elif defined(ALPHA_TEST)
+    if (result.a < alphaCutoff) {
+        discard;
+    }
+#endif
 }

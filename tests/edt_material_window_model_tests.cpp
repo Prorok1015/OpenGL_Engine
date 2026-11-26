@@ -251,6 +251,9 @@ BOOST_AUTO_TEST_CASE(Add_RefusesWhatIsNoIdentifier_AndTheCompilersDefines)
 	}
 	BOOST_TEST(!model.add("OPAQUE").empty());
 	BOOST_TEST(!model.add("USE_ANIMATION").empty());
+	// #1439: the compiler adds the alpha test from alpha_cutoff, so it is not a define of the material.
+	BOOST_TEST(edt::is_compiler_define("ALPHA_TEST"));
+	BOOST_TEST(!model.add("ALPHA_TEST").empty());
 	BOOST_TEST(!data.own().contains("defines"));
 	BOOST_TEST(!data.is_dirty());
 
@@ -565,6 +568,25 @@ BOOST_AUTO_TEST_CASE(CompileRows_ThisMaterialsSetAndTags_AreItsOwn_OtherSetsAreO
 	for (const edt::compile_row& row : errors.others) {
 		BOOST_TEST(row.problem.file.string() != "res://shaders/x.frag");
 	}
+}
+
+// #1439: the alpha test define is the compiler's, like the pass and skinning ones: a program with it is still this material's.
+BOOST_AUTO_TEST_CASE(CompileRows_TheAlphaTestDefine_IsTheCompilers)
+{
+	put("shaders/m.vert", "#version 450\n");
+	put("shaders/m.frag", "#version 450\n");
+	put("shaders/m.shader.desc", k_defined_shader);
+	edt::data_document& data = open(put("lit.desc", k_fog_material));
+	edt::material_window_model model(data, services);
+	model.scan();
+
+	const std::vector<rnd::shader_problem> problems{
+		problem_at("res://shaders/m.frag", 3, "m.vert + m.frag { USE_FOG | SHADER_LEVEL 1 | ALPHA_TEST }"),
+		problem_at("res://shaders/m.frag", 5, "m.vert + m.frag { ALPHA_TEST | SHADER_LEVEL 1 | USE_FOG | OPAQUE }"),
+	};
+	const edt::compile_errors errors = model.compile_rows(problems, res::tag{});
+	BOOST_TEST(errors.material.size() == 2u);
+	BOOST_TEST(errors.others.empty());
 }
 
 BOOST_AUTO_TEST_CASE(CompileRows_ASharedIncludesRowOfAnotherShadersProgram_IsOthers_EvenWithTheSameDefineSet)

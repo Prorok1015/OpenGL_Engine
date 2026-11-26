@@ -1053,6 +1053,38 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_ShininessIsWrittenWhenItIsNotTheDefault)
 	BOOST_TEST(io.read(R"({"uniforms":{"albedo":[1,1,1,1]}})").shininess == 32.0f); // the key is optional
 }
 
+// #1439: the alpha test of the opaque pass. Without the key a material keeps the old rule (discard below full alpha), so
+// no file changes; 0 turns the test off and is written.
+BOOST_AUTO_TEST_CASE(MaterialDesc_AlphaCutoffDefaultsToTheOldRuleAndIsWrittenOnlyWhenChanged)
+{
+	const material_io io{ *descs };
+	BOOST_TEST(scn::material_desc{}.alpha_cutoff == 1.0f);
+	BOOST_TEST(io.read(R"({"uniforms":{"albedo":[1,1,1,1]}})").alpha_cutoff == 1.0f);
+	BOOST_TEST(!ser(scn::material_desc{}).at("uniforms").as_object().contains("alpha_cutoff"));
+
+	for (const float cutoff : { 0.0f, 0.5f }) {
+		BOOST_TEST_CONTEXT("cutoff " << cutoff) {
+			scn::material_desc changed;
+			changed.alpha_cutoff = cutoff;
+			const json::object written = ser(changed);
+			BOOST_REQUIRE(written.at("uniforms").as_object().if_contains("alpha_cutoff"));
+			BOOST_TEST(reload(*descs, changed).alpha_cutoff == cutoff);
+		}
+	}
+	scn::material_desc both;
+	both.shininess = 8.0f;
+	both.alpha_cutoff = 0.25f;
+	const auto both_written = ser(both);
+	std::vector<std::string> keys;
+	for (const auto& member : both_written.at("uniforms").as_object())
+		keys.emplace_back(member.key());
+	BOOST_TEST((keys == std::vector<std::string>{ "albedo", "emissive", "shininess", "alpha_cutoff" }));
+
+	// The range is the editor's: a file that holds more would discard everything, so the reader clamps it.
+	BOOST_TEST(io.read(R"({"uniforms":{"alpha_cutoff":2.5}})").alpha_cutoff == 1.0f);
+	BOOST_TEST(io.read(R"({"uniforms":{"alpha_cutoff":-1}})").alpha_cutoff == 0.0f);
+}
+
 BOOST_AUTO_TEST_CASE(MaterialDesc_QueueReadsWordsAndNullAndWritesNullForNone)
 {
 	const material_io io{ *descs };

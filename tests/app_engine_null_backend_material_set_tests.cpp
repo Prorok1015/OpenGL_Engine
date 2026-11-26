@@ -14,6 +14,8 @@
 #include <snk/scene/scn_model.h>
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iterator>
 #include <set>
@@ -406,6 +408,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	desc.albedo = ds::color{ 0.25f, 0.5f, 0.75f, 1.f };
 	desc.emissive = ds::color{ 0.1f, 0.2f, 0.3f, 0.f };
 	desc.shininess = 77.f;
+	desc.alpha_cutoff = 0.5f;
 	desc.shader = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 	desc.samplers_textures = { res::tag{}, res::tag{} };	// two slots without a texture
 
@@ -415,6 +418,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	expected.diffuse_color = desc.albedo;
 	expected.emissive_color = desc.emissive;
 	expected.shininess = 77.f;
+	expected.alpha_cutoff = 0.5f;
 	BOOST_REQUIRE(config.rdata.material_params.size() == sizeof(expected));
 	BOOST_TEST(std::memcmp(config.rdata.material_params.data(), &expected, sizeof(expected)) == 0);
 	BOOST_REQUIRE(config.rdata.samplers.size() == 2u);
@@ -469,6 +473,160 @@ BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStage
 			BOOST_CHECK(expected == compiled.cdata.defines);
 			BOOST_CHECK(config.rdata.samplers.empty());
 			BOOST_CHECK(config.rdata.material_params.empty());
+		}
+	}
+}
+
+// #1439: the alpha test is added by build_compiled_material, whatever the compiler, only for a cutoff above 0, only once, and
+// not to a shader that splits by alpha itself (the mix shader).
+BOOST_AUTO_TEST_CASE(TheAlphaTestIsCompiledInOnlyForACutoffAboveZero)
+{
+	auto& render = storage.require<rnd::render_system>();
+	rnd::material_compiler_interface* compiler = render.get_material_compiler();
+	BOOST_REQUIRE(compiler);
+	auto& resources = storage.require<res::resource_system>();
+	const auto scene = resources.require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
+	const auto mix = resources.require_sync<rnd::shader_desc>(res::tag::make("shaders/mix_opaque_trans_scene.shader.desc"));
+	test_util::pump(tasks);
+	rnd::shader_config_cache variants;
+	const auto defines_of = [&](const scn::material_desc& material) {
+		const auto compiled = rnd::build_compiled_material(*compiler, variants, render.get_texture_manager(),
+			std::make_shared<const scn::material_desc>(material), false);
+		return variants.resolve(compiled->opaque).defines;
+	};
+	const auto count = [](const std::vector<std::string>& defines, std::string_view name) {
+		return std::ranges::count(defines, std::string(name));
+	};
+
+	scn::material_desc material;
+	material.shader = scene;
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 1);	// the default, 1: the old rule
+	material.alpha_cutoff = 0.5f;
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 1);
+	material.alpha_cutoff = 0.0f;
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 0);
+	material.alpha_cutoff = 0.5f;
+	material.defines = { std::string(rnd::k_alpha_test_define) };
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 1);
+
+	// The compiler itself leaves the define to build_compiled_material, so a module's own compiler cannot lose it.
+	material.defines.clear();
+	const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), false, std::nullopt });
+	BOOST_TEST(count(compiled.cdata.defines, rnd::k_alpha_test_define) == 0);
+	rnd::material_params packed;
+	BOOST_REQUIRE(compiled.rdata.material_params.size() == sizeof(packed));
+	std::memcpy(&packed, compiled.rdata.material_params.data(), sizeof(packed));
+	BOOST_TEST(packed.alpha_cutoff == 0.5f);
+
+	// The mix shader splits by alpha itself: no test, whatever the cutoff, and no variant of its own.
+	material.shader = mix;
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_split_define) == 1);
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 0);
+	material.alpha_cutoff = 0.0f;
+	BOOST_TEST(count(defines_of(material), rnd::k_alpha_test_define) == 0);
+}
+
+namespace {
+
+// The lines of `code` the preprocessor keeps with `defines` set: #ifdef / #ifndef / #if defined(X) / #elif defined(X) /
+// #else / #endif, nested, every other line kept as it is (enough for the opaque shaders).
+std::string active_code(const std::string& code, const std::vector<std::string>& defines)
+{
+	const auto is_defined = [&](std::string_view name) {
+		return std::ranges::any_of(defines, [&](const std::string& d) { return d == name || d.starts_with(std::string(name) + " "); });
+	};
+	const auto name_in = [](std::string_view line, std::string_view after) {
+		std::string_view rest = line.substr(line.find(after) + after.size());
+		const std::size_t end = rest.find_first_of(") \t");
+		return std::string(rest.substr(0, end));
+	};
+	struct level { bool parent; bool taken; bool active; };
+	std::vector<level> stack;
+	std::string out;
+	std::size_t start = 0;
+	while (start <= code.size()) {
+		const std::size_t end = std::min(code.find('\n', start), code.size());
+		const std::string_view line(code.data() + start, end - start);
+		const std::string_view text = line.substr(std::min(line.find_first_not_of(" \t"), line.size()));
+		const bool on = stack.empty() || stack.back().active;
+		if (text.starts_with("#ifdef ") || text.starts_with("#ifndef ") || text.starts_with("#if defined(")) {
+			const bool negated = text.starts_with("#ifndef ");
+			const std::string name = text.starts_with("#if defined(") ? name_in(text, "defined(") : name_in(text, negated ? "#ifndef " : "#ifdef ");
+			const bool value = is_defined(name) != negated;
+			stack.push_back({ on, value, on && value });
+		} else if (text.starts_with("#elif defined(") && !stack.empty()) {
+			level& top = stack.back();
+			const bool value = !top.taken && is_defined(name_in(text, "defined("));
+			top.taken = top.taken || value;
+			top.active = top.parent && value;
+		} else if (text.starts_with("#else") && !stack.empty()) {
+			level& top = stack.back();
+			top.active = top.parent && !top.taken;
+			top.taken = true;
+		} else if (text.starts_with("#endif") && !stack.empty()) {
+			stack.pop_back();
+		} else if (on) {
+			out.append(line).push_back(' ');
+		}
+		start = end + 1;
+	}
+	return out;
+}
+
+// What an `if (result.a < X) { ... discard; ... }` of the active code compares against; empty when no such test discards.
+std::string discard_threshold(const std::string& active)
+{
+	const std::string open = "if (result.a < ";
+	for (std::size_t at = active.find(open); at != std::string::npos; at = active.find(open, at + 1)) {
+		const std::size_t value = at + open.size();
+		const std::size_t close = active.find(')', value);
+		const std::size_t brace_end = active.find('}', close);
+		if (active.substr(close, brace_end - close).find("discard") != std::string::npos) {
+			return active.substr(value, close - value);
+		}
+	}
+	return {};
+}
+
+std::string read_shader_file(const char* name)
+{
+	std::ifstream in(std::filesystem::path{ SNK_CORE_RES_DIR } / "shaders" / name, std::ios::binary);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+}
+
+// #1439 review: the depth prepass draws every opaque material, so for each shader it must discard by the same rule as the
+// shader's own opaque pass, with the defines that material really compiles with: a cutoff of 0.5 on scene, any on mix.
+BOOST_AUTO_TEST_CASE(ThePrepassDiscardsByTheSameRuleAsTheOpaquePass_ForEveryOpaqueShader)
+{
+	auto& render = storage.require<rnd::render_system>();
+	rnd::material_compiler_interface* compiler = render.get_material_compiler();
+	BOOST_REQUIRE(compiler);
+	auto& resources = storage.require<res::resource_system>();
+	const std::string prepass = read_shader_file("z_prepass.frag");
+	BOOST_REQUIRE(!prepass.empty());
+
+	const std::pair<const char*, const char*> shaders[] = {
+		{ "shaders/scene.shader.desc", "scene.frag" },
+		{ "shaders/mix_opaque_trans_scene.shader.desc", "mix_opaque_trans_scene.frag" },
+	};
+	for (const auto& [desc, frag] : shaders) {
+		for (const float cutoff : { 0.0f, 0.5f, 1.0f }) {
+			BOOST_TEST_CONTEXT(desc << ", cutoff " << cutoff) {
+				const auto shader = resources.require_sync<rnd::shader_desc>(res::tag::make(desc));
+				test_util::pump(tasks);
+				scn::material_desc material;
+				material.shader = shader;
+				material.alpha_cutoff = cutoff;
+				rnd::shader_config_cache variants;
+				const auto compiled = rnd::build_compiled_material(*compiler, variants, render.get_texture_manager(),
+					std::make_shared<const scn::material_desc>(material), false);
+				const std::vector<std::string> defines = variants.resolve(compiled->opaque).defines;
+				const std::string colour = read_shader_file(frag);
+				BOOST_REQUIRE(!colour.empty());
+				BOOST_TEST(discard_threshold(active_code(prepass, defines)) == discard_threshold(active_code(colour, defines)));
+			}
 		}
 	}
 }

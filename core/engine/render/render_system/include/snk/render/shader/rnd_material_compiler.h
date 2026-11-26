@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <snk/common/common.h>
 #include <snk/common/snk_api.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
@@ -10,6 +11,13 @@
 
 namespace rnd
 {
+	// Added by build_compiled_material (whatever the compiler) to a material whose alpha_cutoff is above 0: scene.frag and
+	// z_prepass.frag discard below it (#1439).
+	inline constexpr std::string_view k_alpha_test_define = "ALPHA_TEST";
+	// Defined by a shader that splits by alpha itself (mix_opaque_trans_scene: below 1 to OIT, the rest opaque): such a
+	// program gets no ALPHA_TEST, and z_prepass discards below 1 for it, as its opaque pass does.
+	inline constexpr std::string_view k_alpha_split_define = "ALPHA_SPLIT";
+
 	class texture_manager;
 
 	// The shader desc of a material read once: compile and the completeness of its result must see the same state, or a
