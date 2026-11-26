@@ -4,6 +4,8 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
+#include <algorithm>
+#include <string>
 #include <utility>
 
 rnd::material_shader_state rnd::read_material_shader(const material_desc& mat)
@@ -34,6 +36,7 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 		{ "diffuseColor", mat.albedo },
 		{ "emissiveColor", mat.emissive },
 		{ "shininess", mat.shininess },
+		{ "alphaCutoff", mat.alpha_cutoff },
 	};
 	packed_params packed = pack_params(phong_params, sizeof(material_params), values);
 	ASSERT_MSG(packed.ok(), "the phong params schema does not match what the material compiler gives: {}", packed.error);
@@ -56,6 +59,10 @@ rnd::shader_config rnd::default_material_compiler::compile(const material_desc& 
 	// --- former extractor mutations, now driven by the compile context ---
 	if (ctx.has_skinning) {
 		cdata.defines.push_back("USE_ANIMATION");
+	}
+	// A cutoff of 0 discards nothing, so the test is left out of the program altogether (#1439).
+	if (mat.alpha_cutoff > 0.0f && std::ranges::find(cdata.defines, std::string_view(k_alpha_test_define)) == cdata.defines.end()) {
+		cdata.defines.push_back(std::string(k_alpha_test_define));
 	}
 
 	return rnd::shader_config{ cdata, rdata };

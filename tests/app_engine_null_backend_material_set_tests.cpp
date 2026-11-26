@@ -406,6 +406,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	desc.albedo = ds::color{ 0.25f, 0.5f, 0.75f, 1.f };
 	desc.emissive = ds::color{ 0.1f, 0.2f, 0.3f, 0.f };
 	desc.shininess = 77.f;
+	desc.alpha_cutoff = 0.5f;
 	desc.shader = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
 	desc.samplers_textures = { res::tag{}, res::tag{} };	// two slots without a texture
 
@@ -415,6 +416,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	expected.diffuse_color = desc.albedo;
 	expected.emissive_color = desc.emissive;
 	expected.shininess = 77.f;
+	expected.alpha_cutoff = 0.5f;
 	BOOST_REQUIRE(config.rdata.material_params.size() == sizeof(expected));
 	BOOST_TEST(std::memcmp(config.rdata.material_params.data(), &expected, sizeof(expected)) == 0);
 	BOOST_REQUIRE(config.rdata.samplers.size() == 2u);
@@ -463,14 +465,57 @@ BOOST_AUTO_TEST_CASE(AShaderDescGivesTheProgramTheCompilerBuildsFromTheSameStage
 			const rnd::shader_config compiled = compiler->compile(material, rnd::material_compile_context{ &render.get_texture_manager(), skinned, std::nullopt });
 			const rnd::shader_config config = shader->config(material.defines);
 			BOOST_CHECK(config.cdata.program == compiled.cdata.program);
-			// The skinning define stays the compiler's.
+			// The skinning and alpha test defines stay the compiler's.
 			std::vector<std::string> expected = config.cdata.defines;
 			if (skinned) expected.push_back("USE_ANIMATION");
+			expected.emplace_back(rnd::k_alpha_test_define);
 			BOOST_CHECK(expected == compiled.cdata.defines);
 			BOOST_CHECK(config.rdata.samplers.empty());
 			BOOST_CHECK(config.rdata.material_params.empty());
 		}
 	}
+}
+
+// #1439: the opaque pass discards below the material's cutoff only when the program defines ALPHA_TEST; a cutoff of 0 leaves
+// the test out, a material that names the define itself does not get it twice.
+BOOST_AUTO_TEST_CASE(TheAlphaTestIsCompiledInOnlyForACutoffAboveZero)
+{
+	auto& render = storage.require<rnd::render_system>();
+	rnd::material_compiler_interface* compiler = render.get_material_compiler();
+	BOOST_REQUIRE(compiler);
+	const auto shader = storage.require<res::resource_system>().require_sync<rnd::shader_desc>(res::tag::make("shaders/scene.shader.desc"));
+	test_util::pump(tasks);
+	const auto count = [](const rnd::shader_config& config) {
+		return std::ranges::count(config.cdata.defines, std::string(rnd::k_alpha_test_define));
+	};
+	const rnd::material_compile_context context{ &render.get_texture_manager(), false, std::nullopt };
+
+	scn::material_desc material;
+	material.shader = shader;
+	BOOST_TEST(count(compiler->compile(material, context)) == 1);	// the default, 1: the old rule
+
+	material.alpha_cutoff = 0.5f;
+	const rnd::shader_config half = compiler->compile(material, context);
+	BOOST_TEST(count(half) == 1);
+	rnd::material_params packed;
+	BOOST_REQUIRE(half.rdata.material_params.size() == sizeof(packed));
+	std::memcpy(&packed, half.rdata.material_params.data(), sizeof(packed));
+	BOOST_TEST(packed.alpha_cutoff == 0.5f);
+
+	material.alpha_cutoff = 0.0f;
+	BOOST_TEST(count(compiler->compile(material, context)) == 0);
+
+	material.alpha_cutoff = 0.5f;
+	material.defines = { std::string(rnd::k_alpha_test_define) };
+	BOOST_TEST(count(compiler->compile(material, context)) == 1);
+
+	// The program the opaque pass draws differs: the test is a variant, not a branch on the cutoff.
+	material.defines.clear();
+	const rnd::shader_config on = compiler->compile(material, context);
+	material.alpha_cutoff = 0.0f;
+	const rnd::shader_config off = compiler->compile(material, context);
+	BOOST_TEST(on.cdata.program == off.cdata.program);
+	BOOST_TEST(on.cdata.defines != off.cdata.defines);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

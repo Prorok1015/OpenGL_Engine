@@ -6,6 +6,7 @@
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/editor/edt_editor_services.h>
 #include <snk/render/rnd_shader_desc.h>
+#include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_bindings.h>
 #include <snk/render/shader/rnd_shader_includes.h>
@@ -249,7 +250,7 @@ bool same_entries(const json::array& a, const json::array& b)
 
 bool edt::is_compiler_define(std::string_view name)
 {
-	return name == "USE_ANIMATION" || name == "OPAQUE";
+	return name == "USE_ANIMATION" || name == "OPAQUE" || name == rnd::k_alpha_test_define;
 }
 
 bool edt::is_define_name(std::string_view name)
@@ -556,6 +557,7 @@ edt::compile_errors edt::material_window_model::compile_rows(const std::vector<r
 		std::ranges::sort(set);
 		// The pass and skinning defines the compiler adds on its own; the material's set is the rest.
 		if (!holds(expected, "OPAQUE")) take_one(set, "OPAQUE");
+		if (!holds(expected, rnd::k_alpha_test_define)) take_one(set, rnd::k_alpha_test_define);
 		const bool skinned = !holds(expected, "USE_ANIMATION") && take_one(set, "USE_ANIMATION");
 		if (set == expected && names_stages_of(problem.program, m_shader)) {
 			row.skinned = skinned;

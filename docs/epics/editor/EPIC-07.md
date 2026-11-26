@@ -40,6 +40,7 @@
 | `albedo` | `/uniforms/albedo` | ColorEdit4 |
 | `emissive` | `/uniforms/emissive` | ColorEdit4 |
 | `shininess` | `/uniforms/shininess` | DragFloat (0..1000) |
+| `alpha_cutoff` | `/uniforms/alpha_cutoff` | DragFloat (0..1); по умолчанию 1 — отбрасывается всё с alpha < 1, как раньше; 0 — без теста. При > 0 компилятор добавляет `ALPHA_TEST` (скрыт в Defines), отбрасывают `scene.frag` и `z_prepass.frag` (#1439) |
 | `queue` | `/queue` | opaque / transparent / mix, null — ни в одной |
 | `render_mode` | `/render_mode` | Combo |
 | `samplers_textures` | `/samplers` | позиционный список, null — пустой слот; виджеты — US-07-B |

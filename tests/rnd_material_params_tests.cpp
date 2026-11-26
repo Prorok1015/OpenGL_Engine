@@ -25,15 +25,16 @@ BOOST_AUTO_TEST_SUITE(RndMaterialParamsTests)
 
 BOOST_AUTO_TEST_CASE(TheBlockMatchesTheStd140LayoutOfMaterialParams)
 {
-	// MaterialParams { vec4 diffuseColor; vec4 emissiveColor; float shininess; } is 48 bytes (a block rounds up to 16).
+	// MaterialParams { vec4 diffuseColor; vec4 emissiveColor; float shininess; float alphaCutoff; } is 48 bytes (a block rounds up to 16).
 	static_assert(offsetof(material_params, diffuse_color) == 0);
 	static_assert(offsetof(material_params, emissive_color) == 16);
 	static_assert(offsetof(material_params, shininess) == 32);
+	static_assert(offsetof(material_params, alpha_cutoff) == 36);
 	static_assert(sizeof(material_params) == 48);
 	BOOST_TEST(sizeof(material_params) % 16 == 0u);
 	BOOST_TEST(is_std140_schema(phong_params, sizeof(material_params)));
 
-	BOOST_REQUIRE(std::size(phong_params) == 3u);
+	BOOST_REQUIRE(std::size(phong_params) == 4u);
 	BOOST_TEST(phong_params[0].name == "diffuseColor");
 	BOOST_TEST(phong_params[0].offset == offsetof(material_params, diffuse_color));
 	BOOST_TEST((phong_params[0].type == param_type::vec4));
@@ -42,6 +43,11 @@ BOOST_AUTO_TEST_CASE(TheBlockMatchesTheStd140LayoutOfMaterialParams)
 	BOOST_TEST(phong_params[2].name == "shininess");
 	BOOST_TEST(phong_params[2].offset == offsetof(material_params, shininess));
 	BOOST_TEST((phong_params[2].type == param_type::f32));
+	BOOST_TEST(phong_params[3].name == "alphaCutoff");
+	BOOST_TEST(phong_params[3].offset == offsetof(material_params, alpha_cutoff));
+	BOOST_TEST((phong_params[3].type == param_type::f32));
+	// A material written before #1439 keeps the old rule: discard below full alpha.
+	BOOST_TEST(material_params{}.alpha_cutoff == 1.f);
 }
 
 BOOST_AUTO_TEST_CASE(Std140AlignmentsAndSizes)
@@ -75,6 +81,7 @@ BOOST_AUTO_TEST_CASE(NamedValuesLandAtTheOffsetsOfTheSchema)
 {
 	const named_param values[] = {
 		{ "shininess", 64.f },
+		{ "alphaCutoff", 0.25f },
 		{ "diffuseColor", glm::vec4{ 0.1f, 0.2f, 0.3f, 0.4f } },
 		{ "emissiveColor", glm::vec4{ 0.5f, 0.6f, 0.7f, 0.8f } },
 	};
@@ -86,9 +93,10 @@ BOOST_AUTO_TEST_CASE(NamedValuesLandAtTheOffsetsOfTheSchema)
 	expected.diffuse_color = { 0.1f, 0.2f, 0.3f, 0.4f };
 	expected.emissive_color = { 0.5f, 0.6f, 0.7f, 0.8f };
 	expected.shininess = 64.f;
+	expected.alpha_cutoff = 0.25f;
 	BOOST_TEST(std::memcmp(packed.bytes.data(), &expected, sizeof(expected)) == 0);
-	// The padding behind the float stays zero.
-	for (std::size_t i = offsetof(material_params, shininess) + sizeof(float); i < packed.bytes.size(); ++i) {
+	// The padding behind the floats stays zero.
+	for (std::size_t i = offsetof(material_params, alpha_cutoff) + sizeof(float); i < packed.bytes.size(); ++i) {
 		BOOST_REQUIRE(packed.bytes[i] == std::byte{ 0 });
 	}
 }
@@ -119,17 +127,17 @@ BOOST_AUTO_TEST_CASE(SmallerTypesFillTheirOwnBytesOnly)
 
 BOOST_AUTO_TEST_CASE(AValueTheSchemaDoesNotMatchIsAnError)
 {
-	const named_param missing[] = { { "diffuseColor", glm::vec4{ 1.f } }, { "shininess", 1.f } };
+	const named_param missing[] = { { "diffuseColor", glm::vec4{ 1.f } }, { "shininess", 1.f }, { "alphaCutoff", 1.f } };
 	packed_params packed = pack_params(phong_params, sizeof(material_params), missing);
 	BOOST_TEST(!packed.ok());
 	BOOST_TEST(packed.error.find("no value for 'emissiveColor'") != std::string::npos);
 
-	const named_param wrong_type[] = { { "diffuseColor", glm::vec3{ 1.f } }, { "emissiveColor", glm::vec4{ 1.f } }, { "shininess", 1.f } };
+	const named_param wrong_type[] = { { "diffuseColor", glm::vec3{ 1.f } }, { "emissiveColor", glm::vec4{ 1.f } }, { "shininess", 1.f }, { "alphaCutoff", 1.f } };
 	packed = pack_params(phong_params, sizeof(material_params), wrong_type);
 	BOOST_TEST(!packed.ok());
 	BOOST_TEST(packed.error.find("'diffuseColor' is a vec4") != std::string::npos);
 
-	const named_param extra[] = { { "diffuseColor", glm::vec4{ 1.f } }, { "emissiveColor", glm::vec4{ 1.f } }, { "shininess", 1.f }, { "roughness", 0.5f } };
+	const named_param extra[] = { { "diffuseColor", glm::vec4{ 1.f } }, { "emissiveColor", glm::vec4{ 1.f } }, { "shininess", 1.f }, { "alphaCutoff", 1.f }, { "roughness", 0.5f } };
 	packed = pack_params(phong_params, sizeof(material_params), extra);
 	BOOST_TEST(!packed.ok());
 	BOOST_TEST(packed.error.find("'roughness' is not in the schema") != std::string::npos);

@@ -7,6 +7,7 @@ SNK_UBO(2, 0) uniform MaterialParams
     vec4 diffuseColor;
     vec4 emissiveColor;
     float shininess;
+    float alphaCutoff;
 };
 
 #ifdef USE_TXM_AS_DIFFUSE

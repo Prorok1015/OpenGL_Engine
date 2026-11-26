@@ -430,13 +430,33 @@ BOOST_AUTO_TEST_CASE(TheMaterialIsABlockAndThreeMapsOfSet2)
 	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
 	const std::string phong = code_of(read_file(dir / "phong_model_lib.frag"));
 	BOOST_TEST(phong.find("SNK_UBO(2, 0) uniform MaterialParams") != std::string::npos);
-	for (const char* member : { "vec4 diffuseColor;", "vec4 emissiveColor;", "float shininess;" }) {
+	for (const char* member : { "vec4 diffuseColor;", "vec4 emissiveColor;", "float shininess;", "float alphaCutoff;" }) {
 		BOOST_TEST(phong.find(member) != std::string::npos, member);
 	}
 	BOOST_TEST(phong.find("SNK_TEX(2, 0) uniform sampler2D diffuseTxm") != std::string::npos);
 	BOOST_TEST(phong.find("SNK_TEX(2, 1) uniform sampler2D specularTxm") != std::string::npos);
 	for (const char* frag : { "scene.frag", "z_prepass.frag", "mix_opaque_trans_scene.frag" }) {
 		BOOST_TEST(code_of(read_file(dir / frag)).find("SNK_TEX(2, 2) uniform sampler2D normalTxm") != std::string::npos, frag);
+	}
+}
+
+// #1439: both shaders of the opaque list discard only under ALPHA_TEST, against the cutoff of the block; the mix shader keeps
+// its own split between the opaque pass and OIT.
+BOOST_AUTO_TEST_CASE(TheOpaqueShadersDiscardUnderTheAlphaTestOnly)
+{
+	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
+	for (const char* frag : { "scene.frag", "z_prepass.frag" }) {
+		BOOST_TEST_CONTEXT(frag) {
+			const std::string code = code_of(read_file(dir / frag));
+			const std::size_t test = code.find("#ifdef ALPHA_TEST");
+			const std::size_t discard = code.find("discard");
+			BOOST_REQUIRE(test != std::string::npos);
+			BOOST_REQUIRE(discard != std::string::npos);
+			BOOST_TEST(discard > test);
+			BOOST_TEST(code.find("result.a < alphaCutoff") != std::string::npos);
+			BOOST_TEST(code.find("discard", discard + 1) == std::string::npos);
+			BOOST_TEST(code.find("result.a < 1.0") == std::string::npos);
+		}
 	}
 }
 
