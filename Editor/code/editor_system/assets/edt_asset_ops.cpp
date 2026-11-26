@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -164,22 +165,34 @@ namespace
 		return fs::symlink_status(root / path_of(relative), ec).type() != fs::file_type::not_found;
 	}
 
-	// Like exists_on_disk, but where the project's names ignore letter case (`fold`) a file that differs from `relative` in case
-	// only is the same file, whatever the disk under the folder says.
+	// Like exists_on_disk, but where the project's names ignore letter case (`fold`) a path that differs from `relative` in case
+	// only, in any of its names, is the same file or folder, whatever the disk under the folder says.
 	bool exists_named(const fs::path& root, const std::string& relative, bool fold)
 	{
 		if (exists_on_disk(root, relative)) return true;
 		if (!fold) return false;
-		const fs::path path = path_of(relative);
-		const std::string wanted = res::asset_name_key(utf8(path.filename()), true);
-		std::error_code ec;
-		fs::directory_iterator it(root / path.parent_path(), fs::directory_options::skip_permission_denied, ec);
-		if (ec) return false;
-		for (const fs::directory_iterator end; it != end; it.increment(ec)) {
+		fs::path at = root;
+		std::size_t begin = 0;
+		while (true) {
+			const std::size_t end = relative.find('/', begin);
+			const bool last = end == std::string::npos;
+			const std::string wanted = res::asset_name_key(std::string_view(relative).substr(begin, last ? std::string::npos : end - begin), true);
+			std::optional<fs::path> found;
+			std::error_code ec;
+			fs::directory_iterator it(at, fs::directory_options::skip_permission_denied, ec);
 			if (ec) return false;
-			if (res::asset_name_key(utf8(it->path().filename()), true) == wanted) return true;
+			for (const fs::directory_iterator done; it != done; it.increment(ec)) {
+				if (ec) return false;
+				if (res::asset_name_key(utf8(it->path().filename()), true) != wanted) continue;
+				if (!last && fs::symlink_status(it->path(), ec).type() != fs::file_type::directory) continue;
+				found = it->path();
+				break;
+			}
+			if (!found) return false;
+			if (last) return true;
+			at = *found;
+			begin = end + 1;
 		}
-		return false;
 	}
 
 	bool is_regular(const fs::path& root, const std::string& relative)
@@ -193,6 +206,39 @@ namespace
 	{
 		platform::beneath::pinned_root pinned{ root };
 		return platform::beneath::make_folders_beneath(pinned, folder);
+	}
+
+	// The folder `relative` below `root`, made by this call: it must not be there yet, nor be reached through a link.
+	std::string make_new_folder(const fs::path& root, const std::string& relative)
+	{
+		platform::beneath::pinned_root pinned{ root };
+		return platform::beneath::make_folders_beneath(pinned, path_of(relative), true);
+	}
+
+	// Whether the folder below `root` holds nothing; `error` set when it cannot be listed (not there, a link on the way).
+	bool folder_is_empty(const fs::path& root, const std::string& relative, std::string& error)
+	{
+		platform::beneath::pinned_root pinned{ root };
+		const platform::beneath::list_result listed = platform::beneath::list_beneath(pinned, path_of(relative), 1);
+		if (listed.missing) error = "it is not there";
+		else error = listed.error;
+		return error.empty() && listed.entries.empty();
+	}
+
+	// Removes the empty folder below `root`; a folder with anything in it stays (the removal fails).
+	std::string remove_empty_folder(const fs::path& root, const std::string& relative)
+	{
+		std::error_code ec;
+		if (fs::symlink_status(root / path_of(relative), ec).type() != fs::file_type::directory) return "it is not a folder";
+		const fs::path path = path_of(relative);
+		platform::beneath::pinned_root pinned{ root };
+		return platform::beneath::remove_beneath(pinned, path.parent_path(), path.filename());
+	}
+
+	bool is_folder(const fs::path& root, const std::string& relative)
+	{
+		std::error_code ec;
+		return fs::symlink_status(root / path_of(relative), ec).type() == fs::file_type::directory;
 	}
 
 	// The journal's files are reached from the folder that holds journal_root (the project's cache), so a link at
@@ -411,19 +457,120 @@ namespace
 		return out;
 	}
 
+	// The first names of a list, for a reason: the rest is counted.
+	std::string first_names(const std::vector<std::string>& names)
+	{
+		constexpr std::size_t k_shown = 12;
+		std::string out;
+		for (std::size_t i = 0; i < names.size() && i < k_shown; ++i) {
+			if (i > 0) out += ", ";
+			out += names[i];
+		}
+		if (names.size() > k_shown) out += std::format(" and {} more", names.size() - k_shown);
+		return out;
+	}
+
+	edt::refusal too_many(std::string_view files, std::uint64_t bytes, const edt::asset_ops_limits& limits)
+	{
+		return stop(edt::refusal_code::too_many_files, std::format("{} file(s) of {} byte(s) in one operation: at most {} files and {} bytes are done at once",
+			files, bytes, limits.max_files, limits.max_bytes));
+	}
+
+	// A folder of a layer as the walk of a request finds it, no link followed.
+	struct folder_listing
+	{
+		std::vector<std::string> files;
+		// The folder and every folder below it, each after its parent.
+		std::vector<std::string> folders;
+		// Links (any reparse point on Windows) and entries that are neither a file nor a folder.
+		std::vector<std::string> odd;
+		// More files than the walk was allowed: it stopped.
+		bool truncated = false;
+	};
+
+	// Every entry below `folder` in `root`, each folder opened from the one above it without following a link.
+	std::string list_folder(const fs::path& root, const std::string& folder, std::size_t max_files, folder_listing& out)
+	{
+		platform::beneath::pinned_root pinned{ root };
+		out.folders.push_back(folder);
+		for (std::size_t next = 0; next < out.folders.size(); ++next) {
+			const std::string current = out.folders[next];
+			const std::size_t depth = static_cast<std::size_t>(std::ranges::count(std::string_view(current).substr(folder.size()), '/'));
+			if (depth >= static_cast<std::size_t>(res::asset_walk_max_depth)) {
+				return std::format("'{}' is nested deeper than {} folders", current, res::asset_walk_max_depth);
+			}
+			const platform::beneath::list_result listed = platform::beneath::list_beneath(pinned, path_of(current), max_files + 1);
+			if (listed.missing) return std::format("'{}' is not there any more", current);
+			if (!listed.error.empty()) return std::format("'{}' cannot be listed: {}", current, listed.error);
+			if (listed.truncated) {
+				out.truncated = true;
+				return {};
+			}
+			std::vector<std::pair<std::string, platform::beneath::entry_kind>> entries;
+			entries.reserve(listed.entries.size());
+			for (const platform::beneath::listed_entry& entry : listed.entries) entries.emplace_back(utf8(entry.name), entry.kind);
+			std::ranges::sort(entries);
+			for (const auto& [name, kind] : entries) {
+				std::string relative = join(current, name);
+				switch (kind) {
+				case platform::beneath::entry_kind::file: out.files.push_back(std::move(relative)); break;
+				case platform::beneath::entry_kind::folder: out.folders.push_back(std::move(relative)); break;
+				case platform::beneath::entry_kind::link:
+				case platform::beneath::entry_kind::other: out.odd.push_back(std::move(relative)); break;
+				}
+			}
+			if (out.files.size() > max_files) {
+				out.truncated = true;
+				return {};
+			}
+		}
+		return {};
+	}
+
+	// The size of a regular file below `root` as its open handle sees it, read without following a link.
+	std::optional<std::uint64_t> size_of(const fs::path& root, const std::string& relative)
+	{
+		platform::beneath::read_request request = read_request_of(root, relative, (std::numeric_limits<std::uint64_t>::max)());
+		request.stamp_only = true;
+		std::vector<std::byte> none;
+		const platform::beneath::read_result result = platform::beneath::read_beneath(request, none);
+		if (result.status != platform::beneath::read_status::ok || !result.stamp) return std::nullopt;
+		return result.stamp->size;
+	}
+
+	// The file a .resource or a desc's binary file (or its .resource) belongs to; nullopt for any other name.
+	std::optional<std::string> companion_owner(std::string_view relative)
+	{
+		std::string_view file = relative;
+		if (res::is_asset_meta_sidecar(file)) file = res::asset_meta_owner(file);
+		const std::size_t slash = file.find_last_of('/');
+		const std::string_view name = slash == std::string_view::npos ? file : file.substr(slash + 1);
+		if (const std::optional<std::string> desc = res::desc_binary_owner_name(name)) return join(parent_of(file), *desc);
+		if (file.size() != relative.size()) return std::string(file);
+		return std::nullopt;
+	}
+
 	std::string_view step_kind_name(edt::journal_step_kind kind)
 	{
 		switch (kind) {
 		case edt::journal_step_kind::move: return "move";
 		case edt::journal_step_kind::rewrite: return "rewrite";
 		case edt::journal_step_kind::stash: return "stash";
+		case edt::journal_step_kind::make_folder: return "make_folder";
+		case edt::journal_step_kind::remove_folder: return "remove_folder";
 		}
 		return "move";
 	}
 
+	bool is_folder_step(const edt::journal_step& step)
+	{
+		return step.kind == edt::journal_step_kind::make_folder || step.kind == edt::journal_step_kind::remove_folder;
+	}
+
 	std::optional<edt::journal_step_kind> step_kind_of(std::string_view name)
 	{
-		for (const edt::journal_step_kind kind : { edt::journal_step_kind::move, edt::journal_step_kind::rewrite, edt::journal_step_kind::stash }) {
+		for (const edt::journal_step_kind kind : { edt::journal_step_kind::move, edt::journal_step_kind::rewrite, edt::journal_step_kind::stash,
+			edt::journal_step_kind::make_folder, edt::journal_step_kind::remove_folder }) {
 			if (step_kind_name(kind) == name) return kind;
 		}
 		return std::nullopt;
@@ -476,13 +623,28 @@ namespace
 
 	// Takes one step back, and tolerates a step that was written ahead but not (or only half) done: what is already as
 	// it was before the step is left alone. Empty: done.
-	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, const move_seams& seams)
+	std::string undo_step(const edt::journal_step& step, const fs::path& root, const fs::path& journal_root, const std::string& id, const move_seams& seams,
+		std::vector<std::string>& warnings)
 	{
 		std::vector<std::byte> bytes;
-		if (step.kind != edt::journal_step_kind::rewrite) {
+		if (step.kind == edt::journal_step_kind::move || step.kind == edt::journal_step_kind::stash) {
 			if (std::string error = injected_failure(seams, "before_undo:" + step.from); !error.empty()) return error;
 		}
 		switch (step.kind) {
+		case edt::journal_step_kind::make_folder: {
+			if (!exists_on_disk(root, step.from)) return {};
+			std::string error;
+			const bool empty = folder_is_empty(root, step.from, error);
+			if (!error.empty()) return error;
+			if (!empty) {
+				warnings.push_back(std::format("the folder '{}' the operation made is not empty, so it stays", step.from));
+				return {};
+			}
+			return remove_empty_folder(root, step.from);
+		}
+		case edt::journal_step_kind::remove_folder:
+			if (is_folder(root, step.from)) return {};
+			return make_folders(root, path_of(step.from));
 		case edt::journal_step_kind::move:
 			if (exists_on_disk(root, step.from)) {
 				const std::string kept_where = std::format("the moved file stays at '{}'", step.to);
@@ -531,6 +693,19 @@ namespace
 	{
 		std::string error;
 		switch (step.kind) {
+		case edt::journal_step_kind::make_folder:
+		case edt::journal_step_kind::remove_folder: {
+			std::error_code ec;
+			const fs::file_type type = fs::symlink_status(root / path_of(step.from), ec).type();
+			if (type == fs::file_type::not_found) {
+				return step.kind == edt::journal_step_kind::make_folder ? step_state::not_done : step_state::done;
+			}
+			if (type == fs::file_type::directory) {
+				return step.kind == edt::journal_step_kind::make_folder ? step_state::done : step_state::not_done;
+			}
+			file = step.from;
+			return step_state::changed;
+		}
 		case edt::journal_step_kind::move: {
 			const bool from_there = exists_on_disk(root, step.from);
 			if (!exists_on_disk(root, step.to)) {
@@ -604,13 +779,41 @@ namespace
 		return {};
 	}
 
+	// A file the project does not list (hidden, temporary) moved along with its folder: `from` is <folder>/<rest> and `to`
+	// <other folder>/<rest>, both folders names the project lists.
+	bool carried_along(std::string_view from, std::string_view to, const fs::path& root)
+	{
+		if (!is_safe_relative(from) || !is_safe_relative(to)) return false;
+		for (std::size_t slash = from.find('/'); slash != std::string_view::npos; slash = from.find('/', slash + 1)) {
+			const std::string_view rest = from.substr(slash);
+			if (to.size() <= rest.size() || !to.ends_with(rest)) continue;
+			const std::string_view to_folder = to.substr(0, to.size() - rest.size());
+			if (destination_problem(from.substr(0, slash), root, false).empty() && destination_problem(to_folder, root, false).empty()) return true;
+		}
+		return false;
+	}
+
+	// A folder step names a safe path below its root whose first folder is one the project lists (a hidden folder below it
+	// moves with it).
+	bool is_step_folder(std::string_view folder, const fs::path& root)
+	{
+		if (!is_safe_relative(folder)) return false;
+		return destination_problem(folder.substr(0, folder.find('/')), root, false).empty();
+	}
+
 	// What a step may do under the root it is read against: names the project lists, as a live operation checks them.
 	std::string step_problem(const edt::journal_step& step, const fs::path& root)
 	{
 		const auto listed = [&](const std::string& relative) { return is_safe_relative(relative) && destination_problem(relative, root, false).empty(); };
 		switch (step.kind) {
+		case edt::journal_step_kind::make_folder:
+		case edt::journal_step_kind::remove_folder:
+			if (!is_step_folder(step.from, root) || !step.to.empty() || !step.hash.empty() || !step.after_hash.empty() || !step.original.empty()) {
+				return std::format("the {} of '{}' is not of a folder below its root, or carries what a folder step has not", step_kind_name(step.kind), step.from);
+			}
+			break;
 		case edt::journal_step_kind::move:
-			if (!listed(step.from) || !listed(step.to) || !step.original.empty()) {
+			if ((!(listed(step.from) && listed(step.to)) && !carried_along(step.from, step.to, root)) || !step.original.empty()) {
 				return std::format("the move of '{}' is not between two names of the project's files", step.from);
 			}
 			break;
@@ -668,6 +871,12 @@ std::string_view edt::refusal_code_name(refusal_code code)
 	case refusal_code::io_error: return "io_error";
 	case refusal_code::binary_pair_blocked: return "binary_pair_blocked";
 	case refusal_code::unrewritable_references: return "unrewritable_references";
+	case refusal_code::mixed_operations: return "mixed_operations";
+	case refusal_code::overlapping_requests: return "overlapping_requests";
+	case refusal_code::into_itself: return "into_itself";
+	case refusal_code::folder_in_lower_layer: return "folder_in_lower_layer";
+	case refusal_code::folder_has_foreign_entries: return "folder_has_foreign_entries";
+	case refusal_code::too_many_files: return "too_many_files";
 	}
 	return "io_error";
 }
@@ -783,18 +992,315 @@ edt::asset_ops::asset_ops(asset_ops_ports ports)
 edt::operation_plan edt::asset_ops::plan(std::span<const asset_request> requests) const
 {
 	operation_plan out;
-	if (requests.size() != 1) {
-		out.refused = stop(refusal_code::one_asset_only, "one asset at a time: folders and several files are not done yet");
-		return out;
+	out.refused = plan_into(requests, out);
+	if (out.refused) {
+		out.items.clear();
+		out.carried.clear();
+		out.make_folders.clear();
+		out.remove_folders.clear();
 	}
-	plan_item item;
-	item.request = requests.front();
-	out.refused = plan_one(item);
-	if (!out.refused) out.items.push_back(std::move(item));
 	return out;
 }
 
-std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
+std::optional<edt::refusal> edt::asset_ops::plan_into(std::span<const asset_request> requests, operation_plan& out) const
+{
+	if (requests.empty()) return stop(refusal_code::bad_name, "nothing was asked: name a file or a folder");
+	const asset_operation operation = requests.front().operation;
+	out.operation = operation;
+	if (std::ranges::any_of(requests, [operation](const asset_request& request) { return request.operation != operation; })) {
+		return stop(refusal_code::mixed_operations, "one operation at a time: a plan renames, moves or deletes, never a mix of them");
+	}
+	if (operation == asset_operation::rename && requests.size() != 1) {
+		return stop(refusal_code::bad_name, "a rename takes one file or one folder");
+	}
+	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+	if (!db) return stop(refusal_code::no_database, "no project is open: there is no asset database");
+	const bool removing = operation == asset_operation::remove;
+	const bool fold = db->case_insensitive();
+	const std::vector<fs::path>& layers = db->layers();
+	const std::size_t top = db->top_layer();
+	const bool has_top = top < layers.size();
+	if (has_top) out.root = layers[top];
+	const asset_ops_limits& limits = m_ports.limits;
+	const auto key_of = [fold](std::string_view relative) { return res::asset_name_key(relative, fold); };
+	const auto shown = [](std::string_view relative) { return std::string(res::tag::make(relative).view()); };
+
+	// The files of the requested folders, by key: what each becomes and which request it came with.
+	struct walked_file
+	{
+		std::string from;
+		std::string to;
+		std::string folder;
+		std::string request_to;
+	};
+	std::vector<walked_file> walked;
+	std::map<std::string, std::size_t> walked_at;
+	std::map<std::string, std::uint64_t> sizes;
+	std::uint64_t walked_bytes = 0;
+	// Every folder of the requested folders, by key: where it goes ("" for a delete).
+	std::map<std::string, std::string> folder_to;
+	std::vector<std::string> source_folders;
+	std::vector<std::string> odd;
+	std::vector<const asset_request*> file_requests;
+
+	for (const asset_request& request : requests) {
+		if (request.asset.protocol() != res::tag::default_protocol()) {
+			return stop(refusal_code::not_res_path, std::format("only res:// assets are changed, not '{}'", request.asset.view()));
+		}
+		std::string relative(request.asset.relative());
+		while (relative.ends_with('/')) relative.pop_back();
+		if (relative.empty()) return stop(refusal_code::bad_name, "res:// itself is not renamed, moved or deleted");
+		if (!has_top || db->find_any_case(request.asset)) {
+			file_requests.push_back(&request);
+			continue;
+		}
+		// Only a name that passed these checks is looked at on the disk, and never through a link.
+		const bool safe = is_safe_relative(relative) && destination_problem(relative, out.root, false).empty();
+		std::error_code ec;
+		const fs::file_type type = safe ? fs::symlink_status(out.root / path_of(relative), ec).type() : fs::file_type::not_found;
+		if (type == fs::file_type::symlink) {
+			return stop(refusal_code::folder_has_foreign_entries, std::format("'{}' is a link: a link is never followed nor moved", shown(relative)));
+		}
+		if (type != fs::file_type::directory) {
+			for (std::size_t layer = 0; safe && layer < layers.size(); ++layer) {
+				if (layer == top || !is_folder(layers[layer], relative)) continue;
+				const bool engine = is_engine_layer(layers, layer, m_ports.engine_base);
+				return stop(engine ? refusal_code::engine_layer : refusal_code::not_top_layer,
+					std::format("'{}' is a folder of {} only, not of the project's own folder", shown(relative), engine ? "the engine" : "a lower layer"));
+			}
+			// plan_one says what it is (not_found).
+			file_requests.push_back(&request);
+			continue;
+		}
+
+		std::string dest;
+		if (!removing) {
+			std::string into;
+			if (operation == asset_operation::rename) {
+				if (request.to.empty() || request.to.find_first_of("/\\") != std::string::npos) {
+					return stop(refusal_code::bad_name, "a new name is one folder name, without a folder");
+				}
+				dest = join(parent_of(relative), request.to);
+			} else {
+				std::string_view folder = request.to;
+				if (folder.starts_with("res://")) folder.remove_prefix(6);
+				while (folder.starts_with('/')) folder.remove_prefix(1);
+				while (folder.ends_with('/')) folder.remove_suffix(1);
+				if (folder.find('\\') != std::string_view::npos) return stop(refusal_code::bad_name, "a folder is written with '/'");
+				const std::string source_key = key_of(relative);
+				const std::string into_key = key_of(folder);
+				if (into_key == source_key || into_key.starts_with(source_key + "/")) {
+					return stop(refusal_code::into_itself, std::format("'{}' cannot go into itself or a folder inside it", shown(relative)));
+				}
+				into = std::string(folder);
+				const std::size_t slash = relative.find_last_of('/');
+				dest = join(into, slash == std::string::npos ? std::string_view(relative) : std::string_view(relative).substr(slash + 1));
+			}
+			if (const std::string problem = res::portable_path_problem(dest); !problem.empty()) {
+				return stop(refusal_code::unportable_path, std::format("'{}': {}", dest, problem));
+			}
+			if (const std::string problem = destination_problem(dest, out.root, operation == asset_operation::rename); !problem.empty()) {
+				return stop(refusal_code::bad_name, std::format("'{}': {}", dest, problem));
+			}
+			if (!into.empty() && !is_folder(out.root, into)) {
+				return stop(refusal_code::no_such_folder, std::format("'res://{}' is not a folder of the project's own folder", into));
+			}
+			if (dest == relative) return stop(refusal_code::no_change, "the folder is there already under that name");
+			if (fold && key_of(dest) == key_of(relative)) {
+				return stop(refusal_code::case_only_rename, "names are the same folder in any letter case here, so a change of case alone is not done");
+			}
+			if (exists_named(out.root, dest, fold) || db->find_any_case(res::tag::make(dest))) {
+				return stop(refusal_code::target_exists, std::format("'{}' is taken", shown(dest)));
+			}
+		}
+
+		for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+			if (layer == top || !is_folder(layers[layer], relative)) continue;
+			refusal why = stop(refusal_code::folder_in_lower_layer, {});
+			const std::string prefix = key_of(relative) + "/";
+			for (const auto& entry : db->records()) {
+				const asset_record& record = entry.second;
+				if (!key_of(record.path.relative()).starts_with(prefix)) continue;
+				if (record.layer == top && record.shadowed_layers.empty()) continue;
+				why.entries.emplace_back(record.path.view());
+			}
+			why.reason = std::format("'{}' is also a folder of {}: {} would stay visible under the old path", shown(relative),
+				is_engine_layer(layers, layer, m_ports.engine_base) ? "the engine" : "a lower layer",
+				why.entries.empty() ? std::string("the folder") : first_names(why.entries));
+			return why;
+		}
+
+		folder_listing listing;
+		if (const std::string error = list_folder(out.root, relative, limits.max_files, listing); !error.empty()) {
+			return stop(refusal_code::io_error, std::format("'{}': {}", shown(relative), error));
+		}
+		if (listing.truncated) return too_many(std::format("more than {}", limits.max_files), walked_bytes, limits);
+		const auto mapped = [&](const std::string& path) { return removing ? std::string{} : dest + path.substr(relative.size()); };
+		for (const std::string& folder : listing.folders) {
+			const auto [at, added] = folder_to.emplace(key_of(folder), mapped(folder));
+			if (!added) {
+				if (at->second != mapped(folder)) {
+					return stop(refusal_code::overlapping_requests, std::format("'{}' is asked to go to two places", shown(folder)));
+				}
+				continue;
+			}
+			source_folders.push_back(folder);
+			if (!removing) out.make_folders.push_back(mapped(folder));
+		}
+		for (const std::string& file : listing.files) {
+			const auto [at, added] = walked_at.emplace(key_of(file), walked.size());
+			if (!added) {
+				if (walked[at->second].to != mapped(file)) {
+					return stop(refusal_code::overlapping_requests, std::format("'{}' is asked to go to two places", shown(file)));
+				}
+				continue;
+			}
+			walked.push_back(walked_file{ file, mapped(file), shown(relative), request.to });
+			if (walked.size() > limits.max_files) return too_many(std::format("more than {}", limits.max_files), walked_bytes, limits);
+			const std::optional<std::uint64_t> size = size_of(out.root, file);
+			if (!size) return stop(refusal_code::io_error, std::format("'{}' cannot be read", shown(file)));
+			sizes[key_of(file)] = *size;
+			walked_bytes += *size;
+		}
+		odd.insert(odd.end(), listing.odd.begin(), listing.odd.end());
+	}
+	if (!odd.empty()) {
+		refusal why = stop(refusal_code::folder_has_foreign_entries, std::format("{} link(s) or entries that are no file or folder: {}; they are never followed nor moved",
+			odd.size(), first_names(odd)));
+		for (const std::string& entry : odd) why.entries.push_back(shown(entry));
+		return why;
+	}
+	if (walked_bytes > limits.max_bytes) return too_many(std::to_string(walked.size()), walked_bytes, limits);
+
+	// What to plan as one asset each: the folders' files that are assets, then the files asked by themselves.
+	struct candidate
+	{
+		asset_request request;
+		std::optional<std::string> to;
+		std::string folder;
+	};
+	std::vector<candidate> candidates;
+	for (const walked_file& file : walked) {
+		const res::tag tag = res::tag::make(file.from);
+		const asset_record* record = db->find_any_case(tag);
+		if (!record || record->layer != top || key_of(record->path.relative()) != key_of(file.from)) continue;
+		candidates.push_back(candidate{ asset_request{ operation, tag, file.request_to }, removing ? std::nullopt : std::optional<std::string>(file.to), file.folder });
+	}
+	std::set<std::string> asked;
+	for (const asset_request* request : file_requests) {
+		if (const asset_record* record = db->find_any_case(request->asset)) asked.insert(key_of(record->path.relative()));
+	}
+	for (const asset_request* request : file_requests) {
+		// A .resource or a desc's binary file asked with its file (or its folder) goes with it: nothing more to plan.
+		if (!db->find_any_case(request->asset)) {
+			if (const std::optional<std::string> owner = companion_owner(request->asset.relative())) {
+				const std::string owner_key = key_of(*owner);
+				if (asked.contains(owner_key) || walked_at.contains(owner_key)) continue;
+			}
+		}
+		candidates.push_back(candidate{ *request, std::nullopt, {} });
+	}
+	if (walked.size() + file_requests.size() > limits.max_files) {
+		return too_many(std::format("at least {}", walked.size() + file_requests.size()), walked_bytes, limits);
+	}
+
+	usage_index usages;
+	std::vector<item_facts> facts;
+	std::map<std::string, std::size_t> planned_at;
+	for (candidate& next : candidates) {
+		plan_item item;
+		item.request = std::move(next.request);
+		item.folder = std::move(next.folder);
+		item_facts fact;
+		if (std::optional<refusal> why = plan_one(item, next.to, usages, fact)) return why;
+		const auto [at, added] = planned_at.emplace(key_of(fact.relative), out.items.size());
+		if (!added) {
+			if (out.items[at->second].target.view() != item.target.view()) {
+				return stop(refusal_code::overlapping_requests, std::format("'{}' is asked to go to two places", fact.path));
+			}
+			continue;
+		}
+		out.items.push_back(std::move(item));
+		facts.push_back(std::move(fact));
+	}
+
+	std::set<std::string> covered;
+	for (const plan_item& item : out.items) {
+		for (const planned_move& move : item.moves) covered.insert(key_of(move.from));
+	}
+	std::vector<std::string> foreign;
+	for (const walked_file& file : walked) {
+		if (covered.contains(key_of(file.from))) continue;
+		if (removing) {
+			foreign.push_back(shown(file.from));
+			continue;
+		}
+		std::string error;
+		std::string hash = hash_file(out.root, file.from, error);
+		if (!error.empty()) return stop(refusal_code::io_error, std::format("'{}': {}", shown(file.from), error));
+		out.carried.push_back(planned_move{ file.from, file.to, std::move(hash) });
+	}
+	// What the project does not list is not known to be nobody's: a delete never removes it.
+	if (!foreign.empty()) {
+		refusal why = stop(refusal_code::folder_has_foreign_entries, std::format("{} file(s) of the folder are no asset of the project: {}; a delete removes only what it knows",
+			foreign.size(), first_names(foreign)));
+		why.entries = std::move(foreign);
+		return why;
+	}
+
+	std::size_t count = out.carried.size();
+	std::uint64_t bytes = 0;
+	const auto add_size = [&](const planned_move& move) -> bool {
+		const auto known = sizes.find(key_of(move.from));
+		const std::optional<std::uint64_t> size = known != sizes.end() ? std::optional<std::uint64_t>(known->second) : size_of(out.root, move.from);
+		if (!size) return false;
+		bytes += *size;
+		return true;
+	};
+	for (const plan_item& item : out.items) {
+		count += item.moves.size();
+		for (const planned_move& move : item.moves) {
+			if (!add_size(move)) return stop(refusal_code::io_error, std::format("'{}' cannot be read", shown(move.from)));
+		}
+	}
+	for (const planned_move& move : out.carried) {
+		if (!add_size(move)) return stop(refusal_code::io_error, std::format("'{}' cannot be read", shown(move.from)));
+	}
+	if (count > limits.max_files || bytes > limits.max_bytes) return too_many(std::to_string(count), bytes, limits);
+
+	// Parents first for the folders made, children first for the folders removed.
+	const auto depth = [](const std::string& path) { return std::ranges::count(path, '/'); };
+	std::ranges::stable_sort(out.make_folders, {}, depth);
+	out.remove_folders = std::move(source_folders);
+	std::ranges::stable_sort(out.remove_folders, std::ranges::greater{}, depth);
+
+	if (removing) {
+		// A file the delete takes away does not count as a referrer: it goes too.
+		for (plan_item& item : out.items) {
+			std::erase_if(item.referrers, [&](const asset_usage& usage) {
+				return usage.kind != usage_kind::manifest && covered.contains(key_of(res::tag{ usage.file }.relative()));
+			});
+			item.needs_force = !item.referrers.empty();
+		}
+		return std::nullopt;
+	}
+	std::set<std::string> taken;
+	const auto check_target = [&](const planned_move& move) -> std::optional<refusal> {
+		if (taken.insert(key_of(move.to)).second) return std::nullopt;
+		return stop(refusal_code::target_exists, std::format("two files would go to '{}'", shown(move.to)));
+	};
+	for (const plan_item& item : out.items) {
+		for (const planned_move& move : item.moves) {
+			if (std::optional<refusal> why = check_target(move)) return why;
+		}
+	}
+	for (const planned_move& move : out.carried) {
+		if (std::optional<refusal> why = check_target(move)) return why;
+	}
+	return plan_rewrites(out.items, facts);
+}
+
+std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item, const std::optional<std::string>& to, usage_index& usages, item_facts& facts) const
 {
 	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
 	if (!db) return stop(refusal_code::no_database, "no project is open: there is no asset database");
@@ -826,7 +1332,9 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 	std::string dest;
 	std::string move_folder;
 	if (!removing) {
-		if (request.operation == asset_operation::rename) {
+		if (to) {
+			dest = *to;
+		} else if (request.operation == asset_operation::rename) {
 			if (request.to.empty() || request.to.find_first_of("/\\") != std::string::npos) {
 				return stop(refusal_code::bad_name, "a new name is one file name, without a folder");
 			}
@@ -843,7 +1351,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 		if (const std::string problem = res::portable_path_problem(dest); !problem.empty()) {
 			return stop(refusal_code::unportable_path, std::format("'{}': {}", dest, problem));
 		}
-		if (const std::string problem = destination_problem(dest, item.root, request.operation == asset_operation::rename); !problem.empty()) {
+		if (const std::string problem = destination_problem(dest, item.root, !to && request.operation == asset_operation::rename); !problem.empty()) {
 			return stop(refusal_code::bad_name, std::format("'{}': {}", dest, problem));
 		}
 		// Only a folder name that passed the checks above is looked at on the disk, and never through a link.
@@ -885,7 +1393,7 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 			return stop(refusal_code::binary_pair_blocked, std::format("'{}' is there: a save of '{}' is not finished", staged->view(), record->path.view()));
 		}
 		if (binary_here) {
-			const usage_report binary_usages = find_usages(*db, m_ports.descs ? m_ports.descs() : nullptr, usage_target{ *binary, std::nullopt });
+			const usage_report binary_usages = usages.find(*db, m_ports.descs ? m_ports.descs() : nullptr, usage_target{ *binary, std::nullopt });
 			refusal shared = stop(refusal_code::binary_pair_blocked, std::format("something other than the desc refers to its binary file '{}'", binary->view()));
 			std::ranges::copy_if(binary_usages.items, std::back_inserter(shared.referrers), [&](const asset_usage& usage) { return usage.file != record->path.view(); });
 			if (!shared.referrers.empty()) return shared;
@@ -942,16 +1450,19 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 
 	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
 	const std::span<const manifest_reference> manifest_references = manifest ? std::span<const manifest_reference>(manifest->references) : std::span<const manifest_reference>{};
-	usage_report usages = find_usages(*db, m_ports.descs ? m_ports.descs() : nullptr, usage_target{ record->path, record->id },
+	usage_report found = usages.find(*db, m_ports.descs ? m_ports.descs() : nullptr, usage_target{ record->path, record->id },
 		manifest ? std::string_view(manifest->file) : std::string_view{}, manifest_references);
-	std::erase_if(usages.items, [&](const asset_usage& usage) { return usage.file == record->path.view(); });
-	item.referrers = usages.items;
+	std::erase_if(found.items, [&](const asset_usage& usage) { return usage.file == record->path.view(); });
+	item.referrers = found.items;
+	facts.path = std::string(record->path.view());
+	facts.relative = source;
+	facts.guid = record->id ? res::to_text(*record->id) : std::string{};
 
 	std::optional<refusal> scan_problem;
-	if (!usages.skipped.empty()) {
+	if (!found.skipped.empty()) {
 		scan_problem = stop(refusal_code::usage_scan_skipped, "some desc files are too big to be read for references, so who refers to the asset is not known");
-		scan_problem->skipped = usages.skipped;
-	} else if (!usages.complete) {
+		scan_problem->skipped = found.skipped;
+	} else if (!found.complete) {
 		scan_problem = stop(refusal_code::database_not_ready, "the asset database is still reading the files");
 	}
 	if (removing) {
@@ -959,37 +1470,67 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 		item.needs_force = !item.referrers.empty();
 		return std::nullopt;
 	}
-	if (scan_problem) return scan_problem;
+	return scan_problem;
+}
 
-	std::map<std::string, std::vector<const asset_usage*>> groups;
-	for (const asset_usage& usage : item.referrers) groups[usage.file].push_back(&usage);
+std::optional<edt::refusal> edt::asset_ops::plan_rewrites(std::vector<plan_item>& items, const std::vector<item_facts>& facts) const
+{
+	const asset_database* db = m_ports.assets ? m_ports.assets() : nullptr;
+	if (!db) return stop(refusal_code::no_database, "no project is open: there is no asset database");
+	const std::vector<fs::path>& layers = db->layers();
+	const bool fold = db->case_insensitive();
+	const std::optional<asset_ops_manifest> manifest = m_ports.manifest ? m_ports.manifest() : std::nullopt;
+
+	// Where each file the plan moves ends up: a referrer that moves is rewritten there, after the moves.
+	std::map<std::string, std::string> moved_to;
+	for (const plan_item& item : items) {
+		for (const planned_move& move : item.moves) moved_to[res::asset_name_key(move.from, fold)] = move.to;
+	}
+	struct referrer_group
+	{
+		std::size_t item = 0;
+		std::vector<const asset_usage*> usages;
+	};
+	std::map<std::string, std::vector<referrer_group>> files;
+	for (std::size_t i = 0; i < items.size(); ++i) {
+		for (const asset_usage& usage : items[i].referrers) {
+			std::vector<referrer_group>& groups = files[usage.file];
+			if (groups.empty() || groups.back().item != i) groups.push_back(referrer_group{ i, {} });
+			groups.back().usages.push_back(&usage);
+		}
+	}
 	if (m_ports.is_open_with_unsaved_changes) {
-		for (const auto& entry : groups) {
+		for (const auto& entry : files) {
 			const std::string& file = entry.first;
-			const std::vector<const asset_usage*>& group = entry.second;
-			if (group.front()->kind == usage_kind::manifest || !m_ports.is_open_with_unsaved_changes(res::tag{ file })) continue;
+			const std::vector<referrer_group>& groups = entry.second;
+			if (groups.front().usages.front()->kind == usage_kind::manifest || !m_ports.is_open_with_unsaved_changes(res::tag{ file })) continue;
 			refusal open = stop(refusal_code::referrer_open, std::format("'{}' refers to the asset and is open with unsaved changes", file));
-			for (const asset_usage* usage : group) open.referrers.push_back(*usage);
+			for (const referrer_group& group : groups) {
+				for (const asset_usage* usage : group.usages) open.referrers.push_back(*usage);
+			}
 			return open;
 		}
 	}
 
-	const std::string target_guid = record->id ? res::to_text(*record->id) : std::string{};
-	for (const auto& entry : groups) {
+	for (const auto& entry : files) {
 		const std::string& file = entry.first;
-		const std::vector<const asset_usage*>& group = entry.second;
-		const bool by_path = std::ranges::any_of(group, [](const asset_usage* usage) { return !usage->by_guid; });
-		const auto reject = [&](std::string code, std::string reason) {
+		const std::vector<referrer_group>& groups = entry.second;
+		const auto reject = [&](const referrer_group& group, std::string code, std::string reason) {
+			plan_item& item = items[group.item];
 			item.could_not_rewrite.push_back(rewrite_failure{ file, std::move(code), std::move(reason) });
-			for (const asset_usage* usage : group) {
+			for (const asset_usage* usage : group.usages) {
 				if (!usage->by_guid) item.broken_references.push_back(*usage);
 			}
 		};
+		const auto reject_all = [&](const std::string& code, const std::string& reason) {
+			for (const referrer_group& group : groups) reject(group, code, reason);
+		};
 		fs::path root;
 		std::string relative;
-		if (group.front()->kind == usage_kind::manifest) {
+		const bool in_manifest = groups.front().usages.front()->kind == usage_kind::manifest;
+		if (in_manifest) {
 			if (!manifest) {
-				reject("unknown_file", "the project manifest is not known");
+				reject_all("unknown_file", "the project manifest is not known");
 				continue;
 			}
 			root = manifest->root;
@@ -997,15 +1538,18 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 		} else {
 			const asset_record* holder = db->find_any_case(res::tag{ file });
 			if (!holder) {
-				reject("unknown_file", "the asset database has no such file any more");
+				reject_all("unknown_file", "the asset database has no such file any more");
 				continue;
 			}
 			if (holder->layer != db->top_layer()) {
 				const bool engine = is_engine_layer(layers, holder->layer, m_ports.engine_base);
-				if (by_path) {
-					reject(engine ? "engine_layer" : "lower_layer", engine ? "not rewritten: a file of the engine is not changed" : "not rewritten: lower layer");
-				} else {
-					item.warnings.push_back(std::format("'{}' is in a lower layer and is not rewritten: it refers by guid, which stays valid", file));
+				for (const referrer_group& group : groups) {
+					const bool by_path = std::ranges::any_of(group.usages, [](const asset_usage* usage) { return !usage->by_guid; });
+					if (by_path) {
+						reject(group, engine ? "engine_layer" : "lower_layer", engine ? "not rewritten: a file of the engine is not changed" : "not rewritten: lower layer");
+					} else {
+						items[group.item].warnings.push_back(std::format("'{}' is in a lower layer and is not rewritten: it refers by guid, which stays valid", file));
+					}
 				}
 				continue;
 			}
@@ -1014,28 +1558,56 @@ std::optional<edt::refusal> edt::asset_ops::plan_one(plan_item& item) const
 		}
 		std::vector<std::byte> bytes;
 		if (const std::string error = read_file(root, relative, k_level_file_limit, bytes); !error.empty()) {
-			reject("unreadable", error);
+			reject_all("unreadable", error);
 			continue;
 		}
-		std::vector<std::string> pointers;
-		pointers.reserve(group.size());
-		for (const asset_usage* usage : group) pointers.push_back(usage->json_pointer);
-		const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-		rewrite_outcome outcome = rewrite_references(text, pointers, record->path.view(), item.target.view(), db->case_insensitive(), target_guid);
-		if (outcome.status == rewrite_status::nothing_to_do) continue;
-		if (outcome.status != rewrite_status::rewritten) {
-			reject(std::string(rewrite_status_name(outcome.status)), std::move(outcome.reason));
-			continue;
+		// Every asset the file refers to, in turn, over one text: the pointers stay valid, only values change.
+		std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+		std::vector<std::string> pointers_changed;
+		std::optional<std::size_t> owner;
+		bool failed = false;
+		for (const referrer_group& group : groups) {
+			std::vector<std::string> pointers;
+			pointers.reserve(group.usages.size());
+			for (const asset_usage* usage : group.usages) pointers.push_back(usage->json_pointer);
+			const item_facts& fact = facts[group.item];
+			rewrite_outcome outcome = rewrite_references(text, pointers, fact.path, items[group.item].target.view(), fold, fact.guid);
+			if (outcome.status == rewrite_status::nothing_to_do) continue;
+			if (outcome.status != rewrite_status::rewritten) {
+				reject(group, std::string(rewrite_status_name(outcome.status)), std::move(outcome.reason));
+				failed = true;
+				break;
+			}
+			text = std::move(outcome.text);
+			pointers_changed.insert(pointers_changed.end(), std::make_move_iterator(outcome.pointers.begin()), std::make_move_iterator(outcome.pointers.end()));
+			if (!owner) owner = group.item;
 		}
-		item.rewrites.push_back(planned_rewrite{ file, std::move(root), std::move(relative), hash_of(bytes), std::move(outcome.text), std::move(outcome.pointers) });
+		if (failed || !owner) continue;
+		std::string shown_file = file;
+		std::string target = relative;
+		if (!in_manifest) {
+			if (const auto moved = moved_to.find(res::asset_name_key(relative, fold)); moved != moved_to.end()) {
+				target = moved->second;
+				shown_file = std::string(res::tag::make(target).view());
+			}
+		}
+		items[*owner].rewrites.push_back(planned_rewrite{ std::move(shown_file), std::move(root), std::move(target), hash_of(bytes), std::move(text),
+			std::move(pointers_changed), std::move(relative) });
 	}
-	if (!item.could_not_rewrite.empty()) {
-		refusal why = stop(refusal_code::unrewritable_references, std::format("{} file(s) that refer to '{}' cannot be rewritten, so its references would break: nothing was changed", item.could_not_rewrite.size(), record->path.view()));
-		why.unrewritable = item.could_not_rewrite;
-		why.referrers = item.broken_references;
-		return why;
+
+	std::vector<rewrite_failure> failures;
+	std::vector<asset_usage> broken;
+	for (const plan_item& item : items) {
+		failures.insert(failures.end(), item.could_not_rewrite.begin(), item.could_not_rewrite.end());
+		broken.insert(broken.end(), item.broken_references.begin(), item.broken_references.end());
 	}
-	return std::nullopt;
+	if (failures.empty()) return std::nullopt;
+	const std::string what = items.size() == 1 ? std::format("'{}'", facts.front().path) : std::string("the assets");
+	refusal why = stop(refusal_code::unrewritable_references, std::format("{} file(s) that refer to {} cannot be rewritten, so references would break: nothing was changed",
+		failures.size(), what));
+	why.unrewritable = std::move(failures);
+	why.referrers = std::move(broken);
+	return why;
 }
 
 void edt::asset_ops::announce(const std::vector<journal_step>& steps, bool undoing) const
@@ -1071,6 +1643,10 @@ void edt::asset_ops::announce(const std::vector<journal_step>& steps, bool undoi
 		case journal_step_kind::stash:
 			add(step.from, {}, undoing ? res::change_kind::created : res::change_kind::deleted);
 			break;
+		case journal_step_kind::make_folder:
+		case journal_step_kind::remove_folder:
+			// The moves of their files say everything; a folder change would make the database walk every layer again.
+			break;
 		}
 	}
 	if (!changes.empty()) m_ports.report_self_change(changes);
@@ -1100,7 +1676,7 @@ void edt::asset_ops::roll_back(operation_report& report) const
 	for (auto step = journal.steps.rbegin(); step != journal.steps.rend(); ++step) {
 		std::string undone;
 		try {
-			undone = undo_step(*step, path_of(step->root), m_ports.journal_root, journal.id, seams_of(m_ports));
+			undone = undo_step(*step, path_of(step->root), m_ports.journal_root, journal.id, seams_of(m_ports), report.warnings);
 		} catch (const std::exception& error) {
 			undone = error.what();
 		} catch (...) {
@@ -1128,33 +1704,51 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 		report.refused = *plan.refused;
 		return;
 	}
-	if (plan.items.size() != 1) {
-		report.refused = stop(refusal_code::one_asset_only, "one asset at a time");
+	if (plan.items.empty() && plan.carried.empty() && plan.make_folders.empty() && plan.remove_folders.empty()) {
+		report.refused = stop(refusal_code::bad_name, "the plan has nothing to do");
 		return;
 	}
-	const plan_item& item = plan.items.front();
-	const bool removing = item.request.operation == asset_operation::remove;
-	report.warnings = item.warnings;
-	report.could_not_rewrite = item.could_not_rewrite;
-	report.broken_references = item.broken_references;
+	const bool removing = plan.operation == asset_operation::remove;
+	const fs::path& layer = plan.items.empty() ? plan.root : plan.items.front().root;
+	if (layer.empty()) {
+		report.refused = stop(refusal_code::io_error, "the plan names no folder of the project");
+		return;
+	}
+	std::vector<const planned_move*> moves;
+	std::vector<const planned_rewrite*> rewrites;
+	std::vector<asset_usage> referrers;
+	const plan_item* scanned = nullptr;
+	for (const plan_item& item : plan.items) {
+		report.warnings.insert(report.warnings.end(), item.warnings.begin(), item.warnings.end());
+		report.could_not_rewrite.insert(report.could_not_rewrite.end(), item.could_not_rewrite.begin(), item.could_not_rewrite.end());
+		report.broken_references.insert(report.broken_references.end(), item.broken_references.begin(), item.broken_references.end());
+		for (const planned_move& move : item.moves) moves.push_back(&move);
+		for (const planned_rewrite& rewrite : item.rewrites) rewrites.push_back(&rewrite);
+		if (item.scan_problem && !scanned) scanned = &item;
+		if (item.needs_force) referrers.insert(referrers.end(), item.referrers.begin(), item.referrers.end());
+	}
+	for (const planned_move& move : plan.carried) moves.push_back(&move);
 
 	if (removing) {
-		if (item.scan_problem) {
+		const bool one = plan.items.size() == 1;
+		const std::string asked = one ? std::format("'{}'", plan.items.front().request.asset.view()) : std::string("the removed files");
+		if (scanned) {
 			if (!options.force) {
-				report.refused = *item.scan_problem;
+				report.refused = *scanned->scan_problem;
 				return;
 			}
-			report.warnings.push_back(std::format("forced: {}", item.scan_problem->reason));
+			report.warnings.push_back(std::format("forced: {}", scanned->scan_problem->reason));
 		}
-		if (item.needs_force) {
+		if (!referrers.empty()) {
 			if (!options.force) {
-				refusal why = stop(refusal_code::has_referrers, std::format("{} place(s) refer to '{}'", item.referrers.size(), item.request.asset.view()));
-				why.referrers = item.referrers;
+				refusal why = stop(refusal_code::has_referrers, std::format("{} place(s) refer to {}", referrers.size(), asked));
+				why.referrers = referrers;
 				report.refused = std::move(why);
 				return;
 			}
-			report.broken_references = item.referrers;
-			report.warnings.push_back(std::format("'{}' was removed while {} place(s) still refer to it: they are left as they are", item.request.asset.view(), item.referrers.size()));
+			report.warnings.push_back(std::format("{} {} removed while {} place(s) still refer to {}: they are left as they are", asked, one ? "was" : "were",
+				referrers.size(), one ? "it" : "them"));
+			report.broken_references = std::move(referrers);
 		}
 	}
 	if (m_ports.journal_root.empty()) {
@@ -1164,31 +1758,39 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 
 	// Nothing is touched when a file is not what the plan read, or has unsaved edits open since.
 	if (m_ports.is_open_with_unsaved_changes) {
-		if (m_ports.is_open_with_unsaved_changes(item.request.asset)) {
+		for (const plan_item& item : plan.items) {
+			if (!m_ports.is_open_with_unsaved_changes(item.request.asset)) continue;
 			report.refused = stop(refusal_code::referrer_open, std::format("'{}' is open with unsaved changes", item.request.asset.view()));
 			return;
 		}
-		for (const planned_rewrite& rewrite : item.rewrites) {
-			if (!rewrite.file.starts_with("res://") || !m_ports.is_open_with_unsaved_changes(res::tag{ rewrite.file })) continue;
-			report.refused = stop(refusal_code::referrer_open, std::format("'{}' refers to the asset and is open with unsaved changes", rewrite.file));
+		for (const planned_rewrite* rewrite : rewrites) {
+			if (!rewrite->file.starts_with("res://")) continue;
+			const res::tag source = res::tag::make(rewrite->source);
+			if (!m_ports.is_open_with_unsaved_changes(source)) continue;
+			report.refused = stop(refusal_code::referrer_open, std::format("'{}' refers to the asset and is open with unsaved changes", source.view()));
 			return;
 		}
 	}
-	std::vector<std::vector<std::byte>> originals(item.rewrites.size());
-	for (const planned_move& move : item.moves) {
+	for (const planned_move* move : moves) {
 		std::string error;
-		if (hash_file(item.root, move.from, error) != move.hash || !error.empty()) {
-			report.refused = stop(refusal_code::stale_plan, std::format("'{}' changed since it was planned", res::tag::make(move.from).view()));
+		if (hash_file(layer, move->from, error) != move->hash || !error.empty()) {
+			report.refused = stop(refusal_code::stale_plan, std::format("'{}' changed since it was planned", res::tag::make(move->from).view()));
 			return;
 		}
-		if (!removing && exists_on_disk(item.root, move.to)) {
-			report.refused = stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(move.to).view()));
+		if (!removing && exists_on_disk(layer, move->to)) {
+			report.refused = stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(move->to).view()));
 			return;
 		}
 	}
-	for (std::size_t i = 0; i < item.rewrites.size(); ++i) {
-		const planned_rewrite& rewrite = item.rewrites[i];
-		const std::string error = read_file(rewrite.root, rewrite.relative, k_level_file_limit, originals[i]);
+	for (const std::string& folder : plan.make_folders) {
+		if (!exists_on_disk(layer, folder)) continue;
+		report.refused = stop(refusal_code::target_exists, std::format("'{}' is taken", res::tag::make(folder).view()));
+		return;
+	}
+	std::vector<std::vector<std::byte>> originals(rewrites.size());
+	for (std::size_t i = 0; i < rewrites.size(); ++i) {
+		const planned_rewrite& rewrite = *rewrites[i];
+		const std::string error = read_file(rewrite.root, rewrite.source, k_level_file_limit, originals[i]);
 		if (!error.empty() || hash_of(originals[i]) != rewrite.before_hash) {
 			report.refused = stop(refusal_code::stale_plan, std::format("'{}' changed since it was planned", rewrite.file));
 			return;
@@ -1197,24 +1799,24 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 
 	operation_journal& journal = report.journal;
 	journal.id = res::to_text(res::generate_asset_id());
-	journal.operation = item.request.operation;
+	journal.operation = plan.operation;
 	journal.directory = utf8(m_ports.journal_root / journal.id);
 	report.operation_id = journal.id;
 	const fs::path& journal_root = m_ports.journal_root;
-	std::vector<std::string> original_names(item.rewrites.size());
-	for (std::size_t i = 0; i < item.rewrites.size(); ++i) {
+	std::vector<std::string> original_names(rewrites.size());
+	for (std::size_t i = 0; i < rewrites.size(); ++i) {
 		original_names[i] = std::format("originals/{}", i);
 		const std::string kept = in_journal(journal_root, journal.id, original_names[i]);
 		const std::string error = write_file(journal_base(journal_root), kept, originals[i], false);
 		if (!error.empty()) {
-			report.refused = stop(refusal_code::io_error, std::format("the original of '{}' was not kept: {}", item.rewrites[i].file, error));
+			report.refused = stop(refusal_code::io_error, std::format("the original of '{}' was not kept: {}", rewrites[i]->file, error));
 			return;
 		}
 	}
 	originals.clear();
 
 	const std::shared_ptr<void> hold = m_ports.hold_changes ? m_ports.hold_changes() : nullptr;
-	const std::string root = canonical_root(item.root);
+	const std::string root = canonical_root(layer);
 	const auto injected = [this](const std::string& label) { return m_ports.fail_step ? m_ports.fail_step(label) : std::string{}; };
 	const move_seams seams = seams_of(m_ports);
 	// The step is in the journal on the disk before what it describes is done: a crash in between leaves a journal that
@@ -1225,21 +1827,26 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	};
 
 	const auto run = [&]() -> std::string {
-		for (const planned_move& move : item.moves) {
+		for (const std::string& folder : plan.make_folders) {
+			if (std::string error = injected("make_folder:" + folder); !error.empty()) return error;
+			if (std::string error = record(journal_step{ journal_step_kind::make_folder, root, folder, {}, {}, {}, {} }); !error.empty()) return error;
+			if (std::string error = make_new_folder(layer, folder); !error.empty()) return error;
+		}
+		for (const planned_move* move : moves) {
 			if (removing) {
-				if (std::string error = injected("stash:" + move.from); !error.empty()) return error;
-				if (std::string error = record(journal_step{ journal_step_kind::stash, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;
-				const std::string kept = in_journal(journal_root, journal.id, move.to);
-				std::string error = stash_file(item.root, move.from, journal_base(journal_root), kept, move.hash, seams);
+				if (std::string error = injected("stash:" + move->from); !error.empty()) return error;
+				if (std::string error = record(journal_step{ journal_step_kind::stash, root, move->from, move->to, move->hash, {}, {} }); !error.empty()) return error;
+				const std::string kept = in_journal(journal_root, journal.id, move->to);
+				std::string error = stash_file(layer, move->from, journal_base(journal_root), kept, move->hash, seams);
 				if (!error.empty()) return error;
 			} else {
-				if (std::string error = injected("move:" + move.from); !error.empty()) return error;
-				if (std::string error = record(journal_step{ journal_step_kind::move, root, move.from, move.to, move.hash, {}, {} }); !error.empty()) return error;
-				if (std::string error = move_file(item.root, move.from, move.to); !error.empty()) return error;
+				if (std::string error = injected("move:" + move->from); !error.empty()) return error;
+				if (std::string error = record(journal_step{ journal_step_kind::move, root, move->from, move->to, move->hash, {}, {} }); !error.empty()) return error;
+				if (std::string error = move_file(layer, move->from, move->to); !error.empty()) return error;
 			}
 		}
-		for (std::size_t i = 0; i < item.rewrites.size(); ++i) {
-			const planned_rewrite& rewrite = item.rewrites[i];
+		for (std::size_t i = 0; i < rewrites.size(); ++i) {
+			const planned_rewrite& rewrite = *rewrites[i];
 			if (std::string error = injected("rewrite:" + rewrite.relative); !error.empty()) return error;
 			// Right before it is replaced: a referrer someone saved since the plan was read is theirs, not overwritten.
 			std::string read_problem;
@@ -1250,6 +1857,19 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 				hash_of(rewrite.after_text), original_names[i] }); !error.empty()) return error;
 			const std::span<const std::byte> bytes = std::as_bytes(std::span<const char>(rewrite.after_text.data(), rewrite.after_text.size()));
 			if (std::string error = write_file(rewrite.root, rewrite.relative, bytes, true); !error.empty()) return error;
+		}
+		for (const std::string& folder : plan.remove_folders) {
+			if (std::string error = injected("remove_folder:" + folder); !error.empty()) return error;
+			// A folder that is not empty (something came in meanwhile) is left, not a failure.
+			std::string problem;
+			if (!folder_is_empty(layer, folder, problem)) {
+				report.warnings.push_back(std::format("the folder '{}' stays: {}", res::tag::make(folder).view(), problem.empty() ? "it is not empty" : problem));
+				continue;
+			}
+			if (std::string error = record(journal_step{ journal_step_kind::remove_folder, root, folder, {}, {}, {}, {} }); !error.empty()) return error;
+			if (const std::string error = remove_empty_folder(layer, folder); !error.empty()) {
+				report.warnings.push_back(std::format("the folder '{}' stays: {}", res::tag::make(folder).view(), error));
+			}
 		}
 		return {};
 	};
@@ -1269,11 +1889,11 @@ void edt::asset_ops::execute_into(const operation_plan& plan, const execute_opti
 	}
 	announce(journal.steps, false);
 
-	for (const planned_move& move : item.moves) {
-		const std::string to = removing ? std::format("cache://asset_ops/{}/{}", journal.id, move.to) : std::string(res::tag::make(move.to).view());
-		report.moved.push_back(file_move{ std::string(res::tag::make(move.from).view()), to });
+	for (const planned_move* move : moves) {
+		const std::string to = removing ? std::format("cache://asset_ops/{}/{}", journal.id, move->to) : std::string(res::tag::make(move->to).view());
+		report.moved.push_back(file_move{ std::string(res::tag::make(move->from).view()), to });
 	}
-	for (const planned_rewrite& rewrite : item.rewrites) report.rewritten.push_back(rewritten_file{ rewrite.file, rewrite.pointers });
+	for (const planned_rewrite* rewrite : rewrites) report.rewritten.push_back(rewritten_file{ rewrite->file, rewrite->pointers });
 	report.ok = true;
 }
 
@@ -1374,13 +1994,23 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 			roots.push_back(*found);
 		}
 
-		// A crash can leave the last step recorded and not done: that step is not a change, it is skipped.
+		// A crash can leave the last step recorded and not done: that step is not a change, it is skipped. Newest first, so a
+		// moved file a later step rewrote is judged by the text that rewrite left.
 		std::vector<step_state> states(journal.steps.size(), step_state::done);
-		for (std::size_t i = 0; i < journal.steps.size(); ++i) {
+		for (std::size_t i = journal.steps.size(); i-- > 0;) {
+			journal_step judged = journal.steps[i];
+			if (judged.kind == journal_step_kind::move) {
+				for (std::size_t later = i + 1; later < journal.steps.size(); ++later) {
+					const journal_step& step = journal.steps[later];
+					if (step.kind != journal_step_kind::rewrite || step.root != judged.root || step.from != judged.to) continue;
+					if (states[later] == step_state::done) judged.hash = step.after_hash;
+				}
+			}
 			std::string file;
-			states[i] = state_of_step(journal.steps[i], roots[i], journal_root, journal.id, file);
+			states[i] = state_of_step(judged, roots[i], journal_root, journal.id, file);
 			if (states[i] == step_state::changed) report.changed_since.push_back(file);
 		}
+		std::ranges::reverse(report.changed_since);
 		if (!report.changed_since.empty()) {
 			report.error = "files changed since the operation, so nothing was put back";
 			return report;
@@ -1388,7 +2018,7 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		if (m_ports.is_open_with_unsaved_changes) {
 			for (std::size_t i = 0; i < journal.steps.size(); ++i) {
 				const journal_step& step = journal.steps[i];
-				if (states[i] == step_state::not_done || (step.kind == journal_step_kind::rewrite && !step.from.ends_with(".desc"))) continue;
+				if (states[i] == step_state::not_done || is_folder_step(step) || (step.kind == journal_step_kind::rewrite && !step.from.ends_with(".desc"))) continue;
 				for (const std::string* file : { &step.from, &step.to }) {
 					if (step.kind != journal_step_kind::move && file == &step.to) continue;
 					if (m_ports.is_open_with_unsaved_changes(res::tag::make(*file))) report.open_with_unsaved_changes.push_back(*file);
@@ -1405,7 +2035,7 @@ edt::undo_report edt::asset_ops::undo(const operation_journal& journal) const
 		for (std::size_t i = journal.steps.size(); i-- > 0;) {
 			const journal_step& step = journal.steps[i];
 			if (states[i] == step_state::not_done) continue;
-			if (std::string error = undo_step(step, roots[i], journal_root, journal.id, seams_of(m_ports)); !error.empty()) {
+			if (std::string error = undo_step(step, roots[i], journal_root, journal.id, seams_of(m_ports), report.warnings); !error.empty()) {
 				report.failures.push_back(std::format("{}: {}", step_label(step), error));
 				egLOG_WARN("asset_ops", "'{}' could not be put back: {}", step_label(step), error);
 				continue;

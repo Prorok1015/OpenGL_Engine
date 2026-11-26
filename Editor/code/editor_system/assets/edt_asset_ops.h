@@ -27,17 +27,20 @@ namespace edt
 
 	std::string_view asset_operation_name(asset_operation operation);
 
+	// `asset` is a file or a folder of the project's own layer. A plan holds one operation: one rename (a file or a folder), or
+	// moves or deletes of any number of files and folders.
 	struct asset_request
 	{
 		asset_operation operation = asset_operation::rename;
 		res::tag asset;
-		// rename: the new file name; move: the folder below res:// the file goes to ("" is the root); remove: not used.
+		// rename: the new file or folder name; move: the folder below res:// it goes into ("" is the root); remove: not used.
 		std::string to;
 	};
 
 	// Stable, for an agent to branch on.
 	enum class refusal_code : std::uint8_t
 	{
+		// Not produced any more (#1209): kept for the codes already written down.
 		one_asset_only,
 		no_database,
 		database_not_ready,
@@ -63,6 +66,18 @@ namespace edt
 		// A file that refers to the asset cannot be rewritten (a file of a lower layer, a reference whose guid is another
 		// asset's, a file not laid out as the editor writes it): the reference would break, so nothing is done.
 		unrewritable_references,
+		// Requests of more than one operation in one plan.
+		mixed_operations,
+		// Two requests give one file two different results (a file inside a folder moved elsewhere).
+		overlapping_requests,
+		// A folder moved into itself or a folder inside it.
+		into_itself,
+		// The folder is also a folder of a lower layer: its files there would stay visible under the old path.
+		folder_in_lower_layer,
+		// A delete of a folder that holds files the project does not list, or a folder that holds a link (never followed or moved).
+		folder_has_foreign_entries,
+		// More files or bytes than asset_ops_limits allows in one operation.
+		too_many_files,
 	};
 
 	std::string_view refusal_code_name(refusal_code code);
@@ -85,6 +100,9 @@ namespace edt
 		std::vector<std::string> skipped;
 		// unrewritable_references: the files that were not rewritten and why.
 		std::vector<rewrite_failure> unrewritable;
+		// folder_has_foreign_entries: the entries that are not the project's (res:// tags); folder_in_lower_layer: the files of
+		// the lower layer that would stay.
+		std::vector<std::string> entries;
 	};
 
 	struct file_move
@@ -110,24 +128,33 @@ namespace edt
 		std::string hash;
 	};
 
+	// One per referrer file, with every asset of the plan it refers to rewritten in turn.
 	struct planned_rewrite
 	{
+		// Where the file is once the moves are done (a referrer the plan moves is rewritten at its new place).
 		std::string file;
 		std::filesystem::path root;
 		std::string relative;
 		std::string before_hash;
 		std::string after_text;
 		std::vector<std::string> pointers;
+		// Where the file is before the moves (`relative` when it does not move).
+		std::string source;
 	};
 
 	struct plan_item
 	{
+		// For a file of a requested folder: that file, with the folder request's operation and `to`.
 		asset_request request;
+		// The requested folder (res:// tag) the file goes with; empty for a file asked by itself.
+		std::string folder;
 		// Empty for a remove.
 		res::tag target;
 		std::filesystem::path root;
 		std::vector<planned_move> moves;
+		// remove: only the places outside the removed files.
 		std::vector<asset_usage> referrers;
+		// A referrer of several items is rewritten once, in the first item that refers to it.
 		std::vector<planned_rewrite> rewrites;
 		std::vector<rewrite_failure> could_not_rewrite;
 		// Path-only references that stay as they are: they will not find the asset.
@@ -142,7 +169,16 @@ namespace edt
 	struct operation_plan
 	{
 		std::optional<refusal> refused;
+		asset_operation operation = asset_operation::rename;
+		// The project's own layer: every move and folder step is below it.
+		std::filesystem::path root;
 		std::vector<plan_item> items;
+		// Files of a renamed or moved folder that are no asset (hidden, temporary, a .resource of nothing): moved as they are.
+		std::vector<planned_move> carried;
+		// Below the root: the folders to make, each after its parent, and the source folders to remove once empty, each
+		// before its parent.
+		std::vector<std::string> make_folders;
+		std::vector<std::string> remove_folders;
 	};
 
 	struct execute_options
@@ -161,6 +197,10 @@ namespace edt
 		// `from` below `root` was removed into `to` below the journal folder (renamed there, or, across volumes, copied and then
 		// removed); `hash` is its content. Not done: `from` is there. Done: `from` is gone and `to` has `hash`.
 		stash,
+		// The folder `from` below `root` was made (it was not there). Taken back: removed when empty.
+		make_folder,
+		// The empty folder `from` below `root` was removed. Taken back: made again.
+		remove_folder,
 	};
 
 	struct journal_step
@@ -222,6 +262,8 @@ namespace edt
 		// Steps that were recorded and never done (a crash between the record and the action) are left out.
 		std::vector<std::string> restored;
 		std::vector<std::string> failures;
+		// A folder the operation made that is not empty now: it stays.
+		std::vector<std::string> warnings;
 	};
 
 	struct asset_ops_manifest
@@ -230,6 +272,13 @@ namespace edt
 		std::filesystem::path root;
 		std::string file;
 		std::vector<manifest_reference> references;
+	};
+
+	// What one operation may take at most; a bigger one is refused (too_many_files).
+	struct asset_ops_limits
+	{
+		std::size_t max_files = 4096;
+		std::uint64_t max_bytes = 2ull * 1024u * 1024u * 1024u;
 	};
 
 	struct asset_ops_ports
@@ -262,6 +311,7 @@ namespace edt
 		// Tests: asked with the same labels before the rename; a non-empty answer is a rename that failed for another reason (a
 		// link, a denied access): the step fails and nothing is copied.
 		std::function<std::string(std::string_view)> rename_error;
+		asset_ops_limits limits;
 	};
 
 	// Whether `layer` of the asset database's layers is the engine's own (never changed by an operation).
@@ -278,9 +328,11 @@ namespace edt
 	public:
 		explicit asset_ops(asset_ops_ports ports);
 
-		// One request for now (more: one_asset_only). Reads the disk, changes nothing.
+		// Reads the disk, changes nothing. A folder is walked in the project's own layer without following a link: each file
+		// with an asset record is planned as one asset, the others go along as they are (a delete refuses them).
 		operation_plan plan(std::span<const asset_request> requests) const;
-		// Does what `plan` found: the asset first, then the files that refer to it; any failure takes everything back.
+		// Does what `plan` found, in this order: the originals of the referrers into the journal, the folders made, the moves,
+		// the rewrites, the emptied folders removed; any failure takes everything back.
 		operation_report execute(const operation_plan& plan, const execute_options& options = {}) const;
 		// Puts back what `journal` records, when none of its files changed since; a step recorded but never done (a crash) is
 		// skipped, the ones before it are put back. The journal is not trusted: its folder must be journal_root/<id>, its roots
@@ -294,7 +346,21 @@ namespace edt
 		std::string without_host_paths(std::string text) const;
 
 	private:
-		std::optional<refusal> plan_one(plan_item& item) const;
+		// What planning one asset learned that the rewrites of its referrers need.
+		struct item_facts
+		{
+			// The asset's res:// tag as the database spells it, and its path below the layer.
+			std::string path;
+			std::string relative;
+			// Its ID as text; empty: none.
+			std::string guid;
+		};
+
+		std::optional<refusal> plan_into(std::span<const asset_request> requests, operation_plan& out) const;
+		// `to`: the destination below res:// a folder request gives the file (nullopt: its own request says).
+		std::optional<refusal> plan_one(plan_item& item, const std::optional<std::string>& to, usage_index& usages, item_facts& facts) const;
+		// One planned_rewrite per referrer file of `items` (renames and moves).
+		std::optional<refusal> plan_rewrites(std::vector<plan_item>& items, const std::vector<item_facts>& facts) const;
 		// Tells report_self_change what `steps` did (`undoing`: what taking them back did).
 		void announce(const std::vector<journal_step>& steps, bool undoing) const;
 		void execute_into(const operation_plan& plan, const execute_options& options, operation_report& report) const;

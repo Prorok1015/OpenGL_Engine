@@ -69,6 +69,12 @@ namespace
 		case edt::refusal_code::io_error: return "A file could not be read or moved.";
 		case edt::refusal_code::binary_pair_blocked: return "The desc's binary file cannot go along with it.";
 		case edt::refusal_code::unrewritable_references: return "Some files that refer to it cannot be rewritten, so its references would break: nothing was changed.";
+		case edt::refusal_code::mixed_operations: return "One operation at a time: rename, move or delete, not a mix of them.";
+		case edt::refusal_code::overlapping_requests: return "Two of the files or folders asked for would end up in different places.";
+		case edt::refusal_code::into_itself: return "A folder cannot go into itself or into a folder inside it.";
+		case edt::refusal_code::folder_in_lower_layer: return "The folder is also in a lower layer: its files there would stay under the old name.";
+		case edt::refusal_code::folder_has_foreign_entries: return "The folder holds files the project does not list, or a link: they are never deleted or followed.";
+		case edt::refusal_code::too_many_files: return "Too many files or bytes for one operation.";
 		}
 		return "The operation was refused.";
 	}
@@ -188,7 +194,7 @@ void edt::asset_operation_form::replan()
 	m_item.reset();
 	m_refused.reset();
 	if (!m_ports.plan) {
-		m_refused = refusal{ refusal_code::no_database, "no project is open", {}, {}, {} };
+		m_refused = refusal{ refusal_code::no_database, "no project is open", {}, {}, {}, {} };
 		return;
 	}
 	const asset_request asked = request();
@@ -196,7 +202,7 @@ void edt::asset_operation_form::replan()
 	if (plan.refused) {
 		m_refused = std::move(plan.refused);
 	} else if (plan.items.size() != 1) {
-		m_refused = refusal{ refusal_code::one_asset_only, "one asset at a time", {}, {}, {} };
+		m_refused = refusal{ refusal_code::one_asset_only, "one asset at a time", {}, {}, {}, {} };
 	} else {
 		m_item = std::move(plan.items.front());
 	}
