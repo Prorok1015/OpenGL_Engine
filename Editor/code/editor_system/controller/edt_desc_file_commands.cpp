@@ -9,6 +9,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
@@ -708,6 +709,24 @@ namespace {
 		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
 	}
 
+	// A field's key or one of its read aliases: a JSON pointer into the object (registration refuses any other key; the
+	// plain name is for the legacy spelling holds_plain_text also knows).
+	const json::value* value_at_key(const json::object& object, std::string_view key)
+	{
+		if (!key.starts_with('/')) return object.if_contains(key);
+		const std::size_t rest = key.find('/', 1);
+		std::vector<std::string> first;
+		if (!desc::json_pointer_tokens(key.substr(0, rest), first) || first.size() != 1) return nullptr;
+		const json::value* held = object.if_contains(first.front());
+		if (!held || rest == std::string_view::npos) return held;
+		return desc::json_pointer_get(*held, key.substr(rest));
+	}
+
+	std::string pointer_of_key(std::string_view key)
+	{
+		return key.starts_with('/') ? std::string(key) : "/" + res::json_pointer_token(key);
+	}
+
 	// The loader reads these of every geometry_desc, a child of another one too: __parent is copied in first and the
 	// child's own JSON is read over it whole (read_geometry_json). The schema has no notion of a required field (#1180).
 	std::string geometry_members_problem(std::string_view type, const json::object& object)
@@ -838,11 +857,11 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 			schema_error(pointer, "nested deeper than 32: not checked");
 			return;
 		}
-		for (const desc::field_schema& field : schema.fields) {
-			const std::string_view key = std::string_view(field.key).starts_with('/') ? std::string_view(field.key).substr(1) : std::string_view(field.key);
-			const json::value* held = object.if_contains(key);
-			if (!held) continue;
-			const std::string at = pointer + "/" + res::json_pointer_token(key);
+		// Under its key and under each read alias: the loader takes either (#1450).
+		const auto check_field = [&](const desc::field_schema& field, std::string_view field_key) {
+			const json::value* held = value_at_key(object, field_key);
+			if (!held) return;
+			const std::string at = pointer + pointer_of_key(field_key);
 			const bool container = field.kind == desc::field_kind::array || field.kind == desc::field_kind::map;
 			if (field.kind == desc::field_kind::structure || (container && field.element == desc::field_kind::structure)) {
 				const desc::type_schema* nested = descs.find_schema(field.ref_type);
@@ -857,7 +876,7 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 							res::diagnostic_severity::warning);
 					}
 					check_references_by_shape(check_references_by_shape, *held, at);
-					continue;
+					return;
 				}
 				const auto check_nested = [&](const json::value& value, const std::string& nested_at) {
 					const json::object* members = value.if_object();
@@ -879,18 +898,22 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 						check_nested(entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 					}
 				}
-				continue;
+				return;
 			}
 			// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
-			const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref
-				|| field.kind == desc::field_kind::custom
+			// The elements of a list or map of a custom type are read as a single custom field is (#1450). A list or map of
+			// lists or maps is too: deduce_kind gives any sequence the kind array, a codec of its own or not.
+			const bool custom = field.kind == desc::field_kind::custom
+				|| (container && (field.element == desc::field_kind::custom || field.element == desc::field_kind::array
+					|| field.element == desc::field_kind::map));
+			const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref || custom
 				|| (container && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
-			if (!tag_field || (field.kind == desc::field_kind::custom && holds_plain_text(type, field.key))) continue;
+			if (!tag_field || (custom && holds_plain_text(type, field.key))) return;
 			// Inline descs (desc_ref objects) are walked as descs; the values of any other object are all tags.
 			const bool inline_descs_allowed = field.kind == desc::field_kind::desc_ref || field.element == desc::field_kind::desc_ref;
 			// A custom field's codec reads its own objects (the samplers of a material): only a res_tag or a
 			// desc_ref holds a {guid, path} reference.
-			const bool references = field.kind != desc::field_kind::custom;
+			const bool references = !custom;
 			const auto check_tag = [&](const auto& self_tag, const json::value& tag, const std::string& tag_at) -> void {
 				if (tag.is_string()) {
 					if (tag.as_string().empty()) return;
@@ -913,9 +936,13 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 						check_tag(check_tag, entry.value(), at + "/" + res::json_pointer_token(std::string_view(entry.key().data(), entry.key().size())));
 					}
 				}
-				continue;
+				return;
 			}
 			check_tag(check_tag, *held, at);
+		};
+		for (const desc::field_schema& field : schema.fields) {
+			check_field(field, field.key);
+			for (const std::string& alias : field.read_aliases) check_field(field, alias);
 		}
 	};
 

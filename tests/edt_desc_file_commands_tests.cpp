@@ -16,10 +16,13 @@
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_schema_desc.h>
 #include <snk/desc/desc_system.h>
+#include <snk/render/rnd_material_desc.h>
 #include <snk/render/rnd_render_service_init.h>
+#include <snk/scene/scn_camera_desc.h>
 #include <boost/describe.hpp>
 #include <boost/json.hpp>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -202,6 +205,33 @@ public:
 	std::vector<tag_slot> unnamed;
 
 	BOOST_DESCRIBE_CLASS(slot_table_desc, (), (list, map, one, tag, lost, unnamed), (), ())
+};
+
+// #1450: lists and maps whose elements are no structure and no single value: a list of lists (any sequence is kind array,
+// codec or not) and a list and a map of a codec type (the camera's ds::fixed_vector<res::tag, 4>, kind custom).
+class tag_lists_desc : public desc::schema_desc<tag_lists_desc>
+{
+public:
+	static constexpr std::string_view __type = "test.tag_lists";
+
+	std::vector<std::vector<res::tag>> lists;
+	std::vector<ds::fixed_vector<res::tag, 4>> slots;
+	std::map<std::string, ds::fixed_vector<res::tag, 4>, std::less<>> by_slot;
+
+	BOOST_DESCRIBE_CLASS(tag_lists_desc, (), (lists, slots, by_slot), (), ())
+};
+
+// #1450: the plain-text exception of a list of a codec type is asked by the type's name and the field's key, as for a single
+// custom field; this test type borrows the name of a type that has one, in a desc system of its own.
+class plain_text_lists_desc : public desc::schema_desc<plain_text_lists_desc>
+{
+public:
+	static constexpr std::string_view __type = "input_actions_desc";
+
+	std::vector<ds::fixed_vector<res::tag, 4>> actions;
+	std::vector<ds::fixed_vector<res::tag, 4>> other;
+
+	BOOST_DESCRIBE_CLASS(plain_text_lists_desc, (), (actions, other), (), ())
 };
 
 }
@@ -1956,6 +1986,134 @@ BOOST_AUTO_TEST_CASE(AGuidOfAnotherFile_IsBusyWhileTheIndexIsPending_AndRefusedO
 	BOOST_TEST(refused.code == cmd::codes::invalid_args);
 	BOOST_TEST(refused.error.find("name different files") != std::string::npos, refused.error);
 	BOOST_TEST(read_file(res_root / "materials" / "f.mat.desc") == before);
+}
+
+namespace {
+
+std::vector<std::string> errors_at(const std::vector<std::string>& errors, const std::string& pointer)
+{
+	std::vector<std::string> out;
+	for (const std::string& error : errors) {
+		if (error.starts_with(pointer + ": ")) out.push_back(error);
+	}
+	return out;
+}
+
+}
+
+// #1450: the loader reads a field under its key or any of its read aliases, so the strict tag rule reads every one of them;
+// a structure under an alias is checked by its own schema.
+BOOST_AUTO_TEST_CASE(ATagUnderAReadAlias_FollowsTheStrictRule_AsUnderItsKey)
+{
+	register_slot_schemas(*descs);
+	BOOST_REQUIRE(descs->register_schema(desc::parse_type_schema(json::parse(R"({ "name": "test.aliased",
+		"fields": [ { "name": "image", "kind": "res_tag", "default": "", "read_aliases": ["/old_image", "/legacy/image", "/a~1b", "/note"] },
+			{ "name": "slot", "kind": "structure", "ref_type": "test.slot", "read_aliases": ["/old_slot"] },
+			{ "name": "deep", "key": "/deep/image", "kind": "res_tag", "default": "" },
+			{ "name": "note", "kind": "string", "default": "" } ] })").as_object(),
+		&descs->schemas())));
+	const std::vector<std::pair<std::string, std::string>> refused{
+		{ R"({"__type":"test.aliased","image":"shaders/x.vert"})", "/image" },
+		{ R"({"__type":"test.aliased","old_image":"shaders/x.vert"})", "/old_image" },
+		{ R"({"__type":"test.aliased","legacy":{"image":"shaders/x.vert"}})", "/legacy/image" },
+		{ R"({"__type":"test.aliased","old_slot":{"texture":"shaders/x.vert"}})", "/old_slot/texture" },
+		// A key of several segments, an escaped alias, and an alias that is another field's key: the loader may read the
+		// value as the tag, so it is held to the tag's rule.
+		{ R"({"__type":"test.aliased","deep":{"image":"shaders/x.vert"}})", "/deep/image" },
+		{ R"({"__type":"test.aliased","a/b":"shaders/x.vert"})", "/a~1b" },
+		{ R"({"__type":"test.aliased","note":"shaders/x.vert"})", "/note" } };
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const auto& [content, pointer] : refused) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				const std::vector<std::string> errors = errors_at(slot_errors(*descs, content, rule), pointer);
+				BOOST_TEST(errors.size() == 1u);
+				if (!errors.empty()) BOOST_TEST(errors[0].find("must be written as res://") != std::string::npos, errors[0]);
+			}
+		}
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs, std::string(R"({"__type":"test.aliased","old_image":"res://a.png",)"
+				R"("old_slot":{"texture":"res://b.png"},"deep":{"image":"res://c.png"},"a/b":"res://d.png","note":"res://e.png"})"), rule);
+			BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
+		}
+		// The key and an alias at once: both are read, both are reported.
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs,
+				std::string(R"({"__type":"test.aliased","image":"shaders/a.vert","old_image":"shaders/b.vert"})"), rule);
+			BOOST_TEST(errors_at(errors, "/image").size() == 1u);
+			BOOST_TEST(errors_at(errors, "/old_image").size() == 1u);
+		}
+	}
+}
+
+// #1450: the case of the issue. A camera's color targets read under "texture" too; both keys follow the same rule.
+BOOST_AUTO_TEST_CASE(ACamerasLegacyTextureKey_IsCheckedAsItsColorTargets)
+{
+	BOOST_REQUIRE(descs->find_schema(scn::camera_desc::__type));
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const char* key : { "color_targets", "texture" }) {
+			const std::string content = std::format(R"({{"__type":"camera_desc","{}":["shaders/x.vert"]}})", key);
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				const std::vector<std::string> errors = errors_at(slot_errors(*descs, content, rule), std::format("/{}/0", key));
+				BOOST_TEST(errors.size() == 1u);
+			}
+		}
+	}
+}
+
+// #1450: the elements of a list or a map of a custom type are read as a single custom field is: every string strictly.
+BOOST_AUTO_TEST_CASE(ATagInAListOrMapOfACustomType_FollowsTheStrictRule)
+{
+	descs->register_desc<slot_test::tag_lists_desc>(slot_test::tag_lists_desc::__type);
+	const desc::type_schema* schema = descs->find_schema(slot_test::tag_lists_desc::__type);
+	BOOST_REQUIRE(schema);
+	BOOST_REQUIRE_EQUAL(schema->fields.size(), 3u);
+	// The kinds the fix is about: a list of lists is array of array, the codec type's list and map have custom elements.
+	const std::pair<desc::field_kind, desc::field_kind> kinds[] = { { desc::field_kind::array, desc::field_kind::array },
+		{ desc::field_kind::array, desc::field_kind::custom }, { desc::field_kind::map, desc::field_kind::custom } };
+	for (std::size_t i = 0; i < 3; ++i) {
+		BOOST_TEST_CONTEXT(schema->fields[i].name) {
+			BOOST_TEST((schema->fields[i].kind == kinds[i].first));
+			BOOST_TEST((schema->fields[i].element == kinds[i].second));
+		}
+	}
+	const std::vector<std::pair<std::string, std::string>> refused{
+		{ R"({"__type":"test.tag_lists","lists":[["res://a.png"],["res://b.png","shaders/x.vert"]]})", "/lists/1/1" },
+		{ R"({"__type":"test.tag_lists","slots":[["res://a.png","shaders/x.vert"]]})", "/slots/0/1" },
+		{ R"({"__type":"test.tag_lists","by_slot":{"k":["shaders/x.vert"]}})", "/by_slot/k/0" },
+		{ R"({"__type":"test.tag_lists","by_slot":{"a/b":["shaders/x.vert"]}})", "/by_slot/a~1b/0" } };
+	for (const edt::reference_rule rule : k_both_rules) {
+		for (const auto& [content, pointer] : refused) {
+			BOOST_TEST_CONTEXT(content << who_of(rule)) {
+				// The schema check refuses a list of lists by itself ("expected a list": the generic reader takes no nested
+				// sequence); the tag rule still reports the tag, at its own pointer.
+				const std::vector<std::string> errors = errors_at(slot_errors(*descs, content, rule), pointer);
+				BOOST_TEST(errors.size() == 1u);
+				if (!errors.empty()) BOOST_TEST(errors[0].find("must be written as res://") != std::string::npos, errors[0]);
+			}
+		}
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> errors = slot_errors(*descs,
+				std::string(R"({"__type":"test.tag_lists","slots":[["res://b.png"]],"by_slot":{"k":["res://c.png"]}})"), rule);
+			BOOST_TEST(errors.empty(), (errors.empty() ? std::string{} : errors.front()));
+		}
+	}
+}
+
+// #1450: a list of a codec type keeps the plain-text exception of its type and key; another field of the type does not.
+BOOST_AUTO_TEST_CASE(APlainTextListOfACustomType_KeepsItsException)
+{
+	desc::desc_system own{ *rs };
+	own.register_desc<slot_test::plain_text_lists_desc>(slot_test::plain_text_lists_desc::__type);
+	for (const edt::reference_rule rule : k_both_rules) {
+		BOOST_TEST_CONTEXT(who_of(rule)) {
+			const std::vector<std::string> fine = slot_errors(own,
+				std::string(R"({"__type":"input_actions_desc","actions":[["jump","fire"]]})"), rule);
+			BOOST_TEST(fine.empty(), (fine.empty() ? std::string{} : fine.front()));
+			const std::vector<std::string> refused = slot_errors(own,
+				std::string(R"({"__type":"input_actions_desc","other":[["jump"]]})"), rule);
+			BOOST_TEST(errors_at(refused, "/other/0/0").size() == 1u);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
