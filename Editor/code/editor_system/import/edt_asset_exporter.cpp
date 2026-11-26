@@ -60,12 +60,17 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 {
 	std::unordered_map<res::tag, res::tag> remap;
 	std::string model_name = result.source_path.stem().string();
+	// Every file of an import lies under the folder of its prefab: "<model>/" for an agent's, a folder of the run below
+	// "__imports/" for a person's (#987, its name sanitized); the export keeps only what lies below that folder.
+	std::string prefix = model_name + "/";
+	if (const std::string_view root = result.root_tag.relative(); root.find('/') != std::string_view::npos) {
+		const std::string_view folder = root.substr(0, root.rfind('/') + 1);
+		if (folder == prefix || folder.starts_with("__imports/")) prefix = std::string(folder);
+	}
 
 	for (const auto& mem_tag : result.all_tags) {
 		std::string rel = std::string(mem_tag.relative());
 
-		// Strip the model_name/ prefix from relative path
-		std::string prefix = model_name + "/";
 		if (!model_name.empty() && rel.starts_with(prefix))
 			rel = rel.substr(prefix.size());
 

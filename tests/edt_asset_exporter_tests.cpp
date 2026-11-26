@@ -88,6 +88,26 @@ BOOST_AUTO_TEST_CASE(BuildRemap_ReplacesTheStemOnlyAtTheStartOfTheFileName_SoNoE
 	BOOST_TEST(tga_remap.at(texture).string() == "res://assets/fbx/textures/x.tga");
 }
 
+// A person's import lies in a folder of its run (#987): the export takes the files from below it, as an agent's.
+BOOST_AUTO_TEST_CASE(BuildRemap_OfAPersonsImport_DropsTheRunsFolder)
+{
+	edt::asset_exporter exporter(*rs);
+	edt::import_result imported;
+	imported.source_path = "models/robot.glb";
+	imported.root_tag = res::tag{ res::tag::memory, "__imports/41/7/robot/robot.prefab.desc" };
+	const res::tag geometry{ res::tag::memory, "__imports/41/7/robot/robot.geom.desc" };
+	const res::tag texture{ res::tag::memory, "__imports/41/7/robot/textures/skin.png" };
+	imported.all_tags = { imported.root_tag, geometry, texture };
+	const auto remap = exporter.build_remap(imported, "robot", "assets/robot");
+	BOOST_TEST(remap.at(imported.root_tag).string() == "res://assets/robot/robot.prefab.desc");
+	BOOST_TEST(remap.at(geometry).string() == "res://assets/robot/robot.geom.desc");
+	BOOST_TEST(remap.at(texture).string() == "res://assets/robot/textures/skin.png");
+	BOOST_TEST(edt::asset_exporter::remap_problem(remap, "robot", "assets/robot").empty());
+
+	const auto renamed = exporter.build_remap(imported, "bot", "assets/bot");
+	BOOST_TEST(renamed.at(imported.root_tag).string() == "res://assets/bot/bot.prefab.desc");
+}
+
 BOOST_AUTO_TEST_CASE(RemapProblem_RefusesANameAnImportDoesNotGive_AndAChangedExtension)
 {
 	const auto tag = [](const char* text) { return res::tag::make(text); };
