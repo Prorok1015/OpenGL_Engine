@@ -778,7 +778,8 @@ BOOST_AUTO_TEST_CASE(TheSettings_AreShown_ReachTheImport_AndAreRecordedInThePref
 	const res::asset_meta_result meta = res::read_asset_meta(sidecar);
 	BOOST_REQUIRE(meta.meta.has_value());
 	BOOST_CHECK_EQUAL(meta.meta->importer, "model");
-	const edt::model_settings_parse settings = edt::parse_model_settings(meta.meta->settings);
+	const edt::model_settings_parse settings =
+		edt::parse_model_settings(meta.meta->settings, edt::unknown_settings_keys::ignore);
 	BOOST_REQUIRE_MESSAGE(settings.ok(), settings.error);
 	BOOST_CHECK(settings.settings == seen_settings);
 	BOOST_REQUIRE(settings.source.has_value());
@@ -798,7 +799,8 @@ BOOST_AUTO_TEST_CASE(WithoutSettings_TheImportIsAsBefore_AndTheSidecarHoldsTheDe
 	const fs::path sidecar = res_root / "models" / "hero.prefab.desc.resource";
 	const res::asset_meta_result meta = res::read_asset_meta(read_file(sidecar));
 	BOOST_REQUIRE(meta.meta.has_value());
-	BOOST_CHECK(edt::parse_model_settings(meta.meta->settings).settings == edt::model_import_settings{});
+	BOOST_CHECK(edt::parse_model_settings(meta.meta->settings, edt::unknown_settings_keys::ignore).settings
+		== edt::model_import_settings{});
 }
 
 BOOST_AUTO_TEST_CASE(BadSettings_AreRefusedBeforeAnythingIsLookedAt)

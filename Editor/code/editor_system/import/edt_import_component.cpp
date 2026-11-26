@@ -45,16 +45,16 @@ namespace
 	CFG_VAR_DEF_STRING(cfg_import_decoder_sandbox, "import/decoder_sandbox", "on");
 
 	constexpr std::string_view k_prefab_suffix = ".prefab.desc";
-	// Past this a picked model is not hashed on the main thread for the note "the same file as last time".
-	constexpr std::uintmax_t k_max_hashed_bytes = 64ull * 1024 * 1024;
+	// Past this a picked model is not hashed for the note "the same file as last time".
+	constexpr std::uintmax_t k_max_hashed_bytes = 256ull * 1024 * 1024;
 
 	std::string shown(std::string_view text)
 	{
 		return text_escape::escaped_text(text, 512);
 	}
 
-	// The SHA-256 of the file as lowercase hex; empty when it cannot be read or is too big to hash here.
-	std::string sha256_of_file(const std::filesystem::path& path)
+	// The SHA-256 of the file as lowercase hex; empty when it cannot be read or is too big to hash here. A job's work.
+	std::string sha256_of_file(const std::filesystem::path& path, ds::task_context& ctx)
 	{
 		std::error_code ec;
 		const std::uintmax_t size = std::filesystem::file_size(path, ec);
@@ -64,6 +64,7 @@ namespace
 		edt::content_hasher hasher;
 		std::vector<char> chunk(1024 * 1024);
 		while (in) {
+			ctx.throw_if_stopped();
 			in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
 			const std::streamsize got = in.gcount();
 			if (got > 0) hasher.update(std::as_bytes(std::span(chunk.data(), static_cast<std::size_t>(got))));
@@ -243,10 +244,16 @@ void edt::import_component::ask_settings(const std::filesystem::path& absolute_p
 	model_import_settings_form::import_fn on_import)
 {
 	if (m_shut_down || !m_settings_form.open(absolute_path, std::move(on_import))) return;
+	++m_form_serial;
 	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
 }
 
 const edt::asset_export_dialog& edt::import_component::export_dialog() const
+{
+	return *m_export_dialog;
+}
+
+edt::asset_export_dialog& edt::import_component::export_dialog()
 {
 	return *m_export_dialog;
 }
@@ -319,13 +326,24 @@ void edt::import_component::ask_reimport_settings(const res::tag& prefab, const 
 		notes.push_back("Last imported from " + shown(record.source->name));
 		const model_source_record picked = model_source_of(fs_paths::utf8_of(source.filename()), {});
 		if (picked.name != record.source->name) notes.push_back("The picked file's name differs from the recorded one");
-		if (sha256_of_file(source) == record.source->sha256) {
-			notes.push_back("The same file as last time (its SHA-256 matches)");
-		}
 	}
 	if (!m_settings_form.open_reimport(source, std::string(prefab.view()), record.settings, std::move(notes),
 		std::move(on_import))) {
 		return;
+	}
+	const std::uint64_t serial = ++m_form_serial;
+	if (record.source) {
+		// The model may be big: it is hashed off the main thread and the note comes when it is done.
+		m_ports.context.jobs().start(ds::lane::io, { "Hash " + m_settings_form.shown_name(), "import" },
+			m_hash_lifetime,
+			[source, recorded = record.source->sha256](ds::task_context& ctx) {
+				return sha256_of_file(source, ctx) == recorded;
+			},
+			[this, serial](ds::task_result<bool>& result) {
+				// A window closed, or opened again for another file, meanwhile: the answer is about nothing shown.
+				if (!result.ok() || !*result.value || serial != m_form_serial || !m_settings_form.is_open()) return;
+				m_settings_form.add_note("The same file as last time (its SHA-256 matches)");
+			});
 	}
 	m_ports.layer.register_implicit("edt/import_model/settings", [this] { return draw_settings_window(); });
 }
@@ -422,7 +440,9 @@ bool edt::import_component::poll_pipeline()
 			erase_import_folder(m_dialog_folder);
 #endif
 			auto exported_tag = m_export_dialog->get_exported_tag();
-			if (exported_tag.is_valid() && m_ports.exported) {
+			// A re-import rewrote a prefab the scene may use already: no new instance of it is added (#1194).
+			const bool reimported = m_export_dialog->reimport_target().is_valid();
+			if (exported_tag.is_valid() && !reimported && m_ports.exported) {
 				m_ports.exported(exported_tag);
 			}
 			return false;

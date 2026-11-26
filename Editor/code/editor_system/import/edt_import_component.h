@@ -48,6 +48,7 @@ namespace edt
 			// Play locks the document: no import starts while it runs. Null result: no Play session.
 			std::function<const play_session*()> play = {};
 			// The export dialog closed with an exported prefab: add it to the open scene (the caller checks that one is open).
+			// Not called after a re-import (#1194).
 			std::function<void(const res::tag&)> exported = {};
 			// Tests only: the decoder steps every import runs; set, no decoder process is made (empty in the product).
 			std::function<decoder_steps()> decoder = {};
@@ -101,8 +102,9 @@ namespace edt
 		// import as start_import runs it, its export dialog over `prefab`. The refusal, else nullopt.
 		std::optional<model_import_refusal> reimport(const res::tag& prefab, const std::filesystem::path& source,
 			const boost::json::value& settings);
-		// The tests look at what the export dialog was opened with.
+		// The tests look at what the export dialog was opened with, and drive it.
 		const asset_export_dialog& export_dialog() const;
+		asset_export_dialog& export_dialog();
 
 #if SNK_HAS_ASSIMP
 		// The job with `settings`, the "Importing" popup (Esc cancels) and then the export dialog (over `reimport`,
@@ -130,6 +132,8 @@ namespace edt
 		bool m_shut_down = false;
 		bool m_dialog_open = false;
 		model_import_settings_form m_settings_form;
+		// Moves with each opening of the settings window: a hash job of an earlier one adds no note.
+		std::uint64_t m_form_serial = 0;
 #if SNK_HAS_ASSIMP
 		std::unique_ptr<model_importer> m_importer;
 		// Shared with the adapter of the models descs refer to (#925), which the resource system may outlive this component with.
@@ -167,5 +171,7 @@ namespace edt
 		// Owner of the job callbacks; after the state they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 #endif
+		// Owner of the hash job of a re-import's settings window; last, so it dies (and cancels) first.
+		ds::lifetime m_hash_lifetime{ ds::lifetime_option::cancel_on_destroy };
 	};
 }

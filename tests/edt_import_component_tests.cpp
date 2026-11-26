@@ -38,6 +38,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -47,6 +49,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // The person's import as the editor runs it (#987, #1044): import_component over a real editor_context, with the decoder's
@@ -59,6 +62,12 @@ namespace fs = std::filesystem;
 bool contains(std::string_view text, std::string_view part)
 {
 	return text.find(part) != std::string_view::npos;
+}
+
+std::vector<std::byte> bytes_of(std::string_view text)
+{
+	const std::span<const std::byte> bytes = std::as_bytes(std::span(text));
+	return { bytes.begin(), bytes.end() };
 }
 
 // Built before the engine, so its memory:// can be mounted on the folder.
@@ -136,9 +145,18 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 			++imports;
 			import_settings.push_back(source.settings);
 			edt::import_intermediate result;
-			result.prefab_tag = res::tag{ "memory://" + source.memory_folder + "robot.prefab.desc" };
-			BOOST_TEST(rs().store_sync(result.prefab_tag, std::vector<std::byte>(4, std::byte{ '{' })));
+			// Named after the model, as the importer names them: the folder of the import is "<...>/<stem>/".
+			const std::string folder = source.memory_folder;
+			const std::string stem = fs::path(folder.substr(0, folder.size() - 1)).filename().string();
+			result.prefab_tag = res::tag{ "memory://" + folder + stem + ".prefab.desc" };
+			const std::string bytes = prefab_text.empty() ? std::string(4, '{') : prefab_text;
+			BOOST_TEST(rs().store_sync(result.prefab_tag, bytes_of(bytes)));
 			result.created_tags = { result.prefab_tag };
+			for (const auto& [suffix, text] : extra_files) {
+				const res::tag extra{ "memory://" + folder + stem + suffix };
+				BOOST_TEST(rs().store_sync(extra, bytes_of(text)));
+				result.created_tags.push_back(extra);
+			}
 			result.all_tags = result.created_tags;
 			result.prefab_json = boost::json::parse(R"({ "__type": "prefab_desc" })").as_object();
 			descs().migrate_tree(result.prefab_json, "test");
@@ -150,7 +168,9 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	void make_component()
 	{
 		component = std::make_unique<edt::import_component>(edt::import_component::ports{ .context = *context, .resources = rs(),
-			.desc = descs(), .tasks = tasks, .layer = *layer, .decoder = [this] { return decoder(); },
+			.desc = descs(), .tasks = tasks, .layer = *layer,
+			.exported = [this](const res::tag&) { ++exported_to_scene; },
+			.decoder = [this] { return decoder(); },
 			.open_with_unsaved_changes = [this](const res::tag& tag) { return tag.view() == open_dirty; } });
 	}
 
@@ -243,6 +263,10 @@ struct import_component_fixture : memory_on_disk, test_util::null_engine_fixture
 	std::vector<edt::model_import_settings> import_settings;
 	// The tag a document holds with unsaved edits; empty: none.
 	std::string open_dirty;
+	// What the fake decoder stores: the prefab's bytes (empty: four '{') and other files, "<stem><suffix>" -> bytes.
+	std::string prefab_text;
+	std::vector<std::pair<std::string, std::string>> extra_files;
+	int exported_to_scene = 0;
 	std::unique_ptr<edt::import_component> component;
 };
 
@@ -517,6 +541,53 @@ struct reimport_fixture : import_component_fixture
 		rs().registrate_resolver<res::vfs_resolver>(res::tag::default_protocol(),
 			std::vector<fs::path>{ engine_res, project_res }, res::mount_access::read_write,
 			res::write_policy::allow_all());
+		prefab_text = R"({"__type":"prefab_desc","v":2})";
+		extra_files = { { ".mat.desc", R"({"__type":"material_desc","v":2})" } };
+	}
+
+	static res::tag material() { return res::tag::make("assets/robot/robot.mat.desc"); }
+
+	std::string read_project(const char* relative) const
+	{
+		std::ifstream in(project_res / relative, std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	// A person's re-import of `source` over the prefab, up to the export dialog with its check of the files done.
+	edt::asset_export_dialog& checked_dialog(const fs::path& source)
+	{
+		const std::optional<edt::model_import_refusal> refused = component->reimport(prefab(), source, nullptr);
+		BOOST_REQUIRE_MESSAGE(!refused.has_value(), refused ? refused->error : std::string{});
+		frames_until([this] { return component->dialog_open() && !component->export_dialog().checking(); });
+		BOOST_REQUIRE(component->dialog_open());
+		return component->export_dialog();
+	}
+
+	// Export runs to its end: the dialog closes, or goes back to the form with the reason.
+	void export_now(edt::asset_export_dialog& dialog)
+	{
+		BOOST_REQUIRE_MESSAGE(dialog.start_export(), dialog.export_blocker());
+		frames_until([this, &dialog] { return !component->dialog_open() || !dialog.exporting(); });
+	}
+
+	// The first re-import over a record of before #1194 (no `made`): every file is unknown, the tick lets it through.
+	void reimport_over_an_old_record()
+	{
+		write_record();
+		make_component();
+		edt::asset_export_dialog& dialog = checked_dialog(model);
+		dialog.set_overwrite_ticked(true);
+		export_now(dialog);
+		BOOST_REQUIRE(!component->dialog_open());
+	}
+
+	const edt::reimport_file_check* check_of(const edt::asset_export_dialog& dialog, const res::tag& tag) const
+	{
+		if (!dialog.checked()) return nullptr;
+		for (const edt::reimport_file_check& file : dialog.checked()->files) {
+			if (file.tag == tag) return &file;
+		}
+		return nullptr;
 	}
 
 	static res::tag prefab() { return res::tag::make("assets/robot/robot.prefab.desc"); }
@@ -573,9 +644,15 @@ BOOST_AUTO_TEST_CASE(TheWindow_OpensFilledFromTheRecord_AndCancelImportsNothing)
 	BOOST_CHECK(form.reimport());
 	BOOST_CHECK_EQUAL(form.target(), std::string(prefab().view()));
 	BOOST_CHECK(form.settings() == recorded);
-	bool same_file = false;
-	for (const std::string& note : form.notes()) same_file = same_file || contains(note, "same file as last time");
-	BOOST_CHECK(same_file);
+	// The model is hashed by a job: the note comes when it is done.
+	const auto same_file = [&form] {
+		for (const std::string& note : form.notes()) {
+			if (contains(note, "same file as last time")) return true;
+		}
+		return false;
+	};
+	frames_until(same_file);
+	BOOST_CHECK(same_file());
 	frame_without_jobs(false);
 	frame_without_jobs(true);
 	BOOST_CHECK(!component->settings_open());
@@ -718,6 +795,157 @@ BOOST_AUTO_TEST_CASE(APrefabOfALowerLayer_OrOpenWithUnsavedChanges_IsRefused)
 	BOOST_CHECK(component->check_reimport(prefab()).ok());
 	frames_until([] { return false; });
 	BOOST_TEST(imports == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnOldRecord_IsUnknown_ExportWaitsForTheTick_ThenTheRecordSaysWhatWasMade)
+{
+	write_record();
+	make_component();
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	const edt::reimport_file_check* prefab_file = check_of(dialog, prefab());
+	BOOST_REQUIRE(prefab_file != nullptr);
+	BOOST_CHECK(prefab_file->exists);
+	BOOST_CHECK(prefab_file->state == edt::edit_state::unknown);
+	BOOST_CHECK(!prefab_file->same_as_new);
+	BOOST_CHECK(dialog.needs_overwrite_tick());
+	BOOST_CHECK_MESSAGE(contains(dialog.export_blocker(), "Overwrite the files listed above"), dialog.export_blocker());
+	BOOST_CHECK(!dialog.start_export());
+	BOOST_CHECK_EQUAL(read_project("assets/robot/robot.prefab.desc"), R"({"__type":"prefab_desc"})");
+
+	dialog.set_overwrite_ticked(true);
+	BOOST_CHECK(dialog.export_blocker().empty());
+	export_now(dialog);
+	BOOST_REQUIRE(!component->dialog_open());
+	BOOST_CHECK(contains(read_project("assets/robot/robot.prefab.desc"), "\"v\""));
+	const edt::model_import_record record = edt::read_model_import_record(project_res, prefab());
+	BOOST_REQUIRE_MESSAGE(record.ok(), record.error);
+	BOOST_REQUIRE(record.made.has_value());
+	BOOST_CHECK(record.made->contains("robot.prefab.desc"));
+	BOOST_CHECK(record.made->contains("robot.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(AReimport_AddsNoNewInstanceToTheOpenScene)
+{
+	reimport_over_an_old_record();
+	BOOST_CHECK_EQUAL(exported_to_scene, 0);
+}
+
+BOOST_AUTO_TEST_CASE(EditsToThePrefabAndAMaterialAfterTheImport_AreChanged_AndExportWaitsForTheTick)
+{
+	reimport_over_an_old_record();
+	dir.write("project/res/assets/robot/robot.prefab.desc", R"({"__type":"prefab_desc","edited":true})");
+	dir.write("project/res/assets/robot/robot.mat.desc", R"({"__type":"material_desc","edited":true})");
+
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	for (const res::tag& tag : { prefab(), material() }) {
+		const edt::reimport_file_check* file = check_of(dialog, tag);
+		BOOST_REQUIRE(file != nullptr);
+		BOOST_CHECK(file->state == edt::edit_state::changed);
+		BOOST_CHECK(!file->same_as_new);
+	}
+	BOOST_CHECK(dialog.needs_overwrite_tick());
+	BOOST_CHECK(!dialog.start_export());
+	BOOST_CHECK(contains(read_project("assets/robot/robot.mat.desc"), "edited"));
+
+	dialog.set_overwrite_ticked(true);
+	export_now(dialog);
+	BOOST_REQUIRE(!component->dialog_open());
+	BOOST_CHECK(!contains(read_project("assets/robot/robot.prefab.desc"), "edited"));
+	BOOST_CHECK(!contains(read_project("assets/robot/robot.mat.desc"), "edited"));
+}
+
+BOOST_AUTO_TEST_CASE(AFileThatHoldsWhatTheExportWouldWrite_IsNotListed_AndNeedsNoTick)
+{
+	reimport_over_an_old_record();
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	BOOST_REQUIRE(dialog.checked().has_value());
+	for (const edt::reimport_file_check& file : dialog.checked()->files) {
+		BOOST_CHECK(file.exists);
+		BOOST_CHECK(file.same_as_new);
+		BOOST_CHECK(file.state == edt::edit_state::unchanged);
+	}
+	BOOST_CHECK(!dialog.needs_overwrite_tick());
+	BOOST_CHECK_MESSAGE(dialog.export_blocker().empty(), dialog.export_blocker());
+	component->shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(AFileChangedAfterTheCheck_FailsTheExport_AndIsLeftAsItIs)
+{
+	reimport_over_an_old_record();
+	prefab_text = R"({"__type":"prefab_desc","v":3})";
+	extra_files = { { ".mat.desc", R"({"__type":"material_desc","v":3})" } };
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	BOOST_REQUIRE_MESSAGE(dialog.export_blocker().empty(), dialog.export_blocker());
+	dir.write("project/res/assets/robot/robot.mat.desc", "edited after the check");
+	export_now(dialog);
+	BOOST_REQUIRE(component->dialog_open());
+	BOOST_CHECK_MESSAGE(contains(dialog.export_error(), "changed after the dialog looked at it"),
+		dialog.export_error());
+	BOOST_CHECK_EQUAL(read_project("assets/robot/robot.mat.desc"), "edited after the check");
+	BOOST_CHECK(!contains(read_project("assets/robot/robot.prefab.desc"), "\"v\": 3"));
+	component->shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(AMaterialOpenWithUnsavedChanges_BlocksExport)
+{
+	reimport_over_an_old_record();
+	open_dirty = std::string(material().view());
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	BOOST_CHECK_MESSAGE(contains(dialog.export_blocker(), "unsaved changes"), dialog.export_blocker());
+	BOOST_CHECK(!dialog.start_export());
+	component->shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(APickedFileWithAnotherStem_LandsOverThePrefabsNames)
+{
+	write_record();
+	make_component();
+	const fs::path other = dir.write("models/robot_v2.glb", "glb-bytes");
+	edt::asset_export_dialog& dialog = checked_dialog(other);
+	dialog.set_overwrite_ticked(true);
+	export_now(dialog);
+	BOOST_REQUIRE_MESSAGE(!component->dialog_open(), dialog.export_error());
+	BOOST_CHECK(contains(read_project("assets/robot/robot.prefab.desc"), "\"v\""));
+	BOOST_CHECK(fs::exists(project_res / "assets" / "robot" / "robot.mat.desc"));
+	BOOST_CHECK(!fs::exists(project_res / "assets" / "robot" / "robot_v2.prefab.desc"));
+	BOOST_CHECK(!fs::exists(project_res / "assets" / "robot" / "robot_v2.mat.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(EscBeforeTheFirstFile_StopsTheReimport_AndTheDialogSaysWhatItLeft)
+{
+	write_record();
+	make_component();
+	edt::asset_export_dialog& dialog = checked_dialog(model);
+	dialog.set_overwrite_ticked(true);
+	BOOST_REQUIRE(dialog.start_export());
+	frame_without_jobs(false);
+	frame_without_jobs(true);
+	frames_until([&dialog] { return !dialog.exporting(); });
+	BOOST_REQUIRE(component->dialog_open());
+	BOOST_CHECK_MESSAGE(contains(dialog.export_error(), "The re-import was cancelled part way"), dialog.export_error());
+	BOOST_CHECK_MESSAGE(contains(dialog.export_error(), "No file was written"), dialog.export_error());
+	BOOST_CHECK_EQUAL(read_project("assets/robot/robot.prefab.desc"), R"({"__type":"prefab_desc"})");
+	component->shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(OnceAFileIsWritten_AReimportCannotBeCancelled_ANewImportCan)
+{
+	using dialog = edt::asset_export_dialog;
+	BOOST_CHECK(dialog::may_cancel_export(true, 0));
+	BOOST_CHECK(!dialog::may_cancel_export(true, 1));
+	BOOST_CHECK(dialog::may_cancel_export(false, 3));
+	edt::reimport_scan scan;
+	scan.files.push_back(
+		{ .tag = prefab(), .exists = true, .same_as_new = false, .state = edt::edit_state::unchanged });
+	BOOST_CHECK(contains(dialog::reimport_blocker(true, &scan, false), "checking the files"));
+	BOOST_CHECK(dialog::reimport_blocker(false, &scan, false).empty());
+	scan.files.front().state = edt::edit_state::unknown;
+	BOOST_CHECK(!dialog::reimport_blocker(false, &scan, false).empty());
+	BOOST_CHECK(dialog::reimport_blocker(false, &scan, true).empty());
+	scan.files.front().same_as_new = true;
+	BOOST_CHECK(dialog::reimport_blocker(false, &scan, false).empty());
+	scan.error = "a file could not be read";
+	BOOST_CHECK(!dialog::reimport_blocker(false, &scan, true).empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

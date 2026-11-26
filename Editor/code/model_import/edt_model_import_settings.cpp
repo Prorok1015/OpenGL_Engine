@@ -109,6 +109,19 @@ edt::model_settings_parse edt::parse_model_settings(const json::value& value, un
 			} else {
 				out.error = "settings.tangents must be true or false";
 			}
+		} else if (key == "made") {
+			if (unknown == unknown_settings_keys::refuse) {
+				out.error = "settings.made is recorded by the editor, not given";
+			} else {
+				out.error = made_problem(item);
+				if (out.error.empty()) {
+					made_files made;
+					for (const json::key_value_pair& file : item.as_object()) {
+						made.emplace(std::string(file.key()), std::string(file.value().as_string()));
+					}
+					out.made = std::move(made);
+				}
+			}
 		} else if (unknown == unknown_settings_keys::refuse) {
 			out.error = std::format("settings.{} is not a setting of a model (version, source, normals, tangents)",
 				shown(key));
@@ -142,8 +155,42 @@ std::string edt::rewrite_model_settings(const json::value& existing, const model
 	}
 	const json::object written = model_settings_json(settings, source);
 	for (const json::key_value_pair& entry : written) kept[entry.key()] = entry.value();
+	// What an earlier export made says nothing of this one.
+	kept.erase("made");
 	out = std::move(kept);
 	return {};
+}
+
+std::string edt::made_problem(const json::value& made)
+{
+	if (!made.is_object()) return "settings.made must be an object {path: sha256}";
+	if (made.as_object().size() > k_max_made_entries) {
+		return std::format("settings.made holds more than {} files", k_max_made_entries);
+	}
+	for (const json::key_value_pair& entry : made.as_object()) {
+		const std::string_view path = entry.key();
+		bool plain = !path.empty() && path.size() <= k_max_made_path_bytes && !path.starts_with('/')
+			&& path.find('\\') == std::string_view::npos
+			&& std::ranges::none_of(path, [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7F; });
+		for (std::size_t start = 0; plain && start <= path.size();) {
+			const std::size_t end = std::min(path.find('/', start), path.size());
+			plain = path.substr(start, end - start) != "..";
+			start = end + 1;
+		}
+		if (!plain) return std::format("settings.made: '{}' is not a path below the prefab's folder", shown(path));
+		const json::value& hash = entry.value();
+		if (!hash.is_string() || hash.as_string().size() != 64 || !is_lower_hex(hash.as_string())) {
+			return std::format("settings.made.{} must be 64 lowercase hex digits", shown(path));
+		}
+	}
+	return {};
+}
+
+json::object edt::made_json(const made_files& made)
+{
+	json::object out;
+	for (const auto& [path, sha256] : made) out[path] = sha256;
+	return out;
 }
 
 edt::model_source_record edt::model_source_of(std::string_view file_name, std::string sha256)

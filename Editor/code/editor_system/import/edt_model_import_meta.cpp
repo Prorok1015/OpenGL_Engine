@@ -1,5 +1,6 @@
 #include "edt_model_import_meta.h"
 #include "edt_agent_source_rule.h"
+#include "edt_file_identity.h"
 #include <snk/command/cmd_types.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/text_escape.h>
@@ -201,6 +202,67 @@ std::string edt::take_back_model_meta(const fs::path& top, const model_meta_plan
 	return std::format("{} could not be taken back: {}", named, private_text(std::move(error), top));
 }
 
+std::string edt::set_made(model_meta_plan& plan, const made_files& made)
+{
+	if (!plan.ok() || plan.text.empty()) return "no .resource is written";
+	res::asset_meta_result read = res::read_asset_meta(plan.text);
+	if (!read) return "the planned .resource does not read back";
+	res::asset_meta meta = std::move(*read.meta);
+	meta.settings.erase("made");
+	const boost::json::value recorded = made_json(made);
+	if (std::string why = made_problem(recorded); !why.empty()) {
+		plan.text = res::write_asset_meta(meta);
+		return why;
+	}
+	meta.settings["made"] = recorded;
+	plan.text = res::write_asset_meta(meta);
+	return {};
+}
+
+std::string edt::sha256_hex(std::span<const std::byte> bytes)
+{
+	constexpr std::string_view hex = "0123456789abcdef";
+	std::string out;
+	out.reserve(64);
+	for (const std::uint8_t byte : digest_of(bytes)) {
+		out += hex[byte >> 4];
+		out += hex[byte & 0x0f];
+	}
+	return out;
+}
+
+edt::project_file_hash edt::hash_project_file(const fs::path& top, const res::tag& tag, std::uint64_t max_bytes)
+{
+	project_file_hash out;
+	const fs::path path = fs_paths::path_from_utf8(std::string(tag.relative()));
+	platform::beneath::read_request request;
+	request.root = top;
+	request.folder = path.parent_path();
+	request.leaf = path.filename();
+	request.max_bytes = max_bytes;
+	std::vector<std::byte> bytes;
+	const platform::beneath::read_result read = platform::beneath::read_beneath(request, bytes);
+	switch (read.status) {
+	case platform::beneath::read_status::ok:
+		out.status = project_file_hash::state::ok;
+		out.sha256 = sha256_hex(bytes);
+		break;
+	case platform::beneath::read_status::missing:
+		out.status = project_file_hash::state::missing;
+		break;
+	case platform::beneath::read_status::not_regular:
+		out.error = std::format("{} is not a plain file", shown(tag.view()));
+		break;
+	case platform::beneath::read_status::too_large:
+		out.error = std::format("{} is larger than {} MiB", shown(tag.view()), max_bytes / (1024 * 1024));
+		break;
+	case platform::beneath::read_status::failed:
+		out.error = std::format("{} cannot be read: {}", shown(tag.view()), private_text(read.error, top));
+		break;
+	}
+	return out;
+}
+
 edt::model_import_record edt::read_model_import_record(const fs::path& top, const res::tag& prefab)
 {
 	model_import_record record;
@@ -263,5 +325,6 @@ edt::model_import_record edt::read_model_import_record(const fs::path& top, cons
 	record.flags = read.meta->flags;
 	record.settings = settings.settings;
 	record.source = settings.source;
+	record.made = settings.made;
 	return record;
 }

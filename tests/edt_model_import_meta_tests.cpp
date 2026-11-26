@@ -16,6 +16,8 @@
 #include <fstream>
 #include <cstddef>
 #include <iterator>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +37,11 @@ std::string read_file(const fs::path& path)
 {
 	std::ifstream in(path, std::ios::binary);
 	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+}
+
+std::string sha_of(const std::string& bytes)
+{
+	return edt::sha256_hex(std::as_bytes(std::span(bytes)));
 }
 
 edt::model_source_record rock()
@@ -315,6 +322,20 @@ struct export_fixture : test_util::scene_env
 		return result;
 	}
 
+	static res::tag prefab_tag() { return res::tag::make("assets/rock/rock.prefab.desc"); }
+
+	// One triangle in JSON arrays, as the decoder answers: the export writes it with its binary file (EPIC-79).
+	res::tag add_geometry(edt::import_result& result, const char* first = "0")
+	{
+		const res::tag geometry{ res::tag::memory, "rock/rock.geom.desc" };
+		std::string text = R"({"__type":"geometry_desc","layout":{"position":"vec3"},"indices":[0,1,2],"vertices":[)";
+		text += first;
+		for (int i = 1; i < 36; ++i) text += ",0";
+		BOOST_REQUIRE(rs->store_sync(geometry, test_util::to_bytes(text + "]}")));
+		result.all_tags.insert(result.all_tags.begin(), geometry);
+		return geometry;
+	}
+
 	test_util::temp_dir dir{ "model_import_export_meta" };
 	const fs::path res_root = dir.path() / "res";
 	edt::asset_exporter exporter{ *rs };
@@ -336,7 +357,8 @@ BOOST_AUTO_TEST_CASE(AnExport_WritesThePrefabsSidecar_AndNamesItAsWritten)
 	const res::asset_meta_result read = res::read_asset_meta(read_file(sidecar));
 	BOOST_REQUIRE(read.meta.has_value());
 	BOOST_CHECK_EQUAL(read.meta->importer, "model");
-	const edt::model_settings_parse settings = edt::parse_model_settings(read.meta->settings);
+	const edt::model_settings_parse settings =
+		edt::parse_model_settings(read.meta->settings, edt::unknown_settings_keys::ignore);
 	BOOST_REQUIRE(settings.ok());
 	BOOST_CHECK(settings.settings.normals == edt::model_normals::flat);
 	BOOST_CHECK_EQUAL(settings.source->name, "rock.glb");
@@ -401,7 +423,8 @@ BOOST_AUTO_TEST_CASE(AReimport_KeepsThePrefabsGuidAndFlags_AndWritesItsSidecarAf
 	const res::asset_meta after = *res::read_asset_meta(read_file(sidecar)).meta;
 	BOOST_CHECK(after.guid == meta.guid);
 	BOOST_CHECK(after.flags == std::vector<std::string>{ "keep" });
-	const edt::model_settings_parse settings = edt::parse_model_settings(after.settings);
+	const edt::model_settings_parse settings =
+		edt::parse_model_settings(after.settings, edt::unknown_settings_keys::ignore);
 	BOOST_REQUIRE(settings.ok());
 	BOOST_CHECK(settings.settings.normals == edt::model_normals::smooth);
 	BOOST_CHECK(!settings.settings.tangents);
@@ -426,12 +449,110 @@ BOOST_AUTO_TEST_CASE(FilesTheModelNoLongerMakes_AreListed_AndStayInTheProject)
 		R"("b":{"guid":"x","path":"res://assets/rock/textures/albedo.png"},"c":"res://elsewhere/x.png"})";
 	const edt::import_result result = imported();
 	const auto remap = exporter.build_remap(result, "rock", "assets/rock");
-	const std::vector<res::tag> left = edt::asset_exporter::no_longer_made(old_prefab, "assets/rock", remap);
+	const std::vector<res::tag> left =
+		edt::asset_exporter::no_longer_made(std::nullopt, old_prefab, "assets/rock", remap).tags;
 	BOOST_REQUIRE_EQUAL(left.size(), 1u);
 	BOOST_CHECK_EQUAL(left[0].view(), "res://assets/rock/textures/old.png");
 	BOOST_REQUIRE(exporter.export_to_project(result, remap, nullptr, nullptr, nullptr, true, {}, res_root));
 	BOOST_CHECK(fs::exists(res_root / "assets" / "rock" / "textures" / "old.png"));
-	BOOST_CHECK(edt::asset_exporter::no_longer_made("not json", "assets/rock", remap).empty());
+	const edt::no_longer_made_list broken =
+		edt::asset_exporter::no_longer_made(std::nullopt, std::string("not json"), "assets/rock", remap);
+	BOOST_CHECK(broken.tags.empty());
+	BOOST_CHECK_MESSAGE(broken.note.find("could not be read") != std::string::npos, broken.note);
+}
+
+// #1194: the `.resource` records what the export left on the disk, the prefab included, never itself.
+BOOST_AUTO_TEST_CASE(AnExport_RecordsWhatItMade_AndTheRecordReadsItBack)
+{
+	edt::import_result result = imported();
+	add_geometry(result);
+	const auto remap = exporter.build_remap(result, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(result, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+	const edt::model_import_record record = edt::read_model_import_record(res_root, prefab_tag());
+	BOOST_REQUIRE_MESSAGE(record.ok(), record.error);
+	BOOST_REQUIRE(record.made.has_value());
+	const fs::path folder = res_root / "assets" / "rock";
+	for (const char* name : { "rock.prefab.desc", "textures/albedo.png", "rock.geom.desc", "rock.geom.bin" }) {
+		BOOST_REQUIRE_MESSAGE(record.made->contains(name), name);
+		BOOST_CHECK_EQUAL(record.made->at(name), sha_of(read_file(folder / name)));
+	}
+	BOOST_CHECK_EQUAL(record.made->size(), 4u);
+	BOOST_CHECK(!record.made->contains("rock.prefab.desc.resource"));
+}
+
+// The re-import writes the geometry pair again; the `.bin`'s own sidecar (its ID) is not the export's to touch.
+BOOST_AUTO_TEST_CASE(AReimport_KeepsTheSidecarOfTheGeometrysBinaryFile)
+{
+	edt::import_result first = imported();
+	add_geometry(first);
+	const auto remap = exporter.build_remap(first, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(first, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+	const std::string bin_sidecar = res::write_asset_meta(res::asset_meta{ res::generate_asset_id(), {}, {}, {} });
+	dir.write("res/assets/rock/rock.geom.bin.resource", bin_sidecar);
+	const std::string bin_before = read_file(res_root / "assets" / "rock" / "rock.geom.bin");
+
+	edt::import_result again = imported();
+	add_geometry(again, "1");
+	BOOST_REQUIRE(exporter.export_to_project(again, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+	const std::string bin_after = read_file(res_root / "assets" / "rock" / "rock.geom.bin");
+	BOOST_CHECK(bin_after != bin_before);
+	BOOST_CHECK_EQUAL(read_file(res_root / "assets" / "rock" / "rock.geom.bin.resource"), bin_sidecar);
+	const edt::model_import_record record = edt::read_model_import_record(res_root, prefab_tag());
+	BOOST_REQUIRE(record.ok() && record.made.has_value());
+	BOOST_CHECK_EQUAL(record.made->at("rock.geom.bin"), sha_of(bin_after));
+}
+
+// The sidecar of a re-import follows the prefab: when it cannot be written the export says so, the prefab stays.
+BOOST_AUTO_TEST_CASE(AReimportWhosePrefabSidecarCannotBeWritten_SaysSo_AndThePrefabStaysWritten)
+{
+	const edt::import_result first = imported();
+	const auto remap = exporter.build_remap(first, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(first, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+
+	const edt::import_result again = imported();
+	BOOST_REQUIRE(rs->store_sync(again.root_tag, test_util::to_bytes(R"({"__type":"prefab_desc","name":"v2"})")));
+	// Changed under the export, after the plan read it and before its rewrite.
+	const auto on_file = [this](int done, int total) {
+		if (done == total - 1) dir.write("res/assets/rock/rock.prefab.desc.resource", "changed meanwhile");
+	};
+	edt::export_progress progress;
+	std::vector<res::tag> written;
+	BOOST_CHECK(!exporter.export_to_project(again, remap, &progress, nullptr, &written, true, on_file, res_root));
+	BOOST_CHECK_MESSAGE(progress.error.find("the prefab is written") != std::string::npos, progress.error);
+	BOOST_CHECK(read_file(res_root / "assets" / "rock" / "rock.prefab.desc").find("v2") != std::string::npos);
+	BOOST_CHECK_EQUAL(read_file(res_root / "assets" / "rock" / "rock.prefab.desc.resource"), "changed meanwhile");
+	bool prefab_named = false;
+	for (const res::tag& tag : written) {
+		prefab_named = prefab_named || tag.view() == "res://assets/rock/rock.prefab.desc";
+	}
+	BOOST_CHECK(prefab_named);
+}
+
+// A file that is not what the re-import's check saw is never overwritten.
+BOOST_AUTO_TEST_CASE(AFileChangedAfterTheCheck_StopsTheExport_AndStaysAsItIs)
+{
+	const edt::import_result first = imported();
+	const auto remap = exporter.build_remap(first, "rock", "assets/rock");
+	BOOST_REQUIRE(exporter.export_to_project(first, remap, nullptr, nullptr, nullptr, true, {}, res_root));
+	const edt::model_import_record record = edt::read_model_import_record(res_root, prefab_tag());
+	BOOST_REQUIRE(record.ok());
+	const edt::reimport_scan scan = exporter.scan_reimport(remap, res_root, "assets/rock", record.made);
+	BOOST_REQUIRE(scan.error.empty());
+	for (const edt::reimport_file_check& file : scan.files) {
+		BOOST_CHECK(file.exists);
+		BOOST_CHECK(file.state == edt::edit_state::unchanged);
+		BOOST_CHECK(file.same_as_new);
+	}
+	dir.write("res/assets/rock/textures/albedo.png", "painted after the check");
+
+	const edt::import_result again = imported();
+	BOOST_REQUIRE(rs->store_sync(again.all_tags.front(), test_util::to_bytes("png bytes v2")));
+	edt::export_progress progress;
+	BOOST_CHECK(!exporter.export_to_project(again, remap, &progress, nullptr, nullptr, true, {}, res_root, true,
+		&scan.seen));
+	BOOST_CHECK_MESSAGE(progress.error.find("changed after the dialog looked at it") != std::string::npos,
+		progress.error);
+	BOOST_CHECK_EQUAL(read_file(res_root / "assets" / "rock" / "textures" / "albedo.png"), "painted after the check");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

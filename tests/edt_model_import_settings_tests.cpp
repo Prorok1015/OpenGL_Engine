@@ -177,6 +177,51 @@ BOOST_AUTO_TEST_CASE(ARewriteOfAHigherVersion_IsRefused_AndLeavesTheOutputAlone)
 	BOOST_CHECK(!edt::rewrite_model_settings(parsed("[]"), {}, source, out).empty());
 }
 
+// `made` (#1194) is the editor's record of what an export wrote: a `.resource` read back takes a valid one, nobody
+// gives one.
+BOOST_AUTO_TEST_CASE(Made_IsRefusedWhenGiven_AndCheckedWhenReadBack)
+{
+	const std::string hash(k_sha);
+	const json::value good =
+		parsed(R"({"made":{"rock.prefab.desc":")" + hash + R"(","textures/a.png":")" + hash + R"("}})");
+	const edt::model_settings_parse given = edt::parse_model_settings(good);
+	BOOST_CHECK(!given.ok());
+	BOOST_CHECK_MESSAGE(mentions(given.error, "recorded by the editor, not given"), given.error);
+
+	const edt::model_settings_parse read = edt::parse_model_settings(good, edt::unknown_settings_keys::ignore);
+	BOOST_REQUIRE_MESSAGE(read.ok(), read.error);
+	BOOST_REQUIRE(read.made.has_value());
+	BOOST_CHECK_EQUAL(read.made->size(), 2u);
+	BOOST_CHECK_EQUAL(read.made->at("textures/a.png"), hash);
+	BOOST_CHECK(!edt::parse_model_settings(parsed("{}"), edt::unknown_settings_keys::ignore).made.has_value());
+
+	const auto with = [](std::string_view path, std::string_view sha) {
+		json::object made;
+		made[path] = sha;
+		return json::value{ json::object{ { "made", made } } };
+	};
+	for (const json::value& bad : { parsed(R"({"made":[]})"), with("/abs.png", hash), with("a/../b.png", hash),
+		with("..", hash), with("a\\b.png", hash), with("a\nb.png", hash), with(std::string(1025, 'a'), hash),
+		with("a.png", "ABC"), with("a.png", std::string(64, 'A')) }) {
+		const edt::model_settings_parse refused = edt::parse_model_settings(bad, edt::unknown_settings_keys::ignore);
+		BOOST_CHECK_MESSAGE(!refused.ok(), json::serialize(bad));
+		BOOST_CHECK(!refused.made.has_value());
+	}
+	json::object many;
+	for (std::size_t i = 0; i <= edt::k_max_made_entries; ++i) many[std::to_string(i)] = hash;
+	BOOST_CHECK(!edt::parse_model_settings(json::object{ { "made", many } }, edt::unknown_settings_keys::ignore).ok());
+}
+
+BOOST_AUTO_TEST_CASE(ARewrite_DropsTheMadeOfTheEarlierExport)
+{
+	const std::string hash(k_sha);
+	const json::value existing = parsed(R"({"version":1,"lod":4,"made":{"a.png":")" + hash + R"("}})");
+	json::object out;
+	BOOST_REQUIRE(edt::rewrite_model_settings(existing, {}, { "rock.glb", hash }, out).empty());
+	BOOST_CHECK(!out.contains("made"));
+	BOOST_CHECK(out.contains("lod"));
+}
+
 BOOST_AUTO_TEST_CASE(TheDecodersRequest_CarriesTheSettings_AndRefusesBadOnes)
 {
 	edt::decode_request request;

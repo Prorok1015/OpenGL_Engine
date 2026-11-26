@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,7 +31,8 @@ namespace edt {
 		~asset_export_dialog();
 
 		// Set the import result to export. `reimport` (#1194): the prefab it is exported over; its name and folder are
-		// fixed, and the files the earlier import made that this one does not are listed after the export.
+		// fixed, and the files the earlier import made that this one does not are listed after the export. A re-import
+		// first checks (an io job) what each file it would overwrite holds against the prefab's record (`made`).
 		void open(import_result result, res::tag reimport = {});
 
 		// Whether a document holds unsaved edits of a file the export would overwrite: Export is refused. Null: none.
@@ -43,6 +45,29 @@ namespace edt {
 		const char* target_folder() const { return m_target_folder; }
 		// After a re-import: what the earlier import made and this one did not (still in the project).
 		const std::vector<res::tag>& no_longer_made() const { return m_left_over; }
+		// Why that list may be incomplete (an old record, an unreadable prefab); empty when it is not.
+		const std::string& no_longer_made_note() const { return m_left_over_note; }
+
+		// The re-import's check of the files it would overwrite (#1194): running, and what it found.
+		bool checking() const { return m_scanning; }
+		const std::optional<reimport_scan>& checked() const { return m_scan; }
+		// A file that changed after the import, or may have, would be overwritten: Export waits for the tick.
+		bool needs_overwrite_tick() const;
+		bool overwrite_ticked() const { return m_overwrite_ticked; }
+		void set_overwrite_ticked(bool ticked) { m_overwrite_ticked = ticked; }
+		// Why Export is disabled now; empty when it may run.
+		std::string export_blocker() const;
+		// What Export does: false (nothing starts) while export_blocker() says why not.
+		bool start_export();
+		bool exporting() const { return m_exporting; }
+		// Why the last export failed or stopped; the form shows it.
+		const std::string& export_error() const { return m_export_error; }
+
+		// What holds Export of a re-import back: the check runs, it could not read a file, or a file that holds (or may
+		// hold) edits made after the import would be overwritten without `ticked`. Empty when nothing does.
+		static std::string reimport_blocker(bool checking, const reimport_scan* scan, bool ticked);
+		// A re-import that has written a file runs to its end: a cancel would leave the asset half overwritten.
+		static bool may_cancel_export(bool reimport, int files_done) { return !reimport || files_done == 0; }
 
 		// Render the dialog. Returns false when dialog is closed.
 		bool render();
@@ -51,6 +76,11 @@ namespace edt {
 		res::tag get_exported_tag() const { return m_exported_tag; }
 
 	private:
+		// Why the name, the folder or the files refuse the export (`remap` filled when they get that far).
+		std::string form_problem(std::unordered_map<res::tag, res::tag>& remap) const;
+		void start_check();
+		// The job ended without a word (cancelled): a re-import says what it left.
+		void export_stopped();
 		void render_export_form();
 		void render_reimport_report();
 		void render_export_progress();
@@ -70,6 +100,13 @@ namespace edt {
 		res::tag m_exported_tag;
 		res::tag m_reimport;
 		std::vector<res::tag> m_left_over;
+		std::string m_left_over_note;
+		bool m_scanning = false;
+		std::uint64_t m_scan_job = 0;
+		std::uint64_t m_scan_serial = 0;
+		std::optional<reimport_scan> m_scan{};
+		std::optional<made_files> m_made{};
+		bool m_overwrite_ticked = false;
 		bool m_show_report = false;
 		std::function<bool(const res::tag&)> m_open_with_unsaved_changes;
 
@@ -78,6 +115,8 @@ namespace edt {
 		res::resource_system& m_resources;
 		std::uint64_t m_export_job = 0;
 		std::shared_ptr<export_progress> m_export_progress;
+		// What the running export wrote; read once its job is no longer running.
+		std::shared_ptr<std::vector<res::tag>> m_written;
 		bool m_exporting = false;
 		// Set by the job's on_done (main thread); render_export_progress closes the popup on it.
 		bool m_export_done = false;

@@ -341,8 +341,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		},
 		.open_with_unsaved_changes = [this](const res::tag& tag) {
 			const res::tag& editor_copy = m_state.editor_tag;
-			document_manager& documents = m_context->documents();
-			return edt::is_open_with_unsaved_changes(documents.find_by_source(tag), documents.scene(),
+			// A link of the file (EPIC-82) is busy too when its chain or what hangs below it is unsaved.
+			return edt::is_open_with_unsaved_changes(m_context->documents(), tag,
 				editor_copy.is_valid() && editor_copy.relative() == tag.relative());
 		},
 		.project_open = [&data] { return data.has_value<prj::project_context>(); } });

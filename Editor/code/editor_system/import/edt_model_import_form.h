@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // What the "Model Import Settings" window holds between frames (#1195 PR 2), without ImGui: the picked model, the
@@ -24,6 +25,11 @@ namespace edt {
 		bool reimport() const { return !m_target.empty(); }
 		const std::string& target() const { return m_target; }
 		const std::vector<std::string>& notes() const { return m_notes; }
+		// A note that came later (a job's answer); ignored while the window is closed.
+		void add_note(std::string note)
+		{
+			if (is_open()) m_notes.push_back(std::move(note));
+		}
 		bool is_open() const { return static_cast<bool>(m_on_import); }
 
 		const std::filesystem::path& source() const { return m_source; }
