@@ -9,6 +9,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/desc/desc_json_ops.h>
 #include <snk/desc/desc_schema_ops.h>
 #include <snk/desc/desc_system.h>
 #include <snk/editor/edt_editor_events.h>
@@ -708,24 +709,17 @@ namespace {
 		return type == "input_actions_desc" && (field_key == "actions" || field_key == "/actions");
 	}
 
-	// A field's key or one of its read aliases: a plain member name, or a JSON pointer into the object.
+	// A field's key or one of its read aliases: a JSON pointer into the object (registration refuses any other key; the
+	// plain name is for the legacy spelling holds_plain_text also knows).
 	const json::value* value_at_key(const json::object& object, std::string_view key)
 	{
 		if (!key.starts_with('/')) return object.if_contains(key);
-		const json::object* current = &object;
-		for (std::size_t start = 1;;) {
-			const std::size_t end = key.find('/', start);
-			std::string segment(key.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
-			for (std::size_t at = 0; (at = segment.find('~', at)) != std::string::npos; ++at) {
-				if (at + 1 < segment.size() && segment[at + 1] == '1') segment.replace(at, 2, "/");
-				else if (at + 1 < segment.size() && segment[at + 1] == '0') segment.replace(at, 2, "~");
-			}
-			const json::value* found = current->if_contains(segment);
-			if (!found || end == std::string_view::npos) return found;
-			current = found->if_object();
-			if (!current) return nullptr;
-			start = end + 1;
-		}
+		const std::size_t rest = key.find('/', 1);
+		std::vector<std::string> first;
+		if (!desc::json_pointer_tokens(key.substr(0, rest), first) || first.size() != 1) return nullptr;
+		const json::value* held = object.if_contains(first.front());
+		if (!held || rest == std::string_view::npos) return held;
+		return desc::json_pointer_get(*held, key.substr(rest));
 	}
 
 	std::string pointer_of_key(std::string_view key)
@@ -907,8 +901,11 @@ edt::desc_tree_check edt::validate_desc_tree(const desc::desc_system& descs, con
 				return;
 			}
 			// A custom field (a list of tags by slot, say) is read as tags too: the strict side.
-			// The elements of a list or map of a custom type are read as a single custom field is (#1450).
-			const bool custom = field.kind == desc::field_kind::custom || (container && field.element == desc::field_kind::custom);
+			// The elements of a list or map of a custom type are read as a single custom field is (#1450). A list or map of
+			// lists or maps is too: deduce_kind gives any sequence the kind array, a codec of its own or not.
+			const bool custom = field.kind == desc::field_kind::custom
+				|| (container && (field.element == desc::field_kind::custom || field.element == desc::field_kind::array
+					|| field.element == desc::field_kind::map));
 			const bool tag_field = field.kind == desc::field_kind::res_tag || field.kind == desc::field_kind::desc_ref || custom
 				|| (container && (field.element == desc::field_kind::res_tag || field.element == desc::field_kind::desc_ref));
 			if (!tag_field || (custom && holds_plain_text(type, field.key))) return;
