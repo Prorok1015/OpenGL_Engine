@@ -53,6 +53,9 @@ namespace edt
 		// Why the asset index cannot judge a guid now (not attached, files waiting for a hash or an ID): content with a
 		// guid answers busy with it, since a verdict from it could be wrong either way (#968). Null or nullopt: judged now.
 		std::function<std::optional<std::string>()> asset_index_wait;
+		// The file a new document of `type` named `name` gets (document_creator::file_name_of: its asset kind's suffix). desc.create
+		// refuses a material whose path is not that name, naming it (#1198). Null: any *.desc name is taken.
+		std::function<std::string(std::string_view type, std::string_view name)> file_name_of;
 	};
 
 	[[nodiscard]] std::vector<registration> register_desc_file_commands(cmd::command_registry& commands, desc_file_deps deps);

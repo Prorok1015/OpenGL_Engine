@@ -4,6 +4,8 @@
 #include "test_temp_dir.hpp"
 #include "edt_code_commands.h"
 #include "edt_desc_file_commands.h"
+#include "edt_document_creator.h"
+#include "edt_material_creator.h"
 #include "edt_tag_text.h"
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
@@ -113,6 +115,9 @@ struct desc_fixture : test_util::scene_env
 		deps.events = &events;
 		deps.write_blocker = [this] { return blocked; };
 		deps.asset_index_wait = [this] { return index_pending ? std::optional<std::string>(k_index_wait) : std::nullopt; };
+		deps.file_name_of = [this](std::string_view type, std::string_view name) {
+			return kind_suffixes ? edt_kind_file_name(type, name) : std::string(name);
+		};
 		registrations = edt::register_desc_file_commands(commands, std::move(deps));
 	}
 
@@ -174,6 +179,14 @@ struct desc_fixture : test_util::scene_env
 	std::vector<std::string> open_level;
 	std::optional<std::string> blocked;
 	bool index_pending = false;
+	// The editor's built-in desc kinds name the files (#1198): off, every *.desc name passes as before.
+	bool kind_suffixes = false;
+
+	static std::string edt_kind_file_name(std::string_view type, std::string_view name)
+	{
+		static const std::vector<std::string> tails{ ".prefab.desc", ".shader.desc", ".mat.desc" };
+		return edt::document_creator::file_name(name, type == edt::k_material_type ? edt::k_material_suffix : std::string_view(".desc"), tails);
+	}
 };
 
 }
@@ -246,6 +259,70 @@ BOOST_AUTO_TEST_CASE(AnAgentCreatesAMaterialAndChangesIt)
 	BOOST_TEST(on_disk.find("opaque") != std::string::npos);
 	BOOST_TEST(on_disk.find("\"B\"") != std::string::npos);
 	BOOST_TEST(on_disk.find("\"A\"") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsMaterial_GetsTheMenusParent_UnlessItNamesOne)
+{
+	const std::string base = std::string(edt::material_fields().at("__parent").as_string());
+	BOOST_TEST(base == std::string(edt::k_base_material));
+	const auto parent_on_disk = [this](const char* file) {
+		const json::value on_disk = json::parse(read_file(res_root / "materials" / file));
+		const json::value* parent = on_disk.as_object().if_contains("__parent");
+		return parent ? std::string(parent->as_string()) : std::string{};
+	};
+
+	make_material("materials/plain.mat.desc", R"({"__type":"material_desc"})");
+	BOOST_TEST(parent_on_disk("plain.mat.desc") == base);
+
+	// A shader alone keeps the base too, as the menu's Create Material from a shader writes it.
+	make_material("materials/shaded.mat.desc", R"({"__type":"material_desc","shader":"res://shaders/a.shader.desc"})");
+	BOOST_TEST(parent_on_disk("shaded.mat.desc") == base);
+	BOOST_TEST(read_file(res_root / "materials" / "shaded.mat.desc").find("res://shaders/a.shader.desc") != std::string::npos);
+
+	make_material("materials/child.mat.desc", R"({"__type":"material_desc","__parent":"res://materials/plain.mat.desc"})");
+	BOOST_TEST(parent_on_disk("child.mat.desc") == "res://materials/plain.mat.desc");
+
+	const auto table = call("desc.create", desc_args("materials/table.desc", R"({"__type":"test.texture_table"})"));
+	BOOST_REQUIRE_MESSAGE(table.ok, table.error);
+	BOOST_TEST(read_file(res_root / "materials" / "table.desc").find("__parent") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsMaterial_NamedWithoutItsKindsSuffix_IsRefused_NamingTheFileToCreate)
+{
+	kind_suffixes = true;
+	for (const auto& [path, expected] : std::vector<std::pair<std::string, std::string>>{
+			{ "materials/a.desc", "res://materials/a.mat.desc" },
+			{ "materials/a.prefab.desc", "res://materials/a.mat.desc" },
+			{ "materials/a.shader.desc", "res://materials/a.mat.desc" } }) {
+		BOOST_TEST_CONTEXT(path) {
+			const auto refused = call("desc.create", desc_args(path, k_material));
+			BOOST_TEST(refused.code == cmd::codes::invalid_args);
+			BOOST_TEST(refused.error.find(expected) != std::string::npos, refused.error);
+			BOOST_TEST(!fs::exists(res_root / path));
+		}
+	}
+	BOOST_TEST(actions.empty());
+
+	// The kind's part of the suffix in any letter case is the kind's, as the asset browser reads it (".desc" itself is lower case).
+	const auto upper = call("desc.create", desc_args("materials/B.Mat.desc", k_material));
+	BOOST_TEST(upper.ok, upper.error);
+	make_material("materials/c.mat.desc");
+	// Only a material is held to it.
+	const auto table = call("desc.create", desc_args("materials/t.desc", R"({"__type":"test.texture_table"})"));
+	BOOST_TEST(table.ok, table.error);
+}
+
+BOOST_AUTO_TEST_CASE(AnAgentsMaterial_WhoseNameALowerLayerHolds_IsRefusedAsTheMenuRefusesIt)
+{
+	kind_suffixes = true;
+	std::ofstream(lower / "materials" / "Stone.mat.desc", std::ios::binary) << k_material;
+	for (const char* path : { "materials/stone.mat.desc", "materials/Stone.mat.desc" }) {
+		BOOST_TEST_CONTEXT(path) {
+			const auto refused = call("desc.create", desc_args(path, k_material));
+			BOOST_TEST(refused.code == cmd::codes::needs_input);
+			BOOST_TEST(!fs::exists(res_root / path));
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AnAgentCreatesALevel_ItsTypeHasNoSchemaYetSoItIsWarnedAbout)

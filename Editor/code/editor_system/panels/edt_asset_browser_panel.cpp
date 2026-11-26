@@ -348,7 +348,7 @@ namespace edt
 			desc_type = m_desc_types.type_of(m_layers[file.layer], file.relative, budget).value_or(std::string{});
 		}
 		// The asset kinds know a plain .desc only as a level, world or prefab by its `__type`: a material or shader is read here.
-		material_menu_item item = material_menu_item_of_type(desc_type);
+		material_menu_item item = material_menu_item_of(desc_type);
 		if (item == material_menu_item::none) {
 			item = material_menu_item_of(asset_kind_of(m_kinds, relative, desc_type));
 		}
