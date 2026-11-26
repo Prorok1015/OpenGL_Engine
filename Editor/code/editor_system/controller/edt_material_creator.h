@@ -40,6 +40,8 @@ namespace edt
 		variant,
 	};
 	material_menu_item material_menu_item_of(std::string_view kind);
+	// The same by a plain .desc's `__type`: the asset kinds tell only levels, worlds and prefabs apart by it.
+	material_menu_item material_menu_item_of_type(std::string_view type);
 
 	// A desc file a material is made from: its folder below res:// ('/' separated, empty = the root) and its name.
 	struct material_source
@@ -65,8 +67,8 @@ namespace edt
 		std::string suggested_name(std::string_view folder) const;
 		// The same from `base`: `base`, then `base + separator + "2"`, ...
 		std::string suggested_name(std::string_view folder, std::string_view base, std::string_view separator) const;
-		// `file` split as a desc of `type` (its kind's suffix comes off the name, else ".desc"); nullopt when it is no
-		// res://... .desc file.
+		// `file` split as a desc of `type` (its kind's suffix comes off the name, else ".desc"; either in any letter case, the
+		// stem keeps the name's); nullopt when it is no res://... .desc file.
 		std::optional<material_source> source_of(const res::tag& file, std::string_view type) const;
 		// Why `name` cannot be a new material in `folder` (document_creator::check of the material type); empty when it can.
 		// Refused while no asset kind gives the material type k_material_suffix.

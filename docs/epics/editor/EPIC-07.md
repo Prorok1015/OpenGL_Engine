@@ -104,9 +104,12 @@
   материалу этот суффикс и тот же `__parent`, фильтр Kinds показывает «Material», `asset.query` — вид `material_desc`.
   Логика без ImGui — `material_creator` / `material_create_form` (`controller/edt_material_creator.h`) поверх
   `document_creator`; опции `shader` (пишет `shader`) и `parent` (заменяет `__parent`) — для PR 2 и PR 3.
-- **PR 2 (сделано):** в контекстном меню файла браузера ассетов по виду ассета (`asset_kind_of`; у простого `.desc` —
-  по `__type`, читается один раз при открытии меню): на шейдере (`shader_desc`) — **Create Material**, на материале
-  (`material_desc`, в том числе простой `.desc`) — **Create Material Variant**. Create Material создаёт материал в папке
+- **PR 2 (сделано):** в контекстном меню файла браузера ассетов: на шейдере — **Create Material**, на материале —
+  **Create Material Variant**. Шейдер и материал узнаются по суффиксу (`.shader.desc` / `.mat.desc`, в любом регистре
+  букв; основа имени сохраняет свой регистр), а простой `.desc` — по `__type` (`shader_desc` / `material_desc`), который
+  читается один раз при открытии меню и сопоставляется в `material_menu_item_of_type`: `asset_kind_of` знает простой
+  `.desc` только как уровень, мир или префаб, поэтому фильтр Kinds по-прежнему показывает такой файл как `data` (это не
+  меняется). Пункт не показывается, если имя файла не разбирается (`material_creator::source_of`). Create Material создаёт материал в папке
   шейдера: `__parent` остаётся `res://base_material.desc` (остальные поля наследуются), `shader` — этот шейдер; имя
   предлагается по основе шейдера (`toon.shader.desc` → `toon`, при занятом — `toon-2`). Create Material Variant создаёт
   материал в папке исходного с `__parent` = этот материал и больше ничего; имя — `<основа>_variant`, затем `_variant2`,

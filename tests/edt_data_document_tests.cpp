@@ -2458,6 +2458,31 @@ BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_FollowTheAssetKind)
 	}
 }
 
+// A plain .desc is a material or a shader by its `__type`, which the asset kinds do not map (they know only levels, worlds
+// and prefabs by it), so the panel maps the type itself.
+BOOST_AUTO_TEST_CASE(NewMaterial_TheMenuItems_OfAPlainDesc_FollowItsType)
+{
+	BOOST_TEST((edt::material_menu_item_of_type("material_desc") == edt::material_menu_item::variant));
+	BOOST_TEST((edt::material_menu_item_of_type("shader_desc") == edt::material_menu_item::from_shader));
+	for (const std::string_view type : { "", "prefab_desc", "level_desc", "world_desc", "MATERIAL_DESC", "material" }) {
+		BOOST_TEST_CONTEXT("type: " << type)
+		BOOST_TEST((edt::material_menu_item_of_type(type) == edt::material_menu_item::none));
+	}
+}
+
+// The browser's kind lookup ignores letter case, so the suffix comes off in any case and the stem keeps its own.
+BOOST_AUTO_TEST_CASE(NewMaterial_UpperCaseSuffixes_AreTheKinds_AndTheStemKeepsItsCase)
+{
+	const material_wiring wiring{ *this };
+	edt::material_create_form form(wiring.creator);
+	BOOST_REQUIRE(form.open_from_shader(res::tag{ "res://Toon.SHADER.DESC" }));
+	BOOST_TEST(form.suggested() == "Toon");
+	BOOST_TEST(form.title() == "New Material from Toon.SHADER.DESC");
+	BOOST_REQUIRE(form.open_variant_of(res::tag{ "res://Rock.Mat.Desc" }));
+	BOOST_TEST(form.suggested() == "Rock_variant");
+	BOOST_TEST(form.title() == "Material Variant of Rock.Mat.Desc");
+}
+
 BOOST_AUTO_TEST_CASE(NewMaterial_FromAShader_HoldsTheBaseMaterialAsParent_AndTheShader_NamedAfterItsStem)
 {
 	const material_wiring wiring{ *this };
@@ -2552,7 +2577,8 @@ BOOST_AUTO_TEST_CASE(NewMaterial_AVariant_HoldsOnlyTheMaterialAsParent_NamedStem
 	BOOST_TEST(form.problem() == "'rock_variant.mat.desc' already exists in the project layer");
 	BOOST_TEST(!form.submit().has_value());
 
-	// a material that is a plain .desc (the kind lookup knows it by its `__type`): only ".desc" comes off the stem
+	// the creator called directly on a plain .desc (that the menu offers it there by its `__type` is
+	// NewMaterial_TheMenuItems_OfAPlainDesc_FollowItsType): only ".desc" comes off the stem
 	BOOST_REQUIRE(form.open_variant_of(res::tag{ "res://base_material.desc" }));
 	BOOST_TEST(form.folder().empty());
 	BOOST_TEST(form.name() == "base_material_variant");

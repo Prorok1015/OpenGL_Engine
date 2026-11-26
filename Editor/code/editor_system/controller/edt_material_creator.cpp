@@ -1,12 +1,27 @@
 #include "edt_material_creator.h"
 #include <snk/resource/res_free_name.h>
 #include <boost/json.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <utility>
 #include <vector>
 
 namespace json = boost::json;
+
+namespace
+{
+	// The browser's kind lookup lowercases the path, so a suffix written in any case is the kind's.
+	bool ends_with_ignoring_case(std::string_view text, std::string_view suffix)
+	{
+		if (text.size() < suffix.size()) {
+			return false;
+		}
+		const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+		const std::string_view tail = text.substr(text.size() - suffix.size());
+		return std::equal(tail.begin(), tail.end(), suffix.begin(), [&lower](char a, char b) { return lower(a) == lower(b); });
+	}
+}
 
 json::object edt::material_fields(const material_options& options)
 {
@@ -29,19 +44,30 @@ edt::material_menu_item edt::material_menu_item_of(std::string_view kind)
 	return material_menu_item::none;
 }
 
+edt::material_menu_item edt::material_menu_item_of_type(std::string_view type)
+{
+	if (type == k_shader_type) {
+		return material_menu_item::from_shader;
+	}
+	if (type == k_material_type) {
+		return material_menu_item::variant;
+	}
+	return material_menu_item::none;
+}
+
 std::optional<edt::material_source> edt::material_creator::source_of(const res::tag& file, std::string_view type) const
 {
 	constexpr std::string_view protocol = "res://";
 	constexpr std::string_view plain = ".desc";
 	const std::string_view view = file.view();
-	if (!view.starts_with(protocol) || !view.ends_with(plain)) {
+	if (!view.starts_with(protocol) || !ends_with_ignoring_case(view, plain)) {
 		return std::nullopt;
 	}
 	const std::string_view relative = view.substr(protocol.size());
 	const std::size_t slash = relative.rfind('/');
 	const std::string_view name = slash == std::string_view::npos ? relative : relative.substr(slash + 1);
 	const std::string own = m_names.suffix_of(type);
-	const std::size_t cut = name.ends_with(own) ? own.size() : plain.size();
+	const std::size_t cut = !own.empty() && ends_with_ignoring_case(name, own) ? own.size() : plain.size();
 	if (name.size() <= cut) {
 		return std::nullopt;
 	}

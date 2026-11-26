@@ -347,7 +347,17 @@ namespace edt
 			int budget = 1;
 			desc_type = m_desc_types.type_of(m_layers[file.layer], file.relative, budget).value_or(std::string{});
 		}
-		return material_menu_item_of(asset_kind_of(m_kinds, relative, desc_type));
+		// The asset kinds know a plain .desc only as a level, world or prefab by its `__type`: a material or shader is read here.
+		material_menu_item item = material_menu_item_of_type(desc_type);
+		if (item == material_menu_item::none) {
+			item = material_menu_item_of(asset_kind_of(m_kinds, relative, desc_type));
+		}
+		// An item whose click would open nothing (a name the creator cannot split) is not offered.
+		const std::string_view type = item == material_menu_item::from_shader ? k_shader_type : k_material_type;
+		if (item != material_menu_item::none && !m_material_creator->source_of(res::tag::make(file.relative.generic_string()), type)) {
+			return material_menu_item::none;
+		}
+		return item;
 	}
 
 	void asset_browser_panel::set_variant_creator(std::shared_ptr<prefab_variant_creator> creator, std::function<void(const res::tag&)> on_created)
